@@ -43,6 +43,11 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// `segmentStarted` opened): a running total, logged while recording whenever it changes, so
         /// recovery can fill in `droppedFrames` of a segment the recorder never closed.
         case droppedSamples(track: String, count: Int)
+        /// Frame `frame` of the file of audio track `track`'s current segment (counted from 0, the frame at
+        /// the segment's `startHostTime`) was captured at `t`. The file only counts frames and a device's
+        /// clock drifts from the host's, so the recording logs one every few seconds of audio and the export
+        /// places the audio by host time through them.
+        case audioClock(track: String, frame: Int)
     }
 
     /// The event as one line of compact JSON with its keys in alphabetical order,
@@ -69,7 +74,7 @@ public struct InputEvent: Codable, Equatable, Sendable {
 
     private enum EventType: String, Codable {
         case cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker
-        case droppedSamples
+        case droppedSamples, audioClock
     }
 
     public init(from decoder: any Decoder) throws {
@@ -127,6 +132,11 @@ public struct InputEvent: Codable, Equatable, Sendable {
                 track: try container.decode(String.self, forKey: .track),
                 count: try container.decode(Int.self, forKey: .count)
             )
+        case .audioClock:
+            kind = .audioClock(
+                track: try container.decode(String.self, forKey: .track),
+                frame: try container.decode(Int.self, forKey: .frame)
+            )
         }
         self.init(t: t, kind: kind)
     }
@@ -178,6 +188,10 @@ public struct InputEvent: Codable, Equatable, Sendable {
             try container.encode(EventType.droppedSamples, forKey: .type)
             try container.encode(track, forKey: .track)
             try container.encode(count, forKey: .count)
+        case let .audioClock(track, frame):
+            try container.encode(EventType.audioClock, forKey: .type)
+            try container.encode(track, forKey: .track)
+            try container.encode(frame, forKey: .frame)
         }
     }
 }

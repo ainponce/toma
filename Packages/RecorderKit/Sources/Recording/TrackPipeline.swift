@@ -60,6 +60,8 @@ actor TrackPipeline: CaptureSink {
     static let healthySegmentSeconds = 1.0
     /// Samples dropped in a row after which `samplesDropped` is sent.
     static let droppedSamplesWarningCount = 30
+    /// Seconds of audio between two `audioClock` events of a segment.
+    static let audioClockInterval = 5.0
 
     let queue: DispatchSerialQueue
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
@@ -132,6 +134,10 @@ actor TrackPipeline: CaptureSink {
         var dropped = 0
         /// The running total last logged as `droppedSamples`.
         var loggedDropped = 0
+        /// Audio frames taken so far: the frame number, in the file, of the next one.
+        var audioFrames = 0
+        /// Host time of the last `audioClock` event; the first sample's, which is frame 0, to begin with.
+        var lastAudioClock: HostTime?
 
         init(writer: any TrackWriting, index: Int, url: URL, file: String, startSignal: StartSignal) {
             self.writer = writer
@@ -455,7 +461,10 @@ actor TrackPipeline: CaptureSink {
             state.droppedInARow = 0
             segment.lastTakenPTS = pts
             segment.lastSampleEnd = max(segment.lastSampleEnd ?? pts, Self.end(of: sample, at: pts))
-            if case .video = media { segment.framesSinceHeartbeatTick += 1 }
+            switch media {
+            case .video: segment.framesSinceHeartbeatTick += 1
+            case .audio: logAudioClock(segment, sample: sample, at: pts)
+            }
         } catch {
             // Either the writer skipped this sample (its time is not after the previous one, or the
             // encoder stayed busy) and the next one goes on, or it failed, which is handled below.
@@ -469,6 +478,23 @@ actor TrackPipeline: CaptureSink {
         } else if !appended {
             countDropped(in: segment)
         }
+    }
+
+    /// Logs `audioClock` for the audio sample just taken when `audioClockInterval` has passed since the last
+    /// one: the frame of the segment's file it starts at, and its host time. Frame 0 is the segment's start.
+    ///
+    /// The frame counts every sample the writer took. Audio the writer drops afterwards in real time (its
+    /// queue full) is missing from the file, so the frames after it sit earlier in the file than their
+    /// anchors count, and an export places them that much early.
+    private func logAudioClock(_ segment: OpenSegment, sample: CMSampleBuffer, at pts: HostTime) {
+        defer { segment.audioFrames += CMSampleBufferGetNumSamples(sample) }
+        guard let last = segment.lastAudioClock else {
+            segment.lastAudioClock = pts
+            return
+        }
+        guard pts.seconds(since: last) >= Self.audioClockInterval else { return }
+        segment.lastAudioClock = pts
+        context.log.append(InputEvent(t: pts, kind: .audioClock(track: trackID, frame: segment.audioFrames)))
     }
 
     /// Counts a sample that was not written, and warns once it has happened many times in a row.

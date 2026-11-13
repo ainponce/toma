@@ -2,19 +2,21 @@
 import ArgumentParser
 import CoreGraphics
 import Darwin
+import Export
 import Foundation
 import ProjectFormat
 import Recording
 import Recovery
+import Synchronization
 import SyntheticCapture
 
-/// Development tool: records, recovers and verifies takes from the command line, for the crash and
-/// endurance scripts in `scripts/`.
+/// Development tool: records, recovers, verifies and exports takes from the command line, for the crash
+/// and endurance scripts in `scripts/`.
 struct RecorderDev: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "recorder-dev",
-        abstract: "Records, recovers and verifies Toma takes from the command line.",
-        subcommands: [SynthRecord.self, Record.self, Recover.self, Verify.self]
+        abstract: "Records, recovers, verifies and exports Toma takes from the command line.",
+        subcommands: [SynthRecord.self, Record.self, Recover.self, Verify.self, ExportMP4.self]
     )
 }
 
@@ -273,6 +275,62 @@ struct Verify: AsyncParsableCommand {
             }
         }
         if results.contains(where: { !$0.ok }) { throw ExitCode.failure }
+    }
+}
+
+// MARK: - Export
+
+struct ExportMP4: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "export",
+        abstract: "Exports a package's last take as an MP4: H.264 tagged Rec.709, and the microphone as AAC.",
+        discussion: """
+            Draws every frame as the editor preview does. Writes <out.mp4>.partial.mp4 next to the \
+            destination and moves it into place once it is complete, replacing a file already there in one \
+            step; if the export fails or is killed, the destination is left as it was (a partial file left by \
+            a kill is removed by the next export). Never writes into a .toma package. Prints the progress \
+            every 10 % as "progress: <n> %", then "exported: <path>".
+            """
+    )
+
+    @Argument(help: "The .toma package.")
+    var package: String
+
+    @Argument(help: "The MP4 to write.")
+    var output: String
+
+    @Option(help: "Width of the video, in pixels.")
+    var width = 1920
+
+    @Option(help: "Height of the video, in pixels.")
+    var height = 1080
+
+    @Option(help: "Frames per second of the video.")
+    var fps = 60
+
+    func validate() throws {
+        guard width > 0, height > 0, fps > 0 else { throw ValidationError("--width, --height and --fps must be positive.") }
+    }
+
+    func run() async throws {
+        let project = try LoadedProject.load(URL(fileURLWithPath: package, isDirectory: true))
+        let destination = URL(fileURLWithPath: output).standardizedFileURL
+        let exporter = MP4Exporter(project: project, settings: ExportSettings(outputSize: [width, height], framesPerSecond: fps))
+        let printed = Mutex(-1)  // tenths of the export last printed
+        do {
+            try await exporter.export(to: destination) { progress in
+                let tenths = Int(progress * 10)
+                let reached = printed.withLock { last in
+                    defer { last = max(last, tenths) }
+                    return tenths > last
+                }
+                if reached { print("progress: \(tenths * 10) %") }
+            }
+        } catch {
+            printError("error: the export failed: \(error)")
+            throw ExitCode.failure
+        }
+        print("exported: \(destination.path)")
     }
 }
 

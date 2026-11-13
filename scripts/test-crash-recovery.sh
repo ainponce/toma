@@ -4,14 +4,52 @@
 # Crash test with synthetic sources (needs no permission): records a 20 s take, kills the recorder
 # with SIGKILL 10 s in, recovers the take and verifies that every track kept at least 8 s, ends with
 # the take and dropped at most 1 % of its frames. Once with a moving screen, once with a screen that
-# stops changing after 2 s (heartbeats). Run with `make crash-test`.
+# stops changing after 2 s (heartbeats). After the first, an MP4 export of the recovered take is
+# killed 1 s in: the package must be unchanged, and the next export must succeed. Run with
+# `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BIN="$(swift build --package-path Packages/RecorderKit --product recorder-dev --show-bin-path)/recorder-dev"
 swift build --package-path Packages/RecorderKit --product recorder-dev
 
-run_case() {  # $1 = extra flags for synth-record
+# Kills an export of package $1 into folder $2 1 s in, checks that the package did not change and that
+# nothing reached the destination, then exports again and checks that it worked.
+export_crash() {
+  local PKG=$1 TMP=$2 BEFORE EPID
+  echo "== export, kill -9 at 1 s"
+  BEFORE=$(package_hash "$PKG")
+  "$BIN" export "$PKG" "$TMP/out.mp4" > "$TMP/export.out" &
+  EPID=$!
+  sleep 1
+  kill -9 "$EPID"
+  wait "$EPID" 2>/dev/null || true
+  if [ -e "$TMP/out.mp4" ] || [ ! -e "$TMP/out.mp4.partial.mp4" ]; then
+    echo "FAIL: the export was not cut off while writing (it ended within 1 s, or never started)"
+    exit 1
+  fi
+  if [ "$(package_hash "$PKG")" != "$BEFORE" ]; then
+    echo "FAIL: the killed export changed the package"
+    exit 1
+  fi
+  "$BIN" export "$PKG" "$TMP/out.mp4" > "$TMP/export.out"
+  tail -1 "$TMP/export.out"
+  if [ ! -s "$TMP/out.mp4" ] || [ -e "$TMP/out.mp4.partial.mp4" ]; then
+    echo "FAIL: the second export did not leave a finished out.mp4 and nothing else"
+    exit 1
+  fi
+  if [ "$(package_hash "$PKG")" != "$BEFORE" ]; then
+    echo "FAIL: the export changed the package"
+    exit 1
+  fi
+}
+
+# One hash of every file in package $1 (manifest.json included) with its path.
+package_hash() {
+  (cd "$1" && find . -type f -print0 | sort -z | xargs -0 shasum) | shasum
+}
+
+run_case() {  # $1 = extra flags for synth-record, $2 = "export" to crash an export of the recovered take
   local TMP PID PKG
   TMP=$(mktemp -d)
   echo "== synth-record --duration 20 $1, kill -9 at 10 s (in $TMP)"
@@ -36,9 +74,10 @@ run_case() {  # $1 = extra flags for synth-record
     exit 1
   fi
   "$BIN" verify "$PKG" --min-duration 8 --max-drop-ratio 0.01
+  if [ "${2:-}" = export ]; then export_crash "$PKG" "$TMP"; fi
   rm -rf "$TMP"
 }
 
-run_case ""
+run_case "" export
 run_case "--static-after 2"
 echo "crash test passed"

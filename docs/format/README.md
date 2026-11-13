@@ -231,6 +231,7 @@ Reglas de escritura:
 | `deviceChanged` | `track`, `deviceUniqueID` | La pista siguió grabando desde otro dispositivo (el `uniqueID` del dispositivo de audio), por ejemplo porque se desconectó el micrófono. |
 | `marker` | | Una marca que el usuario puso mientras grababa. |
 | `droppedSamples` | `track`, `count` | Total de muestras (cuadros o bloques de audio) que la pista `track` perdió hasta ahora en su segmento actual, el que abrió su último `segmentStarted`. Se escribe cada 2 s mientras se graba, solo si cambió, y no toca el manifiesto: es lo que la recuperación usa como `droppedFrames` de un segmento que la app no llegó a cerrar. |
+| `audioClock` | `track`, `frame` | La muestra número `frame` del archivo del segmento actual de la pista de audio `track` (contando desde 0, la muestra de `startHostTime`) se capturó en `t`. El archivo de audio solo cuenta muestras y el reloj del dispositivo no va exactamente al ritmo del host, así que la grabación escribe uno cada 5 s de audio de cada segmento, con el instante del bloque que empieza en esa muestra, y el export ubica el audio por host time interpolando entre ellos (ver [Tiempos](#tiempos)). `frame` cuenta todo lo que el escritor recibió: si después descartó audio en tiempo real, las muestras que siguen están antes en el archivo de lo que dicen sus anclas. |
 
 Una línea de cada tipo, exactamente como se escribe:
 
@@ -246,6 +247,7 @@ Una línea de cada tipo, exactamente como se escribe:
 {"deviceUniqueID":"BuiltInMicrophoneDevice","t":5,"track":"mic","type":"deviceChanged"}
 {"t":5,"type":"marker"}
 {"count":12,"t":5,"track":"display-1","type":"droppedSamples"}
+{"frame":240000,"t":5,"track":"mic","type":"audioClock"}
 ```
 
 ### Lectura después de un crash
@@ -258,7 +260,8 @@ Una línea de cada tipo, exactamente como se escribe:
 ## Tiempos
 
 - Todos los instantes son `HostTime`: nanosegundos de `CLOCK_UPTIME_RAW`, guardados como un entero JSON. Es el mismo reloj de `CMClockGetHostTimeClock()`, de los timestamps de ScreenCaptureKit y AVFoundation, y de `NSEvent.timestamp`, así que pistas y eventos quedan alineados sin estimar nada.
-- El tiempo 0 de cada archivo de segmento es su `startHostTime`: una muestra en el segundo `t` del archivo ocurrió en `startHostTime + t × 1 000 000 000`.
+- El tiempo 0 de cada archivo de segmento es su `startHostTime`. En video, un cuadro en el segundo `t` del archivo ocurrió en `startHostTime + t × 1 000 000 000`.
+- En audio no: el archivo guarda las muestras una detrás de otra, sin los huecos ni la deriva del reloj del dispositivo (con un reloj de dispositivo que se aparta 2000 ppm del host, el audio se corre 56 ms en 28 s). El instante de la muestra `n` de un segmento sale de interpolar linealmente entre sus anclas: la muestra 0 en `startHostTime` y cada `audioClock` del segmento (el de su pista con `t` entre el `startHostTime` del segmento y el del siguiente), y después de la última, al ritmo del último tramo entre dos anclas (o al nominal si no hay ninguna).
 - El reloj vuelve a cero en cada arranque de la Mac, así que los `HostTime` solo se comparan dentro de una misma toma.
 
 ## Fechas

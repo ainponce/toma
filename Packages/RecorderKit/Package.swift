@@ -6,7 +6,7 @@ let package = Package(
     name: "RecorderKit",
     platforms: [.macOS(.v15)],
     products: [
-        .library(name: "RecorderKit", targets: ["ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Render"]),
+        .library(name: "RecorderKit", targets: ["ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Render", "Export"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
     ],
     dependencies: [
@@ -18,10 +18,11 @@ let package = Package(
         .target(name: "SyntheticCapture", dependencies: ["Recording", "ProjectFormat"]),
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
         .target(name: "Render", dependencies: ["ProjectFormat"]),
+        .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
-                "ProjectFormat", "Recording", "SyntheticCapture", "Recovery",
+                "ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Export",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
@@ -29,6 +30,7 @@ let package = Package(
         .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
+        .testTarget(name: "ExportTests", dependencies: ["Export", "Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
     ],
     swiftLanguageModes: [.v6]
 )
