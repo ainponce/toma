@@ -1,0 +1,286 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import CoreGraphics
+import CoreMedia
+import CoreVideo
+import Foundation
+import ProjectFormat
+import ScreenCaptureKit
+import Synchronization
+import SyntheticCapture
+import Testing
+
+@testable import Recording
+
+@Suite struct CaptureConfigurationTests {
+    @Test func configurationCapturesNativePixelsWithoutCursor() {
+        let c = DisplayCaptureSource.makeConfiguration(
+            contentRect: CGRect(x: 0, y: 0, width: 1512, height: 982), pointPixelScale: 2, framesPerSecond: 60)
+        #expect(c.width == 3024 && c.height == 1964 && c.showsCursor == false)
+        #expect(c.pixelFormat == kCVPixelFormatType_32BGRA && c.minimumFrameInterval == CMTime(value: 1, timescale: 60) && c.queueDepth == 6)
+        #expect(c.showMouseClicks == false && c.capturesAudio == false && c.captureResolution == .best)
+        #expect(c.colorSpaceName == CGColorSpace.sRGB)
+    }
+
+    @Test func onlyCompleteFramesAreForwarded() {
+        let complete = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 1), frameIndex: 0)
+        setFrameStatus(.complete, on: complete)
+        let idle = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 2), frameIndex: 1)
+        setFrameStatus(.idle, on: idle)
+        let unmarked = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 3), frameIndex: 2)
+        #expect(DisplayCaptureSource.isCompleteFrame(complete))
+        #expect(!DisplayCaptureSource.isCompleteFrame(idle))
+        #expect(!DisplayCaptureSource.isCompleteFrame(unmarked))
+    }
+
+    @Test func displayAndMicrophoneIdentifyTheirTracks() {
+        let display = DisplayCaptureSource(displayID: 7, framesPerSecond: 30)
+        #expect(display.trackID == "display-7" && display.kind == .display && display.media == .video(framesPerSecond: 30))
+        #expect(display.sourceInfo.displayID == 7 && display.activeDeviceUniqueID == nil)
+        let microphone = MicrophoneCaptureSource(preferredDeviceUniqueID: nil)
+        #expect(microphone.trackID == "mic" && microphone.kind == .microphone && microphone.media == .audio)
+        #expect(microphone.activeDeviceUniqueID == nil)
+    }
+
+    @Test func microphoneRetimingMovesOnlyTheTimestamps() throws {
+        let original = SampleFactory.audioSample(pts: HostTime(nanoseconds: 1_000_000_000), frames: 480, sampleRate: 48_000, channels: 2)
+        let retimed = try MicrophoneCaptureSource.retimed(original) { $0 + CMTime(value: 1, timescale: 1) }
+        #expect(retimed.presentationTimeStamp == CMTime(value: 2_000_000_000, timescale: 1_000_000_000))
+        #expect(retimed.numSamples == 480)
+        let originalFormat = try #require(original.formatDescription)
+        let retimedFormat = try #require(retimed.formatDescription)
+        #expect(CMFormatDescriptionEqual(originalFormat, otherFormatDescription: retimedFormat))
+        #expect(original.presentationTimeStamp == CMTime(value: 1_000_000_000, timescale: 1_000_000_000))
+    }
+
+    @Test func syntheticSourceDeliversOnGivenQueueInOrder() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.video")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30)
+        #expect(source.trackID == "display-1" && source.kind == .display && source.media == .video(framesPerSecond: 30))
+        #expect(source.sourceInfo == TrackSource(
+            name: source.sourceInfo.name, displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 64, height: 36), pixelScale: 1))
+
+        try await source.start(on: queue, sink: sink)
+        try await Task.sleep(for: .seconds(1))
+        await source.stop()
+
+        let samples = sink.samples
+        #expect(samples.count >= 25)
+        #expect(samples.allSatisfy { $0.trackID == "display-1" && $0.width == 64 && $0.height == 36 })
+        #expect(zip(samples, samples.dropFirst()).allSatisfy { $0.pts < $1.pts })
+        #expect(sink.failures.isEmpty)
+        #expect(source.startCount == 1)
+
+        // Nothing arrives once stop() has returned.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(sink.samples.count == samples.count)
+    }
+
+    @Test func stopReleasesTheSink() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.release")
+        let source = SyntheticAudioSource()
+        weak var released: RecordingSink?
+        do {
+            let sink = RecordingSink(queue: queue)
+            released = sink
+            try await source.start(on: queue, sink: sink)
+            #expect(await eventually { sink.samples.count >= 2 })
+            await source.stop()
+        }
+        #expect(released == nil)
+    }
+
+    @Test func syntheticFailureReachesSink() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.failure")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30)
+        try await source.start(on: queue, sink: sink)
+        #expect(await eventually { sink.samples.count >= 3 })
+
+        source.failNow(domain: "SCStreamErrorDomain", code: -3821)
+        #expect(await eventually { !sink.failures.isEmpty })
+        let failures = sink.failures
+        #expect(failures.map(\.domain) == ["SCStreamErrorDomain"] && failures.map(\.code) == [-3821])
+
+        // The error is the last delivery of that run.
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(sink.samples.count == failures[0].samplesBefore)
+
+        // start may be called again after an error.
+        try await source.start(on: queue, sink: sink)
+        #expect(await eventually { sink.samples.count > failures[0].samplesBefore })
+        await source.stop()
+        #expect(source.startCount == 2)
+        #expect(sink.failures.count == 1)
+    }
+
+    @Test func failOnStartThrowsThenStartsNormally() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.failOnStart")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticAudioSource()
+        source.failOnStart = 2
+        for _ in 0..<2 {
+            await #expect(throws: NSError(domain: "Synthetic", code: -1)) {
+                try await source.start(on: queue, sink: sink)
+            }
+        }
+        #expect(source.activeDeviceUniqueID == nil)
+        try await source.start(on: queue, sink: sink)
+        #expect(await eventually { sink.samples.count >= 2 })
+        #expect(source.activeDeviceUniqueID == source.deviceUniqueID)
+        await source.stop()
+        #expect(source.startCount == 3 && source.failOnStart == 0)
+        #expect(source.activeDeviceUniqueID == nil)
+    }
+
+    @Test func clockSkewShiftsAudioPTS() async throws {
+        async let skewed = ptsAdvanceAfterOneSecond(clockSkewPPM: 2000)
+        async let exact = ptsAdvanceAfterOneSecond(clockSkewPPM: 0)
+        // 1 s of samples (48 000 frames) moves the PTS 1 s × (1 + 2000 / 1e6): ≈ 2 ms ahead.
+        let (skewedAdvance, exactAdvance) = try await (skewed, exact)
+        #expect(abs(skewedAdvance - 1.002) < 0.000_001)
+        #expect(abs(exactAdvance - 1.0) < 0.000_001)
+    }
+
+    @Test func switchFormatChangesLaterAudioSamples() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.switchFormat")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticAudioSource(channels: 1)
+        try await source.start(on: queue, sink: sink)
+        #expect(await eventually { sink.samples.count >= 3 })
+        source.switchFormat(sampleRate: 44_100, channels: 2)
+        #expect(await eventually { sink.samples.contains { $0.sampleRate == 44_100 } })
+        await source.stop()
+
+        let samples = sink.samples
+        let switchIndex = try #require(samples.firstIndex { $0.sampleRate == 44_100 })
+        #expect(samples[..<switchIndex].allSatisfy { $0.sampleRate == 48_000 && $0.channels == 1 && $0.frames == 480 })
+        #expect(samples[switchIndex...].allSatisfy { $0.sampleRate == 44_100 && $0.channels == 2 && $0.frames == 441 })
+        // The timeline continues: the first new block starts where the last old one ended.
+        let gap = samples[switchIndex].pts.seconds(since: samples[switchIndex - 1].pts)
+        #expect(abs(gap - 0.010) < 0.000_001)
+    }
+
+    @Test func pausedFramesKeepTheSourceRunning() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.pause")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30)
+        try await source.start(on: queue, sink: sink)
+        #expect(await eventually { sink.samples.count >= 3 })
+
+        source.pauseFrames(true)
+        try await Task.sleep(for: .milliseconds(50))
+        let paused = sink.samples.count
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(sink.samples.count == paused)
+
+        source.pauseFrames(false)
+        #expect(await eventually { sink.samples.count > paused })
+        await source.stop()
+        #expect(sink.failures.isEmpty && source.startCount == 1)
+    }
+
+    /// How far the PTS of the block that starts after 48 000 frames is from the first PTS.
+    private func ptsAdvanceAfterOneSecond(clockSkewPPM: Double) async throws -> Double {
+        let queue = DispatchSerialQueue(label: "test.synthetic.skew.\(clockSkewPPM)")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticAudioSource(sampleRate: 48_000, channels: 1, clockSkewPPM: clockSkewPPM)
+        try await source.start(on: queue, sink: sink)
+        let delivered = await eventually(timeout: .seconds(5)) { sink.samples.count > 100 }
+        await source.stop()
+        try #require(delivered)
+        let samples = sink.samples
+        #expect(samples.prefix(100).allSatisfy { $0.frames == 480 })
+        return samples[100].pts.seconds(since: samples[0].pts)
+    }
+}
+
+/// Sets `SCStreamFrameInfo.status` on the first sample attachment, as ScreenCaptureKit does.
+private func setFrameStatus(_ status: SCFrameStatus, on sample: CMSampleBuffer) {
+    let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true)!
+    let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
+    let key = SCStreamFrameInfo.status.rawValue as CFString
+    let value = status.rawValue as CFNumber
+    CFDictionarySetValue(
+        dictionary, Unmanaged.passUnretained(key).toOpaque(), Unmanaged.passUnretained(value).toOpaque())
+}
+
+/// Polls `condition` until it holds or `timeout` passes.
+func eventually(timeout: Duration = .seconds(5), _ condition: () async -> Bool) async -> Bool {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    while clock.now < deadline {
+        if await condition() { return true }
+        try? await Task.sleep(for: .milliseconds(10))
+    }
+    return await condition()
+}
+
+/// Records what a source delivers. Every call must arrive on `queue` (`dispatchPrecondition` traps
+/// otherwise). The records live in a `Mutex` so they can be read from the test at any time.
+final class RecordingSink: CaptureSink {
+    struct Delivery: Sendable {
+        var trackID: String
+        var pts: HostTime
+        var frames: Int
+        var width: Int?
+        var height: Int?
+        var sampleRate: Double?
+        var channels: Int?
+        var isCompleteFrame: Bool
+        /// Host time at delivery minus the sample's PTS, in seconds.
+        var lag: Double
+    }
+
+    struct Failure: Sendable {
+        var trackID: String
+        var domain: String
+        var code: Int
+        /// Samples delivered before the error.
+        var samplesBefore: Int
+    }
+
+    private struct Log {
+        var samples: [Delivery] = []
+        var failures: [Failure] = []
+    }
+
+    let queue: DispatchSerialQueue
+    private let log = Mutex(Log())
+
+    var samples: [Delivery] { log.withLock { $0.samples } }
+    var failures: [Failure] { log.withLock { $0.failures } }
+
+    init(queue: DispatchSerialQueue) {
+        self.queue = queue
+    }
+
+    func source(_ trackID: String, didOutput sample: CMSampleBuffer) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        let now = HostTime.now()
+        let pts = HostTime(sample.presentationTimeStamp)
+        let image = sample.imageBuffer
+        let audio = sample.formatDescription?.audioStreamBasicDescription
+        let delivery = Delivery(
+            trackID: trackID,
+            pts: pts,
+            frames: sample.numSamples,
+            width: image.map(CVPixelBufferGetWidth),
+            height: image.map(CVPixelBufferGetHeight),
+            sampleRate: audio?.mSampleRate,
+            channels: audio.map { Int($0.mChannelsPerFrame) },
+            isCompleteFrame: DisplayCaptureSource.isCompleteFrame(sample),
+            lag: now.seconds(since: pts)
+        )
+        log.withLock { $0.samples.append(delivery) }
+    }
+
+    func source(_ trackID: String, didStopWithError error: any Error) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        let error = error as NSError
+        log.withLock { log in
+            log.failures.append(
+                Failure(trackID: trackID, domain: error.domain, code: error.code, samplesBefore: log.samples.count))
+        }
+    }
+}

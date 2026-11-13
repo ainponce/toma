@@ -1,0 +1,55 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import CoreMedia
+import Dispatch
+import ProjectFormat
+
+/// Receives what a `CaptureSource` produces.
+///
+/// Delivery contract: every call arrives on the queue passed to `CaptureSource.start(on:sink:)`,
+/// one at a time and in order. Samples come in presentation order, timestamped on the host clock.
+/// `source(_:didStopWithError:)` is the last call of a run: nothing more arrives until the next
+/// `start`. Nothing arrives once `stop()` has returned.
+///
+/// The requirements are not isolated. An actor whose executor is that queue conforms with
+/// `nonisolated` witnesses that enter the actor with `assumeIsolated`.
+public protocol CaptureSink: AnyObject, Sendable {
+    func source(_ trackID: String, didOutput sample: CMSampleBuffer)
+    func source(_ trackID: String, didStopWithError error: any Error)
+}
+
+/// A live producer of one track: a display or a microphone.
+public protocol CaptureSource: AnyObject, Sendable {
+    var trackID: String { get }
+    var kind: TrackKind { get }
+    var media: TrackMedia { get }
+    var sourceInfo: TrackSource { get }
+    /// The device being captured, for sources that have one: set by a successful `start`, kept
+    /// after an error, cleared by `stop`.
+    var activeDeviceUniqueID: String? { get }
+    /// Starts delivering to `sink` on `queue`, with presentation timestamps on the host clock.
+    /// May be called again after an error or after `stop()`: each call ends the previous run first.
+    /// The sink is retained until the run ends (`stop()` or the error), never longer.
+    func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws
+    /// Ends the current run, if any. When it returns, nothing more is delivered and the sink is released.
+    func stop() async
+}
+
+public enum CaptureSourceError: Error, Equatable {
+    /// The display is not among the shareable displays (disconnected or asleep).
+    case displayNotFound(displayID: UInt32)
+    /// No audio input device is available.
+    case microphoneNotFound
+    /// The capture session refused the device input or the audio output.
+    case sessionConfigurationFailed
+    /// `startRunning()` returned without the session running.
+    case sessionDidNotStart
+}
+
+extension DispatchSerialQueue {
+    /// Returns once every block submitted to the queue before the call has run.
+    func drain() async {
+        await withCheckedContinuation { continuation in
+            self.async { continuation.resume() }
+        }
+    }
+}
