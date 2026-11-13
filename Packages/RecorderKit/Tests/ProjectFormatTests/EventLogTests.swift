@@ -318,6 +318,29 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
     }
 }
 
+@Test func unknownEventTypeAtTailIsKeptNotTruncated() async throws {
+    try await withTemporaryDirectory { dir in
+        // A whole line of a type a newer version writes, missing only its line break.
+        let newer = #"{"dy":1,"t":2,"type":"scroll"}"#
+        let contents = try line(marker(1)) + newer
+
+        let url = dir.appendingPathComponent("events.jsonl")
+        try contents.write(to: url, atomically: false, encoding: .utf8)
+        let r = try EventLogReader.read(url)
+        #expect(r.events == [marker(1)])
+        #expect(r.skippedLines == 1 && !r.droppedTruncatedTail)
+        #expect(try EventLogReader.truncateIncompleteTail(url))
+        #expect(try String(contentsOf: url, encoding: .utf8) == contents + "\n")
+
+        let reopened = dir.appendingPathComponent("reopened.jsonl")
+        try contents.write(to: reopened, atomically: false, encoding: .utf8)
+        let writer = try EventLogWriter(url: reopened)
+        writer.append(marker(3))
+        try writer.close()
+        #expect(try String(contentsOf: reopened, encoding: .utf8) == contents + "\n" + (try line(marker(3))))
+    }
+}
+
 @Test func truncateLeavesWholeLinesAlone() async throws {
     try await withTemporaryDirectory { dir in
         let empty = dir.appendingPathComponent("empty.jsonl")

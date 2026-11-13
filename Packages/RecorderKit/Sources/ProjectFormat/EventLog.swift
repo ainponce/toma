@@ -11,22 +11,24 @@ private let newline = UInt8(ascii: "\n")
 ///
 /// `append` only adds the line to a buffer in memory. A timer on the writer's own queue writes
 /// the buffer to the file every `flushInterval` and orders it on disk with `F_BARRIERFSYNC` every
-/// `syncInterval`. `close()` writes what is left, full-syncs and closes the file. A crash of the
-/// app therefore loses at most the events of the last `flushInterval` (plus the timer's latency),
-/// and the file always ends either at a line break or inside its last line, which
-/// `EventLogReader` drops unless it is a whole event that only lacks its line break.
+/// `syncInterval`. `close()` writes what is left, full-syncs and closes the file. While writes
+/// succeed, a crash of the app loses at most the events of the last `flushInterval` (plus the
+/// timer's latency), and the file always ends either at a line break or inside its last line,
+/// which `EventLogReader` drops unless it is a whole JSON object that only lacks its line break.
 ///
 /// A write that fails, for example on a full disk, keeps its bytes in memory: the next timer tick,
 /// `flush()` or `close()` writes them again from the byte where the failed write stopped, so lines
-/// stay whole. `flush()` and `close()` throw if the write keeps failing.
+/// stay whole. A failed sync is retried on the next tick.
+///
+/// No failure goes unreported. The first write or sync of the timer that fails is kept and thrown
+/// once by the next `flush()` or `close()`, even if a later retry succeeded: a later successful
+/// sync does not prove the earlier data reached the disk.
 ///
 /// An existing file is appended to, after making it end at a line break the way
 /// `EventLogReader.truncateIncompleteTail` does. Use one writer per file.
 public final class EventLogWriter: Sendable {
     public static let flushInterval: Duration = .milliseconds(250)
     public static let syncInterval: Duration = .seconds(2)
-
-    private static let ticksPerSync = Int((syncInterval / flushInterval).rounded())
 
     /// The only state `append` touches, so it never waits for disk I/O.
     private struct Pending {
@@ -41,6 +43,8 @@ public final class EventLogWriter: Sendable {
         var fd: Int32?
         /// Bytes taken from `Pending` that are not in the file yet.
         var unwritten: [UInt8] = []
+        /// The first write or sync of the timer that failed since the last time one was thrown.
+        var ioError: (any Error)?
         /// The first event since the last report that could not be encoded.
         var encodingError: (any Error)?
         /// Something was written since the last successful sync.
@@ -52,9 +56,16 @@ public final class EventLogWriter: Sendable {
     private let pending = Mutex(Pending())
     private let file: Mutex<FileState>
     private let timer: any DispatchSourceTimer
+    private let io: EventLogIO
+    private let ticksPerSync: Int
 
     /// Opens `url` for appending, creating it if needed. The folder must exist.
-    public init(url: URL) throws {
+    public convenience init(url: URL) throws {
+        try self.init(url: url, flushInterval: Self.flushInterval, syncInterval: Self.syncInterval, io: .system)
+    }
+
+    /// Tests pass their own intervals and I/O.
+    init(url: URL, flushInterval: Duration, syncInterval: Duration, io: EventLogIO) throws {
         let path = url.path
         var created = true
         var fd = open(path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
@@ -75,11 +86,13 @@ public final class EventLogWriter: Sendable {
         }
 
         file = Mutex(FileState(fd: fd))
+        self.io = io
+        ticksPerSync = max(1, Int((syncInterval / flushInterval).rounded()))
         let timer = DispatchSource.makeTimerSource(queue: DispatchQueue(label: "dev.toma.EventLogWriter", qos: .utility))
         self.timer = timer
         // Weak, so the timer never keeps an abandoned writer alive; `close()` cancels it.
         timer.setEventHandler { [weak self] in self?.tick() }
-        let interval = Self.flushInterval.dispatchInterval
+        let interval = flushInterval.dispatchInterval
         timer.schedule(deadline: .now() + interval, repeating: interval, leeway: .milliseconds(25))
         timer.activate()
     }
@@ -92,7 +105,7 @@ public final class EventLogWriter: Sendable {
 
     /// Adds `event` to the buffer. Does nothing after `close()`.
     ///
-    /// An event that cannot be encoded (a non-finite number) is dropped, and the next `flush()`
+    /// An event that cannot be encoded (a non-finite number) is dropped, and a later `flush()`
     /// or `close()` throws its `EncodingError`.
     public func append(_ event: InputEvent) {
         do {
@@ -112,13 +125,18 @@ public final class EventLogWriter: Sendable {
 
     /// Writes the buffer to the file now, without syncing it. Does nothing after `close()`.
     ///
-    /// Throws the write error if the write fails (the bytes stay buffered), or else the error of
-    /// the first event `append` could not encode since the last time it was thrown.
+    /// Throws the write error if its own write fails (the bytes stay buffered). Otherwise it throws,
+    /// once, an earlier failure the caller has not heard of: first a failed write or sync of the
+    /// timer, then, on a later call, an event `append` could not encode.
     public func flush() throws {
         try file.withLock { file in
             guard let fd = file.fd else { return }
             drainPending(into: &file)
-            try Self.writeUnwritten(&file, to: fd)
+            try writeUnwritten(&file, to: fd)
+            if let error = file.ioError {
+                file.ioError = nil
+                throw error
+            }
             if let error = file.encodingError {
                 file.encodingError = nil
                 throw error
@@ -129,9 +147,10 @@ public final class EventLogWriter: Sendable {
     /// Writes the buffer, full-syncs the file with `F_FULLFSYNC` and closes it. Later calls to
     /// `append`, `flush()` and `close()` do nothing.
     ///
-    /// The writer is closed even when this throws: it throws the first error of the write, the sync
-    /// or `close(2)`, and else the error of an event `append` could not encode. Bytes that could not
-    /// be written are lost.
+    /// The writer is closed even when this throws, and bytes that could not be written are lost.
+    /// It throws the first failure the caller has not heard of: a failed write or sync of the timer
+    /// (even when the final sync succeeds), else its own write, sync or `close(2)`, else an event
+    /// `append` could not encode.
     public func close() throws {
         try file.withLock { file in
             pending.withLock { $0.isClosed = true }
@@ -140,31 +159,39 @@ public final class EventLogWriter: Sendable {
             timer.cancel()
             drainPending(into: &file)
 
-            var firstError: (any Error)?
-            do { try Self.writeUnwritten(&file, to: fd) } catch { firstError = error }
-            do { try DurableFile.fullSync(fd) } catch { firstError = firstError ?? error }
-            if Darwin.close(fd) != 0, firstError == nil { firstError = POSIXError.current() }
-            let encodingError = file.encodingError
+            var ownError: (any Error)?
+            do { try writeUnwritten(&file, to: fd) } catch { ownError = error }
+            do { try io.fullSync(fd) } catch { ownError = ownError ?? error }
+            if Darwin.close(fd) != 0, ownError == nil { ownError = POSIXError.current() }
+            let error = file.ioError ?? ownError ?? file.encodingError
             file.unwritten = []
+            file.ioError = nil
             file.encodingError = nil
-            if let error = firstError ?? encodingError { throw error }
+            if let error { throw error }
         }
     }
 
     /// Every `flushInterval`, on the timer's queue.
-    private func tick() {
+    func tick() {
         file.withLock { file in
             guard let fd = file.fd else { return }
             drainPending(into: &file)
-            // A failed write keeps its bytes for the next tick, `flush()` or `close()`, and those two
-            // throw if it keeps failing.
-            try? Self.writeUnwritten(&file, to: fd)
+            do {
+                try writeUnwritten(&file, to: fd)
+            } catch {
+                // The bytes stay for the next tick, `flush()` or `close()`; one of those two throws it.
+                if file.ioError == nil { file.ioError = error }
+            }
             file.ticksSinceSync += 1
-            guard file.ticksSinceSync >= Self.ticksPerSync else { return }
+            guard file.ticksSinceSync >= ticksPerSync else { return }
             if file.needsSync {
-                // A failed sync is retried on the next tick; `close()` full-syncs and throws if the
-                // file cannot be synced.
-                guard (try? DurableFile.barrierSync(fd)) != nil else { return }
+                do {
+                    try io.barrierSync(fd)
+                } catch {
+                    // Retried on the next tick; the next `flush()` or `close()` throws it.
+                    if file.ioError == nil { file.ioError = error }
+                    return
+                }
                 file.needsSync = false
             }
             file.ticksSinceSync = 0
@@ -190,7 +217,7 @@ public final class EventLogWriter: Sendable {
     }
 
     /// Writes `unwritten`, keeping whatever a failed write did not reach.
-    private static func writeUnwritten(_ file: inout FileState, to fd: Int32) throws {
+    private func writeUnwritten(_ file: inout FileState, to fd: Int32) throws {
         var written = 0
         defer {
             if written > 0 {
@@ -199,26 +226,44 @@ public final class EventLogWriter: Sendable {
             }
         }
         try file.unwritten.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-            guard let base = buffer.baseAddress else { return }
             while written < buffer.count {
-                let result = write(fd, base + written, buffer.count - written)
-                if result < 0 {
-                    if errno == EINTR { continue }
-                    throw POSIXError.current()
-                }
-                written += result
+                let count = try io.write(fd, UnsafeRawBufferPointer(rebasing: buffer[written...]))
+                // `write(2)` on a regular file never writes 0 of a non-empty buffer; don't spin if it does.
+                guard count > 0 else { throw POSIXError(.EIO) }
+                written += count
             }
         }
     }
+}
+
+/// The calls through which `EventLogWriter` touches its file, so tests can make them fail.
+struct EventLogIO: Sendable {
+    /// Writes some of the bytes, retrying `EINTR`, and returns how many it wrote.
+    var write: @Sendable (Int32, UnsafeRawBufferPointer) throws -> Int
+    var barrierSync: @Sendable (Int32) throws -> Void
+    var fullSync: @Sendable (Int32) throws -> Void
+
+    static let system = EventLogIO(
+        write: { fd, buffer in
+            while true {
+                let count = Darwin.write(fd, buffer.baseAddress, buffer.count)
+                if count >= 0 { return count }
+                if errno != EINTR { throw POSIXError.current() }
+            }
+        },
+        barrierSync: { try DurableFile.barrierSync($0) },
+        fullSync: { try DurableFile.fullSync($0) }
+    )
 }
 
 /// What `EventLogReader.read` found in an `events.jsonl`.
 public struct EventLogReadResult: Sendable {
     /// The events in file order, which is the order they were appended, not always the order of `t`.
     public var events: [InputEvent]
-    /// The file ended inside a line that is not an event: a write cut short by a crash. It was ignored.
+    /// The file ended inside a line that is not a whole JSON object: a write cut short by a crash.
+    /// It was ignored.
     public var droppedTruncatedTail: Bool
-    /// Whole lines that are not an event this version can read (damaged, or of a newer type).
+    /// Lines that are whole but not an event this version can read (damaged, or of a newer type).
     /// They were ignored.
     public var skippedLines: Int
 
@@ -231,9 +276,10 @@ public struct EventLogReadResult: Sendable {
 
 /// Reads `events.jsonl` the way it can be after a crash.
 ///
-/// A line is whole when it ends with a line break. A last line without one is kept if it is an
-/// event (only its line break is missing) and dropped if not (a write cut short). A whole line
-/// that is not an event is skipped and counted, and the lines after it are still read.
+/// A line is whole when it ends with a line break. A last line without one is whole too if it is a
+/// complete JSON object, because a write cut short never is one: it is read like any other line.
+/// Otherwise it is a write cut short and is dropped. A whole line that is not an event is skipped
+/// and counted, and the lines after it are still read.
 public enum EventLogReader {
     /// Throws only if the file cannot be read.
     public static func read(_ url: URL) throws -> EventLogReadResult {
@@ -249,6 +295,8 @@ public enum EventLogReader {
                     let tail = data[(data.startIndex + start)...]
                     if let event = try? decoder.decode(InputEvent.self, from: tail) {
                         result.events.append(event)
+                    } else if isWholeObject(tail) {
+                        result.skippedLines += 1
                     } else {
                         result.droppedTruncatedTail = true
                     }
@@ -269,9 +317,10 @@ public enum EventLogReader {
 
     /// Makes the file end at a line break before more lines are appended to it, and full-syncs it.
     ///
-    /// A last line without its line break that is not an event (a write cut short by a crash) is
-    /// truncated away; one that is an event gets its line break. Returns `true` if the file changed.
-    /// Whole lines are never touched.
+    /// A last line without its line break that is not a complete JSON object (a write cut short by
+    /// a crash) is truncated away. One that is a complete JSON object gets its line break, even if
+    /// its `type` is unknown to this version, so no event is ever deleted. Returns `true` if the
+    /// file changed. Whole lines are never touched.
     public static func truncateIncompleteTail(_ url: URL) throws -> Bool {
         let fd = open(url.path, O_RDWR | O_APPEND | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError.current() }
@@ -294,13 +343,21 @@ public enum EventLogReader {
         guard size > 0, try readBytes(fd, at: size - 1, count: 1) != [newline] else { return false }
         let tailStart = try startOfLastLine(fd, size: size)
         let tail = try readBytes(fd, at: tailStart, count: Int(size - tailStart))
-        if (try? JSONDecoder().decode(InputEvent.self, from: Data(tail))) != nil {
+        if isWholeObject(Data(tail)) {
             try DurableFile.writeAll(Data([newline]), to: fd)
         } else {
             guard ftruncate(fd, tailStart) == 0 else { throw POSIXError.current() }
         }
         try DurableFile.fullSync(fd)
         return true
+    }
+
+    /// Whether `bytes` is one complete JSON object. Every line is one, and no strict prefix of a
+    /// JSON object is, so this tells a whole line that lacks its line break from a write cut short,
+    /// whatever its `type`.
+    private static func isWholeObject(_ bytes: Data) -> Bool {
+        guard let object = try? JSONSerialization.jsonObject(with: bytes) else { return false }
+        return object is [String: Any]
     }
 
     private static let chunkSize: off_t = 64 * 1024

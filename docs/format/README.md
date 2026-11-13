@@ -208,8 +208,8 @@ Reglas de escritura:
 - UTF-8. Cada línea es un objeto JSON compacto (sin espacios) que termina en `\n`, con las claves en orden alfabético y sin escapar `/`. Un salto de línea dentro de un texto se escribe escapado (`\n`), así que nunca corta la línea.
 - Todo evento tiene `t`, su instante como `HostTime`, y `type`. Los demás campos dependen del tipo y van al mismo nivel.
 - Los números que son enteros se escriben sin decimales (`20`, no `20.0`), aunque el campo admita fracciones; los demás, con la forma decimal más corta que vuelve al mismo valor (`10.5`). Un lector acepta las dos formas. Nunca se escriben `NaN` ni infinitos: un evento con uno de esos valores no se registra y quien graba recibe el error.
-- El archivo solo crece por el final (`O_APPEND`); una línea escrita no se reescribe. Los eventos se juntan en memoria y se escriben cada 250 ms; cada 2 s lo escrito se ordena en disco con `F_BARRIERFSYNC`, y al cerrar la toma se escribe lo que falta y se fuerza a disco con `F_FULLFSYNC` (con `fsync` si el volumen no los admite). Si la app muere, se pierden como mucho los eventos de los últimos 250 ms, más lo que tarde el sistema en disparar el temporizador.
-- Una escritura que falla, por ejemplo con el disco lleno, se reintenta desde el byte donde quedó, así las líneas siguen enteras.
+- El archivo solo crece por el final (`O_APPEND`); una línea escrita no se reescribe. Los eventos se juntan en memoria y se escriben cada 250 ms; cada 2 s lo escrito se ordena en disco con `F_BARRIERFSYNC`, y al cerrar la toma se escribe lo que falta y se fuerza a disco con `F_FULLFSYNC` (con `fsync` si el volumen no los admite). Mientras las escrituras funcionan, si la app muere se pierden como mucho los eventos de los últimos 250 ms, más lo que tarde el sistema en disparar el temporizador. Si las escrituras fallan (por ejemplo, con el disco lleno), los eventos esperan en memoria y se pierden si la app muere antes de que un reintento funcione.
+- Una escritura que falla se reintenta desde el byte donde quedó, así las líneas siguen enteras, y una sincronización que falla se reintenta a los 250 ms. Quien graba recibe siempre el error de la primera escritura o sincronización que falló, aunque un reintento posterior funcione: que una sincronización posterior funcione no prueba que lo escrito antes haya llegado al disco.
 - Las líneas van en el orden en que se registraron, que no siempre es el orden de `t`: un clic llega con el instante que le puso el sistema y el cursor se muestrea en otra cola. Quien necesite orden temporal ordena por `t`.
 - Un solo proceso escribe el archivo de una toma por vez.
 
@@ -248,9 +248,9 @@ Una línea de cada tipo, exactamente como se escribe:
 ### Lectura después de un crash
 
 - Una línea está completa cuando termina en `\n`.
-- Si la última línea no termina en `\n` y es un evento válido, se lee: solo le faltó el salto de línea. Si no lo es, es una escritura que un crash cortó a la mitad y se descarta.
+- Si la última línea no termina en `\n` pero es un objeto JSON completo, solo le faltó el salto de línea, porque una escritura cortada a la mitad nunca es un objeto completo: se lee como cualquier otra línea (y si es de un `type` que esta versión no conoce, se saltea y se cuenta). Si no es un objeto JSON completo, es una escritura que un crash cortó a la mitad y se descarta.
 - Una línea completa que no es un evento legible (dañada, vacía o de un `type` que esta versión no conoce) se saltea y se cuenta, y el resto del archivo se lee igual. Así una versión vieja puede abrir un archivo con tipos nuevos.
-- Antes de seguir escribiendo en un archivo que ya existe (al reabrirlo o en la recuperación), se lo hace terminar en un límite de línea: la línea cortada del final se trunca, y una última línea válida sin `\n` recibe el suyo. Después se fuerza a disco con `F_FULLFSYNC`. Las líneas completas nunca se tocan.
+- Antes de seguir escribiendo en un archivo que ya existe (al reabrirlo o en la recuperación), se lo hace terminar en un límite de línea: la línea cortada del final se trunca, y una última línea que es un objeto JSON completo sin `\n` recibe el suyo, aunque esta versión no conozca su `type`, así nunca se borra un evento. Después se fuerza a disco con `F_FULLFSYNC`. Las líneas completas nunca se tocan.
 
 ## Tiempos
 
