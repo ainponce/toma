@@ -14,6 +14,16 @@ private func frame(_ i: Int, at seconds: Double) -> CMSampleBuffer {
     SampleFactory.videoSample(width: 640, height: 360, pts: base.adding(seconds: seconds), frameIndex: i)
 }
 
+/// Like `frame`, optionally carrying an explicit duration of 1/30 s, as ScreenCaptureKit frames may.
+private func frame(_ i: Int, at seconds: Double, carryingDuration: Bool) throws -> CMSampleBuffer {
+    let sample = frame(i, at: seconds)
+    guard carryingDuration else { return sample }
+    let timing = CMSampleTimingInfo(
+        duration: CMTime(value: 1, timescale: 30), presentationTimeStamp: sample.presentationTimeStamp, decodeTimeStamp: .invalid
+    )
+    return try CMSampleBuffer(copying: sample, withNewTiming: [timing])
+}
+
 @Test func bitrateFormula() {
     #expect(VideoBitrate.averageBitRate(width: 3024, height: 1964, framesPerSecond: 60) == 17_817_408)
 }
@@ -43,11 +53,11 @@ private func frame(_ i: Int, at seconds: Double) -> CMSampleBuffer {
     }
 }
 
-@Test func finishHoldsLastFrameUntilStopTime() async throws {
+@Test(arguments: [false, true]) func finishHoldsLastFrameUntilStopTime(framesCarryDuration: Bool) async throws {
     try await withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("seg-0001.mov")
         let w = try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: 30), realTime: false)
-        for i in 0..<10 { try w.append(frame(i, at: Double(i) / 10)) }
+        for i in 0..<10 { try w.append(frame(i, at: Double(i) / 10, carryingDuration: framesCarryDuration)) }
         let r = try await w.finish(at: base.adding(seconds: 5))
         #expect(r.startHostTime == base && r.endHostTime == base.adding(seconds: 5))
         #expect(r.sampleCount == 10 && r.droppedSampleCount == 0 && r.heartbeatSampleCount == 0)
@@ -60,11 +70,11 @@ private func frame(_ i: Int, at seconds: Double) -> CMSampleBuffer {
     }
 }
 
-@Test func heartbeatExtendsReadableDurationWithoutFinish() async throws {
+@Test(arguments: [false, true]) func heartbeatExtendsReadableDurationWithoutFinish(framesCarryDuration: Bool) async throws {
     try await withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("seg-0001.mov")
         let w = try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: 30), realTime: false)
-        for i in 0..<10 { try w.append(frame(i, at: Double(i) / 30)) }
+        for i in 0..<10 { try w.append(frame(i, at: Double(i) / 30, carryingDuration: framesCarryDuration)) }
         for k in 1...6 { try w.appendHeartbeat(at: base.adding(seconds: 0.5 * Double(k))) }
 
         // Not finished: what a crash at this point would leave on disk.
@@ -73,6 +83,8 @@ private func frame(_ i: Int, at seconds: Double) -> CMSampleBuffer {
         let r = try await w.finish(at: base.adding(seconds: 3))
         #expect(r.sampleCount == 10 && r.heartbeatSampleCount == 6 && r.droppedSampleCount == 0)
         #expect(abs(try await AVURLAsset(url: url).load(.duration).seconds - 3) < 0.05)
+        // Each heartbeat holds the frame until the next one, so the media itself reaches 3 s.
+        #expect(abs(try await videoMediaEnd(of: url) - 3) < 0.05)
     }
 }
 
@@ -98,6 +110,17 @@ private func frame(_ i: Int, at seconds: Double) -> CMSampleBuffer {
         #expect(CMFormatDescriptionGetMediaSubType(format) == expected)
         let asbd = try #require(CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee)
         #expect(Int(asbd.mChannelsPerFrame) == channels && asbd.mSampleRate == 48_000)
+        let expectedLayout: AudioChannelLayoutTag? = switch channels {
+        case 4: kAudioChannelLayoutTag_MPEG_4_0_B
+        case 8: kAudioChannelLayoutTag_MPEG_7_1_B
+        case 10: kAudioChannelLayoutTag_DiscreteInOrder | 10
+        default: nil  // 1–2 channels: no layout is requested
+        }
+        if let expectedLayout {
+            var layoutSize = 0
+            let layout = try #require(CMAudioFormatDescriptionGetChannelLayout(format, sizeOut: &layoutSize))
+            #expect(layout.pointee.mChannelLayoutTag == expectedLayout)
+        }
     }
 }
 
@@ -176,6 +199,10 @@ private func frame(_ i: Int, at seconds: Double) -> CMSampleBuffer {
         }
         #expect(throws: WriterError.unsupportedFormat) {
             _ = try FragmentedTrackWriter(url: dir.appendingPathComponent("b.mov"), media: .video(framesPerSecond: 0))
+        }
+        // AVAssetWriter raises NSInvalidArgumentException for a URL that is not a file URL.
+        #expect(throws: WriterError.unsupportedFormat) {
+            _ = try FragmentedTrackWriter(url: try #require(URL(string: "https://example.invalid/seg.mov")), media: .audio)
         }
 
         let audioURL = dir.appendingPathComponent("audio.mov")

@@ -20,13 +20,17 @@ public final class FragmentedTrackWriter: TrackWriting {
 
     /// Most audio held while the encoder is busy in real time; beyond it the oldest is dropped.
     static let maxPendingAudioSeconds = 2.0
-    /// How long `append` waits for the encoder when not in real time, and how often it looks.
-    static let readinessTimeoutSeconds = 5.0
+    /// How often waiting for the encoder looks again.
     static let readinessPollMicroseconds: useconds_t = 1_000
 
     public var onStart: ((HostTime) -> Void)?
     public private(set) var formatDescription: CMFormatDescription?
     public private(set) var failure: NSError?
+
+    /// How long waiting for the encoder may take before it gives up.
+    var readinessTimeoutSeconds = 5.0
+    /// Whether the encoder takes more data now. Tests replace it to make the encoder look busy.
+    var inputHasRoom: (AVAssetWriterInput) -> Bool = { $0.isReadyForMoreMediaData }
 
     private let media: TrackMedia
     private let realTime: Bool
@@ -34,13 +38,14 @@ public final class FragmentedTrackWriter: TrackWriting {
     private var input: AVAssetWriterInput?
     /// Host time of the first sample, time zero in the file.
     private var start: HostTime?
-    /// Newest presentation time taken (written, queued or dropped), including heartbeats.
+    /// Newest presentation time taken: written, queued or deliberately dropped, heartbeats included.
     private var lastPTS: HostTime?
+    /// Newest presentation time handed to the encoder.
+    private var lastWrittenPTS: HostTime?
     /// Newest video frame taken, already retimed; heartbeats and `finish` repeat it.
     private var lastFrame: CMSampleBuffer?
-    /// Real-time audio waiting for the encoder, oldest first, already retimed.
-    private var pendingAudio: [CMSampleBuffer] = []
-    private var pendingAudioSeconds = 0.0
+    /// Real-time audio waiting for the encoder; set up with the source sample rate in `configure`.
+    private var pendingAudio = PendingAudioQueue(capacitySeconds: maxPendingAudioSeconds, sampleRate: 0)
     private var sampleCount = 0
     private var droppedSampleCount = 0
     private var heartbeatSampleCount = 0
@@ -48,14 +53,15 @@ public final class FragmentedTrackWriter: TrackWriting {
 
     /// Creates the writer; the file itself is created with the first sample.
     /// - Throws: `WriterError.fileExists` if anything already exists at `url` (it is left untouched),
-    ///   `WriterError.unsupportedFormat` for a video rate below 1 fps or a fragment interval that is
-    ///   not a positive time.
+    ///   `WriterError.unsupportedFormat` for a URL that is not a file URL, a video rate below 1 fps or
+    ///   a fragment interval that is not a positive time.
     public init(
         url: URL,
         media: TrackMedia,
         realTime: Bool = true,
         fragmentInterval: CMTime = defaultFragmentInterval
     ) throws {
+        guard url.isFileURL else { throw WriterError.unsupportedFormat }
         if case .video(let framesPerSecond) = media, framesPerSecond < 1 { throw WriterError.unsupportedFormat }
         guard fragmentInterval.isNumeric, fragmentInterval > .zero else { throw WriterError.unsupportedFormat }
         var existing = stat()
@@ -87,13 +93,15 @@ public final class FragmentedTrackWriter: TrackWriting {
         }
         if start == nil { try startWriting(at: host) }
         let retimed = try self.retimed(sample, at: host)
-        lastPTS = host
 
+        // The sample counts as taken (`lastPTS`, `lastFrame`) only once it is written, queued or
+        // deliberately dropped; a sample that times out or fails is not taken.
         switch media {
         case .video:
-            lastFrame = retimed
             if realTime {
-                guard input.isReadyForMoreMediaData else {
+                guard try hasRoom(input) else {
+                    lastPTS = host
+                    lastFrame = retimed
                     droppedSampleCount += 1
                     return
                 }
@@ -101,19 +109,19 @@ public final class FragmentedTrackWriter: TrackWriting {
                 try waitUntilReady(input)
             }
             try write(retimed, to: input)
+            lastPTS = host
+            lastFrame = retimed
             sampleCount += 1
         case .audio:
             if realTime {
-                pendingAudio.append(retimed)
-                pendingAudioSeconds += Self.seconds(of: retimed)
+                try drainPendingAudio(into: input, waiting: false)  // make room before the cap applies
+                droppedSampleCount += pendingAudio.push(retimed).count
+                lastPTS = host
                 try drainPendingAudio(into: input, waiting: false)
-                while pendingAudioSeconds > Self.maxPendingAudioSeconds, pendingAudio.count > 1 {
-                    pendingAudioSeconds -= Self.seconds(of: pendingAudio.removeFirst())
-                    droppedSampleCount += 1
-                }
             } else {
                 try waitUntilReady(input)
                 try write(retimed, to: input)
+                lastPTS = host
                 sampleCount += 1
             }
         }
@@ -131,7 +139,7 @@ public final class FragmentedTrackWriter: TrackWriting {
         }
         let repeated = try retimed(lastFrame, at: time)
         if realTime {
-            guard input.isReadyForMoreMediaData else { return }
+            guard try hasRoom(input) else { return }
         } else {
             try waitUntilReady(input)
         }
@@ -140,14 +148,14 @@ public final class FragmentedTrackWriter: TrackWriting {
         heartbeatSampleCount += 1
     }
 
-    /// Writes what is still queued, holds the last video frame until `stopTime`, ends the session
-    /// there and finishes the file. The end is never earlier than the last sample taken.
+    /// Writes the queued audio, holds the last video frame until `stopTime`, ends the session there
+    /// and finishes the file. The session never ends before the start of the last sample taken; an
+    /// audio block that ends after `stopTime` is cut at `stopTime`.
     ///
-    /// A writer whose failure was already reported (`failure`, thrown by `append`) is not finalized,
-    /// since AVFoundation cannot; its file keeps every fragment written before the failure, and the
-    /// result still reports the counts.
-    /// - Throws: `alreadyFinished` on a second call; `appendFailed` if the writer failed since the
-    ///   last append or the file cannot be finished (it then keeps every fragment written so far).
+    /// Follows `TrackWriting.finish`: once the segment started it always returns a result, and a
+    /// writer error goes to `failure`. If the encoder has no room for 5 s while finishing, the audio
+    /// still queued is counted as dropped and the hold frame is skipped, and the file is finished anyway.
+    /// - Throws: Only `alreadyFinished`, on a second call.
     public nonisolated(nonsending) func finish(at stopTime: HostTime) async throws -> SegmentResult {
         guard !finished else { throw WriterError.alreadyFinished }
         finished = true
@@ -156,31 +164,15 @@ public final class FragmentedTrackWriter: TrackWriting {
                 startHostTime: nil, endHostTime: stopTime, sampleCount: 0, droppedSampleCount: 0, heartbeatSampleCount: 0
             )
         }
-        if failure == nil, writer.status != .writing { throw recordFailure() }
+        if failure == nil, writer.status != .writing { _ = recordFailure() }
         let end = max(stopTime, lastPTS ?? start)
-        if failure == nil {
-            try drainPendingAudio(into: input, waiting: true)
-            if case .video(let framesPerSecond) = media, let lastFrame, let lastPTS,
-               end.seconds(since: lastPTS) > 1 / Double(framesPerSecond) {
-                let held = try retimed(lastFrame, at: end)
-                try waitUntilReady(input)
-                try write(held, to: input)
-            }
-            guard writer.status == .writing else { throw recordFailure() }
-            writer.endSession(atSourceTime: offset(of: end))
-            await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
-                writer.finishWriting { done.resume() }
-            }
-            guard writer.status == .completed else { throw recordFailure() }
-        } else {
-            droppedSampleCount += pendingAudio.count
-            pendingAudio.removeAll()
-            pendingAudioSeconds = 0
+        if failure == nil { await finalize(input, endingAt: end) }
+        guard failure == nil else {
+            // Not finalized: the file holds the fragments written before the failure.
+            droppedSampleCount += pendingAudio.removeAll().count
+            return result(start: start, end: lastWrittenPTS ?? start)
         }
-        return SegmentResult(
-            startHostTime: start, endHostTime: end, sampleCount: sampleCount,
-            droppedSampleCount: droppedSampleCount, heartbeatSampleCount: heartbeatSampleCount
-        )
+        return result(start: start, end: end)
     }
 
     // MARK: - Setup
@@ -197,6 +189,7 @@ public final class FragmentedTrackWriter: TrackWriting {
         let mediaType: AVMediaType
         let settings: [String: Any]
         let hint: CMFormatDescription?
+        var sampleRate = 0.0
         switch media {
         case .video(let framesPerSecond):
             guard CMFormatDescriptionGetMediaType(format) == kCMMediaType_Video else { throw WriterError.unsupportedFormat }
@@ -213,6 +206,7 @@ public final class FragmentedTrackWriter: TrackWriting {
             mediaType = .audio
             settings = Self.audioSettings(for: asbd)
             hint = nil
+            sampleRate = asbd.mSampleRate
         }
         guard writer.status == .unknown, writer.canApply(outputSettings: settings, forMediaType: mediaType) else {
             throw WriterError.unsupportedFormat
@@ -223,6 +217,7 @@ public final class FragmentedTrackWriter: TrackWriting {
         writer.add(input)
         self.input = input
         formatDescription = format
+        pendingAudio = PendingAudioQueue(capacitySeconds: Self.maxPendingAudioSeconds, sampleRate: sampleRate)
         return input
     }
 
@@ -343,27 +338,72 @@ public final class FragmentedTrackWriter: TrackWriting {
 
     // MARK: - Writing
 
+    /// Drains the queue, adds the hold frame, ends the session at `end` and finishes the file. A
+    /// timeout drops what is still queued, or skips the hold, and finishing goes on; a writer error
+    /// stops here and is left in `failure`.
+    private nonisolated(nonsending) func finalize(_ input: AVAssetWriterInput, endingAt end: HostTime) async {
+        do {
+            try drainPendingAudio(into: input, waiting: true)
+        } catch {
+            guard failure == nil else { return }
+            droppedSampleCount += pendingAudio.removeAll().count
+        }
+        if case .video(let framesPerSecond) = media, let lastFrame, let lastPTS,
+           end.seconds(since: lastPTS) > 1 / Double(framesPerSecond) {
+            do {
+                let held = try retimed(lastFrame, at: end)
+                try waitUntilReady(input)
+                try write(held, to: input)
+            } catch {
+                guard failure == nil else { return }  // otherwise the hold is cosmetic: skip it
+            }
+        }
+        guard writer.status == .writing else {
+            _ = recordFailure()
+            return
+        }
+        writer.endSession(atSourceTime: offset(of: end))
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            writer.finishWriting { done.resume() }
+        }
+        if writer.status != .completed { _ = recordFailure() }
+    }
+
+    private func result(start: HostTime, end: HostTime) -> SegmentResult {
+        SegmentResult(
+            startHostTime: start, endHostTime: end, sampleCount: sampleCount,
+            droppedSampleCount: droppedSampleCount, heartbeatSampleCount: heartbeatSampleCount
+        )
+    }
+
     /// Hands queued real-time audio to the encoder in order: while it has room, or, with `waiting`,
     /// all of it, waiting for room as `append` does outside real time.
     private func drainPendingAudio(into input: AVAssetWriterInput, waiting: Bool) throws {
         while let next = pendingAudio.first {
             if waiting {
                 try waitUntilReady(input)
-            } else if !input.isReadyForMoreMediaData {
+            } else if try !hasRoom(input) {
                 return
             }
             try write(next, to: input)
-            pendingAudio.removeFirst()
-            pendingAudioSeconds -= Self.seconds(of: next)
+            _ = pendingAudio.popFirst()
             sampleCount += 1
         }
     }
 
-    /// Polls every millisecond until the encoder takes more data; gives up after 5 s.
+    /// Whether the encoder takes more data now. A writer that stopped is noticed here, so `failure`
+    /// is set on the call where it happens rather than on the next one.
+    private func hasRoom(_ input: AVAssetWriterInput) throws -> Bool {
+        if inputHasRoom(input) { return true }
+        guard writer.status == .writing else { throw recordFailure() }
+        return false
+    }
+
+    /// Polls every millisecond until the encoder takes more data; gives up after
+    /// `readinessTimeoutSeconds` with `appendFailed("timeout")`, leaving `failure` unset.
     private func waitUntilReady(_ input: AVAssetWriterInput) throws {
-        let deadline = HostTime.now().adding(seconds: Self.readinessTimeoutSeconds)
-        while !input.isReadyForMoreMediaData {
-            guard writer.status == .writing else { throw recordFailure() }
+        let deadline = HostTime.now().adding(seconds: readinessTimeoutSeconds)
+        while try !hasRoom(input) {
             guard HostTime.now() < deadline else { throw WriterError.appendFailed("timeout") }
             usleep(Self.readinessPollMicroseconds)
         }
@@ -372,6 +412,7 @@ public final class FragmentedTrackWriter: TrackWriting {
     private func write(_ sample: CMSampleBuffer, to input: AVAssetWriterInput) throws {
         guard writer.status == .writing else { throw recordFailure() }
         guard input.append(sample), writer.status != .failed else { throw recordFailure() }
+        lastWrittenPTS = HostTime(nanoseconds: (start?.nanoseconds ?? 0) + HostTime(sample.presentationTimeStamp).nanoseconds)
     }
 
     /// Keeps the writer's error as `failure` and returns the error to throw.
@@ -392,21 +433,25 @@ public final class FragmentedTrackWriter: TrackWriting {
     }
 
     /// A copy of `sample` that presents at `host` in file time. Every timing entry keeps its offset
-    /// from the first one, so a multi-entry buffer keeps its shape. Decode times are dropped: the
-    /// samples are uncompressed and the encoder assigns its own.
+    /// from the first one, so a multi-entry buffer keeps its shape. Decode times are dropped (the
+    /// samples are uncompressed and the encoder assigns its own), and so are video durations: a frame
+    /// lasts until the next one, so held and heartbeat frames extend however the source timed them.
     private func retimed(_ sample: CMSampleBuffer, at host: HostTime) throws -> CMSampleBuffer {
         let entries = (try? sample.sampleTimingInfos()) ?? []
         let first = entries.first?.presentationTimeStamp ?? .invalid
         let shift = offset(of: host)
+        let keepsDuration = media == .audio
         let timing: [CMSampleTimingInfo]
         if entries.isEmpty || !first.isNumeric {
-            timing = [CMSampleTimingInfo(duration: sample.duration, presentationTimeStamp: shift, decodeTimeStamp: .invalid)]
+            let duration = keepsDuration ? sample.duration : .invalid
+            timing = [CMSampleTimingInfo(duration: duration, presentationTimeStamp: shift, decodeTimeStamp: .invalid)]
         } else {
             timing = entries.map { entry in
                 let pts = entry.presentationTimeStamp.isNumeric
                     ? CMTimeAdd(shift, CMTimeSubtract(entry.presentationTimeStamp, first))
                     : shift
-                return CMSampleTimingInfo(duration: entry.duration, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+                let duration = keepsDuration ? entry.duration : .invalid
+                return CMSampleTimingInfo(duration: duration, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
             }
         }
         do {
@@ -414,10 +459,5 @@ public final class FragmentedTrackWriter: TrackWriting {
         } catch {
             throw WriterError.appendFailed("could not retime sample (\(error))")
         }
-    }
-
-    private static func seconds(of sample: CMSampleBuffer) -> Double {
-        let duration = sample.duration
-        return duration.isNumeric ? duration.seconds : 0
     }
 }

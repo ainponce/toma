@@ -54,6 +54,15 @@ public protocol TrackWriting: AnyObject {
     /// Repeats the last video frame at `time`, so a static screen keeps producing fragments.
     func appendHeartbeat(at time: HostTime) throws
     /// Closes the segment at `stopTime`. Called once; later calls throw `alreadyFinished`.
+    ///
+    /// Once the segment has started (`onStart` was called), `finish` always returns a result with
+    /// the counts, and a writer error is reported through `failure`, never thrown. `endHostTime` is
+    /// `stopTime` (never before the last sample taken) when the file was finished, or the last sample
+    /// written when the writer failed and the file keeps only the fragments written before it. With
+    /// nothing started, the result has `startHostTime == nil` and `endHostTime == stopTime`.
+    /// Besides `alreadyFinished`, a conformer may throw only when nothing was started and closing
+    /// itself failed; `FragmentedTrackWriter` never touches a file it did not start, so it never does.
+    ///
     /// Runs on the caller's actor (`nonisolated(nonsending)`), so the pipeline actor that owns the
     /// non-Sendable writer can await it without sending the writer to another executor.
     nonisolated(nonsending) func finish(at stopTime: HostTime) async throws -> SegmentResult
