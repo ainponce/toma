@@ -8,9 +8,10 @@ import os
 
 /// Drives an `MTKView` showing the preview, through the same `FrameRenderer` the export uses.
 ///
-/// The view must use `renderer.device`, draw `.bgra8Unorm` and keep its drawable at `renderer.outputSize`
-/// (`autoResizeDrawable = false`); a drawable of another size is not drawn. `renderPreview` is the one
-/// drawing call, used by `draw(in:)` and by `snapshot(at:)`.
+/// `configure(_:)` sets the view up: `renderer.device`, `.bgra8Unorm`, a drawable of `renderer.outputSize`
+/// that does not follow the view's size. A drawable of another size is not drawn (and logged once).
+/// `renderPreview` is the one drawing call, used by `draw(in:)` and by `snapshot(at:)`. Errors while
+/// drawing or on the GPU are logged once each, not on every frame.
 public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "PreviewRenderer")
     /// How often Debug builds log the average frame rate, in seconds.
@@ -18,6 +19,8 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
 
     private let renderer: FrameRenderer
     private let playback = Mutex(Playback())
+    /// Descriptions of the errors already logged.
+    private let reportedErrors = Mutex<Set<String>>([])
 
     private struct Playback {
         var currentTime = 0.0
@@ -65,6 +68,20 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
         }
     }
 
+    /// Makes `view` show the preview: the renderer's device, `.bgra8Unorm` drawables of exactly
+    /// `renderer.outputSize` (scaled to the view by its layer), tagged Rec. 709 like the export, and this
+    /// object as its delegate. The view keeps the delegate weakly: keep this object alive while it shows.
+    @MainActor
+    public func configure(_ view: MTKView) {
+        view.device = renderer.device
+        view.colorPixelFormat = Compositor.pixelFormat
+        view.autoResizeDrawable = false
+        view.drawableSize = CGSize(width: renderer.outputSize.x, height: renderer.outputSize.y)
+        view.framebufferOnly = true
+        (view.layer as? CAMetalLayer)?.colorspace = CGColorSpace(name: CGColorSpace.itur_709)
+        view.delegate = self
+    }
+
     @MainActor
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
@@ -85,14 +102,23 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
             }
             return state.currentTime
         }
+        // Checked before taking a drawable, which a misconfigured view would otherwise hold for nothing.
+        let drawableSize = SIMD2(Int(view.drawableSize.width), Int(view.drawableSize.height))
+        guard drawableSize == renderer.outputSize else {
+            reportOnce(RenderError.targetSizeMismatch(expected: renderer.outputSize, actual: drawableSize), "Preview not drawn")
+            return
+        }
         guard let drawable = view.currentDrawable, let commandBuffer = renderer.commandQueue.makeCommandBuffer() else {
             return
         }
         do {
             try renderPreview(at: time, into: drawable.texture, commandBuffer: commandBuffer)
         } catch {
-            Self.logger.error("Preview frame at \(time) s not drawn: \(String(describing: error), privacy: .public)")
+            reportOnce(error, "Preview not drawn")
             return
+        }
+        commandBuffer.addCompletedHandler { [weak self] commandBuffer in
+            if let error = commandBuffer.error { self?.reportOnce(error, "Preview frame failed on the GPU") }
         }
         commandBuffer.present(drawable)
         commandBuffer.commit()
@@ -100,6 +126,18 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
         logFrameRate(at: now)
         #endif
     }
+
+    /// Logs `error` the first time it is seen; returns whether it did.
+    @discardableResult
+    func reportOnce(_ error: any Error, _ context: String) -> Bool {
+        let description = String(describing: error)
+        guard reportedErrors.withLock({ $0.insert(description).inserted }) else { return false }
+        Self.logger.error("\(context, privacy: .public): \(description, privacy: .public)")
+        return true
+    }
+
+    /// How many distinct errors have been logged, for tests.
+    var reportedErrorCount: Int { reportedErrors.withLock { $0.count } }
 
     #if DEBUG
     private func logFrameRate(at now: CFTimeInterval) {

@@ -29,6 +29,14 @@ public enum RenderError: Error, Equatable {
 /// `Compositor` over the screen frame `TrackFrameReader` decodes for that time. Every way to draw —
 /// `render(at:into:)`, `renderBytes(at:)` and `PreviewRenderer` — goes through `encode(at:into:commandBuffer:)`.
 ///
+/// Use one renderer per consumer: the preview and an export each make their own. A renderer keeps one
+/// decoder position for its screen track, so two consumers reading different times would keep sending
+/// it back and forth, reopening a reader for nearly every frame.
+///
+/// Decoding is synchronous, on the caller's thread: the first frame read from each segment loads its
+/// track and decodes from the keyframe before it, and so does every scrub (a step back, or a jump of
+/// 2 s or more). Reading forward frame by frame only decodes the frames in between.
+///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
     public let outputSize: SIMD2<Int>
@@ -102,7 +110,7 @@ public final class FrameRenderer: @unchecked Sendable {
         }
         let size = SIMD2(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer))
         guard size == outputSize else { throw RenderError.targetSizeMismatch(expected: outputSize, actual: size) }
-        let target = try metalTexture(for: pixelBuffer)
+        let target = try lock.withLock { try metalTexture(for: pixelBuffer) }
         let commandBuffer = try makeCommandBuffer()
         try encode(at: outputTime, into: target.texture, commandBuffer: commandBuffer)
         try finish(commandBuffer)
@@ -152,7 +160,7 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// `pixelBuffer` as a `.bgra8Unorm` texture sharing its memory, through the texture cache. The
-    /// `CVMetalTexture` must outlive every use of its texture by the GPU.
+    /// `CVMetalTexture` must outlive every use of its texture by the GPU. Call with `lock` held.
     private func metalTexture(for pixelBuffer: CVPixelBuffer) throws -> CachedTexture {
         var created: CVMetalTexture?
         let status = CVMetalTextureCacheCreateTextureFromImage(

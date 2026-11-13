@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
 import CoreVideo
 import Foundation
 import ProjectFormat
@@ -134,5 +135,74 @@ func rendererOpensTakeWithEmptyAndMissingSegments() async throws {
         #expect(try indexAt(2.5) == 29)
         #expect(try indexAt(3) == 29)
         #expect(try indexAt(1.21) == 6)
+    }
+}
+
+/// Counts track loads and times out the first `timeouts` of them for the file named `failing`.
+private final class FlakyLoader: @unchecked Sendable {
+    let failing: String
+    var timeouts: Int
+    var calls = 0
+
+    init(failing: String, timeouts: Int) {
+        self.failing = failing
+        self.timeouts = timeouts
+    }
+
+    func load(_ asset: AVURLAsset) -> TrackFrameReader.TrackLoad {
+        guard asset.url.lastPathComponent == failing else { return TrackFrameReader.loadFirstVideoTrack(of: asset) }
+        calls += 1
+        if timeouts > 0 {
+            timeouts -= 1
+            return .timedOut
+        }
+        return TrackFrameReader.loadFirstVideoTrack(of: asset)
+    }
+}
+
+@Test(arguments: [0.0, 3600.0])
+func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let first = try await writeSegment(in: package, index: 1, start: base, seconds: 1)
+        let second = try await writeSegment(in: package, index: 2, start: base.adding(seconds: 1), seconds: 1, firstFrame: 30)
+        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: [first, second]))
+        let loader = FlakyLoader(failing: "seg-0002.mov", timeouts: 1)
+        reader.trackLoader = loader.load
+        reader.timeoutBackoff = backoff
+
+        #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 0.51)))) == 15)
+        // The second segment's load times out: its time shows the frame before it, for now.
+        #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.51)))) == 29)
+        #expect(loader.calls == 1)
+        let next = try #require(reader.pixelBuffer(at: base.adding(seconds: 1.55)))
+        if backoff == 0 {
+            // Tried again on the next request, which now loads.
+            #expect(loader.calls == 2)
+            #expect(frameIndex(of: next) == 30 + 16)
+        } else {
+            // Still backing off: no new attempt, so a stuck load stalls one frame, not every frame.
+            #expect(loader.calls == 1)
+            #expect(frameIndex(of: next) == 29)
+        }
+    }
+}
+
+@Test func readerMarksASegmentWhoseTrackFailsToLoadUnreadable() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let first = try await writeSegment(in: package, index: 1, start: base, seconds: 1)
+        let second = try await writeSegment(in: package, index: 2, start: base.adding(seconds: 1), seconds: 1, firstFrame: 30)
+        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: [first, second]))
+        let calls = FlakyLoader(failing: "seg-0002.mov", timeouts: 0)
+        reader.trackLoader = { asset in
+            guard asset.url.lastPathComponent == "seg-0002.mov" else { return TrackFrameReader.loadFirstVideoTrack(of: asset) }
+            calls.calls += 1
+            return .failed("injected")
+        }
+        reader.timeoutBackoff = 0
+        #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.51)))) == 29)
+        #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.21)))) == 29)
+        #expect(calls.calls == 1)
     }
 }

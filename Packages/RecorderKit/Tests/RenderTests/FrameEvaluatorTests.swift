@@ -156,3 +156,20 @@ private func cursor(_ seconds: Double, x: Double, y: Double) -> InputEvent {
     #expect(e.frame(at: 0).screen == nil)
     #expect(e.frame(at: 0).cursor == nil)
 }
+
+/// y grows down in global points and in the output alike: a cursor a quarter of the way down the display
+/// is a quarter of the way down the screen's rect, on the main display and on one with a negative origin.
+@Test(arguments: [
+    Rect(x: 0, y: 0, width: 1920, height: 1080),
+    Rect(x: -1920, y: -200, width: 1920, height: 1080),
+])
+func cursorKeepsItsVerticalPositionOffCentre(display: Rect) throws {
+    let e = evaluator(globalFrame: display, events: [
+        cursor(0, x: display.x + 0.75 * display.width, y: display.y + 0.25 * display.height),
+    ])
+    let frame = e.frame(at: 0.5)
+    let rect = try #require(frame.screen?.rect)
+    let hotspot = try #require(frame.cursor).hotspot
+    #expect(abs(hotspot.x - (rect.x + 0.75 * rect.width)) < 1e-9)
+    #expect(abs(hotspot.y - (rect.y + 0.25 * rect.height)) < 1e-9)
+}

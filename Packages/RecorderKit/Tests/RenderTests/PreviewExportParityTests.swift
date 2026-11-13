@@ -2,8 +2,10 @@
 import CoreVideo
 import Foundation
 import Metal
+import MetalKit
 import ProjectFormat
-import Render
+import QuartzCore
+@testable import Render
 import SyntheticCapture
 import Testing
 
@@ -107,4 +109,35 @@ func previewPlaybackStaysWithinTheTimeline() async throws {
         preview.isPlaying = true
         #expect(preview.isPlaying)
     }
+}
+
+@MainActor
+@Test(.enabled(if: metalAvailable))
+func configureSetsUpAViewForThePreview() async throws {
+    // Not `withTemporaryDirectory`: its body is not main-actor isolated, and views are.
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent("RenderTests-\(UUID().uuidString)", isDirectory: true)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let project = try await movingCursorProject(in: dir)
+    let renderer = try FrameRenderer(project: project, outputSize: [1280, 720])
+    let preview = PreviewRenderer(renderer: renderer)
+    let view = MTKView(frame: CGRect(x: 0, y: 0, width: 320, height: 180), device: nil)
+    preview.configure(view)
+    #expect(view.device === renderer.device)
+    #expect(view.colorPixelFormat == .bgra8Unorm)
+    #expect(view.autoResizeDrawable == false)
+    #expect(view.drawableSize == CGSize(width: 1280, height: 720))
+    #expect(view.framebufferOnly)
+    #expect(view.delegate === preview)
+    let layer = try #require(view.layer as? CAMetalLayer)
+    #expect(layer.colorspace?.name == CGColorSpace.itur_709)
+    #expect(layer.pixelFormat == .bgra8Unorm)
+
+    // A drawable of another size is not drawn, and logged once rather than on every frame.
+    view.drawableSize = CGSize(width: 640, height: 360)
+    preview.draw(in: view)
+    preview.draw(in: view)
+    #expect(preview.reportedErrorCount == 1)
+    let mismatch = RenderError.targetSizeMismatch(expected: [1280, 720], actual: [640, 360])
+    #expect(preview.reportOnce(mismatch, "again") == false)
 }
