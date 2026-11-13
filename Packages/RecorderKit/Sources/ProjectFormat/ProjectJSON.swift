@@ -22,7 +22,8 @@ public enum ProjectJSON {
 
 extension Date {
     /// This date rounded down to a whole second, the precision dates have on disk.
-    var roundedToWholeSeconds: Date {
+    /// Every `Date` that is written to a project is rounded with this when it is created.
+    public var roundedToWholeSeconds: Date {
         Date(timeIntervalSince1970: timeIntervalSince1970.rounded(.down))
     }
 }

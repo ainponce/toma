@@ -119,7 +119,7 @@ Reglas de escritura:
 
 - JSON UTF-8 con claves en orden alfabético, indentado y sin escapar `/`.
 - Los campos opcionales se omiten cuando no tienen valor (nunca se escribe `null`).
-- El archivo se reemplaza entero en cada cambio: se escribe `manifest.json.tmp`, se fuerza a disco con `F_FULLFSYNC`, se renombra sobre `manifest.json` con `rename(2)` y se sincroniza la carpeta. Un lector ve siempre el manifiesto anterior o el nuevo, nunca uno a medias. Un `manifest.json.tmp` que quede después de un crash se puede ignorar: la próxima escritura lo pisa.
+- El archivo se reemplaza entero en cada cambio: se escribe `manifest.json.tmp`, se fuerza a disco con `F_FULLFSYNC` (o `fsync` si el volumen no lo admite), se renombra sobre `manifest.json` con `rename(2)` y se sincroniza la carpeta. Un lector ve siempre el manifiesto anterior o el nuevo, nunca uno a medias. Un `manifest.json.tmp` que quede después de un crash se puede ignorar: la próxima escritura lo pisa.
 
 ### Campos
 

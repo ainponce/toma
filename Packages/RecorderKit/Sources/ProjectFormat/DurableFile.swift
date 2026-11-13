@@ -21,15 +21,27 @@ public enum DurableFile {
         try syncDirectory(url.deletingLastPathComponent())
     }
 
-    /// Flushes the file and asks the drive to write its cache to permanent storage.
+    /// Flushes the file and asks the drive to write its cache to permanent storage (`F_FULLFSYNC`).
+    /// On a volume that does not support it, falls back to `fsync`.
     public static func fullSync(_ fd: Int32) throws {
-        guard fcntl(fd, F_FULLFSYNC) != -1 else { throw POSIXError.current() }
+        if fcntl(fd, F_FULLFSYNC) != -1 { return }
+        guard isUnsupportedOperation(errno) else { throw POSIXError.current() }
+        guard fsync(fd) == 0 else { throw POSIXError.current() }
     }
 
-    /// Flushes the file and orders it before later writes, without waiting for the drive cache.
-    /// Cheaper than `fullSync`; meant for files that are appended to while recording.
+    /// Flushes the file and orders it before later writes, without waiting for the drive cache
+    /// (`F_BARRIERFSYNC`). Cheaper than `fullSync`; meant for files that are appended to while
+    /// recording. On a volume that does not support it, falls back to `fullSync`.
     public static func barrierSync(_ fd: Int32) throws {
-        guard fcntl(fd, F_BARRIERFSYNC) != -1 else { throw POSIXError.current() }
+        if fcntl(fd, F_BARRIERFSYNC) != -1 { return }
+        guard isUnsupportedOperation(errno) else { throw POSIXError.current() }
+        try fullSync(fd)
+    }
+
+    /// The `errno` values with which a file system says it does not implement a sync command.
+    /// Any other error is a real failure and is thrown.
+    static func isUnsupportedOperation(_ code: Int32) -> Bool {
+        code == ENOTSUP || code == EINVAL || code == ENOTTY
     }
 
     /// Makes the creation, removal or renaming of entries in a directory durable.
