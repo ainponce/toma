@@ -1,0 +1,13 @@
+# Brainstorming mockups (local only)
+.superpowers/
+
+# macOS
+.DS_Store
+
+# Xcode / SwiftPM
+build/
+DerivedData/
+.build/
+*.xcuserstate
+xcuserdata/
+.swiftpm/
