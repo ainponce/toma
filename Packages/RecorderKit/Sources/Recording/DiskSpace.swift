@@ -51,7 +51,8 @@ public struct DiskSpacePolicy: Sendable, Equatable {
 public final class DiskSpaceMonitor: Sendable {
     private let volumeURL: URL
     private let policy: DiskSpacePolicy
-    private let interval: Duration
+    /// How often `start(onVerdict:)` checks; the coordinator watches for verdicts that stop coming.
+    let interval: Duration
     private let query: @Sendable (URL) throws -> DiskCapacity
     private let queue = DispatchQueue(label: "dev.toma.DiskSpaceMonitor")
     private let timer = Mutex<DispatchSourceTimer?>(nil)
