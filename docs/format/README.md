@@ -186,6 +186,72 @@ Reglas de escritura:
 | `empty` | | La recuperación encontró el archivo vacío o sin ninguna muestra; `endHostTime` es igual a `startHostTime`. |
 | `unreadable` | `bytes` | La recuperación no pudo leer un archivo no vacío de `bytes` bytes. El archivo queda intacto. |
 
+## `events.jsonl`
+
+Todo lo que pasa durante la toma además de los cuadros y el audio: el cursor, los clics, la geometría de las pantallas y el ciclo de vida de la grabación (segmentos, cortes del stream, pausas). Un evento por línea ([JSON Lines](https://jsonlines.org)). Por ejemplo, el comienzo de la toma del manifiesto de arriba, con su corte del stream:
+
+```
+{"displayID":1,"frame":{"height":982,"width":1512,"x":0,"y":0},"scale":2,"t":81234567000000,"type":"displayGeometry"}
+{"index":1,"t":81234567890123,"track":"display-1","type":"segmentStarted"}
+{"index":1,"t":81234570000000,"track":"mic","type":"segmentStarted"}
+{"t":81234600000000,"type":"cursor","x":640.5,"y":402}
+{"t":81234608333333,"type":"cursor","x":642.25,"y":401}
+{"button":"left","t":81234650000000,"type":"mouseDown","x":642.25,"y":401}
+{"button":"left","t":81234720000000,"type":"mouseUp","x":642.25,"y":401}
+{"code":-3821,"domain":"SCStreamErrorDomain","t":81276901234567,"track":"display-1","type":"streamInterrupted"}
+{"index":2,"t":81277458000000,"track":"display-1","type":"segmentStarted"}
+{"t":81300000000000,"type":"marker"}
+```
+
+Reglas de escritura:
+
+- UTF-8. Cada línea es un objeto JSON compacto (sin espacios) que termina en `\n`, con las claves en orden alfabético y sin escapar `/`. Un salto de línea dentro de un texto se escribe escapado (`\n`), así que nunca corta la línea.
+- Todo evento tiene `t`, su instante como `HostTime`, y `type`. Los demás campos dependen del tipo y van al mismo nivel.
+- Los números que son enteros se escriben sin decimales (`20`, no `20.0`), aunque el campo admita fracciones; los demás, con la forma decimal más corta que vuelve al mismo valor (`10.5`). Un lector acepta las dos formas. Nunca se escriben `NaN` ni infinitos: un evento con uno de esos valores no se registra y quien graba recibe el error.
+- El archivo solo crece por el final (`O_APPEND`); una línea escrita no se reescribe. Los eventos se juntan en memoria y se escriben cada 250 ms; cada 2 s lo escrito se ordena en disco con `F_BARRIERFSYNC`, y al cerrar la toma se escribe lo que falta y se fuerza a disco con `F_FULLFSYNC` (con `fsync` si el volumen no los admite). Si la app muere, se pierden como mucho los eventos de los últimos 250 ms, más lo que tarde el sistema en disparar el temporizador.
+- Una escritura que falla, por ejemplo con el disco lleno, se reintenta desde el byte donde quedó, así las líneas siguen enteras.
+- Las líneas van en el orden en que se registraron, que no siempre es el orden de `t`: un clic llega con el instante que le puso el sistema y el cursor se muestrea en otra cola. Quien necesite orden temporal ordena por `t`.
+- Un solo proceso escribe el archivo de una toma por vez.
+
+**Coordenadas.** `x`, `y` (cursor y clics) y `frame` (`displayGeometry`) están en puntos globales, el espacio de `CGEvent.location` y de `globalFrame` en el manifiesto: el origen está arriba a la izquierda de la pantalla principal, `y` crece hacia abajo, y una pantalla a la izquierda o arriba de la principal tiene coordenadas negativas. La posición dentro de la grabación de una pantalla es `(x − globalFrame.x, y − globalFrame.y)` en puntos, o eso por `pixelScale` en píxeles. macOS da el cursor con fracciones de punto, así que `x` e `y` no siempre son enteros.
+
+### Tipos
+
+| `type` | Campos además de `t` | Significado |
+|---|---|---|
+| `cursor` | `x`, `y` | Posición del puntero. La grabación la muestrea a 120 Hz y escribe una línea solo cuando cambia. |
+| `mouseDown` | `button`, `x`, `y` | Se presionó un botón del mouse (`left`, `right` u `other` para cualquier otro) en esa posición. |
+| `mouseUp` | `button`, `x`, `y` | Se soltó un botón del mouse en esa posición. |
+| `displayGeometry` | `displayID`, `frame`, `scale` | Una pantalla grabada: su `CGDirectDisplayID`, su rectángulo en puntos globales (`x`, `y`, `width`, `height`) y sus píxeles por punto. Se escribe al empezar la toma para cada pantalla. En esta versión es informativo: la geometría que usa el render es `globalFrame` del manifiesto. |
+| `segmentStarted` | `track`, `index` | La pista `track` (su `id` en el manifiesto) abrió el segmento `index`. `t` es el `startHostTime` del segmento; la recuperación lo usa si el archivo quedó en disco pero el segmento no llegó al manifiesto. |
+| `streamInterrupted` | `track`, `domain`, `code` | El stream de captura de la pista falló con ese error (dominio y código del `NSError`). La pista sigue en un segmento nuevo, que tiene su propio `segmentStarted`. |
+| `paused` | `reason` | La captura se detuvo en todas las pistas, por ejemplo con `reason` `screenLocked` (pantalla bloqueada). Un lector no falla ante un `reason` que no conoce. |
+| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. |
+| `deviceChanged` | `track`, `deviceUniqueID` | La pista siguió grabando desde otro dispositivo (el `uniqueID` del dispositivo de audio), por ejemplo porque se desconectó el micrófono. |
+| `marker` | | Una marca que el usuario puso mientras grababa. |
+
+Una línea de cada tipo, exactamente como se escribe:
+
+```
+{"t":123,"type":"cursor","x":10.5,"y":20}
+{"button":"left","t":5,"type":"mouseDown","x":1,"y":2}
+{"button":"right","t":5,"type":"mouseUp","x":-1920,"y":340.25}
+{"displayID":1,"frame":{"height":982,"width":1512,"x":0,"y":0},"scale":2,"t":5,"type":"displayGeometry"}
+{"index":2,"t":5,"track":"display-1","type":"segmentStarted"}
+{"code":-3821,"domain":"SCStreamErrorDomain","t":5,"track":"display-1","type":"streamInterrupted"}
+{"reason":"screenLocked","t":5,"type":"paused"}
+{"t":5,"type":"resumed"}
+{"deviceUniqueID":"BuiltInMicrophoneDevice","t":5,"track":"mic","type":"deviceChanged"}
+{"t":5,"type":"marker"}
+```
+
+### Lectura después de un crash
+
+- Una línea está completa cuando termina en `\n`.
+- Si la última línea no termina en `\n` y es un evento válido, se lee: solo le faltó el salto de línea. Si no lo es, es una escritura que un crash cortó a la mitad y se descarta.
+- Una línea completa que no es un evento legible (dañada, vacía o de un `type` que esta versión no conoce) se saltea y se cuenta, y el resto del archivo se lee igual. Así una versión vieja puede abrir un archivo con tipos nuevos.
+- Antes de seguir escribiendo en un archivo que ya existe (al reabrirlo o en la recuperación), se lo hace terminar en un límite de línea: la línea cortada del final se trunca, y una última línea válida sin `\n` recibe el suyo. Después se fuerza a disco con `F_FULLFSYNC`. Las líneas completas nunca se tocan.
+
 ## Tiempos
 
 - Todos los instantes son `HostTime`: nanosegundos de `CLOCK_UPTIME_RAW`, guardados como un entero JSON. Es el mismo reloj de `CMClockGetHostTimeClock()`, de los timestamps de ScreenCaptureKit y AVFoundation, y de `NSEvent.timestamp`, así que pistas y eventos quedan alineados sin estimar nada.
@@ -219,4 +285,4 @@ Mientras se graba una toma existe `takes/<toma>/recording.lock`, y el proceso qu
 
 ## Los datos crudos nunca se borran
 
-Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. Lo único que se puede borrar sin perder nada es `cache/`, porque todo lo que contiene se vuelve a calcular.
+Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/`, porque todo lo que contiene se vuelve a calcular.

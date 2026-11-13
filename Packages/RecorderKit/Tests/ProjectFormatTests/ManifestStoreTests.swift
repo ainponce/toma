@@ -4,15 +4,6 @@ import Synchronization
 import Testing
 @testable import ProjectFormat
 
-/// A fresh, empty directory that is removed when `body` returns.
-func withTemporaryDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ProjectFormatTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: url) }
-    return try await body(url)
-}
-
 private let testApp = AppInfo(name: "Toma", version: "0.1.0")
 private let testDate = Date(timeIntervalSince1970: 1_700_000_000)
 
