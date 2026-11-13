@@ -11,3 +11,6 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .swiftpm/
+
+Toma.xcodeproj/
+dist/

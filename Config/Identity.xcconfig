@@ -1,0 +1,9 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+// Single source of truth for the app identity. Frozen before the first build that reaches another Mac.
+// In .xcconfig, "//" starts a comment: write URLs and base64 keys with "/$()/".
+PRODUCT_NAME = Toma
+PRODUCT_BUNDLE_IDENTIFIER = dev.toma.Toma
+MARKETING_VERSION = 0.0.0
+CURRENT_PROJECT_VERSION = 1
+SPARKLE_FEED_URL = http:/$()/localhost:8000/appcast.xml
+SPARKLE_PUBLIC_KEY =

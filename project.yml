@@ -1,0 +1,34 @@
+name: Toma
+options:
+  bundleIdPrefix: dev.toma
+  deploymentTarget:
+    macOS: "15.0"
+packages:
+  RecorderKit:
+    path: Packages/RecorderKit
+targets:
+  Toma:
+    type: application
+    platform: macOS
+    sources:
+      - App
+    configFiles:
+      Debug: Config/Identity.xcconfig
+      Release: Config/Identity.xcconfig
+    settings:
+      base:
+        ARCHS: arm64
+        SWIFT_VERSION: "6.0"
+        MACOSX_DEPLOYMENT_TARGET: "15.0"
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: RecorderKit
+        product: RecorderKit
+    info:
+      path: App/Info.plist
+      properties:
+        LSUIElement: true
+        LSMinimumSystemVersion: "15.0"
+        NSMicrophoneUsageDescription: Toma records your microphone only when you enable it for a recording.
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
