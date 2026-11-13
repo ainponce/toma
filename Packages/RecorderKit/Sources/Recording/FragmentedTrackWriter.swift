@@ -44,6 +44,9 @@ public final class FragmentedTrackWriter: TrackWriting {
     private var lastWrittenPTS: HostTime?
     /// Newest video frame taken, already retimed; heartbeats and `finish` repeat it.
     private var lastFrame: CMSampleBuffer?
+    /// The source audio format relabeled with the file's channel layout (`fileLayoutTag`). Every
+    /// audio buffer goes to the encoder with it, so the encoder never remaps channels.
+    private var writingAudioFormat: CMAudioFormatDescription?
     /// Real-time audio waiting for the encoder; set up with the source sample rate in `configure`.
     private var pendingAudio = PendingAudioQueue(capacitySeconds: maxPendingAudioSeconds, sampleRate: 0)
     private var sampleCount = 0
@@ -207,6 +210,7 @@ public final class FragmentedTrackWriter: TrackWriting {
             settings = Self.audioSettings(for: asbd)
             hint = nil
             sampleRate = asbd.mSampleRate
+            writingAudioFormat = try Self.writingFormat(for: asbd)
         }
         guard writer.status == .unknown, writer.canApply(outputSettings: settings, forMediaType: mediaType) else {
             throw WriterError.unsupportedFormat
@@ -251,7 +255,8 @@ public final class FragmentedTrackWriter: TrackWriting {
     }
 
     /// ALAC up to 8 channels (AVFoundation raises an exception without a bit-depth hint, and needs
-    /// an explicit layout above 2 channels); Float32 LPCM with a discrete layout beyond that.
+    /// an explicit layout above 2 channels); Float32 LPCM with a discrete layout beyond that. The
+    /// layout is `fileLayoutTag`.
     static func audioSettings(for source: AudioStreamBasicDescription) -> [String: Any] {
         let channels = Int(source.mChannelsPerFrame)
         var settings: [String: Any] = [
@@ -264,16 +269,46 @@ public final class FragmentedTrackWriter: TrackWriting {
             settings[AVLinearPCMIsFloatKey] = true
             settings[AVLinearPCMIsBigEndianKey] = false
             settings[AVLinearPCMIsNonInterleaved] = false
-            settings[AVChannelLayoutKey] = channelLayoutData(kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels))
+            settings[AVChannelLayoutKey] = channelLayoutData(fileLayoutTag(channels: channels, sampleRate: source.mSampleRate))
             return settings
         }
         let isFloat = source.mFormatFlags & kAudioFormatFlagIsFloat != 0
         settings[AVFormatIDKey] = kAudioFormatAppleLossless
         settings[AVEncoderBitDepthHintKey] = !isFloat && source.mBitsPerChannel <= 16 ? 16 : 24
         if channels > 2 {
-            settings[AVChannelLayoutKey] = channelLayoutData(alacLayoutTag(channels: channels, sampleRate: source.mSampleRate))
+            settings[AVChannelLayoutKey] = channelLayoutData(fileLayoutTag(channels: channels, sampleRate: source.mSampleRate))
         }
         return settings
+    }
+
+    /// The channel layout written in the file: mono or stereo for 1–2 channels (ALAC's own), the
+    /// ALAC layout for 3–8 (`alacLayoutTag`), and discrete in order beyond 8 (LPCM).
+    ///
+    /// It only labels the channels: they are always the source's channels, in the source's order.
+    /// Interfaces label their inputs as discrete (or with labels of their own), and the encoder would
+    /// map those labels onto the file's layout, giving silence or moved channels. So every buffer is
+    /// relabeled with this layout before the encoder sees it (`writingFormat(for:)`).
+    static func fileLayoutTag(channels: Int, sampleRate: Double) -> AudioChannelLayoutTag {
+        switch channels {
+        case 1: kAudioChannelLayoutTag_Mono
+        case 2: kAudioChannelLayoutTag_Stereo
+        case 3...8: alacLayoutTag(channels: channels, sampleRate: sampleRate)
+        default: kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels)
+        }
+    }
+
+    /// `source` with the layout `fileLayoutTag`, and nothing else from the source's description.
+    static func writingFormat(for source: AudioStreamBasicDescription) throws -> CMAudioFormatDescription {
+        var asbd = source
+        var layout = AudioChannelLayout()
+        layout.mChannelLayoutTag = fileLayoutTag(channels: Int(source.mChannelsPerFrame), sampleRate: source.mSampleRate)
+        var format: CMAudioFormatDescription?
+        let status = CMAudioFormatDescriptionCreate(
+            allocator: kCFAllocatorDefault, asbd: &asbd, layoutSize: MemoryLayout<AudioChannelLayout>.size, layout: &layout,
+            magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &format
+        )
+        guard status == noErr, let format else { throw WriterError.unsupportedFormat }
+        return format
     }
 
     /// The layout ALAC prefers for `channels` (3...8): the first matching entry of
@@ -434,26 +469,26 @@ public final class FragmentedTrackWriter: TrackWriting {
         return CMTime(value: CMTimeValue(host.nanoseconds - min(start.nanoseconds, host.nanoseconds)), timescale: 1_000_000_000)
     }
 
-    /// A copy of `sample` that presents at `host` in file time. Every timing entry keeps its offset
-    /// from the first one, so a multi-entry buffer keeps its shape. Decode times are dropped (the
-    /// samples are uncompressed and the encoder assigns its own), and so are video durations: a frame
-    /// lasts until the next one, so held and heartbeat frames extend however the source timed them.
+    /// A copy of `sample` that presents at `host` in file time.
+    ///
+    /// Video: every timing entry keeps its offset from the first one. Decode times are dropped (the
+    /// frames are uncompressed and the encoder assigns its own), and so are durations: a frame lasts
+    /// until the next one, so held and heartbeat frames extend however the source timed them.
+    /// Audio: see `relabeledAudio(_:at:)`.
     private func retimed(_ sample: CMSampleBuffer, at host: HostTime) throws -> CMSampleBuffer {
+        if case .audio = media { return try relabeledAudio(sample, at: host) }
         let entries = (try? sample.sampleTimingInfos()) ?? []
         let first = entries.first?.presentationTimeStamp ?? .invalid
         let shift = offset(of: host)
-        let keepsDuration = media == .audio
         let timing: [CMSampleTimingInfo]
         if entries.isEmpty || !first.isNumeric {
-            let duration = keepsDuration ? sample.duration : .invalid
-            timing = [CMSampleTimingInfo(duration: duration, presentationTimeStamp: shift, decodeTimeStamp: .invalid)]
+            timing = [CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: shift, decodeTimeStamp: .invalid)]
         } else {
             timing = entries.map { entry in
                 let pts = entry.presentationTimeStamp.isNumeric
                     ? CMTimeAdd(shift, CMTimeSubtract(entry.presentationTimeStamp, first))
                     : shift
-                let duration = keepsDuration ? entry.duration : .invalid
-                return CMSampleTimingInfo(duration: duration, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
+                return CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
             }
         }
         do {
@@ -461,5 +496,55 @@ public final class FragmentedTrackWriter: TrackWriting {
         } catch {
             throw WriterError.appendFailed("could not retime sample (\(error))")
         }
+    }
+
+    /// The same audio frames, in the same channel order, as `sample`, presenting at `host` in file
+    /// time and described by `writingAudioFormat`, so the encoder sees the file's own layout and copies
+    /// every channel as it is instead of mapping channels by label.
+    ///
+    /// The samples are copied through the source's own `AudioBufferList`, so any block layout the
+    /// source uses (interleaved, planar, planes padded for alignment) arrives intact.
+    private func relabeledAudio(_ sample: CMSampleBuffer, at host: HostTime) throws -> CMSampleBuffer {
+        guard let format = writingAudioFormat, CMSampleBufferDataIsReady(sample) else {
+            throw WriterError.appendFailed("audio sample has no data ready")
+        }
+        var listSize = 0
+        var status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sample, bufferListSizeNeededOut: &listSize, bufferListOut: nil, bufferListSize: 0,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: nil
+        )
+        guard status == noErr, listSize >= MemoryLayout<AudioBufferList>.size else {
+            throw WriterError.appendFailed("could not read audio sample (\(status))")
+        }
+        let list = UnsafeMutableRawPointer.allocate(byteCount: listSize, alignment: MemoryLayout<AudioBufferList>.alignment)
+            .bindMemory(to: AudioBufferList.self, capacity: 1)
+        defer { list.deallocate() }
+        var source: CMBlockBuffer?
+        status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sample, bufferListSizeNeededOut: nil, bufferListOut: list, bufferListSize: listSize,
+            blockBufferAllocator: nil, blockBufferMemoryAllocator: nil, flags: 0, blockBufferOut: &source
+        )
+        guard status == noErr else { throw WriterError.appendFailed("could not read audio sample (\(status))") }
+
+        var relabeled: CMSampleBuffer?
+        status = CMAudioSampleBufferCreateWithPacketDescriptions(
+            allocator: kCFAllocatorDefault, dataBuffer: nil, dataReady: false, makeDataReadyCallback: nil, refcon: nil,
+            formatDescription: format, sampleCount: CMSampleBufferGetNumSamples(sample),
+            presentationTimeStamp: offset(of: host), packetDescriptions: nil, sampleBufferOut: &relabeled
+        )
+        guard status == noErr, let relabeled else {
+            throw WriterError.appendFailed("could not relabel audio sample (\(status))")
+        }
+        // `list` points into `source`, which must stay alive until the copy is made.
+        status = withExtendedLifetime(source) {
+            CMSampleBufferSetDataBufferFromAudioBufferList(
+                relabeled, blockBufferAllocator: kCFAllocatorDefault, blockBufferMemoryAllocator: kCFAllocatorDefault,
+                flags: 0, bufferList: list
+            )
+        }
+        guard status == noErr, CMSampleBufferDataIsReady(relabeled) else {
+            throw WriterError.appendFailed("could not copy audio sample (\(status))")
+        }
+        return relabeled
     }
 }

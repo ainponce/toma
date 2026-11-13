@@ -88,16 +88,47 @@ private func frame(_ i: Int, at seconds: Double, carryingDuration: Bool) throws 
     }
 }
 
+/// Writes `seconds` of `multichannelAudio` (10 ms blocks at 48 kHz) labeled `layout` and finishes.
+private func writeMultichannelAudio(
+    to url: URL, channels: Int, layout: AudioChannelLayoutTag, seconds: Int, planar: Bool = false
+) async throws -> (FragmentedTrackWriter, SegmentResult) {
+    let w = try FragmentedTrackWriter(url: url, media: .audio, realTime: false)
+    for k in 0..<(100 * seconds) {
+        try w.append(multichannelAudio(
+            pts: base.adding(seconds: Double(k) / 100), startFrame: k * 480, frames: 480,
+            sampleRate: 48_000, channels: channels, layout: layout, planar: planar
+        ))
+    }
+    return (w, try await w.finish(at: base.adding(seconds: Double(seconds))))
+}
+
+/// The file holds `frames` frames of `channels` channels, each one its own `channelSignal`, in order,
+/// within `tolerance` (ALAC stores a Float32 source at 24 bits).
+private func expectEveryChannelKept(
+    in url: URL, channels: Int, frames: Int, tolerance: Float, sourceLocation: SourceLocation = #_sourceLocation
+) async throws {
+    let decoded = try await decodedAudio(of: url)
+    #expect(decoded.channels == channels, sourceLocation: sourceLocation)
+    #expect(decoded.samples.count == frames * channels, sourceLocation: sourceLocation)
+    let count = min(frames, decoded.samples.count / max(decoded.channels, 1))
+    for c in 0..<min(channels, decoded.channels) {
+        var maxError: Float = 0
+        for n in 0..<count {
+            maxError = max(maxError, abs(decoded.samples[n * decoded.channels + c] - channelSignal(c, frame: n, sampleRate: 48_000)))
+        }
+        #expect(maxError <= tolerance, "channel \(c) of \(channels): max error \(maxError)", sourceLocation: sourceLocation)
+    }
+}
+
+/// One step of a 24-bit sample: the most a Float32 source may change through ALAC.
+private let alac24BitStep: Float = 1.0 / Float(1 << 23)
+
 @Test(arguments: [1, 2, 4, 8, 10]) func audioChannelCounts(channels: Int) async throws {
     try await withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("seg-0001.mov")
-        let w = try FragmentedTrackWriter(url: url, media: .audio, realTime: false)
-        for k in 0..<300 {
-            try w.append(SampleFactory.audioSample(
-                pts: base.adding(seconds: Double(k) / 100), frames: 480, sampleRate: 48_000, channels: channels
-            ))
-        }
-        let r = try await w.finish(at: base.adding(seconds: 3))
+        // A multi-input interface labels its channels as discrete, which has no ALAC layout of its own.
+        let layout = channels == 1 ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels)
+        let (w, r) = try await writeMultichannelAudio(to: url, channels: channels, layout: layout, seconds: 3)
         #expect(r.startHostTime == base && r.sampleCount == 300 && r.droppedSampleCount == 0)
         #expect(w.failure == nil)
 
@@ -121,6 +152,35 @@ private func frame(_ i: Int, at seconds: Double, carryingDuration: Bool) throws 
             let layout = try #require(CMAudioFormatDescriptionGetChannelLayout(format, sizeOut: &layoutSize))
             #expect(layout.pointee.mChannelLayoutTag == expectedLayout)
         }
+        // The content, not just the format: every channel's own signal, in order.
+        try await expectEveryChannelKept(
+            in: url, channels: channels, frames: 144_000, tolerance: channels <= 8 ? alac24BitStep : 0
+        )
+    }
+}
+
+@Test(arguments: [kAudioChannelLayoutTag_Binaural, kAudioChannelLayoutTag_Quadraphonic, kAudioChannelLayoutTag_MPEG_5_1_A])
+func audioKeepsEveryChannelInOrderWhateverItsLabels(layout: AudioChannelLayoutTag) async throws {
+    // Labels that differ from the file's layout must not make the encoder move or drop channels.
+    try await withTemporaryDirectory { dir in
+        let url = dir.appendingPathComponent("seg-0001.mov")
+        let channels = Int(layout & 0xFFFF)
+        let (w, r) = try await writeMultichannelAudio(to: url, channels: channels, layout: layout, seconds: 1)
+        #expect(r.sampleCount == 100 && w.failure == nil)
+        try await expectEveryChannelKept(in: url, channels: channels, frames: 48_000, tolerance: alac24BitStep)
+    }
+}
+
+@Test(arguments: [2, 4, 10]) func planarAudioKeepsEveryChannelInOrder(channels: Int) async throws {
+    // Interfaces may deliver one plane per channel (non-interleaved) instead of interleaved frames.
+    try await withTemporaryDirectory { dir in
+        let url = dir.appendingPathComponent("seg-0001.mov")
+        let layout = kAudioChannelLayoutTag_DiscreteInOrder | UInt32(channels)
+        let (w, r) = try await writeMultichannelAudio(to: url, channels: channels, layout: layout, seconds: 1, planar: true)
+        #expect(r.sampleCount == 100 && w.failure == nil)
+        try await expectEveryChannelKept(
+            in: url, channels: channels, frames: 48_000, tolerance: channels <= 8 ? alac24BitStep : 0
+        )
     }
 }
 

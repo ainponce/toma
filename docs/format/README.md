@@ -28,6 +28,7 @@ MiVideo.toma/
 - Las tomas se llaman `take-001`, `take-002`, … Un número nunca se reutiliza: la toma nueva recibe el número siguiente al más alto del manifiesto y salta cualquier carpeta que ya exista en `takes/`.
 - Los segmentos se numeran desde 1 con cuatro dígitos (`seg-0001.mov`). Cada pista abre un segmento nuevo cada vez que su captura se interrumpe (pausa, error del stream, cambio de formato), así un corte nunca daña lo grabado antes.
 - Los segmentos son películas fragmentadas, con fragmentos de 1 s: si la app, el sistema o la batería se apagan de golpe, se puede leer todo hasta el último fragmento escrito.
+- Los segmentos de micrófono guardan todos los canales del dispositivo, en su orden: ALAC hasta 8 canales y LPCM Float32 con distribución discreta (`kAudioChannelLayoutTag_DiscreteInOrder`) desde 9. La distribución de canales que declara un archivo de 3 a 8 canales es la que ALAC exige para esa cantidad (por ejemplo `MPEG_5_1_D` para 6) y es solo una etiqueta: el canal *n* del archivo es la entrada *n* del dispositivo, no el altavoz que la etiqueta nombra.
 - Las pistas de cámara, audio del sistema y iPhone/iPad, y las imágenes de cursor (`cursors/`), llegan en fases posteriores con sus propias carpetas dentro de la toma.
 
 ## `manifest.json`
