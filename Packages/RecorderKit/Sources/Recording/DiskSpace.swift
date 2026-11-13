@@ -79,8 +79,8 @@ public final class DiskSpaceMonitor: Sendable {
         let nanoseconds = max(1, seconds * 1_000_000_000 + attoseconds / 1_000_000_000)
         let source = DispatchSource.makeTimerSource(queue: queue)
         source.schedule(deadline: .now(), repeating: .nanoseconds(Int(nanoseconds)))
-        source.setEventHandler { [self] in
-            guard let verdict = try? verdict(isRecording: true) else { return }
+        source.setEventHandler { [weak self] in
+            guard let self, let verdict = try? verdict(isRecording: true) else { return }
             onVerdict(verdict)
         }
         let previous = timer.withLock { current in
@@ -91,6 +91,8 @@ public final class DiskSpaceMonitor: Sendable {
         source.resume()
     }
 
+    /// Idempotent. One more `onVerdict` may still arrive after this returns (a tick already in
+    /// flight); callers must tolerate it.
     public func stop() {
         timer.withLock { current in
             defer { current = nil }
@@ -129,6 +131,7 @@ public enum VolumeEligibility: Sendable, Equatable {
         return values.volumeIsLocal == false ? .networkVolume : .allowed
     }
 
+    /// Lowercased on purpose: a conservative choice for default (case-insensitive) APFS.
     /// Standardized, lowercased path with symlinks resolved on the nearest existing ancestor, so
     /// that a location that does not exist yet still compares correctly.
     private static func normalizedPath(_ url: URL) -> String {

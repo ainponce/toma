@@ -48,7 +48,7 @@ import Testing
         let (stream, continuation) = AsyncStream.makeStream(of: DiskSpaceVerdict.self)
         monitor.start { continuation.yield($0) }
         defer { monitor.stop() }
-        let first = try #require(await stream.first { _ in true })
+        let first = try #require(await firstVerdict(of: stream))
         #expect(first == .stopNow(availableBytes: 500_000_000))
     }
 
@@ -66,7 +66,7 @@ import Testing
         let (stream, continuation) = AsyncStream.makeStream(of: DiskSpaceVerdict.self)
         monitor.start { continuation.yield($0) }
         defer { monitor.stop() }
-        let first = try #require(await stream.first { _ in true })
+        let first = try #require(await firstVerdict(of: stream))
         #expect(first == .ok)
         #expect(calls.withLock { $0 } >= 2)
     }
@@ -104,10 +104,41 @@ import Testing
         #expect(b.withLock { $0 } > 1)
     }
 
+    @Test func droppedMonitorStopsPolling() async throws {
+        let calls = Mutex(0)
+        do {
+            let monitor = DiskSpaceMonitor(
+                volumeURL: FileManager.default.temporaryDirectory,
+                interval: .milliseconds(20),
+                query: { _ in
+                    calls.withLock { $0 += 1 }
+                    return DiskCapacity(importantUsage: 10_000_000_000, available: 10_000_000_000)
+                })
+            monitor.start { _ in }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+        try await Task.sleep(for: .milliseconds(100))
+        let frozen = calls.withLock { $0 }
+        #expect(frozen >= 1)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(calls.withLock { $0 } == frozen)
+    }
+
     @Test func verdictUsesInjectedQuery() throws {
         let monitor = DiskSpaceMonitor(
             volumeURL: FileManager.default.temporaryDirectory,
             query: { _ in DiskCapacity(importantUsage: 1_500_000_000, available: 1_500_000_000) })
         #expect(try monitor.verdict(isRecording: false) == .refuseToStart(availableBytes: 1_500_000_000))
+    }
+}
+
+/// First verdict from `stream`, or nil after 5 s so a timer that never fires fails instead of hanging.
+private func firstVerdict(of stream: AsyncStream<DiskSpaceVerdict>) async -> DiskSpaceVerdict? {
+    await withTaskGroup(of: DiskSpaceVerdict?.self) { group in
+        group.addTask { await stream.first { _ in true } }
+        group.addTask { try? await Task.sleep(for: .seconds(5)); return nil }
+        let result = await group.next() ?? nil
+        group.cancelAll()
+        return result
     }
 }
