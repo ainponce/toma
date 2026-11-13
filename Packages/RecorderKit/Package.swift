@@ -6,7 +6,7 @@ let package = Package(
     name: "RecorderKit",
     platforms: [.macOS(.v15)],
     products: [
-        .library(name: "RecorderKit", targets: ["ProjectFormat", "Recording", "SyntheticCapture", "Recovery"]),
+        .library(name: "RecorderKit", targets: ["ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Render"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
     ],
     dependencies: [
@@ -17,6 +17,7 @@ let package = Package(
         .target(name: "Recording", dependencies: ["ProjectFormat"]),
         .target(name: "SyntheticCapture", dependencies: ["Recording", "ProjectFormat"]),
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
+        .target(name: "Render", dependencies: ["ProjectFormat"]),
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
@@ -27,6 +28,7 @@ let package = Package(
         .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat"]),
         .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat"]),
+        .testTarget(name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
     ],
     swiftLanguageModes: [.v6]
 )
