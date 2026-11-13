@@ -1,0 +1,319 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+import ProjectFormat
+import Recovery
+import Testing
+
+// MARK: - Scanner
+
+@Test func scannerFindsOnlyUnheldRecordingTakes() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
+        try addTake(makeTake("take-002", tracks: [micTrack([])]), to: package)
+        try addTake(makeTake("take-003", tracks: [micTrack([])]), to: package)
+        let held = try RecordingLock.acquire(at: package.lockURL(take: "take-002"), info: .current(now: Date()))
+        defer { held.release() }
+        // take-003 keeps the lock file its crashed recorder left behind, which nobody holds.
+        try Data("{}".utf8).write(to: package.lockURL(take: "take-003"))
+
+        Swift.withExtendedLifetime(held) {
+            #expect(RecoveryScanner.scan(directory: dir) == [.recoverable(package: package, takeID: "take-003")])
+        }
+    }
+}
+
+@Test func scanSkipsCorruptPackageAndFindsOthers() async throws {
+    try await withTemporaryDirectory { dir in
+        let corrupt = try makePackage(in: dir, name: "a-corrupt")
+        try Data().write(to: corrupt.manifestURL)
+        let loose = dir.appendingPathComponent("b-loose.toma", isDirectory: true)
+        try FileManager.default.createDirectory(at: loose, withIntermediateDirectories: false)
+        let good = try makePackage(in: dir, name: "c-good")
+        try addTake(makeTake(tracks: [micTrack([])]), to: good)
+        // Not packages: ignored.
+        try Data().write(to: dir.appendingPathComponent("notes.txt"))
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("other"), withIntermediateDirectories: false)
+
+        let results = RecoveryScanner.scan(directory: dir)
+
+        try #require(results.count == 3)
+        guard case let .needsRepair(first, firstReason) = results[0],
+              case let .needsRepair(second, secondReason) = results[1]
+        else {
+            Issue.record("expected two packages that need repair first, got \(results)")
+            return
+        }
+        #expect(first == corrupt && !firstReason.isEmpty)
+        #expect(second == ProjectPackage(url: loose) && !secondReason.isEmpty)
+        #expect(results[2] == .recoverable(package: good, takeID: "take-001"))
+    }
+}
+
+@Test func scanFlagsNewerFormatVersionWithoutRecoveringIt() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [micTrack([])]), to: package)
+        try ManifestStore(package: package).update { $0.formatVersion = Manifest.currentFormatVersion + 1 }
+
+        let results = RecoveryScanner.scan(directory: dir)
+
+        try #require(results.count == 1)
+        guard case let .needsRepair(found, reason) = results[0] else {
+            Issue.record("expected needsRepair, got \(results)")
+            return
+        }
+        #expect(found == package)
+        #expect(reason.contains("\(Manifest.currentFormatVersion + 1)"))
+    }
+}
+
+// MARK: - Lock
+
+@Test func recoverRefusesHeldLock() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let held = try RecordingLock.acquire(at: package.lockURL(take: "take-001"), info: .current(now: Date()))
+        defer { held.release() }
+        let before = try Data(contentsOf: package.manifestURL)
+
+        await #expect(throws: RecoveryError.lockHeld) {
+            try await TakeRecovery.recover(package: package, takeID: "take-001")
+        }
+
+        #expect(try Data(contentsOf: package.manifestURL) == before)
+        Swift.withExtendedLifetime(held) {
+            #expect(RecordingLock.isHeld(at: package.lockURL(take: "take-001")))
+        }
+    }
+}
+
+@Test func recoverRefusesWhileAnotherTakeOfThePackageIsRecording() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake("take-001", tracks: [micTrack([])]), to: package)
+        try addTake(makeTake("take-002", tracks: [micTrack([])]), to: package)
+        // Its recorder writes manifest.json, which has a single writer.
+        let held = try RecordingLock.acquire(at: package.lockURL(take: "take-002"), info: .current(now: Date()))
+        defer { held.release() }
+        let before = try Data(contentsOf: package.manifestURL)
+
+        await #expect(throws: RecoveryError.lockHeld) {
+            try await TakeRecovery.recover(package: package, takeID: "take-001")
+        }
+
+        #expect(try Data(contentsOf: package.manifestURL) == before)
+        #expect(!FileManager.default.fileExists(atPath: package.lockURL(take: "take-001").path))
+        Swift.withExtendedLifetime(held) {}
+    }
+}
+
+// MARK: - Segments
+
+@Test func recoversOpenSegmentsFromFragments() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let micStart = base.adding(seconds: 0.01)
+        try addTake(makeTake(tracks: [
+            displayTrack([try segmentRecord(package, track: "display-1", start: base)]),
+            micTrack([try segmentRecord(package, track: "mic", start: micStart)]),
+        ]), to: package)
+        let lock = package.lockURL(take: "take-001")
+        let reserve = package.reserveURL(take: "take-001")
+        try Data("{}".utf8).write(to: lock)  // left behind by the crashed recorder
+        try Data(count: 1 << 20).write(to: reserve)
+        let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
+        let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
+        let video = try await writeVideo(to: displayURL, start: base, seconds: 3, finish: false)
+        // Written as fast as it can (not in real time), an ALAC movie gets its header only after about
+        // 3 s of audio, so 3 s would leave nothing readable; in real time the first fragment comes at 1 s.
+        let audio = try await writeAudio(to: micURL, start: micStart, seconds: 6, finish: false)
+
+        try await withExtendedLifetime((video, audio)) {
+            let readableBefore = [
+                "display-1": await readableDuration(of: displayURL, reaching: 1.9),
+                "mic": await readableDuration(of: micURL, reaching: 1.9),
+            ]
+            let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+            let readableAfter = ["display-1": await readableDuration(of: displayURL), "mic": await readableDuration(of: micURL)]
+
+            #expect(record.status == .recovered)
+            #expect(try takeOnDisk(package, "take-001") == record)
+            for (trackID, start) in [("display-1", base), ("mic", micStart)] {
+                let track = try #require(record.track(trackID))
+                try #require(track.segments.count == 1)
+                let segment = track.segments[0]
+                #expect(segment.startHostTime == start)
+                #expect(segment.endReason == .recoveredAfterCrash)
+                #expect(segment.droppedFrames == 0 && segment.heartbeatFrames == 0)
+                let seconds = try #require(segment.endHostTime).seconds(since: start)
+                #expect(seconds >= 1.9)
+                let before = try #require(readableBefore[trackID]), after = try #require(readableAfter[trackID])
+                #expect(seconds >= before - 0.001 && seconds <= after + 0.001, "\(trackID): \(seconds) s vs \(before)…\(after) s")
+            }
+            #expect(FileManager.default.fileExists(atPath: displayURL.path))
+            #expect(FileManager.default.fileExists(atPath: micURL.path))
+            // The reserve is scratch and goes; the lock is released and its file removed.
+            #expect(!FileManager.default.fileExists(atPath: reserve.path))
+            #expect(!RecordingLock.isHeld(at: lock))
+            #expect(!FileManager.default.fileExists(atPath: lock.path))
+        }
+    }
+}
+
+@Test func recoversTakeWhoseSegmentHasNoFragments() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let micStart = base.adding(seconds: 0.02)
+        try addTake(makeTake(tracks: [
+            displayTrack([try segmentRecord(package, track: "display-1", start: base)]),
+            micTrack([try segmentRecord(package, track: "mic", start: micStart)]),
+        ]), to: package)
+        let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
+        let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
+        let video = try await writeVideo(to: displayURL, start: base, seconds: 3, finish: false)
+        try #require(FileManager.default.createFile(atPath: micURL.path, contents: Data()))
+
+        try await withExtendedLifetime(video) {
+            #expect(await readableDuration(of: displayURL, reaching: 1.9) >= 1.9)
+            let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+            #expect(record.status == .recovered)
+            let mic = try #require(record.track("mic")?.segments.first)
+            #expect(mic.endReason == .empty)
+            #expect(mic.endHostTime == micStart)
+            #expect(mic.droppedFrames == 0 && mic.heartbeatFrames == 0)
+            #expect(try fileSize(micURL) == 0)
+            let display = try #require(record.track("display-1")?.segments.first)
+            #expect(display.endReason == .recoveredAfterCrash)
+            #expect(try #require(display.endHostTime).seconds(since: base) >= 1.9)
+            #expect(try takeOnDisk(package, "take-001") == record)
+        }
+    }
+}
+
+@Test func nonEmptyUnreadableSegmentIsNotMarkedEmpty() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
+        let garbage = Data((0..<2_097_152).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
+        try garbage.write(to: micURL)
+
+        let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+        let mic = try #require(record.track("mic")?.segments.first)
+        #expect(mic.endReason == .unreadable(bytes: 2_097_152))
+        #expect(mic.endHostTime == base)
+        #expect(record.status == .recovered)
+        #expect(try Data(contentsOf: micURL) == garbage)
+    }
+}
+
+@Test func segmentWhoseFileIsGoneIsMarkedEmpty() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        // Not even the track folder is left.
+        try FileManager.default.removeItem(at: package.trackDirectory(take: "take-001", track: "mic"))
+
+        let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+        let mic = try #require(record.track("mic")?.segments.first)
+        #expect(mic.endReason == .empty)
+        #expect(mic.endHostTime == base)
+        #expect(record.status == .recovered)
+    }
+}
+
+@Test func recoveryAdoptsSegmentMissingFromManifest() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let secondStart = base.adding(seconds: 1.5)
+        let first = try segmentRecord(
+            package, track: "display-1", start: base, end: base.adding(seconds: 1),
+            reason: .streamError(domain: "SCStreamErrorDomain", code: -3821))
+        try addTake(makeTake(tracks: [displayTrack([first])]), to: package)
+        _ = try await writeVideo(
+            to: package.segmentURL(take: "take-001", track: "display-1", index: 1), start: base, seconds: 1, finish: true)
+        let secondURL = package.segmentURL(take: "take-001", track: "display-1", index: 2)
+        let video = try await writeVideo(to: secondURL, start: secondStart, seconds: 3, finish: false)
+        // seg-0003 has no segmentStarted event, so nothing says when it starts: it is left alone.
+        let strayURL = package.segmentURL(take: "take-001", track: "display-1", index: 3)
+        let stray = Data(repeating: 0xAB, count: 4096)
+        try stray.write(to: strayURL)
+        let lines = [
+            InputEvent(t: base, kind: .segmentStarted(track: "display-1", index: 1)),
+            InputEvent(t: secondStart, kind: .segmentStarted(track: "display-1", index: 2)),
+        ]
+        try Data(try lines.map { try $0.jsonLine() + "\n" }.joined().utf8).write(to: package.eventsURL(take: "take-001"))
+
+        try await withExtendedLifetime(video) {
+            #expect(await readableDuration(of: secondURL, reaching: 1.9) >= 1.9)
+            let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+            let segments = try #require(record.track("display-1")?.segments)
+            try #require(segments.map(\.index) == [1, 2])
+            #expect(segments[0] == first)
+            let adopted = segments[1]
+            #expect(adopted.startHostTime == secondStart)
+            #expect(adopted.file == "takes/take-001/display-1/seg-0002.mov")
+            #expect(adopted.endReason == .recoveredAfterCrash)
+            #expect(adopted.droppedFrames == 0 && adopted.heartbeatFrames == 0)
+            #expect(try #require(adopted.endHostTime).seconds(since: secondStart) >= 1.9)
+            #expect(try Data(contentsOf: strayURL) == stray)
+            #expect(try takeOnDisk(package, "take-001") == record)
+        }
+    }
+}
+
+// MARK: - Events and idempotence
+
+@Test func recoveryTruncatesBrokenEventTail() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        try #require(FileManager.default.createFile(
+            atPath: package.segmentURL(take: "take-001", track: "mic", index: 1).path, contents: Data()))
+        let whole = try [
+            InputEvent(t: base, kind: .segmentStarted(track: "mic", index: 1)),
+            InputEvent(t: base.adding(seconds: 0.5), kind: .cursor(x: 10.5, y: 20)),
+        ].map { try $0.jsonLine() + "\n" }.joined()
+        let eventsURL = package.eventsURL(take: "take-001")
+        try Data((whole + #"{"t":5000600000000,"type":"cur"#).utf8).write(to: eventsURL)
+
+        let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+        #expect(record.status == .recovered)
+        let contents = try String(contentsOf: eventsURL, encoding: .utf8)
+        #expect(contents == whole)
+        #expect(contents.hasSuffix("}\n"))
+    }
+}
+
+@Test func recoveryIsIdempotent() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [
+            displayTrack([try segmentRecord(package, track: "display-1", start: base)]),
+            micTrack([try segmentRecord(package, track: "mic", start: base)]),
+        ]), to: package)
+        let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
+        let video = try await writeVideo(to: displayURL, start: base, seconds: 3, finish: false)
+        try #require(FileManager.default.createFile(
+            atPath: package.segmentURL(take: "take-001", track: "mic", index: 1).path, contents: Data()))
+
+        try await withExtendedLifetime(video) {
+            #expect(await readableDuration(of: displayURL, reaching: 1.9) >= 1.9)
+            let first = try await TakeRecovery.recover(package: package, takeID: "take-001")
+            let manifest = try Data(contentsOf: package.manifestURL)
+            let second = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+            #expect(second == first)
+            #expect(first.status == .recovered)
+            #expect(try Data(contentsOf: package.manifestURL) == manifest)
+            #expect(RecoveryScanner.scan(directory: dir).isEmpty)
+        }
+    }
+}

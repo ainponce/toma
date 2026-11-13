@@ -1,0 +1,157 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
+import ProjectFormat
+import Recovery
+import Testing
+
+/// A closed take with a finished display segment and a finished mic segment of the given lengths.
+private func completeTake(
+    in dir: URL, displaySeconds: Double, micSeconds: Double, displayDropped: Int = 0
+) async throws -> ProjectPackage {
+    let package = try makePackage(in: dir)
+    try addTake(makeTake(status: .complete, tracks: [
+        displayTrack([try segmentRecord(
+            package, track: "display-1", start: base, end: base.adding(seconds: displaySeconds), reason: .stopped,
+            dropped: displayDropped)]),
+        micTrack([try segmentRecord(
+            package, track: "mic", start: base, end: base.adding(seconds: micSeconds), reason: .stopped)]),
+    ]), to: package)
+    _ = try await writeVideo(
+        to: package.segmentURL(take: "take-001", track: "display-1", index: 1),
+        start: base, seconds: displaySeconds, finish: true)
+    _ = try await writeAudio(
+        to: package.segmentURL(take: "take-001", track: "mic", index: 1), start: base, seconds: micSeconds, finish: true)
+    return package
+}
+
+@Test func verifyFailsOnEmptyMicSegment() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(status: .recovered, tracks: [
+            displayTrack([try segmentRecord(
+                package, track: "display-1", start: base, end: base.adding(seconds: 3), reason: .stopped)]),
+            micTrack([try segmentRecord(package, track: "mic", start: base, end: base, reason: .empty)]),
+        ]), to: package)
+        _ = try await writeVideo(
+            to: package.segmentURL(take: "take-001", track: "display-1", index: 1), start: base, seconds: 3, finish: true)
+        try #require(FileManager.default.createFile(
+            atPath: package.segmentURL(take: "take-001", track: "mic", index: 1).path, contents: Data()))
+
+        let results = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 2, maxDropRatio: nil)
+
+        try #require(results.map(\.trackID) == ["display-1", "mic"])
+        let display = results[0], mic = results[1]
+        #expect(display.ok && display.reason == nil)
+        #expect(abs(display.seconds - 3) < 0.05)
+        #expect(display.droppedFrames == 0)
+        #expect(!mic.ok)
+        #expect(mic.seconds == 0)
+        let reason = try #require(mic.reason)
+        #expect(reason.contains("seg-0001.mov") && reason.contains("empty"), "\(reason)")
+    }
+}
+
+@Test func verifyFailsOnMissingOrUnreadableSegment() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await completeTake(in: dir, displaySeconds: 3, micSeconds: 3)
+        try FileManager.default.removeItem(at: package.segmentURL(take: "take-001", track: "display-1", index: 1))
+        try Data(repeating: 0xAB, count: 4096).write(to: package.segmentURL(take: "take-001", track: "mic", index: 1))
+
+        let results = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 0, maxDropRatio: nil)
+
+        try #require(results.count == 2)
+        #expect(!results[0].ok && results[0].reason?.contains("seg-0001.mov is missing") == true, "\(results[0].reason ?? "")")
+        #expect(!results[1].ok && results[1].reason?.contains("cannot be read") == true, "\(results[1].reason ?? "")")
+    }
+}
+
+@Test func verifyAcceptsCompleteTake() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await completeTake(in: dir, displaySeconds: 3, micSeconds: 3)
+
+        let results = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 2.5, maxDropRatio: 0.01)
+
+        try #require(results.count == 2)
+        for result in results {
+            #expect(result.ok, "\(result.trackID): \(result.reason ?? "")")
+            #expect(result.reason == nil)
+            #expect(abs(result.seconds - 3) < 0.05)
+            #expect(result.droppedFrames == 0)
+        }
+    }
+}
+
+@Test func verifyFailsTrackBelowMinimumOrEndingEarly() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await completeTake(in: dir, displaySeconds: 3, micSeconds: 1)
+        let project = try LoadedProject.load(package.url)
+
+        let results = await TakeVerifier.verify(project, minDuration: 0.5, maxDropRatio: nil)
+        try #require(results.map(\.trackID) == ["display-1", "mic"])
+        #expect(results[0].ok)
+        #expect(!results[1].ok)
+        #expect(results[1].reason?.contains("before the end of the take") == true, "\(results[1].reason ?? "")")
+
+        let strict = await TakeVerifier.verify(project, minDuration: 5, maxDropRatio: nil)
+        #expect(strict.allSatisfy { !$0.ok })
+        #expect(strict[0].reason?.contains("minimum 5.00 s") == true, "\(strict[0].reason ?? "")")
+    }
+}
+
+@Test func verifyAppliesMaxDropRatio() async throws {
+    try await withTemporaryDirectory { dir in
+        // About 90 frames in the file and 10 dropped: close to 10 % of the frames that reached the recorder.
+        let package = try await completeTake(in: dir, displaySeconds: 3, micSeconds: 3, displayDropped: 10)
+        let project = try LoadedProject.load(package.url)
+
+        let unchecked = await TakeVerifier.verify(project, minDuration: 2, maxDropRatio: nil)
+        #expect(unchecked.allSatisfy { $0.ok })
+        #expect(unchecked[0].droppedFrames == 10)
+
+        let loose = await TakeVerifier.verify(project, minDuration: 2, maxDropRatio: 0.2)
+        #expect(loose.allSatisfy { $0.ok })
+
+        let strict = await TakeVerifier.verify(project, minDuration: 2, maxDropRatio: 0.05)
+        #expect(!strict[0].ok)
+        #expect(strict[0].reason?.contains("dropped 10 of") == true, "\(strict[0].reason ?? "")")
+        #expect(strict[1].ok)
+    }
+}
+
+// MARK: - LoadedProject
+
+@Test func loadedProjectReadsLastTakeAndItsEvents() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
+        try addTake(makeTake("take-002", status: .complete, tracks: [displayTrack([])]), to: package)
+        let events = [
+            InputEvent(t: base, kind: .segmentStarted(track: "display-1", index: 1)),
+            InputEvent(t: base.adding(seconds: 0.1), kind: .cursor(x: 1, y: 2)),
+        ]
+        try Data(try events.map { try $0.jsonLine() + "\n" }.joined().utf8).write(to: package.eventsURL(take: "take-002"))
+
+        let last = try LoadedProject.load(package.url)
+        #expect(last.package == package)
+        #expect(last.manifest == (try manifestOnDisk(package)))
+        #expect(last.take.id == "take-002")
+        #expect(last.events == events)
+
+        let first = try LoadedProject.load(package.url, take: "take-001")
+        #expect(first.take.id == "take-001")
+        #expect(first.events.isEmpty)  // take-001 has no events.jsonl
+
+        #expect(throws: LoadedProjectError.takeNotFound("take-009")) {
+            try LoadedProject.load(package.url, take: "take-009")
+        }
+        try ManifestStore(package: package).update { $0.formatVersion = 2 }
+        #expect(throws: LoadedProjectError.unsupportedFormatVersion(2)) { try LoadedProject.load(package.url) }
+    }
+}
+
+@Test func loadedProjectRefusesPackageWithoutTakes() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        #expect(throws: LoadedProjectError.noTakes) { try LoadedProject.load(package.url) }
+    }
+}
