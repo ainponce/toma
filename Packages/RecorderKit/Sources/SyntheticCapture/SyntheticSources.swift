@@ -33,6 +33,8 @@ public final class SyntheticVideoSource: CaptureSource {
     private struct Frames {
         var paused = false
         var nextIndex = 0
+        /// PTS of the last frame emitted, by any run.
+        var lastPTS: HostTime?
     }
 
     public init(
@@ -80,20 +82,31 @@ public final class SyntheticVideoSource: CaptureSource {
         frames.withLock { $0.paused = paused }
     }
 
+    /// The PTS is `clock()`, moved past the previous frame's if needed, so PTS keep increasing across
+    /// restarts even with a clock that stalls or goes back.
     private func emitFrame(to sink: any CaptureSink) {
-        let index = frames.withLock { frames -> Int? in
+        let now = clock()
+        let frame = frames.withLock { frames -> (index: Int, pts: HostTime)? in
             guard !frames.paused else { return nil }
-            defer { frames.nextIndex += 1 }
-            return frames.nextIndex
+            let pts = frames.lastPTS.map { max(now, HostTime(nanoseconds: $0.nanoseconds + 1)) } ?? now
+            defer {
+                frames.nextIndex += 1
+                frames.lastPTS = pts
+            }
+            return (frames.nextIndex, pts)
         }
-        guard let index else { return }
-        sink.source(trackID, didOutput: SampleFactory.videoSample(width: width, height: height, pts: clock(), frameIndex: index))
+        guard let frame else { return }
+        sink.source(
+            trackID,
+            didOutput: SampleFactory.videoSample(width: width, height: height, pts: frame.pts, frameIndex: frame.index))
     }
 }
 
 /// A fake microphone: 10 ms blocks of `SampleFactory` audio, paced in real time. The first block
-/// is stamped with `clock()` at `start`; each block moves the next PTS by
+/// is stamped with `clock()` at `start` (or where the previous run ended, if that is later, so PTS
+/// never go back across a restart); each block moves the next PTS by
 /// `frames / sampleRate × (1 + clockSkewPPM / 1e6)`, like a device clock that drifts from the host's.
+/// `sampleRate` must be at least 100 Hz, so a 10 ms block has at least one frame.
 public final class SyntheticAudioSource: CaptureSource {
     public let trackID: String
     public let kind = TrackKind.microphone
@@ -137,6 +150,11 @@ public final class SyntheticAudioSource: CaptureSource {
         var startUptimeNanoseconds: UInt64
         /// Nominal duration of the blocks emitted so far: Σ frames / sampleRate.
         var emittedSeconds = 0.0
+
+        /// PTS of the next block, which is also where the last block emitted ends.
+        func nextPTS(clockSkewPPM: Double) -> HostTime {
+            firstPTS.adding(seconds: emittedSeconds * (1 + clockSkewPPM / 1_000_000))
+        }
     }
 
     private struct Block {
@@ -153,6 +171,7 @@ public final class SyntheticAudioSource: CaptureSource {
         clockSkewPPM: Double = 0,
         clock: @escaping @Sendable () -> HostTime = HostTime.now
     ) {
+        Self.checkFormat(sampleRate: sampleRate, channels: channels)
         self.trackID = trackID
         self.clockSkewPPM = clockSkewPPM
         self.clock = clock
@@ -162,10 +181,13 @@ public final class SyntheticAudioSource: CaptureSource {
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
         try await runner.start(
             on: queue, sink: sink, interval: .milliseconds(10),
-            prepare: { [self] in
-                let firstPTS = clock()
+            onInstall: { [self] in
+                let now = clock()
                 audio.withLock { audio in
-                    audio.timeline = Timeline(firstPTS: firstPTS, startUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds)
+                    let previousEnd = audio.timeline?.nextPTS(clockSkewPPM: clockSkewPPM)
+                    audio.timeline = Timeline(
+                        firstPTS: max(now, previousEnd ?? now),
+                        startUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds)
                     audio.activeDeviceUniqueID = audio.deviceUniqueID
                 }
             }
@@ -175,8 +197,9 @@ public final class SyntheticAudioSource: CaptureSource {
     }
 
     public func stop() async {
-        await runner.stop()
-        audio.withLock { $0.activeDeviceUniqueID = nil }
+        await runner.stop { [self] in
+            audio.withLock { $0.activeDeviceUniqueID = nil }
+        }
     }
 
     /// Delivers `didStopWithError` with `NSError(domain:code:)` on the start queue, after the blocks
@@ -187,6 +210,7 @@ public final class SyntheticAudioSource: CaptureSource {
 
     /// The blocks emitted from now on use this format; the timeline continues where it was.
     public func switchFormat(sampleRate: Double, channels: Int) {
+        Self.checkFormat(sampleRate: sampleRate, channels: channels)
         audio.withLock { audio in
             audio.sampleRate = sampleRate
             audio.channels = channels
@@ -206,14 +230,21 @@ public final class SyntheticAudioSource: CaptureSource {
         let now = DispatchTime.now().uptimeNanoseconds
         return audio.withLock { audio -> Block? in
             guard var timeline = audio.timeline else { return nil }
-            let elapsed = Double(now - timeline.startUptimeNanoseconds) / 1_000_000_000
-            guard timeline.emittedSeconds <= elapsed else { return nil }
+            // Signed: a restart may have set the start after `now` was read.
+            let elapsedNanoseconds = Int64(bitPattern: now &- timeline.startUptimeNanoseconds)
+            guard timeline.emittedSeconds <= Double(elapsedNanoseconds) / 1_000_000_000 else { return nil }
             let frames = Int((audio.sampleRate / 100).rounded())
-            let pts = timeline.firstPTS.adding(seconds: timeline.emittedSeconds * (1 + clockSkewPPM / 1_000_000))
+            let pts = timeline.nextPTS(clockSkewPPM: clockSkewPPM)
             timeline.emittedSeconds += Double(frames) / audio.sampleRate
             audio.timeline = timeline
             return Block(pts: pts, frames: frames, sampleRate: audio.sampleRate, channels: audio.channels)
         }
+    }
+
+    private static func checkFormat(sampleRate: Double, channels: Int) {
+        precondition(
+            sampleRate >= 100 && channels > 0,
+            "SyntheticAudioSource: \(sampleRate) Hz × \(channels) channels gives empty 10 ms blocks")
     }
 }
 
@@ -225,12 +256,6 @@ private final class SyntheticRunner: Sendable {
         let timer: any DispatchSourceTimer
         let queue: DispatchSerialQueue
         let sink: any CaptureSink
-
-        /// Cancels the timer and waits for the ticks already queued, which see the run gone.
-        func end() async {
-            timer.cancel()
-            await queue.drain()
-        }
     }
 
     private struct State {
@@ -239,6 +264,9 @@ private final class SyntheticRunner: Sendable {
         /// Bumped by every `start` and `stop`, so a `start` overtaken by a later call gives up.
         var generation = 0
         var run: Run?
+        /// Queue of the last run installed. Kept when the run ends, so `start` and `stop` can wait
+        /// for a delivery still running there, such as the error that ended it.
+        var lastQueue: DispatchSerialQueue?
     }
 
     private let state = Mutex(State())
@@ -254,27 +282,28 @@ private final class SyntheticRunner: Sendable {
         state.withLock { $0.run }?.timer.cancel()
     }
 
-    /// Ends the previous run, then either throws the injected failure or calls `prepare` and starts
-    /// a timer that calls `tick` with the sink on `queue` every `interval` while this run lasts.
+    /// Ends the previous run and waits for its deliveries, then either throws the injected failure
+    /// or starts a timer that calls `tick` with the sink on `queue` every `interval` while this run
+    /// lasts. `onInstall` runs under the lock that installs the run.
     func start(
         on queue: DispatchSerialQueue,
         sink: any CaptureSink,
         interval: DispatchTimeInterval,
-        prepare: () -> Void = {},
+        onInstall: () -> Void = {},
         tick: @escaping @Sendable (any CaptureSink) -> Void
     ) async throws {
-        let (id, previous, fails) = state.withLock { state in
+        let (id, previous, lastQueue, fails) = state.withLock { state in
             state.startCount += 1
             state.generation += 1
             let fails = state.failOnStart > 0
             if fails { state.failOnStart -= 1 }
             defer { state.run = nil }
-            return (state.generation, state.run, fails)
+            return (state.generation, state.run, state.lastQueue, fails)
         }
-        if let previous { await previous.end() }
+        previous?.timer.cancel()
+        await lastQueue?.drain()
         if fails { throw NSError(domain: "Synthetic", code: -1) }
 
-        prepare()
         let timer = DispatchSource.makeTimerSource(queue: queue)
         timer.schedule(deadline: .now(), repeating: interval, leeway: .milliseconds(1))
         timer.setEventHandler { [weak self] in
@@ -284,6 +313,8 @@ private final class SyntheticRunner: Sendable {
         let installed = state.withLock { state in
             guard state.generation == id else { return false }
             state.run = Run(id: id, timer: timer, queue: queue, sink: sink)
+            state.lastQueue = queue
+            onInstall()
             return true
         }
         guard installed else {
@@ -295,21 +326,25 @@ private final class SyntheticRunner: Sendable {
         timer.resume()
     }
 
-    func stop() async {
-        let run = state.withLock { state in
+    /// Ends the current run, if any, and waits for the deliveries already queued (an error being
+    /// delivered included). `onStop` runs under the lock that ends the run.
+    func stop(onStop: () -> Void = {}) async {
+        let (run, lastQueue) = state.withLock { state in
             state.generation += 1
+            onStop()
             defer { state.run = nil }
-            return state.run
+            return (state.run, state.lastQueue)
         }
-        await run?.end()
+        run?.timer.cancel()
+        await lastQueue?.drain()
     }
 
     /// Ends the current run with `error`, delivered on its queue after the ticks already queued.
     func fail(trackID: String, error: any Error) {
-        guard let run = state.withLock({ $0.run }) else { return }
-        run.queue.async { [self] in
-            let ended = state.withLock { state in
-                guard state.run?.id == run.id else { return nil as Run? }
+        guard let (id, queue) = state.withLock({ state in state.run.map { ($0.id, $0.queue) } }) else { return }
+        queue.async { [self] in
+            let ended = state.withLock { state -> Run? in
+                guard state.run?.id == id else { return nil }
                 defer { state.run = nil }
                 return state.run
             }
@@ -321,14 +356,5 @@ private final class SyntheticRunner: Sendable {
 
     private func sink(ifCurrent id: Int) -> (any CaptureSink)? {
         state.withLock { $0.run?.id == id ? $0.run?.sink : nil }
-    }
-}
-
-extension DispatchSerialQueue {
-    /// Returns once every block submitted to the queue before the call has run.
-    fileprivate func drain() async {
-        await withCheckedContinuation { continuation in
-            self.async { continuation.resume() }
-        }
     }
 }

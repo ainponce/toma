@@ -27,10 +27,18 @@ public protocol CaptureSource: AnyObject, Sendable {
     /// after an error, cleared by `stop`.
     var activeDeviceUniqueID: String? { get }
     /// Starts delivering to `sink` on `queue`, with presentation timestamps on the host clock.
-    /// May be called again after an error or after `stop()`: each call ends the previous run first.
-    /// The sink is retained until the run ends (`stop()` or the error), never longer.
+    /// May be called again after an error or after `stop()`: each call ends the previous run first
+    /// and waits for its deliveries to finish. The sink is retained until the run ends (`stop()` or
+    /// the error), never longer.
+    ///
+    /// Failures are reported once. A failure that happens before `start` returns makes `start`
+    /// throw and is never delivered to the sink. `source(_:didStopWithError:)` only reports the
+    /// failure of a run whose `start` succeeded. The sink can get that call on the queue before
+    /// the caller has resumed from `start`. Samples may arrive as soon as capture is running,
+    /// before `start` returns: ScreenCaptureKit can send the only frame of a still screen then.
     func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws
-    /// Ends the current run, if any. When it returns, nothing more is delivered and the sink is released.
+    /// Ends the current run, if any. When it returns, nothing more is delivered, a delivery that
+    /// was in progress (an error included) has finished, and the sink is released.
     func stop() async
 }
 
@@ -47,7 +55,7 @@ public enum CaptureSourceError: Error, Equatable {
 
 extension DispatchSerialQueue {
     /// Returns once every block submitted to the queue before the call has run.
-    func drain() async {
+    package func drain() async {
         await withCheckedContinuation { continuation in
             self.async { continuation.resume() }
         }

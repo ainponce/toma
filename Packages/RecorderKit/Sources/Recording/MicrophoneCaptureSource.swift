@@ -14,26 +14,26 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
 
     private let preferredDeviceUniqueID: String?
     /// Session setup, `startRunning` (which blocks) and teardown happen here, one at a time.
-    private let sessionQueue = DispatchQueue(label: "dev.toma.MicrophoneCaptureSource.session")
+    private let sessionQueue = DispatchSerialQueue(label: "dev.toma.MicrophoneCaptureSource.session")
     private let state = Mutex(State())
 
     private struct State {
         /// Bumped by every `start` and `stop`, so a `start` overtaken by a later call gives up.
         var generation = 0
         var run: Run?
+        /// Queue of the last run installed. Kept when the run ends, so `start` and `stop` can wait
+        /// for a delivery still running there, such as the error that ended it.
+        var lastQueue: DispatchSerialQueue?
         var activeDeviceUniqueID: String?
     }
 
-    /// One `start`, until it is stopped or fails. `@unchecked Sendable` because the AVFoundation
-    /// objects are not annotated: the session queue builds them and hands them to the state, and
-    /// whoever ends the run takes them out and tears them down on the session queue. The sample
-    /// callback only compares the output's identity and reads the session's clock.
-    private struct Run: @unchecked Sendable {
-        let id: Int
+    /// The AVFoundation side of a run. `@unchecked Sendable` because those objects are not
+    /// annotated: the session queue builds them, the state holds them, and whoever ends the run
+    /// tears them down on the session queue. The sample callback only compares the output's
+    /// identity and reads the session's clock.
+    private struct Capture: @unchecked Sendable {
         let session: AVCaptureSession
         let output: AVCaptureAudioDataOutput
-        let queue: DispatchSerialQueue
-        let sink: any CaptureSink
         let observers: [any NSObjectProtocol]
 
         func tearDown() {
@@ -41,6 +41,24 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
             session.stopRunning()
             for observer in observers { NotificationCenter.default.removeObserver(observer) }
         }
+    }
+
+    /// One `start`, until it is stopped or fails.
+    private struct Run: Sendable {
+        let id: Int
+        let capture: Capture
+        let queue: DispatchSerialQueue
+        let sink: any CaptureSink
+        /// Set once the session runs and `start` is about to return successfully.
+        var started = false
+        /// An error before `started`, which `start` throws instead of delivering.
+        var failure: (any Error)?
+    }
+
+    private enum StartOutcome {
+        case started
+        case failed(any Error)
+        case overtaken
     }
 
     /// `nil` captures the default input. A preferred device that is not connected when `start` runs
@@ -62,12 +80,17 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
     }
 
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
-        let (id, previous) = state.withLock { state in
+        let (id, previous, lastQueue) = state.withLock { state in
             state.generation += 1
             defer { state.run = nil }
-            return (state.generation, state.run)
+            return (state.generation, state.run, state.lastQueue)
         }
-        if let previous { await end(previous) }
+        if let previous {
+            let capture = previous.capture
+            sessionQueue.async { capture.tearDown() }
+        }
+        await lastQueue?.drain()
+        // Runs after any teardown already queued, so two sessions never overlap.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
             sessionQueue.async { [self] in
                 continuation.resume(with: Result { try begin(id: id, queue: queue, sink: sink) })
@@ -76,13 +99,20 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
     }
 
     public func stop() async {
-        let run = state.withLock { state in
+        let (run, lastQueue) = state.withLock { state in
             state.generation += 1
             state.activeDeviceUniqueID = nil
             defer { state.run = nil }
-            return state.run
+            return (state.run, state.lastQueue)
         }
-        if let run { await end(run) }
+        if let run {
+            let capture = run.capture
+            sessionQueue.async { capture.tearDown() }
+        }
+        // The session is torn down (a `start` in progress included, which then throws
+        // `CancellationError`), and deliveries already queued, an error included, have finished.
+        await sessionQueue.drain()
+        await lastQueue?.drain()
     }
 
     /// Builds and starts the session. Runs on `sessionQueue`.
@@ -113,56 +143,71 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
                 self?.fail(runID: id, error: AVError(.deviceWasDisconnected))
             },
         ]
-        let run = Run(id: id, session: session, output: output, queue: queue, sink: sink, observers: observers)
+        let capture = Capture(session: session, output: output, observers: observers)
         let installed = state.withLock { state in
             guard state.generation == id else { return false }
-            state.run = run
-            state.activeDeviceUniqueID = device.uniqueID
+            state.run = Run(id: id, capture: capture, queue: queue, sink: sink)
+            state.lastQueue = queue
             return true
         }
         guard installed else {
-            run.tearDown()
+            capture.tearDown()
             throw CancellationError()
         }
 
         session.startRunning()
-        guard session.isRunning else {
-            let mine = state.withLock { state in
-                guard state.run?.id == id else { return false }
+        let running = session.isRunning
+        let outcome = state.withLock { state -> StartOutcome in
+            guard var run = state.run, run.id == id else { return .overtaken }
+            if let failure = run.failure {
                 state.run = nil
-                return true
+                return .failed(failure)
             }
-            if mine { run.tearDown() }
-            throw CaptureSourceError.sessionDidNotStart
+            guard running else {
+                state.run = nil
+                return .failed(CaptureSourceError.sessionDidNotStart)
+            }
+            run.started = true
+            state.run = run
+            state.activeDeviceUniqueID = device.uniqueID
+            return .started
+        }
+        switch outcome {
+        case .started:
+            return
+        case .failed(let error):
+            capture.tearDown()
+            throw error
+        case .overtaken:
+            // The `stop` or `start` that took this run queued its teardown after this call.
+            throw CancellationError()
         }
     }
 
-    /// Tears the session down on the session queue and waits for deliveries already queued, which
-    /// see the run gone and drop.
-    private func end(_ run: Run) async {
-        await withCheckedContinuation { continuation in
-            sessionQueue.async {
-                run.tearDown()
-                continuation.resume()
-            }
-        }
-        await run.queue.drain()
-    }
-
-    /// Ends the run `runID` with `error`, delivered on its queue after the samples already queued there.
+    /// From any thread: handled on the run's queue, after the samples already queued there.
     private func fail(runID: Int, error: any Error) {
         let queue = state.withLock { $0.run?.id == runID ? $0.run?.queue : nil }
-        guard let queue else { return }
-        queue.async { [self] in
-            let ended = state.withLock { state in
-                guard state.run?.id == runID else { return nil as Run? }
-                defer { state.run = nil }
-                return state.run
+        queue?.async { [self] in failOnQueue(runID: runID, error: error) }
+    }
+
+    /// Runs on the run's queue. Before `start` has succeeded the error is kept for `start` to throw;
+    /// afterwards the run ends: its teardown is queued first, so a restart from inside the sink
+    /// cannot overlap the old session, then the error is the run's last delivery.
+    private func failOnQueue(runID: Int, error: any Error) {
+        let ended = state.withLock { state -> Run? in
+            guard var run = state.run, run.id == runID, run.failure == nil else { return nil }
+            guard run.started else {
+                run.failure = error
+                state.run = run
+                return nil
             }
-            guard let ended else { return }
-            ended.sink.source(trackID, didStopWithError: error)
-            sessionQueue.async { ended.tearDown() }
+            state.run = nil
+            return run
         }
+        guard let ended else { return }
+        let capture = ended.capture
+        sessionQueue.async { capture.tearDown() }
+        ended.sink.source(trackID, didStopWithError: error)
     }
 
     private func resolveDevice() -> AVCaptureDevice? {
@@ -175,16 +220,17 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
     public func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         let outputID = ObjectIdentifier(output)
         let run = state.withLock { state in
-            state.run.flatMap { ObjectIdentifier($0.output) == outputID ? $0 : nil }
+            state.run.flatMap { ObjectIdentifier($0.capture.output) == outputID && $0.failure == nil ? $0 : nil }
         }
         guard let run else { return }
         let hostClock = CMClockGetHostTimeClock()
-        let sessionClock = run.session.synchronizationClock ?? hostClock
+        let sessionClock = run.capture.session.synchronizationClock ?? hostClock
         do {
             let retimed = try Self.retimed(sampleBuffer) { CMSyncConvertTime($0, from: sessionClock, to: hostClock) }
             run.sink.source(trackID, didOutput: retimed)
         } catch {
-            fail(runID: run.id, error: error)
+            // Already on the run's queue: end the run now, so no later sample goes out before the error.
+            failOnQueue(runID: run.id, error: error)
         }
     }
 

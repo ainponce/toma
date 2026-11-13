@@ -180,6 +180,92 @@ import Testing
         #expect(sink.failures.isEmpty && source.startCount == 1)
     }
 
+    @Test func stopWaitsForAnErrorBeingDelivered() async throws {
+        let video = SyntheticVideoSource(width: 16, height: 16, framesPerSecond: 30)
+        let audio = SyntheticAudioSource()
+        let sources: [(any CaptureSource, @Sendable () -> Void)] = [
+            (video, { video.failNow(domain: "Test", code: 1) }),
+            (audio, { audio.failNow(domain: "Test", code: 1) }),
+        ]
+        for (source, failNow) in sources {
+            let queue = DispatchSerialQueue(label: "test.synthetic.stopRace")
+            let progress = SlowErrorSink.Progress()
+            weak var released: SlowErrorSink?
+            do {
+                let sink = SlowErrorSink(progress: progress)
+                released = sink
+                try await source.start(on: queue, sink: sink)
+                failNow()
+            }
+            #expect(await eventually { progress.state.withLock { $0.entered } })
+            await source.stop()
+            // stop() returned only after the error delivery finished and the sink was released.
+            #expect(progress.state.withLock { $0.finished })
+            #expect(released == nil)
+        }
+    }
+
+    @Test func startWhileRunningReplacesRun() async throws {
+        let firstQueue = DispatchSerialQueue(label: "test.synthetic.replace.1")
+        let secondQueue = DispatchSerialQueue(label: "test.synthetic.replace.2")
+        let first = RecordingSink(queue: firstQueue)
+        let second = RecordingSink(queue: secondQueue)
+        let source = SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30)
+        try await source.start(on: firstQueue, sink: first)
+        #expect(await eventually { first.samples.count >= 3 })
+
+        try await source.start(on: secondQueue, sink: second)
+        let firstCount = first.samples.count
+        #expect(await eventually { second.samples.count >= 3 })
+        try await Task.sleep(for: .milliseconds(150))
+        // The old run's timer is gone: its sink gets nothing after the second start returned.
+        #expect(first.samples.count == firstCount)
+        await source.stop()
+
+        #expect(first.failures.isEmpty && second.failures.isEmpty)
+        #expect(source.startCount == 2)
+        let lastOfFirst = try #require(first.samples.last?.pts)
+        let firstOfSecond = try #require(second.samples.first?.pts)
+        #expect(firstOfSecond > lastOfFirst)
+    }
+
+    @Test func restartNeverMovesPTSBackwards() async throws {
+        // A clock that goes 1 s back on every read.
+        let reads = Mutex(0)
+        let backwards: @Sendable () -> HostTime = {
+            let n = reads.withLock { n in
+                defer { n += 1 }
+                return n
+            }
+            return HostTime(nanoseconds: UInt64(1_000_000 - n) * 1_000_000_000)
+        }
+        let sources: [any CaptureSource] = [
+            SyntheticVideoSource(width: 16, height: 16, framesPerSecond: 30, clock: backwards),
+            SyntheticAudioSource(clock: backwards),
+        ]
+        for source in sources {
+            let queue = DispatchSerialQueue(label: "test.synthetic.restartPTS")
+            let sink = RecordingSink(queue: queue)
+            for run in 1...2 {
+                try await source.start(on: queue, sink: sink)
+                #expect(await eventually { sink.samples.count >= 3 * run })
+                await source.stop()
+            }
+            let pts = sink.samples.map(\.pts)
+            #expect(pts.count >= 6)
+            #expect(zip(pts, pts.dropFirst()).allSatisfy { $0 < $1 }, "\(source.trackID)")
+        }
+    }
+
+    @Test func audioSampleRateBelow100HzIsRejected() async {
+        await #expect(processExitsWith: .failure) {
+            _ = SyntheticAudioSource(sampleRate: 50)
+        }
+        await #expect(processExitsWith: .failure) {
+            SyntheticAudioSource().switchFormat(sampleRate: 99, channels: 1)
+        }
+    }
+
     /// How far the PTS of the block that starts after 48 000 frames is from the first PTS.
     private func ptsAdvanceAfterOneSecond(clockSkewPPM: Double) async throws -> Double {
         let queue = DispatchSerialQueue(label: "test.synthetic.skew.\(clockSkewPPM)")
@@ -214,6 +300,27 @@ func eventually(timeout: Duration = .seconds(5), _ condition: () async -> Bool) 
         try? await Task.sleep(for: .milliseconds(10))
     }
     return await condition()
+}
+
+/// A sink whose error delivery takes 300 ms, to catch a `stop()` that does not wait for it.
+final class SlowErrorSink: CaptureSink {
+    final class Progress: Sendable {
+        let state = Mutex((entered: false, finished: false))
+    }
+
+    let progress: Progress
+
+    init(progress: Progress) {
+        self.progress = progress
+    }
+
+    func source(_ trackID: String, didOutput sample: CMSampleBuffer) {}
+
+    func source(_ trackID: String, didStopWithError error: any Error) {
+        progress.state.withLock { $0.entered = true }
+        Thread.sleep(forTimeInterval: 0.3)
+        progress.state.withLock { $0.finished = true }
+    }
 }
 
 /// Records what a source delivers. Every call must arrive on `queue` (`dispatchPrecondition` traps
