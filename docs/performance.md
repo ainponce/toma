@@ -9,6 +9,8 @@ bash scripts/stress-recovery.sh /Volumes/<disco>/toma   # disco USB externo
 
 El script compila `recorder-dev` en Release, graba la pantalla principal y el micrófono con contenido en movimiento, mide la memoria (RSS) del grabador a los 5, 15 y 30 min, lo mata con `kill -9` a los 30 min, recupera la toma y la verifica con `--min-duration 1798`. Al final imprime, por pista, la duración, `droppedFrames` y el `endReason` de cada segmento.
 
+Después del `kill -9`, `droppedFrames` sale del último evento `droppedSamples` que el grabador escribió en `events.jsonl` (lo hace cada 2 s, si cambió): pueden faltar los cuadros perdidos en los últimos 2 s antes del corte. `verify` tolera que una pista de una toma recuperada termine hasta 2 s antes que otra (1 s en una toma cerrada por la app), porque cada pista se puede leer hasta su último fragmento completo de 1 s.
+
 **Regla de decisión:** si en el disco externo se pierde más del 0,5 % de los cuadros de la pantalla, los volúmenes no internos graban con `fragmentInterval` de 2 s.
 
 ## Resistencia real (`stress-recovery.sh`)

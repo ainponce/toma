@@ -37,14 +37,16 @@ public enum RecoveryScanner {
     private static func scan(package: ProjectPackage) -> [ScanResult] {
         let manifest: Manifest
         do {
-            manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
+            let data = try Data(contentsOf: package.manifestURL)
+            // The version first: a newer manifest may not decode as this version's `Manifest`.
+            let version = try Manifest.formatVersion(of: data)
+            guard version <= Manifest.currentFormatVersion else {
+                return [.needsRepair(
+                    package: package, reason: "format version \(version) is newer than \(Manifest.currentFormatVersion)")]
+            }
+            manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
         } catch {
             return [.needsRepair(package: package, reason: "manifest.json cannot be read: \(error.localizedDescription)")]
-        }
-        guard manifest.formatVersion <= Manifest.currentFormatVersion else {
-            return [.needsRepair(
-                package: package,
-                reason: "format version \(manifest.formatVersion) is newer than \(Manifest.currentFormatVersion)")]
         }
         return manifest.takes
             .filter { $0.status == .recording && !RecordingLock.isHeld(at: package.lockURL(take: $0.id)) }

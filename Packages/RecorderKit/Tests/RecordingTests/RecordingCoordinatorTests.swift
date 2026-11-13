@@ -622,6 +622,40 @@ extension RealTimeRecordingTests {
             }
         }
 
+        @Test func droppedSamplesAreLoggedWhileRecording() async throws {
+            try await withTemporaryDirectory { directory in
+                // The encoder has no room for one call in three, so the real-time writer drops frames.
+                let rig = try Rig(
+                    in: directory, tracks: [.display], configuration: RecordingConfiguration(syncInterval: .milliseconds(300))
+                ) { url, media in
+                    let writer = try FragmentedTrackWriter(url: url, media: media)
+                    let calls = Mutex(0)
+                    writer.inputHasRoom = { input in
+                        let n = calls.withLock { n in
+                            n += 1
+                            return n
+                        }
+                        return n % 3 != 0 && input.isReadyForMoreMediaData
+                    }
+                    return writer
+                }
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(1600))
+                let record = try await rig.coordinator.stop()
+
+                let counts = try rig.events(id).compactMap { event -> Int? in
+                    guard case .droppedSamples("display-1", let count) = event.kind else { return nil }
+                    return count
+                }
+                #expect(counts.count >= 3, "\(counts)")
+                #expect(zip(counts, counts.dropFirst()).allSatisfy { $0 < $1 }, "\(counts)")
+                #expect((counts.first ?? 0) > 0)
+                // The manifest's count at the close includes the drops after the last tick.
+                let dropped = try #require(record.track("display-1")?.segments.first?.droppedFrames)
+                #expect(dropped >= (counts.last ?? .max), "\(dropped) vs \(counts)")
+            }
+        }
+
         @Test func stateErrors() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, tracks: [.display])
@@ -798,6 +832,7 @@ final class ScriptedWriter: TrackWriting {
 
     var formatDescription: CMFormatDescription? { inner.formatDescription }
     var failure: NSError? { injected ?? inner.failure }
+    var droppedSampleCount: Int { inner.droppedSampleCount }
 
     func append(_ sample: CMSampleBuffer) throws {
         if injected == nil, let failAt, HostTime.now() >= failAt {

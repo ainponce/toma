@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
 import CoreMedia
+import Darwin
 import Foundation
 import ProjectFormat
 
@@ -10,22 +11,24 @@ enum SegmentFile {
     case missing
     /// A file of 0 bytes, or one that opens without any media of its track's kind.
     case empty
-    /// A non-empty file that cannot be opened.
+    /// A non-empty file that can be opened but whose contents AVFoundation cannot read.
     case unreadable(bytes: Int64, error: any Error)
     /// `duration` of media of the track's kind can be read from `track` of `asset`. For a segment
     /// left open by a crash, that is everything up to its last complete fragment.
     case readable(asset: AVURLAsset, track: AVAssetTrack, duration: CMTime)
 
-    static func inspect(_ url: URL, kind: TrackKind) async -> SegmentFile {
-        let bytes: Int64
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
-            bytes = (attributes[.size] as? NSNumber)?.int64Value ?? 0
-        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
-            return .missing
-        } catch {
-            return .unreadable(bytes: 0, error: error)
+    /// Throws the `POSIXError` when the file exists but cannot be examined or opened for reading (for
+    /// example `EACCES`): that says nothing about its contents, so it must not be recorded as them.
+    static func inspect(_ url: URL, kind: TrackKind) async throws -> SegmentFile {
+        var info = stat()
+        guard stat(url.path, &info) == 0 else {
+            if errno == ENOENT { return .missing }
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        close(fd)
+        let bytes = Int64(info.st_size)
         guard bytes > 0 else { return .empty }
 
         let asset = AVURLAsset(url: url)

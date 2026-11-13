@@ -12,19 +12,27 @@
 # folder: where the package is recorded, created if needed (default: a new temporary folder). Point
 # it at an external disk for the external-volume run. Write the results in docs/performance.md.
 #
+# droppedFrames after the SIGKILL come from the last droppedSamples event the recorder logged (every
+# 2 s), so the drops of up to the last 2 s before the kill may be missing.
+#
 # Needs Screen Recording and Microphone permission for the terminal app, and about 4 GB free.
 # The optional reboot test is described in docs/performance.md.
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
 DURATION=3600
 KILL_AT=1800
 MIN_DURATION=1798
 RSS_AT=(300 900 1800)
 
-DIR="${1:-$(mktemp -d)}"
-mkdir -p "$DIR"
+# The folder argument is relative to where the script was started, so resolve it before the `cd`.
+if [ $# -ge 1 ]; then
+  mkdir -p "$1"
+  DIR="$(cd "$1" && pwd)"
+else
+  DIR="$(mktemp -d)"
+fi
 LOGS="$(mktemp -d)"
+cd "$(dirname "$0")/.."
 
 swift build -c release --package-path Packages/RecorderKit --product recorder-dev
 BIN="$(swift build -c release --package-path Packages/RecorderKit --product recorder-dev --show-bin-path)/recorder-dev"
@@ -118,16 +126,6 @@ for (( i = 0; i < $(json "takes.$TAKE.tracks"); i++ )); do
   if [ "$ID" = mic ]; then HAS_MIC=1; fi
 done
 
-# Export speed, once `recorder-dev export` exists (Task 11). It has no range option yet, so this
-# times the whole recovered take, not only its first 10 min.
-if "$BIN" --help | grep -qE '^ +export '; then
-  EXPORT_START=$(date +%s)
-  "$BIN" export "$PKG" "$LOGS/export.mp4" --width 1920 --height 1080 --fps 60
-  echo "export at 1080p60: $(( $(date +%s) - EXPORT_START )) s for the whole take"
-else
-  echo "export: pending (recorder-dev export arrives with Task 11)"
-fi
-
 FAILED=0
 if grep -q 'trackLost' "$LOGS/out"; then
   echo "FAIL: a track was lost:"
@@ -142,5 +140,19 @@ if [ "$VERIFY_STATUS" != 0 ]; then
   echo "FAIL: verify failed"
   FAILED=1
 fi
-if [ "$FAILED" != 0 ]; then exit 1; fi
-echo "stress test passed: $PKG"
+if [ "$FAILED" = 0 ]; then echo "stress test passed: $PKG"; fi
+
+# Export speed, once `recorder-dev export` exists (Task 11): a measurement, never the verdict. It has
+# no range option yet, so this times the whole recovered take, not only its first 10 min.
+HELP="$("$BIN" --help)"
+if grep -qE '^ +export ' <<< "$HELP"; then
+  EXPORT_START=$(date +%s)
+  if "$BIN" export "$PKG" "$LOGS/export.mp4" --width 1920 --height 1080 --fps 60; then
+    echo "export at 1080p60: $(( $(date +%s) - EXPORT_START )) s for the whole take"
+  else
+    echo "export: failed after $(( $(date +%s) - EXPORT_START )) s (not part of the verdict)"
+  fi
+else
+  echo "export: pending (recorder-dev export arrives with Task 11)"
+fi
+exit "$FAILED"

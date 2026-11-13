@@ -130,6 +130,8 @@ actor TrackPipeline: CaptureSink {
         var framesSinceHeartbeatTick = 0
         /// Samples this pipeline dropped that belong to this segment, beyond the writer's own count.
         var dropped = 0
+        /// The running total last logged as `droppedSamples`.
+        var loggedDropped = 0
 
         init(writer: any TrackWriting, index: Int, url: URL, file: String, startSignal: StartSignal) {
             self.writer = writer
@@ -421,7 +423,10 @@ actor TrackPipeline: CaptureSink {
 
     private nonisolated func syncTimerFired() {
         dispatchPrecondition(condition: .onQueue(queue))
-        assumeIsolated { $0.syncSegmentFile() }
+        assumeIsolated { pipeline in
+            pipeline.logDroppedSamples()
+            pipeline.syncSegmentFile()
+        }
     }
 
     // MARK: - State (only ever called inside a dispatch block on `queue`)
@@ -617,6 +622,17 @@ actor TrackPipeline: CaptureSink {
         if let failure = segment.writer.failure {
             writerDidFail(segment, failure)
         }
+    }
+
+    /// Every `syncInterval`: logs the open segment's running total of dropped samples (its own and its
+    /// writer's) as `droppedSamples` when it changed, without touching the manifest. A crash then
+    /// loses at most the drops of the last interval: recovery takes `droppedFrames` from the last one.
+    private func logDroppedSamples() {
+        guard let segment = state.segment, segment.startHostTime != nil else { return }
+        let count = segment.dropped + segment.writer.droppedSampleCount
+        guard count != segment.loggedDropped else { return }
+        segment.loggedDropped = count
+        context.log.append(InputEvent(t: context.clock(), kind: .droppedSamples(track: trackID, count: count)))
     }
 
     private func syncSegmentFile() {

@@ -5,9 +5,11 @@ import Foundation
 import ProjectFormat
 
 public enum RecoveryError: Error, Equatable {
-    /// The take is being recorded right now, or another take of the same package is (its recorder
-    /// is the single writer of `manifest.json`). Nothing was changed.
+    /// The take is being recorded right now. Nothing was changed.
     case lockHeld
+    /// Another take of the same package is being recorded, or the manifest changed while recovering:
+    /// a recorder is writing `manifest.json`, which has a single writer. Nothing was changed.
+    case anotherTakeRecording
     /// The manifest has no take with this ID.
     case takeNotFound(String)
     /// The manifest was written by a newer version of the format; rewriting it could lose what this
@@ -17,13 +19,17 @@ public enum RecoveryError: Error, Equatable {
 
 /// Closes a take its recorder left open by dying, from what is on disk, without deleting or rewriting
 /// any raw data.
+///
+/// Recover the takes of a package one at a time, and before recording anything new in it: like a
+/// recorder, recovery rewrites `manifest.json`, which has a single writer.
 public enum TakeRecovery {
     /// Takes the take's recording lock, keeps it while recovering, and closes the take as `recovered`:
     ///
     /// - every open segment gets the end of what can be read (`recoveredAfterCrash`), or `empty` (no
-    ///   sample: 0 bytes, or the file is gone) or `unreadable(bytes:)` (a non-empty file that cannot be
-    ///   opened, left untouched), with `endHostTime == startHostTime` for those two; `droppedFrames` and
-    ///   `heartbeatFrames` are 0, since nothing recorded them;
+    ///   sample: 0 bytes, or the file is gone) or `unreadable(bytes:)` (a non-empty file whose contents
+    ///   cannot be read, left untouched), with `endHostTime == startHostTime` for those two. Its
+    ///   `droppedFrames` is the last `droppedSamples` total the recorder logged for it (0 if none);
+    ///   `heartbeatFrames` is 0, since nothing logged them;
     /// - a `seg-NNNN.mov` in a track folder that the manifest does not list is added when
     ///   `events.jsonl` has its `segmentStarted` (its `t` is the start); without one nothing says when
     ///   it starts, so it is left out and untouched;
@@ -31,23 +37,32 @@ public enum TakeRecovery {
     /// - `.reserve` is deleted: it is scratch space, never take data.
     ///
     /// The manifest is written once, with all of it. Idempotent: a take that is no longer `recording`
-    /// is returned as it is. Throws `RecoveryError.lockHeld` if the lock is held, or if another take of
-    /// the package is being recorded, without changing anything.
+    /// is returned as it is.
+    ///
+    /// Throws without changing the manifest: `RecoveryError.lockHeld` if the take's lock is held;
+    /// `anotherTakeRecording` if another take of the package is being recorded, checked again right
+    /// before the manifest is written, or if the manifest changed meanwhile; and the error of a segment
+    /// file that exists but cannot be examined or opened (for example `EACCES`), so the take stays
+    /// `recording` and can be recovered once the file is readable.
     public static func recover(package: ProjectPackage, takeID: String) async throws -> TakeRecord {
+        try await recover(package: package, takeID: takeID, beforeWriting: {})
+    }
+
+    /// `recover`, running `beforeWriting` just before the last check for another recorder: tests use it
+    /// to start one while a recovery is in progress.
+    static func recover(
+        package: ProjectPackage, takeID: String, beforeWriting: () async throws -> Void
+    ) async throws -> TakeRecord {
         let lock = try await acquireLock(at: package.lockURL(take: takeID))
         defer { lock.release() }
 
+        let version = try Manifest.formatVersion(of: Data(contentsOf: package.manifestURL))
+        guard version <= Manifest.currentFormatVersion else { throw RecoveryError.unsupportedFormatVersion(version) }
         let store = try ManifestStore(package: package)
-        let manifest = store.manifest
-        guard manifest.formatVersion <= Manifest.currentFormatVersion else {
-            throw RecoveryError.unsupportedFormatVersion(manifest.formatVersion)
-        }
-        guard let take = manifest.takes.first(where: { $0.id == takeID }) else { throw RecoveryError.takeNotFound(takeID) }
+        let snapshot = store.manifest
+        guard let take = snapshot.takes.first(where: { $0.id == takeID }) else { throw RecoveryError.takeNotFound(takeID) }
         guard take.status == .recording else { return take }
-        let otherRecorder = manifest.takes.contains {
-            $0.id != takeID && $0.status == .recording && RecordingLock.isHeld(at: package.lockURL(take: $0.id))
-        }
-        guard !otherRecorder else { throw RecoveryError.lockHeld }
+        guard try !anotherTakeIsRecording(in: package, besides: takeID) else { throw RecoveryError.anotherTakeRecording }
 
         try removeReserve(package.reserveURL(take: takeID))
         let events = try readEventsEndingAtLineBoundary(package.eventsURL(take: takeID))
@@ -56,6 +71,11 @@ public enum TakeRecovery {
         for i in recovered.tracks.indices {
             recovered.tracks[i] = try await recover(recovered.tracks[i], of: takeID, in: package, events: events)
         }
+
+        try await beforeWriting()
+        guard try !anotherTakeIsRecording(in: package, besides: takeID),
+              try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL)) == snapshot
+        else { throw RecoveryError.anotherTakeRecording }
         let closed = recovered
         try store.update { manifest in
             guard let i = manifest.takes.firstIndex(where: { $0.id == takeID }) else { return }
@@ -76,6 +96,15 @@ public enum TakeRecovery {
                 attempt += 1
                 try await Task.sleep(for: .milliseconds(20))
             }
+        }
+    }
+
+    /// Whether the lock of any other take folder of the package is held, including a take whose
+    /// recorder has taken its lock but not yet written it to the manifest.
+    private static func anotherTakeIsRecording(in package: ProjectPackage, besides takeID: String) throws -> Bool {
+        let takes = package.takeDirectory(takeID).deletingLastPathComponent()
+        return try FileManager.default.contentsOfDirectory(atPath: takes.path).contains { other in
+            other != takeID && RecordingLock.isHeld(at: package.lockURL(take: other))
         }
     }
 
@@ -110,10 +139,10 @@ public enum TakeRecovery {
 
         for i in track.segments.indices where track.segments[i].endHostTime == nil || track.segments[i].endReason == nil {
             let segment = track.segments[i]
-            let (end, reason) = await readableEnd(of: segment, kind: track.kind, in: package)
+            let (end, reason) = try await readableEnd(of: segment, kind: track.kind, in: package)
             track.segments[i].endHostTime = end
             track.segments[i].endReason = reason
-            track.segments[i].droppedFrames = 0
+            track.segments[i].droppedFrames = loggedDrops(track: track.id, segment: segment.index, in: events)
             track.segments[i].heartbeatFrames = 0
         }
         return track
@@ -122,9 +151,9 @@ public enum TakeRecovery {
     /// Where an open segment ends: its start plus what can be read of the file.
     private static func readableEnd(
         of segment: SegmentRecord, kind: TrackKind, in package: ProjectPackage
-    ) async -> (HostTime, SegmentEndReason) {
+    ) async throws -> (HostTime, SegmentEndReason) {
         let start = segment.startHostTime
-        switch await SegmentFile.inspect(package.fileURL(segment.file), kind: kind) {
+        switch try await SegmentFile.inspect(package.fileURL(segment.file), kind: kind) {
         case .missing, .empty:
             return (start, .empty)
         case .unreadable(let bytes, _):
@@ -132,6 +161,26 @@ public enum TakeRecovery {
         case .readable(_, _, let duration):
             return (HostTime(nanoseconds: start.nanoseconds + HostTime(duration).nanoseconds), .recoveredAfterCrash)
         }
+    }
+
+    /// The last `droppedSamples` total of `track` logged after the `segmentStarted` of segment
+    /// `index` and before the track's next `segmentStarted`, in file order; 0 if there is none.
+    private static func loggedDrops(track: String, segment index: Int, in events: [InputEvent]) -> Int {
+        guard let start = events.firstIndex(where: { $0.kind == .segmentStarted(track: track, index: index) }) else {
+            return 0
+        }
+        var count = 0
+        for event in events[events.index(after: start)...] {
+            switch event.kind {
+            case .segmentStarted(let other, _) where other == track:
+                return count
+            case .droppedSamples(let other, let total) where other == track:
+                count = total
+            default:
+                continue
+            }
+        }
+        return count
     }
 
     /// The indices of the files in a track folder named exactly as `ProjectPackage.segmentURL` names a

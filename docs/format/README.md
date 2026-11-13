@@ -170,8 +170,8 @@ Reglas de escritura:
 | `startHostTime` | `HostTime` | Instante del primer cuadro o muestra del archivo. |
 | `endHostTime` | `HostTime` | Instante en que se cerró. Falta mientras el segmento está abierto. |
 | `endReason` | objeto | Por qué se cerró. Falta mientras el segmento está abierto. |
-| `droppedFrames` | entero | Cuadros (o bloques de audio) que llegaron de la captura y no se escribieron: porque el escritor no daba abasto, o porque lo rechazó o no se pudo abrir (en ese caso se cuentan en el segmento siguiente, o en el último si no hay otro). |
-| `heartbeatFrames` | entero | Cuadros repetidos para que el tiempo siga corriendo con la pantalla quieta. |
+| `droppedFrames` | entero | Cuadros (o bloques de audio) que llegaron de la captura y no se escribieron: porque el escritor no daba abasto, o porque lo rechazó o no se pudo abrir (en ese caso se cuentan en el segmento siguiente, o en el último si no hay otro). En un segmento que cerró la recuperación, es el último `droppedSamples` de `events.jsonl` para ese segmento (0 si no hay), así que pueden faltar los de los últimos 2 s antes del crash. |
+| `heartbeatFrames` | entero | Cuadros repetidos para que el tiempo siga corriendo con la pantalla quieta. La recuperación no los conoce y escribe 0. |
 
 **Motivo de cierre** (`endReason`): un objeto plano con `type` y, según el tipo, otros campos al mismo nivel.
 
@@ -230,6 +230,7 @@ Reglas de escritura:
 | `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. |
 | `deviceChanged` | `track`, `deviceUniqueID` | La pista siguió grabando desde otro dispositivo (el `uniqueID` del dispositivo de audio), por ejemplo porque se desconectó el micrófono. |
 | `marker` | | Una marca que el usuario puso mientras grababa. |
+| `droppedSamples` | `track`, `count` | Total de muestras (cuadros o bloques de audio) que la pista `track` perdió hasta ahora en su segmento actual, el que abrió su último `segmentStarted`. Se escribe cada 2 s mientras se graba, solo si cambió, y no toca el manifiesto: es lo que la recuperación usa como `droppedFrames` de un segmento que la app no llegó a cerrar. |
 
 Una línea de cada tipo, exactamente como se escribe:
 
@@ -244,6 +245,7 @@ Una línea de cada tipo, exactamente como se escribe:
 {"t":5,"type":"resumed"}
 {"deviceUniqueID":"BuiltInMicrophoneDevice","t":5,"track":"mic","type":"deviceChanged"}
 {"t":5,"type":"marker"}
+{"count":12,"t":5,"track":"display-1","type":"droppedSamples"}
 ```
 
 ### Lectura después de un crash
@@ -290,6 +292,24 @@ Mientras se graba una toma existe `takes/<toma>/.reserve`: 8 MiB de ceros escrit
 
 - Es espacio de reserva, no datos de la toma. Si el disco se llena (el monitor de espacio pide parar, o una escritura de un segmento, del manifiesto o de `events.jsonl` falla con `ENOSPC`), la grabación lo borra primero y recién después hace las escrituras finales: cerrar los segmentos, marcar la toma `complete` con sus segmentos `diskFull` y cerrar `events.jsonl`. Al cerrar una toma por cualquier otro motivo también se borra.
 - Un `.reserve` que quedó en disco después de un crash no significa nada: la recuperación lo ignora y lo borra.
+
+## Recuperación después de un crash
+
+Una toma con `status` `recording` cuyo `recording.lock` no tiene nadie quedó abierta porque la app murió. La recuperación la cierra con lo que hay en el disco, sin borrar ni reescribir datos crudos:
+
+- Toma el lock de la toma mientras trabaja. No recupera nada mientras otra toma del mismo paquete se está grabando (su grabador es quien escribe `manifest.json`), y lo vuelve a comprobar, junto con que el manifiesto no haya cambiado, justo antes de escribirlo. Las tomas de un paquete se recuperan de a una y antes de grabar algo nuevo en él.
+- No toca un manifiesto con un `formatVersion` mayor que el que conoce.
+- Hace terminar `events.jsonl` en un límite de línea, como antes de agregarle líneas (ver arriba).
+- Cierra cada segmento abierto (sin `endHostTime` o sin `endReason`) según lo que se puede leer de su archivo:
+  - `recoveredAfterCrash`, con `endHostTime` igual a `startHostTime` más la duración legible, que llega hasta el último fragmento completo;
+  - `empty` si el archivo tiene 0 bytes, no tiene ninguna muestra del tipo de su pista o ya no existe;
+  - `unreadable` con `bytes` si el archivo no está vacío pero su contenido no se puede leer; el archivo queda intacto;
+  - en `empty` y `unreadable`, `endHostTime` es igual a `startHostTime`;
+  - `droppedFrames` es el último `droppedSamples` del segmento (0 si no hay) y `heartbeatFrames` es 0.
+- Si un archivo de segmento existe pero no se puede examinar ni abrir (por ejemplo, por permisos), se detiene sin cambiar nada: la toma sigue `recording` y se puede recuperar cuando el archivo se pueda leer.
+- Un archivo de una carpeta de pista que el manifiesto no lista se agrega como segmento solo si su nombre es exactamente el de un segmento (`seg-0002.mov`) y `events.jsonl` tiene su `segmentStarted`, cuyo `t` pasa a ser su `startHostTime`. Si no, nada dice cuándo empieza: queda fuera del manifiesto y sin tocar.
+- Borra el `.reserve` de la toma.
+- Marca la toma `recovered` y escribe el manifiesto una sola vez, con todo. Recuperar una toma que ya no está `recording` no cambia nada.
 
 ## Los datos crudos nunca se borran
 

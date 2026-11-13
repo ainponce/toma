@@ -181,9 +181,11 @@ struct Recover: AsyncParsableCommand {
         abstract: "Recovers the takes left open by a crash in the packages directly inside a folder.",
         discussion: """
             Prints "recovered: <package> <take>" and one line per track for each take it closes, \
-            "needs repair: <package>: <reason>" for a package it cannot read safely (left untouched) and \
-            "skipped: <package> <take>: being recorded" for a take whose lock is held. Never deletes raw \
-            data. Exits 1 if a recovery failed.
+            "needs repair: <package>: <reason>" for a package it cannot read safely (left untouched), \
+            "skipped: <package> <take>: being recorded" for a take whose lock is held and "skipped: \
+            <package> <take>: another take in this package is recording" while a recorder writes that \
+            package's manifest. Never deletes raw data. Exits 1 if a recovery failed; run it again once \
+            the cause (for example a segment file it may not read) is fixed.
             """
     )
 
@@ -211,6 +213,8 @@ struct Recover: AsyncParsableCommand {
                     for track in take.tracks { print("  " + summary(of: track)) }
                 } catch RecoveryError.lockHeld {
                     print("skipped: \(package.url.path) \(takeID): being recorded")
+                } catch RecoveryError.anotherTakeRecording {
+                    print("skipped: \(package.url.path) \(takeID): another take in this package is recording")
                 } catch {
                     printError("error: \(package.url.path) \(takeID): \(error)")
                     failed = true
@@ -229,14 +233,19 @@ struct Verify: AsyncParsableCommand {
         discussion: """
             Prints "OK: <track> <seconds> s, dropped <n>" or "FAIL: <track> <reason>" for each track. A \
             track passes when every segment file can be read and has media, its readable media lasts at \
-            least --min-duration seconds, and it ends at most 1 s before the take's latest readable media.
+            least --min-duration seconds, and neither the track nor any of its segments ends more than a \
+            tolerance before it should: the take's latest readable media for the track, the manifest's \
+            endHostTime for a segment. The tolerance is 1 s in a take the recorder closed (complete) and \
+            2 s in one a crash left open (recovered, or still recording), whose tracks end at their last \
+            complete 1 s fragment.
 
-            With --max-drop-ratio, a track also fails when its dropped frames (droppedFrames in the \
-            manifest) are more than that fraction of the frames that reached the recorder: the frames \
-            in its files plus the dropped ones. Display frames are counted from the video samples in \
-            the files, heartbeat repeats included. Microphone frames are its readable seconds × 100, one \
-            per 10 ms block (the synthetic microphone's block; a real microphone's blocks are longer, so \
-            its ratio reads lower than it is).
+            --max-drop-ratio is optional: without it, dropped frames are reported but not checked. With \
+            it, a track fails when dropped / (frames + dropped) is above the ratio. dropped is the sum of \
+            droppedFrames in the manifest; after a crash, recovery takes it from the last droppedSamples \
+            event, so the drops of up to the last 2 s may be missing. frames are the frames that were \
+            written: for a display, the video samples in its files, heartbeat repeats included; for a \
+            microphone, its readable seconds × 100, one per 10 ms block (the synthetic microphone's \
+            block; a real microphone's blocks are longer, so its ratio reads lower than it is).
             """
     )
 
@@ -246,7 +255,7 @@ struct Verify: AsyncParsableCommand {
     @Option(help: "Minimum seconds of readable media per track.")
     var minDuration: Double
 
-    @Option(help: "Maximum fraction of dropped frames per track, for example 0.01. Not checked when omitted.")
+    @Option(help: "Maximum dropped / (frames + dropped) per track, for example 0.01. Not checked when omitted.")
     var maxDropRatio: Double?
 
     func run() async throws {

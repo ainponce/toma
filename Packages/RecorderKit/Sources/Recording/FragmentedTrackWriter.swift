@@ -47,7 +47,7 @@ public final class FragmentedTrackWriter: TrackWriting {
     /// Real-time audio waiting for the encoder; set up with the source sample rate in `configure`.
     private var pendingAudio = PendingAudioQueue(capacitySeconds: maxPendingAudioSeconds, sampleRate: 0)
     private var sampleCount = 0
-    private var droppedSampleCount = 0
+    public private(set) var droppedSampleCount = 0
     private var heartbeatSampleCount = 0
     private var finished = false
 

@@ -39,6 +39,10 @@ public struct InputEvent: Codable, Equatable, Sendable {
         case deviceChanged(track: String, deviceUniqueID: String)
         /// A mark the user placed while recording.
         case marker
+        /// `count` samples of `track` have been dropped so far in its current segment (the one its last
+        /// `segmentStarted` opened): a running total, logged while recording whenever it changes, so
+        /// recovery can fill in `droppedFrames` of a segment the recorder never closed.
+        case droppedSamples(track: String, count: Int)
     }
 
     /// The event as one line of compact JSON with its keys in alphabetical order,
@@ -60,11 +64,12 @@ public struct InputEvent: Codable, Equatable, Sendable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case t, type, x, y, button, displayID, frame, scale, track, index, domain, code, reason, deviceUniqueID
+        case t, type, x, y, button, displayID, frame, scale, track, index, domain, code, reason, deviceUniqueID, count
     }
 
     private enum EventType: String, Codable {
         case cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker
+        case droppedSamples
     }
 
     public init(from decoder: any Decoder) throws {
@@ -117,6 +122,11 @@ public struct InputEvent: Codable, Equatable, Sendable {
             )
         case .marker:
             kind = .marker
+        case .droppedSamples:
+            kind = .droppedSamples(
+                track: try container.decode(String.self, forKey: .track),
+                count: try container.decode(Int.self, forKey: .count)
+            )
         }
         self.init(t: t, kind: kind)
     }
@@ -164,6 +174,10 @@ public struct InputEvent: Codable, Equatable, Sendable {
             try container.encode(deviceUniqueID, forKey: .deviceUniqueID)
         case .marker:
             try container.encode(EventType.marker, forKey: .type)
+        case let .droppedSamples(track, count):
+            try container.encode(EventType.droppedSamples, forKey: .type)
+            try container.encode(track, forKey: .track)
+            try container.encode(count, forKey: .count)
         }
     }
 }

@@ -26,26 +26,37 @@ public struct TrackVerification: Sendable {
 
 /// Checks that a take on disk is what a good recording looks like. Read-only.
 public enum TakeVerifier {
-    /// How far a track's readable end may be from the take's end.
-    static let endTolerance = 1.0
+    /// How far readable media may fall short of where it should end, in a take the recorder closed:
+    /// it finished every file at the stop time.
+    static let completeEndTolerance = 1.0
+    /// The same in a take a crash left open (recovered or still `recording`): each track is readable up
+    /// to its last complete fragment, so two healthy tracks can differ by up to a fragment, plus the
+    /// one being written. Two of `FragmentedTrackWriter.defaultFragmentInterval` (1 s).
+    static let openEndTolerance = 2.0
     /// A microphone's dropped frames are 10 ms blocks, the synthetic microphone's block length.
     static let audioFramesPerSecond = 100.0
 
     /// Verifies every track of `project.take`, display and microphone alike, in manifest order. A track
     /// passes when:
     ///
-    /// - every segment file opens and has media of the track's kind (not missing, not empty);
+    /// - every segment file opens and has media of the track's kind (not missing, not empty), and its
+    ///   readable media does not end more than the tolerance before the segment's `endHostTime`;
     /// - its readable media, summed over its segments, lasts at least `minDuration` seconds;
-    /// - its readable media ends at most 1 s before the take's, which is the latest readable end of
-    ///   any of its tracks;
+    /// - its readable media ends no more than the tolerance before the take's, which is the latest
+    ///   readable end of any of its tracks;
     /// - with `maxDropRatio`, `droppedFrames / (frames + droppedFrames)` is at most `maxDropRatio`.
     ///   `frames` are the frames that were written: for a display, the video samples in its files
     ///   (heartbeat repeats included); for a microphone, which drops 10 ms blocks, the readable
     ///   seconds × 100. A real microphone's blocks are longer than 10 ms, so its ratio reads low.
+    ///
+    /// The tolerance is 1 s for a `complete` take and 2 s for one a crash left open (`recovered` or
+    /// still `recording`), whose tracks end at their last complete 1 s fragment.
     public static func verify(_ project: LoadedProject, minDuration: Double, maxDropRatio: Double?) async -> [TrackVerification] {
+        let tolerance = project.take.status == .complete ? completeEndTolerance : openEndTolerance
         var measured: [Measurement] = []
         for track in project.take.tracks {
-            measured.append(await measure(track, in: project.package, countingFrames: maxDropRatio != nil))
+            measured.append(await measure(
+                track, in: project.package, tolerance: tolerance, countingFrames: maxDropRatio != nil))
         }
         let takeEnd = measured.compactMap(\.end).max()
         return measured.map { track in
@@ -54,7 +65,7 @@ public enum TakeVerifier {
             if track.seconds < minDuration {
                 problems.append("\(format(track.seconds)) s of readable media, minimum \(format(minDuration)) s")
             }
-            if let takeEnd, let end = track.end, takeEnd.seconds(since: end) > endTolerance {
+            if let takeEnd, let end = track.end, takeEnd.seconds(since: end) > tolerance {
                 problems.append("ends \(format(takeEnd.seconds(since: end))) s before the end of the take")
             }
             if let maxDropRatio {
@@ -83,12 +94,21 @@ public enum TakeVerifier {
         var problems: [String] = []
     }
 
-    private static func measure(_ track: TrackRecord, in package: ProjectPackage, countingFrames: Bool) async -> Measurement {
+    private static func measure(
+        _ track: TrackRecord, in package: ProjectPackage, tolerance: Double, countingFrames: Bool
+    ) async -> Measurement {
         var result = Measurement(id: track.id, segments: track.segments.count)
         for segment in track.segments {
             result.dropped += segment.droppedFrames
             let name = (segment.file as NSString).lastPathComponent
-            switch await SegmentFile.inspect(package.fileURL(segment.file), kind: track.kind) {
+            let file: SegmentFile
+            do {
+                file = try await SegmentFile.inspect(package.fileURL(segment.file), kind: track.kind)
+            } catch {
+                result.problems.append("\(name) cannot be opened: \(error.localizedDescription)")
+                continue
+            }
+            switch file {
             case .missing:
                 result.problems.append("\(name) is missing")
             case .empty:
@@ -100,6 +120,11 @@ public enum TakeVerifier {
                 result.seconds += seconds
                 let end = HostTime(nanoseconds: segment.startHostTime.nanoseconds + HostTime(duration).nanoseconds)
                 result.end = max(result.end ?? end, end)
+                if let recorded = segment.endHostTime, recorded.seconds(since: end) > tolerance {
+                    result.problems.append(
+                        "\(name) holds \(format(seconds)) s, \(format(recorded.seconds(since: end))) s less than "
+                            + "the manifest says")
+                }
                 guard countingFrames else { continue }
                 switch track.kind {
                 case .display:

@@ -50,6 +50,9 @@ public protocol TrackWriting: AnyObject {
     var formatDescription: CMFormatDescription? { get }
     /// Set when the underlying writer failed; every later `append` throws `appendFailed`.
     var failure: NSError? { get }
+    /// Samples discarded so far because the encoder had no room (real time only). `finish` reports the
+    /// final count, which may be higher, as `SegmentResult.droppedSampleCount`.
+    var droppedSampleCount: Int { get }
     func append(_ sample: CMSampleBuffer) throws
     /// Repeats the last video frame at `time`, so a static screen keeps producing fragments.
     func appendHeartbeat(at time: HostTime) throws

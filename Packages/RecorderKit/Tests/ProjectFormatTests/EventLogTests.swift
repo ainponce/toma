@@ -27,6 +27,8 @@ extension InputEvent {
          #"{"deviceUniqueID":"BuiltInMicrophoneDevice","t":5,"track":"mic","type":"deviceChanged"}"#),
         (InputEvent(t: HostTime(nanoseconds: 5), kind: .marker),
          #"{"t":5,"type":"marker"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .droppedSamples(track: "display-1", count: 12)),
+         #"{"count":12,"t":5,"track":"display-1","type":"droppedSamples"}"#),
     ]
 }
 
@@ -53,7 +55,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
     }
     #expect(Set(types) == [
         "cursor", "mouseDown", "mouseUp", "displayGeometry", "segmentStarted",
-        "streamInterrupted", "paused", "resumed", "deviceChanged", "marker",
+        "streamInterrupted", "paused", "resumed", "deviceChanged", "marker", "droppedSamples",
     ])
 }
 

@@ -1,18 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import ProjectFormat
-import Recovery
+import Recording
 import Testing
 
-/// A closed take with a finished display segment and a finished mic segment of the given lengths.
+@testable import Recovery
+
+/// A closed take with a finished display segment and a finished mic segment of the given lengths. The
+/// manifest says the display segment lasts `displayRecordedSeconds` (its file's length by default).
 private func completeTake(
-    in dir: URL, displaySeconds: Double, micSeconds: Double, displayDropped: Int = 0
+    in dir: URL, status: TakeStatus = .complete, displaySeconds: Double, micSeconds: Double,
+    displayRecordedSeconds: Double? = nil, displayDropped: Int = 0
 ) async throws -> ProjectPackage {
     let package = try makePackage(in: dir)
-    try addTake(makeTake(status: .complete, tracks: [
+    try addTake(makeTake(status: status, tracks: [
         displayTrack([try segmentRecord(
-            package, track: "display-1", start: base, end: base.adding(seconds: displaySeconds), reason: .stopped,
-            dropped: displayDropped)]),
+            package, track: "display-1", start: base, end: base.adding(seconds: displayRecordedSeconds ?? displaySeconds),
+            reason: .stopped, dropped: displayDropped)]),
         micTrack([try segmentRecord(
             package, track: "mic", start: base, end: base.adding(seconds: micSeconds), reason: .stopped)]),
     ]), to: package)
@@ -118,6 +122,44 @@ private func completeTake(
     }
 }
 
+@Test func verifyAllowsTwoSecondsBetweenTracksOfATakeACrashLeftOpen() async throws {
+    #expect(TakeVerifier.openEndTolerance == 2 * FragmentedTrackWriter.defaultFragmentInterval.seconds)
+    try await withTemporaryDirectory { dir in
+        for name in ["recovered", "complete"] {
+            try FileManager.default.createDirectory(at: dir.appendingPathComponent(name), withIntermediateDirectories: false)
+        }
+        let recovered = try await completeTake(
+            in: dir.appendingPathComponent("recovered"), status: .recovered, displaySeconds: 3, micSeconds: 1.5)
+        let results = await TakeVerifier.verify(try LoadedProject.load(recovered.url), minDuration: 1, maxDropRatio: nil)
+        #expect(results.allSatisfy { $0.ok }, "\(results.map { $0.reason ?? "" })")
+
+        let complete = try await completeTake(
+            in: dir.appendingPathComponent("complete"), displaySeconds: 3, micSeconds: 1.5)
+        let strict = await TakeVerifier.verify(try LoadedProject.load(complete.url), minDuration: 1, maxDropRatio: nil)
+        #expect(strict[0].ok)
+        #expect(strict[1].reason == "ends 1.50 s before the end of the take")
+    }
+}
+
+@Test func verifyFailsSegmentShorterThanTheManifestSays() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await completeTake(in: dir, displaySeconds: 3, micSeconds: 3, displayRecordedSeconds: 4.5)
+
+        let results = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 1, maxDropRatio: nil)
+
+        try #require(results.count == 2)
+        #expect(!results[0].ok)
+        #expect(results[0].reason?.contains("seg-0001.mov holds 3.00 s, 1.50 s less than the manifest says") == true,
+                "\(results[0].reason ?? "")")
+        #expect(results[1].ok)
+
+        // Within the 2 s of a take a crash left open.
+        try ManifestStore(package: package).update { $0.takes[0].status = .recovered }
+        let open = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 1, maxDropRatio: nil)
+        #expect(open.allSatisfy { $0.ok })
+    }
+}
+
 // MARK: - LoadedProject
 
 @Test func loadedProjectReadsLastTakeAndItsEvents() async throws {
@@ -144,7 +186,8 @@ private func completeTake(
         #expect(throws: LoadedProjectError.takeNotFound("take-009")) {
             try LoadedProject.load(package.url, take: "take-009")
         }
-        try ManifestStore(package: package).update { $0.formatVersion = 2 }
+        // Newer and not decodable as this version's `Manifest`: still recognized as newer.
+        try Data(#"{"formatVersion":2,"projects":[]}"#.utf8).write(to: package.manifestURL)
         #expect(throws: LoadedProjectError.unsupportedFormatVersion(2)) { try LoadedProject.load(package.url) }
     }
 }

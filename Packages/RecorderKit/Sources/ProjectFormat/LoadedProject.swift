@@ -25,10 +25,10 @@ public struct LoadedProject: Sendable {
     /// or an unknown take, and the underlying error if the manifest or the event log cannot be read.
     public static func load(_ url: URL, take: String? = nil) throws -> LoadedProject {
         let package = ProjectPackage(url: url)
-        let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
-        guard manifest.formatVersion <= Manifest.currentFormatVersion else {
-            throw LoadedProjectError.unsupportedFormatVersion(manifest.formatVersion)
-        }
+        let data = try Data(contentsOf: package.manifestURL)
+        let version = try Manifest.formatVersion(of: data)
+        guard version <= Manifest.currentFormatVersion else { throw LoadedProjectError.unsupportedFormatVersion(version) }
+        let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
         let record: TakeRecord
         if let take {
             guard let found = manifest.takes.first(where: { $0.id == take }) else {
@@ -52,4 +52,16 @@ public enum LoadedProjectError: Error, Equatable {
     case noTakes
     /// The manifest has no take with this ID.
     case takeNotFound(String)
+}
+
+extension Manifest {
+    /// The `formatVersion` of an encoded manifest, decoded on its own: a manifest of a newer format,
+    /// which this version may not be able to decode, is still recognized as newer.
+    public static func formatVersion(of data: Data) throws -> Int {
+        try ProjectJSON.decoder().decode(FormatVersion.self, from: data).formatVersion
+    }
+
+    private struct FormatVersion: Decodable {
+        var formatVersion: Int
+    }
 }
