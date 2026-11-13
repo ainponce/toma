@@ -5,27 +5,39 @@
 # with SIGKILL 10 s in, recovers the take and verifies that every track kept at least 8 s, ends with
 # the take and dropped at most 1 % of its frames. Once with a moving screen, once with a screen that
 # stops changing after 2 s (heartbeats). After the first, an MP4 export of the recovered take is
-# killed 1 s in: the package must be unchanged, and the next export must succeed. Run with
-# `make crash-test`.
+# killed as soon as it is writing: the package must be unchanged, and the next export must succeed.
+# Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BIN="$(swift build --package-path Packages/RecorderKit --product recorder-dev --show-bin-path)/recorder-dev"
 swift build --package-path Packages/RecorderKit --product recorder-dev
 
-# Kills an export of package $1 into folder $2 1 s in, checks that the package did not change and that
-# nothing reached the destination, then exports again and checks that it worked.
+# Kills an export of package $1 into folder $2 once it is writing (its partial file exists), checks that
+# the package did not change and that nothing reached the destination, then exports again and checks
+# that it worked.
 export_crash() {
-  local PKG=$1 TMP=$2 BEFORE EPID
-  echo "== export, kill -9 at 1 s"
+  local PKG=$1 TMP=$2 BEFORE EPID WAITED=0
+  echo "== export, kill -9 while it writes"
   BEFORE=$(package_hash "$PKG")
   "$BIN" export "$PKG" "$TMP/out.mp4" > "$TMP/export.out" &
   EPID=$!
-  sleep 1
+  until [ -e "$TMP/out.mp4.partial.mp4" ]; do
+    # It exited, finished already, or wrote nothing for 20 s.
+    if ! kill -0 "$EPID" 2>/dev/null || [ -e "$TMP/out.mp4" ] || [ "$WAITED" -ge 200 ]; then
+      echo "FAIL: the export could not be caught while writing its partial file"
+      kill -9 "$EPID" 2>/dev/null || true
+      wait "$EPID" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 0.1
+    WAITED=$((WAITED + 1))
+  done
+  sleep 0.3  # a few frames into the file
   kill -9 "$EPID"
   wait "$EPID" 2>/dev/null || true
   if [ -e "$TMP/out.mp4" ] || [ ! -e "$TMP/out.mp4.partial.mp4" ]; then
-    echo "FAIL: the export was not cut off while writing (it ended within 1 s, or never started)"
+    echo "FAIL: the export was not cut off while writing (it finished first)"
     exit 1
   fi
   if [ "$(package_hash "$PKG")" != "$BEFORE" ]; then

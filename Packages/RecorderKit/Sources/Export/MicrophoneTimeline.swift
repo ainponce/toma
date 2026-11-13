@@ -11,9 +11,11 @@ import os
 /// The track is the take's first microphone track. Each segment is placed by host time: its frames go to
 /// output time `host − timelineStart`, where a frame's host time comes from its segment's clock map
 /// (`ClockMap`). Segments marked `.empty` or `.unreadable`, missing files and files that cannot be read
-/// are silence, and so is every gap between segments longer than `maxClosedGap`; a shorter gap (or
-/// overlap) after audio is closed, the next segment following on. Output before the first segment, after
-/// the last and past `totalFrames` is silence too.
+/// are silence, listed in `missingAudio`; so is every gap between segments longer than `maxClosedGap`
+/// (a gap is not missing audio: nothing was recorded there). A shorter gap (or overlap) after audio is
+/// closed: the next segment follows on where the audio before it ended, which shifts that segment, and
+/// only it, by up to `maxClosedGap` (20 ms) from its host time. Output before the first segment, after the
+/// last and past `totalFrames` is silence too.
 ///
 /// The stream is mono if every segment is, stereo otherwise: a mono segment goes to both channels, and a
 /// segment of more than two channels is mixed down with every channel at unity gain into both, clipped to
@@ -27,6 +29,9 @@ final class MicrophoneTimeline {
     static let maxClosedGap = 0.020
     /// Frames per block handed to the encoder.
     static let blockFrames = 4096
+    /// The largest difference between the rate two consecutive clock anchors imply and the file's sample
+    /// rate for the later one to be used: 5000 ppm, well beyond any real device clock.
+    static let maxClockDeviation = 0.005
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
@@ -38,6 +43,9 @@ final class MicrophoneTimeline {
     let formatDescription: CMAudioFormatDescription
     /// Output frame of the next block.
     private(set) var position: Int64 = 0
+    /// Spans that are silent because a segment's audio could not be used, as they were found: the
+    /// segments that could not be opened when loading, then the ones that failed while reading.
+    private(set) var missingAudio: [MissingAudio]
 
     private let segments: [Segment]
     private var nextSegment = 0
@@ -48,6 +56,8 @@ final class MicrophoneTimeline {
     /// A segment that can be read, and where its frames go.
     struct Segment {
         var index: Int
+        /// `SegmentRecord.file`.
+        var file: String
         var asset: AVURLAsset
         var track: AVAssetTrack
         var map: ClockMap
@@ -55,6 +65,8 @@ final class MicrophoneTimeline {
         var channels: Int
         /// Frames of the file at `sampleRate`, when its track says.
         var frames: Double?
+        /// Output seconds of the segment's recorded span, for `missingAudio`.
+        var span: (start: Double, end: Double)
     }
 
     /// The microphone of `project` on a timeline whose frame 0 is host time `timelineStart`, `totalFrames`
@@ -64,16 +76,35 @@ final class MicrophoneTimeline {
     static func load(_ project: LoadedProject, timelineStart: HostTime, totalFrames: Int64) async throws -> MicrophoneTimeline? {
         guard let track = project.take.tracks.first(where: { $0.kind == .microphone }) else { return nil }
         let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
+        let duration = Double(max(0, totalFrames)) / sampleRate
         var segments: [Segment] = []
+        var missing: [MissingAudio] = []
+        var rejectedAnchors = 0
         var maxChannels = 1
         for (k, record) in records.enumerated() {
+            let next = k + 1 < records.count ? records[k + 1].startHostTime : nil
+            // Where the segment's audio would go, for the summary: up to its end, the next segment or the export's end.
+            let start = record.startHostTime.seconds(since: timelineStart)
+            let end = (record.endHostTime ?? next).map { $0.seconds(since: timelineStart) } ?? duration
+            func leaveOut(_ reason: MissingAudio.Reason) {
+                if let entry = missingEntry(file: record.file, start: start, end: end, duration: duration, reason: reason) {
+                    missing.append(entry)
+                }
+            }
             switch record.endReason {
-            case .empty?, .unreadable?: continue
-            default: break
+            case .empty?:
+                leaveOut(.empty)
+                continue
+            case .unreadable?:
+                leaveOut(.unreadable)
+                continue
+            default:
+                break
             }
             let url = project.package.url.appending(path: record.file)
             guard FileManager.default.fileExists(atPath: url.path) else {
                 logger.error("Microphone segment \(record.index): \(record.file, privacy: .public) is missing; exporting silence")
+                leaveOut(.fileMissing)
                 continue
             }
             let asset = AVURLAsset(url: url)
@@ -88,35 +119,55 @@ final class MicrophoneTimeline {
                       asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0
                 else {
                     logger.error("Microphone segment \(record.index): no audio track; exporting silence")
+                    leaveOut(.cannotOpen("the file has no audio track"))
                     continue
                 }
                 audio = first
                 sourceRate = asbd.mSampleRate
                 sourceChannels = Int(asbd.mChannelsPerFrame)
-                maxChannels = max(maxChannels, sourceChannels)
-                let duration = try await first.load(.timeRange).duration
-                frames = duration.isNumeric ? duration.seconds * sampleRate : nil
+                let range = try await first.load(.timeRange).duration
+                frames = range.isNumeric ? range.seconds * sampleRate : nil
             } catch {
                 logger.error("Microphone segment \(record.index): cannot be loaded (\(String(describing: error), privacy: .public)); exporting silence")
+                leaveOut(.cannotOpen(String(describing: error)))
                 continue
             }
-            let next = k + 1 < records.count ? records[k + 1].startHostTime : nil
-            let anchors = clockAnchors(of: track.id, from: record.startHostTime, before: next, in: project.events)
+            maxChannels = max(maxChannels, sourceChannels)
+            let anchors = clockAnchors(of: track.id, from: record.startHostTime, before: next, sourceRate: sourceRate, in: project.events)
+            rejectedAnchors += anchors.rejected
             let map = ClockMap(
-                start: record.startHostTime, anchors: anchors, sourceRate: sourceRate,
+                start: record.startHostTime, anchors: anchors.kept, sourceRate: sourceRate,
                 timelineStart: timelineStart, outputRate: sampleRate)
-            segments.append(Segment(index: record.index, asset: asset, track: audio, map: map, channels: sourceChannels, frames: frames))
+            segments.append(Segment(
+                index: record.index, file: record.file, asset: asset, track: audio, map: map, channels: sourceChannels,
+                frames: frames, span: (start, end)))
         }
-        return try MicrophoneTimeline(segments: segments, channels: min(maxChannels, 2), totalFrames: totalFrames)
+        if rejectedAnchors > 0 {
+            logger.error("Microphone track \(track.id, privacy: .public): \(rejectedAnchors) audio clock anchor(s) out of order or off by more than 5000 ppm; not used")
+        }
+        return try MicrophoneTimeline(segments: segments, missingAudio: missing, channels: min(maxChannels, 2), totalFrames: totalFrames)
+    }
+
+    /// `MissingAudio` for output seconds `start ..< end` clamped to the export (`0 ... duration`); `nil` when
+    /// the span lies outside it.
+    static func missingEntry(file: String, start: Double, end: Double, duration: Double, reason: MissingAudio.Reason) -> MissingAudio? {
+        guard end >= 0, start <= duration else { return nil }
+        let from = min(max(start, 0), duration)
+        return MissingAudio(file: file, start: from, end: max(from, min(end, duration)), reason: reason)
     }
 
     /// The audio clock anchors of `track` logged at or after `start` and before `end`, in time order:
-    /// `(frame, host time)` with both increasing.
+    /// `(frame, host time)` with both increasing, and how many were left out.
     ///
     /// The events do not name the segment: an anchor belongs to the segment whose span of host time holds
-    /// it, which is unambiguous because a track's segments follow one another. An anchor that does not move
-    /// both forward from the one before (frame 0 at `start`) is skipped.
-    static func clockAnchors(of track: String, from start: HostTime, before end: HostTime?, in events: [InputEvent]) -> [(frame: Int, t: HostTime)] {
+    /// it, which is unambiguous because a track's segments follow one another. An anchor is left out when it
+    /// does not move forward, in both frame and time, from the last one kept (frame 0 at `start` to begin
+    /// with), or when the rate it implies against the anchor logged before it (kept or not) is more than
+    /// `maxClockDeviation` from `sourceRate`. Comparing with the one logged before means a single bad anchor,
+    /// or a jump in the device's timestamps, costs at most the anchor after it too, not every later one.
+    static func clockAnchors(
+        of track: String, from start: HostTime, before end: HostTime?, sourceRate: Double, in events: [InputEvent]
+    ) -> (kept: [(frame: Int, t: HostTime)], rejected: Int) {
         let logged = events.enumerated()
             .compactMap { offset, event -> (offset: Int, frame: Int, t: HostTime)? in
                 guard case let .audioClock(other, frame) = event.kind, other == track, event.t >= start else { return nil }
@@ -124,17 +175,31 @@ final class MicrophoneTimeline {
                 return (offset, frame, event.t)
             }
             .sorted { ($0.t, $0.offset) < ($1.t, $1.offset) }
-        var anchors: [(frame: Int, t: HostTime)] = []
-        var last = (frame: 0, t: start)
-        for anchor in logged where anchor.frame > last.frame && anchor.t > last.t {
-            last = (anchor.frame, anchor.t)
-            anchors.append(last)
+        var kept: [(frame: Int, t: HostTime)] = []
+        var rejected = 0
+        var lastKept = (frame: 0, t: start)
+        var previous = lastKept
+        for anchor in logged {
+            defer { previous = (anchor.frame, anchor.t) }
+            guard anchor.frame > lastKept.frame, anchor.t > lastKept.t else {
+                rejected += 1
+                continue
+            }
+            let reference = anchor.frame > previous.frame && anchor.t > previous.t ? previous : lastKept
+            let rate = Double(anchor.frame - reference.frame) / (anchor.t.seconds(since: reference.t) * sourceRate)
+            guard abs(rate - 1) <= maxClockDeviation else {
+                rejected += 1
+                continue
+            }
+            lastKept = (anchor.frame, anchor.t)
+            kept.append(lastKept)
         }
-        return anchors
+        return (kept, rejected)
     }
 
-    init(segments: [Segment], channels: Int, totalFrames: Int64) throws {
+    init(segments: [Segment], missingAudio: [MissingAudio] = [], channels: Int, totalFrames: Int64) throws {
         self.segments = segments
+        self.missingAudio = missingAudio
         self.channels = channels
         self.totalFrames = max(0, totalFrames)
         var description = AudioStreamBasicDescription(
@@ -195,6 +260,9 @@ final class MicrophoneTimeline {
             if segment.read(outputFrame: frame, into: &samples, at: i * channels) {
                 i += 1
             } else {
+                if let failure = segment.readFailure {
+                    note(segment.segment, from: Double(frame) / Self.sampleRate, .readFailed(failure))
+                }
                 lastAudioEnd = frame
                 active = nil
             }
@@ -218,9 +286,18 @@ final class MicrophoneTimeline {
             } catch {
                 Self.logger.error(
                     "Microphone segment \(segment.index): cannot be read (\(String(describing: error), privacy: .public)); exporting silence")
+                note(segment, from: segment.span.start, .cannotOpen(String(describing: error)))
             }
         }
         return nil
+    }
+
+    /// Adds `segment`'s span from output second `start` on to `missingAudio`.
+    private func note(_ segment: Segment, from start: Double, _ reason: MissingAudio.Reason) {
+        let duration = Double(totalFrames) / Self.sampleRate
+        if let entry = Self.missingEntry(file: segment.file, start: start, end: segment.span.end, duration: duration, reason: reason) {
+            missingAudio.append(entry)
+        }
     }
 
     private func makeSampleBuffer(_ samples: [Float], frames: Int, at position: Int64) throws -> CMSampleBuffer {
@@ -296,7 +373,10 @@ struct ClockMap {
 /// Reads one segment's frames in order, decoded to interleaved Float32 at the output rate and mixed to the
 /// stream's channels, and resamples them onto output frames through its clock map (linear interpolation).
 private final class SegmentReader {
+    let segment: MicrophoneTimeline.Segment
     let firstOutputFrame: Int64
+    /// Why reading stopped before the end of the file, if it did.
+    private(set) var readFailure: String?
 
     private let index: Int
     private let reader: AVAssetReader
@@ -315,6 +395,7 @@ private final class SegmentReader {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
     init(_ segment: MicrophoneTimeline.Segment, channels: Int) throws {
+        self.segment = segment
         index = segment.index
         map = segment.map
         self.channels = channels
@@ -384,8 +465,9 @@ private final class SegmentReader {
         guard let sample = output.copyNextSampleBuffer() else {
             finished = true
             if reader.status == .failed {
-                Self.logger.error(
-                    "Microphone segment \(self.index): reading stopped (\(String(describing: self.reader.error), privacy: .public)); silence after it")
+                let error = reader.error.map { String(describing: $0) } ?? "the reader failed"
+                readFailure = error
+                Self.logger.error("Microphone segment \(self.index): reading stopped (\(error, privacy: .public)); silence after it")
             }
             return
         }
@@ -396,6 +478,7 @@ private final class SegmentReader {
         }
         guard status == noErr else {
             finished = true
+            readFailure = "cannot copy decoded audio (OSStatus \(status))"
             Self.logger.error("Microphone segment \(self.index): cannot copy decoded audio (OSStatus \(status)); silence after it")
             return
         }

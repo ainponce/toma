@@ -35,18 +35,24 @@ public final class MP4Exporter: Sendable {
         self.settings = settings
     }
 
-    /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete.
+    /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete,
+    /// and returns what it had to leave out (microphone audio that could not be read is silence).
     ///
-    /// Rendering and encoding run on a queue of their own, never on the caller's thread. `progress` gets
-    /// values from 0 that never go down, on that queue (hop to the main actor to show them); the last one
-    /// is exactly 1, once the file is in place. Cancel the calling task to stop: the export ends between
-    /// two frames and throws `ExportError.cancelled`.
+    /// Rendering and encoding run on a queue of their own, never on the caller's thread or the main thread.
+    /// `progress` is called one call at a time, in order, never on the main thread (hop to the main actor
+    /// to show the values): from the export's queue while frames are encoded, with values from 0 that never
+    /// go down and stay below 1, then once more with exactly 1 from the task running the export, once the
+    /// file is in place. Cancel that task to stop: the export ends between two frames and throws
+    /// `ExportError.cancelled`. One export at a time per destination: they would share the partial file.
     /// - Throws: `ExportError` (`destinationNotAllowed` before anything is written, `noDisplayTrack`,
     ///   `writerFailed`, `cancelled`), or the `RenderError` of a frame that could not be drawn.
-    @concurrent
-    public func export(to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws {
+    @concurrent @discardableResult
+    public func export(to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> ExportSummary {
         guard !Task.isCancelled else { throw ExportError.cancelled }
-        guard Self.isAllowedDestination(destination, project: project.package) else { throw ExportError.destinationNotAllowed }
+        // From here on only the canonical URL is used, so what is written is what was checked.
+        guard let destination = Self.canonicalDestination(destination, project: project.package) else {
+            throw ExportError.destinationNotAllowed
+        }
         guard let screen = project.take.tracks.first(where: { $0.kind == .display }), !screen.segments.isEmpty else {
             throw ExportError.noDisplayTrack
         }
@@ -64,6 +70,7 @@ public final class MP4Exporter: Sendable {
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
         try Self.removeStalePartial(partial)
+        let summary: ExportSummary
         do {
             let session = try ExportSession(
                 url: partial, settings: settings, renderer: renderer, frameCount: frameCount, microphone: microphone)
@@ -75,6 +82,7 @@ public final class MP4Exporter: Sendable {
             try Self.fullSync(partial)
             guard !Task.isCancelled else { throw ExportError.cancelled }
             try Self.move(partial, to: destination)
+            summary = ExportSummary(missingAudio: session.missingAudio.sorted { ($0.start, $0.end) < ($1.start, $1.end) })
         } catch {
             if unlink(partial.path) != 0 {
                 let code = errno
@@ -91,47 +99,54 @@ public final class MP4Exporter: Sendable {
             Self.logger.error("Cannot sync the folder of \(destination.path, privacy: .public): \(String(describing: error), privacy: .public)")
         }
         progress(1)
+        return summary
     }
 
     // MARK: - Destination
 
-    /// Whether an export may write `destination`: not a folder (nor a symlink to one), and neither the
-    /// path as given nor the path with every symlink resolved inside a `*.toma` package or inside the
-    /// project's package.
-    static func isAllowedDestination(_ destination: URL, project: ProjectPackage) -> Bool {
-        guard destination.isFileURL else { return false }
-        var isDirectory: ObjCBool = false
-        if FileManager.default.fileExists(atPath: destination.path, isDirectory: &isDirectory), isDirectory.boolValue {
-            return false
+    /// The file an export may write for `destination`, made canonical once so that every later use (the
+    /// checks, the partial file next to it, the move into place) names the same file: `realpath(3)` of its
+    /// folder, which must exist, plus its name. A `..` after a symlink is resolved the way the kernel
+    /// resolves it, never lexically.
+    ///
+    /// `nil`, refused, for a name that is empty, `.` or `..`; a destination that exists and is not a regular
+    /// file (a folder, a symlink, a device); and one inside a `*.toma` package or inside the project's
+    /// package, on the canonical path or on the path as given.
+    static func canonicalDestination(_ destination: URL, project: ProjectPackage) -> URL? {
+        guard destination.isFileURL else { return nil }
+        let path = destination.path as NSString
+        let name = path.lastPathComponent
+        guard !name.isEmpty, name != ".", name != "..", name != "/" else { return nil }
+        guard let folder = realpath(path.deletingLastPathComponent.isEmpty ? "." : path.deletingLastPathComponent, nil) else {
+            return nil
         }
-        let packages = [project.url.standardizedFileURL.pathComponents, resolvingSymlinks(project.url)].map(lowercased)
-        for components in [destination.standardizedFileURL.pathComponents, resolvingSymlinks(destination)].map(lowercased) {
-            let ancestors = components.dropLast()
-            if ancestors.contains(where: { ($0 as NSString).pathExtension == ProjectPackage.fileExtension.lowercased() }) {
-                return false
+        let canonical = URL(fileURLWithPath: String(cString: folder), isDirectory: true).appendingPathComponent(name, isDirectory: false)
+        free(folder)
+        var info = stat()
+        if lstat(canonical.path, &info) == 0 {
+            guard info.st_mode & S_IFMT == S_IFREG else { return nil }
+        } else if errno != ENOENT {
+            return nil
+        }
+        let packageRoots = [project.url.standardizedFileURL.pathComponents, resolved(project.url)].map(lowercased)
+        for components in [canonical.pathComponents, URL(fileURLWithPath: destination.path).pathComponents].map(lowercased) {
+            if components.dropLast().contains(where: { ($0 as NSString).pathExtension == ProjectPackage.fileExtension.lowercased() }) {
+                return nil
             }
-            if packages.contains(where: { components.count > $0.count && components.starts(with: $0) }) { return false }
+            if packageRoots.contains(where: { components.count > $0.count && components.starts(with: $0) }) { return nil }
         }
-        return true
+        return canonical
     }
 
     private static func lowercased(_ components: [String]) -> [String] {
         components.map { $0.lowercased() }
     }
 
-    /// The path components of `url` with every symlink resolved: `realpath(3)` of its deepest existing
-    /// ancestor (itself if it exists), followed by the components that do not exist yet.
-    private static func resolvingSymlinks(_ url: URL) -> [String] {
-        var existing = url.standardizedFileURL.pathComponents
-        var missing: [String] = []
-        while !existing.isEmpty {
-            if let resolved = realpath(NSString.path(withComponents: existing), nil) {
-                defer { free(resolved) }
-                return URL(fileURLWithPath: String(cString: resolved)).pathComponents + missing.reversed()
-            }
-            missing.append(existing.removeLast())
-        }
-        return url.standardizedFileURL.pathComponents
+    /// The path components of an existing `url` with every symlink resolved; as given if it cannot be.
+    private static func resolved(_ url: URL) -> [String] {
+        guard let path = realpath(url.path, nil) else { return url.standardizedFileURL.pathComponents }
+        defer { free(path) }
+        return URL(fileURLWithPath: String(cString: path)).pathComponents
     }
 
     /// Removes what an export that died left at `partial`; never a folder.
@@ -158,17 +173,20 @@ public final class MP4Exporter: Sendable {
         }
     }
 
-    /// Puts the finished export at `destination`: `replaceItemAt` over an existing file (one step, never
-    /// remove-then-move), `rename(2)` otherwise.
+    /// Puts the finished export at `destination` (canonical): `replaceItemAt` over a regular file (one step,
+    /// never remove-then-move), `rename(2)` when nothing is there. Anything else there now, such as a
+    /// symlink that appeared since the export began, is refused.
     private static func move(_ partial: URL, to destination: URL) throws {
         var info = stat()
         if lstat(destination.path, &info) == 0 {
+            guard info.st_mode & S_IFMT == S_IFREG else { throw ExportError.destinationNotAllowed }
             do {
                 _ = try FileManager.default.replaceItemAt(destination, withItemAt: partial)
             } catch {
                 throw ExportError.writerFailed("cannot replace \(destination.path): \(error)")
             }
         } else {
+            guard errno == ENOENT else { throw posixFailure("cannot look at \(destination.path)") }
             guard rename(partial.path, destination.path) == 0 else {
                 throw posixFailure("cannot move the export to \(destination.path)")
             }
@@ -226,6 +244,8 @@ private final class ExportSession: @unchecked Sendable {
                 AVNumberOfChannelsKey: microphone.channels,
                 AVChannelLayoutKey: MicrophoneTimeline.channelLayoutData(channels: microphone.channels),
                 AVEncoderBitRateKey: MP4Exporter.audioBitRate,
+                // Constant: the default strategy spends far less than asked on a quiet or simple signal.
+                AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Constant,
             ]
             guard writer.canApply(outputSettings: audio, forMediaType: .audio) else {
                 throw ExportError.writerFailed("AAC cannot encode \(microphone.channels) channel(s) at 48 kHz, 160 kbps")
@@ -268,6 +288,9 @@ private final class ExportSession: @unchecked Sendable {
     func cancel() {
         cancelled.store(true, ordering: .relaxed)
     }
+
+    /// The microphone spans left silent; read once `run` has returned.
+    var missingAudio: [MissingAudio] { microphone?.missingAudio ?? [] }
 
     /// Encodes every frame and the audio, then finishes the file. On failure or cancellation the writer is
     /// cancelled (this is the export's own partial file, never recorded data) and the error rethrown.
@@ -321,6 +344,7 @@ private final class ExportSession: @unchecked Sendable {
             }
             if !audioDone, let audioInput, let microphone, audioInput.isReadyForMoreMediaData {
                 if let block = try microphone.nextBlock() {
+                    try waitUntilReady(audioInput)
                     guard audioInput.append(block) else { throw failure() }
                 } else {
                     audioInput.markAsFinished()
@@ -355,8 +379,25 @@ private final class ExportSession: @unchecked Sendable {
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
         let fps = settings.framesPerSecond
         try renderer.render(at: Double(frame) / Double(fps), into: pixelBuffer)
+        try waitUntilReady(videoInput)  // drawing took time: the writer may have failed meanwhile
         guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps))) else {
             throw failure()
+        }
+    }
+
+    /// Returns once `input` takes data, checked right before an append: appending to an input that is not
+    /// ready, or after the writer stopped writing, raises an Objective-C exception, which would end the
+    /// process. Throws the writer's failure, `cancelled`, or `writerFailed` after `stallTimeout`.
+    private func waitUntilReady(_ input: AVAssetWriterInput) throws {
+        let deadline = HostTime.now().adding(seconds: MP4Exporter.stallTimeout)
+        while true {
+            guard writer.status == .writing else { throw failure() }
+            if input.isReadyForMoreMediaData { return }
+            if cancelled.load(ordering: .relaxed) { throw ExportError.cancelled }
+            guard HostTime.now() < deadline else {
+                throw ExportError.writerFailed("the writer took no data for \(Int(MP4Exporter.stallTimeout)) s")
+            }
+            usleep(1_000)
         }
     }
 

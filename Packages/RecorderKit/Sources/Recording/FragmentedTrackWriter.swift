@@ -52,6 +52,9 @@ public final class FragmentedTrackWriter: TrackWriting {
     private var sampleCount = 0
     public private(set) var droppedSampleCount = 0
     private var heartbeatSampleCount = 0
+    /// Audio frames handed to the encoder so far: the frame of the file the next one starts at.
+    private var writtenAudioFrames = 0
+    public private(set) var lastWrittenAudio: AudioFilePosition?
     private var finished = false
 
     /// Creates the writer; the file itself is created with the first sample.
@@ -449,7 +452,12 @@ public final class FragmentedTrackWriter: TrackWriting {
     private func write(_ sample: CMSampleBuffer, to input: AVAssetWriterInput) throws {
         guard writer.status == .writing else { throw recordFailure() }
         guard input.append(sample), writer.status != .failed else { throw recordFailure() }
-        lastWrittenPTS = HostTime(nanoseconds: (start?.nanoseconds ?? 0) + HostTime(sample.presentationTimeStamp).nanoseconds)
+        let host = HostTime(nanoseconds: (start?.nanoseconds ?? 0) + HostTime(sample.presentationTimeStamp).nanoseconds)
+        lastWrittenPTS = host
+        if media == .audio {
+            lastWrittenAudio = AudioFilePosition(frame: writtenAudioFrames, hostTime: host)
+            writtenAudioFrames += CMSampleBufferGetNumSamples(sample)
+        }
     }
 
     /// Keeps the writer's error as `failure` and returns the error to throw.

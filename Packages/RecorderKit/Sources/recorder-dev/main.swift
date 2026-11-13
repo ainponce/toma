@@ -289,7 +289,8 @@ struct ExportMP4: AsyncParsableCommand {
             destination and moves it into place once it is complete, replacing a file already there in one \
             step; if the export fails or is killed, the destination is left as it was (a partial file left by \
             a kill is removed by the next export). Never writes into a .toma package. Prints the progress \
-            every 10 % as "progress: <n> %", then "exported: <path>".
+            every 10 % as "progress: <n> %", then "exported: <path>", then a "warning: no audio …" line for \
+            each span where recorded microphone audio could not be read and the MP4 is silent.
             """
     )
 
@@ -314,11 +315,14 @@ struct ExportMP4: AsyncParsableCommand {
 
     func run() async throws {
         let project = try LoadedProject.load(URL(fileURLWithPath: package, isDirectory: true))
-        let destination = URL(fileURLWithPath: output).standardizedFileURL
+        // As given, made absolute by hand: a relative file URL drops `..` lexically, while the exporter
+        // resolves it (after a symlink included) the way the kernel does, as the shell would.
+        let destination = URL(fileURLWithPath: output.hasPrefix("/") ? output : FileManager.default.currentDirectoryPath + "/" + output)
         let exporter = MP4Exporter(project: project, settings: ExportSettings(outputSize: [width, height], framesPerSecond: fps))
         let printed = Mutex(-1)  // tenths of the export last printed
+        let summary: ExportSummary
         do {
-            try await exporter.export(to: destination) { progress in
+            summary = try await exporter.export(to: destination) { progress in
                 let tenths = Int(progress * 10)
                 let reached = printed.withLock { last in
                     defer { last = max(last, tenths) }
@@ -331,6 +335,10 @@ struct ExportMP4: AsyncParsableCommand {
             throw ExitCode.failure
         }
         print("exported: \(destination.path)")
+        for missing in summary.missingAudio {
+            print("warning: no audio from \(missing.file) from \(String(format: "%.2f", missing.start)) s to "
+                + "\(String(format: "%.2f", missing.end)) s: \(missing.reason)")
+        }
     }
 }
 

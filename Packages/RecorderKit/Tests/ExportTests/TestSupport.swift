@@ -35,34 +35,45 @@ func withTemporaryDirectory<T>(_ body: (URL) async throws -> T) async throws -> 
 /// after `base`, with `channels` channels at 48 kHz. Without a file, the manifest lists it but nothing is
 /// written.
 struct MicSegment {
+    enum Contents { case audio, none, garbage }
+
     var start: Double
     var seconds: Double
     var channels = 1
     var endReason = SegmentEndReason.stopped
-    var writesFile = true
+    /// What is written at the segment's path: its audio, nothing, or 4 KiB that are not a movie.
+    var contents = Contents.audio
 }
 
 /// `<directory>/Synthetic.toma` with one complete take written as the recorder would: `seconds` of 30 fps
 /// 640×360 `SampleFactory` video from `base`, the microphone segments `mic` (by default one as long as the
-/// video), and the manifest on disk.
-func makeSyntheticPackage(in directory: URL, seconds: Double, mic: [MicSegment]? = nil) async throws -> ProjectPackage {
+/// video; no microphone track at all when `microphone` is false), and the manifest on disk.
+func makeSyntheticPackage(
+    in directory: URL, seconds: Double, mic: [MicSegment]? = nil, microphone: Bool = true, noise: Bool = false
+) async throws -> ProjectPackage {
     let package = try ProjectPackage.create(in: directory, name: "Synthetic", app: AppInfo(name: "Tests", version: "0"), now: Date())
 
     let videoURL = package.segmentURL(take: takeID, track: displayID, index: 1)
     try FileManager.default.createDirectory(at: videoURL.deletingLastPathComponent(), withIntermediateDirectories: true)
     let video = try FragmentedTrackWriter(url: videoURL, media: .video(framesPerSecond: 30), realTime: false)
     for i in 0..<Int((seconds * 30).rounded()) {
-        try video.append(SampleFactory.videoSample(width: 640, height: 360, pts: base.adding(seconds: Double(i) / 30), frameIndex: i))
+        let pts = base.adding(seconds: Double(i) / 30)
+        try video.append(noise
+            ? noiseVideoSample(width: 640, height: 360, pts: pts.cmTime, seed: UInt64(i))
+            : SampleFactory.videoSample(width: 640, height: 360, pts: pts, frameIndex: i))
     }
     let videoResult = try await video.finish(at: base.adding(seconds: seconds))
     #expect(video.failure == nil)
 
     var micRecords: [SegmentRecord] = []
-    for (k, segment) in (mic ?? [MicSegment(start: 0, seconds: seconds)]).enumerated() {
+    for (k, segment) in (microphone ? mic ?? [MicSegment(start: 0, seconds: seconds)] : []).enumerated() {
         let url = package.segmentURL(take: takeID, track: micID, index: k + 1)
         let start = base.adding(seconds: segment.start)
         var end = start.adding(seconds: segment.seconds)
-        if segment.writesFile {
+        if segment.contents == .garbage {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 0x42, count: 4096).write(to: url)
+        } else if segment.contents == .audio {
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             let audio = try FragmentedTrackWriter(url: url, media: .audio, realTime: false)
             for block in 0..<Int((segment.seconds * 100).rounded()) {
@@ -77,19 +88,20 @@ func makeSyntheticPackage(in directory: URL, seconds: Double, mic: [MicSegment]?
             endHostTime: end, endReason: segment.endReason, droppedFrames: 0, heartbeatFrames: 0))
     }
 
-    let take = TakeRecord(
-        id: takeID, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000),
-        tracks: [
-            TrackRecord(
-                id: displayID, kind: .display,
-                source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1),
-                segments: [SegmentRecord(
-                    index: 1, file: try package.relativePath(of: videoURL), startHostTime: base,
-                    endHostTime: videoResult.endHostTime, endReason: .stopped, droppedFrames: 0, heartbeatFrames: 0)]),
-            TrackRecord(
-                id: micID, kind: .microphone, source: TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic"),
-                segments: micRecords),
-        ])
+    var tracks = [
+        TrackRecord(
+            id: displayID, kind: .display,
+            source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1),
+            segments: [SegmentRecord(
+                index: 1, file: try package.relativePath(of: videoURL), startHostTime: base,
+                endHostTime: videoResult.endHostTime, endReason: .stopped, droppedFrames: 0, heartbeatFrames: 0)]),
+    ]
+    if microphone {
+        tracks.append(TrackRecord(
+            id: micID, kind: .microphone, source: TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic"),
+            segments: micRecords))
+    }
+    let take = TakeRecord(id: takeID, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks)
     try ManifestStore(package: package).update { $0.takes.append(take) }
     return package
 }
@@ -121,7 +133,42 @@ func partialFiles(in directory: URL) throws -> [String] {
 
 // MARK: - Reading an MP4
 
-struct DecodedFrame {
+private enum TrackReadError: Error {
+    case cannotAddOutput, didNotStart
+}
+
+/// Reads every sample of the first `mediaType` track of `url` with `outputSettings`, folding them into
+/// `initial` with `fold`.
+///
+/// The reading runs on a thread of its own, as in the recording tests: `copyNextSampleBuffer` blocks until
+/// AVFoundation's own file reads finish, and many test cases blocking the cooperative pool that way at once
+/// can starve those reads of threads and deadlock the test run.
+func readTrack<T: Sendable>(
+    of url: URL, mediaType: AVMediaType, outputSettings: [String: any Sendable]?, into initial: T,
+    _ fold: @escaping @Sendable (inout T, CMSampleBuffer) throws -> Void
+) async throws -> T {
+    let asset = AVURLAsset(url: url)
+    // Handed over to the reading thread, and not used here again.
+    nonisolated(unsafe) let track = try #require(try await asset.loadTracks(withMediaType: mediaType).first)
+    let (value, status) = try await withCheckedThrowingContinuation { continuation in
+        Thread {
+            continuation.resume(with: Result { () throws -> (T, AVAssetReader.Status) in
+                let reader = try AVAssetReader(asset: asset)
+                let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
+                guard reader.canAdd(output) else { throw TrackReadError.cannotAddOutput }
+                reader.add(output)
+                guard reader.startReading() else { throw reader.error ?? TrackReadError.didNotStart }
+                var value = initial
+                while let sample = output.copyNextSampleBuffer() { try fold(&value, sample) }
+                return (value, reader.status)
+            })
+        }.start()
+    }
+    #expect(status == .completed)
+    return value
+}
+
+struct DecodedFrame: Sendable {
     var time: Double
     var width: Int
     var height: Int
@@ -129,30 +176,21 @@ struct DecodedFrame {
     var bytes: [UInt8]
 }
 
-/// Calls `body` with every decoded frame of the first video track, as BGRA, in presentation order.
-func forEachVideoFrame(of url: URL, _ body: (DecodedFrame) throws -> Void) async throws {
-    let asset = AVURLAsset(url: url)
-    let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
-    let reader = try AVAssetReader(asset: asset)
-    let output = AVAssetReaderTrackOutput(
-        track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-    try #require(reader.canAdd(output))
-    reader.add(output)
-    try #require(reader.startReading())
-    while let sample = output.copyNextSampleBuffer() {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else { continue }
-        try body(DecodedFrame(
+/// Folds every decoded frame of the first video track, as BGRA, in presentation order.
+func readVideoFrames<T: Sendable>(of url: URL, into initial: T, _ fold: @escaping @Sendable (inout T, DecodedFrame) -> Void) async throws -> T {
+    let settings: [String: any Sendable] = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
+    return try await readTrack(of: url, mediaType: .video, outputSettings: settings, into: initial) { value, sample in
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample) else { return }
+        fold(&value, DecodedFrame(
             time: sample.presentationTimeStamp.seconds,
             width: CVPixelBufferGetWidth(pixelBuffer), height: CVPixelBufferGetHeight(pixelBuffer),
             bytes: packedBytes(of: pixelBuffer)))
     }
-    #expect(reader.status == .completed)
 }
 
 /// The decoded frame of the first video track presented closest to `time`.
 func videoFrame(of url: URL, nearest time: Double) async throws -> DecodedFrame {
-    var best: DecodedFrame?
-    try await forEachVideoFrame(of: url) { frame in
+    let best = try await readVideoFrames(of: url, into: DecodedFrame?.none) { best, frame in
         if best.map({ abs($0.time - time) > abs(frame.time - time) }) ?? true { best = frame }
     }
     return try #require(best)
@@ -161,34 +199,25 @@ func videoFrame(of url: URL, nearest time: Double) async throws -> DecodedFrame 
 /// The first audio track decoded as 48 kHz Float32: channel 0 of every frame, and the presentation time of
 /// the first one.
 func decodedAudio(of url: URL) async throws -> (start: Double, samples: [Float]) {
-    let asset = AVURLAsset(url: url)
-    let track = try #require(try await asset.loadTracks(withMediaType: .audio).first)
-    let reader = try AVAssetReader(asset: asset)
-    let output = AVAssetReaderTrackOutput(track: track, outputSettings: [
+    let settings: [String: any Sendable] = [
         AVFormatIDKey: kAudioFormatLinearPCM,
         AVSampleRateKey: 48_000,
         AVLinearPCMBitDepthKey: 32,
         AVLinearPCMIsFloatKey: true,
         AVLinearPCMIsNonInterleaved: false,
         AVLinearPCMIsBigEndianKey: false,
-    ])
-    try #require(reader.canAdd(output))
-    reader.add(output)
-    try #require(reader.startReading())
-    var start: Double?
-    var samples: [Float] = []
-    while let sample = output.copyNextSampleBuffer() {
+    ]
+    let (start, samples) = try await readTrack(of: url, mediaType: .audio, outputSettings: settings, into: (Double?.none, [Float]())) { value, sample in
         guard let format = CMSampleBufferGetFormatDescription(sample),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
               let block = CMSampleBufferGetDataBuffer(sample)
-        else { continue }
-        if start == nil { start = sample.presentationTimeStamp.seconds }
+        else { return }
+        if value.0 == nil { value.0 = sample.presentationTimeStamp.seconds }
         let channels = Int(asbd.mChannelsPerFrame)
         var interleaved = [Float](repeating: 0, count: CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size)
         _ = interleaved.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!) }
-        samples.append(contentsOf: stride(from: 0, to: interleaved.count, by: channels).map { interleaved[$0] })
+        value.1.append(contentsOf: stride(from: 0, to: interleaved.count, by: channels).map { interleaved[$0] })
     }
-    #expect(reader.status == .completed)
     return (try #require(start), samples)
 }
 
@@ -251,8 +280,7 @@ func ssimLuma(_ a: [UInt8], _ b: [UInt8], width: Int, height: Int) -> Double {
 
 /// Presentation time of the first decoded frame whose centre is white: the flash.
 func flashTime(in url: URL) async throws -> Double {
-    var found: Double?
-    try await forEachVideoFrame(of: url) { frame in
+    let found = try await readVideoFrames(of: url, into: Double?.none) { found, frame in
         guard found == nil else { return }
         let p = pixel(frame.bytes, width: frame.width, x: frame.width / 2, y: frame.height / 2)
         if p.x > 240, p.y > 240, p.z > 240 { found = frame.time }
@@ -272,21 +300,46 @@ func clickTime(in url: URL, near time: Double, window: Double = 0.5) async throw
     return start + Double(loudest) / 48_000
 }
 
+/// A BGRA, IOSurface-backed frame of random pixels (SplitMix64 from `seed`) presented at `pts`: content no
+/// encoder can compress below its target bitrate.
+func noiseVideoSample(width: Int, height: Int, pts: CMTime, seed: UInt64) -> CMSampleBuffer {
+    var state = seed &* 0x9E37_79B9_7F4A_7C15
+    return videoSample(width: width, height: height, pts: pts) { base, bytesPerRow in
+        for y in 0..<height {
+            let row = base.advanced(by: y * bytesPerRow).assumingMemoryBound(to: UInt64.self)
+            for x in 0..<(width / 2) {
+                state &+= 0x9E37_79B9_7F4A_7C15
+                var z = state
+                z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+                z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+                row[x] = (z ^ (z >> 31)) | 0xFF00_0000_FF00_0000  // two pixels, opaque
+            }
+        }
+    }
+}
+
 /// A BGRA, IOSurface-backed white frame presented at `pts`.
 func whiteVideoSample(width: Int, height: Int, pts: CMTime) -> CMSampleBuffer {
+    videoSample(width: width, height: height, pts: pts) { base, bytesPerRow in
+        memset(base, 0xFF, bytesPerRow * height)
+    }
+}
+
+/// A BGRA, IOSurface-backed frame presented at `pts`, its pixels written by `fill(baseAddress, bytesPerRow)`.
+private func videoSample(width: Int, height: Int, pts: CMTime, fill: (UnsafeMutableRawPointer, Int) -> Void) -> CMSampleBuffer {
     var created: CVPixelBuffer?
     let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary] as CFDictionary
     let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes, &created)
-    guard status == kCVReturnSuccess, let pixelBuffer = created else { preconditionFailure("white frame: \(status)") }
+    guard status == kCVReturnSuccess, let pixelBuffer = created else { preconditionFailure("video frame: \(status)") }
     CVPixelBufferLockBaseAddress(pixelBuffer, [])
-    memset(CVPixelBufferGetBaseAddress(pixelBuffer)!, 0xFF, CVPixelBufferGetBytesPerRow(pixelBuffer) * height)
+    fill(CVPixelBufferGetBaseAddress(pixelBuffer)!, CVPixelBufferGetBytesPerRow(pixelBuffer))
     CVPixelBufferUnlockBaseAddress(pixelBuffer, [])
     do {
         let format = try CMVideoFormatDescription(imageBuffer: pixelBuffer)
         let timing = CMSampleTimingInfo(duration: .invalid, presentationTimeStamp: pts, decodeTimeStamp: .invalid)
         return try CMSampleBuffer(imageBuffer: pixelBuffer, formatDescription: format, sampleTiming: timing)
     } catch {
-        preconditionFailure("white frame: \(error)")
+        preconditionFailure("video frame: \(error)")
     }
 }
 

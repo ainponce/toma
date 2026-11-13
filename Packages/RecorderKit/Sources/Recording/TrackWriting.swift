@@ -31,6 +31,19 @@ public struct SegmentResult: Equatable, Sendable {
     }
 }
 
+/// An audio sample in its segment's file: the frame it starts at and when it was captured.
+public struct AudioFilePosition: Equatable, Sendable {
+    /// Frames before it in the file, counted from 0 at the segment's start.
+    public var frame: Int
+    /// Its presentation time on the host clock.
+    public var hostTime: HostTime
+
+    public init(frame: Int, hostTime: HostTime) {
+        self.frame = frame
+        self.hostTime = hostTime
+    }
+}
+
 public enum WriterError: Error, Equatable {
     /// The sample's format cannot be encoded by this writer (wrong media, compressed, or refused settings).
     case unsupportedFormat
@@ -53,6 +66,9 @@ public protocol TrackWriting: AnyObject {
     /// Samples discarded so far because the encoder had no room (real time only). `finish` reports the
     /// final count, which may be higher, as `SegmentResult.droppedSampleCount`.
     var droppedSampleCount: Int { get }
+    /// The audio sample handed to the encoder last: its frame counts every frame written before it, and
+    /// none that was dropped. `nil` before the first one, and for video.
+    var lastWrittenAudio: AudioFilePosition? { get }
     func append(_ sample: CMSampleBuffer) throws
     /// Repeats the last video frame at `time`, so a static screen keeps producing fragments.
     func appendHeartbeat(at time: HostTime) throws

@@ -30,7 +30,8 @@ func exportsH264WithRec709AndAudio() async throws {
         try Data("stale".utf8).write(to: stale)
 
         let exporter = MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [1280, 720], framesPerSecond: 30))
-        try await exporter.export(to: destination) { _ in }
+        let summary = try await exporter.export(to: destination) { _ in }
+        #expect(summary == ExportSummary())
         #expect(try partialFiles(in: dir).isEmpty)
 
         let asset = AVURLAsset(url: destination)
@@ -59,6 +60,7 @@ func exportsH264WithRec709AndAudio() async throws {
         let asbd = try #require(CMAudioFormatDescriptionGetStreamBasicDescription(audioFormat)?.pointee)
         #expect(asbd.mSampleRate == 48_000)
         #expect(asbd.mChannelsPerFrame == 1)
+        #expect(abs(Double(try await audio.load(.estimatedDataRate)) - 160_000) < 8_000, "AAC at 160 kbps")
         // It carries the microphone's 440 Hz sine at 1/4 full scale (RMS 0.177).
         let (start, samples) = try await decodedAudio(of: destination)
         #expect(abs(rms(samples, start: start, from: 0.5, to: 2.5) - sineRMS) < 0.02)
@@ -76,11 +78,16 @@ func microphoneIsPlacedByHostTimeWithSilenceInGaps() async throws {
             MicSegment(start: 1.01, seconds: 0.49),  // 10 ms gap: closed, it follows on at 1 s
             MicSegment(start: 1.8, seconds: 0.6),  // 300 ms gap: silence, then the audio at 1.8 s
             MicSegment(start: 2.4, seconds: 0.3, endReason: .unreadable(bytes: 100)),  // marked unreadable: silence
-            MicSegment(start: 2.7, seconds: 0.3, writesFile: false),  // missing file: silence
+            MicSegment(start: 2.7, seconds: 0.3, contents: .none),  // missing file: silence
         ])
         let destination = dir.appending(path: "out.mp4")
-        try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+        let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
+        // The gaps were never recorded; the two segments that were but cannot be used are listed.
+        try expectMissing(summary, [
+            ("takes/take-001/mic/seg-0004.mov", 2.4, 2.7, .unreadable),
+            ("takes/take-001/mic/seg-0005.mov", 2.7, 3.0, .fileMissing),
+        ])
         let (start, samples) = try await decodedAudio(of: destination)
 
         #expect(abs(rms(samples, start: start, from: 0.1, to: 0.9) - sineRMS) < 0.02)
@@ -101,18 +108,19 @@ func microphoneIsPlacedByHostTimeWithSilenceInGaps() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
-func multichannelMicrophoneIsMixedDownToStereo() async throws {
+/// 4 channels are recorded as ALAC with the encoder's layout for 4, more than 8 as Float32 LPCM with a
+/// discrete layout; either way every channel is mixed in.
+@Test(.enabled(if: metalAvailable), arguments: [4, 10])
+func multichannelMicrophoneIsMixedDownToStereo(channels: Int) async throws {
     try await withTemporaryDirectory { dir in
-        // More than 8 channels are recorded as Float32 LPCM with a discrete layout.
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1, mic: [MicSegment(start: 0, seconds: 1, channels: 10)])
+        let package = try await makeSyntheticPackage(in: dir, seconds: 1, mic: [MicSegment(start: 0, seconds: 1, channels: channels)])
         let destination = dir.appending(path: "out.mp4")
         try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
         let audio = try #require(try await AVURLAsset(url: destination).loadTracks(withMediaType: .audio).first)
         let format = try #require(try await audio.load(.formatDescriptions).first)
         #expect(CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee.mChannelsPerFrame == 2)
-        // Every channel at unity gain: ten copies of the sine add up louder than one (and clip).
+        // Every channel at unity gain: the copies of the sine add up louder than one (and clip).
         let (start, samples) = try await decodedAudio(of: destination)
         #expect(rms(samples, start: start, from: 0.2, to: 0.8) > 2 * sineRMS)
     }
@@ -208,6 +216,10 @@ func exportRefusesDestinationInsideProject() async throws {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: package.url.appending(path: "takes"))
         let fileLink = dir.appending(path: "manifest-link.mp4")
         try FileManager.default.createSymbolicLink(at: fileLink, withDestinationURL: package.manifestURL)
+        let outside = dir.appending(path: "outside.mp4")
+        try Data("outside".utf8).write(to: outside)
+        let outsideLink = dir.appending(path: "outside-link.mp4")
+        try FileManager.default.createSymbolicLink(at: outsideLink, withDestinationURL: outside)
         let before = try snapshot(of: dir)
 
         let exporter = MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
@@ -217,7 +229,12 @@ func exportRefusesDestinationInsideProject() async throws {
             package.manifestURL,
             other.url.appending(path: "out.mp4"),
             link.appending(path: "out.mp4"),  // inside the package through a symlink
+            // `..` after a symlink: the kernel goes up from where the link points, inside the package.
+            URL(fileURLWithPath: link.path + "/../out.mp4"),
+            URL(fileURLWithPath: link.path + "/../manifest.json"),
             fileLink,  // a symlink to a file of the package
+            outsideLink,  // any symlink: the file replaced would not be the one named
+            dir.appending(path: "no-such-folder/out.mp4"),
             dir,  // a folder
             package.url,
         ] {
@@ -226,6 +243,15 @@ func exportRefusesDestinationInsideProject() async throws {
             }
         }
         #expect(try snapshot(of: dir) == before)
+
+        // A symlinked folder outside any package is fine: the export lands where it points.
+        let exports = dir.appending(path: "exports")
+        try FileManager.default.createDirectory(at: exports, withIntermediateDirectories: false)
+        let exportsLink = dir.appending(path: "exports-link")
+        try FileManager.default.createSymbolicLink(at: exportsLink, withDestinationURL: exports)
+        try await exporter.export(to: exportsLink.appending(path: "out.mp4")) { _ in }
+        #expect(FileManager.default.fileExists(atPath: exports.appending(path: "out.mp4").path))
+        #expect(try partialFiles(in: exports).isEmpty)
     }
 }
 
@@ -309,5 +335,95 @@ func exportKeepsAVSyncUnderClockSkew() async throws {
         let offset = clickSeconds - flashSeconds
         print("A/V offset under \(skew) ppm skew: \(String(format: "%.2f", offset * 1000)) ms (click \(clickSeconds) s, flash \(flashSeconds) s)")
         #expect(abs(offset) <= 0.017, "click \(clickSeconds) s, flash \(flashSeconds) s")
+    }
+}
+
+@Test(.enabled(if: metalAvailable))
+func summaryListsMicrophoneAudioThatCouldNotBeUsed() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await makeSyntheticPackage(in: dir, seconds: 3, mic: [
+            MicSegment(start: 0, seconds: 1),
+            MicSegment(start: 1, seconds: 1, contents: .garbage),  // a file that is not a movie
+            MicSegment(start: 2, seconds: 0.5, endReason: .empty, contents: .none),
+            MicSegment(start: 2.5, seconds: 0.5),
+        ])
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        #expect(summary.missingAudio.count == 2)
+        let unopened = try #require(summary.missingAudio.first)
+        #expect(unopened.file == "takes/take-001/mic/seg-0002.mov")
+        #expect(abs(unopened.start - 1) < 1e-6 && abs(unopened.end - 2) < 1e-6)
+        guard case .cannotOpen(let why) = unopened.reason else {
+            Issue.record("expected cannotOpen, got \(unopened.reason)")
+            return
+        }
+        #expect(!why.isEmpty)
+        try expectMissing(ExportSummary(missingAudio: Array(summary.missingAudio.dropFirst())), [
+            ("takes/take-001/mic/seg-0003.mov", 2, 2.5, .empty),
+        ])
+        let (start, samples) = try await decodedAudio(of: destination)
+        #expect(abs(rms(samples, start: start, from: 0.1, to: 0.9) - sineRMS) < 0.02)
+        #expect(rms(samples, start: start, from: 1.1, to: 2.4) < 0.01)
+        #expect(abs(rms(samples, start: start, from: 2.6, to: 2.9) - sineRMS) < 0.02)
+    }
+}
+
+/// `summary.missingAudio` is exactly `expected` (file, start, end, reason), times within 1 µs.
+private func expectMissing(_ summary: ExportSummary, _ expected: [(String, Double, Double, MissingAudio.Reason)]) throws {
+    try #require(summary.missingAudio.count == expected.count, "\(summary.missingAudio)")
+    for (missing, (file, start, end, reason)) in zip(summary.missingAudio, expected) {
+        #expect(missing.file == file)
+        #expect(abs(missing.start - start) < 1e-6 && abs(missing.end - end) < 1e-6, "\(missing)")
+        #expect(missing.reason == reason)
+    }
+}
+
+/// Random pixels at 1280×720, 30 fps: content the encoder cannot compress below its target, so the file's
+/// data rate is the formula's (width × height × fps × 0.08), within what VideoToolbox's rate control holds.
+@Test(.enabled(if: metalAvailable))
+func videoDataRateFollowsTheFormula() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await makeSyntheticPackage(in: dir, seconds: 4, noise: true)
+        let settings = ExportSettings(outputSize: [1280, 720], framesPerSecond: 30)
+        let destination = dir.appending(path: "out.mp4")
+        try await MP4Exporter(project: try LoadedProject.load(package.url), settings: settings).export(to: destination) { _ in }
+        let video = try #require(try await AVURLAsset(url: destination).loadTracks(withMediaType: .video).first)
+        let rate = Double(try await video.load(.estimatedDataRate))
+        #expect(abs(rate / Double(settings.averageBitRate) - 1) <= 0.2, "\(rate) bit/s for \(settings.averageBitRate)")
+    }
+}
+
+@Test(.enabled(if: metalAvailable))
+func takeWithoutMicrophoneExportsWithoutAudio() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await makeSyntheticPackage(in: dir, seconds: 1, microphone: false)
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        #expect(summary.missingAudio.isEmpty)
+        let asset = AVURLAsset(url: destination)
+        #expect(try await asset.loadTracks(withMediaType: .audio).isEmpty)
+        #expect(try await asset.loadTracks(withMediaType: .video).count == 1)
+    }
+}
+
+@Test(.enabled(if: metalAvailable))
+func takeWithoutScreenIsRefused() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await makeSyntheticPackage(in: dir, seconds: 1)
+        let loaded = try LoadedProject.load(package.url)
+        let mic = try #require(loaded.take.track(micID))
+        var display = try #require(loaded.take.track(displayID))
+        display.segments = []
+        for tracks in [[mic], [display, mic]] {  // no display track; a display track that recorded nothing
+            var project = loaded
+            project.take.tracks = tracks
+            await #expect(throws: ExportError.noDisplayTrack) {
+                try await MP4Exporter(project: project).export(to: dir.appending(path: "out.mp4")) { _ in }
+            }
+        }
+        #expect(try partialFiles(in: dir).isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "out.mp4").path))
     }
 }

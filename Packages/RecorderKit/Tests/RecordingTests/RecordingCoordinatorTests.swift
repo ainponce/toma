@@ -656,6 +656,39 @@ extension RealTimeRecordingTests {
             }
         }
 
+        @Test func audioClockNamesFramesThatAreInTheFileAfterDrops() async throws {
+            try await withTemporaryDirectory { directory in
+                // From 1 s to 4.5 s the encoder has no room: the 2 s queue drops the oldest 1.5 s of audio.
+                let rig = try Rig(in: directory, tracks: [.mic]) { url, media in
+                    let writer = try FragmentedTrackWriter(url: url, media: media)
+                    let created = HostTime.now()
+                    writer.inputHasRoom = { input in
+                        let elapsed = HostTime.now().seconds(since: created)
+                        return !(1.0..<4.5).contains(elapsed) && input.isReadyForMoreMediaData
+                    }
+                    return writer
+                }
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(11.5))
+                let record = try await rig.coordinator.stop()
+
+                let segment = try #require(record.track("mic")?.segments.first)
+                #expect(segment.droppedFrames >= 100, "\(segment.droppedFrames) blocks dropped")
+                let anchors = try rig.events(id).compactMap { event -> (frame: Int, t: HostTime)? in
+                    guard case .audioClock("mic", let frame) = event.kind else { return nil }
+                    return (frame, event.t)
+                }
+                #expect(anchors.count >= 2)
+                // The synthetic microphone stamps block n at start + n × 10 ms, so the sample captured at t
+                // is source frame (t − start) × 48 kHz; in the file, the dropped blocks (all before the first
+                // anchor) are missing in front of it.
+                for anchor in anchors {
+                    let captured = Int((anchor.t.seconds(since: segment.startHostTime) * 48_000).rounded())
+                    #expect(anchor.frame == captured - 480 * segment.droppedFrames, "anchor \(anchor)")
+                }
+            }
+        }
+
         @Test func stateErrors() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, tracks: [.display])
@@ -833,6 +866,7 @@ final class ScriptedWriter: TrackWriting {
     var formatDescription: CMFormatDescription? { inner.formatDescription }
     var failure: NSError? { injected ?? inner.failure }
     var droppedSampleCount: Int { inner.droppedSampleCount }
+    var lastWrittenAudio: AudioFilePosition? { inner.lastWrittenAudio }
 
     func append(_ sample: CMSampleBuffer) throws {
         if injected == nil, let failAt, HostTime.now() >= failAt {

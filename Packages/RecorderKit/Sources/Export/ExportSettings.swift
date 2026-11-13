@@ -32,3 +32,45 @@ public enum ExportError: Error, Equatable {
     /// The destination is a folder, or inside a project package (`*.toma`), which an export never writes into.
     case destinationNotAllowed
 }
+
+/// What a finished export left out, for the app to tell the user.
+public struct ExportSummary: Sendable, Equatable {
+    /// Spans of the video where recorded microphone audio could not be used, in time order: they are
+    /// silent in the MP4.
+    public var missingAudio: [MissingAudio]
+
+    public init(missingAudio: [MissingAudio] = []) {
+        self.missingAudio = missingAudio
+    }
+}
+
+/// A span of an export where a microphone segment's audio could not be used, so the MP4 is silent there.
+public struct MissingAudio: Sendable, Equatable {
+    public enum Reason: Sendable, Equatable {
+        /// Crash recovery found the segment's file without samples (`SegmentEndReason.empty`).
+        case empty
+        /// Crash recovery could not read the segment's file (`SegmentEndReason.unreadable`).
+        case unreadable
+        /// The segment's file is not in the package.
+        case fileMissing
+        /// The file has no audio track AVFoundation can open (the error, or what is missing).
+        case cannotOpen(String)
+        /// Reading the file stopped partway, with this error; the span starts where it stopped.
+        case readFailed(String)
+    }
+
+    /// The segment's file, relative to the package root (`SegmentRecord.file`).
+    public var file: String
+    /// Output seconds where the silent span starts, within the export.
+    public var start: Double
+    /// Output seconds where it ends, within the export; `start` for a segment without a known length.
+    public var end: Double
+    public var reason: Reason
+
+    public init(file: String, start: Double, end: Double, reason: Reason) {
+        self.file = file
+        self.start = start
+        self.end = end
+        self.reason = reason
+    }
+}

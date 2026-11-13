@@ -88,6 +88,28 @@ private func audioBlock(_ k: Int, frames: Int = 480) -> CMSampleBuffer {
     }
 }
 
+@Test func lastWrittenAudioCountsOnlyFramesInTheFile() async throws {
+    try await withTemporaryDirectory { dir in
+        let url = dir.appendingPathComponent("seg-0001.mov")
+        let w = try FragmentedTrackWriter(url: url, media: .audio, realTime: true)
+        #expect(w.lastWrittenAudio == nil)
+        for k in 0..<50 { try w.append(audioBlock(k)) }
+        #expect(w.lastWrittenAudio == AudioFilePosition(frame: 49 * 480, hostTime: base.adding(seconds: 0.49)))
+        // The encoder has no room while 2.5 s more arrive: the 2 s queue drops the oldest half second.
+        w.inputHasRoom = { _ in false }
+        for k in 50..<300 { try w.append(audioBlock(k)) }
+        #expect(w.lastWrittenAudio == AudioFilePosition(frame: 49 * 480, hostTime: base.adding(seconds: 0.49)))
+        w.inputHasRoom = { $0.isReadyForMoreMediaData }
+        try w.append(audioBlock(300))
+        let r = try await w.finish(at: base.adding(seconds: 3.01))
+        #expect(r.droppedSampleCount >= 40 && r.sampleCount + r.droppedSampleCount == 301)
+        // Block 300 starts after every block written before it, the dropped ones not counted.
+        #expect(w.lastWrittenAudio == AudioFilePosition(frame: (r.sampleCount - 1) * 480, hostTime: base.adding(seconds: 3)))
+        let track = try #require(try await AVURLAsset(url: url).loadTracks(withMediaType: .audio).first)
+        #expect(try await track.load(.timeRange).duration == CMTime(value: CMTimeValue(r.sampleCount * 480), timescale: 48_000))
+    }
+}
+
 @Test func appendThatTimesOutIsNotTakenAndCanBeRetried() async throws {
     try await withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("seg-0001.mov")
