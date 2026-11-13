@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import Synchronization
 import Testing
 @testable import ProjectFormat
 
@@ -39,7 +40,7 @@ private func take(_ id: String) -> TakeRecord {
         let segment = package.segmentURL(take: "take-001", track: "display-1", index: 1)
         #expect(segment.path.hasSuffix("Demo.toma/takes/take-001/display-1/seg-0001.mov"))
         #expect(package.segmentURL(take: "take-001", track: "mic", index: 12).lastPathComponent == "seg-0012.mov")
-        #expect(package.relativePath(of: segment) == "takes/take-001/display-1/seg-0001.mov")
+        #expect(try package.relativePath(of: segment) == "takes/take-001/display-1/seg-0001.mov")
         #expect(package.takeDirectory("take-001").path.hasSuffix("Demo.toma/takes/take-001"))
         #expect(package.trackDirectory(take: "take-001", track: "mic").path.hasSuffix("Demo.toma/takes/take-001/mic"))
         #expect(package.eventsURL(take: "take-001").path.hasSuffix("Demo.toma/takes/take-001/events.jsonl"))
@@ -81,6 +82,53 @@ private func take(_ id: String) -> TakeRecord {
     }
 }
 
+@Test func nextTakeIDNeverReusesNumbers() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
+        #expect(package.nextTakeID(existing: [take("take-003")]) == "take-004")
+    }
+}
+
+@Test func relativePathRejectsURLsOutsideThePackage() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
+        for outside in [
+            dir.appendingPathComponent("elsewhere.mov"),
+            dir.appendingPathComponent("Demo.toma-copy/takes/take-001/mic/seg-0001.mov"),
+            package.url,
+        ] {
+            #expect(throws: ProjectPackageError.notInsidePackage(outside)) { try package.relativePath(of: outside) }
+        }
+    }
+}
+
+@Test func relativePathResolvesASymlinkedParent() async throws {
+    try await withTemporaryDirectory { dir in
+        let real = dir.appendingPathComponent("real", isDirectory: true)
+        let link = dir.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+        let package = try ProjectPackage.create(in: real, name: "Demo", app: testApp, now: testDate)
+        let viaLink = ProjectPackage(url: link.appendingPathComponent("Demo.toma", isDirectory: true))
+
+        // A file that exists, reached through the link.
+        let takeDirectory = package.takeDirectory("take-001")
+        try FileManager.default.createDirectory(at: takeDirectory, withIntermediateDirectories: false)
+        try Data().write(to: package.eventsURL(take: "take-001"))
+        #expect(try package.relativePath(of: viaLink.eventsURL(take: "take-001")) == "takes/take-001/events.jsonl")
+
+        // A segment that does not exist yet, under a package opened through the link.
+        let segment = package.segmentURL(take: "take-001", track: "display-1", index: 1)
+        #expect(try viaLink.relativePath(of: segment) == "takes/take-001/display-1/seg-0001.mov")
+
+        // The temporary directory is itself under a symlink (/var -> /private/var).
+        if dir.path.hasPrefix("/var/") {
+            let privateSegment = URL(fileURLWithPath: "/private" + segment.path)
+            #expect(try package.relativePath(of: privateSegment) == "takes/take-001/display-1/seg-0001.mov")
+        }
+    }
+}
+
 // MARK: - ManifestStore
 
 @Test func concurrentUpdatesAreAllApplied() async throws {
@@ -100,30 +148,41 @@ private func take(_ id: String) -> TakeRecord {
     }
 }
 
+/// Counters shared with the reader thread of `atomicWriteNeverLeavesPartialManifest`.
+private final class ReaderCounters: Sendable {
+    let started = Atomic<Bool>(false)
+    let stop = Atomic<Bool>(false)
+    let finished = Atomic<Bool>(false)
+    let reads = Atomic<Int>(0)
+    let failures = Atomic<Int>(0)
+}
+
 @Test func atomicWriteNeverLeavesPartialManifest() async throws {
     try await withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
-        let reader = Task.detached { () -> (reads: Int, failures: Int) in
-            var reads = 0
-            var failures = 0
-            while !Task.isCancelled {
-                reads += 1
+        // A dedicated thread, so the reader runs even while other tests fill the cooperative pool.
+        let counters = ReaderCounters()
+        Thread {
+            counters.started.store(true, ordering: .releasing)
+            while !counters.stop.load(ordering: .relaxed) {
                 do {
                     _ = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
                 } catch {
-                    failures += 1
+                    counters.failures.add(1, ordering: .relaxed)
                 }
+                counters.reads.add(1, ordering: .relaxed)
             }
-            return (reads, failures)
-        }
+            counters.finished.store(true, ordering: .releasing)
+        }.start()
+        while !counters.started.load(ordering: .acquiring) { try await Task.sleep(for: .milliseconds(1)) }
         for i in 1...200 {
             try store.update { $0.takes.append(take("take-\(i)")) }
         }
-        reader.cancel()
-        let result = await reader.value
-        #expect(result.reads > 0)
-        #expect(result.failures == 0)
+        counters.stop.store(true, ordering: .relaxed)
+        while !counters.finished.load(ordering: .acquiring) { try await Task.sleep(for: .milliseconds(1)) }
+        #expect(counters.reads.load(ordering: .relaxed) > 0)
+        #expect(counters.failures.load(ordering: .relaxed) == 0)
         #expect(try ManifestStore(package: package).manifest.takes.count == 200)
         #expect(!FileManager.default.fileExists(atPath: package.manifestURL.path + ".tmp"))
     }
@@ -160,6 +219,25 @@ private func take(_ id: String) -> TakeRecord {
 
         try store.update { $0.takes.append(take("take-002")) }
         #expect(try ManifestStore(package: package).manifest.takes.map(\.id) == ["take-001", "take-002"])
+    }
+}
+
+@Test func encodingFailureDoesNotWedgeStore() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
+        let store = try ManifestStore(package: package)
+        let display = TrackRecord(id: "display-1", kind: .display, source: TrackSource(name: "Display", pixelScale: 2), segments: [])
+        try store.update { $0.takes.append(TakeRecord(id: "take-001", status: .recording, startedAt: testDate, tracks: [display])) }
+
+        #expect(throws: EncodingError.self) { try store.update { $0.takes[0].tracks[0].source.pixelScale = .nan } }
+        #expect(store.manifest.takes[0].tracks[0].source.pixelScale == 2)
+
+        try store.update { $0.takes[0].status = .complete }
+        try store.flushPending()
+        let reread = try ManifestStore(package: package).manifest
+        #expect(reread == store.manifest)
+        #expect(reread.takes[0].status == .complete)
+        #expect(reread.takes[0].tracks[0].source.pixelScale == 2)
     }
 }
 

@@ -32,6 +32,9 @@ public struct RecordingLockInfo: Codable, Equatable, Sendable {
 }
 
 /// An acquired recording lock. The lock lasts while its file descriptor is open.
+///
+/// Dropping the last reference releases the lock (`deinit` calls `release()`), so the
+/// owner must keep a strong reference for the whole take.
 public final class HeldRecordingLock: Sendable {
     private let path: String
     private let descriptor: Mutex<Int32?>

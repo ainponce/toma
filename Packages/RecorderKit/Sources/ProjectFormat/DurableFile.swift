@@ -8,7 +8,8 @@ public enum DurableFile {
     /// sees either the old file or the new one, never a partial one.
     ///
     /// Writes `<url>.tmp`, flushes it to the drive with `F_FULLFSYNC`, renames it over `url`
-    /// with `rename(2)` and syncs the parent directory so the rename is durable too.
+    /// with `rename(2)` and full-syncs the parent directory so the rename is durable too.
+    /// Only one writer may use a given `url` at a time: the temporary path is fixed.
     public static func writeAtomically(_ data: Data, to url: URL) throws {
         let temporaryPath = url.path + ".tmp"
         do {
@@ -44,12 +45,13 @@ public enum DurableFile {
         code == ENOTSUP || code == EINVAL || code == ENOTTY
     }
 
-    /// Makes the creation, removal or renaming of entries in a directory durable.
+    /// Makes the creation, removal or renaming of entries in a directory durable, down to the
+    /// drive's permanent storage (`fullSync` on the directory, with the same fallback).
     public static func syncDirectory(_ url: URL) throws {
         let fd = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError.current() }
         defer { close(fd) }
-        guard fsync(fd) == 0 else { throw POSIXError.current() }
+        try fullSync(fd)
     }
 
     private static func writeAndFullSync(_ data: Data, toNewFileAt path: String) throws {

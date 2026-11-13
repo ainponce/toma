@@ -57,6 +57,7 @@ private func fileSystemType(at url: URL) throws -> String {
         #expect(write(fd, "fragment", 8) == 8)
         try DurableFile.barrierSync(fd)
         try DurableFile.fullSync(fd)
+        try DurableFile.syncDirectory(mount)
 
         let manifest = mount.appendingPathComponent("manifest.json")
         try DurableFile.writeAtomically(Data("{}".utf8), to: manifest)

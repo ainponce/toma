@@ -83,25 +83,51 @@ public struct ProjectPackage: Sendable, Hashable {
     }
 
     /// The path of a file inside the package relative to its root, as stored in the manifest.
-    public func relativePath(of fileURL: URL) -> String {
-        let root = url.standardizedFileURL.pathComponents
-        let file = fileURL.standardizedFileURL.pathComponents
-        precondition(
-            file.count > root.count && file.starts(with: root),
-            "\(fileURL.path) is not inside the package \(url.path)"
-        )
+    ///
+    /// Symlinks in both URLs are resolved, so a file reached through another path to the same
+    /// folder (for example `/var` and `/private/var`) still resolves. The file does not need to
+    /// exist yet. Throws `ProjectPackageError.notInsidePackage` for any other URL.
+    public func relativePath(of fileURL: URL) throws -> String {
+        if let path = Self.relativePath(of: fileURL.standardizedFileURL.pathComponents, under: url.standardizedFileURL.pathComponents) {
+            return path
+        }
+        if let path = Self.relativePath(of: Self.resolvingSymlinks(fileURL), under: Self.resolvingSymlinks(url)) {
+            return path
+        }
+        throw ProjectPackageError.notInsidePackage(fileURL)
+    }
+
+    private static func relativePath(of file: [String], under root: [String]) -> String? {
+        guard file.count > root.count, file.starts(with: root) else { return nil }
         return file.dropFirst(root.count).joined(separator: "/")
+    }
+
+    /// The path components of `url` with every symlink resolved.
+    ///
+    /// `URL.resolvingSymlinksInPath()` leaves a path untouched when its last component does not
+    /// exist (a segment about to be written), so this resolves the deepest existing ancestor
+    /// with `realpath(3)` and appends the components that do not exist yet.
+    private static func resolvingSymlinks(_ url: URL) -> [String] {
+        var existing = url.standardizedFileURL.pathComponents
+        var missing: [String] = []
+        while !existing.isEmpty {
+            if let resolved = realpath(NSString.path(withComponents: existing), nil) {
+                defer { free(resolved) }
+                return URL(fileURLWithPath: String(cString: resolved)).pathComponents + missing.reversed()
+            }
+            missing.append(existing.removeLast())
+        }
+        return url.standardizedFileURL.pathComponents
     }
 
     /// The first `take-NNN` after the highest one in `existing` whose folder does not exist yet.
     ///
     /// Numbers are never reused, so a removed take cannot be confused with a newer one.
     public func nextTakeID(existing: [TakeRecord]) -> String {
-        let used = Set(existing.map(\.id))
         var number = (existing.compactMap { Self.takeNumber(of: $0.id) }.max() ?? 0) + 1
         while true {
             let id = "take-" + String(format: "%03d", number)
-            if !used.contains(id), !FileManager.default.fileExists(atPath: takeDirectory(id).path) {
+            if !FileManager.default.fileExists(atPath: takeDirectory(id).path) {
                 return id
             }
             number += 1
@@ -112,4 +138,9 @@ public struct ProjectPackage: Sendable, Hashable {
         guard id.hasPrefix("take-") else { return nil }
         return Int(id.dropFirst("take-".count))
     }
+}
+
+public enum ProjectPackageError: Error, Equatable {
+    /// The URL is not a file inside the package.
+    case notInsidePackage(URL)
 }

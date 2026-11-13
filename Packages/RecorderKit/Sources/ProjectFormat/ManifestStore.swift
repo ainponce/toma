@@ -5,8 +5,14 @@ import Synchronization
 /// The in-memory manifest of a package, written durably to `manifest.json` after every change.
 ///
 /// Changes are serialized under a lock and each one is written with
-/// `DurableFile.writeAtomically`. If a write fails the change stays in memory,
-/// the error is rethrown, and the next `update` or `flushPending()` writes it again.
+/// `DurableFile.writeAtomically`. A change that cannot be encoded (for example a
+/// non-finite `Double`) is rejected like a throwing `body`: nothing changes. If the
+/// write itself fails, the change stays in memory, the error is rethrown, and the
+/// next `update` or `flushPending()` writes it again.
+///
+/// Use one `ManifestStore` per package, in a single writer process: every write goes
+/// through the same `manifest.json.tmp`, so two writers would overwrite each other's
+/// temporary file.
 public final class ManifestStore: Sendable {
     public let package: ProjectPackage
 
@@ -28,14 +34,19 @@ public final class ManifestStore: Sendable {
         state.withLock { $0.manifest }
     }
 
-    /// Applies `body` and writes the result. If `body` throws, nothing changes.
+    /// Applies `body` and writes the result. If `body` throws or its result cannot be
+    /// encoded, nothing changes and the error is rethrown.
+    ///
+    /// `body` runs while the store's lock is held, and the lock is not recursive:
+    /// `body` must never call back into this store.
     public func update(_ body: (inout Manifest) throws -> Void) throws {
         try state.withLock { state in
             var manifest = state.manifest
             try body(&manifest)
+            let data = try ProjectJSON.encoder().encode(manifest)
             state.manifest = manifest
             state.needsWrite = true
-            try write(&state)
+            try write(data, &state)
         }
     }
 
@@ -43,12 +54,11 @@ public final class ManifestStore: Sendable {
     public func flushPending() throws {
         try state.withLock { state in
             guard state.needsWrite else { return }
-            try write(&state)
+            try write(ProjectJSON.encoder().encode(state.manifest), &state)
         }
     }
 
-    private func write(_ state: inout State) throws {
-        let data = try ProjectJSON.encoder().encode(state.manifest)
+    private func write(_ data: Data, _ state: inout State) throws {
         try DurableFile.writeAtomically(data, to: package.manifestURL)
         state.needsWrite = false
     }
