@@ -21,6 +21,7 @@ MiVideo.toma/
         seg-0001.mov
       events.jsonl             un evento por línea: cursor, clics, cortes de stream, pausas
       recording.lock           lock de la grabación en curso (ver más abajo)
+      .reserve                 espacio reservado mientras se graba (ver más abajo)
   cache/                       regenerable: transcripciones, sugerencias, miniaturas
 ```
 
@@ -169,7 +170,7 @@ Reglas de escritura:
 | `startHostTime` | `HostTime` | Instante del primer cuadro o muestra del archivo. |
 | `endHostTime` | `HostTime` | Instante en que se cerró. Falta mientras el segmento está abierto. |
 | `endReason` | objeto | Por qué se cerró. Falta mientras el segmento está abierto. |
-| `droppedFrames` | entero | Cuadros (o bloques de audio) que llegaron de la captura y se descartaron porque el escritor no daba abasto. |
+| `droppedFrames` | entero | Cuadros (o bloques de audio) que llegaron de la captura y no se escribieron: porque el escritor no daba abasto, o porque lo rechazó o no se pudo abrir (en ese caso se cuentan en el segmento siguiente, o en el último si no hay otro). |
 | `heartbeatFrames` | entero | Cuadros repetidos para que el tiempo siga corriendo con la pantalla quieta. |
 
 **Motivo de cierre** (`endReason`): un objeto plano con `type` y, según el tipo, otros campos al mismo nivel.
@@ -283,6 +284,13 @@ Mientras se graba una toma existe `takes/<toma>/recording.lock`, y el proceso qu
 
 `bootSessionUUID` es `kern.bootsessionuuid`, que cambia en cada arranque de la Mac.
 
+## `.reserve`
+
+Mientras se graba una toma existe `takes/<toma>/.reserve`: 8 MiB de ceros escritos (bloques realmente asignados) y sincronizados con `F_FULLFSYNC` al empezar, antes de marcar la toma como `recording`.
+
+- Es espacio de reserva, no datos de la toma. Si el disco se llena (el monitor de espacio pide parar, o una escritura de un segmento, del manifiesto o de `events.jsonl` falla con `ENOSPC`), la grabación lo borra primero y recién después hace las escrituras finales: cerrar los segmentos, marcar la toma `complete` con sus segmentos `diskFull` y cerrar `events.jsonl`. Al cerrar una toma por cualquier otro motivo también se borra.
+- Un `.reserve` que quedó en disco después de un crash no significa nada: la recuperación lo ignora y lo borra.
+
 ## Los datos crudos nunca se borran
 
-Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/`, porque todo lo que contiene se vuelve a calcular.
+Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/`, porque todo lo que contiene se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.

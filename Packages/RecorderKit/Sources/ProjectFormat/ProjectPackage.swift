@@ -82,6 +82,12 @@ public struct ProjectPackage: Sendable, Hashable {
         takeDirectory(take).appendingPathComponent("recording.lock", isDirectory: false)
     }
 
+    /// `takes/<take>/.reserve`: space the recorder holds while recording a take and frees to close it
+    /// when the disk fills. Never take data: recovery removes it.
+    public func reserveURL(take: String) -> URL {
+        takeDirectory(take).appendingPathComponent(".reserve", isDirectory: false)
+    }
+
     /// The path of a file inside the package relative to its root, as stored in the manifest.
     ///
     /// Symlinks in both URLs are resolved, so a file reached through another path to the same

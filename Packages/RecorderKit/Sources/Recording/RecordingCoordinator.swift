@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
+import Darwin
 import Foundation
 import ProjectFormat
+import Synchronization
 
 /// Makes the writer of one segment: the file to create and what the track carries.
 public typealias WriterFactory = @Sendable (URL, TrackMedia) throws -> any TrackWriting
@@ -36,7 +39,12 @@ public enum RecordingWarning: Sendable, Equatable {
     case displayPaused(track: String)
     /// The writer of `track` failed; its segment was closed and the next sample opens a new one.
     case writerFailed(track: String)
-    /// The manifest could not be written; the change is kept and written with the next change.
+    /// `track` could not write `TrackPipeline.droppedSamplesWarningCount` samples in a row (its writer
+    /// refused them or could not be opened). They are counted in `droppedFrames` of the segment that
+    /// refused them, or of the next segment (the last one if no other follows).
+    case samplesDropped(track: String)
+    /// The manifest could not be written; the change is kept and written again by the next change or
+    /// the next sync tick (every `syncInterval`), at the latest when the take closes.
     case manifestWriteFailed
     /// Little free space left on the recording volume.
     case diskLow(availableBytes: Int64)
@@ -76,6 +84,7 @@ public actor RecordingCoordinator {
         let startedAt: Date
         let store: ManifestStore
         let lock: HeldRecordingLock
+        let reserve: TakeReserve
         var log: EventLogWriter?
         var diskVerdicts: AsyncStream<DiskSpaceVerdict>.Continuation?
         var activity: (any NSObjectProtocol)?
@@ -111,8 +120,13 @@ public actor RecordingCoordinator {
     private var closeTask: Task<CloseOutcome, Never>?
     private var startWaiters: [CheckedContinuation<Void, Never>] = []
     private var autoStopPending = false
-    private var onAutoStop: (@Sendable (TakeRecord) -> Void)?
+    private var onAutoStop: (@Sendable (TakeRecord, (any Error)?) -> Void)?
+    /// A write ran out of space or the monitor said stop: the take's reserve was given back.
+    private var diskFull = false
+    /// The first event-log failure a periodic flush heard, for `stop()` to report.
+    private var logFailure: (any Error)?
     private var activityTask: Task<Void, Never>?
+    private var maintenanceTask: Task<Void, Never>?
     private var diskTask: Task<Void, Never>?
     private var diskWatchdog: Task<Void, Never>?
     /// Verdicts received since the watchdog last looked.
@@ -142,8 +156,10 @@ public actor RecordingCoordinator {
         self.clock = clock
     }
 
-    /// Called once with the closed take when the take stops by itself (the disk is full).
-    public func setOnAutoStop(_ handler: @escaping @Sendable (TakeRecord) -> Void) {
+    /// Called once when the take stops by itself because the disk is full, with the closed take and
+    /// the first failure of closing it (`nil` when it closed cleanly): the same outcome a later
+    /// `stop()` returns or throws.
+    public func setOnAutoStop(_ handler: @escaping @Sendable (TakeRecord, (any Error)?) -> Void) {
         onAutoStop = handler
     }
 
@@ -166,7 +182,7 @@ public actor RecordingCoordinator {
             let takeID = try await openTake()
             state = .recording
             startMonitoring()
-            if autoStopPending { requestAutoStop() }
+            if autoStopPending { diskFilled() }
             return takeID
         } catch {
             state = .stopped
@@ -192,12 +208,19 @@ public actor RecordingCoordinator {
         let takeID = package.nextTakeID(existing: store.manifest.takes)
         try FileManager.default.createDirectory(at: package.takeDirectory(takeID), withIntermediateDirectories: false)
         let lock = try await acquireLock(at: package.lockURL(take: takeID))
+        let reserve: TakeReserve
+        do {
+            reserve = try TakeReserve.create(at: package.reserveURL(take: takeID))
+        } catch {
+            lock.release()
+            throw error
+        }
         let startedAt = Date().roundedToWholeSeconds
         let record = TakeRecord(
             id: takeID, status: .recording, startedAt: startedAt,
             tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) })
+        take = Take(id: takeID, startedAt: startedAt, store: store, lock: lock, reserve: reserve)
         updateManifest(store) { $0.takes.append(record) }
-        take = Take(id: takeID, startedAt: startedAt, store: store, lock: lock)
 
         do {
             for source in sources {
@@ -227,7 +250,8 @@ public actor RecordingCoordinator {
                 package: package, takeID: takeID, store: store, log: log, warnings: warningsContinuation,
                 configuration: configuration, writerFactory: writerFactory, clock: clock,
                 onDiskFull: { [weak self] in
-                    Task { await self?.requestAutoStop() }
+                    reserve.release()  // before the writer's caller writes anything else
+                    Task { await self?.diskFilled() }
                 })
             let displays = sources.filter { $0.kind == .display }.count
             for source in sources {
@@ -264,6 +288,7 @@ public actor RecordingCoordinator {
             }
         }
         diskWatchdog = Task { await self.watchDiskVerdicts() }
+        maintenanceTask = Task { await self.maintain() }
     }
 
     // MARK: - Stop
@@ -288,7 +313,11 @@ public actor RecordingCoordinator {
         }
     }
 
-    private func requestAutoStop() {
+    /// The volume is full, or about to be: gives the reserve back so the closing writes fit, and
+    /// stops the take as `diskFull` (after `start()` if it is still starting).
+    private func diskFilled() {
+        take?.reserve.release()
+        diskFull = true
         switch state {
         case .starting:
             autoStopPending = true
@@ -309,19 +338,22 @@ public actor RecordingCoordinator {
         if automatic {
             Task {
                 let outcome = await task.value
-                self.onAutoStop?(outcome.record)
+                self.onAutoStop?(outcome.record, outcome.error)
             }
         }
         return task
     }
 
-    /// Closes whatever part of the take is open: stops monitoring, the sources and the input, closes
-    /// every track (collecting failures), marks the take `complete`, closes the log, releases the lock
-    /// and finishes `warnings`. Also rolls back a failed `start()`.
+    /// Closes whatever part of the take is open: gives the reserve back (room for the final writes,
+    /// however the take ended), stops monitoring, the sources and the input, closes every track
+    /// (collecting failures), marks the take `complete`, closes the log, releases the lock and
+    /// finishes `warnings`. Also rolls back a failed `start()`.
     private func closeTake(reason: SegmentEndReason, stopTime: HostTime) async -> CloseOutcome {
         guard let take else { preconditionFailure("RecordingCoordinator: closing without a take") }
         var errors: [any Error] = []
+        take.reserve.release()
         diskMonitor.stop()
+        maintenanceTask?.cancel()
         diskWatchdog?.cancel()
         diskTask?.cancel()
         activityTask?.cancel()
@@ -351,7 +383,12 @@ public actor RecordingCoordinator {
             manifest.takes[i].status = .complete
         }
         do { try take.store.flushPending() } catch { errors.append(error) }
-        do { try take.log?.close() } catch { errors.append(error) }
+        if let logFailure { errors.append(logFailure) }
+        if let log = take.log {
+            if diskFull, let failure = Self.flushAfterDiskFull(log) { errors.append(failure) }
+            do { try log.close() } catch { errors.append(error) }
+        }
+        if let failure = take.reserve.releaseError { errors.append(failure) }
         take.lock.release()
         if let activity = take.activity {
             ProcessInfo.processInfo.endActivity(activity)
@@ -419,7 +456,7 @@ public actor RecordingCoordinator {
             diskLowReported = true
             warningsContinuation.yield(.diskLow(availableBytes: available))
         case .stopNow:
-            requestAutoStop()
+            diskFilled()
         case .refuseToStart:
             break  // only given before recording
         }
@@ -442,13 +479,156 @@ public actor RecordingCoordinator {
         }
     }
 
+    /// Every `syncInterval` while recording: writes a manifest change whose write failed, and flushes
+    /// the event log so a failed write of its own timer is heard now. Running out of space either way
+    /// stops the take as `diskFull`; any other log failure is reported by `stop()`.
+    private func maintain() async {
+        while true {
+            do {
+                try await Task.sleep(for: configuration.syncInterval)
+            } catch {
+                return
+            }
+            guard state == .recording || state == .paused, let take else { return }
+            do {
+                try take.store.flushPending()
+            } catch {
+                // Still pending: the next tick or the close writes it again (its update already warned).
+                if isOutOfSpace(error) { diskFilled() }
+            }
+            do {
+                try take.log?.flush()
+            } catch {
+                if isOutOfSpace(error) {
+                    diskFilled()  // the log keeps the lines; the close writes them with the reserve's room
+                } else if logFailure == nil {
+                    logFailure = error
+                }
+            }
+        }
+    }
+
     // MARK: - Helpers
 
+    /// Writes a manifest change. A failed write is reported as `manifestWriteFailed` and retried by
+    /// the next write; one that failed for lack of space stops the take and is retried at once with
+    /// the reserve's room.
     private func updateManifest(_ store: ManifestStore, _ change: (inout Manifest) -> Void) {
         do {
             try store.update(change)
         } catch {
+            if isOutOfSpace(error) {
+                diskFilled()
+                if (try? store.flushPending()) != nil { return }
+            }
             warningsContinuation.yield(.manifestWriteFailed)
         }
     }
+
+    /// After the disk filled, the event log kept the lines it could not write, and the first failure
+    /// of its timer stays latched until a flush hears it. With the reserve's room, a flush writes them:
+    /// once one succeeds, a latched out-of-space failure from before is not a loss and is not reported.
+    /// Returns any other failure; a write that still fails is left for `close()` to report.
+    private static func flushAfterDiskFull(_ log: EventLogWriter) -> (any Error)? {
+        for _ in 0..<3 {
+            do {
+                try log.flush()
+                return nil
+            } catch where isOutOfSpace(error) {
+                continue
+            } catch {
+                return error
+            }
+        }
+        return nil
+    }
+}
+
+/// Space a take holds on its volume from the start, `takes/<take>/.reserve`, given back when the disk
+/// fills so the take can still be closed: the last segment writes, the manifest marked `complete` and
+/// the event log. It is scratch, never take data.
+final class TakeReserve: Sendable {
+    static let size = 8 << 20
+
+    let url: URL
+    private let state = Mutex<(held: Bool, error: (any Error)?)>((true, nil))
+
+    private init(url: URL) {
+        self.url = url
+    }
+
+    /// Writes `size` bytes of zeros (so the blocks are really allocated) and full-syncs them.
+    static func create(at url: URL) throws -> TakeReserve {
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        do {
+            let chunk = [UInt8](repeating: 0, count: 1 << 20)
+            for _ in 0..<(size / chunk.count) {
+                try chunk.withUnsafeBytes { buffer in
+                    var offset = 0
+                    while offset < buffer.count {
+                        let written = write(fd, buffer.baseAddress! + offset, buffer.count - offset)
+                        if written < 0 {
+                            if errno == EINTR { continue }
+                            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                        }
+                        offset += written
+                    }
+                }
+            }
+            try DurableFile.fullSync(fd)
+        } catch {
+            close(fd)
+            unlink(url.path)
+            throw error
+        }
+        guard close(fd) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            unlink(url.path)
+            throw error
+        }
+        return TakeReserve(url: url)
+    }
+
+    /// Deletes the file and syncs its folder so the space is free right away. Only the first call
+    /// does anything; safe from any thread.
+    func release() {
+        state.withLock { state in
+            guard state.held else { return }
+            state.held = false
+            if unlink(url.path) != 0, errno != ENOENT {
+                state.error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                return
+            }
+            do {
+                try DurableFile.syncDirectory(url.deletingLastPathComponent())
+            } catch {
+                state.error = error
+            }
+        }
+    }
+
+    /// Why `release()` could not delete the file or sync its folder, if it could not.
+    var releaseError: (any Error)? {
+        state.withLock { $0.error }
+    }
+}
+
+/// Whether `error` means the volume is full, looking through underlying errors.
+func isOutOfSpace(_ error: any Error, depth: Int = 0) -> Bool {
+    let error = error as NSError
+    switch (error.domain, error.code) {
+    case (NSPOSIXErrorDomain, Int(ENOSPC)),
+         (AVFoundationErrorDomain, AVError.Code.diskFull.rawValue),
+         (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError),
+         (NSOSStatusErrorDomain, -34):  // dskFulErr
+        return true
+    default:
+        break
+    }
+    guard depth < 8 else { return false }
+    var underlying: [NSError] = []
+    if let error = error.userInfo[NSUnderlyingErrorKey] as? NSError { underlying.append(error) }
+    if let errors = error.userInfo[NSMultipleUnderlyingErrorsKey] as? [NSError] { underlying += errors }
+    return underlying.contains { isOutOfSpace($0, depth: depth + 1) }
 }

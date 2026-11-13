@@ -18,8 +18,9 @@ public enum SystemActivity: Sendable, Equatable {
 /// The system's sleep, wake, lock and display-sleep notifications as one stream.
 public enum SystemActivityMonitor {
     /// Observes `NSWorkspace` sleep, wake and display-sleep notifications and the distributed
-    /// `com.apple.screenIsLocked` / `com.apple.screenIsUnlocked` notifications while the stream is
-    /// iterated. The observers are removed when the stream terminates.
+    /// `com.apple.screenIsLocked` / `com.apple.screenIsUnlocked` notifications. The observers are
+    /// registered when the stream is created (events from then on are buffered until it is iterated)
+    /// and removed when it terminates.
     ///
     /// Locking and display sleep are folded into one state: `screenLocked` is sent when the screen
     /// stops being capturable for either reason, and `screenUnlocked` only once it is unlocked and

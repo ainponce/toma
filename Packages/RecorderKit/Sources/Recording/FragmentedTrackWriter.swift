@@ -86,7 +86,7 @@ public final class FragmentedTrackWriter: TrackWriting {
 
         let input: AVAssetWriterInput
         if let configured = self.input, let configuredFormat = formatDescription {
-            guard Self.isSameFormat(format, configuredFormat, media: media) else { throw WriterError.unsupportedFormat }
+            guard Self.isCompatible(format, with: configuredFormat, media: media) else { throw WriterError.unsupportedFormat }
             input = configured
         } else {
             input = try configure(with: format)
@@ -318,8 +318,10 @@ public final class FragmentedTrackWriter: TrackWriting {
     }
 
     /// Whether `format` can go into an input configured for `configured`: same dimensions for video,
-    /// same sample rate, channel count and sample layout for audio.
-    private static func isSameFormat(_ format: CMFormatDescription, _ configured: CMFormatDescription, media: TrackMedia) -> Bool {
+    /// same sample rate, channel count and sample layout for audio. `append` refuses anything else
+    /// with `unsupportedFormat`; the track pipeline uses it to decide when a format change needs a
+    /// new segment.
+    static func isCompatible(_ format: CMFormatDescription, with configured: CMFormatDescription, media: TrackMedia) -> Bool {
         guard CMFormatDescriptionGetMediaType(format) == CMFormatDescriptionGetMediaType(configured) else { return false }
         switch media {
         case .video:

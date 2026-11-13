@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import AVFoundation
 import CoreMedia
 import Darwin
 import Dispatch
@@ -16,11 +15,13 @@ struct PipelineContext: Sendable {
     let configuration: RecordingConfiguration
     let writerFactory: WriterFactory
     let clock: @Sendable () -> HostTime
-    /// A writer ran out of disk space: the coordinator closes the take as `diskFull`.
+    /// A write ran out of disk space. Gives the take's reserve back before returning, so the writes
+    /// that follow have room, and has the coordinator close the take as `diskFull`.
     let onDiskFull: @Sendable () -> Void
 
     /// Changes one track of the take in the manifest. A failed write is reported as
-    /// `manifestWriteFailed`; the change stays in memory and the next write retries it.
+    /// `manifestWriteFailed`; the change stays in memory and the next write retries it. A write that
+    /// failed for lack of space is retried at once, after the reserve is given back.
     func updateTrack(_ trackID: String, _ change: (inout TrackRecord) -> Void) {
         do {
             try store.update { manifest in
@@ -30,6 +31,10 @@ struct PipelineContext: Sendable {
                 change(&manifest.takes[take].tracks[track])
             }
         } catch {
+            if isOutOfSpace(error) {
+                onDiskFull()
+                if (try? store.flushPending()) != nil { return }
+            }
             warnings.yield(.manifestWriteFailed)
         }
     }
@@ -53,6 +58,8 @@ actor TrackPipeline: CaptureSink {
     /// A segment that lasted at least this long before its writer failed does not count towards
     /// the backoff that repeated writer failures get.
     static let healthySegmentSeconds = 1.0
+    /// Samples dropped in a row after which `samplesDropped` is sent.
+    static let droppedSamplesWarningCount = 30
 
     let queue: DispatchSerialQueue
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
@@ -87,6 +94,8 @@ actor TrackPipeline: CaptureSink {
         var segment: OpenSegment?
         var nextIndex = 1
         var restartTask: Task<Void, Never>?
+        /// Bumped for every restart task, so one that ends only clears its own handle.
+        var restartTasks = 0
         /// Segments being finished, by finishing number.
         var finishing: [Int: Task<Void, Never>] = [:]
         var finishCount = 0
@@ -99,6 +108,9 @@ actor TrackPipeline: CaptureSink {
         /// Writers in a row that failed early or could not be created.
         var writerFailures = 0
         var reopenNotBefore: HostTime?
+        /// Samples dropped while no segment could take them; the next segment counts them.
+        var pendingDropped = 0
+        var droppedInARow = 0
     }
 
     /// The segment being written. Owned by `state` until it is closed, then by its finishing task.
@@ -116,6 +128,8 @@ actor TrackPipeline: CaptureSink {
         /// Newest PTS the writer took, frame or heartbeat. The next heartbeat must come after it.
         var lastTakenPTS: HostTime?
         var framesSinceHeartbeatTick = 0
+        /// Samples this pipeline dropped that belong to this segment, beyond the writer's own count.
+        var dropped = 0
 
         init(writer: any TrackWriting, index: Int, url: URL, file: String, startSignal: StartSignal) {
             self.writer = writer
@@ -123,6 +137,14 @@ actor TrackPipeline: CaptureSink {
             self.url = url
             self.file = file
             self.startSignal = startSignal
+        }
+
+        /// The latest time the segment holds: its last sample's end or its last heartbeat.
+        var latestTime: HostTime? {
+            switch (lastSampleEnd, lastTakenPTS) {
+            case let (end?, taken?): max(end, taken)
+            case let (end, taken): end ?? taken
+            }
         }
     }
 
@@ -141,9 +163,10 @@ actor TrackPipeline: CaptureSink {
 
     enum RunOutcome: Sendable {
         case started
-        /// The run failed while starting; whoever owns restarts takes it from here.
+        /// The run failed while starting, or another run owns the source now: the restart task, if
+        /// any, takes it from here, and the source must not be stopped.
         case failed
-        /// The pipeline was paused or closed while the run started.
+        /// The pipeline was paused, closed or never started meanwhile: the source must be stopped.
         case superseded
     }
 
@@ -233,6 +256,7 @@ actor TrackPipeline: CaptureSink {
 
     /// Closes the open segment with `reason` at `time`, waits for every segment being finished and
     /// returns the failures the pipeline collected. Stops capture first if `stopCapture()` did not.
+    /// Samples dropped after the last segment ended are added to that segment's `droppedFrames`.
     func close(reason: SegmentEndReason, at time: HostTime) async -> [any Error] {
         dispatchPrecondition(condition: .onQueue(queue))
         await stopCapture()
@@ -240,6 +264,16 @@ actor TrackPipeline: CaptureSink {
         heartbeatTimer?.cancel()
         syncTimer.cancel()
         await waitForFinishing()
+        let dropped = await onQueue { pipeline in
+            defer { pipeline.state.pendingDropped = 0 }
+            return pipeline.state.pendingDropped
+        }
+        if dropped > 0 {
+            context.updateTrack(trackID) { track in
+                guard !track.segments.isEmpty else { return }
+                track.segments[track.segments.count - 1].droppedFrames += dropped
+            }
+        }
         return await onQueue { pipeline in
             defer { pipeline.state.errors = [] }
             return pipeline.state.errors
@@ -298,20 +332,20 @@ actor TrackPipeline: CaptureSink {
         }
     }
 
-    /// Finishes a closed segment's writer and records how the segment ended.
+    /// Finishes a closed segment's writer, makes the file durable and then records how it ended.
     private func finish(_ closing: ClosingSegment, number: Int) async {
         dispatchPrecondition(condition: .onQueue(queue))
         let segment = closing.segment
         var errors: [any Error] = []
         var reason = closing.reason
         var end: HostTime?
-        var dropped = 0
+        var dropped = segment.dropped
         var heartbeats = 0
         do {
             let result = try await segment.writer.finish(at: closing.stopTime)
             if result.startHostTime != nil {
                 end = result.endHostTime
-                dropped = result.droppedSampleCount
+                dropped += result.droppedSampleCount
                 heartbeats = result.heartbeatSampleCount
             }
         } catch {
@@ -319,14 +353,19 @@ actor TrackPipeline: CaptureSink {
             let failure = error as NSError
             reason = .writerError(domain: failure.domain, code: failure.code)
             if let start = segment.startHostTime {
-                end = segment.lastSampleEnd ?? start
+                end = segment.latestTime ?? start
             }
         }
         if !closing.failureReported, let failure = segment.writer.failure {
-            let diskFull = Self.isDiskFull(failure)
+            let diskFull = isOutOfSpace(failure)
             reason = diskFull ? .diskFull : .writerError(domain: failure.domain, code: failure.code)
             context.warnings.yield(.writerFailed(track: trackID))
             if diskFull { context.onDiskFull() }
+        }
+        // The manifest only says the segment ended once what it says is on the disk.
+        if segment.fd >= 0 {
+            do { try DurableFile.fullSync(segment.fd) } catch { errors.append(error) }
+            Darwin.close(segment.fd)
         }
         if let end, segment.startHostTime != nil {
             let index = segment.index
@@ -337,10 +376,6 @@ actor TrackPipeline: CaptureSink {
                 track.segments[i].droppedFrames = dropped
                 track.segments[i].heartbeatFrames = heartbeats
             }
-        }
-        if segment.fd >= 0 {
-            do { try DurableFile.fullSync(segment.fd) } catch { errors.append(error) }
-            Darwin.close(segment.fd)
         }
         let failures = errors
         await onQueue { pipeline in
@@ -391,19 +426,28 @@ actor TrackPipeline: CaptureSink {
 
     // MARK: - State (only ever called inside a dispatch block on `queue`)
 
+    /// Writes one sample. A sample that cannot be written while capture runs is counted as dropped:
+    /// in the open segment if it refused it, otherwise in the next segment.
     private func write(_ sample: CMSampleBuffer) {
-        guard case .running = state.phase, !state.outOfDiskSpace,
-              let format = CMSampleBufferGetFormatDescription(sample),
-              sample.presentationTimeStamp.isNumeric
-        else { return }
+        guard case .running = state.phase, !state.outOfDiskSpace else { return }
+        guard let format = CMSampleBufferGetFormatDescription(sample), sample.presentationTimeStamp.isNumeric else {
+            countDropped(in: nil)
+            return
+        }
         let pts = HostTime(sample.presentationTimeStamp)
         if let segment = state.segment, let current = segment.writer.formatDescription,
-           !Self.isSameFormat(current, format) {
+           !Self.continuesSegment(format, after: current, media: media) {
             closeSegment(reason: .formatChanged, at: pts)
         }
-        guard let segment = state.segment ?? openSegment() else { return }
+        guard let segment = state.segment ?? openSegment() else {
+            countDropped(in: nil)
+            return
+        }
+        var appended = false
         do {
             try segment.writer.append(sample)
+            appended = true
+            state.droppedInARow = 0
             segment.lastTakenPTS = pts
             segment.lastSampleEnd = max(segment.lastSampleEnd ?? pts, Self.end(of: sample, at: pts))
             if case .video = media { segment.framesSinceHeartbeatTick += 1 }
@@ -415,7 +459,23 @@ actor TrackPipeline: CaptureSink {
             segmentDidStart(segment, at: start)
         }
         if let failure = segment.writer.failure {
+            if !appended { countDropped(in: nil) }
             writerDidFail(segment, failure)
+        } else if !appended {
+            countDropped(in: segment)
+        }
+    }
+
+    /// Counts a sample that was not written, and warns once it has happened many times in a row.
+    private func countDropped(in segment: OpenSegment?) {
+        if let segment {
+            segment.dropped += 1
+        } else {
+            state.pendingDropped += 1
+        }
+        state.droppedInARow += 1
+        if state.droppedInARow == Self.droppedSamplesWarningCount {
+            context.warnings.yield(.samplesDropped(track: trackID))
         }
     }
 
@@ -432,6 +492,8 @@ actor TrackPipeline: CaptureSink {
                 let signal = StartSignal()
                 writer.onStart = { [signal] in signal.hostTime = $0 }
                 let segment = OpenSegment(writer: writer, index: index, url: url, file: file, startSignal: signal)
+                segment.dropped = state.pendingDropped
+                state.pendingDropped = 0
                 state.segment = segment
                 return segment
             } catch WriterError.fileExists {
@@ -460,15 +522,15 @@ actor TrackPipeline: CaptureSink {
     }
 
     private func writerDidFail(_ segment: OpenSegment, _ failure: NSError) {
-        let diskFull = Self.isDiskFull(failure)
+        let diskFull = isOutOfSpace(failure)
         let reason: SegmentEndReason = diskFull ? .diskFull : .writerError(domain: failure.domain, code: failure.code)
-        closeSegment(reason: reason, at: segment.lastSampleEnd ?? context.clock(), failureReported: true)
+        closeSegment(reason: reason, at: segment.latestTime ?? context.clock(), failureReported: true)
         context.warnings.yield(.writerFailed(track: trackID))
         if diskFull {
             state.outOfDiskSpace = true
             context.onDiskFull()
         } else {
-            let lasted = segment.startHostTime.flatMap { start in segment.lastSampleEnd.map { $0.seconds(since: start) } } ?? 0
+            let lasted = segment.startHostTime.flatMap { start in segment.latestTime.map { $0.seconds(since: start) } } ?? 0
             noteWriterFailure(healthy: lasted >= Self.healthySegmentSeconds)
         }
     }
@@ -487,11 +549,20 @@ actor TrackPipeline: CaptureSink {
         state.reopenNotBefore = context.clock().adding(seconds: delay.seconds)
     }
 
-    /// Hands the open segment, if any, to a task that finishes it at `time`.
+    /// Hands the open segment, if any, to a task that finishes it at `time`. A segment that never
+    /// started has no record: its dropped samples go to the next segment, and so does its number
+    /// when it left no file.
     private func closeSegment(reason: SegmentEndReason, at time: HostTime, failureReported: Bool = false) {
         guard let segment = state.segment else { return }
         state.segment = nil
-        if !failureReported, segment.startHostTime != nil, segment.writer.failure == nil {
+        if segment.startHostTime == nil {
+            state.pendingDropped += segment.dropped
+            segment.dropped = 0
+            var existing = stat()
+            if state.nextIndex == segment.index + 1, lstat(segment.url.path, &existing) != 0 {
+                state.nextIndex = segment.index
+            }
+        } else if !failureReported, segment.writer.failure == nil {
             state.writerFailures = 0
             state.reopenNotBefore = nil
         }
@@ -507,7 +578,7 @@ actor TrackPipeline: CaptureSink {
         let now = context.clock()
         closeSegment(
             reason: .streamError(domain: failure.domain, code: failure.code),
-            at: state.segment?.lastSampleEnd ?? now)
+            at: state.segment?.latestTime ?? now)
         context.log.append(InputEvent(
             t: now, kind: .streamInterrupted(track: trackID, domain: failure.domain, code: failure.code)))
         context.warnings.yield(.streamInterrupted(track: trackID))
@@ -516,9 +587,17 @@ actor TrackPipeline: CaptureSink {
     }
 
     /// Starts the restart task unless one is running already (it notices the new failure itself).
+    /// However the task ends, it clears its own handle, so a later failure always gets a new one.
     private func startRestartingIfNeeded() {
         guard state.restartTask == nil else { return }
-        state.restartTask = Task { await self.restart() }
+        state.restartTasks += 1
+        let id = state.restartTasks
+        state.restartTask = Task {
+            await self.restart()
+            await self.onQueue { pipeline in
+                if pipeline.state.restartTasks == id { pipeline.state.restartTask = nil }
+            }
+        }
     }
 
     /// Writes a repeat of the last frame when no frame came during the last interval, so a static
@@ -599,7 +678,9 @@ actor TrackPipeline: CaptureSink {
         return true
     }
 
-    /// The source's `start` returned. Logs `deviceChanged` if it now captures another device.
+    /// The source's `start` for `run` returned. Logs `deviceChanged` if it now captures another
+    /// device. Only a pause, the close or an idle pipeline makes the caller stop the source: a later
+    /// run (a restart that overtook a slow resume) owns it and must keep it.
     private func runDidStart(_ run: Int, endsRestart: Bool) -> RunOutcome {
         switch state.phase {
         case .running(run: run):
@@ -612,60 +693,25 @@ actor TrackPipeline: CaptureSink {
             }
             if endsRestart { state.restartTask = nil }
             return .started
-        case .restarting:
-            // The stream failed before `start` returned (`streamDidFail` already handled it).
+        case .running, .restarting:
+            // The stream failed before `start` returned (`streamDidFail` already handled it), or a
+            // restart started a newer run since.
             return .failed
-        default:
+        case .paused, .closing, .idle, .lost:
             return .superseded
         }
     }
 
     // MARK: - Helpers
 
-    /// Whether `format` can go on in the segment that started with `current`. Equal descriptions
-    /// always can; otherwise what the writer configures from must match (media type and subtype, plus
-    /// dimensions for video or the stream description for audio), so an extension-only difference does
-    /// not split the track.
-    static func isSameFormat(_ current: CMFormatDescription, _ format: CMFormatDescription) -> Bool {
+    /// Whether a sample with `format` can go on in the segment that started with `current`: equal
+    /// descriptions always can; otherwise the writer must accept it (`FragmentedTrackWriter.isCompatible`)
+    /// and the media subtype must match, so an extension-only difference does not split the track but
+    /// a sample the writer would refuse always opens a new segment.
+    static func continuesSegment(_ format: CMFormatDescription, after current: CMFormatDescription, media: TrackMedia) -> Bool {
         if CMFormatDescriptionEqual(current, otherFormatDescription: format) { return true }
-        let mediaType = CMFormatDescriptionGetMediaType(current)
-        guard mediaType == CMFormatDescriptionGetMediaType(format),
-              CMFormatDescriptionGetMediaSubType(current) == CMFormatDescriptionGetMediaSubType(format)
-        else { return false }
-        switch mediaType {
-        case kCMMediaType_Video:
-            let a = CMVideoFormatDescriptionGetDimensions(current)
-            let b = CMVideoFormatDescriptionGetDimensions(format)
-            return a.width == b.width && a.height == b.height
-        case kCMMediaType_Audio:
-            guard let a = CMAudioFormatDescriptionGetStreamBasicDescription(current)?.pointee,
-                  let b = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee
-            else { return false }
-            return a.mSampleRate == b.mSampleRate && a.mFormatID == b.mFormatID && a.mFormatFlags == b.mFormatFlags
-                && a.mBytesPerPacket == b.mBytesPerPacket && a.mFramesPerPacket == b.mFramesPerPacket
-                && a.mBytesPerFrame == b.mBytesPerFrame && a.mChannelsPerFrame == b.mChannelsPerFrame
-                && a.mBitsPerChannel == b.mBitsPerChannel
-        default:
-            return false
-        }
-    }
-
-    /// Whether a writer failed because the volume is full, looking through underlying errors.
-    static func isDiskFull(_ error: NSError, depth: Int = 0) -> Bool {
-        switch (error.domain, error.code) {
-        case (NSPOSIXErrorDomain, Int(ENOSPC)),
-             (AVFoundationErrorDomain, AVError.Code.diskFull.rawValue),
-             (NSCocoaErrorDomain, NSFileWriteOutOfSpaceError),
-             (NSOSStatusErrorDomain, -34):  // dskFulErr
-            return true
-        default:
-            break
-        }
-        guard depth < 8 else { return false }
-        var underlying: [NSError] = []
-        if let error = error.userInfo[NSUnderlyingErrorKey] as? NSError { underlying.append(error) }
-        if let errors = error.userInfo[NSMultipleUnderlyingErrorsKey] as? [NSError] { underlying += errors }
-        return underlying.contains { isDiskFull($0, depth: depth + 1) }
+        return CMFormatDescriptionGetMediaSubType(current) == CMFormatDescriptionGetMediaSubType(format)
+            && FragmentedTrackWriter.isCompatible(format, with: current, media: media)
     }
 
     /// Where `sample` ends: its PTS plus its duration when it has one.
