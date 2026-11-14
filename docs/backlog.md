@@ -5,7 +5,6 @@ Lo que la revisión final de la fase 0 decidió no corregir todavía, con el mot
 ## Antes de construir sobre lo que hay
 
 - **Reloj y ticks inyectables en `TrackPipeline` y `RecordingCoordinator`.** Partir su `State` en tipos de valor (`RestartPolicy`, `WriterFailureBackoff`, `SegmentAccounting`, `AudioClockAnchors`) con pruebas síncronas, y llevar la extensión de `Duration` a su propio archivo. *Por qué después:* mantenimiento; la ronda final ya quitó la inestabilidad de las pruebas que medían contra el tiempo dormido. *Cuándo:* antes de que la fase 1a sume las pistas de cámara y de audio del sistema.
-- **Sacar la lógica duplicada.** El reintento ante `EWOULDBLOCK` dentro de `RecordingLock.acquire(retries:)`, un solo ayudante para ordenar `InputEvent` por tiempo, y un único abridor de medios de segmento con una sola clasificación. *Por qué después:* nada se comporta mal hoy. *Cuándo:* junto con el trabajo de lectores de la fase 1, para que la recuperación, `verify` y el export sigan de acuerdo.
 
 ## Grabación
 

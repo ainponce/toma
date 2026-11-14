@@ -244,7 +244,8 @@ public actor RecordingCoordinator {
         let store = try ManifestStore(package: package)
         let takeID = package.nextTakeID(existing: store.manifest.takes)
         try FileManager.default.createDirectory(at: package.takeDirectory(takeID), withIntermediateDirectories: false)
-        let lock = try await acquireLock(at: package.lockURL(take: takeID))
+        // `RecordingLock.isHeld` probes by taking the lock for a moment: try a few times before giving up.
+        let lock = try await RecordingLock.acquire(at: package.lockURL(take: takeID), info: .current(now: Date()), retries: 4)
         let reserve: TakeReserve
         do {
             reserve = try TakeReserve.create(at: package.reserveURL(take: takeID))
@@ -317,20 +318,6 @@ public actor RecordingCoordinator {
             throw error
         }
         return takeID
-    }
-
-    /// `RecordingLock.isHeld` probes by taking the lock for a moment, so an `acquire` that races
-    /// it can fail with `EWOULDBLOCK`: try a few times before giving up.
-    private func acquireLock(at url: URL) async throws -> HeldRecordingLock {
-        var attempt = 1
-        while true {
-            do {
-                return try RecordingLock.acquire(at: url, info: .current(now: Date()))
-            } catch let error as POSIXError where error.code == .EWOULDBLOCK && attempt < 5 {
-                attempt += 1
-                try await Task.sleep(for: .milliseconds(20))
-            }
-        }
     }
 
     private func startMonitoring() {

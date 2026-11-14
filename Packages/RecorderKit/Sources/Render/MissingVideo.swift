@@ -4,7 +4,8 @@
 /// shown instead (or the background, before the first readable frame).
 public struct MissingVideo: Sendable, Equatable {
     public enum Reason: Sendable, Equatable {
-        /// Crash recovery found the segment's file without samples (`SegmentEndReason.empty`).
+        /// The segment holds no samples: crash recovery marked it `SegmentEndReason.empty`, or its file has 0
+        /// bytes.
         case empty
         /// Crash recovery could not read the segment's file (`SegmentEndReason.unreadable`), or it has no
         /// frame at all.

@@ -68,7 +68,14 @@ public enum TakeRecovery {
         } catch {
             throw RecoveryError.invalidPath(error)
         }
-        let lock = try await acquireLock(at: package.lockURL(take: takeID))
+        // `RecordingLock.isHeld` probes by taking the lock for a moment: try a few times before concluding
+        // that the take is being recorded.
+        let lock: HeldRecordingLock
+        do {
+            lock = try await RecordingLock.acquire(at: package.lockURL(take: takeID), info: .current(now: Date()), retries: 4)
+        } catch let error as POSIXError where error.code == .EWOULDBLOCK {
+            throw RecoveryError.lockHeld
+        }
         defer { lock.release() }
 
         let version = try Manifest.formatVersion(of: Data(contentsOf: package.manifestURL))
@@ -103,21 +110,6 @@ public enum TakeRecovery {
             manifest.takes[i] = closed
         }
         return closed
-    }
-
-    /// `RecordingLock.isHeld` probes by taking the lock for a moment, so an `acquire` that races it
-    /// can fail with `EWOULDBLOCK`: try a few times before concluding it is held.
-    private static func acquireLock(at url: URL) async throws -> HeldRecordingLock {
-        var attempt = 1
-        while true {
-            do {
-                return try RecordingLock.acquire(at: url, info: .current(now: Date()))
-            } catch let error as POSIXError where error.code == .EWOULDBLOCK {
-                guard attempt < 5 else { throw RecoveryError.lockHeld }
-                attempt += 1
-                try await Task.sleep(for: .milliseconds(20))
-            }
-        }
     }
 
     /// Whether the lock of any other take folder of the package is held, including a take whose
@@ -174,7 +166,7 @@ public enum TakeRecovery {
         of segment: SegmentRecord, kind: TrackKind, in package: ProjectPackage
     ) async throws -> (HostTime, SegmentEndReason) {
         let start = segment.startHostTime
-        switch try await SegmentFile.inspect(package.fileURL(segment.file), kind: kind) {
+        switch try await SegmentMedia.inspect(package.fileURL(segment.file), kind: kind) {
         case .missing, .empty:
             return (start, .empty)
         case .unreadable(let bytes, _):

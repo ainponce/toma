@@ -10,12 +10,12 @@ import os
 ///
 /// The track is the take's first microphone track. Each segment is placed by host time: its frames go to
 /// output time `host − timelineStart`, where a frame's host time comes from its segment's clock map
-/// (`ClockMap`). Segments marked `.empty` or `.unreadable`, missing files and files that cannot be read
-/// are silence, listed in `missingAudio`; so is every gap between segments longer than `maxClosedGap`
-/// (a gap is not missing audio: nothing was recorded there). A shorter gap (or overlap) after audio is
-/// closed: the next segment follows on where the audio before it ended, which shifts that segment, and
-/// only it, by up to `maxClosedGap` (20 ms) from its host time. Output before the first segment, after the
-/// last and past `totalFrames` is silence too.
+/// (`ClockMap`). Segments that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a
+/// file of 0 bytes or none) and files that cannot be read are silence, listed in `missingAudio`; so is every
+/// gap between segments longer than `maxClosedGap` (a gap is not missing audio: nothing was recorded there).
+/// A shorter gap (or overlap) after audio is closed: the next segment follows on where the audio before it
+/// ended, which shifts that segment, and only it, by up to `maxClosedGap` (20 ms) from its host time. Output
+/// before the first segment, after the last and past `totalFrames` is silence too.
 ///
 /// The stream is mono if every segment is, stereo otherwise: a mono segment goes to both channels, and a
 /// segment of more than two channels is mixed down with every channel at unity gain into both, clipped to
@@ -91,23 +91,21 @@ final class MicrophoneTimeline {
                     missing.append(entry)
                 }
             }
-            switch record.endReason {
-            case .empty?:
-                leaveOut(.empty)
-                continue
-            case .unreadable?:
-                leaveOut(.unreadable)
-                continue
-            default:
+            switch SegmentAvailability.classify(record, in: project.package) {
+            case .present:
                 break
-            }
-            let url = project.package.url.appending(path: record.file)
-            guard FileManager.default.fileExists(atPath: url.path) else {
+            case .missing:
                 logger.error("Microphone segment \(record.index): \(record.file, privacy: .public) is missing; exporting silence")
                 leaveOut(.fileMissing)
                 continue
+            case .empty:
+                leaveOut(.empty)
+                continue
+            case .unreadable:
+                leaveOut(.unreadable)
+                continue
             }
-            let asset = AVURLAsset(url: url)
+            let asset = AVURLAsset(url: project.package.fileURL(record.file))
             let audio: AVAssetTrack
             let sourceRate: Double
             let sourceChannels: Int
@@ -168,13 +166,16 @@ final class MicrophoneTimeline {
     static func clockAnchors(
         of track: String, from start: HostTime, before end: HostTime?, sourceRate: Double, in events: [InputEvent]
     ) -> (kept: [(frame: Int, t: HostTime)], rejected: Int) {
-        let logged = events.enumerated()
-            .compactMap { offset, event -> (offset: Int, frame: Int, t: HostTime)? in
-                guard case let .audioClock(other, frame) = event.kind, other == track, event.t >= start else { return nil }
-                if let end, event.t >= end { return nil }
-                return (offset, frame, event.t)
+        let logged = events
+            .filter { event in
+                guard case .audioClock(track, _) = event.kind, event.t >= start else { return false }
+                return end.map { event.t < $0 } ?? true
             }
-            .sorted { ($0.t, $0.offset) < ($1.t, $1.offset) }
+            .sortedByTime()
+            .compactMap { event -> (frame: Int, t: HostTime)? in
+                guard case let .audioClock(_, frame) = event.kind else { return nil }
+                return (frame, event.t)
+            }
         var kept: [(frame: Int, t: HostTime)] = []
         var rejected = 0
         var lastKept = (frame: 0, t: start)

@@ -84,6 +84,27 @@ public enum RecordingLock {
         return HeldRecordingLock(path: path, descriptor: fd)
     }
 
+    /// `acquire(at:info:)`, tried again up to `retries` more times, `retryDelay` apart, while another open
+    /// file holds the lock: `isHeld` probes by taking the lock for a moment, so an `acquire` that races a
+    /// probe fails with `EWOULDBLOCK` although nobody is recording. Waits with `Task.sleep`, so no thread
+    /// is blocked meanwhile, and runs on the caller's actor.
+    ///
+    /// Throws the last `POSIXError(.EWOULDBLOCK)` once the retries run out, any other error of `acquire` at
+    /// once, and `CancellationError` if the task is cancelled while it waits.
+    public nonisolated(nonsending) static func acquire(
+        at url: URL, info: RecordingLockInfo, retries: Int, retryDelay: Duration = .milliseconds(20)
+    ) async throws -> HeldRecordingLock {
+        var retriesLeft = retries
+        while true {
+            do {
+                return try acquire(at: url, info: info)
+            } catch let error as POSIXError where error.code == .EWOULDBLOCK && retriesLeft > 0 {
+                retriesLeft -= 1
+                try await Task.sleep(for: retryDelay)
+            }
+        }
+    }
+
     /// Whether some open file holds the lock. `false` if the file does not exist, or is a symlink
     /// (never followed) or not a regular file. Never creates the file.
     public static func isHeld(at url: URL) -> Bool {

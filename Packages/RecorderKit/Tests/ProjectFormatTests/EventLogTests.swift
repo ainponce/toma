@@ -83,6 +83,15 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
     #expect(throws: DecodingError.self) { try InputEvent(jsonLine: #"{"type":"marker"}"#) }
 }
 
+@Test func sortedByTimeKeepsFileOrderForEqualTimes() {
+    func event(_ name: String, t: UInt64) -> InputEvent {
+        InputEvent(t: HostTime(nanoseconds: t), kind: .paused(reason: name))
+    }
+    let a = event("a", t: 1), b = event("b", t: 2), c = event("c", t: 2)
+    #expect([b, a, c].sortedByTime() == [a, b, c])
+    #expect([c, a, b].sortedByTime() == [a, c, b])
+}
+
 @Test func nonFiniteNumberFailsToEncode() {
     #expect(throws: EncodingError.self) {
         try InputEvent(t: HostTime(nanoseconds: 1), kind: .cursor(x: .nan, y: 0)).jsonLine()

@@ -52,7 +52,8 @@ public struct ExportSummary: Sendable, Equatable {
 /// A span of an export where a microphone segment's audio could not be used, so the MP4 is silent there.
 public struct MissingAudio: Sendable, Equatable {
     public enum Reason: Sendable, Equatable {
-        /// Crash recovery found the segment's file without samples (`SegmentEndReason.empty`).
+        /// The segment holds no samples: crash recovery marked it `SegmentEndReason.empty`, or its file has 0
+        /// bytes.
         case empty
         /// Crash recovery could not read the segment's file (`SegmentEndReason.unreadable`).
         case unreadable

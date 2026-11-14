@@ -34,6 +34,27 @@ extension RecordingLockInfo {
     }
 }
 
+@Test func acquireRetriesWhileAnotherHolderReleases() async throws {
+    try await withTemporaryDirectory { dir in
+        let url = dir.appendingPathComponent("recording.lock")
+        let held = try RecordingLock.acquire(at: url, info: .fixture)
+        let error = await #expect(throws: POSIXError.self) {
+            try await RecordingLock.acquire(at: url, info: .fixture, retries: 0)
+        }
+        #expect(error?.code == .EWOULDBLOCK)
+
+        // Another thread lets go 30 ms in; four retries 100 ms apart wait for it.
+        Thread.detachNewThread {
+            Thread.sleep(forTimeInterval: 0.030)
+            held.release()
+        }
+        let lock = try await RecordingLock.acquire(at: url, info: .fixture, retries: 4, retryDelay: .milliseconds(100))
+        #expect(RecordingLock.isHeld(at: url))
+        #expect(RecordingLock.readInfo(at: url) == .fixture)
+        lock.release()
+    }
+}
+
 @Test func releasedLockIsFree() async throws {
     try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("recording.lock")

@@ -54,19 +54,14 @@ public struct FrameEvaluator: Sendable {
         }
         contentRect = Self.contentRect(aspect: displayFrame.map { $0.width / $0.height }, style: style, outputSize: outputSize)
 
-        // events.jsonl is in append order, which can be slightly out of `t` order: sort, keeping the
-        // file order of events with the same `t`.
-        positions = events.enumerated()
-            .compactMap { offset, event -> (offset: Int, t: HostTime, point: SIMD2<Double>)? in
-                switch event.kind {
-                case let .cursor(x, y), let .mouseDown(_, x, y), let .mouseUp(_, x, y):
-                    return (offset, event.t, SIMD2(x, y))
-                default:
-                    return nil
-                }
+        positions = events.sortedByTime().compactMap { event -> (t: HostTime, point: SIMD2<Double>)? in
+            switch event.kind {
+            case let .cursor(x, y), let .mouseDown(_, x, y), let .mouseUp(_, x, y):
+                return (event.t, SIMD2(x, y))
+            default:
+                return nil
             }
-            .sorted { ($0.t, $0.offset) < ($1.t, $1.offset) }
-            .map { ($0.t, $0.point) }
+        }
     }
 
     public func frame(at outputTime: Double) -> RenderFrame {

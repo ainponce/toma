@@ -101,9 +101,9 @@ public enum TakeVerifier {
         for segment in track.segments {
             result.dropped += segment.droppedFrames
             let name = (segment.file as NSString).lastPathComponent
-            let file: SegmentFile
+            let file: SegmentMedia
             do {
-                file = try await SegmentFile.inspect(package.fileURL(segment.file), kind: track.kind)
+                file = try await SegmentMedia.inspect(package.fileURL(segment.file), kind: track.kind)
             } catch {
                 result.problems.append("\(name) cannot be opened: \(error.localizedDescription)")
                 continue

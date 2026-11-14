@@ -9,10 +9,10 @@ import os
 /// Decoded frames of one display track at any host time, across all its segments: the frame with the
 /// latest presentation time at or before the time asked for.
 ///
-/// Segments marked `.empty` or `.unreadable`, files that are missing, and files AVFoundation cannot open or
-/// read are gaps: the last frame before them is held. Reading forward by less than `sequentialWindow` keeps
-/// decoding the open reader (the export path); a step back or a longer jump opens a new reader `preroll`
-/// before the time. At most one `AVAssetReader` is open at a time.
+/// Segments that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a file of 0 bytes or
+/// none) and files AVFoundation cannot open or read are gaps: the last frame before them is held. Reading
+/// forward by less than `sequentialWindow` keeps decoding the open reader (the export path); a step back or a
+/// longer jump opens a new reader `preroll` before the time. At most one `AVAssetReader` is open at a time.
 ///
 /// When decoding stops with an error partway through a segment, the next time asked for after the last
 /// frame decoded opens a reader again right after that frame; if it stops at the same frame again, each
@@ -116,30 +116,28 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// How many readers have been opened, for tests.
     var openedReaderCount: Int { lock.withLock { openedReaders } }
 
-    /// The spans shown with the frame before them so far, in the order they were found: the segments the
-    /// manifest marks unusable or whose file is missing from the start, the others as frames were asked for.
+    /// The spans shown with the frame before them so far, in the order they were found: the segments that are
+    /// not `SegmentAvailability.present` from the start, the others as frames were asked for.
     /// Consecutive spans of a segment for the same reason are merged.
     var gaps: [Gap] { lock.withLock { recordedGaps } }
 
-    /// Never throws and reads nothing yet: every segment is opened when it is first needed.
+    /// Never throws and reads nothing yet: every segment is classified without opening it, and opened when it
+    /// is first needed.
     public init(package: ProjectPackage, track: TrackRecord) {
         trackID = track.id
-        segments = track.segments
-            .sorted { $0.startHostTime < $1.startHostTime }
-            .map { record in
-                let url = package.url.appending(path: record.file)
-                return Segment(
-                    index: record.index, file: record.file, start: record.startHostTime, end: record.endHostTime, url: url,
-                    usable: true, media: nil, retryAfter: nil, loadFailure: nil, failure: nil)
-            }
-        for k in segments.indices {
+        let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
+        segments = records.map { record in
+            Segment(
+                index: record.index, file: record.file, start: record.startHostTime, end: record.endHostTime,
+                url: package.fileURL(record.file), usable: true, media: nil, retryAfter: nil, loadFailure: nil, failure: nil)
+        }
+        for (k, record) in records.enumerated() {
             let reason: MissingVideo.Reason
-            switch track.segments.first(where: { $0.index == segments[k].index })?.endReason {
-            case .empty?: reason = .empty
-            case .unreadable?: reason = .unreadable
-            default:
-                guard !FileManager.default.fileExists(atPath: segments[k].url.path) else { continue }
-                reason = .fileMissing
+            switch SegmentAvailability.classify(record, in: package) {
+            case .present: continue
+            case .missing: reason = .fileMissing
+            case .empty: reason = .empty
+            case .unreadable: reason = .unreadable
             }
             segments[k].usable = false
             noteGap(k, from: segments[k].start, to: segments[k].end ?? segments[k].start, reason)
