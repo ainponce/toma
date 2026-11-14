@@ -16,7 +16,10 @@ public enum RecoveryScanner {
     /// Looks at every `*.toma` folder directly inside `directory` (not in subfolders), each on its
     /// own, in name order. A take marked `recording` whose `recording.lock` nobody holds is
     /// `recoverable`; one whose lock is held is being recorded and is skipped. A package whose
-    /// manifest is missing or unreadable, or of a newer `formatVersion`, `needsRepair`.
+    /// manifest is missing or unreadable, or of a newer `formatVersion`, `needsRepair`; so does one
+    /// with a path that could leave the package (`Manifest.validatePaths()`), or a symlink or an entry
+    /// of the wrong kind inside a take (`ProjectPackage.checkLayout`), and then none of its takes is
+    /// offered for recovery.
     ///
     /// Never throws because of a package; a `directory` that cannot be listed gives no results.
     public static func scan(directory: URL) -> [ScanResult] {
@@ -47,6 +50,12 @@ public enum RecoveryScanner {
             manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
         } catch {
             return [.needsRepair(package: package, reason: "manifest.json cannot be read: \(error.localizedDescription)")]
+        }
+        do throws(PackagePathError) {
+            try manifest.validatePaths()
+            for take in manifest.takes { try package.checkLayout(of: take) }
+        } catch {
+            return [.needsRepair(package: package, reason: error.description)]
         }
         return manifest.takes
             .filter { $0.status == .recording && !RecordingLock.isHeld(at: package.lockURL(take: $0.id)) }

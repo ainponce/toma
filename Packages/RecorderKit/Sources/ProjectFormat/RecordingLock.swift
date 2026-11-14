@@ -66,7 +66,9 @@ public final class HeldRecordingLock: Sendable {
 /// even if the lock file stays behind.
 public enum RecordingLock {
     /// Takes the lock and writes `info` into the file.
-    /// Throws `POSIXError(.EWOULDBLOCK)` if another open file holds it, even in this process.
+    /// Throws `POSIXError(.EWOULDBLOCK)` if another open file holds it, even in this process, and
+    /// `ELOOP` or `EFTYPE` if `url` is a symlink or not a regular file: a symlink is never followed, so
+    /// a lock file planted in a package cannot make this truncate a file elsewhere.
     public static func acquire(at url: URL, info: RecordingLockInfo) throws -> HeldRecordingLock {
         let path = url.path
         let fd = try openLocked(path)
@@ -82,10 +84,10 @@ public enum RecordingLock {
         return HeldRecordingLock(path: path, descriptor: fd)
     }
 
-    /// Whether some open file holds the lock. `false` if the file does not exist.
-    /// Never creates the file.
+    /// Whether some open file holds the lock. `false` if the file does not exist, or is a symlink
+    /// (never followed) or not a regular file. Never creates the file.
     public static func isHeld(at url: URL) -> Bool {
-        let fd = openRetryingInterrupts(url.path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC)
+        let fd = openRetryingInterrupts(url.path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC)
         if fd >= 0 {
             close(fd)
             return false
@@ -99,11 +101,11 @@ public enum RecordingLock {
         return try? ProjectJSON.decoder().decode(RecordingLockInfo.self, from: data)
     }
 
-    /// Opens and locks `path`, retrying if the file was unlinked between the
-    /// `open` and the lock, so the lock always belongs to the file at `path`.
+    /// Opens and locks `path`, a regular file and never a symlink, retrying if the file was unlinked
+    /// between the `open` and the lock, so the lock always belongs to the file at `path`.
     private static func openLocked(_ path: String) throws -> Int32 {
         while true {
-            let fd = openRetryingInterrupts(path, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_CLOEXEC, 0o644)
+            let fd = openRetryingInterrupts(path, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC, 0o644)
             guard fd >= 0 else { throw POSIXError.current() }
             var opened = stat()
             var current = stat()
@@ -112,7 +114,12 @@ public enum RecordingLock {
                 close(fd)
                 throw error
             }
-            guard stat(path, &current) == 0 else {
+            guard opened.st_mode & S_IFMT == S_IFREG else {
+                close(fd)
+                throw POSIXError(.EFTYPE)
+            }
+            // `lstat`: a symlink put at `path` since the `open` names another file, never this one.
+            guard lstat(path, &current) == 0 else {
                 let error = POSIXError.current()
                 close(fd)
                 if error.code == .ENOENT { continue }

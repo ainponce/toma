@@ -21,14 +21,20 @@ public struct LoadedProject: Sendable {
     /// Reads the package at `url`, its take `take` (the last one in the manifest when `nil`) and that
     /// take's events.
     ///
-    /// Throws `LoadedProjectError` for a manifest of a newer format version, a package without takes
-    /// or an unknown take, and the underlying error if the manifest or the event log cannot be read.
+    /// Throws `LoadedProjectError` for a manifest of a newer format version, one with a path that could
+    /// leave the package (`Manifest.validatePaths()`), a package without takes or an unknown take, and
+    /// the underlying error if the manifest or the event log cannot be read.
     public static func load(_ url: URL, take: String? = nil) throws -> LoadedProject {
         let package = ProjectPackage(url: url)
         let data = try Data(contentsOf: package.manifestURL)
         let version = try Manifest.formatVersion(of: data)
         guard version <= Manifest.currentFormatVersion else { throw LoadedProjectError.unsupportedFormatVersion(version) }
         let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
+        do {
+            try manifest.validatePaths()
+        } catch {
+            throw LoadedProjectError.invalidPath(error)
+        }
         let record: TakeRecord
         if let take {
             guard let found = manifest.takes.first(where: { $0.id == take }) else {
@@ -52,6 +58,8 @@ public enum LoadedProjectError: Error, Equatable {
     case noTakes
     /// The manifest has no take with this ID.
     case takeNotFound(String)
+    /// A path in the manifest could leave the package. Nothing was read through it.
+    case invalidPath(PackagePathError)
 }
 
 extension Manifest {

@@ -59,7 +59,8 @@ public final class EventLogWriter: Sendable {
     private let io: EventLogIO
     private let ticksPerSync: Int
 
-    /// Opens `url` for appending, creating it if needed. The folder must exist.
+    /// Opens `url` for appending, creating it if needed. The folder must exist. Throws `ELOOP` or
+    /// `EFTYPE` if `url` is a symlink (never followed) or not a regular file.
     public convenience init(url: URL) throws {
         try self.init(url: url, flushInterval: Self.flushInterval, syncInterval: Self.syncInterval, io: .system)
     }
@@ -68,10 +69,10 @@ public final class EventLogWriter: Sendable {
     init(url: URL, flushInterval: Duration, syncInterval: Duration, io: EventLogIO) throws {
         let path = url.path
         var created = true
-        var fd = open(path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+        var fd = open(path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
         if fd < 0, errno == EEXIST {
             created = false
-            fd = open(path, O_RDWR | O_APPEND | O_CLOEXEC)
+            fd = try EventLogReader.openRegularFile(path)
         }
         guard fd >= 0 else { throw POSIXError.current() }
         do {
@@ -320,10 +321,10 @@ public enum EventLogReader {
     /// A last line without its line break that is not a complete JSON object (a write cut short by
     /// a crash) is truncated away. One that is a complete JSON object gets its line break, even if
     /// its `type` is unknown to this version, so no event is ever deleted. Returns `true` if the
-    /// file changed. Whole lines are never touched.
+    /// file changed. Whole lines are never touched. Throws `ELOOP` or `EFTYPE` if `url` is a symlink
+    /// (never followed) or not a regular file.
     public static func truncateIncompleteTail(_ url: URL) throws -> Bool {
-        let fd = open(url.path, O_RDWR | O_APPEND | O_CLOEXEC)
-        guard fd >= 0 else { throw POSIXError.current() }
+        let fd = try openRegularFile(url.path)
         let changed: Bool
         do {
             changed = try endAtLineBoundary(fd)
@@ -333,6 +334,23 @@ public enum EventLogReader {
         }
         guard close(fd) == 0 else { throw POSIXError.current() }
         return changed
+    }
+
+    /// Opens the regular file at `path` with `O_RDWR | O_APPEND`, never following a symlink.
+    static func openRegularFile(_ path: String) throws -> Int32 {
+        let fd = open(path, O_RDWR | O_APPEND | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError.current() }
+        var info = stat()
+        guard fstat(fd, &info) == 0 else {
+            let error = POSIXError.current()
+            close(fd)
+            throw error
+        }
+        guard info.st_mode & S_IFMT == S_IFREG else {
+            close(fd)
+            throw POSIXError(.EFTYPE)
+        }
+        return fd
     }
 
     /// `truncateIncompleteTail` on a file opened with `O_RDWR | O_APPEND`.

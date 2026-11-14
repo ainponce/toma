@@ -9,7 +9,9 @@ public enum DurableFile {
     ///
     /// Writes `<url>.tmp`, flushes it to the drive with `F_FULLFSYNC`, renames it over `url`
     /// with `rename(2)` and full-syncs the parent directory so the rename is durable too.
-    /// Only one writer may use a given `url` at a time: the temporary path is fixed.
+    /// Only one writer may use a given `url` at a time: the temporary path is fixed. Whatever is left
+    /// at the temporary path is removed first, and the new one is created, never opened: a symlink
+    /// planted there is removed, not followed.
     public static func writeAtomically(_ data: Data, to url: URL) throws {
         let temporaryPath = url.path + ".tmp"
         do {
@@ -55,7 +57,9 @@ public enum DurableFile {
     }
 
     private static func writeAndFullSync(_ data: Data, toNewFileAt path: String) throws {
-        let fd = open(path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
+        // A stale temporary file (or a symlink) from an earlier run: `unlink` never follows a symlink.
+        guard unlink(path) == 0 || errno == ENOENT else { throw POSIXError.current() }
+        let fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard fd >= 0 else { throw POSIXError.current() }
         do {
             try writeAll(data, to: fd)

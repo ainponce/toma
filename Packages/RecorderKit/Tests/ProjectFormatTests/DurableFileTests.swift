@@ -66,6 +66,25 @@ private func fileSystemType(at url: URL) throws -> String {
     }
 }
 
+@Test func writeAtomicallyNeverFollowsASymlinkAtTheTemporaryPath() async throws {
+    try await withTemporaryDirectory { dir in
+        let victim = dir.appendingPathComponent("victim.txt")
+        let victimBytes = Data("not the manifest".utf8)
+        try victimBytes.write(to: victim)
+        let url = dir.appendingPathComponent("manifest.json")
+        try FileManager.default.createSymbolicLink(
+            at: dir.appendingPathComponent("manifest.json.tmp"), withDestinationURL: victim)
+
+        try DurableFile.writeAtomically(Data("new".utf8), to: url)
+
+        #expect(try Data(contentsOf: url) == Data("new".utf8))
+        #expect(try Data(contentsOf: victim) == victimBytes)
+        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("manifest.json.tmp").path))
+        var info = stat()
+        #expect(lstat(url.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG)
+    }
+}
+
 @Test func syncOfAnInvalidDescriptorThrows() {
     let barrier = #expect(throws: POSIXError.self) { try DurableFile.barrierSync(-1) }
     #expect(barrier?.code == .EBADF)

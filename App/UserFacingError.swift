@@ -83,6 +83,8 @@ private func description(of error: RecoveryError) -> String {
         String(localized: "The recording isn't in this project.")
     case .unsupportedFormatVersion:
         String(localized: "This project was saved by a newer version and can't be opened.")
+    case .invalidPath:
+        String(localized: "This project has files in unexpected places. It was left untouched.")
     }
 }
 
@@ -94,6 +96,8 @@ private func description(of error: LoadedProjectError) -> String {
         String(localized: "This project has no recordings.")
     case .takeNotFound:
         String(localized: "The recording isn't in this project.")
+    case .invalidPath:
+        String(localized: "This project has files in unexpected places. It was left untouched.")
     }
 }
 

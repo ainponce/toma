@@ -70,8 +70,7 @@ public struct ProjectPackage: Sendable, Hashable {
 
     /// `takes/<take>/<track>/seg-0001.mov`
     public func segmentURL(take: String, track: String, index: Int) -> URL {
-        let name = "seg-" + String(format: "%04d", index) + ".mov"
-        return trackDirectory(take: take, track: track).appendingPathComponent(name, isDirectory: false)
+        trackDirectory(take: take, track: track).appendingPathComponent(Self.segmentFileName(index: index), isDirectory: false)
     }
 
     public func eventsURL(take: String) -> URL {

@@ -15,6 +15,10 @@ public enum RecoveryError: Error, Equatable {
     /// The manifest was written by a newer version of the format; rewriting it could lose what this
     /// version does not know about. Nothing was changed.
     case unsupportedFormatVersion(Int)
+    /// A path of the take could leave the package: an ID or segment file the manifest gives
+    /// (`Manifest.validatePaths()`), or a symlink inside the take (`ProjectPackage.checkLayout`).
+    /// Nothing was changed, and nothing was created or touched outside the package.
+    case invalidPath(PackagePathError)
 }
 
 /// Closes a take its recorder left open by dying, from what is on disk, without deleting or rewriting
@@ -39,6 +43,11 @@ public enum TakeRecovery {
     /// The manifest is written once, with all of it. Idempotent: a take that is no longer `recording`
     /// is returned as it is.
     ///
+    /// Throws without changing anything: `RecoveryError.invalidPath` for a take ID that is not
+    /// `take-NNN`, a manifest with a path that could leave the package, or a symlink (or an entry of the
+    /// wrong kind) where the take's folders, lock, event log or reserve should be, checked before the lock
+    /// is taken and again once it is held.
+    ///
     /// Throws without changing the manifest: `RecoveryError.lockHeld` if the take's lock is held;
     /// `anotherTakeRecording` if another take of the package is being recorded, checked again right
     /// before the manifest is written, or if the manifest changed meanwhile; and the error of a segment
@@ -53,6 +62,12 @@ public enum TakeRecovery {
     static func recover(
         package: ProjectPackage, takeID: String, beforeWriting: () async throws -> Void
     ) async throws -> TakeRecord {
+        // Before the lock, which creates a file: its path must stay inside the package.
+        do throws(PackagePathError) {
+            try package.checkLayout(of: TakeRecord(id: takeID, status: .recording, startedAt: Date(), tracks: []))
+        } catch {
+            throw RecoveryError.invalidPath(error)
+        }
         let lock = try await acquireLock(at: package.lockURL(take: takeID))
         defer { lock.release() }
 
@@ -61,6 +76,12 @@ public enum TakeRecovery {
         let store = try ManifestStore(package: package)
         let snapshot = store.manifest
         guard let take = snapshot.takes.first(where: { $0.id == takeID }) else { throw RecoveryError.takeNotFound(takeID) }
+        do throws(PackagePathError) {
+            try snapshot.validatePaths()
+            try package.checkLayout(of: take)
+        } catch {
+            throw RecoveryError.invalidPath(error)
+        }
         guard take.status == .recording else { return take }
         guard try !anotherTakeIsRecording(in: package, besides: takeID) else { throw RecoveryError.anotherTakeRecording }
 

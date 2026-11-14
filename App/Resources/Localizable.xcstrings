@@ -970,6 +970,16 @@
         }
       }
     },
+    "This project has files in unexpected places. It was left untouched." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto tiene archivos en lugares inesperados. Se dejó como estaba."
+          }
+        }
+      }
+    },
     "This project has no recordings." : {
       "localizations" : {
         "es" : {
