@@ -7,12 +7,20 @@ import Testing
 
 @testable import Recovery
 
-/// A `recording` take whose microphone has one open segment from `base`, with `file` at its path.
+/// A `recording` take whose microphone has one open segment from `base`, with `file` at its path, and no
+/// `events.jsonl`.
 private func openMicrophoneTake(in dir: URL, file: SegmentFileFixture) async throws -> ProjectPackage {
     let builder = try TakeBuilder(in: dir)
     try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
     try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: nil, file: file)
-    return try builder.write(status: .recording).package
+    let package = try builder.write(status: .recording).package
+    try removeEventLog(of: package)
+    return package
+}
+
+/// Deletes the `events.jsonl` `TakeBuilder` wrote: a take without one has no events, which recovery accepts.
+private func removeEventLog(of package: ProjectPackage) throws {
+    try FileManager.default.removeItem(at: package.eventsURL(take: "take-001"))
 }
 
 // MARK: - Scanner
@@ -197,6 +205,7 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
             AudioSegmentSpec(start: micStart, seconds: 6, endReason: nil, leaveOpen: true),
         ])
         let package = try builder.write(status: .recording).package
+        try removeEventLog(of: package)
         let lock = package.lockURL(take: "take-001")
         let reserve = package.reserveURL(take: "take-001")
         try Data("{}".utf8).write(to: lock)  // left behind by the crashed recorder
@@ -246,6 +255,7 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
         try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
         try builder.addEmptySegment(track: "mic", index: 1, start: micStart, endReason: nil, file: .zeroBytes)
         let package = try builder.write(status: .recording).package
+        try removeEventLog(of: package)
         let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
         let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
 
@@ -395,6 +405,7 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
         try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
         try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: nil, file: .zeroBytes)
         let package = try builder.write(status: .recording).package
+        try removeEventLog(of: package)
         let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
 
         try await withExtendedLifetime(builder) {

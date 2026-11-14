@@ -69,7 +69,7 @@ private func screenIndex(of url: URL, take: TakeRecord, at time: Double) async t
 }
 
 /// `<dir>/Crashed.toma` with a `recording` take whose screen and microphone segments hold `seconds` of
-/// synthetic media and were never finalized, as a crash leaves them. `body` runs while their writers are
+/// synthetic media and were never finalized, as a crash leaves them, and no `events.jsonl`. `body` runs while their writers are
 /// still alive (a dead writer would finish its file).
 private func withCrashedPackage<T>(
     in dir: URL, seconds: Int, _ body: (ProjectPackage) async throws -> T
@@ -83,6 +83,7 @@ private func withCrashedPackage<T>(
         id: micID, source: TrackSource(name: "Mic", deviceUniqueID: "mic"),
         segments: [AudioSegmentSpec(start: base, seconds: Double(seconds), endReason: nil, leaveOpen: true)])
     let package = try builder.write(status: .recording).package
+    try FileManager.default.removeItem(at: package.eventsURL(take: takeID))  // a take without events.jsonl
     return try await withExtendedLifetime(builder) { try await body(package) }
 }
 
