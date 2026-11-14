@@ -381,7 +381,10 @@ private func expectMissing(_ summary: ExportSummary, _ expected: [(String, Doubl
 
 /// Random pixels at 1280×720, 30 fps: content the encoder cannot compress below its target, so the file's
 /// data rate is the formula's (width × height × fps × 0.08), within what VideoToolbox's rate control holds.
-@Test(.enabled(if: metalAvailable))
+/// Off in CI: the H.264 rate control of the runners' virtual machines differs.
+@Test(
+    .enabled(if: metalAvailable),
+    .disabled(if: ProcessInfo.processInfo.environment["TOMA_CI"] == "1", "VM H.264 rate control differs"))
 func videoDataRateFollowsTheFormula() async throws {
     try await withTemporaryDirectory { dir in
         let package = try await makeSyntheticPackage(in: dir, seconds: 4, noise: true)

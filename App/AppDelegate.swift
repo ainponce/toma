@@ -4,16 +4,19 @@ import AppSupport
 import ProjectFormat
 import os
 
-/// Owns the recording, the windows and the app's life: the recovery prompt at launch, the permissions
-/// window, editors (also for projects opened from Finder), the Dock icon, and closing a take before quitting.
+/// Owns the recording, the updater, the windows and the app's life: the recovery prompt at launch, the
+/// permissions and licenses windows, editors (also for projects opened from Finder), the Dock icon, and
+/// closing a take before quitting.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recording: RecordingController
+    let updater: UpdaterController
     private let probe: any PermissionProbe = SystemPermissionProbe()
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
     private var onboarding: OnboardingWindowController?
+    private var notices: ThirdPartyNoticesWindowController?
     private var powerOffObserver: (any NSObjectProtocol)?
     /// The take is being closed to quit or power off.
     private var closingForQuit = false
@@ -30,10 +33,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     override init() {
         recording = RecordingController(probe: probe)
+        updater = UpdaterController(recording: recording)
         super.init()
         recording.openEditor = { [weak self] url, take in self?.showEditor(for: url, take: take) }
         recording.openOnboarding = { [weak self] in self?.showOnboarding() }
-        recording.recordingStateChanged = { [weak self] in self?.updateActivationPolicy() }
+        recording.recordingStateChanged = { [weak self] in
+            self?.updateActivationPolicy()
+            self?.updater.recordingStateChanged()
+        }
         recovery.recovered = { [weak self] url in
             self?.recording.noteRecovered(url)
             self?.showEditor(for: url, take: nil)
@@ -132,6 +139,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(onboarding)
     }
 
+    func showThirdPartyNotices() {
+        if notices == nil {
+            notices = ThirdPartyNoticesWindowController { [weak self] in
+                guard let self, notices?.window?.isVisible != true else { return }  // shown again meanwhile
+                notices = nil
+                updateActivationPolicy()
+            }
+        }
+        present(notices)
+    }
+
     // MARK: - Windows
 
     func showEditor(for url: URL, take: String?) {
@@ -159,7 +177,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// In the Dock and Cmd-Tab only while a window is open and no take is being recorded.
     private func updateActivationPolicy() {
-        let openWindows = editors.count + (onboarding == nil ? 0 : 1)
+        let openWindows = editors.count + (onboarding == nil ? 0 : 1) + (notices == nil ? 0 : 1)
         let policy = ActivationPolicyDecision.policy(openWindows: openWindows, isRecording: recording.isRecording)
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)

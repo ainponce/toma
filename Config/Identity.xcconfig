@@ -8,5 +8,7 @@ CURRENT_PROJECT_VERSION = 1
 // The project document type. PROJECT_FILE_EXTENSION must equal ProjectPackage.fileExtension.
 PROJECT_TYPE_IDENTIFIER = dev.toma.project
 PROJECT_FILE_EXTENSION = toma
+// Sparkle: the update feed, and the EdDSA public key that generate_keys prints (docs/release.md). Without
+// the key the app starts without its updater.
 SPARKLE_FEED_URL = http:/$()/localhost:8000/appcast.xml
 SPARKLE_PUBLIC_KEY =

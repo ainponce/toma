@@ -7,14 +7,21 @@ on:
 jobs:
   build:
     runs-on: macos-26
+    env:
+      # Tests that depend on the runners' virtual hardware (for example H.264 rate control) are off.
+      TOMA_CI: "1"
     steps:
       - uses: actions/checkout@v4
       - name: Select Xcode 27.2
         run: sudo xcode-select -s /Applications/Xcode_27.2.app
       - run: swift --version
       - run: brew install xcodegen
+      - name: Encoder probe (one HEVC and one H.264 frame)
+        run: swift test --package-path Packages/RecorderKit --filter hevcAndH264EncodersAreAvailable
       - run: make test
       - run: make crash-test
       - run: make project
       - name: Build app
         run: xcodebuild -project Toma.xcodeproj -scheme Toma -configuration Debug -derivedDataPath build build CODE_SIGNING_ALLOWED=NO
+      - name: Check dependency licenses
+        run: bash scripts/check-licenses.sh

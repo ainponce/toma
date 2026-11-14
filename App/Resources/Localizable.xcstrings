@@ -42,6 +42,16 @@
         }
       }
     },
+    "Acknowledgements…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licencias de terceros…"
+          }
+        }
+      }
+    },
     "Allowed" : {
       "comment" : "The state of a permission",
       "localizations" : {
@@ -698,6 +708,16 @@
         }
       }
     },
+    "The license notices are missing from this copy of the app." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta copia de la app no incluye los avisos de licencias."
+          }
+        }
+      }
+    },
     "The main display isn't available." : {
       "localizations" : {
         "es" : {
@@ -914,6 +934,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quedaron como estaban. Para volver a intentarlo, usar Recuperar grabaciones… en la barra de menú."
+          }
+        }
+      }
+    },
+    "Third-Party Licenses" : {
+      "comment" : "The title of the window with the licenses of the software the app includes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Licencias de terceros"
           }
         }
       }

@@ -8,7 +8,7 @@ struct TomaApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(app: appDelegate, recording: appDelegate.recording)
+            MenuContent(app: appDelegate, recording: appDelegate.recording, updater: appDelegate.updater)
         } label: {
             MenuBarIcon(recording: appDelegate.recording)
         }
@@ -42,6 +42,7 @@ private struct MenuBarIcon: View {
 private struct MenuContent: View {
     let app: AppDelegate
     let recording: RecordingController
+    let updater: UpdaterController
 
     var body: some View {
         switch recording.phase {
@@ -67,9 +68,9 @@ private struct MenuContent: View {
         Button("Recover Recordings…") { app.recoverRecordings() }
         Button("Permissions…") { app.showOnboarding() }
         Divider()
-        // Wired to Sparkle by the updater.
-        Button("Check for Updates…") {}
-            .disabled(true)
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(recording.isRecording || !updater.isCheckAvailable)
+        Button("Acknowledgements…") { app.showThirdPartyNotices() }
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
