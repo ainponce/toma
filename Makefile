@@ -17,7 +17,8 @@ build:
 
 install:
 	xcodebuild -project Toma.xcodeproj -scheme Toma -configuration Release -derivedDataPath build build
-	cp -R build/Build/Products/Release/Toma.app /Applications/
+	rm -rf /Applications/Toma.app
+	ditto build/Build/Products/Release/Toma.app /Applications/Toma.app
 
 release:
 	bash scripts/release.sh $(VERSION)

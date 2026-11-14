@@ -5,5 +5,8 @@ PRODUCT_NAME = Toma
 PRODUCT_BUNDLE_IDENTIFIER = dev.toma.Toma
 MARKETING_VERSION = 0.0.0
 CURRENT_PROJECT_VERSION = 1
+// The project document type. PROJECT_FILE_EXTENSION must equal ProjectPackage.fileExtension.
+PROJECT_TYPE_IDENTIFIER = dev.toma.project
+PROJECT_FILE_EXTENSION = toma
 SPARKLE_FEED_URL = http:/$()/localhost:8000/appcast.xml
 SPARKLE_PUBLIC_KEY =

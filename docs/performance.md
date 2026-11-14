@@ -42,6 +42,13 @@ Después del `kill -9`, `droppedFrames` sale del último evento `droppedSamples`
 | Medición | Valor |
 |---|---|
 | fps promedio de la vista previa (registro de Debug cada 5 s) | pendiente |
+| Salto en la vista previa del editor (scrub hacia atrás y de 2 s o más hacia adelante): ms del cuadro en el hilo principal | pendiente |
+
+La vista previa decodifica en el hilo principal. El editor carga el proyecto y el primer segmento fuera de él, pero cada salto bloquea el hilo principal mientras decodifica desde el keyframe anterior. El editor registra cada cuadro que tarda más de 17 ms; para verlos, con el editor abierto y arrastrando la barra de tiempo:
+
+```
+log stream --level debug --predicate 'subsystem == "dev.toma.Toma" && category == "Preview"'
+```
 
 ## Mediciones sintéticas
 

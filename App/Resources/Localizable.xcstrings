@@ -1,0 +1,752 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Allowed" : {
+      "comment" : "The state of a permission",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitido"
+          }
+        }
+      }
+    },
+    "Allow…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permitir…"
+          }
+        }
+      }
+    },
+    "Can't check the free disk space." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede comprobar el espacio libre en el disco."
+          }
+        }
+      }
+    },
+    "Cancel" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelar"
+          }
+        }
+      }
+    },
+    "Check for Updates…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar actualizaciones…"
+          }
+        }
+      }
+    },
+    "Couldn't export the video" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't open the project" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo abrir el proyecto"
+          }
+        }
+      }
+    },
+    "Couldn't recover %lld recordings" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Couldn't recover %lld recording"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Couldn't recover %lld recordings"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "No se pudo recuperar %lld grabación"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "No se pudieron recuperar %lld grabaciones"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Couldn't start recording" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo empezar a grabar"
+          }
+        }
+      }
+    },
+    "Couldn't update the project file. Trying again." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo actualizar el archivo del proyecto. Se vuelve a intentar."
+          }
+        }
+      }
+    },
+    "Export MP4…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportar MP4…"
+          }
+        }
+      }
+    },
+    "Export finished." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportación terminada."
+          }
+        }
+      }
+    },
+    "Exporting…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportando…"
+          }
+        }
+      }
+    },
+    "If screen recording is already allowed in System Settings, macOS applies it after reopening the app." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si la grabación de pantalla ya está permitida en Ajustes del Sistema, macOS la aplica al volver a abrir la app."
+          }
+        }
+      }
+    },
+    "Later" : {
+      "comment" : "Button: leave the unfinished recordings as they are for now",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Más tarde"
+          }
+        }
+      }
+    },
+    "Loading…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cargando…"
+          }
+        }
+      }
+    },
+    "Low disk space: %@ left." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Queda poco espacio en el disco: %@."
+          }
+        }
+      }
+    },
+    "Microphone" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Micrófono"
+          }
+        }
+      }
+    },
+    "Microphone access is off. Recording without audio." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El acceso al micrófono está desactivado. Se graba sin audio."
+          }
+        }
+      }
+    },
+    "Microphone capture resumed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reanudó la captura del micrófono."
+          }
+        }
+      }
+    },
+    "Microphone capture was interrupted. Trying again…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se interrumpió la captura del micrófono. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "No microphone found." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró un micrófono."
+          }
+        }
+      }
+    },
+    "No microphone found. Recording without audio." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró un micrófono. Se graba sin audio."
+          }
+        }
+      }
+    },
+    "No recordings need recovering." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay grabaciones para recuperar."
+          }
+        }
+      }
+    },
+    "Not allowed" : {
+      "comment" : "The state of a permission",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No permitido"
+          }
+        }
+      }
+    },
+    "Not requested yet" : {
+      "comment" : "The state of a permission that was never asked for",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no se pidió"
+          }
+        }
+      }
+    },
+    "Open Last Project" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir último proyecto"
+          }
+        }
+      }
+    },
+    "Open System Settings" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir Ajustes del Sistema"
+          }
+        }
+      }
+    },
+    "Pause" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar"
+          }
+        }
+      }
+    },
+    "Permissions" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permisos"
+          }
+        }
+      }
+    },
+    "Permissions…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Permisos…"
+          }
+        }
+      }
+    },
+    "Play" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reproducir"
+          }
+        }
+      }
+    },
+    "Quit" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salir"
+          }
+        }
+      }
+    },
+    "Quit & Reopen" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salir y volver a abrir"
+          }
+        }
+      }
+    },
+    "Record Main Display" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar pantalla principal"
+          }
+        }
+      }
+    },
+    "Recording" : {
+      "comment" : "A recording: the start of a new project's name, and the menu bar icon while recording",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabación"
+          }
+        }
+      }
+    },
+    "Recording %@" : {
+      "comment" : "Menu item while recording: the time recorded so far",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabando %@"
+          }
+        }
+      }
+    },
+    "Recording stopped: the disk is almost full." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La grabación se detuvo: el disco está casi lleno."
+          }
+        }
+      }
+    },
+    "Recordings can't be saved to a network or synced folder." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede grabar en una carpeta de red o sincronizada."
+          }
+        }
+      }
+    },
+    "Recover" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recuperar"
+          }
+        }
+      }
+    },
+    "Recover Recordings…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recuperar grabaciones…"
+          }
+        }
+      }
+    },
+    "Saving recording…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardando la grabación…"
+          }
+        }
+      }
+    },
+    "Saving the microphone failed. Continuing in a new file." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló el guardado del micrófono. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
+    "Saving the screen failed. Continuing in a new file." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló el guardado de la pantalla. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
+    "Screen Recording" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabación de pantalla"
+          }
+        }
+      }
+    },
+    "Screen capture is paused. Still trying to restart it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La captura de pantalla está en pausa. Se sigue intentando reanudarla."
+          }
+        }
+      }
+    },
+    "Screen capture resumed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reanudó la captura de pantalla."
+          }
+        }
+      }
+    },
+    "Screen capture was interrupted. Trying again…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se interrumpió la captura de pantalla. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "Screen recording permission is required to record. The microphone is optional." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para grabar hace falta el permiso de grabación de pantalla. El micrófono es opcional."
+          }
+        }
+      }
+    },
+    "Show in Finder" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar en Finder"
+          }
+        }
+      }
+    },
+    "Some microphone audio couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar parte del audio del micrófono."
+          }
+        }
+      }
+    },
+    "Some screen frames couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron guardar algunos cuadros de la pantalla."
+          }
+        }
+      }
+    },
+    "Starting recording…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Iniciando la grabación…"
+          }
+        }
+      }
+    },
+    "Stop Recording" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detener grabación"
+          }
+        }
+      }
+    },
+    "The main display isn't available." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pantalla principal no está disponible."
+          }
+        }
+      }
+    },
+    "The microphone stopped recording. The recording continues without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El micrófono dejó de grabar. La grabación sigue sin él."
+          }
+        }
+      }
+    },
+    "The recording closed with an error: %@" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La grabación se cerró con un error: %@"
+          }
+        }
+      }
+    },
+    "The screen stopped recording." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The video was exported, but %lld parts have no sound: their microphone audio couldn't be read." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld part has no sound: its microphone audio couldn't be read."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld parts have no sound: their microphone audio couldn't be read."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero %lld parte quedó sin sonido: no se pudo leer su audio del micrófono."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero %lld partes quedaron sin sonido: no se pudo leer su audio del micrófono."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "There isn't enough free disk space to record (%@ available)." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay suficiente espacio libre en el disco para grabar (%@ disponibles)."
+          }
+        }
+      }
+    },
+    "These projects can't be read safely and were left untouched:" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estos proyectos no se pueden leer de forma segura y no se modificaron:"
+          }
+        }
+      }
+    },
+    "They were left as they are. To try again, use Recover Recordings… in the menu bar." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quedaron como estaban. Para volver a intentarlo, usar Recuperar grabaciones… en la barra de menú."
+          }
+        }
+      }
+    },
+    "This recording hasn't finished saving. If it isn't being recorded now, recover it with Recover Recordings… in the menu bar." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta grabación todavía no terminó de guardarse. Si no se está grabando ahora, recuperarla con Recuperar grabaciones… en la barra de menú."
+          }
+        }
+      }
+    },
+    "We found %lld recordings that didn't finish saving. Recover them?" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "We found %lld recording that didn't finish saving. Recover it?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "We found %lld recordings that didn't finish saving. Recover them?"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se encontró %lld grabación que no terminó de guardarse. ¿Recuperarla?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se encontraron %lld grabaciones que no terminaron de guardarse. ¿Recuperarlas?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "macOS may ask you again every month to allow screen recording. That's normal." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}
