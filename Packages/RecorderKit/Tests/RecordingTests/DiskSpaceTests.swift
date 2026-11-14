@@ -11,6 +11,9 @@ import Testing
         (DiskCapacity(importantUsage: 3_000_000_000, available: 3_000_000_000), false, .warn(availableBytes: 3_000_000_000)),
         (DiskCapacity(importantUsage: 10_000_000_000, available: 10_000_000_000), false, .ok),
         (DiskCapacity(importantUsage: 9_000_000_000, available: 900_000_000), true, .stopNow(availableBytes: 900_000_000)),
+        // Purgeable space makes importantUsage look fine: never start below the stop threshold.
+        (DiskCapacity(importantUsage: 9_000_000_000, available: 900_000_000), false, .refuseToStart(availableBytes: 900_000_000)),
+        (DiskCapacity(importantUsage: 9_000_000_000, available: 1_000_000_000), false, .ok),
         (DiskCapacity(importantUsage: 4_000_000_000, available: 4_000_000_000), true, .warn(availableBytes: 4_000_000_000)),
     ])
     func policy(capacity: DiskCapacity, recording: Bool, expected: DiskSpaceVerdict) {

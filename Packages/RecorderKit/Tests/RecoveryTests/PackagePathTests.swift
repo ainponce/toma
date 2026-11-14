@@ -137,3 +137,43 @@ private func expectNeedsRepair(_ results: [ScanResult], _ package: ProjectPackag
         try take(file: "takes/take-001/mic/seg-0000.mov", index: 0).validatePaths()
     }
 }
+
+@Test func takeFolderTheManifestDoesNotListIsReported() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
+        // A take whose first manifest write never landed: its segment is on disk, the manifest knows nothing.
+        let orphan = package.segmentURL(take: "take-002", track: "display-1", index: 1)
+        try FileManager.default.createDirectory(at: orphan.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 100).write(to: orphan)
+        // An empty folder left by a start that failed before recording is not.
+        try FileManager.default.createDirectory(at: package.takeDirectory("take-003"), withIntermediateDirectories: false)
+        let manifest = try Data(contentsOf: package.manifestURL)
+
+        let results = RecoveryScanner.scan(directory: dir)
+        guard results.count == 1, case let .needsRepair(found, reason) = results[0] else {
+            Issue.record("expected needsRepair, got \(results)")
+            return
+        }
+        #expect(found == package)
+        #expect(reason.contains("takes/take-002") && !reason.contains("take-003"), "\(reason)")
+        #expect(try Data(contentsOf: package.manifestURL) == manifest)  // read-only
+    }
+}
+
+@Test func takeFolderWithAFreeLockTheManifestDoesNotListIsReported() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try FileManager.default.createDirectory(at: package.takeDirectory("take-001"), withIntermediateDirectories: false)
+        try Data("{}".utf8).write(to: package.lockURL(take: "take-001"))
+        expectNeedsRepair(RecoveryScanner.scan(directory: dir), package)
+
+        // The same folder while its recorder holds the lock is a take starting right now.
+        try FileManager.default.removeItem(at: package.lockURL(take: "take-001"))
+        let held = try RecordingLock.acquire(at: package.lockURL(take: "take-001"), info: .current(now: Date()))
+        defer { held.release() }
+        Swift.withExtendedLifetime(held) {
+            #expect(RecoveryScanner.scan(directory: dir).isEmpty)
+        }
+    }
+}

@@ -18,6 +18,21 @@ struct PipelineContext: Sendable {
     /// A write ran out of disk space. Gives the take's reserve back before returning, so the writes
     /// that follow have room, and has the coordinator close the take as `diskFull`.
     let onDiskFull: @Sendable () -> Void
+    /// Space free right now on the recording volume, `nil` if it cannot be read.
+    let freeBytes: @Sendable () -> Int64?
+
+    /// Below this much free space, a writer failure of any shape is taken as the disk filling up: room
+    /// for the take's reserve twice over.
+    static let fullVolumeBytes = 2 * Int64(TakeReserve.size)
+
+    /// Whether a writer's `failure` means the volume is full: recognized as out of space
+    /// (`isOutOfSpace`), or of a shape AVFoundation also reports a full disk with (a bare -11800, say)
+    /// while the volume has less than `fullVolumeBytes` free.
+    func isDiskFull(_ failure: any Error) -> Bool {
+        if isOutOfSpace(failure) { return true }
+        guard let free = freeBytes() else { return false }
+        return free < Self.fullVolumeBytes
+    }
 
     /// Changes one track of the take in the manifest. A failed write is reported as
     /// `manifestWriteFailed`; the change stays in memory and the next write retries it. A write that
@@ -357,13 +372,18 @@ actor TrackPipeline: CaptureSink {
         } catch {
             errors.append(error)
             let failure = error as NSError
-            reason = .writerError(domain: failure.domain, code: failure.code)
+            if context.isDiskFull(failure) {
+                reason = .diskFull
+                context.onDiskFull()
+            } else {
+                reason = .writerError(domain: failure.domain, code: failure.code)
+            }
             if let start = segment.startHostTime {
                 end = segment.latestTime ?? start
             }
         }
         if !closing.failureReported, let failure = segment.writer.failure {
-            let diskFull = isOutOfSpace(failure)
+            let diskFull = context.isDiskFull(failure)
             reason = diskFull ? .diskFull : .writerError(domain: failure.domain, code: failure.code)
             context.warnings.yield(.writerFailed(track: trackID))
             if diskFull { context.onDiskFull() }
@@ -550,7 +570,7 @@ actor TrackPipeline: CaptureSink {
     }
 
     private func writerDidFail(_ segment: OpenSegment, _ failure: NSError) {
-        let diskFull = isOutOfSpace(failure)
+        let diskFull = context.isDiskFull(failure)
         let reason: SegmentEndReason = diskFull ? .diskFull : .writerError(domain: failure.domain, code: failure.code)
         closeSegment(reason: reason, at: segment.latestTime ?? context.clock(), failureReported: true)
         context.warnings.yield(.writerFailed(track: trackID))

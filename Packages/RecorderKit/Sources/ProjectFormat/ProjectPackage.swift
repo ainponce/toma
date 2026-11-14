@@ -58,7 +58,8 @@ public struct ProjectPackage: Sendable, Hashable {
     public var manifestURL: URL { url.appendingPathComponent("manifest.json", isDirectory: false) }
     public var editURL: URL { url.appendingPathComponent("edit.json", isDirectory: false) }
     public var cacheURL: URL { url.appendingPathComponent("cache", isDirectory: true) }
-    var takesURL: URL { url.appendingPathComponent("takes", isDirectory: true) }
+    /// `takes/`, which holds one folder per take.
+    public var takesURL: URL { url.appendingPathComponent("takes", isDirectory: true) }
 
     public func takeDirectory(_ take: String) -> URL {
         takesURL.appendingPathComponent(take, isDirectory: true)

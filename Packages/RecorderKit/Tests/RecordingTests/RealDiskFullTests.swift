@@ -31,16 +31,27 @@ extension RealTimeRecordingTests {
                 policy.minimumToStart = 0
                 policy.warnBelow = 0
                 policy.stopBelow = 0
+                let writers = MadeWriters()
                 let coordinator = RecordingCoordinator(
                     package: package,
                     sources: [SyntheticAudioSource(), SyntheticVideoSource(width: 1920, height: 1080, framesPerSecond: 60)],
                     input: NoInputRecorder(),
                     diskMonitor: DiskSpaceMonitor(volumeURL: volume, policy: policy, interval: .milliseconds(200)),
-                    systemActivity: AsyncStream.makeStream(of: SystemActivity.self).stream
+                    systemActivity: AsyncStream.makeStream(of: SystemActivity.self).stream,
+                    writerFactory: { url, media in
+                        let writer = try FragmentedTrackWriter(url: url, media: media)
+                        writers.append(writer)
+                        return writer
+                    }
                 )
                 // Whatever fails below, the take is stopped before the volume goes away.
                 let outcome = await Result { try await recordUntilFull(coordinator, package) }
                 _ = try? await coordinator.stop()
+                // Which shape of error AVFoundation gave the full disk, for when a run ends otherwise.
+                for writer in writers.all {
+                    guard let failure = writer.failure else { continue }
+                    print("RealDiskFullTests: a writer failed with \(errorChain(failure))")
+                }
                 try outcome.get()
             }
         }
@@ -99,6 +110,28 @@ extension RealTimeRecordingTests {
             }
         }
     }
+}
+
+/// The writers a take made, read once it is closed: no writer is touched by its pipeline any more then.
+private final class MadeWriters: @unchecked Sendable {
+    private let lock = NSLock()
+    private var writers: [FragmentedTrackWriter] = []
+
+    var all: [FragmentedTrackWriter] { lock.withLock { writers } }
+
+    func append(_ writer: FragmentedTrackWriter) {
+        lock.withLock { writers.append(writer) }
+    }
+}
+
+/// `error`, its user info and every error under it (`NSUnderlyingErrorKey`, `NSMultipleUnderlyingErrorsKey`).
+private func errorChain(_ error: NSError, depth: Int = 0) -> String {
+    let indent = String(repeating: "  ", count: depth)
+    var text = "\n\(indent)\(error.domain) \(error.code) \(error.userInfo.filter { $0.key != NSUnderlyingErrorKey && $0.key != NSMultipleUnderlyingErrorsKey })"
+    guard depth < 8 else { return text }
+    if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError { text += errorChain(underlying, depth: depth + 1) }
+    for underlying in error.userInfo[NSMultipleUnderlyingErrorsKey] as? [NSError] ?? [] { text += errorChain(underlying, depth: depth + 1) }
+    return text
 }
 
 private struct HdiutilError: Error, CustomStringConvertible {

@@ -102,6 +102,16 @@ public actor RecordingCoordinator {
         var pipelines: [TrackPipeline] = []
     }
 
+    /// The steps of closing a take that are ordered for durability, in the order `closeTake` takes them.
+    enum CloseStep: Sendable, Equatable {
+        /// `events.jsonl` has its last lines and is full-synced and closed.
+        case logClosed
+        /// The manifest says the take is `complete` (written, or its write failed and was reported).
+        case manifestComplete
+        /// The recording lock is released.
+        case lockReleased
+    }
+
     private struct CloseOutcome: Sendable {
         var record: TakeRecord
         var error: (any Error)?
@@ -143,6 +153,8 @@ public actor RecordingCoordinator {
     /// Verdicts received since the watchdog last looked.
     private var diskVerdictCount = 0
     private var diskLowReported = false
+    /// Told about each `CloseStep` as `closeTake` takes it; tests set it.
+    private var onCloseStep: (@Sendable (CloseStep) -> Void)?
 
     public init(
         package: ProjectPackage,
@@ -174,14 +186,22 @@ public actor RecordingCoordinator {
         onAutoStop = handler
     }
 
+    /// For tests: `observer` is told about each `CloseStep` as the take closes.
+    func setOnCloseStep(_ observer: @escaping @Sendable (CloseStep) -> Void) {
+        onCloseStep = observer
+    }
+
     // MARK: - Start
 
     /// Starts recording a new take and returns its ID.
     ///
-    /// Throws `volumeNotAllowed` or `notEnoughDiskSpace` before creating anything. If a source fails
-    /// to start, the sources already started are stopped, the take is closed as `complete` with what
-    /// it has (nothing is deleted), the lock is released and the error is rethrown. Either way this
-    /// coordinator is done: it records one take.
+    /// Throws `volumeNotAllowed` or `notEnoughDiskSpace` before creating anything. The take's record
+    /// must reach the manifest on disk before anything is recorded: if that write fails (after one retry
+    /// with the reserve's room when it ran out of space), the lock and the reserve are released and the
+    /// error is rethrown, leaving at most an empty take folder. If a source fails to start, the sources
+    /// already started are stopped, the take is closed as `complete` with what it has (nothing is
+    /// deleted), the lock is released and the error is rethrown. Either way this coordinator is done: it
+    /// records one take.
     public func start() async throws -> String {
         guard state == .idle else { throw RecordingError.alreadyStarted }
         state = .starting
@@ -230,8 +250,22 @@ public actor RecordingCoordinator {
         let record = TakeRecord(
             id: takeID, status: .recording, startedAt: startedAt,
             tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) })
+        // A take the manifest does not list is invisible to recovery and the editor: nothing is recorded
+        // until it is on disk.
+        do {
+            do {
+                try store.update { $0.takes.append(record) }
+            } catch where isOutOfSpace(error) {
+                reserve.release()
+                try store.flushPending()
+                diskFilled()  // still starting: the take stops as `diskFull` once it has started
+            }
+        } catch {
+            reserve.release()
+            lock.release()
+            throw error
+        }
         take = Take(id: takeID, startedAt: startedAt, store: store, lock: lock, reserve: reserve)
-        updateManifest(store) { $0.takes.append(record) }
 
         do {
             for source in sources {
@@ -263,7 +297,8 @@ public actor RecordingCoordinator {
                 onDiskFull: { [weak self] in
                     reserve.release()  // before the writer's caller writes anything else
                     Task { await self?.diskFilled() }
-                })
+                },
+                freeBytes: { [diskMonitor] in diskMonitor.availableBytes() })
             let displays = sources.filter { $0.kind == .display }.count
             for source in sources {
                 let pipeline = TrackPipeline(
@@ -357,8 +392,12 @@ public actor RecordingCoordinator {
 
     /// Closes whatever part of the take is open: gives the reserve back (room for the final writes,
     /// however the take ended), stops monitoring, the sources and the input, closes every track
-    /// (collecting failures), marks the take `complete`, closes the log, releases the lock and
-    /// finishes `warnings`. Also rolls back a failed `start()`.
+    /// (collecting failures), closes the log (its last lines full-synced), then marks the take
+    /// `complete`, releases the lock and finishes `warnings`. Also rolls back a failed `start()`.
+    ///
+    /// The order is the segments' rule: the manifest says the take ended only once what it holds is on
+    /// disk. Recovery never touches a `complete` take, so marking it first would lose for good the last
+    /// lines of the log if the app died in between.
     private func closeTake(reason: SegmentEndReason, stopTime: HostTime) async -> CloseOutcome {
         guard let take else { preconditionFailure("RecordingCoordinator: closing without a take") }
         var errors: [any Error] = []
@@ -388,19 +427,22 @@ public actor RecordingCoordinator {
         }
         errors += closed.flatMap { $0 }
 
+        if let logFailure { errors.append(logFailure) }
+        if let log = take.log {
+            if diskFull, let failure = Self.flushAfterDiskFull(log) { errors.append(failure) }
+            do { try log.close() } catch { errors.append(error) }
+            onCloseStep?(.logClosed)
+        }
         let takeID = take.id
         updateManifest(take.store) { manifest in
             guard let i = manifest.takes.firstIndex(where: { $0.id == takeID }) else { return }
             manifest.takes[i].status = .complete
         }
         do { try take.store.flushPending() } catch { errors.append(error) }
-        if let logFailure { errors.append(logFailure) }
-        if let log = take.log {
-            if diskFull, let failure = Self.flushAfterDiskFull(log) { errors.append(failure) }
-            do { try log.close() } catch { errors.append(error) }
-        }
+        onCloseStep?(.manifestComplete)
         if let failure = take.reserve.releaseError { errors.append(failure) }
         take.lock.release()
+        onCloseStep?(.lockReleased)
         if let activity = take.activity {
             ProcessInfo.processInfo.endActivity(activity)
             self.take?.activity = nil

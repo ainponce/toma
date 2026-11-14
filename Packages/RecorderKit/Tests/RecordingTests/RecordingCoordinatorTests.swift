@@ -394,6 +394,54 @@ extension RealTimeRecordingTests {
             }
         }
 
+        @Test func refusesToStartBelowTheStopThresholdEvenWithPurgeableSpace() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory)
+                rig.disk.set(importantUsage: 9_000_000_000, available: 900_000_000)
+                await #expect(throws: RecordingError.notEnoughDiskSpace(availableBytes: 900_000_000)) {
+                    try await rig.coordinator.start()
+                }
+                #expect(try rig.manifestOnDisk().takes.isEmpty)
+                #expect(try FileManager.default.contentsOfDirectory(atPath: rig.package.takesURL.path).isEmpty)
+                #expect(rig.display.startCount == 0 && rig.mic.startCount == 0)
+            }
+        }
+
+        @Test func startFailsWhenTheTakeCannotReachTheManifest() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory)
+                // The manifest is replaced through a temporary file in the package folder; takes/ stays writable.
+                let folder = rig.package.url.path
+                try #require(chmod(folder, 0o555) == 0)
+                defer { chmod(folder, 0o755) }
+                await #expect(throws: POSIXError(.EACCES)) { try await rig.coordinator.start() }
+                try #require(chmod(folder, 0o755) == 0)
+
+                #expect(try rig.manifestOnDisk().takes.isEmpty)
+                let id = "take-001"
+                #expect(rig.lockIsFree(id))
+                #expect(rig.reserveBytes(id) == nil)
+                #expect(rig.display.startCount == 0 && rig.mic.startCount == 0)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all.isEmpty)
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.stop() }
+            }
+        }
+
+        @Test func closeWritesTheLogBeforeMarkingTheTakeComplete() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display])
+                let steps = Mutex<[RecordingCoordinator.CloseStep]>([])
+                await rig.coordinator.setOnCloseStep { step in steps.withLock { $0.append(step) } }
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await rig.coordinator.stop()
+                #expect(steps.withLock { $0 } == [.logClosed, .manifestComplete, .lockReleased])
+                #expect(try rig.takeOnDisk(id).status == .complete)
+                #expect(try rig.events(id).contains { $0.kind == .segmentStarted(track: "display-1", index: 1) })
+            }
+        }
+
         @Test func stopDuringRestartBackoffDoesNotReopen() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, configuration: RecordingConfiguration(restartBackoff: [.seconds(1)]))
@@ -884,17 +932,22 @@ final class WarningLog: Sendable {
     }
 }
 
-/// Wraps a real writer: fails its appends from `failAfter` seconds after creation (with
-/// `NSError(domain: "TestWriter", code: 7)`), or throws `finishError` after finishing the file.
+/// Wraps a real writer: fails its appends from `failAfter` seconds after creation (with `failure`,
+/// by default `NSError(domain: "TestWriter", code: 7)`), or throws `finishError` after finishing the file.
 final class ScriptedWriter: TrackWriting {
     private let inner: FragmentedTrackWriter
     private let failAt: HostTime?
+    private let failureToInject: NSError
     private let finishError: (any Error)?
     private var injected: NSError?
 
-    init(inner: FragmentedTrackWriter, failAfter seconds: Double? = nil, finishError: (any Error)? = nil) {
+    init(
+        inner: FragmentedTrackWriter, failAfter seconds: Double? = nil,
+        failure: NSError = NSError(domain: "TestWriter", code: 7), finishError: (any Error)? = nil
+    ) {
         self.inner = inner
         self.failAt = seconds.map { HostTime.now().adding(seconds: $0) }
+        self.failureToInject = failure
         self.finishError = finishError
     }
 
@@ -910,7 +963,7 @@ final class ScriptedWriter: TrackWriting {
 
     func append(_ sample: CMSampleBuffer) throws {
         if injected == nil, let failAt, HostTime.now() >= failAt {
-            injected = NSError(domain: "TestWriter", code: 7)
+            injected = failureToInject
         }
         if let injected { throw WriterError.appendFailed(injected.localizedDescription) }
         try inner.append(sample)

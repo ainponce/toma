@@ -24,7 +24,8 @@ public enum DiskSpaceVerdict: Sendable, Equatable {
 }
 
 /// When a recording may start, when to warn and when to stop before the disk fills up.
-/// Starting and warning look at `importantUsage`; stopping looks at the hard `available` figure.
+/// Starting and warning look at `importantUsage`; stopping looks at the hard `available` figure, and so
+/// does starting: a take never starts where it would be stopped at once.
 public struct DiskSpacePolicy: Sendable, Equatable {
     public var minimumToStart: Int64 = 2_000_000_000
     public var warnBelow: Int64 = 5_000_000_000
@@ -38,6 +39,11 @@ public struct DiskSpacePolicy: Sendable, Equatable {
         }
         if !isRecording, capacity.importantUsage < minimumToStart {
             return .refuseToStart(availableBytes: capacity.importantUsage)
+        }
+        // Purgeable space or local snapshots can make `importantUsage` look fine while the hard figure
+        // is below the stop threshold: starting then would stop the take as `diskFull` right away.
+        if !isRecording, capacity.available < stopBelow {
+            return .refuseToStart(availableBytes: capacity.available)
         }
         if capacity.importantUsage < warnBelow {
             return .warn(availableBytes: capacity.importantUsage)
@@ -71,6 +77,11 @@ public final class DiskSpaceMonitor: Sendable {
 
     public func verdict(isRecording: Bool) throws -> DiskSpaceVerdict {
         policy.evaluate(try query(volumeURL), isRecording: isRecording)
+    }
+
+    /// Space free right now on the volume (`DiskCapacity.available`), or `nil` if it cannot be read.
+    public func availableBytes() -> Int64? {
+        try? query(volumeURL).available
     }
 
     /// Fires once immediately, then every `interval`, evaluating as a recording in progress.
