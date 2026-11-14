@@ -217,9 +217,16 @@ public final class SyntheticAudioSource: CaptureSource {
         }
     }
 
-    /// Emits every block whose nominal start time has been reached, so late timer ticks catch up.
+    /// At most this many blocks (0.5 s of audio) per timer tick. A process starved of CPU (a debug build at
+    /// utility QoS under load) can take longer to make a block than the block lasts: catching up without a
+    /// limit would then never end, and hold the delivery queue, which is also the sink's executor, forever.
+    static let maximumBlocksPerTick = 50
+
+    /// Emits the blocks whose nominal start time has been reached, so late timer ticks catch up, at most
+    /// `maximumBlocksPerTick` at a time: the rest come on the next ticks.
     private func emitDueBlocks(to sink: any CaptureSink) {
-        while let block = nextDueBlock() {
+        for _ in 0..<Self.maximumBlocksPerTick {
+            guard let block = nextDueBlock() else { return }
             let sample = SampleFactory.audioSample(
                 pts: block.pts, frames: block.frames, sampleRate: block.sampleRate, channels: block.channels)
             sink.source(trackID, didOutput: sample)
