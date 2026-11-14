@@ -54,6 +54,33 @@ private let date: Date = {
     }
 }
 
+@Test func onlyAPackageWithNothingRecordedIsRemoved() throws {
+    try withTemporaryDirectory { directory in
+        let unused = try ProjectFolder.createPackage(in: directory, prefix: "Unused", app: app, now: date)
+        try ProjectFolder.removeIfUnused(unused)
+        #expect(!FileManager.default.fileExists(atPath: unused.url.path))
+
+        // A take folder the manifest does not list: raw data may be in it.
+        let withFiles = try ProjectFolder.createPackage(in: directory, prefix: "Files", app: app, now: date)
+        try FileManager.default.createDirectory(at: withFiles.takeDirectory("take-001"), withIntermediateDirectories: false)
+        try ProjectFolder.removeIfUnused(withFiles)
+        #expect(FileManager.default.fileExists(atPath: withFiles.takeDirectory("take-001").path))
+
+        let withTake = try ProjectFolder.createPackage(in: directory, prefix: "Take", app: app, now: date)
+        try ManifestStore(package: withTake).update {
+            $0.takes.append(TakeRecord(id: "take-001", status: .complete, startedAt: date, tracks: []))
+        }
+        try ProjectFolder.removeIfUnused(withTake)
+        #expect(FileManager.default.fileExists(atPath: withTake.manifestURL.path))
+
+        // Nothing says it is unused.
+        let unreadable = try ProjectFolder.createPackage(in: directory, prefix: "Unreadable", app: app, now: date)
+        try FileManager.default.removeItem(at: unreadable.manifestURL)
+        #expect(throws: (any Error).self) { try ProjectFolder.removeIfUnused(unreadable) }
+        #expect(FileManager.default.fileExists(atPath: unreadable.takesURL.path))
+    }
+}
+
 @Test func defaultFolderIsTheAppNameInMovies() {
     let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask)[0]
     #expect(ProjectFolder.defaultURL(appName: "Toma").standardizedFileURL

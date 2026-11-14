@@ -219,6 +219,20 @@ Lo que las correcciones de la revisión final dejan para comprobar con hardware 
 | 16. Recuperar dos tomas; recuperar desde el editor | pendiente | pendiente | pendiente |
 | 17. Feed público https y SHA de las acciones | pendiente | pendiente | pendiente |
 
+## Pendientes del dueño del hito 1a
+
+Lo que necesita permisos de grabación, hardware real o una persona, de las tareas del hito 1a. Cada resultado va a la tabla de abajo.
+
+- [ ] Task 5a (el ciclo de vida de la toma pasó a `AppSupport`): repetir las comprobaciones 2, 5, 6 y 8 de las verificaciones manuales de la Task 12 de la fase 0 ("Pendientes del dueño de la fase 0", arriba), con `make build` y `build/Build/Products/Debug/Toma.app`. En la 2, el tiempo del menú ("Grabando 0:00:xx") ahora lo dibuja un `TimelineView`: anotar si se ve y si avanza con el menú abierto.
+- [ ] Task 5a: Cmd-Q durante "Iniciando la grabación…". Para que el arranque espere, borrar antes el permiso del micrófono (`tccutil reset Microphone dev.toma.Toma`) y salir mientras el sistema lo pide: la app sale cuando termina el arranque (al responder el pedido, o a los 30 s del límite para salir) y `~/Movies/Toma` no tiene un paquete vacío nuevo.
+- [ ] Task 5a: bloquear la pantalla 20 s durante una toma: el tiempo del menú no avanza mientras está bloqueada y, al desbloquear, sigue desde donde quedó.
+
+| Comprobación | Fecha | macOS | Resultado |
+|---|---|---|---|
+| 5a. Comprobaciones 2, 5, 6 y 8 de la Task 12 de la fase 0 | pendiente | pendiente | pendiente |
+| 5a. Cmd-Q durante "Iniciando la grabación…" sin paquete vacío nuevo | pendiente | pendiente | pendiente |
+| 5a. El tiempo del menú no avanza con la pantalla bloqueada | pendiente | pendiente | pendiente |
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

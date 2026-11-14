@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import AppSupport
 import SwiftUI
 
 @main
@@ -51,7 +52,11 @@ private struct MenuContent: View {
         case .starting:
             Text("Starting recording…")
         case .recording:
-            Text("Recording \(recording.elapsed.formatted(.time(pattern: .hourMinuteSecond)))", comment: "Menu item while recording: the time recorded so far")
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                Text(
+                    "Recording \(recording.elapsed(at: context.date).formatted(.time(pattern: .hourMinuteSecond)))",
+                    comment: "Menu item while recording: the time recorded so far")
+            }
             if recording.isPaused {
                 Text("Paused (screen locked or Mac asleep)", comment: "Menu item while a take is paused because the screen is locked or the Mac sleeps")
             }
@@ -59,10 +64,10 @@ private struct MenuContent: View {
         case .stopping:
             Text("Saving recording…")
         }
-        if !recording.warnings.isEmpty {
+        if !recording.notices.isEmpty {
             Divider()
-            ForEach(Array(recording.warnings.enumerated()), id: \.offset) { _, warning in
-                Text(warning)
+            ForEach(Array(recording.notices.enumerated()), id: \.offset) { _, notice in
+                Text(notice.text(closeError: recording.lastCloseError))
             }
         }
         Divider()

@@ -34,12 +34,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
     override init() {
-        recording = RecordingController(probe: probe)
+        recording = RecordingController(probe: probe, environment: LiveTakeEnvironment.make())
         updater = UpdaterController(recording: recording, exportGate: exportGate)
         super.init()
         exportGate.busyChanged = { [weak self] in self?.updater.exportStateChanged() }
         recording.openEditor = { [weak self] url, take in self?.showEditor(for: url, take: take) }
         recording.openOnboarding = { [weak self] in self?.showOnboarding() }
+        recording.showStartFailure = { [weak self] error in self?.showStartFailure(error) }
         recording.recordingStateChanged = { [weak self] in
             self?.updateActivationPolicy()
             self?.updater.recordingStateChanged()
@@ -56,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             MainActor.assumeIsolated { self?.willPowerOff() }
         }
         Task {
-            await recovery.run(in: RecordingController.projectsFolder, atLaunch: true)
+            await recovery.run(in: recording.projectsFolder, atLaunch: true)
             if PermissionsModel.needsAttention(probe: probe) { showOnboarding() }
         }
     }
@@ -171,7 +172,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Menu actions
 
     func recoverRecordings() {
-        Task { await recovery.run(in: RecordingController.projectsFolder, atLaunch: false) }
+        Task { await recovery.run(in: recording.projectsFolder, atLaunch: false) }
     }
 
     func showOnboarding() {
@@ -197,6 +198,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Windows
+
+    private func showStartFailure(_ error: any Error) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(localized: "Couldn't start recording")
+        alert.informativeText = userFacingDescription(of: error)
+        NSApp.activate()
+        alert.runModal()
+    }
 
     /// After recovery: every recovered project is the last project in turn, open editors on them load again,
     /// and a few more open (`RecoveredProjects`); the recovery alert has listed them all.

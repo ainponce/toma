@@ -39,4 +39,15 @@ public enum ProjectFolder {
             }
         }
     }
+
+    /// Deletes `package` if nothing was ever recorded in it: its manifest lists no takes and `takes/` is
+    /// empty. Any other package is left as it is (raw data is never deleted). Throws if the manifest or
+    /// `takes/` cannot be read, without deleting anything, or if the deletion fails.
+    public static func removeIfUnused(_ package: ProjectPackage) throws {
+        let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
+        guard manifest.takes.isEmpty,
+            try FileManager.default.contentsOfDirectory(atPath: package.takesURL.path).isEmpty
+        else { return }
+        try FileManager.default.removeItem(at: package.url)
+    }
 }

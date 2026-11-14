@@ -9,10 +9,11 @@ project:
 test:
 	swift test --package-path Packages/RecorderKit
 
-# The thread-safety argument of TrackPipeline and TrackFrameReader rests on this run (plan exit criterion).
+# The thread-safety argument of TrackPipeline, TrackFrameReader and the take's life cycle rests on this run (plan
+# exit criterion). Suites that do not exist yet match nothing; each task that adds one is covered from then on.
 tsan:
 	TSAN_OPTIONS=$${TSAN_OPTIONS:-halt_on_error=1} swift test --package-path Packages/RecorderKit --sanitize=thread \
-		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests'
+		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|WindowCaptureTests|LevelMeterTests|CountdownTests'
 
 crash-test:
 	bash scripts/test-crash-recovery.sh
