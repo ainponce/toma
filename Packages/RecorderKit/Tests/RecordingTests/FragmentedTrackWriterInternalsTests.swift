@@ -129,3 +129,19 @@ private func audioBlock(_ k: Int, frames: Int = 480) -> CMSampleBuffer {
         #expect(try await decodedFrameIndices(of: url) == [0, 1])
     }
 }
+
+@Test func offlineWriterWaitsThirtySecondsForTheEncoder() throws {
+    try withTemporaryDirectory { dir in
+        let url = dir.appendingPathComponent("seg-0001.mov")
+        let w = try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: 30), realTime: false)
+        #expect(w.readinessTimeoutSeconds == 30)
+    }
+}
+
+@Test func realTimeWriterKeepsFiveSeconds() throws {
+    try withTemporaryDirectory { dir in
+        let url = dir.appendingPathComponent("seg-0001.mov")
+        let w = try FragmentedTrackWriter(url: url, media: .audio, realTime: true)
+        #expect(w.readinessTimeoutSeconds == 5)
+    }
+}

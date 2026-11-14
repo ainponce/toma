@@ -27,8 +27,12 @@ public final class FragmentedTrackWriter: TrackWriting {
     public private(set) var formatDescription: CMFormatDescription?
     public private(set) var failure: NSError?
 
+    /// How long a real-time writer waits for the encoder before it gives up.
+    static let realTimeReadinessTimeoutSeconds = 5.0
+    /// How long an offline writer waits: nothing is live, so a busy machine only makes it slower.
+    static let offlineReadinessTimeoutSeconds = 30.0
     /// How long waiting for the encoder may take before it gives up.
-    var readinessTimeoutSeconds = 5.0
+    var readinessTimeoutSeconds: Double
     /// Whether the encoder takes more data now. Tests replace it to make the encoder look busy.
     var inputHasRoom: (AVAssetWriterInput) -> Bool = { $0.isReadyForMoreMediaData }
 
@@ -77,6 +81,7 @@ public final class FragmentedTrackWriter: TrackWriting {
         writer.movieFragmentInterval = fragmentInterval
         self.media = media
         self.realTime = realTime
+        readinessTimeoutSeconds = realTime ? Self.realTimeReadinessTimeoutSeconds : Self.offlineReadinessTimeoutSeconds
     }
 
     public func append(_ sample: CMSampleBuffer) throws {
