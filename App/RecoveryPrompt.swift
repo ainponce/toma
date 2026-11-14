@@ -9,8 +9,8 @@ import os
 /// a take from what is on disk, and a project that cannot be read safely is only listed, untouched.
 @MainActor
 final class RecoveryPrompt {
-    /// Called with the last project recovered.
-    var recovered: (URL) -> Void = { _ in }
+    /// Called with every project recovered, in order, after the alert that lists them.
+    var recovered: ([URL]) -> Void = { _ in }
 
     private var isRunning = false
     private let repairNotices = RepairNotices()
@@ -79,7 +79,23 @@ final class RecoveryPrompt {
 
         let takes = recoverable
         let (closed, failures) = await Task.detached(priority: .userInitiated) { await Self.recover(takes) }.value
-        if let last = closed.last { recovered(last.url) }
+        // A package with two recovered takes is one project.
+        var seen: Set<URL> = []
+        let projects = closed.map(\.url).filter { seen.insert($0.standardizedFileURL).inserted }
+        if !projects.isEmpty {
+            let done = NSAlert()
+            done.messageText = String(localized: "Recovered \(projects.count) recordings")
+            done.informativeText = projects.map { "• " + $0.deletingPathExtension().lastPathComponent }.joined(separator: "\n")
+                + (projects.count > RecoveredProjects.maximumOpened
+                    ? "\n\n" + String(localized: "The first \(RecoveredProjects.maximumOpened) open now; the others are in the projects folder.")
+                    : "")
+            done.addButton(withTitle: String(localized: "OK"))
+            done.addButton(withTitle: String(localized: "Show in Finder"))
+            if show(done) == .alertSecondButtonReturn {
+                NSWorkspace.shared.activateFileViewerSelecting(projects)
+            }
+            recovered(projects)
+        }
         guard !failures.isEmpty else { return }
         let failed = NSAlert()
         failed.alertStyle = .warning

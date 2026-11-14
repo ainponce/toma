@@ -73,6 +73,16 @@
         }
       }
     },
+    "An export is in progress. Quit and cancel it?" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay una exportación en curso. ¿Salir y cancelarla?"
+          }
+        }
+      }
+    },
     "An unexpected error occurred." : {
       "localizations" : {
         "es" : {
@@ -193,6 +203,16 @@
         }
       }
     },
+    "Couldn't recover the recording" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo recuperar la grabación"
+          }
+        }
+      }
+    },
     "Couldn't start recording" : {
       "localizations" : {
         "es" : {
@@ -239,6 +259,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Exportando…"
+          }
+        }
+      }
+    },
+    "If it isn't being recorded now, click Recover. Nothing recorded is deleted." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si no se está grabando ahora, hacer clic en Recuperar. No se borra nada de lo grabado."
           }
         }
       }
@@ -382,6 +412,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se está grabando nada."
+          }
+        }
+      }
+    },
+    "OK" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aceptar"
           }
         }
       }
@@ -559,6 +599,56 @@
         }
       }
     },
+    "Recovered %lld recordings" : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Recovered %lld recording"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Recovered %lld recordings"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se recuperó %lld grabación"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Se recuperaron %lld grabaciones"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Recovering…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recuperando…"
+          }
+        }
+      }
+    },
     "Recovery is already running." : {
       "localizations" : {
         "es" : {
@@ -729,6 +819,16 @@
         }
       }
     },
+    "The first %lld open now; the others are in the projects folder." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los primeros %lld se abren ahora; los demás están en la carpeta de proyectos."
+          }
+        }
+      }
+    },
     "The license notices are missing from this copy of the app." : {
       "localizations" : {
         "es" : {
@@ -865,6 +965,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The video being exported isn't saved. The project isn't changed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El video que se está exportando no se guarda. El proyecto no cambia."
           }
         }
       }
@@ -1080,12 +1190,12 @@
         }
       }
     },
-    "This recording hasn't finished saving. If it isn't being recorded now, recover it with Recover Recordings… in the menu bar." : {
+    "This recording hasn't finished saving" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta grabación todavía no terminó de guardarse. Si no se está grabando ahora, recuperarla con Recuperar grabaciones… en la barra de menú."
+            "value" : "Esta grabación no terminó de guardarse"
           }
         }
       }

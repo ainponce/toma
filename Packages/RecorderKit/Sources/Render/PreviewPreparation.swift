@@ -19,9 +19,9 @@ public struct PreparedPreview: Sendable {
 }
 
 public enum PreviewPreparationError: Error, Equatable {
-    /// The take is still marked `recording`: it is being recorded, or its recorder died and it must be
+    /// Take `takeID` is still marked `recording`: it is being recorded, or its recorder died and it must be
     /// recovered first.
-    case unfinished
+    case unfinished(takeID: String)
     /// The first frame could not be drawn; the error, described.
     case cannotDraw(String)
 }
@@ -51,7 +51,7 @@ public enum PreviewPreparation {
     /// `prepare`, on the caller's thread. Blocks: never call it from a Swift concurrency thread.
     static func prepareBlocking(url: URL, take: String?, outputSize: SIMD2<Int>) throws -> PreparedPreview {
         let project = try LoadedProject.load(url, take: take)
-        guard project.take.status != .recording else { throw PreviewPreparationError.unfinished }
+        guard project.take.status != .recording else { throw PreviewPreparationError.unfinished(takeID: project.take.id) }
         // Its own renderer: an export makes another one.
         let renderer = try FrameRenderer(project: project, outputSize: outputSize)
         let preview = PreviewRenderer(renderer: renderer)

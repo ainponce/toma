@@ -56,7 +56,7 @@ private actor Pinger {
             var take = makeTake(tracks: [displayTrack(globalFrame: nil, segments: [])])
             take.status = .recording
             try ManifestStore(package: package).update { [take] in $0.takes.append(take) }
-            await #expect(throws: PreviewPreparationError.unfinished) {
+            await #expect(throws: PreviewPreparationError.unfinished(takeID: takeID)) {
                 try await PreviewPreparation.prepare(url: package.url, take: nil, outputSize: [320, 180])
             }
         }

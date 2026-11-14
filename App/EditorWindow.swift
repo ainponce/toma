@@ -3,6 +3,7 @@ import AppKit
 import Export
 import Observation
 import ProjectFormat
+import Recovery
 import Render
 import SwiftUI
 import Synchronization
@@ -12,7 +13,11 @@ import os
 /// Allows one export at a time in the whole app: blocking reads of several exports at once starve each other.
 @MainActor @Observable
 final class ExportGate {
-    var isBusy = false
+    var isBusy = false {
+        didSet { if isBusy != oldValue { busyChanged() } }
+    }
+    /// Called when an export starts or ends; set by the app delegate.
+    @ObservationIgnored var busyChanged: () -> Void = {}
 }
 
 /// A window showing one take of a project: preview, playback, scrubbing and MP4 export.
@@ -22,10 +27,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private let model: EditorModel
     private let onClose: () -> Void
 
-    init(packageURL: URL, takeID: String?, exportGate: ExportGate, onClose: @escaping () -> Void) {
+    init(
+        packageURL: URL, takeID: String?, exportGate: ExportGate, onRecovered: @escaping (URL) -> Void,
+        onClose: @escaping () -> Void
+    ) {
         self.packageURL = packageURL
         self.onClose = onClose
         model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
+        model.onRecovered = onRecovered
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -51,7 +60,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     /// Loads the project again if it could not be shown, for example after it was recovered.
     func reloadIfNeeded() {
-        if case .failed = model.state { model.load() }
+        switch model.state {
+        case .failed, .unfinished: model.load()
+        case .loading, .recovering, .ready: break
+        }
+    }
+
+    /// Cancels an export in progress and returns once it has ended, its partial file removed.
+    func cancelExportAndWait() async {
+        await model.cancelExportAndWait()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -71,6 +88,9 @@ final class EditorModel {
     enum State {
         case loading
         case ready(PreviewRenderer)
+        /// Take `takeID` is still marked as being recorded: it can be recovered from here.
+        case unfinished(takeID: String)
+        case recovering
         case failed(String)
     }
 
@@ -90,6 +110,8 @@ final class EditorModel {
     var canExport: Bool { project != nil && !exportGate.isBusy }
 
     @ObservationIgnored weak var window: NSWindow?
+    /// Called with the project once it was recovered from this editor; set by the app delegate.
+    @ObservationIgnored var onRecovered: (URL) -> Void = { _ in }
     @ObservationIgnored private let exportGate: ExportGate
     @ObservationIgnored private var project: LoadedProject?
     @ObservationIgnored private var exportTask: Task<Void, Never>?
@@ -128,14 +150,41 @@ final class EditorModel {
                 currentTime = 0
                 isPlaying = false
                 state = .ready(prepared.preview)
-            } catch PreviewPreparationError.unfinished {
-                state = .failed(String(localized: "This recording hasn't finished saving. If it isn't being recorded now, recover it with Recover Recordings… in the menu bar."))
+            } catch PreviewPreparationError.unfinished(let takeID) {
+                guard !closed else { return }
+                state = .unfinished(takeID: takeID)
             } catch PreviewPreparationError.cannotDraw(let reason) {
                 Self.logger.error("Cannot draw the first frame: \(reason, privacy: .public)")
                 state = .failed(String(localized: "Couldn't draw the preview."))
             } catch {
                 Self.logger.error("Cannot open \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")
                 state = .failed(userFacingDescription(of: error))
+            }
+        }
+    }
+
+    /// Recovers the unfinished take from what is on disk, wherever the project is (the menu's recovery only
+    /// looks in the projects folder), and loads it. `TakeRecovery` refuses a take that is being recorded and
+    /// a project of a newer format, and never deletes recorded data.
+    func recover() {
+        guard case .unfinished(let takeID) = state else { return }
+        state = .recovering
+        let package = ProjectPackage(url: packageURL)
+        Task {
+            do {
+                // Off the main thread: recovery reads every open segment.
+                let take = try await Task.detached(priority: .userInitiated) {
+                    try await TakeRecovery.recover(package: package, takeID: takeID)
+                }.value
+                Self.logger.notice("Recovered \(take.id, privacy: .public) of \(package.url.path, privacy: .public) from its editor")
+                guard !closed else { return }
+                onRecovered(packageURL)
+                load()
+            } catch {
+                Self.logger.error("Cannot recover \(takeID, privacy: .public) of \(package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
+                guard !closed else { return }
+                state = .unfinished(takeID: takeID)
+                showAlert(String(localized: "Couldn't recover the recording"), informative: userFacingDescription(of: error), style: .warning)
             }
         }
     }
@@ -241,6 +290,13 @@ final class EditorModel {
         exportTask?.cancel()
     }
 
+    /// Cancels an export in progress and waits for its task to end: the exporter has removed its partial file.
+    func cancelExportAndWait() async {
+        guard let exportTask else { return }
+        exportTask.cancel()
+        await exportTask.value
+    }
+
     private func exportProgressed(_ value: Double) {
         guard case .running(let progress) = exportState, value > progress else { return }
         exportState = .running(progress: value)
@@ -308,6 +364,17 @@ struct EditorView: View {
         switch model.state {
         case .loading:
             ProgressView("Loading…")
+        case .unfinished:
+            ContentUnavailableView {
+                Label("This recording hasn't finished saving", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text("If it isn't being recorded now, click Recover. Nothing recorded is deleted.")
+            } actions: {
+                Button("Recover") { model.recover() }
+                    .keyboardShortcut(.defaultAction)
+            }
+        case .recovering:
+            ProgressView("Recovering…")
         case .failed(let message):
             ContentUnavailableView {
                 Label("Couldn't open the project", systemImage: "exclamationmark.triangle")

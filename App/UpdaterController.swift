@@ -8,7 +8,7 @@ import os
 /// Sparkle's standard updater, with the app's rules for a take being recorded: no update check runs, neither
 /// from the menu (its item is off) nor scheduled (`updater(_:mayPerform:)` refuses it, and the refused check
 /// runs once the take is closed), so no update window shows up in a recording; and an update being installed
-/// relaunches the app only once the take is closed.
+/// relaunches the app only once neither a take nor an export is in progress, so a relaunch never cuts one off.
 ///
 /// A build without an EdDSA public key (`SPARKLE_PUBLIC_KEY` empty) does not start the updater at launch:
 /// Sparkle would refuse to start and show an alert every time. Checking for updates shows that alert instead.
@@ -23,6 +23,7 @@ final class UpdaterController: NSObject, SPUUpdaterDelegate {
     var isCheckAvailable: Bool { !isStarted || canCheckForUpdates }
 
     @ObservationIgnored private let recording: RecordingController
+    @ObservationIgnored private let exportGate: ExportGate
     @ObservationIgnored private let relaunchGate = UpdateRelaunchGate()
     @ObservationIgnored private let checkGate = UpdateCheckGate()
     @ObservationIgnored private var standardController: SPUStandardUpdaterController?
@@ -30,8 +31,12 @@ final class UpdaterController: NSObject, SPUUpdaterDelegate {
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Updates")
 
-    init(recording: RecordingController) {
+    /// A take is being recorded or an export runs: a relaunch waits.
+    private var isBusy: Bool { recording.isRecording || exportGate.isBusy }
+
+    init(recording: RecordingController, exportGate: ExportGate) {
         self.recording = recording
+        self.exportGate = exportGate
         super.init()
         let publicKey = Bundle.main.object(forInfoDictionaryKey: "SUPublicEDKey") as? String ?? ""
         let hasPublicKey = !publicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -59,11 +64,16 @@ final class UpdaterController: NSObject, SPUUpdaterDelegate {
         standardController.checkForUpdates(nil)
     }
 
-    /// Called whenever a take starts or ends. Once it ends, a relaunch postponed for an update goes ahead,
-    /// or else a check refused during the take runs.
+    /// Called whenever an export starts or ends. Once nothing is in progress, a postponed relaunch goes ahead.
+    func exportStateChanged() {
+        relaunchGate.busyChanged(isBusy: isBusy)
+    }
+
+    /// Called whenever a take starts or ends. Once nothing is in progress, a relaunch postponed for an update
+    /// goes ahead; or else, once the take ends, a check refused during it runs.
     func recordingStateChanged() {
         let isRecording = recording.isRecording
-        relaunchGate.recordingChanged(isRecording: isRecording)
+        relaunchGate.busyChanged(isBusy: isBusy)
         guard checkGate.recordingChanged(isRecording: isRecording), let standardController,
             isStarted, standardController.updater.canCheckForUpdates
         else { return }
@@ -86,9 +96,9 @@ final class UpdaterController: NSObject, SPUUpdaterDelegate {
         _ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,
         untilInvokingBlock installHandler: @escaping () -> Void
     ) -> Bool {
-        let postpone = relaunchGate.shouldPostpone(isRecording: recording.isRecording, relaunch: installHandler)
+        let postpone = relaunchGate.shouldPostpone(isBusy: isBusy, relaunch: installHandler)
         if postpone {
-            Self.logger.notice("Update \(item.displayVersionString, privacy: .public) installs once the take is closed")
+            Self.logger.notice("Update \(item.displayVersionString, privacy: .public) installs once the take is closed and no export runs")
         }
         return postpone
     }
