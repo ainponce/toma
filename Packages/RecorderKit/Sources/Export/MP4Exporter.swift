@@ -12,7 +12,8 @@ import os
 /// Exports a take as an MP4: H.264 High video tagged Rec.709 and the microphone as AAC.
 ///
 /// Frame `i` is the frame `FrameRenderer` draws at output time `i / framesPerSecond`, the same drawing
-/// the preview shows; the video lasts the take's screen, rounded to whole frames. The microphone is placed
+/// the preview shows; the video lasts the renderer's timeline (`FrameEvaluator`: the screen, or the microphone
+/// when it was recorded longer), rounded to whole frames. The microphone is placed
 /// by host time on the same timeline (`MicrophoneTimeline`); a take without one exports without audio.
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it

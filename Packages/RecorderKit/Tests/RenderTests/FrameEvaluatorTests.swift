@@ -18,6 +18,28 @@ private func cursor(_ seconds: Double, x: Double, y: Double) -> InputEvent {
     InputEvent(t: base.adding(seconds: seconds), kind: .cursor(x: x, y: y))
 }
 
+@Test func timelineEndsWithTheMicrophoneWhenItRecordedLonger() {
+    let display = displayTrack(globalFrame: nil, segments: [segment(start: base, end: base.adding(seconds: 2))])
+    func microphone(_ segments: [SegmentRecord]) -> TrackRecord {
+        TrackRecord(id: "mic", kind: .microphone, source: TrackSource(name: "Mic"), segments: segments)
+    }
+    func evaluate(_ tracks: [TrackRecord]) -> FrameEvaluator {
+        FrameEvaluator(take: makeTake(tracks: tracks), events: [], style: StyleV0(), outputSize: [1920, 1080])
+    }
+    // The mic starts earlier and ends later: the start stays the screen's, the end is the mic's.
+    let longer = evaluate([microphone([segment(start: base.adding(seconds: -0.5), end: base.adding(seconds: 6))]), display])
+    #expect(longer.timelineStart == base)
+    #expect(abs(longer.duration - 6) < 1e-9)
+    #expect(longer.frame(at: 5).screen?.sourceTime == base.adding(seconds: 5))
+    // An open mic segment counts up to its start.
+    let open = evaluate([display, microphone([segment(start: base.adding(seconds: 3), end: nil, reason: nil)])])
+    #expect(abs(open.duration - 3) < 1e-9)
+    // A shorter mic changes nothing; without a screen segment the mic does not make a timeline.
+    #expect(evaluate([display, microphone([segment(start: base, end: base.adding(seconds: 1))])]).duration == 2)
+    let screenless = evaluate([displayTrack(globalFrame: nil, segments: []), microphone([segment(start: base, end: base.adding(seconds: 6))])])
+    #expect(screenless.duration == 0)
+}
+
 @Test func styleV0Values() {
     let style = StyleV0()
     #expect(style.gradientStart == SIMD4<Float>(0x7F, 0x5A, 0xF0, 255) / 255)

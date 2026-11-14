@@ -108,6 +108,37 @@ func microphoneIsPlacedByHostTimeWithSilenceInGaps() async throws {
     }
 }
 
+/// The screen stopped after 2 s (it never came back) while the microphone recorded 6 s: the export lasts
+/// the microphone, over the screen's last frame, and none of the audio is left out.
+@Test(.enabled(if: metalAvailable))
+func microphoneRecordedPastTheScreenIsExported() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try await makeSyntheticPackage(in: dir, seconds: 2, mic: [MicSegment(start: 0, seconds: 6)])
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        #expect(summary.missingAudio.isEmpty)
+
+        let asset = AVURLAsset(url: destination)
+        let video = try #require(try await asset.loadTracks(withMediaType: .video).first)
+        let videoSeconds = try await video.load(.timeRange).duration.seconds
+        #expect(abs(videoSeconds - 6) <= 1.0 / 30 + 1e-6, "video lasts \(videoSeconds) s")
+        let (start, samples) = try await decodedAudio(of: destination)
+        let audioSeconds = start + Double(samples.count) / 48_000
+        #expect(abs(audioSeconds - 6) <= 1.0 / 30 + 0.025, "audio lasts \(audioSeconds) s")
+        #expect(abs(rms(samples, start: start, from: 4.9, to: 5.1) - sineRMS) < 0.02)
+
+        // After 2 s the screen's last frame is held.
+        let last = try await videoFrame(of: destination, nearest: 59.0 / 30)
+        let earlier = try await videoFrame(of: destination, nearest: 1)
+        for time in [2.5, 4.0, 5.9] {
+            let held = try await videoFrame(of: destination, nearest: time)
+            #expect(ssimLuma(held.bytes, last.bytes, width: 640, height: 360) > 0.98, "frame at \(time) s")
+        }
+        #expect(ssimLuma(earlier.bytes, last.bytes, width: 640, height: 360) < 0.98)
+    }
+}
+
 /// 4 channels are recorded as ALAC with the encoder's layout for 4, more than 8 as Float32 LPCM with a
 /// discrete layout; either way every channel is mixed in.
 @Test(.enabled(if: metalAvailable), arguments: [4, 10])

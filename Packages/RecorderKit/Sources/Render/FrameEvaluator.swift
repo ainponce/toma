@@ -6,8 +6,12 @@ import ProjectFormat
 /// the style and the output size.
 ///
 /// The screen is the take's first display track. Output time 0 is `timelineStart`, the start of that
-/// track's first segment, and output times are clamped to `[0, duration]`. Its `TrackSource.globalFrame`
-/// is the only geometry used in phase 0 (`displayGeometry` events are informational).
+/// track's first segment. The timeline ends at the latest segment end (the start, for a segment still
+/// open) of the screen and of the take's first microphone track, so microphone audio recorded after the
+/// screen's last segment (a display that never came back) is in the preview and the export, over the
+/// screen's last frame, which `TrackFrameReader` holds. A take whose screen has no segment has a timeline
+/// of 0 s. Output times are clamped to `[0, duration]`. The screen's `TrackSource.globalFrame` is the only
+/// geometry used in phase 0 (`displayGeometry` events are informational).
 public struct FrameEvaluator: Sendable {
     /// Two cursor samples at most this far apart are interpolated; farther apart, the cursor stays put
     /// until the next one.
@@ -15,7 +19,7 @@ public struct FrameEvaluator: Sendable {
 
     /// Host time at output time 0.
     public private(set) var timelineStart: HostTime
-    /// Seconds from `timelineStart` to the end of the screen's last segment.
+    /// Seconds from `timelineStart` to the latest end of a segment of the screen or of the microphone.
     public private(set) var duration: Double
 
     private let style: StyleV0
@@ -35,8 +39,10 @@ public struct FrameEvaluator: Sendable {
         screenTrackID = screen?.id
         let segments = screen?.segments ?? []
         let start = segments.map(\.startHostTime).min() ?? HostTime(nanoseconds: 0)
+        // Without a screen segment there is nothing to show, and no start to measure the microphone from.
+        let microphone = segments.isEmpty ? [] : take.tracks.first { $0.kind == .microphone }?.segments ?? []
         // An open segment (no end yet) counts up to its start.
-        let end = segments.map { $0.endHostTime ?? $0.startHostTime }.max() ?? start
+        let end = (segments + microphone).map { $0.endHostTime ?? $0.startHostTime }.max() ?? start
         timelineStart = start
         duration = max(0, end.seconds(since: start))
 
