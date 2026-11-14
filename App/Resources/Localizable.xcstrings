@@ -426,6 +426,17 @@
         }
       }
     },
+    "Paused (screen locked or Mac asleep)" : {
+      "comment" : "Menu item while a take is paused because the screen is locked or the Mac sleeps",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En pausa (pantalla bloqueada o Mac en reposo)"
+          }
+        }
+      }
+    },
     "Permissions" : {
       "localizations" : {
         "es" : {

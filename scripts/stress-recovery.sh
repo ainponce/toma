@@ -53,7 +53,9 @@ cleanup() {
 }
 trap cleanup EXIT
 
-caffeinate -dimsu -t 3700 &
+# Keeps the Mac from sleeping (-i -m -s), but not the display (no -d, and no -u, which would keep it on
+# too): the recorder's own assertion must keep the display awake, so the gate checks that it does.
+caffeinate -ims -t 3700 &
 CAFFEINATE_PID=$!
 
 "$BIN" record "$DIR" --duration "$DURATION" > "$LOGS/out" 2> "$LOGS/err" &

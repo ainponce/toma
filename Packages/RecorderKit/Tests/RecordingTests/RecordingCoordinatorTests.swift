@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import Foundation
 import ProjectFormat
@@ -163,7 +164,40 @@ extension RealTimeRecordingTests {
                 }
                 #expect(rig.display.startCount == 2 && rig.mic.startCount == 2)
                 await rig.warningsDone.value
-                #expect(rig.warnings.all.isEmpty)
+                #expect(rig.warnings.all == [.paused(reason: "screenLocked"), .resumed])
+            }
+        }
+
+        @Test func noInputIsRecordedWhilePaused() async throws {
+            try await withTemporaryDirectory { directory in
+                let location = MovingLocation()
+                let rig = try Rig(
+                    in: directory, tracks: [.display], input: CursorRecorder(location: { location.next() }))
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(300))
+                rig.activity.yield(.screenLocked)
+                #expect(await eventually { rig.liveTrack(id, "display-1")?.segments.map(\.endReason) == [.paused] })
+                try await Task.sleep(for: .milliseconds(300))
+                rig.activity.yield(.screenUnlocked)
+                #expect(await eventually { rig.liveTrack(id, "display-1")?.segments.count == 2 })
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await rig.coordinator.stop()
+
+                let events = try rig.events(id)
+                let paused = try #require(events.firstIndex { $0.kind == .paused(reason: "screenLocked") })
+                let resumed = try #require(events.firstIndex { $0.kind == .resumed })
+                let isInput: (InputEvent) -> Bool = { event in
+                    switch event.kind {
+                    case .cursor, .mouseDown, .mouseUp: true
+                    default: false
+                    }
+                }
+                #expect(events[..<paused].contains(where: isInput))
+                #expect(!events[paused...resumed].contains(where: isInput))
+                #expect(!events.contains { isInput($0) && $0.t > events[paused].t && $0.t < events[resumed].t })
+                #expect(events[resumed...].contains(where: isInput))
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.paused(reason: "screenLocked"), .resumed])
             }
         }
 
@@ -188,6 +222,9 @@ extension RealTimeRecordingTests {
                 #expect(events.filter { $0.kind == .paused(reason: "willSleep") }.count == 1)
                 #expect(events.filter { $0.kind == .resumed }.count == 1)
                 #expect(rig.display.startCount == 2)
+                await rig.warningsDone.value
+                // One pause and one resume, however many causes overlapped.
+                #expect(rig.warnings.all == [.paused(reason: "willSleep"), .resumed])
             }
         }
 
@@ -576,7 +613,9 @@ extension RealTimeRecordingTests {
                 #expect(try await rig.duration(of: mic.segments[2]) > 0.7)
                 #expect(source.inner.startCount == 3)
                 await rig.warningsDone.value
-                #expect(rig.warnings.all == [.streamInterrupted(track: "mic"), .streamRestarted(track: "mic")])
+                #expect(rig.warnings.all == [
+                    .paused(reason: "screenLocked"), .resumed, .streamInterrupted(track: "mic"), .streamRestarted(track: "mic"),
+                ])
             }
         }
 
@@ -618,7 +657,7 @@ extension RealTimeRecordingTests {
                 })
                 _ = try await rig.coordinator.stop()
                 await rig.warningsDone.value
-                #expect(rig.warnings.all == [.manifestWriteFailed])
+                #expect(rig.warnings.all == [.paused(reason: "screenLocked"), .manifestWriteFailed])
             }
         }
 
@@ -723,6 +762,7 @@ struct Rig {
         in directory: URL,
         tracks: [Track] = [.mic, .display],
         sources custom: [any CaptureSource]? = nil,
+        input: any InputRecorder = NoInputRecorder(),
         configuration: RecordingConfiguration = .init(),
         writerFactory: WriterFactory? = nil
     ) throws {
@@ -734,7 +774,7 @@ struct Rig {
         coordinator = RecordingCoordinator(
             package: package,
             sources: sources,
-            input: NoInputRecorder(),
+            input: input,
             diskMonitor: disk.monitor(volume: directory),
             systemActivity: stream,
             configuration: configuration,
@@ -889,6 +929,15 @@ final class ScriptedWriter: TrackWriting {
 }
 
 struct FinishFailure: Error {}
+
+/// A cursor location that moves on every call, so every sample is recorded.
+final class MovingLocation: Sendable {
+    private let calls = Mutex(0)
+
+    func next() -> CGPoint {
+        CGPoint(x: Double(calls.withLock { $0 += 1; return $0 }), y: 7)
+    }
+}
 
 /// A synthetic microphone whose `start` can be made to return late, after its run already delivers.
 final class SlowStartSource: CaptureSource {

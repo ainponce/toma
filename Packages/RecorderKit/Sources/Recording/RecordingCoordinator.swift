@@ -53,6 +53,11 @@ public enum RecordingWarning: Sendable, Equatable {
     /// Free space could not be read for three monitor intervals in a row: the take goes on without
     /// the disk-space stop until it can be read again.
     case diskSpaceUnknown
+    /// The take is paused: nothing is recorded until `resumed`. `reason` is the `paused` event's
+    /// (`willSleep`, or `screenLocked` for a lock or for the displays going to sleep).
+    case paused(reason: String)
+    /// The take records again after `paused`, in new segments.
+    case resumed
 }
 
 public enum RecordingError: Error, Equatable {
@@ -70,6 +75,12 @@ public enum RecordingError: Error, Equatable {
 /// or writer failure closes that track's segment and opens a new one once it recovers. The user's
 /// `stop()` and the stop for disk space share one closing task, so a take is closed exactly once.
 public actor RecordingCoordinator {
+    /// What a take asks of the system while it records: no idle sleep of the Mac or of the displays.
+    /// A display that sleeps on its idle timer would pause the take as if the screen were locked.
+    static let takeActivityOptions: ProcessInfo.ActivityOptions = [
+        .userInitiated, .idleSystemSleepDisabled, .idleDisplaySleepDisabled,
+    ]
+
     private enum State {
         case idle, starting, recording, paused, stopping, stopped
     }
@@ -244,7 +255,7 @@ public actor RecordingCoordinator {
                 for await verdict in verdicts { self.handleDiskVerdict(verdict) }
             }
             take?.activity = ProcessInfo.processInfo.beginActivity(
-                options: [.userInitiated, .idleSystemSleepDisabled], reason: "Recording a take")
+                options: Self.takeActivityOptions, reason: "Recording a take")
 
             let context = PipelineContext(
                 package: package, takeID: takeID, store: store, log: log, warnings: warningsContinuation,
@@ -414,14 +425,18 @@ public actor RecordingCoordinator {
         }
     }
 
-    /// Stops every source and closes their segments as `paused`. Nothing else changes `state` while
-    /// this runs: `closeTake` waits for the activity task before touching the pipelines.
+    /// Stops the input recorder and every source, and closes the segments as `paused`: nothing is
+    /// written while paused, and no input event lands between the `paused` and `resumed` events.
+    /// Warns `paused` on the transition only. Nothing else changes `state` while this runs:
+    /// `closeTake` waits for the activity task before touching the pipelines.
     private func pause(for cause: PauseCause, reason: String) async {
         pauseCauses.insert(cause)
         guard state == .recording, let take else { return }
         state = .paused
+        await input.pause()
         let time = clock()
         take.log?.append(InputEvent(t: time, kind: .paused(reason: reason)))
+        warningsContinuation.yield(.paused(reason: reason))
         await withDiscardingTaskGroup { group in
             for pipeline in take.pipelines {
                 group.addTask { await pipeline.pause(at: time) }
@@ -429,12 +444,15 @@ public actor RecordingCoordinator {
         }
     }
 
-    /// Starts every source again once nothing keeps the take paused. Restart attempts start afresh.
+    /// Starts every source and the input recorder again once nothing keeps the take paused, and warns
+    /// `resumed`. Restart attempts start afresh.
     private func resume(clearing cause: PauseCause) async {
         pauseCauses.remove(cause)
         guard state == .paused, pauseCauses.isEmpty, let take else { return }
         state = .recording
         take.log?.append(InputEvent(t: clock(), kind: .resumed))
+        warningsContinuation.yield(.resumed)
+        await input.resume()
         await withDiscardingTaskGroup { group in
             for pipeline in take.pipelines {
                 group.addTask { await pipeline.resume() }

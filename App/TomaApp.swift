@@ -52,6 +52,9 @@ private struct MenuContent: View {
             Text("Starting recording…")
         case .recording:
             Text("Recording \(recording.elapsed.formatted(.time(pattern: .hourMinuteSecond)))", comment: "Menu item while recording: the time recorded so far")
+            if recording.isPaused {
+                Text("Paused (screen locked or Mac asleep)", comment: "Menu item while a take is paused because the screen is locked or the Mac sleeps")
+            }
             Button("Stop Recording") { recording.stopRecording() }
         case .stopping:
             Text("Saving recording…")

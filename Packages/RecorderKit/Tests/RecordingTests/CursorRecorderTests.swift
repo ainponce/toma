@@ -60,6 +60,31 @@ import ProjectFormat
         }
     }
 
+    @Test func pauseStopsSamplingAndResumeStartsAgain() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = dir.appendingPathComponent("events.jsonl")
+            let log = try EventLogWriter(url: url)
+            let source = SteppingLocation()
+            let recorder = CursorRecorder(clock: HostTime.now, location: { source.next() })
+            await recorder.start(log: log)
+            try await Task.sleep(for: .milliseconds(100))
+            await recorder.pause()
+            await recorder.pause()  // idempotent
+            try log.flush()
+            let beforePause = try EventLogReader.read(url).events.count
+            try await Task.sleep(for: .milliseconds(150))
+            try log.flush()
+            #expect(beforePause > 0)
+            #expect(try EventLogReader.read(url).events.count == beforePause)
+            await recorder.resume()
+            await recorder.resume()  // idempotent: one timer, not two
+            try await Task.sleep(for: .milliseconds(100))
+            await recorder.stop()
+            try log.close()
+            #expect(try EventLogReader.read(url).events.count > beforePause)
+        }
+    }
+
     @Test func mapsMouseEventsToInputEvents() {
         let p = CGPoint(x: 12, y: 34)
         let ts = 5.0

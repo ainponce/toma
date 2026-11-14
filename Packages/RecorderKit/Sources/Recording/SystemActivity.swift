@@ -41,14 +41,8 @@ private final class SystemActivityObservers: Sendable {
         let value: any NSObjectProtocol
     }
 
-    private struct Screen {
-        var locked = false
-        var displaysAsleep = false
-        var unavailable: Bool { locked || displaysAsleep }
-    }
-
     private let tokens = Mutex<[Token]>([])
-    private let screen = Mutex(Screen())
+    private let screen = Mutex(ScreenAvailability())
 
     private let continuation: AsyncStream<SystemActivity>.Continuation
 
@@ -64,16 +58,16 @@ private final class SystemActivityObservers: Sendable {
         observe(workspace, NSWorkspace.willSleepNotification) { continuation.yield(.willSleep) }
         observe(workspace, NSWorkspace.didWakeNotification) { continuation.yield(.didWake) }
         observe(workspace, NSWorkspace.screensDidSleepNotification) { [weak self] in
-            self?.updateScreen { $0.displaysAsleep = true }
+            self?.updateScreen(displaysAsleep: true)
         }
         observe(workspace, NSWorkspace.screensDidWakeNotification) { [weak self] in
-            self?.updateScreen { $0.displaysAsleep = false }
+            self?.updateScreen(displaysAsleep: false)
         }
         observe(distributed, Notification.Name("com.apple.screenIsLocked")) { [weak self] in
-            self?.updateScreen { $0.locked = true }
+            self?.updateScreen(locked: true)
         }
         observe(distributed, Notification.Name("com.apple.screenIsUnlocked")) { [weak self] in
-            self?.updateScreen { $0.locked = false }
+            self?.updateScreen(locked: false)
         }
         tokens.withLock { $0 = added }
     }
@@ -84,14 +78,33 @@ private final class SystemActivityObservers: Sendable {
         }
     }
 
-    /// Applies `change` and sends `screenLocked` or `screenUnlocked` when availability flips.
-    /// Yielding under the lock keeps the events in the order of the changes.
-    private func updateScreen(_ change: (inout Screen) -> Void) {
+    /// Applies the change and sends what `ScreenAvailability` says. Yielding under the lock keeps the
+    /// events in the order of the changes.
+    private func updateScreen(locked: Bool? = nil, displaysAsleep: Bool? = nil) {
         screen.withLock { screen in
-            let wasUnavailable = screen.unavailable
-            change(&screen)
-            guard screen.unavailable != wasUnavailable else { return }
-            continuation.yield(screen.unavailable ? .screenLocked : .screenUnlocked)
+            if let activity = screen.apply(locked: locked, displaysAsleep: displaysAsleep) {
+                continuation.yield(activity)
+            }
         }
+    }
+}
+
+/// Whether the screen can be captured, folding the lock and display sleep into one state: it stops
+/// being capturable when either starts, and is capturable again only once both have ended, so waking
+/// the displays onto the lock screen does not resume capture.
+struct ScreenAvailability: Equatable {
+    private(set) var locked = false
+    private(set) var displaysAsleep = false
+
+    var isAvailable: Bool { !locked && !displaysAsleep }
+
+    /// Sets what is given and returns `screenLocked` or `screenUnlocked` when availability flips,
+    /// otherwise `nil`.
+    mutating func apply(locked: Bool? = nil, displaysAsleep: Bool? = nil) -> SystemActivity? {
+        let wasAvailable = isAvailable
+        if let locked { self.locked = locked }
+        if let displaysAsleep { self.displaysAsleep = displaysAsleep }
+        guard isAvailable != wasAvailable else { return nil }
+        return isAvailable ? .screenUnlocked : .screenLocked
     }
 }

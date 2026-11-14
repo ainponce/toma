@@ -24,6 +24,8 @@ final class RecordingController {
     private(set) var phase = Phase.idle
     /// Time since the take started, in whole seconds, while recording.
     private(set) var elapsed = Duration.zero
+    /// The take is paused (the screen is locked or the Mac sleeps): nothing is recorded until it resumes.
+    private(set) var isPaused = false
     /// What the user should know about the current or the last take, oldest first.
     private(set) var warnings: [String] = []
     /// The project of the last take recorded or recovered.
@@ -256,6 +258,7 @@ final class RecordingController {
         ticker?.cancel()
         ticker = nil
         elapsed = .zero
+        isPaused = false
         take = nil
         ProcessInfo.processInfo.enableAutomaticTermination(Self.terminationReason)
         ProcessInfo.processInfo.enableSuddenTermination()
@@ -336,6 +339,12 @@ final class RecordingController {
             message = String(localized: "Recording stopped: the disk is almost full.")
         case .diskSpaceUnknown:
             message = String(localized: "Can't check the free disk space.")
+        case .paused:
+            isPaused = true  // the menu says so while it lasts
+            return
+        case .resumed:
+            isPaused = false
+            return
         }
         addWarning(message)
     }

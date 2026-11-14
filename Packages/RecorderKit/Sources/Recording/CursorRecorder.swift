@@ -8,6 +8,11 @@ import Synchronization
 /// Records pointer input into the event log while a take runs.
 public protocol InputRecorder: Sendable {
     func start(log: EventLogWriter) async
+    /// Appends nothing more until `resume()`; once it returns, no event of the pause can still be
+    /// appended. Does nothing unless started and not paused.
+    func pause() async
+    /// Records again after `pause()`, only what happens from now on. Does nothing unless paused.
+    func resume() async
     func stop() async
 }
 
@@ -15,6 +20,8 @@ public protocol InputRecorder: Sendable {
 public final class NoInputRecorder: InputRecorder {
     public init() {}
     public func start(log: EventLogWriter) async {}
+    public func pause() async {}
+    public func resume() async {}
     public func stop() async {}
 }
 
@@ -33,6 +40,11 @@ public final class CursorRecorder: InputRecorder, Sendable {
         var timer: DispatchSourceTimer?
         var monitors: [MonitorToken] = []
         var lastPosition: CGPoint?
+        /// Between `pause()` and `resume()`: the timer is stopped and button events are dropped.
+        var paused = false
+        /// Button events from before this time are dropped: they happened during a pause, even if
+        /// they arrive after it.
+        var acceptsFrom: HostTime?
     }
 
     private let clock: @Sendable () -> HostTime
@@ -54,12 +66,9 @@ public final class CursorRecorder: InputRecorder, Sendable {
             s.log = log
             s.generation += 1
             s.lastPosition = nil
-            let timer = DispatchSource.makeTimerSource(queue: queue)
-            let interval = DispatchTimeInterval.nanoseconds(Int(1_000_000_000 / Self.sampleRate))
-            timer.schedule(deadline: .now(), repeating: interval, leeway: .microseconds(500))
-            timer.setEventHandler { [weak self] in self?.sample() }
-            s.timer = timer
-            timer.resume()
+            s.paused = false
+            s.acceptsFrom = nil
+            s.timer = makeSamplingTimer()
             return s.generation
         }
         guard let generation else { return }
@@ -91,6 +100,31 @@ public final class CursorRecorder: InputRecorder, Sendable {
         if !keep { await Self.remove(tokens) }
     }
 
+    /// Stops sampling and drops button events until `resume()`. The event monitors stay installed, so
+    /// resuming does not add a second set of them.
+    public func pause() async {
+        let timer = state.withLock { s -> DispatchSourceTimer? in
+            guard s.log != nil, !s.paused else { return nil }
+            s.paused = true
+            defer { s.timer = nil }
+            return s.timer
+        }
+        // A sample in flight finds `paused` set under the lock and appends nothing.
+        timer?.cancel()
+    }
+
+    /// Samples again, logging the position at once, and takes button events from now on.
+    public func resume() async {
+        let now = clock()
+        state.withLock { s in
+            guard s.log != nil, s.paused else { return }
+            s.paused = false
+            s.lastPosition = nil
+            s.acceptsFrom = now
+            s.timer = makeSamplingTimer()
+        }
+    }
+
     public func stop() async {
         let (timer, tokens) = state.withLock { s -> (DispatchSourceTimer?, [MonitorToken]) in
             let result = (s.timer, s.monitors)
@@ -98,19 +132,32 @@ public final class CursorRecorder: InputRecorder, Sendable {
             s.timer = nil
             s.monitors = []
             s.lastPosition = nil
+            s.paused = false
+            s.acceptsFrom = nil
             return result
         }
         timer?.cancel()
         await Self.remove(tokens)
     }
 
+    /// A running timer that samples the cursor at `sampleRate`, starting now.
+    private func makeSamplingTimer() -> DispatchSourceTimer {
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        let interval = DispatchTimeInterval.nanoseconds(Int(1_000_000_000 / Self.sampleRate))
+        timer.schedule(deadline: .now(), repeating: interval, leeway: .microseconds(500))
+        timer.setEventHandler { [weak self] in self?.sample() }
+        timer.resume()
+        return timer
+    }
+
     /// Appends a `.cursor` event when the position differs from the last one recorded. Holding the
-    /// lock across the append guarantees nothing is appended once `stop()` has cleared the log.
+    /// lock across the append guarantees nothing is appended once `stop()` has cleared the log, or
+    /// once `pause()` has returned.
     private func sample() {
         let position = location()
         let time = clock()
         state.withLock { s in
-            guard let log = s.log, s.lastPosition != position else { return }
+            guard let log = s.log, !s.paused, s.lastPosition != position else { return }
             s.lastPosition = position
             log.append(InputEvent(t: time, kind: .cursor(x: Double(position.x), y: Double(position.y))))
         }
@@ -122,7 +169,10 @@ public final class CursorRecorder: InputRecorder, Sendable {
                 type: event.type, buttonNumber: event.buttonNumber,
                 location: position, timestamp: event.timestamp)
         else { return }
-        state.withLock { s in s.log?.append(input) }
+        state.withLock { s in
+            guard !s.paused, s.acceptsFrom.map({ input.t >= $0 }) ?? true else { return }
+            s.log?.append(input)
+        }
     }
 
     private static func remove(_ tokens: [MonitorToken]) async {
