@@ -15,6 +15,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editors: [URL: EditorWindowController] = [:]
     private var onboarding: OnboardingWindowController?
     private var powerOffObserver: (any NSObjectProtocol)?
+    /// The take is being closed to quit or power off.
+    private var closingForQuit = false
+    /// Closing to quit has taken longer than `quitTimeLimit`.
+    private var quitTimeLimitPassed = false
+    /// `applicationShouldTerminate` answered `.terminateLater` and waits for a reply.
+    private var terminationPending = false
+    private var terminationReplied = false
+
+    /// How long quitting waits for the take to close.
+    private static let quitTimeLimit = Duration.seconds(30)
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
@@ -44,24 +54,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// A take in progress is closed before quitting: `stop()` is awaited, then the app quits even if
-    /// closing failed (the take can still be recovered).
+    /// A take in progress is closed before quitting: the app quits once `stop()` returns (even if closing
+    /// failed: the take can still be recovered), or after `quitTimeLimit` if it has not returned by then.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard recording.isRecording else { return .terminateNow }
-        Self.logger.notice("Quitting while recording: closing the take first")
-        Task {
-            await recording.stop(openingEditor: false)
-            sender.reply(toApplicationShouldTerminate: true)
+        if quitTimeLimitPassed {
+            // Closing for a power off already took too long.
+            Self.logger.error("Quitting before the take closed; it stays recoverable")
+            return .terminateNow
         }
+        Self.logger.notice("Quitting while recording: closing the take first")
+        terminationPending = true
+        closeTakeBeforeQuitting()
         return .terminateLater
     }
 
     /// Logging out, restarting or shutting down: the take starts closing now, before the system asks the
-    /// app to quit (which then waits for the same stop).
+    /// app to quit, which then waits for the same stop and the same time limit.
     private func willPowerOff() {
         guard recording.isRecording else { return }
         Self.logger.notice("Powering off while recording: closing the take")
-        Task { await recording.stop(openingEditor: false) }
+        closeTakeBeforeQuitting()
+    }
+
+    /// Starts closing the take, once, with `quitTimeLimit`; whichever ends first answers a pending quit.
+    private func closeTakeBeforeQuitting() {
+        guard !closingForQuit else { return }
+        closingForQuit = true
+        let deadline = Task {
+            try? await Task.sleep(for: Self.quitTimeLimit)
+            guard !Task.isCancelled else { return }
+            quitTimeLimitPassed = true
+            replyToTermination(takeClosed: false)
+        }
+        Task {
+            await recording.stop(openingEditor: false)
+            deadline.cancel()
+            closingForQuit = false
+            quitTimeLimitPassed = false
+            replyToTermination(takeClosed: true)
+        }
+    }
+
+    /// Lets a pending quit go ahead; only the first call replies.
+    private func replyToTermination(takeClosed: Bool) {
+        guard terminationPending, !terminationReplied else { return }
+        terminationReplied = true
+        if !takeClosed { Self.logger.error("Quitting before the take closed; it stays recoverable") }
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     /// Projects opened from Finder (or dropped on the app) open in the editor.

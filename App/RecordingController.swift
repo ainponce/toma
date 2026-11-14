@@ -105,6 +105,44 @@ final class RecordingController {
             addWarning(String(localized: "Microphone access is off. Recording without audio."))
         }
 
+        var withMicrophone = preflight.recordMicrophone
+        while true {
+            switch await attempt(withMicrophone: withMicrophone) {
+            case .started, .handedToStop:
+                return
+            case .cancelled:
+                setPhase(.idle)
+                return
+            case .failed(let error, let microphoneFailed):
+                // A broken microphone must not keep the screen from being recorded: once, in a new
+                // project, with the display alone. The failed project is left as it is.
+                if withMicrophone, microphoneFailed, !startCancelled {
+                    Self.logger.notice("The microphone could not start; recording the display alone in a new project")
+                    addWarning(String(localized: "The microphone couldn't start. Recording the screen without audio."))
+                    withMicrophone = false
+                    continue
+                }
+                setPhase(.idle)
+                if !startCancelled { showStartFailure(error) }
+                return
+            }
+        }
+    }
+
+    private enum AttemptOutcome {
+        /// Recording.
+        case started
+        /// A stop came first; nothing was recorded and nothing is left to release.
+        case cancelled
+        /// A stop came while starting: it closes the take.
+        case handedToStop
+        /// The take did not start and its resources are released. `microphoneFailed`: because the
+        /// microphone did not start.
+        case failed(any Error, microphoneFailed: Bool)
+    }
+
+    /// Creates a new project and starts recording a take in it.
+    private func attempt(withMicrophone: Bool) async -> AttemptOutcome {
         let folder = Self.projectsFolder
         let prefix = String(localized: "Recording", comment: "A recording: the start of a new project's name, and the menu bar icon while recording")
         let app = AppInfo(name: AppIdentity.name, version: AppIdentity.version)
@@ -115,20 +153,14 @@ final class RecordingController {
                 try ProjectFolder.createPackage(in: folder, prefix: prefix, app: app, now: Date())
             }.value
         } catch {
-            setPhase(.idle)
-            showStartFailure(error)
-            return
+            Self.logger.error("Cannot create a project in \(folder.path, privacy: .public): \(String(describing: error), privacy: .public)")
+            return .failed(error, microphoneFailed: false)
         }
-        guard !startCancelled else {
-            setPhase(.idle)
-            return
-        }
+        guard !startCancelled else { return .cancelled }
 
         // From here to `take = …` nothing suspends, so a stop either cancelled the start above or finds the take.
-        var sources: [any CaptureSource] = [DisplayCaptureSource(displayID: CGMainDisplayID())]
-        if preflight.recordMicrophone {
-            sources.append(MicrophoneCaptureSource(preferredDeviceUniqueID: nil))
-        }
+        let microphone = withMicrophone ? StartTrackingSource(MicrophoneCaptureSource(preferredDeviceUniqueID: nil)) : nil
+        let sources: [any CaptureSource] = [DisplayCaptureSource(displayID: CGMainDisplayID())] + (microphone.map { [$0] } ?? [])
         let kinds = Dictionary(uniqueKeysWithValues: sources.map { ($0.trackID, $0.kind) })
         let coordinator = RecordingCoordinator(
             package: package, sources: sources, input: CursorRecorder(),
@@ -155,16 +187,17 @@ final class RecordingController {
         Self.logger.notice("Starting a take in \(package.url.path, privacy: .public) with \(ownWindows) visible windows of our own")
         do {
             _ = try await starting.value
-            // A stop that came while starting has the take now.
-            guard stopTask == nil else { return }
+            // A stop that came while starting has the take now, or has already closed it.
+            guard stopTask == nil, take?.coordinator === coordinator else { return .handedToStop }
             let since = Date()
             setPhase(.recording(since: since))
             startTicker(since: since)
+            return .started
         } catch {
             Self.logger.error("The take could not start: \(String(describing: error), privacy: .public)")
-            guard stopTask == nil else { return }
-            endTake()
-            showStartFailure(error)
+            guard stopTask == nil, take?.coordinator === coordinator else { return .handedToStop }
+            releaseTake()
+            return .failed(error, microphoneFailed: MicrophoneFallback.shouldRetryWithoutMicrophone(after: error, microphone: microphone))
         }
     }
 
@@ -213,15 +246,19 @@ final class RecordingController {
         if openingEditor { openEditor(take.package.url, takeID) }
     }
 
-    /// Releases what the take held once it is closed (or failed to start).
+    /// Releases what the take held once it is closed (or failed to start), and goes back to idle.
     private func endTake() {
+        releaseTake()
+        setPhase(.idle)
+    }
+
+    private func releaseTake() {
         ticker?.cancel()
         ticker = nil
         elapsed = .zero
         take = nil
         ProcessInfo.processInfo.enableAutomaticTermination(Self.terminationReason)
         ProcessInfo.processInfo.enableSuddenTermination()
-        setPhase(.idle)
     }
 
     private static let terminationReason = "Recording a take"
@@ -307,24 +344,9 @@ final class RecordingController {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = String(localized: "Couldn't start recording")
-        alert.informativeText = Self.startFailureDescription(error)
+        alert.informativeText = userFacingDescription(of: error)
         NSApp.activate()
         alert.runModal()
-    }
-
-    private static func startFailureDescription(_ error: any Error) -> String {
-        switch error {
-        case RecordingError.notEnoughDiskSpace(let available):
-            String(localized: "There isn't enough free disk space to record (\(available.formatted(.byteCount(style: .file))) available).")
-        case RecordingError.volumeNotAllowed:
-            String(localized: "Recordings can't be saved to a network or synced folder.")
-        case CaptureSourceError.displayNotFound:
-            String(localized: "The main display isn't available.")
-        case CaptureSourceError.microphoneNotFound:
-            String(localized: "No microphone found.")
-        default:
-            userFacingDescription(of: error)
-        }
     }
 }
 
@@ -337,15 +359,4 @@ enum AppIdentity {
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
     }
-}
-
-/// A description of `error` to show: the system's own text for errors that carry one, the error itself
-/// for this app's errors (whose generic text would say nothing).
-func userFacingDescription(of error: any Error) -> String {
-    let bridged = error as NSError
-    let systemDomains = [NSCocoaErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain, NSURLErrorDomain]
-    if bridged.userInfo[NSLocalizedDescriptionKey] != nil || systemDomains.contains(bridged.domain) {
-        return bridged.localizedDescription
-    }
-    return String(describing: error)
 }

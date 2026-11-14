@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import AppSupport
 import ProjectFormat
 import Recovery
 import os
@@ -12,6 +13,7 @@ final class RecoveryPrompt {
     var recovered: (URL) -> Void = { _ in }
 
     private var isRunning = false
+    private let repairNotices = RepairNotices()
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recovery")
 
     private struct Failure: Sendable {
@@ -20,41 +22,60 @@ final class RecoveryPrompt {
         var error: any Error
     }
 
-    /// Scans `folder`. At launch it only speaks up when there is something to recover; from the menu
-    /// it also says when there is nothing.
+    /// Scans `folder`. At launch it only speaks up when there is something to recover, or a damaged project
+    /// it has not mentioned before; from the menu it also says when there is nothing.
     func run(in folder: URL, atLaunch: Bool) async {
-        guard !isRunning else { return }
+        guard !isRunning else {
+            if !atLaunch {
+                let alert = NSAlert()
+                alert.messageText = String(localized: "Recovery is already running.")
+                show(alert)
+            }
+            return
+        }
         isRunning = true
         defer { isRunning = false }
 
         let results = await Task.detached(priority: .userInitiated) { RecoveryScanner.scan(directory: folder) }.value
         var recoverable: [(package: ProjectPackage, takeID: String)] = []
-        var needsRepair: [(package: ProjectPackage, reason: String)] = []
+        var damaged: [RepairNotice] = []
         for result in results {
             switch result {
             case let .recoverable(package, takeID): recoverable.append((package, takeID))
-            case let .needsRepair(package, reason): needsRepair.append((package, reason))
+            case let .needsRepair(package, reason): damaged.append(RepairNotice(path: package.url.path, reason: reason))
             }
         }
-        for (package, reason) in needsRepair {
-            Self.logger.notice("Needs repair, left untouched: \(package.url.path, privacy: .public): \(reason, privacy: .public)")
+        for notice in damaged {
+            Self.logger.notice("Needs repair, left untouched: \(notice.path, privacy: .public): \(notice.reason, privacy: .public)")
         }
+        // At launch each damaged project is mentioned once; the menu lists them all.
+        let mentioned = atLaunch ? repairNotices.unseen(damaged) : damaged
 
         guard !recoverable.isEmpty else {
-            guard !atLaunch else { return }
-            let alert = NSAlert()
-            alert.messageText = String(localized: "No recordings need recovering.")
-            alert.informativeText = Self.repairList(needsRepair)
-            show(alert)
+            if !atLaunch {
+                let alert = NSAlert()
+                alert.messageText = String(localized: "No recordings need recovering.")
+                alert.informativeText = Self.repairList(mentioned)
+                show(alert)
+            } else if !mentioned.isEmpty {
+                let alert = NSAlert()
+                alert.alertStyle = .warning
+                alert.messageText = String(localized: "Some projects can't be read safely")
+                alert.informativeText = Self.repairList(mentioned)
+                show(alert)
+            }
+            repairNotices.markShown(mentioned)
             return
         }
 
         let alert = NSAlert()
         alert.messageText = String(localized: "We found \(recoverable.count) recordings that didn't finish saving. Recover them?")
-        alert.informativeText = Self.repairList(needsRepair)
+        alert.informativeText = Self.repairList(mentioned)
         alert.addButton(withTitle: String(localized: "Recover"))
         alert.addButton(withTitle: String(localized: "Later", comment: "Button: leave the unfinished recordings as they are for now"))
-        guard show(alert) == .alertFirstButtonReturn else { return }
+        let response = show(alert)
+        repairNotices.markShown(mentioned)
+        guard response == .alertFirstButtonReturn else { return }
 
         let takes = recoverable
         let (closed, failures) = await Task.detached(priority: .userInitiated) { await Self.recover(takes) }.value
@@ -87,11 +108,16 @@ final class RecoveryPrompt {
         return (closed, failures)
     }
 
-    /// The projects that cannot be read safely, one per line, or nothing.
-    private static func repairList(_ needsRepair: [(package: ProjectPackage, reason: String)]) -> String {
-        guard !needsRepair.isEmpty else { return "" }
+    /// The projects that cannot be read safely, one per line under a heading, or nothing. The reasons come
+    /// from recovery, in English, and are shown as details.
+    private static func repairList(_ notices: [RepairNotice]) -> String {
+        guard !notices.isEmpty else { return "" }
+        let lines = notices.map { notice in
+            let name = (notice.path as NSString).lastPathComponent
+            return "• " + String(localized: "\(name) (details: \(notice.reason))", comment: "A damaged project: its name, and recovery's technical reason")
+        }
         return String(localized: "These projects can't be read safely and were left untouched:")
-            + "\n" + needsRepair.map { "• \($0.package.url.lastPathComponent): \($0.reason)" }.joined(separator: "\n")
+            + "\n" + lines.joined(separator: "\n")
     }
 
     @discardableResult

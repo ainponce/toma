@@ -38,7 +38,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Toma records your microphone only when you enable it for a recording.</string>
+	<string>$(PRODUCT_NAME) records your microphone only when you enable it for a recording.</string>
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

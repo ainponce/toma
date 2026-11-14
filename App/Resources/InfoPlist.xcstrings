@@ -1,0 +1,29 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "$(PRODUCT_NAME) Project" : {
+      "comment" : "Kind of a project document in Finder. The name of the app is put in when building.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proyecto de $(PRODUCT_NAME)"
+          }
+        }
+      }
+    },
+    "NSMicrophoneUsageDescription" : {
+      "comment" : "Shown by macOS when the app first asks for the microphone. The name of the app is put in when building.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "$(PRODUCT_NAME) graba el micrófono solo cuando se activa para una grabación."
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

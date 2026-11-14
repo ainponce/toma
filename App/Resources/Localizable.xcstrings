@@ -1,6 +1,47 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%@ (details: %@)" : {
+      "comment" : "A damaged project: its name, and recovery's technical reason",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ (detalle: %@)"
+          }
+        }
+      }
+    },
+    "A file isn't inside the project." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un archivo no está dentro del proyecto."
+          }
+        }
+      }
+    },
+    "A recording file with the same name already exists. It was left untouched." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya existe un archivo de grabación con el mismo nombre. No se modificó."
+          }
+        }
+      }
+    },
+    "A recording is already in progress." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya hay una grabación en curso."
+          }
+        }
+      }
+    },
     "Allowed" : {
       "comment" : "The state of a permission",
       "localizations" : {
@@ -18,6 +59,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Permitir…"
+          }
+        }
+      }
+    },
+    "An unexpected error occurred." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocurrió un error inesperado."
+          }
+        }
+      }
+    },
+    "Another recording in this project is in progress." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay otra grabación en curso en este proyecto."
           }
         }
       }
@@ -48,6 +109,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Buscar actualizaciones…"
+          }
+        }
+      }
+    },
+    "Couldn't draw the preview." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo dibujar la vista previa."
           }
         }
       }
@@ -295,6 +366,16 @@
         }
       }
     },
+    "Nothing is being recorded." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se está grabando nada."
+          }
+        }
+      }
+    },
     "Open Last Project" : {
       "localizations" : {
         "es" : {
@@ -311,6 +392,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrir Ajustes del Sistema"
+          }
+        }
+      }
+    },
+    "Part of the recording couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar parte de la grabación."
           }
         }
       }
@@ -447,6 +538,16 @@
         }
       }
     },
+    "Recovery is already running." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La recuperación ya está en curso."
+          }
+        }
+      }
+    },
     "Saving recording…" : {
       "localizations" : {
         "es" : {
@@ -547,6 +648,16 @@
         }
       }
     },
+    "Some projects can't be read safely" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Algunos proyectos no se pueden leer de forma segura"
+          }
+        }
+      }
+    },
     "Some screen frames couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -577,12 +688,52 @@
         }
       }
     },
+    "The export was canceled." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se canceló la exportación."
+          }
+        }
+      }
+    },
     "The main display isn't available." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla principal no está disponible."
+          }
+        }
+      }
+    },
+    "The microphone couldn't be set up." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo configurar el micrófono."
+          }
+        }
+      }
+    },
+    "The microphone couldn't start. Recording the screen without audio." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar el micrófono. Se graba la pantalla sin audio."
+          }
+        }
+      }
+    },
+    "The microphone didn't start." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El micrófono no se inició."
           }
         }
       }
@@ -597,6 +748,16 @@
         }
       }
     },
+    "The operation was canceled." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se canceló la operación."
+          }
+        }
+      }
+    },
     "The recording closed with an error: %@" : {
       "localizations" : {
         "es" : {
@@ -607,12 +768,82 @@
         }
       }
     },
+    "The recording file was already closed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo de la grabación ya estaba cerrado."
+          }
+        }
+      }
+    },
+    "The recording is still in progress." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La grabación todavía está en curso."
+          }
+        }
+      }
+    },
+    "The recording isn't in this project." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La grabación no está en este proyecto."
+          }
+        }
+      }
+    },
+    "The recording's format can't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede guardar el formato de la grabación."
+          }
+        }
+      }
+    },
     "The screen stopped recording." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The video can't be saved there. Choose a folder outside the project." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede guardar el video ahí. Elegir una carpeta fuera del proyecto."
+          }
+        }
+      }
+    },
+    "The video couldn't be drawn." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo dibujar el video."
+          }
+        }
+      }
+    },
+    "The video file couldn't be written." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo escribir el archivo de video."
           }
         }
       }
@@ -683,6 +914,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quedaron como estaban. Para volver a intentarlo, usar Recuperar grabaciones… en la barra de menú."
+          }
+        }
+      }
+    },
+    "This Mac has no graphics device to draw the video." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta Mac no tiene un dispositivo gráfico para dibujar el video."
+          }
+        }
+      }
+    },
+    "This project has no recordings." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto no tiene grabaciones."
+          }
+        }
+      }
+    },
+    "This project was saved by a newer version and can't be opened." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto se guardó con una versión más nueva y no se puede abrir."
+          }
+        }
+      }
+    },
+    "This recording has no screen to export." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta grabación no tiene pantalla para exportar."
           }
         }
       }

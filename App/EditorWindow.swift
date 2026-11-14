@@ -95,12 +95,17 @@ final class EditorModel {
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     @ObservationIgnored private var resumeAfterScrub = false
     @ObservationIgnored private var closed = false
+    @ObservationIgnored private var lastPublished: ContinuousClock.Instant?
 
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Editor")
 
     private enum LoadError: Error {
         case unfinished
+        case cannotDraw
     }
+
+    /// While playing, the time shown is published at most this often.
+    private static let playbackPublishInterval = Duration.milliseconds(100)
 
     init(packageURL: URL, takeID: String?, exportGate: ExportGate) {
         self.packageURL = packageURL
@@ -131,6 +136,7 @@ final class EditorModel {
                         _ = try preview.snapshot(at: 0)  // loads the first segment's track now
                     } catch {
                         Self.logger.error("Cannot draw the first frame: \(String(describing: error), privacy: .public)")
+                        throw LoadError.cannotDraw
                     }
                     return (project, preview, renderer.duration)
                 }.value
@@ -142,6 +148,8 @@ final class EditorModel {
                 state = .ready(preview)
             } catch LoadError.unfinished {
                 state = .failed(String(localized: "This recording hasn't finished saving. If it isn't being recorded now, recover it with Recover Recordings… in the menu bar."))
+            } catch LoadError.cannotDraw {
+                state = .failed(String(localized: "Couldn't draw the preview."))
             } catch {
                 Self.logger.error("Cannot open \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")
                 state = .failed(userFacingDescription(of: error))
@@ -177,14 +185,21 @@ final class EditorModel {
         sync()
     }
 
-    /// After every frame drawn: playing moves the time, and stops at the end.
+    /// After every frame drawn: playing moves the time, and stops at the end. While it plays, the time is
+    /// published at most every `playbackPublishInterval`, not on every frame.
     func previewDidDraw() {
+        guard let preview else { return }
+        if isPlaying, preview.isPlaying, let lastPublished,
+           ContinuousClock.now - lastPublished < Self.playbackPublishInterval {
+            return
+        }
         sync()
     }
 
     private func sync() {
         guard let preview else { return }
         let time = preview.currentTime, playing = preview.isPlaying
+        lastPublished = .now
         if currentTime != time { currentTime = time }
         if isPlaying != playing { isPlaying = playing }
     }

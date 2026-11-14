@@ -25,6 +25,15 @@ targets:
         CODE_SIGN_ENTITLEMENTS: App/Toma.entitlements
         LOCALIZATION_PREFERS_STRING_CATALOGS: "YES"
         SWIFT_EMIT_LOC_STRINGS: "YES"
+    postBuildScripts:
+      - name: Put the product name in InfoPlist.strings
+        script: bash "$SRCROOT/scripts/expand-infoplist-strings.sh"
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        inputFiles:
+          - $(SRCROOT)/scripts/expand-infoplist-strings.sh
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/en.lproj/InfoPlist.strings
+          - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/es.lproj/InfoPlist.strings
     dependencies:
       - package: RecorderKit
         product: RecorderKit
@@ -35,7 +44,7 @@ targets:
       properties:
         LSUIElement: true
         LSMinimumSystemVersion: "15.0"
-        NSMicrophoneUsageDescription: Toma records your microphone only when you enable it for a recording.
+        NSMicrophoneUsageDescription: $(PRODUCT_NAME) records your microphone only when you enable it for a recording.
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDocumentTypes:

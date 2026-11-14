@@ -20,7 +20,7 @@ let package = Package(
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
         .target(name: "Render", dependencies: ["ProjectFormat"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
-        .target(name: "AppSupport", dependencies: ["ProjectFormat"]),
+        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording"]),
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
@@ -33,7 +33,7 @@ let package = Package(
         .testTarget(name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "ExportTests", dependencies: ["Export", "Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
-        .testTarget(name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat"]),
+        .testTarget(name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture"]),
     ],
     swiftLanguageModes: [.v6]
 )

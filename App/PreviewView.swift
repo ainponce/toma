@@ -10,7 +10,8 @@ import os
 struct PreviewView: NSViewRepresentable {
     let preview: PreviewRenderer
     let isPlaying: Bool
-    /// The output time shown; a change redraws the paused view.
+    /// The output time the editor shows; a change makes SwiftUI update the view, which redraws it if paused
+    /// and the renderer's time is not the one last drawn.
     let time: Double
     /// Called on the main thread after every frame drawn.
     let onDraw: @MainActor () -> Void
@@ -36,7 +37,8 @@ struct PreviewView: NSViewRepresentable {
     func updateNSView(_ view: MTKView, context: Context) {
         context.coordinator.onDraw = onDraw
         apply(isPlaying, to: view)
-        if !isPlaying { view.needsDisplay = true }
+        // Paused, a new frame is drawn only when the time shown changes.
+        if !isPlaying, context.coordinator.lastDrawnTime != preview.currentTime { view.needsDisplay = true }
     }
 
     /// Playing: the view's own timer draws. Paused: it draws when it needs display.
@@ -55,6 +57,8 @@ struct PreviewView: NSViewRepresentable {
 
         let preview: PreviewRenderer
         var onDraw: @MainActor () -> Void = {}
+        /// The output time of the last frame drawn.
+        private(set) var lastDrawnTime: Double?
 
         init(preview: PreviewRenderer) {
             self.preview = preview
@@ -69,6 +73,7 @@ struct PreviewView: NSViewRepresentable {
             let start = ContinuousClock.now
             preview.draw(in: view)
             let elapsed = ContinuousClock.now - start
+            lastDrawnTime = preview.currentTime  // where playing moved it to
             if elapsed > Self.slowFrame {
                 let milliseconds = Double(elapsed.components.seconds) * 1000 + Double(elapsed.components.attoseconds) / 1e15
                 Self.logger.debug("Frame at \(time, format: .fixed(precision: 2)) s took \(milliseconds, format: .fixed(precision: 1)) ms on the main thread")

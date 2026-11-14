@@ -1,0 +1,121 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import Export
+import Foundation
+import ProjectFormat
+import Recording
+import Recovery
+import Render
+
+/// A description of `error` to show: this app's errors in the user's language, the system's own text for
+/// errors that carry one, and a generic sentence otherwise. Never a type or case name; callers log the
+/// error itself.
+func userFacingDescription(of error: any Error) -> String {
+    if let text = appErrorDescription(error) { return text }
+    let bridged = error as NSError
+    let systemDomains = [NSCocoaErrorDomain, NSPOSIXErrorDomain, NSOSStatusErrorDomain, NSURLErrorDomain]
+    if bridged.userInfo[NSLocalizedDescriptionKey] != nil || systemDomains.contains(bridged.domain) {
+        return bridged.localizedDescription
+    }
+    return String(localized: "An unexpected error occurred.")
+}
+
+private func appErrorDescription(_ error: any Error) -> String? {
+    switch error {
+    case let error as RecordingError: description(of: error)
+    case let error as CaptureSourceError: description(of: error)
+    case let error as WriterError: description(of: error)
+    case let error as RecoveryError: description(of: error)
+    case let error as LoadedProjectError: description(of: error)
+    case let error as ExportError: description(of: error)
+    case let error as RenderError: description(of: error)
+    case is ProjectPackageError: String(localized: "A file isn't inside the project.")
+    case is CancellationError: String(localized: "The operation was canceled.")
+    default: nil
+    }
+}
+
+private func description(of error: RecordingError) -> String {
+    switch error {
+    case .notEnoughDiskSpace(let available):
+        String(localized: "There isn't enough free disk space to record (\(available.formatted(.byteCount(style: .file))) available).")
+    case .volumeNotAllowed:
+        String(localized: "Recordings can't be saved to a network or synced folder.")
+    case .alreadyStarted:
+        String(localized: "A recording is already in progress.")
+    case .notRecording:
+        String(localized: "Nothing is being recorded.")
+    }
+}
+
+private func description(of error: CaptureSourceError) -> String {
+    switch error {
+    case .displayNotFound:
+        String(localized: "The main display isn't available.")
+    case .microphoneNotFound:
+        String(localized: "No microphone found.")
+    case .sessionConfigurationFailed:
+        String(localized: "The microphone couldn't be set up.")
+    case .sessionDidNotStart:
+        String(localized: "The microphone didn't start.")
+    }
+}
+
+private func description(of error: WriterError) -> String {
+    switch error {
+    case .unsupportedFormat:
+        String(localized: "The recording's format can't be saved.")
+    case .appendFailed:
+        String(localized: "Part of the recording couldn't be saved.")
+    case .alreadyFinished:
+        String(localized: "The recording file was already closed.")
+    case .fileExists:
+        String(localized: "A recording file with the same name already exists. It was left untouched.")
+    }
+}
+
+private func description(of error: RecoveryError) -> String {
+    switch error {
+    case .lockHeld:
+        String(localized: "The recording is still in progress.")
+    case .anotherTakeRecording:
+        String(localized: "Another recording in this project is in progress.")
+    case .takeNotFound:
+        String(localized: "The recording isn't in this project.")
+    case .unsupportedFormatVersion:
+        String(localized: "This project was saved by a newer version and can't be opened.")
+    }
+}
+
+private func description(of error: LoadedProjectError) -> String {
+    switch error {
+    case .unsupportedFormatVersion:
+        String(localized: "This project was saved by a newer version and can't be opened.")
+    case .noTakes:
+        String(localized: "This project has no recordings.")
+    case .takeNotFound:
+        String(localized: "The recording isn't in this project.")
+    }
+}
+
+private func description(of error: ExportError) -> String {
+    switch error {
+    case .cancelled:
+        String(localized: "The export was canceled.")
+    case .writerFailed:
+        String(localized: "The video file couldn't be written.")
+    case .noDisplayTrack:
+        String(localized: "This recording has no screen to export.")
+    case .destinationNotAllowed:
+        String(localized: "The video can't be saved there. Choose a folder outside the project.")
+    }
+}
+
+private func description(of error: RenderError) -> String {
+    switch error {
+    case .noMetalDevice:
+        String(localized: "This Mac has no graphics device to draw the video.")
+    case .invalidOutputSize, .targetSizeMismatch, .unsupportedPixelFormat, .metalResourceUnavailable,
+         .missingShaderFunction, .textureCreationFailed, .gpuFailed:
+        String(localized: "The video couldn't be drawn.")
+    }
+}
