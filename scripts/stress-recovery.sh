@@ -4,8 +4,9 @@
 # Endurance and crash gate of phase 0, run by hand (it cannot run in CI): records the main display
 # and the default microphone with content that moves the whole time, samples the recorder's memory
 # at 5, 15 and 30 min, kills it with SIGKILL at 30 min, recovers the take and verifies that every
-# track kept at least 1798 s. Prints, per track, its duration, droppedFrames and the endReason of
-# each segment. Fails if a track was lost or stopped recording for good (trackLost, or trackPaused or
+# track kept at least 1798 s. Fails if memory grows: RSS at 30 min must be at most RSS at 5 min
+# + 50 MB (spec §9, bounded memory). Prints, per track, its duration, droppedFrames and the endReason
+# of each segment. Fails if a track was lost or stopped recording for good (trackLost, or trackPaused or
 # displayPaused: its restarts were used up) or there is no mic track.
 #
 #   bash scripts/stress-recovery.sh [folder]
@@ -17,13 +18,19 @@
 # 2 s), so the drops of up to the last 2 s before the kill may be missing.
 #
 # Needs Screen Recording and Microphone permission for the terminal app, and about 4 GB free.
-# The optional reboot test is described in docs/performance.md.
+# The optional reboot test is described in docs/release.md.
+#
+# For checking the gate itself, the timings can be shortened (DURATION, KILL_AT, MIN_DURATION, and RSS_AT,
+# seconds separated by spaces: the first is compared with the last) and RECORDER_DEV can name a recorder-dev
+# to run instead of building one.
 set -euo pipefail
 
-DURATION=3600
-KILL_AT=1800
-MIN_DURATION=1798
-RSS_AT=(300 900 1800)
+DURATION=${DURATION:-3600}
+KILL_AT=${KILL_AT:-1800}
+MIN_DURATION=${MIN_DURATION:-1798}
+read -r -a RSS_AT <<<"${RSS_AT:-300 900 1800}"
+# The most RSS may grow from the first sample (5 min) to the last (30 min), in KB.
+RSS_GROWTH_LIMIT_KB=51200
 
 # The folder argument is relative to where the script was started, so resolve it before the `cd`.
 if [ $# -ge 1 ]; then
@@ -35,8 +42,12 @@ fi
 LOGS="$(mktemp -d)"
 cd "$(dirname "$0")/.."
 
-swift build -c release --package-path Packages/RecorderKit --product recorder-dev
-BIN="$(swift build -c release --package-path Packages/RecorderKit --product recorder-dev --show-bin-path)/recorder-dev"
+if [ -n "${RECORDER_DEV:-}" ]; then
+  BIN=$RECORDER_DEV
+else
+  swift build -c release --package-path Packages/RecorderKit --product recorder-dev
+  BIN="$(swift build -c release --package-path Packages/RecorderKit --product recorder-dev --show-bin-path)/recorder-dev"
+fi
 
 cat <<'EOF'
 Before recording, on the main display:
@@ -56,7 +67,7 @@ trap cleanup EXIT
 
 # Keeps the Mac from sleeping (-i -m -s), but not the display (no -d, and no -u, which would keep it on
 # too): the recorder's own assertion must keep the display awake, so the gate checks that it does.
-caffeinate -ims -t 3700 &
+caffeinate -ims -t $(( DURATION + 100 )) &
 CAFFEINATE_PID=$!
 
 "$BIN" record "$DIR" --duration "$DURATION" > "$LOGS/out" 2> "$LOGS/err" &
@@ -85,11 +96,15 @@ wait_until() {
   done
 }
 
+RSS_SAMPLES=()
 for mark in "${RSS_AT[@]}"; do
   wait_until "$mark"
   RSS_KB=$(ps -o rss= -p "$PID" | tr -d ' ')
-  echo "RSS at $(( mark / 60 )) min: ${RSS_KB} KB ($(( RSS_KB / 1024 )) MB)"
+  RSS_SAMPLES+=("$RSS_KB")
+  echo "RSS at $(( mark / 60 )) min ($mark s): ${RSS_KB} KB ($(( RSS_KB / 1024 )) MB)"
 done
+RSS_FIRST=${RSS_SAMPLES[0]}
+RSS_LAST=${RSS_SAMPLES[${#RSS_SAMPLES[@]} - 1]}
 
 wait_until "$KILL_AT"
 kill -9 "$PID"
@@ -130,6 +145,13 @@ for (( i = 0; i < $(json "takes.$TAKE.tracks"); i++ )); do
 done
 
 FAILED=0
+if [ "$RSS_LAST" -gt $(( RSS_FIRST + RSS_GROWTH_LIMIT_KB )) ]; then
+  echo "FAIL: memory grew: RSS at ${RSS_AT[${#RSS_AT[@]} - 1]} s is ${RSS_LAST} KB, more than RSS at ${RSS_AT[0]} s" \
+    "(${RSS_FIRST} KB) + 50 MB (${RSS_GROWTH_LIMIT_KB} KB)"
+  FAILED=1
+else
+  echo "RSS: ${RSS_FIRST} KB at ${RSS_AT[0]} s, ${RSS_LAST} KB at ${RSS_AT[${#RSS_AT[@]} - 1]} s: within 50 MB"
+fi
 if grep -qE 'trackLost|trackPaused|displayPaused' "$LOGS/out"; then
   echo "FAIL: a track was lost or stopped recording:"
   grep -E 'trackLost|trackPaused|displayPaused' "$LOGS/out"
