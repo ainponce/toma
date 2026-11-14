@@ -7,7 +7,7 @@ bash scripts/stress-recovery.sh                         # disco interno
 bash scripts/stress-recovery.sh /Volumes/<disco>/toma   # disco USB externo
 ```
 
-El script compila `recorder-dev` en Release, graba la pantalla principal y el micrófono con contenido en movimiento, mide la memoria (RSS) del grabador a los 5, 15 y 30 min, lo mata con `kill -9` a los 30 min, recupera la toma y la verifica con `--min-duration 1798`. Al final imprime, por pista, la duración, `droppedFrames` y el `endReason` de cada segmento.
+El script compila `recorder-dev` en Release, graba la pantalla principal y el micrófono con contenido en movimiento, mide la memoria (RSS) del grabador a los 5, 15 y 30 min, lo mata con `kill -9` a los 30 min, recupera la toma y la verifica con `--min-duration 1798`. Al final imprime, por pista, la duración, `droppedFrames` y el `endReason` de cada segmento. **Falla** si la memoria crece (RSS a los 30 min > RSS a los 5 min + 50 MB: el objetivo de memoria acotada del spec §9), si una pista se perdió o dejó de grabar (`trackLost`, `trackPaused`, `displayPaused`), si no hay pista de micrófono o si `verify` falla. Mantiene la Mac despierta con `caffeinate -ims`, sin `-d` ni `-u`: es la propia toma la que no deja que la pantalla se apague, y el script lo comprueba así.
 
 Después del `kill -9`, `droppedFrames` sale del último evento `droppedSamples` que el grabador escribió en `events.jsonl` (lo hace cada 2 s, si cambió): pueden faltar los cuadros perdidos en los últimos 2 s antes del corte. `verify` tolera que una pista de una toma recuperada termine hasta 2 s antes que otra (1 s en una toma cerrada por la app), porque cada pista se puede leer hasta su último fragmento completo de 1 s.
 
@@ -21,12 +21,13 @@ Después del `kill -9`, `droppedFrames` sale del último evento `droppedSamples`
 | RSS a los 5 min | pendiente | pendiente |
 | RSS a los 15 min | pendiente | pendiente |
 | RSS a los 30 min | pendiente | pendiente |
+| RSS a los 30 min ≤ RSS a los 5 min + 50 MB (el script falla si no) | pendiente | pendiente |
 | `display-1`: duración recuperada | pendiente | pendiente |
 | `display-1`: `droppedFrames` (% de los cuadros) | pendiente | pendiente |
 | `mic`: duración recuperada | pendiente | pendiente |
 | `mic`: `droppedFrames` | pendiente | pendiente |
 | `endReason` de los segmentos | pendiente | pendiente |
-| Advertencias (`trackLost`, `samplesDropped`, …) | pendiente | pendiente |
+| Advertencias (`trackLost`, `trackPaused`, `displayPaused`, `samplesDropped`, …) | pendiente | pendiente |
 | `verify --min-duration 1798` | pendiente | pendiente |
 
 ## Export (Task 11)
@@ -65,17 +66,24 @@ Apple M5 Pro, macOS 26.6, Swift 6.4.2, disco interno, 13 de noviembre de 2026.
 
 Lo legible de un segmento abierto, que es lo que la recuperación conserva tras un crash: video y audio grabados en tiempo real se pueden leer hasta su último fragmento de 1 s; en una prueba de audio en tiempo real, lo legible fue 1,02 s a los 1,6 s de audio y después siguió a 1–2 s de lo grabado. Un segmento que lleva menos de eso cuando la app muere queda `empty` o `unreadable` (el archivo se conserva). Escrito sin tiempo real, como en las pruebas, un archivo ALAC no tiene encabezado legible hasta los ~3 s de audio.
 
-## Prueba opcional de reinicio
+## Corrida de 3 h (spec §7.3.9)
 
-Comprueba que un corte sin vaciar la caché del sistema de archivos conserva la toma. Va a `docs/release.md` cuando exista (Task 13).
+El spec pide también una toma de 3 h. Con el mismo script y los tiempos alargados por variables de entorno:
 
-1. `caffeinate -dimsu -t 1000 &` y, en la misma Terminal, `recorder-dev record <carpeta> --duration 900 > out &`; la primera línea de `out` es la ruta del paquete.
-2. A los 300 s: `sudo reboot -q -n` (reinicia sin vaciar la caché de disco).
-3. Después del arranque: `recorder-dev recover <carpeta>` y `recorder-dev verify <paquete> --min-duration 290`.
-4. Anotar aquí la duración recuperada de cada pista y su `endReason`.
+```
+DURATION=10800 KILL_AT=10500 MIN_DURATION=10490 RSS_AT="300 5400 10200" bash scripts/stress-recovery.sh
+```
+
+El criterio de memoria compara el primer RSS (5 min) con el último (2 h 50 min). Si el dueño decide postergarla, la postergación se escribe acá, con la fecha y el motivo, y la aprueba el dueño.
 
 | Medición | Valor |
 |---|---|
 | Fecha, Mac, macOS | pendiente |
+| RSS a los 5 min y a las 2 h 50 min | pendiente |
 | Duración recuperada por pista | pendiente |
-| `verify --min-duration 290` | pendiente |
+| `verify --min-duration 10490` | pendiente |
+| Postergación aprobada por el dueño (si no se corre) | — |
+
+## Prueba opcional de reinicio
+
+Pasó a [`docs/release.md`](release.md#prueba-opcional-de-reinicio), con su tabla de resultados.

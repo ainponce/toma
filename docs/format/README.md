@@ -11,7 +11,8 @@ Un proyecto es una carpeta con extensión `.toma` que Finder muestra como un sol
 ```
 MiVideo.toma/
   manifest.json                versión de formato, app, fecha, tomas, pistas y segmentos
-  edit.json                    decisiones del usuario (línea de tiempo, estilos); lo crea el editor
+  edit.json                    decisiones del usuario (línea de tiempo, estilos); lo escribe el editor desde
+                               la fase 1 (en la fase 0 no existe)
   takes/
     take-001/
       display-1/               una carpeta por pista, con el id de la pista
@@ -26,6 +27,7 @@ MiVideo.toma/
 ```
 
 - Las tomas se llaman `take-001`, `take-002`, … Un número nunca se reutiliza: la toma nueva recibe el número siguiente al más alto del manifiesto y salta cualquier carpeta que ya exista en `takes/`.
+- **Rutas.** Un paquete puede venir de cualquier lado (una carpeta compartida, una descarga), así que ninguna herramienta sigue una ruta del manifiesto sin comprobarla. El `id` de una toma es `take-` y tres o más dígitos; el de una pista, solo letras ASCII, dígitos y `-`; el `file` de un segmento es exactamente `takes/<toma>/<pista>/seg-NNNN.mov` para su `index`. Dentro de una toma, `takes/`, la carpeta de la toma, las de sus pistas, `recording.lock`, `events.jsonl` y `.reserve` no pueden ser enlaces simbólicos ni de otro tipo (carpetas las carpetas, archivos comunes los archivos). Un paquete que no cumple algo de esto es *para reparar*: la recuperación no lo toca y el editor no lo abre. La ruta del paquete en sí sí puede pasar por enlaces (`/var` es uno, o una carpeta Movies enlazada): solo se comprueba lo que está dentro.
 - Los segmentos se numeran desde 1 con cuatro dígitos (`seg-0001.mov`). Cada pista abre un segmento nuevo cada vez que su captura se interrumpe (pausa, error del stream, cambio de formato), así un corte nunca daña lo grabado antes.
 - Los segmentos son películas fragmentadas, con fragmentos de 1 s: si la app, el sistema o la batería se apagan de golpe, se puede leer todo hasta el último fragmento escrito.
 - Los segmentos de micrófono guardan todos los canales del dispositivo, en su orden: ALAC hasta 8 canales y LPCM Float32 con distribución discreta (`kAudioChannelLayoutTag_DiscreteInOrder`) desde 9. La distribución de canales que declara un archivo de 3 a 8 canales es la que ALAC exige para esa cantidad (por ejemplo `MPEG_5_1_D` para 6) y es solo una etiqueta: el canal *n* del archivo es la entrada *n* del dispositivo, no el altavoz que la etiqueta nombra.
@@ -121,8 +123,9 @@ Reglas de escritura:
 
 - JSON UTF-8 con claves en orden alfabético, indentado y sin escapar `/`.
 - Los campos opcionales se omiten cuando no tienen valor (nunca se escribe `null`).
-- El archivo se reemplaza entero en cada cambio: se escribe `manifest.json.tmp`, se fuerza a disco con `F_FULLFSYNC`, se renombra sobre `manifest.json` con `rename(2)` y se fuerza a disco también la carpeta del paquete con `F_FULLFSYNC`, para que el cambio de nombre sobreviva a un corte de energía. Si el volumen no admite `F_FULLFSYNC`, se usa `fsync`. Un lector ve siempre el manifiesto anterior o el nuevo, nunca uno a medias.
-- Después de un corte de energía puede quedar un `manifest.json.tmp` más nuevo que `manifest.json` (completo en disco, pero sin el cambio de nombre). Los lectores lo ignoran y usan `manifest.json`; la recuperación puede revisarlo más adelante. La próxima escritura lo pisa.
+- El archivo se reemplaza entero en cada cambio: se borra un `manifest.json.tmp` que haya quedado (aunque sea un enlace simbólico, que nunca se sigue), se crea uno nuevo con `O_CREAT | O_EXCL | O_NOFOLLOW`, se fuerza a disco con `F_FULLFSYNC`, se renombra sobre `manifest.json` con `rename(2)` y se fuerza a disco también la carpeta del paquete con `F_FULLFSYNC`, para que el cambio de nombre sobreviva a un corte de energía. Si el volumen no admite `F_FULLFSYNC`, se usa `fsync`. Un lector ve siempre el manifiesto anterior o el nuevo, nunca uno a medias.
+- Después de un corte de energía puede quedar un `manifest.json.tmp` más nuevo que `manifest.json` (completo en disco, pero sin el cambio de nombre). Los lectores lo ignoran y usan `manifest.json`; la recuperación puede revisarlo más adelante. La próxima escritura lo borra y crea uno nuevo.
+- Una toma entra al manifiesto, ya `recording`, antes de que se grabe nada: si esa primera escritura no llega al disco (después de un reintento con el espacio del `.reserve` si faltó espacio), la toma no empieza, y se sueltan el lock y el `.reserve`. Una carpeta de `takes/` que el manifiesto no lista pero que tiene un segmento o un `recording.lock` que nadie tiene hace que el paquete sea *para reparar*.
 - Un solo proceso escribe el manifiesto de un paquete por vez, porque todas las escrituras usan el mismo `manifest.json.tmp`.
 
 ### Campos
@@ -179,7 +182,7 @@ Reglas de escritura:
 | `type` | Campos extra | Significado |
 |---|---|---|
 | `stopped` | | La grabación se detuvo de forma ordenada. |
-| `paused` | | Pausa, bloqueo de pantalla o reposo. |
+| `paused` | | Pausa: reposo de la Mac, pantalla bloqueada o pantallas apagadas (ver el evento `paused`). |
 | `streamError` | `domain`, `code` | El stream de captura falló; la pista sigue en un segmento nuevo. |
 | `writerError` | `domain`, `code` | El escritor del archivo falló. |
 | `formatChanged` | | Cambió el formato de la fuente (por ejemplo, la resolución). |
@@ -227,8 +230,8 @@ Reglas de escritura:
 | `displayGeometry` | `displayID`, `frame`, `scale` | Una pantalla grabada: su `CGDirectDisplayID`, su rectángulo en puntos globales (`x`, `y`, `width`, `height`) y sus píxeles por punto. Se escribe al empezar la toma para cada pantalla. En esta versión es informativo: la geometría que usa el render es `globalFrame` del manifiesto. |
 | `segmentStarted` | `track`, `index` | La pista `track` (su `id` en el manifiesto) abrió el segmento `index`. `t` es el `startHostTime` del segmento; la recuperación lo usa si el archivo quedó en disco pero el segmento no llegó al manifiesto. |
 | `streamInterrupted` | `track`, `domain`, `code` | El stream de captura de la pista falló con ese error (dominio y código del `NSError`). La pista sigue en un segmento nuevo, que tiene su propio `segmentStarted`. |
-| `paused` | `reason` | La captura se detuvo en todas las pistas, por ejemplo con `reason` `screenLocked` (pantalla bloqueada). Un lector no falla ante un `reason` que no conoce. |
-| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. |
+| `paused` | `reason` | La captura se detuvo en todas las pistas, que cierran su segmento como `paused`. `reason` es `willSleep` (la Mac va a entrar en reposo) o `screenLocked`, que cubre dos cosas: la pantalla se bloqueó, o las pantallas se apagaron (las dos se pliegan en un solo estado, que termina solo cuando la pantalla está desbloqueada y encendida, así encender las pantallas sobre la pantalla de bloqueo no reanuda nada). Mientras se graba, la app no deja que las pantallas se apaguen solas por inactividad, así que eso pasa solo si el usuario las apaga o bloquea la Mac. Con varios motivos a la vez hay un solo `paused` y un solo `resumed`. Un lector no falla ante un `reason` que no conoce. |
+| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. Entre un `paused` y su `resumed` no se graba nada: tampoco hay eventos `cursor`, `mouseDown` ni `mouseUp` (privacidad: ni la pantalla de bloqueo ni sus clics). |
 | `deviceChanged` | `track`, `deviceUniqueID` | La pista siguió grabando desde otro dispositivo (el `uniqueID` del dispositivo de audio), por ejemplo porque se desconectó el micrófono. |
 | `marker` | | Una marca que el usuario puso mientras grababa. |
 | `droppedSamples` | `track`, `count` | Total de muestras (cuadros o bloques de audio) que la pista `track` perdió hasta ahora en su segmento actual, el que abrió su último `segmentStarted`. Se escribe cada 2 s mientras se graba, solo si cambió, y no toca el manifiesto: es lo que la recuperación usa como `droppedFrames` de un segmento que la app no llegó a cerrar. |
@@ -276,7 +279,7 @@ Mientras se graba una toma existe `takes/<toma>/recording.lock`, y el proceso qu
 - **Lo que cuenta es el lock, no el archivo.** Una toma se está grabando si y solo si alguien tiene el lock. Para saberlo se abre el archivo con `open(ruta, O_RDONLY | O_EXLOCK | O_NONBLOCK)`: si falla con `EWOULDBLOCK`, está tomado; si abre (o el archivo no existe), está libre y hay que cerrarlo enseguida.
 - El kernel suelta el lock cuando muere el proceso, aun con `kill -9` o un corte de energía. Un `recording.lock` que quedó en disco después de un crash no significa que se esté grabando.
 - El lock pertenece al archivo abierto, no al proceso: un segundo `open` con `O_EXLOCK` dentro del mismo proceso también falla con `EWOULDBLOCK`.
-- El que graba lo toma con `open(ruta, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK, 0644)` antes de marcar la toma como `recording`. Al terminar borra el archivo y después lo cierra, en ese orden, para que nadie pueda quedarse con el lock de un archivo ya borrado.
+- El que graba lo toma con `open(ruta, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW, 0644)` antes de marcar la toma como `recording`, y comprueba que es un archivo común (`fstat`) y que sigue siendo el de la ruta (`lstat`). Nunca sigue un enlace simbólico: un `recording.lock` que apunta a otro archivo hace fallar la toma de lock, y el archivo apuntado no se toca. Quien solo pregunta si está tomado abre también con `O_NOFOLLOW`. Al terminar borra el archivo y después lo cierra, en ese orden, para que nadie pueda quedarse con el lock de un archivo ya borrado.
 - La recuperación toma el mismo lock mientras trabaja, así dos procesos nunca recuperan la misma toma a la vez ni recuperan una toma que sigue grabándose.
 - El contenido es **solo informativo** y ninguna decisión depende de él:
 
@@ -294,13 +297,26 @@ Mientras se graba una toma existe `takes/<toma>/recording.lock`, y el proceso qu
 
 Mientras se graba una toma existe `takes/<toma>/.reserve`: 8 MiB de ceros escritos (bloques realmente asignados) y sincronizados con `F_FULLFSYNC` al empezar, antes de marcar la toma como `recording`.
 
-- Es espacio de reserva, no datos de la toma. Si el disco se llena (el monitor de espacio pide parar, o una escritura de un segmento, del manifiesto o de `events.jsonl` falla con `ENOSPC`), la grabación lo borra primero y recién después hace las escrituras finales: cerrar los segmentos, marcar la toma `complete` con sus segmentos `diskFull` y cerrar `events.jsonl`. Al cerrar una toma por cualquier otro motivo también se borra.
+- Es espacio de reserva, no datos de la toma. Si el disco se llena (el monitor de espacio pide parar, o una escritura de un segmento, del manifiesto o de `events.jsonl` falla con `ENOSPC`, o falla de otra forma con menos de 16 MiB libres en el volumen), la grabación lo borra primero y recién después hace las escrituras finales: cerrar los segmentos como `diskFull`, cerrar `events.jsonl` y marcar la toma `complete`. Al cerrar una toma por cualquier otro motivo también se borra.
+- Una toma no empieza si el volumen tiene menos espacio libre que el que la detendría (1 GB disponibles ahora, sin contar el espacio purgable), aunque el espacio para uso importante sea mayor.
+
+## Cierre de una toma
+
+La regla es la de los segmentos: el manifiesto dice que algo terminó solo cuando eso ya está en el disco. Al cerrar una toma, en este orden:
+
+1. se detienen las fuentes y el registro de cursor y clics, y cada pista cierra su segmento (forzado a disco con `F_FULLFSYNC` antes de anotar su `endHostTime` y `endReason`);
+2. se escriben las últimas líneas de `events.jsonl`, que se fuerza a disco con `F_FULLFSYNC` y se cierra;
+3. la toma se marca `complete` en el manifiesto;
+4. se suelta el lock (se borra `recording.lock` y se cierra).
+
+La recuperación nunca toca una toma `complete`, así que si la app muere entre 2 y 3 la toma queda `recording` y se recupera con su `events.jsonl` entero; al revés, se perderían para siempre sus últimas líneas.
 - Un `.reserve` que quedó en disco después de un crash no significa nada: la recuperación lo ignora y lo borra.
 
 ## Recuperación después de un crash
 
 Una toma con `status` `recording` cuyo `recording.lock` no tiene nadie quedó abierta porque la app murió. La recuperación la cierra con lo que hay en el disco, sin borrar ni reescribir datos crudos:
 
+- Antes de tocar nada comprueba las rutas (ver [Rutas](#el-paquete)): con un `id`, un `file` o un enlace simbólico que podrían sacarla del paquete, no cambia nada y no crea nada fuera de él. `events.jsonl` se abre con `O_NOFOLLOW` y tiene que ser un archivo común.
 - Toma el lock de la toma mientras trabaja. No recupera nada mientras otra toma del mismo paquete se está grabando (su grabador es quien escribe `manifest.json`), y lo vuelve a comprobar, junto con que el manifiesto no haya cambiado, justo antes de escribirlo. Las tomas de un paquete se recuperan de a una y antes de grabar algo nuevo en él.
 - No toca un manifiesto con un `formatVersion` mayor que el que conoce.
 - Hace terminar `events.jsonl` en un límite de línea, como antes de agregarle líneas (ver arriba).
@@ -310,10 +326,19 @@ Una toma con `status` `recording` cuyo `recording.lock` no tiene nadie quedó ab
   - `unreadable` con `bytes` si el archivo no está vacío pero su contenido no se puede leer; el archivo queda intacto;
   - en `empty` y `unreadable`, `endHostTime` es igual a `startHostTime`;
   - `droppedFrames` es el último `droppedSamples` del segmento (0 si no hay) y `heartbeatFrames` es 0.
-- Si un archivo de segmento existe pero no se puede examinar ni abrir (por ejemplo, por permisos), se detiene sin cambiar nada: la toma sigue `recording` y se puede recuperar cuando el archivo se pueda leer.
+- Si un archivo de segmento existe pero no se puede examinar ni abrir (por ejemplo, por permisos), se detiene sin cambiar el manifiesto (puede haber borrado `.reserve` y cortado la cola de `events.jsonl`): la toma sigue `recording` y se puede recuperar cuando el archivo se pueda leer.
 - Un archivo de una carpeta de pista que el manifiesto no lista se agrega como segmento solo si su nombre es exactamente el de un segmento (`seg-0002.mov`) y `events.jsonl` tiene su `segmentStarted`, cuyo `t` pasa a ser su `startHostTime`. Si no, nada dice cuándo empieza: queda fuera del manifiesto y sin tocar.
 - Borra el `.reserve` de la toma.
 - Marca la toma `recovered` y escribe el manifiesto una sola vez, con todo. Recuperar una toma que ya no está `recording` no cambia nada.
+
+## Interfaz de render (congelada)
+
+La vista previa del editor y el export MP4 dibujan con el mismo código, y desde la fase 0 su interfaz no cambia sin una migración: lo que un proyecto muestra hoy lo vuelve a mostrar igual una versión nueva.
+
+- **Línea de tiempo** (`FrameEvaluator`). La pantalla es la primera pista `display` de la toma. El tiempo de salida 0 es el `startHostTime` de su primer segmento. La línea de tiempo termina en el final más tardío (el inicio, si el segmento sigue abierto) de un segmento de esa pantalla o de la primera pista `microphone`: el audio grabado después del último segmento de la pantalla (una pantalla que no volvió) se exporta sobre el último cuadro de la pantalla. Una toma sin segmentos de pantalla tiene una línea de tiempo de 0 s. Los tiempos de salida se recortan a `[0, duración]`. El cuadro de un tiempo es una función pura de la toma, sus eventos, el estilo y el tamaño de salida; la geometría es el `globalFrame` de la pantalla.
+- **Cuadros de la pantalla** (`TrackFrameReader`). En un tiempo se muestra el último cuadro presentado en ese instante o antes. Un segmento `empty` o `unreadable`, un archivo que falta, uno que no se puede abrir o leer, y lo que no se pudo decodificar son huecos: se mantiene el cuadro anterior (o el fondo, antes del primer cuadro legible), y cada hueco se informa (`FrameRenderer.missingVideo`, `ExportSummary.missingVideo`). Si la lectura se corta con un error a mitad de un segmento, se vuelve a abrir justo después del último cuadro y, si se corta en el mismo lugar, cada vez `preroll` (1 s) más adelante, hasta decodificar o llegar al final del segmento.
+- **Dibujo** (`FrameRenderer`, `Compositor`). Todo pasa por `FrameRenderer.encode(at:into:commandBuffer:)`, que dibuja con `Compositor.encode` en una textura `.bgra8Unorm` del tamaño de salida: `render(at:into:)` (un `CVPixelBuffer` 32BGRA, para el export) y `renderBytes(at:)` (bytes BGRA sin relleno) lo usan, igual que la vista previa. Mismo proyecto, mismo tiempo y mismo tamaño dan los mismos bytes en la vista previa y en el export.
+- **Audio** (`MicrophoneTimeline`). El primer micrófono se ubica en la misma línea de tiempo por host time (ver [Tiempos](#tiempos)); lo que no se pudo usar queda en silencio y se informa (`ExportSummary.missingAudio`).
 
 ## Los datos crudos nunca se borran
 

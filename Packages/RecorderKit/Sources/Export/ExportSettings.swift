@@ -68,7 +68,8 @@ public struct MissingAudio: Sendable, Equatable {
     public var file: String
     /// Output seconds where the silent span starts, within the export.
     public var start: Double
-    /// Output seconds where it ends, within the export; `start` for a segment without a known length.
+    /// Output seconds where it ends, within the export: up to the segment's end, else the next segment's
+    /// start, else the export's end.
     public var end: Double
     public var reason: Reason
 
