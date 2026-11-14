@@ -10,10 +10,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-resolved_files=(
-  Toma.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
-  Packages/RecorderKit/Package.resolved
-)
+# The app's first: it pins every dependency of the app, Sparkle included, so it can't be empty.
+app_resolved=Toma.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
+resolved_files=("$app_resolved" Packages/RecorderKit/Package.resolved)
 checkout_dirs=(build/SourcePackages/checkouts Packages/RecorderKit/.build/checkouts)
 notices_file=App/Resources/ThirdPartyNotices.txt
 allowed=(MIT ISC BSD Apache-2.0 zlib LGPL GPL-3.0)
@@ -65,7 +64,9 @@ for resolved in "${resolved_files[@]}"; do
   format=$(value "$resolved" version)
   [[ $format == 2 || $format == 3 ]] || fail "$resolved: Package.resolved version $format is not supported"
   count=$(value "$resolved" pins)
-  for ((i = 0; i < ${count:-0}; i++)); do
+  [[ $count =~ ^[0-9]+$ ]] || fail "$resolved has no list of pins"
+  [[ $resolved != "$app_resolved" ]] || ((count > 0)) || fail "$resolved pins nothing: resolve the app's packages again (make build)"
+  for ((i = 0; i < count; i++)); do
     identity=$(value "$resolved" "pins.$i.identity")
     kind=$(value "$resolved" "pins.$i.kind")
     location=$(value "$resolved" "pins.$i.location")

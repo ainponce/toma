@@ -23,3 +23,8 @@ Toma.xcodeproj/project.xcworkspace/xcshareddata/*
 Toma.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/*
 !Toma.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved
 dist/
+
+# Signing secrets never go into the repository (docs/release.md).
+sparkle_ed.key
+*.p12
+*.p12.password

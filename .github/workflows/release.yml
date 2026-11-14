@@ -20,6 +20,13 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_27.2.app
       - run: brew install xcodegen
 
+      - name: Resolve the pinned packages and check their licenses
+        run: |
+          xcodegen generate
+          xcodebuild -resolvePackageDependencies -project Toma.xcodeproj -scheme Toma -derivedDataPath build \
+            -disableAutomaticPackageResolution -onlyUsePackageVersionsFromResolvedFile -packageAuthorizationProvider netrc
+          bash scripts/check-licenses.sh
+
       - name: Check the release secrets
         env:
           SIGNING_CERT_P12: ${{ secrets.SIGNING_CERT_P12 }}
@@ -39,6 +46,8 @@ jobs:
           SIGNING_CERT_PASSWORD: ${{ secrets.SIGNING_CERT_PASSWORD }}
         run: |
           set -euo pipefail
+          # The decoded certificate never outlives this step, whatever fails.
+          trap 'rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/signing-cert.pem"' EXIT
           keychain="$RUNNER_TEMP/toma-signing.keychain-db"
           # LibreSSL reads the .p12 that scripts/create-signing-cert.sh wrote; OpenSSL 3 may not.
           keychain_password=$(/usr/bin/openssl rand -base64 24)
@@ -46,6 +55,8 @@ jobs:
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
           printf '%s' "$SIGNING_CERT_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          # security import takes the password only as an argument or in a dialog: on this single-use runner
+          # it is visible to other processes (ps) while the import runs, never in the log (it is a secret).
           security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$SIGNING_CERT_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
@@ -53,10 +64,22 @@ jobs:
           # and the release is signed on the owner's Mac instead (docs/release.md).
           /usr/bin/openssl pkcs12 -in "$RUNNER_TEMP/signing.p12" -clcerts -nokeys -passin env:SIGNING_CERT_PASSWORD \
             -out "$RUNNER_TEMP/signing-cert.pem"
-          rm -f "$RUNNER_TEMP/signing.p12"
           sudo security add-trusted-cert -d -r trustRoot -p codeSign -k "$keychain" "$RUNNER_TEMP/signing-cert.pem" ||
             echo "::warning::Could not trust the signing certificate on this runner"
           security find-identity -p codesigning "$keychain"
+
+      - name: Bring the previous release's appcast and DMGs
+        # The new appcast keeps the earlier versions, with delta updates from them. generate_appcast points every
+        # DMG in dist/ at this release's URL, so they are all published again with it.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p dist
+          previous=$(gh release list --limit 1 --json tagName --jq '.[0].tagName // empty')
+          if [ -n "$previous" ]; then
+            gh release download "$previous" --dir dist --pattern appcast.xml --pattern '*.dmg'
+          fi
+          ls -l dist
 
       - name: Build, sign and package
         env:
@@ -68,11 +91,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          shopt -s nullglob
           version="${GITHUB_REF_NAME#v}"
+          [ -f "dist/Toma-$version.dmg" ] || { echo "::error::dist/Toma-$version.dmg is missing"; exit 1; }
+          # Every file the appcast points to: this version's DMG, the earlier ones it still lists, and the deltas.
+          files=(dist/*.dmg dist/*.delta dist/appcast.xml)
           gh release create "$GITHUB_REF_NAME" --prerelease --verify-tag --title "Toma $version" \
             --notes "Versión de prueba de la fase 0. Cómo instalarla y abrirla la primera vez: https://github.com/$GITHUB_REPOSITORY#instalar" \
-            "dist/Toma-$version.dmg" dist/appcast.xml
+            "${files[@]}"
 
-      - name: Delete the temporary keychain
+      - name: Delete the temporary keychain and certificate files
         if: always()
-        run: security delete-keychain "$RUNNER_TEMP/toma-signing.keychain-db" || true
+        run: |
+          rm -f "$RUNNER_TEMP/signing.p12" "$RUNNER_TEMP/signing-cert.pem"
+          security delete-keychain "$RUNNER_TEMP/toma-signing.keychain-db" || true

@@ -999,6 +999,16 @@
         }
       }
     },
+    "Updates are checked once the recording ends." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las actualizaciones se buscan al terminar la grabación."
+          }
+        }
+      }
+    },
     "We found %lld recordings that didn't finish saving. Recover them?" : {
       "localizations" : {
         "en" : {

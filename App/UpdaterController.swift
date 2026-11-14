@@ -5,8 +5,10 @@ import Observation
 import Sparkle
 import os
 
-/// Sparkle's standard updater, with the app's rules: no checking for updates while a take is being recorded,
-/// and an update installed meanwhile relaunches the app only once the take is closed.
+/// Sparkle's standard updater, with the app's rules for a take being recorded: no update check runs, neither
+/// from the menu (its item is off) nor scheduled (`updater(_:mayPerform:)` refuses it, and the refused check
+/// runs once the take is closed), so no update window shows up in a recording; and an update being installed
+/// relaunches the app only once the take is closed.
 ///
 /// A build without an EdDSA public key (`SPARKLE_PUBLIC_KEY` empty) does not start the updater at launch:
 /// Sparkle would refuse to start and show an alert every time. Checking for updates shows that alert instead.
@@ -22,6 +24,7 @@ final class UpdaterController: NSObject, SPUUpdaterDelegate {
 
     @ObservationIgnored private let recording: RecordingController
     @ObservationIgnored private let relaunchGate = UpdateRelaunchGate()
+    @ObservationIgnored private let checkGate = UpdateCheckGate()
     @ObservationIgnored private var standardController: SPUStandardUpdaterController?
     @ObservationIgnored private var canCheckObservation: NSKeyValueObservation?
 
@@ -56,12 +59,28 @@ final class UpdaterController: NSObject, SPUUpdaterDelegate {
         standardController.checkForUpdates(nil)
     }
 
-    /// Called whenever a take starts or ends: a relaunch postponed for an update goes ahead once it ends.
+    /// Called whenever a take starts or ends. Once it ends, a relaunch postponed for an update goes ahead,
+    /// or else a check refused during the take runs.
     func recordingStateChanged() {
-        relaunchGate.recordingChanged(isRecording: recording.isRecording)
+        let isRecording = recording.isRecording
+        relaunchGate.recordingChanged(isRecording: isRecording)
+        guard checkGate.recordingChanged(isRecording: isRecording), let standardController,
+            isStarted, standardController.updater.canCheckForUpdates
+        else { return }
+        Self.logger.notice("Checking for updates now that the take is closed")
+        standardController.updater.checkForUpdatesInBackground()
     }
 
     // MARK: - SPUUpdaterDelegate
+
+    func updater(_ updater: SPUUpdater, mayPerform updateCheck: SPUUpdateCheck) throws {
+        guard checkGate.mayCheck(isRecording: recording.isRecording) else {
+            Self.logger.notice("No update check while recording; it runs once the take is closed")
+            throw NSError(
+                domain: "dev.toma.Toma.Updates", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: String(localized: "Updates are checked once the recording ends.")])
+        }
+    }
 
     func updater(
         _ updater: SPUUpdater, shouldPostponeRelaunchForUpdate item: SUAppcastItem,

@@ -11,9 +11,12 @@
 #   SIGNING_CERT_P12 and SIGNING_CERT_PASSWORD of the `release` environment.
 # Nothing it writes goes into the repository. It asks for a password for the image, and macOS asks for the
 # user's password once, to trust the certificate.
-#   bash scripts/create-signing-cert.sh [sparkle_ed.key]
+#   bash scripts/create-signing-cert.sh [~/sparkle_ed.key]
 # Environment: BACKUP_IMAGE, where to write the encrypted image (default ~/Toma-signing-backup.dmg).
+# The Sparkle key and the image must be outside the repository.
 set -euo pipefail
+
+repository=$(cd "$(dirname "$0")/.." && pwd -P)
 
 name="Toma Project Signing"
 # LibreSSL: Homebrew's OpenSSL 3 writes .p12 files that `security import` rejects.
@@ -27,8 +30,20 @@ fail() {
   exit 1
 }
 
-[[ -z $sparkle_key || -f $sparkle_key ]] || fail "$sparkle_key not found"
+# Whether a path (existing or not) is inside the repository, where `git add -A` would pick it up.
+in_repository() {
+  local dir
+  dir=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || return 1
+  [[ $dir/ == "$repository"/* ]]
+}
+
+if [[ -n $sparkle_key ]]; then
+  [[ -f $sparkle_key ]] || fail "$sparkle_key not found"
+  in_repository "$sparkle_key" &&
+    fail "$sparkle_key is inside the repository: export the key outside it (generate_keys -x ~/sparkle_ed.key) and delete this copy (rm -P)"
+fi
 [[ ! -e $backup_image ]] || fail "$backup_image already exists: move it away first"
+in_repository "$backup_image" && fail "$backup_image is inside the repository: set BACKUP_IMAGE to a path outside it"
 if security find-certificate -c "$name" "$login_keychain" >/dev/null 2>&1; then
   fail "\"$name\" is already in the login keychain. Keep using it; a new certificate makes macOS ask every user for the permissions again"
 fi
@@ -59,6 +74,7 @@ export P12_PASSWORD="$p12_password"  # openssl reads it from the environment, no
   -subj "/CN=$name" -addext "keyUsage=critical,digitalSignature" -addext "extendedKeyUsage=critical,codeSigning"
 "$openssl" pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -name "$name" \
   -out "$work/signing.p12" -passout env:P12_PASSWORD
+unset P12_PASSWORD
 sha1=$("$openssl" x509 -in "$work/cert.pem" -noout -fingerprint -sha1 | sed 's/.*=//; s/://g')
 expires=$("$openssl" x509 -in "$work/cert.pem" -noout -enddate | sed 's/.*=//')
 
@@ -83,7 +99,9 @@ hdiutil detach "$mount_point" >/dev/null
 mounted=false
 
 echo "Importing it into the login keychain"
-# -T: codesign may use the key.
+# -T: codesign may use the key. `security import` takes the .p12 password only as an argument (-P) or in
+# a dialog, so for the moment it runs it is visible to this user's other processes (ps); it only unlocks
+# this .p12, which is in the encrypted image and is deleted when the script ends.
 security import "$work/signing.p12" -k "$login_keychain" -P "$p12_password" -T /usr/bin/codesign ||
   fail "security import failed. $backup_image holds a certificate that is not in the keychain: delete it before trying again"
 echo "Trusting it for code signing (macOS asks for your password)"
