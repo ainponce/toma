@@ -12,8 +12,9 @@ import Testing
 /// An arbitrary host time well after boot.
 let base = HostTime(nanoseconds: 5_000_000_000_000)
 
-/// Whether this machine has a Metal device; tests that draw are skipped without one.
-let metalAvailable = MTLCreateSystemDefaultDevice() != nil
+/// Whether the tests that draw run: on a machine with a Metal device, and always in CI (`TOMA_CI=1`), where a
+/// runner without one must fail them loudly instead of skipping them and staying green.
+let metalAvailable = MTLCreateSystemDefaultDevice() != nil || ProcessInfo.processInfo.environment["TOMA_CI"] == "1"
 
 let takeID = "take-001"
 let trackID = "display-1"

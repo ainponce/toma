@@ -1,21 +1,33 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 name: CI
 
 on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-26
     env:
-      # Tests that depend on the runners' virtual hardware (for example H.264 rate control) are off.
+      # Tests that depend on the runners' virtual hardware (for example H.264 rate control) are off, and the
+      # tests that draw with Metal run and fail loudly instead of being skipped when there is no device.
       TOMA_CI: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
       - name: Select Xcode 27.2
         run: sudo xcode-select -s /Applications/Xcode_27.2.app
       - run: swift --version
-      - run: brew install xcodegen
+      - name: Check the workflows
+        run: bash scripts/check-workflows.sh
+      - name: Install XcodeGen (pinned, checksum checked)
+        run: |
+          bash scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
       - name: Encoder probe (one HEVC and one H.264 frame)
         run: swift test --package-path Packages/RecorderKit --filter hevcAndH264EncodersAreAvailable
       - run: make test
@@ -25,3 +37,17 @@ jobs:
         run: xcodebuild -project Toma.xcodeproj -scheme Toma -configuration Debug -derivedDataPath build build CODE_SIGNING_ALLOWED=NO
       - name: Check dependency licenses
         run: bash scripts/check-licenses.sh
+
+  thread-sanitizer:
+    # The thread-safety argument of TrackPipeline and TrackFrameReader rests on this run (plan exit criterion).
+    runs-on: macos-26
+    env:
+      TOMA_CI: "1"
+      TSAN_OPTIONS: halt_on_error=1
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode 27.2
+        run: sudo xcode-select -s /Applications/Xcode_27.2.app
+      - run: make tsan

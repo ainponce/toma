@@ -13,6 +13,17 @@
         }
       }
     },
+    "NSHumanReadableCopyright" : {
+      "comment" : "The copyright line in Finder's Get Info and the About panel. The name of the app is put in when building.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copyright © 2026 los colaboradores de $(PRODUCT_NAME). Software libre bajo la GNU GPL, versión 3 o posterior, sin ninguna garantía."
+          }
+        }
+      }
+    },
     "NSMicrophoneUsageDescription" : {
       "comment" : "Shown by macOS when the app first asks for the microphone. The name of the app is put in when building.",
       "localizations" : {

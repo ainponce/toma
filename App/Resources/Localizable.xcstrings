@@ -689,6 +689,16 @@
         }
       }
     },
+    "Source code of this version: %@" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Código fuente de esta versión: %@"
+          }
+        }
+      }
+    },
     "Starting recording…" : {
       "localizations" : {
         "es" : {
@@ -1016,6 +1026,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta Mac no tiene un dispositivo gráfico para dibujar el video."
+          }
+        }
+      }
+    },
+    "This build doesn't say where its source code is: it wasn't made by the release workflow." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta compilación no indica dónde está su código fuente: no la generó el flujo de publicación."
           }
         }
       }

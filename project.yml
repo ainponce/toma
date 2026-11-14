@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 name: Toma
 options:
   bundleIdPrefix: dev.toma
@@ -15,6 +16,9 @@ targets:
     platform: macOS
     sources:
       - App
+      # GPLv3 §4 and §6: the app carries its license (Contents/Resources/LICENSE).
+      - path: LICENSE
+        buildPhase: resources
     configFiles:
       Debug: Config/Identity.xcconfig
       Release: Config/Identity.xcconfig
@@ -58,6 +62,9 @@ targets:
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SUFeedURL: $(SPARKLE_FEED_URL)
         SUPublicEDKey: $(SPARKLE_PUBLIC_KEY)
+        NSHumanReadableCopyright: "Copyright © 2026 the $(PRODUCT_NAME) contributors. Free software under the GNU GPL, version 3 or later, without any warranty."
+        # Where the source code is; Acknowledgements shows it at the tag of this version.
+        SourceCodeURL: $(SOURCE_CODE_URL)
         CFBundleDocumentTypes:
           - CFBundleTypeName: "$(PRODUCT_NAME) Project"
             CFBundleTypeRole: Editor

@@ -2,7 +2,7 @@
 
 Grabador de pantalla nativo y de código abierto para macOS (Apple silicon, macOS 15+). A native, open-source screen recorder for macOS. Nombre en clave provisorio.
 
-Licencia: GPL-3.0-or-later.
+Licencia: GPL-3.0-or-later. Cada copia de la app y cada DMG llevan la licencia (`LICENSE`); "Licencias de terceros…" en el menú muestra el aviso de Toma, dónde está el código fuente de esa versión y las licencias de terceros.
 
 ## Instalar
 
@@ -21,17 +21,16 @@ Toma se firma siempre con el mismo certificado propio del proyecto ("Toma Projec
 Requiere Xcode 27 (gratis en la App Store) y [XcodeGen](https://github.com/yonaskolb/XcodeGen) (`brew install xcodegen`).
 
 ```sh
-make project
 make install
 ```
 
-`make install` compila en Release y copia `Toma.app` a `/Applications`. Como se compila en la propia Mac, macOS debería abrirla sin aviso (a confirmar en la verificación 4 de [docs/release.md](docs/release.md#verificaciones-del-dueño)).
+`make install` genera el proyecto, compila en Release y copia `Toma.app` a `/Applications` (reemplaza la que haya: hace falta una cuenta de administrador). Como se compila en la propia Mac, macOS debería abrirla sin aviso (a confirmar en la verificación 4 de [docs/release.md](docs/release.md#verificaciones-del-dueño)).
 
 ## Actualizaciones
 
 Toma busca actualizaciones con [Sparkle](https://sparkle-project.org): una vez por día si se acepta cuando lo pregunta, o cuando se elige "Buscar actualizaciones…" en su menú de la barra de menús. Cada actualización viene firmada con la clave EdDSA del proyecto, y Sparkle rechaza una actualización que no tenga esa firma ni la misma firma de código que la app instalada. Mientras se graba no se buscan actualizaciones, para que ninguna ventana de Sparkle aparezca en la grabación: "Buscar actualizaciones…" está desactivado, y la búsqueda diaria que toque durante la toma se hace al terminarla. Una actualización que ya se está instalando espera a que termine la grabación para volver a abrir la app.
 
-Una copia compilada desde el código se actualiza compilando de nuevo: `git pull && make project && make install`. Pero desde que la clave pública de Sparkle está en `Config/Identity.xcconfig`, esa copia también corre Sparkle y puede actualizarse sola a la versión del DMG, firmada con el certificado del proyecto. La copia compilada no está firmada con ese certificado, así que esa vez macOS la ve como otra app y vuelve a pedir los permisos, una sola vez: las versiones siguientes ya vienen firmadas igual (a confirmar en la verificación 1).
+Una copia compilada desde el código se actualiza compilando de nuevo: `git pull && make install`. Pero desde que la clave pública de Sparkle está en `Config/Identity.xcconfig`, esa copia también corre Sparkle y puede actualizarse sola a la versión del DMG, firmada con el certificado del proyecto. La copia compilada no está firmada con ese certificado, así que esa vez macOS la ve como otra app y vuelve a pedir los permisos, una sola vez: las versiones siguientes ya vienen firmadas igual (a confirmar en la verificación 1).
 
 En la fase 0 las actualizaciones apuntan a un servidor de prueba local; el feed público llega con el primer release público. Ver [docs/release.md](docs/release.md).
 

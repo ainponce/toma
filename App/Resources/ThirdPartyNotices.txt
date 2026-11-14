@@ -1,9 +1,27 @@
+Toma
+
+Copyright © 2026 the Toma contributors.
+
+Toma is free software: you can redistribute it and/or modify it under the terms of the GNU General
+Public License as published by the Free Software Foundation, either version 3 of the License, or (at
+your option) any later version. Toma is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See
+the GNU General Public License for more details: the LICENSE file inside the app
+(Contents/Resources/LICENSE) and on its disk image, or https://www.gnu.org/licenses/. The source code of
+each version is at the address shown above this text.
+
+Toma es software libre: se puede redistribuir y modificar según los términos de la GNU General Public
+License publicada por la Free Software Foundation, versión 3 de la licencia o (a elección) cualquier
+versión posterior. Toma se distribuye con la esperanza de que sea útil, pero SIN NINGUNA GARANTÍA; ni
+siquiera la garantía implícita de COMERCIABILIDAD o IDONEIDAD PARA UN FIN DETERMINADO. Los detalles están
+en la GNU General Public License: el archivo LICENSE dentro de la app (Contents/Resources/LICENSE) y en
+su imagen de disco, o https://www.gnu.org/licenses/. El código fuente de cada versión está en la
+dirección que figura arriba de este texto.
+
 Third-party software in Toma / Software de terceros en Toma
 
-Toma is free software under the GNU General Public License, version 3 or later.
-It includes or is built with the software below, each under its own license.
-Toma es software libre bajo la GNU General Public License, versión 3 o posterior.
-Incluye o se compila con el software siguiente, cada uno con su propia licencia.
+Toma includes or is built with the software below, each under its own license.
+Toma incluye o se compila con el software siguiente, cada uno con su propia licencia.
 
 ================================================================================
 Sparkle — https://github.com/sparkle-project/Sparkle

@@ -12,3 +12,7 @@ PROJECT_FILE_EXTENSION = toma
 // the key the app starts without its updater.
 SPARKLE_FEED_URL = http:/$()/localhost:8000/appcast.xml
 SPARKLE_PUBLIC_KEY =
+// The repository the source code of a release is published at (GPLv3 §6), for example
+// https:/$()/github.com/<owner>/<repo>. The release workflow sets it from the repository it runs in; a
+// build without it says so in Acknowledgements.
+SOURCE_CODE_URL =

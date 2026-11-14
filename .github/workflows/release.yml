@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
 name: Release
 
 on:
@@ -7,18 +8,31 @@ on:
 permissions:
   contents: write
 
+# One release at a time, never cancelled halfway: two runs would publish over each other's appcast.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: macos-26
     # Holds the signing certificate and Sparkle's private key; the owner approves each run.
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           fetch-depth: 0 # the build number counts every commit
+          persist-credentials: false # no token in .git/config for the steps below
+      - name: Release only commits that are on main
+        run: |
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main ||
+            { echo "::error::$GITHUB_REF_NAME ($GITHUB_SHA) is not on main: tag a commit of main"; exit 1; }
       - name: Select Xcode 27.2
         run: sudo xcode-select -s /Applications/Xcode_27.2.app
-      - run: brew install xcodegen
+      - name: Install XcodeGen (pinned, checksum checked)
+        run: |
+          bash scripts/install-xcodegen.sh "$RUNNER_TEMP/xcodegen"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
 
       - name: Resolve the pinned packages and check their licenses
         run: |
@@ -83,9 +97,17 @@ jobs:
 
       - name: Build, sign and package
         env:
+          # release.sh takes it out of the environment before running anything: only generate_appcast sees it.
           SPARKLE_ED_PRIVATE_KEY: ${{ secrets.SPARKLE_ED_PRIVATE_KEY }}
           DOWNLOAD_PREFIX: https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/
+          # GPLv3 §6: the app says where the source code of this version is.
+          SOURCE_CODE_URL: ${{ github.server_url }}/${{ github.repository }}
         run: bash scripts/release.sh "${GITHUB_REF_NAME#v}"
+
+      - name: Lock the temporary keychain
+        # Nothing after the build signs: the certificate's key is out of reach of the steps below.
+        if: always()
+        run: security lock-keychain "$RUNNER_TEMP/toma-signing.keychain-db" || true
 
       - name: Publish the prerelease
         env:

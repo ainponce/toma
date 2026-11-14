@@ -2,7 +2,9 @@
 import AppKit
 import os
 
-/// The licenses of the software the app includes or is built with, from `ThirdPartyNotices.txt`.
+/// The app's own notice (its version, where the source code of that version is, the GPL and that it comes
+/// without any warranty), then the licenses of the software it includes or is built with, from
+/// `ThirdPartyNotices.txt`.
 @MainActor
 final class ThirdPartyNoticesWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
@@ -23,7 +25,7 @@ final class ThirdPartyNoticesWindowController: NSWindowController, NSWindowDeleg
             textView.isEditable = false
             textView.isSelectable = true
             textView.textContainerInset = NSSize(width: 12, height: 12)
-            textView.string = Self.notices()
+            textView.string = Self.versionAndSource() + "\n\n" + Self.notices()
             textView.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         }
         window.contentView = scrollView
@@ -40,6 +42,19 @@ final class ThirdPartyNoticesWindowController: NSWindowController, NSWindowDeleg
     func windowWillClose(_ notification: Notification) {
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
+    }
+
+    /// The name, version and build, and where the source code of this version is (`SourceCodeURL` in the
+    /// Info.plist, at the tag `v<version>`).
+    private static func versionAndSource() -> String {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let build = info["CFBundleVersion"] as? String ?? "?"
+        let heading = "\(AppIdentity.name) \(AppIdentity.version) (\(build))"
+        guard let source = info["SourceCodeURL"] as? String, !source.isEmpty else {
+            return heading + "\n" + String(localized: "This build doesn't say where its source code is: it wasn't made by the release workflow.")
+        }
+        let tag = source.hasSuffix("/") ? source + "tree/v\(AppIdentity.version)" : source + "/tree/v\(AppIdentity.version)"
+        return heading + "\n" + String(localized: "Source code of this version: \(tag)")
     }
 
     private static func notices() -> String {

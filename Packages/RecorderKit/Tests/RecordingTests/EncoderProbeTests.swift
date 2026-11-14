@@ -38,6 +38,10 @@ private func encodeOneFrame(codec: AVVideoCodecType, to url: URL) throws -> AVAs
 
 @Test func hevcAndH264EncodersAreAvailable() throws {
     print("Metal device: \(MTLCreateSystemDefaultDevice()?.name ?? "none")")
+    // In CI the drawing tests run even without a device (they would fail); say why here first.
+    if ProcessInfo.processInfo.environment["TOMA_CI"] == "1" {
+        #expect(MTLCreateSystemDefaultDevice() != nil, "this runner has no Metal device: the render and export tests fail")
+    }
     try withTemporaryDirectory { dir in
         for codec in [AVVideoCodecType.hevc, .h264] {
             let url = dir.appendingPathComponent("probe-\(codec.rawValue).mov")
