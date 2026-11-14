@@ -4,6 +4,7 @@ import CoreGraphics
 import CoreMedia
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Synchronization
 import SyntheticCapture
 import Testing
@@ -925,57 +926,6 @@ struct Rig {
     }
 }
 
-/// The free space a `DiskSpaceMonitor` sees, set by the test.
-final class FakeDisk: Sendable {
-    private struct State {
-        var capacity = DiskCapacity(importantUsage: 100_000_000_000, available: 100_000_000_000)
-        var failing = false
-        var lowQueryWaiters: [CheckedContinuation<Void, Never>] = []
-    }
-
-    private let state = Mutex(State())
-
-    func set(importantUsage: Int64, available: Int64) {
-        state.withLock { $0.capacity = DiskCapacity(importantUsage: importantUsage, available: available) }
-    }
-
-    func failQueries(_ failing: Bool) {
-        state.withLock { $0.failing = failing }
-    }
-
-    /// Returns right after the monitor next reads less than 1 GB available.
-    func nextLowQuery() async {
-        await withCheckedContinuation { continuation in
-            state.withLock { $0.lowQueryWaiters.append(continuation) }
-        }
-    }
-
-    func monitor(volume: URL) -> DiskSpaceMonitor {
-        DiskSpaceMonitor(volumeURL: volume, interval: .milliseconds(50)) { [self] _ in try query() }
-    }
-
-    private func query() throws -> DiskCapacity {
-        let (capacity, failing, waiters) = state.withLock { state in
-            let low = state.capacity.available < 1_000_000_000
-            defer { if low { state.lowQueryWaiters = [] } }
-            return (state.capacity, state.failing, low ? state.lowQueryWaiters : [])
-        }
-        defer { for waiter in waiters { waiter.resume() } }
-        if failing { throw CocoaError(.fileReadUnknown) }
-        return capacity
-    }
-}
-
-final class WarningLog: Sendable {
-    private let items = Mutex<[RecordingWarning]>([])
-
-    var all: [RecordingWarning] { items.withLock { $0 } }
-
-    func append(_ warning: RecordingWarning) {
-        items.withLock { $0.append(warning) }
-    }
-}
-
 /// Wraps a real writer: fails its appends from `failAfter` seconds after creation, or after
 /// `failAfterAppends` appends went through (with `failure`, by default `NSError(domain: "TestWriter", code: 7)`),
 /// or throws `finishError` after finishing the file.
@@ -1151,22 +1101,5 @@ final class SlowStartSource: CaptureSource {
 
     func stop() async {
         await inner.stop()
-    }
-}
-
-/// The first element of `stream`, or `nil` if none comes within `timeout`.
-func first<T: Sendable>(of stream: AsyncStream<T>, within timeout: Duration) async -> T? {
-    await withTaskGroup(of: T?.self) { group in
-        group.addTask {
-            for await element in stream { return element }
-            return nil
-        }
-        group.addTask {
-            try? await Task.sleep(for: timeout)
-            return nil
-        }
-        let result = await group.next() ?? nil
-        group.cancelAll()
-        return result
     }
 }

@@ -3,6 +3,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Recording
 import SyntheticCapture
 import Testing
@@ -107,7 +108,7 @@ private func writeMultichannelAudio(
 private func expectEveryChannelKept(
     in url: URL, channels: Int, frames: Int, tolerance: Float, sourceLocation: SourceLocation = #_sourceLocation
 ) async throws {
-    let decoded = try await decodedAudio(of: url)
+    let decoded = try await decodedAudioChannels(of: url)
     #expect(decoded.channels == channels, sourceLocation: sourceLocation)
     #expect(decoded.samples.count == frames * channels, sourceLocation: sourceLocation)
     let count = min(frames, decoded.samples.count / max(decoded.channels, 1))

@@ -2,6 +2,7 @@
 import CoreGraphics
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Testing
 
 @testable import Recording

@@ -4,6 +4,7 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import ScreenCaptureKit
 import Synchronization
 import SyntheticCapture
@@ -296,17 +297,6 @@ private func setFrameStatus(_ status: SCFrameStatus, on sample: CMSampleBuffer) 
         dictionary, Unmanaged.passUnretained(key).toOpaque(), Unmanaged.passUnretained(value).toOpaque())
 }
 
-/// Polls `condition` until it holds or `timeout` passes.
-func eventually(timeout: Duration = .seconds(5), _ condition: () async -> Bool) async -> Bool {
-    let clock = ContinuousClock()
-    let deadline = clock.now + timeout
-    while clock.now < deadline {
-        if await condition() { return true }
-        try? await Task.sleep(for: .milliseconds(10))
-    }
-    return await condition()
-}
-
 /// A sink whose error delivery takes 300 ms, to catch a `stop()` that does not wait for it.
 final class SlowErrorSink: CaptureSink {
     final class Progress: Sendable {
@@ -325,74 +315,5 @@ final class SlowErrorSink: CaptureSink {
         progress.state.withLock { $0.entered = true }
         Thread.sleep(forTimeInterval: 0.3)
         progress.state.withLock { $0.finished = true }
-    }
-}
-
-/// Records what a source delivers. Every call must arrive on `queue` (`dispatchPrecondition` traps
-/// otherwise). The records live in a `Mutex` so they can be read from the test at any time.
-final class RecordingSink: CaptureSink {
-    struct Delivery: Sendable {
-        var trackID: String
-        var pts: HostTime
-        var frames: Int
-        var width: Int?
-        var height: Int?
-        var sampleRate: Double?
-        var channels: Int?
-        var isCompleteFrame: Bool
-        /// Host time at delivery minus the sample's PTS, in seconds.
-        var lag: Double
-    }
-
-    struct Failure: Sendable {
-        var trackID: String
-        var domain: String
-        var code: Int
-        /// Samples delivered before the error.
-        var samplesBefore: Int
-    }
-
-    private struct Log {
-        var samples: [Delivery] = []
-        var failures: [Failure] = []
-    }
-
-    let queue: DispatchSerialQueue
-    private let log = Mutex(Log())
-
-    var samples: [Delivery] { log.withLock { $0.samples } }
-    var failures: [Failure] { log.withLock { $0.failures } }
-
-    init(queue: DispatchSerialQueue) {
-        self.queue = queue
-    }
-
-    func source(_ trackID: String, didOutput sample: CMSampleBuffer) {
-        dispatchPrecondition(condition: .onQueue(queue))
-        let now = HostTime.now()
-        let pts = HostTime(sample.presentationTimeStamp)
-        let image = sample.imageBuffer
-        let audio = sample.formatDescription?.audioStreamBasicDescription
-        let delivery = Delivery(
-            trackID: trackID,
-            pts: pts,
-            frames: sample.numSamples,
-            width: image.map(CVPixelBufferGetWidth),
-            height: image.map(CVPixelBufferGetHeight),
-            sampleRate: audio?.mSampleRate,
-            channels: audio.map { Int($0.mChannelsPerFrame) },
-            isCompleteFrame: DisplayCaptureSource.isCompleteFrame(sample),
-            lag: now.seconds(since: pts)
-        )
-        log.withLock { $0.samples.append(delivery) }
-    }
-
-    func source(_ trackID: String, didStopWithError error: any Error) {
-        dispatchPrecondition(condition: .onQueue(queue))
-        let error = error as NSError
-        log.withLock { log in
-            log.failures.append(
-                Failure(trackID: trackID, domain: error.domain, code: error.code, samplesBefore: log.samples.count))
-        }
     }
 }

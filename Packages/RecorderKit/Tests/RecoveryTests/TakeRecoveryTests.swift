@@ -2,14 +2,23 @@
 import Darwin
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Testing
 
 @testable import Recovery
 
+/// A `recording` take whose microphone has one open segment from `base`, with `file` at its path.
+private func openMicrophoneTake(in dir: URL, file: SegmentFileFixture) async throws -> ProjectPackage {
+    let builder = try TakeBuilder(in: dir)
+    try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
+    try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: nil, file: file)
+    return try builder.write(status: .recording).package
+}
+
 // MARK: - Scanner
 
 @Test func scannerFindsOnlyUnheldRecordingTakes() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)
         try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
         try addTake(makeTake("take-002", tracks: [micTrack([])]), to: package)
@@ -26,7 +35,7 @@ import Testing
 }
 
 @Test func scanSkipsCorruptPackageAndFindsOthers() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let corrupt = try makePackage(in: dir, name: "a-corrupt")
         try Data().write(to: corrupt.manifestURL)
         let loose = dir.appendingPathComponent("b-loose.toma", isDirectory: true)
@@ -81,8 +90,7 @@ private let newerManifest = Data(#"{"formatVersion":2,"projects":[{"takes":[]}]}
 
 @Test func recoverRefusesHeldLock() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let package = try await openMicrophoneTake(in: dir, file: .absent)
         let held = try RecordingLock.acquire(at: package.lockURL(take: "take-001"), info: .current(now: Date()))
         defer { held.release() }
         let before = try Data(contentsOf: package.manifestURL)
@@ -120,8 +128,7 @@ private let newerManifest = Data(#"{"formatVersion":2,"projects":[{"takes":[]}]}
 
 @Test func recoveryChecksAgainForAnotherRecorderBeforeWriting() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let package = try await openMicrophoneTake(in: dir, file: .absent)
         let before = try Data(contentsOf: package.manifestURL)
 
         // A recorder starts take-002 meanwhile: it holds its lock before the manifest lists the take.
@@ -156,10 +163,8 @@ private let newerManifest = Data(#"{"formatVersion":2,"projects":[{"takes":[]}]}
 @Test(.enabled(if: getuid() != 0, "root can read any file"))
 func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let package = try await openMicrophoneTake(in: dir, file: .garbage(bytes: 4096))
         let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
-        try Data(repeating: 0xAB, count: 4096).write(to: micURL)
         try #require(chmod(micURL.path, 0o000) == 0)
         defer { chmod(micURL.path, 0o644) }
         let before = try Data(contentsOf: package.manifestURL)
@@ -181,24 +186,25 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func recoversOpenSegmentsFromFragments() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
         let micStart = base.adding(seconds: 0.01)
-        try addTake(makeTake(tracks: [
-            displayTrack([try segmentRecord(package, track: "display-1", start: base)]),
-            micTrack([try segmentRecord(package, track: "mic", start: micStart)]),
-        ]), to: package)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 3, endReason: nil, leaveOpen: true),
+        ])
+        // Written as fast as it can (not in real time), an ALAC movie gets its header only after about
+        // 3 s of audio, so 3 s would leave nothing readable; in real time the first fragment comes at 1 s.
+        try await builder.addAudioTrack(id: "mic", source: micSource, segments: [
+            AudioSegmentSpec(start: micStart, seconds: 6, endReason: nil, leaveOpen: true),
+        ])
+        let package = try builder.write(status: .recording).package
         let lock = package.lockURL(take: "take-001")
         let reserve = package.reserveURL(take: "take-001")
         try Data("{}".utf8).write(to: lock)  // left behind by the crashed recorder
         try Data(count: 1 << 20).write(to: reserve)
         let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
         let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
-        let video = try await writeVideo(to: displayURL, start: base, seconds: 3, finish: false)
-        // Written as fast as it can (not in real time), an ALAC movie gets its header only after about
-        // 3 s of audio, so 3 s would leave nothing readable; in real time the first fragment comes at 1 s.
-        let audio = try await writeAudio(to: micURL, start: micStart, seconds: 6, finish: false)
 
-        try await withExtendedLifetime((video, audio)) {
+        try await withExtendedLifetime(builder) {
             let readableBefore = [
                 "display-1": await readableDuration(of: displayURL, reaching: 1.9),
                 "mic": await readableDuration(of: micURL, reaching: 1.9),
@@ -232,18 +238,18 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func recoversTakeWhoseSegmentHasNoFragments() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
         let micStart = base.adding(seconds: 0.02)
-        try addTake(makeTake(tracks: [
-            displayTrack([try segmentRecord(package, track: "display-1", start: base)]),
-            micTrack([try segmentRecord(package, track: "mic", start: micStart)]),
-        ]), to: package)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 3, endReason: nil, leaveOpen: true),
+        ])
+        try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
+        try builder.addEmptySegment(track: "mic", index: 1, start: micStart, endReason: nil, file: .zeroBytes)
+        let package = try builder.write(status: .recording).package
         let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
         let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
-        let video = try await writeVideo(to: displayURL, start: base, seconds: 3, finish: false)
-        try #require(FileManager.default.createFile(atPath: micURL.path, contents: Data()))
 
-        try await withExtendedLifetime(video) {
+        try await withExtendedLifetime(builder) {
             #expect(await readableDuration(of: displayURL, reaching: 1.9) >= 1.9)
             let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
 
@@ -263,11 +269,9 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func nonEmptyUnreadableSegmentIsNotMarkedEmpty() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let package = try await openMicrophoneTake(in: dir, file: .garbage(bytes: 2_097_152))
         let micURL = package.segmentURL(take: "take-001", track: "mic", index: 1)
-        let garbage = Data((0..<2_097_152).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 7) })
-        try garbage.write(to: micURL)
+        let garbage = try Data(contentsOf: micURL)
 
         let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
 
@@ -281,8 +285,7 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func segmentWhoseFileIsGoneIsMarkedEmpty() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
+        let package = try await openMicrophoneTake(in: dir, file: .absent)
         // Not even the track folder is left.
         try FileManager.default.removeItem(at: package.trackDirectory(take: "take-001", track: "mic"))
 
@@ -297,27 +300,23 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func recoveryAdoptsSegmentMissingFromManifest() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
         let secondStart = base.adding(seconds: 1.5)
-        let first = try segmentRecord(
-            package, track: "display-1", start: base, end: base.adding(seconds: 1),
-            reason: .streamError(domain: "SCStreamErrorDomain", code: -3821))
-        try addTake(makeTake(tracks: [displayTrack([first])]), to: package)
-        _ = try await writeVideo(
-            to: package.segmentURL(take: "take-001", track: "display-1", index: 1), start: base, seconds: 1, finish: true)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 1, endReason: .streamError(domain: "SCStreamErrorDomain", code: -3821)),
+            VideoSegmentSpec(start: secondStart, seconds: 3, endReason: nil, leaveOpen: true),
+        ])
+        let package = try builder.write(status: .recording).package
+        // seg-0002 has its segmentStarted event, but the recorder died before the manifest listed it.
+        try ManifestStore(package: package).update { $0.takes[0].tracks[0].segments.removeLast() }
+        let first = try #require(try takeOnDisk(package, "take-001").track("display-1")?.segments.first)
         let secondURL = package.segmentURL(take: "take-001", track: "display-1", index: 2)
-        let video = try await writeVideo(to: secondURL, start: secondStart, seconds: 3, finish: false)
         // seg-0003 has no segmentStarted event, so nothing says when it starts: it is left alone.
         let strayURL = package.segmentURL(take: "take-001", track: "display-1", index: 3)
         let stray = Data(repeating: 0xAB, count: 4096)
         try stray.write(to: strayURL)
-        let lines = [
-            InputEvent(t: base, kind: .segmentStarted(track: "display-1", index: 1)),
-            InputEvent(t: secondStart, kind: .segmentStarted(track: "display-1", index: 2)),
-        ]
-        try Data(try lines.map { try $0.jsonLine() + "\n" }.joined().utf8).write(to: package.eventsURL(take: "take-001"))
 
-        try await withExtendedLifetime(video) {
+        try await withExtendedLifetime(builder) {
             #expect(await readableDuration(of: secondURL, reaching: 1.9) >= 1.9)
             let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
 
@@ -340,19 +339,15 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func recoveryTakesDroppedFramesFromTheLog() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
         // display-1 died while finishing segment 1, with segment 2 already open; mic in segment 1.
-        try addTake(makeTake(tracks: [
-            displayTrack([
-                try segmentRecord(package, track: "display-1", index: 1, start: base),
-                try segmentRecord(package, track: "display-1", index: 2, start: base.adding(seconds: 2)),
-            ]),
-            micTrack([try segmentRecord(package, track: "mic", start: base)]),
-        ]), to: package)
-        for (track, index) in [("display-1", 1), ("display-1", 2), ("mic", 1)] {
-            try #require(FileManager.default.createFile(
-                atPath: package.segmentURL(take: "take-001", track: track, index: index).path, contents: Data()))
-        }
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [])
+        try builder.addEmptySegment(track: "display-1", index: 1, start: base, endReason: nil, file: .zeroBytes)
+        try builder.addEmptySegment(track: "display-1", index: 2, start: base.adding(seconds: 2), endReason: nil, file: .zeroBytes)
+        try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
+        try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: nil, file: .zeroBytes)
+        let package = try builder.write(status: .recording).package
+        // The log as the recorder left it, in file order.
         let events = [
             InputEvent(t: base, kind: .segmentStarted(track: "display-1", index: 1)),
             InputEvent(t: base, kind: .segmentStarted(track: "mic", index: 1)),
@@ -374,10 +369,7 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func recoveryTruncatesBrokenEventTail() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [micTrack([try segmentRecord(package, track: "mic", start: base)])]), to: package)
-        try #require(FileManager.default.createFile(
-            atPath: package.segmentURL(take: "take-001", track: "mic", index: 1).path, contents: Data()))
+        let package = try await openMicrophoneTake(in: dir, file: .zeroBytes)
         let whole = try [
             InputEvent(t: base, kind: .segmentStarted(track: "mic", index: 1)),
             InputEvent(t: base.adding(seconds: 0.5), kind: .cursor(x: 10.5, y: 20)),
@@ -396,17 +388,16 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
 
 @Test func recoveryIsIdempotent() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(tracks: [
-            displayTrack([try segmentRecord(package, track: "display-1", start: base)]),
-            micTrack([try segmentRecord(package, track: "mic", start: base)]),
-        ]), to: package)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 3, endReason: nil, leaveOpen: true),
+        ])
+        try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
+        try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: nil, file: .zeroBytes)
+        let package = try builder.write(status: .recording).package
         let displayURL = package.segmentURL(take: "take-001", track: "display-1", index: 1)
-        let video = try await writeVideo(to: displayURL, start: base, seconds: 3, finish: false)
-        try #require(FileManager.default.createFile(
-            atPath: package.segmentURL(take: "take-001", track: "mic", index: 1).path, contents: Data()))
 
-        try await withExtendedLifetime(video) {
+        try await withExtendedLifetime(builder) {
             #expect(await readableDuration(of: displayURL, reaching: 1.9) >= 1.9)
             let first = try await TakeRecovery.recover(package: package, takeID: "take-001")
             let manifest = try Data(contentsOf: package.manifestURL)

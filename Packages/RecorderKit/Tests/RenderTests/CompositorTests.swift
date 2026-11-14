@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Metal
 import ProjectFormat
+import RecorderKitTestSupport
 import Render
 import Testing
 
@@ -38,7 +39,7 @@ private func draw(_ frame: RenderFrame, screen: (any MTLTexture)?, device: any M
     return bytes
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func compositorDrawsBackgroundScreenAndCursor() throws {
     let device = try #require(MTLCreateSystemDefaultDevice())
     let style = StyleV0()
@@ -79,7 +80,7 @@ func compositorDrawsBackgroundScreenAndCursor() throws {
     #expect(stride(from: 3, to: bytes.count, by: 4).allSatisfy { bytes[$0] == 255 })
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func compositorWithoutScreenOrCursorDrawsOnlyTheBackground() throws {
     let device = try #require(MTLCreateSystemDefaultDevice())
     let style = StyleV0()
@@ -102,7 +103,7 @@ func compositorWithoutScreenOrCursorDrawsOnlyTheBackground() throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func cursorSpriteIsAPremultipliedArrowWithItsTipAtTheOrigin() throws {
     let device = try #require(MTLCreateSystemDefaultDevice())
     let texture = try CursorSprite.makeTexture(device: device)

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import RecorderKitTestSupport
 import Synchronization
 import Testing
 @testable import ProjectFormat
@@ -14,7 +15,7 @@ private func take(_ id: String) -> TakeRecord {
 // MARK: - ProjectPackage
 
 @Test func packageLayout() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate.addingTimeInterval(0.75))
         #expect(ProjectPackage.fileExtension == "toma")
         #expect(package.url.lastPathComponent == "Demo.toma")
@@ -44,7 +45,7 @@ private func take(_ id: String) -> TakeRecord {
 }
 
 @Test func createRefusesExistingPackage() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let first = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let before = try Data(contentsOf: first.manifestURL)
         let error = #expect(throws: CocoaError.self) {
@@ -56,7 +57,7 @@ private func take(_ id: String) -> TakeRecord {
 }
 
 @Test func createDoesNotMakeIntermediateDirectories() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         #expect(throws: (any Error).self) {
             try ProjectPackage.create(in: dir.appendingPathComponent("missing"), name: "Demo", app: testApp, now: testDate)
         }
@@ -65,7 +66,7 @@ private func take(_ id: String) -> TakeRecord {
 }
 
 @Test func nextTakeIDSkipsFoldersOnDisk() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         #expect(package.nextTakeID(existing: []) == "take-001")
         try FileManager.default.createDirectory(at: package.takeDirectory("take-002"), withIntermediateDirectories: false)
@@ -74,14 +75,14 @@ private func take(_ id: String) -> TakeRecord {
 }
 
 @Test func nextTakeIDNeverReusesNumbers() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         #expect(package.nextTakeID(existing: [take("take-003")]) == "take-004")
     }
 }
 
 @Test func relativePathRejectsURLsOutsideThePackage() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         for outside in [
             dir.appendingPathComponent("elsewhere.mov"),
@@ -94,7 +95,7 @@ private func take(_ id: String) -> TakeRecord {
 }
 
 @Test func relativePathResolvesASymlinkedParent() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let real = dir.appendingPathComponent("real", isDirectory: true)
         let link = dir.appendingPathComponent("link", isDirectory: true)
         try FileManager.default.createDirectory(at: real, withIntermediateDirectories: false)
@@ -180,7 +181,7 @@ private final class ReaderCounters: Sendable {
 }
 
 @Test func failedWriteKeepsChangeAndRetries() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
         let before = try Data(contentsOf: package.manifestURL)
@@ -200,7 +201,7 @@ private final class ReaderCounters: Sendable {
 }
 
 @Test func failedWriteIsRetriedByTheNextUpdate() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
 
@@ -214,7 +215,7 @@ private final class ReaderCounters: Sendable {
 }
 
 @Test func encodingFailureDoesNotWedgeStore() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
         let display = TrackRecord(id: "display-1", kind: .display, source: TrackSource(name: "Display", pixelScale: 2), segments: [])
@@ -234,7 +235,7 @@ private final class ReaderCounters: Sendable {
 
 @Test func throwingUpdateBodyChangesNothing() async throws {
     struct Abort: Error {}
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
         let store = try ManifestStore(package: package)
         #expect(throws: Abort.self) {

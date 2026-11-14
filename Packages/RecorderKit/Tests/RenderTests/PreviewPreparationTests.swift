@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Synchronization
 import Testing
 
@@ -11,17 +12,16 @@ private actor Pinger {
     func ping() {}
 }
 
-@Suite(.enabled(if: metalAvailable)) struct PreviewPreparationTests {
+@Suite(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired)) struct PreviewPreparationTests {
     /// More previews prepared at once than the pool has threads: each blocks while it decodes, which on the
     /// pool would take every thread and hang the app.
     @Test func manyPreparationsAtOnceLeaveThePoolFree() async throws {
         try await withTemporaryDirectory { dir in
-            let package = try makePackage(in: dir)
-            let record = try await writeSegment(in: package, index: 1, start: base, seconds: 2)
+            let builder = try TakeBuilder(in: dir)
             let frame = Rect(x: 0, y: 0, width: 640, height: 360)
-            try ManifestStore(package: package).update {
-                $0.takes.append(makeTake(tracks: [displayTrack(globalFrame: frame, segments: [record])]))
-            }
+            try await builder.addVideoTrack(
+                id: trackID, source: displaySource(globalFrame: frame), segments: [VideoSegmentSpec(start: base, seconds: 2)])
+            let package = try builder.write().package
             let count = ProcessInfo.processInfo.activeProcessorCount + 1
             let finished = Atomic(0)
             let clock = ContinuousClock()
@@ -52,10 +52,9 @@ private actor Pinger {
 
     @Test func unfinishedTakeIsNotPrepared() async throws {
         try await withTemporaryDirectory { dir in
-            let package = try makePackage(in: dir)
-            var take = makeTake(tracks: [displayTrack(globalFrame: nil, segments: [])])
-            take.status = .recording
-            try ManifestStore(package: package).update { [take] in $0.takes.append(take) }
+            let builder = try TakeBuilder(in: dir)
+            try await builder.addVideoTrack(id: trackID, source: displaySource(globalFrame: nil), segments: [])
+            let package = try builder.write(status: .recording).package
             await #expect(throws: PreviewPreparationError.unfinished(takeID: takeID)) {
                 try await PreviewPreparation.prepare(url: package.url, take: nil, outputSize: [320, 180])
             }

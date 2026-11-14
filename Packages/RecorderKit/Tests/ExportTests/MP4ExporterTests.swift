@@ -4,6 +4,7 @@ import CoreMedia
 @testable import Export
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Recording
 import Render
 import Synchronization
@@ -20,10 +21,13 @@ import Testing
     #expect(ExportSettings(outputSize: [1280, 720], framesPerSecond: 30).averageBitRate == 2_211_840)
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func exportsH264WithRec709AndAudio() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 3)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         // A partial file left by an export that died is replaced, not appended to.
         let stale = URL(fileURLWithPath: destination.path + ".partial.mp4")
@@ -70,16 +74,20 @@ func exportsH264WithRec709AndAudio() async throws {
 /// RMS of the `SampleFactory` sine.
 private let sineRMS = 0.25 / 2.0.squareRoot()
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func microphoneIsPlacedByHostTimeWithSilenceInGaps() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 3, mic: [
-            MicSegment(start: 0, seconds: 1),
-            MicSegment(start: 1.01, seconds: 0.49),  // 10 ms gap: closed, it follows on at 1 s
-            MicSegment(start: 1.8, seconds: 0.6),  // 300 ms gap: silence, then the audio at 1.8 s
-            MicSegment(start: 2.4, seconds: 0.3, endReason: .unreadable(bytes: 100)),  // marked unreadable: silence
-            MicSegment(start: 2.7, seconds: 0.3, contents: .none),  // missing file: silence
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [
+            AudioSegmentSpec(start: base, seconds: 1),
+            AudioSegmentSpec(start: base.adding(seconds: 1.01), seconds: 0.49),  // 10 ms gap: closed, it follows on at 1 s
+            AudioSegmentSpec(start: base.adding(seconds: 1.8), seconds: 0.6),  // 300 ms gap: silence, then the audio at 1.8 s
+            AudioSegmentSpec(start: base.adding(seconds: 2.4), seconds: 0.3, endReason: .unreadable(bytes: 100)),  // marked unreadable: silence
         ])
+        try builder.addEmptySegment(  // missing file: silence
+            track: micID, index: 5, start: base.adding(seconds: 2.7), end: base.adding(seconds: 3), endReason: .stopped, file: .absent)
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
@@ -110,10 +118,13 @@ func microphoneIsPlacedByHostTimeWithSilenceInGaps() async throws {
 
 /// The screen stopped after 2 s (it never came back) while the microphone recorded 6 s: the export lasts
 /// the microphone, over the screen's last frame, and none of the audio is left out.
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func microphoneRecordedPastTheScreenIsExported() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 2, mic: [MicSegment(start: 0, seconds: 6)])
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 2)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 6)])
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
@@ -141,10 +152,13 @@ func microphoneRecordedPastTheScreenIsExported() async throws {
 
 /// 4 channels are recorded as ALAC with the encoder's layout for 4, more than 8 as Float32 LPCM with a
 /// discrete layout; either way every channel is mixed in.
-@Test(.enabled(if: metalAvailable), arguments: [4, 10])
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), arguments: [4, 10])
 func multichannelMicrophoneIsMixedDownToStereo(channels: Int) async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1, mic: [MicSegment(start: 0, seconds: 1, channels: channels)])
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 1, channels: channels)])
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
@@ -157,10 +171,13 @@ func multichannelMicrophoneIsMixedDownToStereo(channels: Int) async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func exportedFrameMatchesRenderBeforeEncoding() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 3)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        let package = try builder.write().package
         let project = try LoadedProject.load(package.url)
         let destination = dir.appending(path: "out.mp4")
         try await MP4Exporter(project: project, settings: ExportSettings(outputSize: [1280, 720], framesPerSecond: 30))
@@ -175,10 +192,13 @@ func exportedFrameMatchesRenderBeforeEncoding() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func failedExportKeepsExistingDestination() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 3)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        let package = try builder.write().package
         let manifest = try Data(contentsOf: package.manifestURL)
         let projectFiles = try snapshot(of: package.url)
         let destination = dir.appending(path: "out.mp4")
@@ -205,10 +225,13 @@ func failedExportKeepsExistingDestination() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable), .timeLimit(.minutes(1)))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(1)))
 func cancelledExportCleansUp() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 3)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         let exporter = MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [1280, 720], framesPerSecond: 30))
         // The export waits in its progress callback, a third of the way in, until the task has been cancelled.
@@ -238,10 +261,13 @@ func cancelledExportCleansUp() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func exportRefusesDestinationInsideProject() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 1)])
+        let package = try builder.write().package
         let other = try ProjectPackage.create(in: dir, name: "Other", app: AppInfo(name: "Tests", version: "0"), now: Date())
         let link = dir.appending(path: "link")
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: package.url.appending(path: "takes"))
@@ -286,10 +312,13 @@ func exportRefusesDestinationInsideProject() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func progressReachesOne() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 2)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 2)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 2)])
+        let package = try builder.write().package
         let progress = Mutex<[Double]>([])
         try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: dir.appending(path: "out.mp4")) { value in progress.withLock { $0.append(value) } }
@@ -305,7 +334,7 @@ func progressReachesOne() async throws {
 /// 30 s recorded in real time from synthetic sources whose microphone clock runs 2000 ppm fast. A white
 /// flash in the video and a click in the audio are at the same host time, 28 s in; in the MP4 the click
 /// must be within 17 ms of the flash (about one frame at 60 fps, the export's frame quantization).
-@Test(.enabled(if: metalAvailable), .timeLimit(.minutes(3)))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(3)))
 func exportKeepsAVSyncUnderClockSkew() async throws {
     try await withTemporaryDirectory { dir in
         let package = try ProjectPackage.create(in: dir, name: "Sync", app: AppInfo(name: "Tests", version: "0"), now: Date())
@@ -369,15 +398,19 @@ func exportKeepsAVSyncUnderClockSkew() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func summaryListsMicrophoneAudioThatCouldNotBeUsed() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 3, mic: [
-            MicSegment(start: 0, seconds: 1),
-            MicSegment(start: 1, seconds: 1, contents: .garbage),  // a file that is not a movie
-            MicSegment(start: 2, seconds: 0.5, endReason: .empty, contents: .none),
-            MicSegment(start: 2.5, seconds: 0.5),
-        ])
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 1)])
+        try builder.addEmptySegment(  // a file that is not a movie
+            track: micID, index: 2, start: base.adding(seconds: 1), end: base.adding(seconds: 2), endReason: .stopped,
+            file: .garbage(bytes: 4096))
+        try builder.addEmptySegment(
+            track: micID, index: 3, start: base.adding(seconds: 2), end: base.adding(seconds: 2.5), endReason: .empty, file: .absent)
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base.adding(seconds: 2.5), seconds: 0.5)])
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
@@ -414,11 +447,18 @@ private func expectMissing(_ summary: ExportSummary, _ expected: [(String, Doubl
 /// data rate is the formula's (width × height × fps × 0.08), within what VideoToolbox's rate control holds.
 /// Off in CI: the H.264 rate control of the runners' virtual machines differs.
 @Test(
-    .enabled(if: metalAvailable),
+    .enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired),
     .disabled(if: ProcessInfo.processInfo.environment["TOMA_CI"] == "1", "VM H.264 rate control differs"))
 func videoDataRateFollowsTheFormula() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 4, noise: true)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 4) { frame, sample in
+                noiseVideoSample(width: 640, height: 360, pts: sample.presentationTimeStamp, seed: UInt64(frame))
+            },
+        ])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 4)])
+        let package = try builder.write().package
         let settings = ExportSettings(outputSize: [1280, 720], framesPerSecond: 30)
         let destination = dir.appending(path: "out.mp4")
         try await MP4Exporter(project: try LoadedProject.load(package.url), settings: settings).export(to: destination) { _ in }
@@ -428,10 +468,12 @@ func videoDataRateFollowsTheFormula() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func takeWithoutMicrophoneExportsWithoutAudio() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1, microphone: false)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        let package = try builder.write().package
         let destination = dir.appending(path: "out.mp4")
         let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
             .export(to: destination) { _ in }
@@ -442,10 +484,13 @@ func takeWithoutMicrophoneExportsWithoutAudio() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func takeWithoutScreenIsRefused() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 1)])
+        let package = try builder.write().package
         let loaded = try LoadedProject.load(package.url)
         let mic = try #require(loaded.take.track(micID))
         var display = try #require(loaded.take.track(displayID))

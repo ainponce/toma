@@ -2,6 +2,7 @@
 import AVFoundation
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Synchronization
 import SyntheticCapture
 import Testing

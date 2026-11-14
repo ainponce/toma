@@ -1,23 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
-import CoreMedia
 import Foundation
 import ProjectFormat
-import Recording
-import SyntheticCapture
 import Testing
 
 /// An arbitrary host time well after boot.
 let base = HostTime(nanoseconds: 5_000_000_000_000)
-
-/// A fresh, empty directory that is removed when `body` returns.
-func withTemporaryDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("RecoveryTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: url) }
-    return try await body(url)
-}
 
 /// `<directory>/<name>.toma` with an empty manifest.
 func makePackage(in directory: URL, name: String = "Test") throws -> ProjectPackage {
@@ -69,46 +57,6 @@ func segmentRecord(
         startHostTime: start, endHostTime: end, endReason: reason, droppedFrames: dropped, heartbeatFrames: 0)
 }
 
-/// Writes `seconds` of 30 fps synthetic video starting at `start`. When `finish` is false the writer is
-/// left open, the way a crash leaves it: the caller keeps it alive while it reads the file.
-func writeVideo(
-    to url: URL, start: HostTime, seconds: Double, finish: Bool
-) async throws -> FragmentedTrackWriter {
-    let writer = try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: 30), realTime: false)
-    for i in 0..<Int(seconds * 30) {
-        try writer.append(SampleFactory.videoSample(
-            width: 640, height: 360, pts: start.adding(seconds: Double(i) / 30), frameIndex: i))
-    }
-    if finish { _ = try await writer.finish(at: start.adding(seconds: seconds)) }
-    return writer
-}
-
-/// Writes `seconds` of 48 kHz mono audio in 10 ms blocks starting at `start`, like `writeVideo`.
-func writeAudio(
-    to url: URL, start: HostTime, seconds: Double, finish: Bool
-) async throws -> FragmentedTrackWriter {
-    let writer = try FragmentedTrackWriter(url: url, media: .audio, realTime: false)
-    for k in 0..<Int(seconds * 100) {
-        try writer.append(SampleFactory.audioSample(
-            pts: start.adding(seconds: Double(k) / 100), frames: 480, sampleRate: 48_000, channels: 1))
-    }
-    if finish { _ = try await writer.finish(at: start.adding(seconds: seconds)) }
-    return writer
-}
-
-/// The readable duration of the movie at `url`, polled until it reaches `target` or `timeout` passes.
-/// A movie that AVFoundation cannot open yet reads as 0.
-func readableDuration(of url: URL, reaching target: Double, timeout: Duration = .seconds(5)) async -> Double {
-    let clock = ContinuousClock()
-    let deadline = clock.now + timeout
-    var seconds = 0.0
-    while true {
-        seconds = await readableDuration(of: url)
-        if seconds >= target || clock.now >= deadline { return seconds }
-        try? await Task.sleep(for: .milliseconds(50))
-    }
-}
-
 /// The movie's duration as AVFoundation reads it now, or 0 if it cannot open it.
 func readableDuration(of url: URL) async -> Double {
     (try? await AVURLAsset(url: url).load(.duration).seconds) ?? 0
@@ -119,7 +67,8 @@ func fileSize(_ url: URL) throws -> Int64 {
 }
 
 /// `withExtendedLifetime` for an async `body`, which the standard library does not have: `value` is
-/// not released before `body` returns. Keeps an unfinished writer alive while a test reads its file.
+/// not released before `body` returns. Keeps a `TakeBuilder`'s unfinished writers alive while a test reads
+/// their files.
 func withExtendedLifetime<T, Result>(_ value: T, _ body: () async throws -> Result) async rethrows -> Result {
     defer { Swift.withExtendedLifetime(value) {} }
     return try await body()

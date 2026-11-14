@@ -3,17 +3,25 @@ import AVFoundation
 import CoreVideo
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 @testable import Render
 import SyntheticCapture
 import Testing
 
 private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 
+/// The display track of a take of `segments` written with `TakeBuilder`, and its package.
+private func displayTake(in dir: URL, _ segments: [VideoSegmentSpec]) async throws -> (ProjectPackage, TrackRecord) {
+    let builder = try TakeBuilder(in: dir)
+    try await builder.addVideoTrack(id: trackID, source: displaySource(globalFrame: screenFrame), segments: segments)
+    let project = try builder.write()
+    return (project.package, try #require(project.take.track(trackID)))
+}
+
 @Test func readerReturnsLatestFrameNotAfterTime() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        let seg = try await writeSegment(in: package, index: 1, start: base, seconds: 3)
-        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: [seg]))
+        let (package, track) = try await displayTake(in: dir, [VideoSegmentSpec(start: base, seconds: 3)])
+        let reader = TrackFrameReader(package: package, track: track)
 
         #expect(reader.pixelBuffer(at: base.adding(seconds: -0.5)) == nil)
         let first = try #require(reader.pixelBuffer(at: base))
@@ -36,9 +44,8 @@ private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 
 @Test func readerReadsSequentiallyWithOneReaderPerSegment() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        let seg = try await writeSegment(in: package, index: 1, start: base, seconds: 3)
-        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: [seg]))
+        let (package, track) = try await displayTake(in: dir, [VideoSegmentSpec(start: base, seconds: 3)])
+        let reader = TrackFrameReader(package: package, track: track)
         // 60 fps output over 30 fps media: every frame twice, in order.
         for k in 0..<180 {
             let t = base.adding(seconds: (Double(k) + 0.5) / 60)
@@ -51,11 +58,11 @@ private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 
 @Test func readerHoldsLastFrameAcrossGap() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        let first = try await writeSegment(in: package, index: 1, start: base, seconds: 1)
-        let second = try await writeSegment(
-            in: package, index: 2, start: base.adding(seconds: 1.5), seconds: 1, firstFrame: 30)
-        let track = displayTrack(globalFrame: screenFrame, segments: [first, second])
+        // The frames of the second segment are numbered from 30, after the first one's.
+        let (package, track) = try await displayTake(in: dir, [
+            VideoSegmentSpec(start: base, seconds: 1),
+            VideoSegmentSpec(start: base.adding(seconds: 1.5), seconds: 1),
+        ])
 
         // Straight into the gap.
         let seeking = TrackFrameReader(package: package, track: track)
@@ -76,21 +83,22 @@ private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 
 @Test func readerTreatsEmptyUnreadableAndMissingSegmentsAsGaps() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        let first = try await writeSegment(in: package, index: 1, start: base, seconds: 1)
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(
+            id: trackID, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 1)])
         // Recovery marks these, but a reader must survive them however they are marked.
-        let emptyURL = package.segmentURL(take: takeID, track: trackID, index: 2)
-        try Data().write(to: emptyURL)
-        let garbageURL = package.segmentURL(take: takeID, track: trackID, index: 3)
-        try Data(repeating: 0x5A, count: 4096).write(to: garbageURL)
-        let segments = [
-            first,
-            segment(index: 2, start: base.adding(seconds: 1), end: base.adding(seconds: 2), reason: .empty),
-            segment(index: 3, start: base.adding(seconds: 2), end: base.adding(seconds: 3), reason: .stopped),
-            segment(index: 4, start: base.adding(seconds: 3), end: base.adding(seconds: 4), reason: .stopped),
-            segment(index: 5, start: base.adding(seconds: 4), end: base.adding(seconds: 5), reason: .unreadable(bytes: 10)),
-        ]
-        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: segments))
+        try builder.addEmptySegment(
+            track: trackID, index: 2, start: base.adding(seconds: 1), end: base.adding(seconds: 2), endReason: .empty, file: .zeroBytes)
+        try builder.addEmptySegment(
+            track: trackID, index: 3, start: base.adding(seconds: 2), end: base.adding(seconds: 3), endReason: .stopped,
+            file: .garbage(bytes: 4096))
+        try builder.addEmptySegment(
+            track: trackID, index: 4, start: base.adding(seconds: 3), end: base.adding(seconds: 4), endReason: .stopped, file: .absent)
+        try builder.addEmptySegment(
+            track: trackID, index: 5, start: base.adding(seconds: 4), end: base.adding(seconds: 5), endReason: .unreadable(bytes: 10),
+            file: .absent)
+        let project = try builder.write()
+        let reader = TrackFrameReader(package: project.package, track: try #require(project.take.track(trackID)))
         for seconds in [1.5, 2.5, 3.5, 4.5, 2.2] {
             let buffer = try #require(reader.pixelBuffer(at: base.adding(seconds: seconds)), "at \(seconds) s")
             #expect(frameIndex(of: buffer) == 29, "at \(seconds) s")
@@ -108,22 +116,22 @@ private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func rendererOpensTakeWithEmptyAndMissingSegments() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
         // 1: a file of 0 bytes that recovery marked empty; 2: valid; 3: its file is gone.
-        let emptyURL = package.segmentURL(take: takeID, track: trackID, index: 1)
-        try FileManager.default.createDirectory(at: emptyURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data().write(to: emptyURL)
-        let valid = try await writeSegment(in: package, index: 2, start: base.adding(seconds: 1), seconds: 1)
-        let take = makeTake(tracks: [displayTrack(globalFrame: screenFrame, segments: [
-            segment(index: 1, start: base, end: base.adding(seconds: 1), reason: .empty),
-            valid,
-            segment(index: 3, start: base.adding(seconds: 2), end: base.adding(seconds: 3), reason: .recoveredAfterCrash),
-        ])])
-        try ManifestStore(package: package).update { $0.takes.append(take) }
-        let project = try LoadedProject.load(package.url)
+        let builder = try TakeBuilder(in: dir)
+        let source = displaySource(globalFrame: screenFrame)
+        try await builder.addVideoTrack(id: trackID, source: source, segments: [])
+        try builder.addEmptySegment(
+            track: trackID, index: 1, start: base, end: base.adding(seconds: 1), endReason: .empty, file: .zeroBytes)
+        try await builder.addVideoTrack(
+            id: trackID, source: source, segments: [VideoSegmentSpec(start: base.adding(seconds: 1), seconds: 1)])
+        try builder.addEmptySegment(
+            track: trackID, index: 3, start: base.adding(seconds: 2), end: base.adding(seconds: 3), endReason: .recoveredAfterCrash,
+            file: .absent)
+        let project = try builder.write()
+        let take = project.take
 
         let size = SIMD2(640, 360)
         let renderer = try FrameRenderer(project: project, outputSize: size)
@@ -173,10 +181,11 @@ private final class FlakyLoader: @unchecked Sendable {
 @Test(arguments: [0.0, 3600.0])
 func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        let first = try await writeSegment(in: package, index: 1, start: base, seconds: 1)
-        let second = try await writeSegment(in: package, index: 2, start: base.adding(seconds: 1), seconds: 1, firstFrame: 30)
-        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: [first, second]))
+        let (package, track) = try await displayTake(in: dir, [
+            VideoSegmentSpec(start: base, seconds: 1),
+            VideoSegmentSpec(start: base.adding(seconds: 1), seconds: 1),
+        ])
+        let reader = TrackFrameReader(package: package, track: track)
         let loader = FlakyLoader(failing: "seg-0002.mov", timeouts: 1)
         reader.trackLoader = loader.load
         reader.timeoutBackoff = backoff
@@ -206,10 +215,11 @@ func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
 
 @Test func readerMarksASegmentWhoseTrackFailsToLoadUnreadable() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        let first = try await writeSegment(in: package, index: 1, start: base, seconds: 1)
-        let second = try await writeSegment(in: package, index: 2, start: base.adding(seconds: 1), seconds: 1, firstFrame: 30)
-        let reader = TrackFrameReader(package: package, track: displayTrack(globalFrame: screenFrame, segments: [first, second]))
+        let (package, track) = try await displayTake(in: dir, [
+            VideoSegmentSpec(start: base, seconds: 1),
+            VideoSegmentSpec(start: base.adding(seconds: 1), seconds: 1),
+        ])
+        let reader = TrackFrameReader(package: package, track: track)
         let calls = FlakyLoader(failing: "seg-0002.mov", timeouts: 0)
         reader.trackLoader = { asset in
             guard asset.url.lastPathComponent == "seg-0002.mov" else { return TrackFrameReader.loadFirstVideoTrack(of: asset) }
@@ -221,7 +231,7 @@ func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
         #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.21)))) == 29)
         #expect(calls.calls == 1)
         #expect(reader.gaps == [TrackFrameReader.Gap(
-            file: "takes/\(takeID)/\(trackID)/seg-0002.mov", start: base.adding(seconds: 1), end: second.endHostTime ?? base,
+            file: "takes/\(takeID)/\(trackID)/seg-0002.mov", start: base.adding(seconds: 1), end: track.segments[1].endHostTime ?? base,
             reason: .cannotOpen("injected"))])
     }
 }

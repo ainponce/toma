@@ -5,6 +5,7 @@ import Metal
 import MetalKit
 import ProjectFormat
 import QuartzCore
+import RecorderKitTestSupport
 @testable import Render
 import SyntheticCapture
 import Testing
@@ -13,10 +14,11 @@ private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 
 /// A take of one 3 s display segment from `base`, with the cursor moving over it the whole time.
 private func movingCursorProject(in dir: URL) async throws -> LoadedProject {
-    let package = try makePackage(in: dir)
-    let seg = try await writeSegment(in: package, index: 1, start: base, seconds: 3)
-    let take = makeTake(tracks: [displayTrack(globalFrame: screenFrame, segments: [seg])])
-    return makeProject(package, take: take, events: cursorEvents(from: base, seconds: 3, across: screenFrame))
+    let builder = try TakeBuilder(in: dir)
+    try await builder.addVideoTrack(
+        id: trackID, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
+    try builder.addEvents(cursorEvents(from: base, seconds: 3, across: screenFrame))
+    return try builder.write()
 }
 
 private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
@@ -30,7 +32,7 @@ private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
     return try #require(created)
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func renderIsDeterministic() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await movingCursorProject(in: dir)
@@ -54,7 +56,7 @@ func renderIsDeterministic() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func previewAndExportPathsMatchBitForBit() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await movingCursorProject(in: dir)
@@ -74,7 +76,7 @@ func previewAndExportPathsMatchBitForBit() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func rendererRefusesTargetsOfAnotherSizeOrFormat() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await movingCursorProject(in: dir)
@@ -96,7 +98,7 @@ func rendererRefusesTargetsOfAnotherSizeOrFormat() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func previewPlaybackStaysWithinTheTimeline() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await movingCursorProject(in: dir)
@@ -112,7 +114,7 @@ func previewPlaybackStaysWithinTheTimeline() async throws {
 }
 
 @MainActor
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func configureSetsUpAViewForThePreview() async throws {
     // Not `withTemporaryDirectory`: its body is not main-actor isolated, and views are.
     let dir = FileManager.default.temporaryDirectory.appendingPathComponent("RenderTests-\(UUID().uuidString)", isDirectory: true)

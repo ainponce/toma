@@ -3,7 +3,6 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
-import Metal
 import ProjectFormat
 import Recording
 import Synchronization
@@ -13,99 +12,13 @@ import Testing
 /// An arbitrary host time well after boot.
 let base = HostTime(nanoseconds: 5_000_000_000_000)
 
-/// Whether the tests that draw run: on a machine with a Metal device, and always in CI (`TOMA_CI=1`), where a
-/// runner without one must fail them loudly instead of skipping them and staying green.
-let metalAvailable = MTLCreateSystemDefaultDevice() != nil || ProcessInfo.processInfo.environment["TOMA_CI"] == "1"
-
 let takeID = "take-001"
 let displayID = "display-1"
 let micID = "mic"
 
-/// A fresh, empty directory that is removed when `body` returns.
-func withTemporaryDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("ExportTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: url) }
-    return try await body(url)
-}
-
-// MARK: - Synthetic projects
-
-/// One microphone segment of a synthetic take: `seconds` of the `SampleFactory` sine from `start` seconds
-/// after `base`, with `channels` channels at 48 kHz. Without a file, the manifest lists it but nothing is
-/// written.
-struct MicSegment {
-    enum Contents { case audio, none, garbage }
-
-    var start: Double
-    var seconds: Double
-    var channels = 1
-    var endReason = SegmentEndReason.stopped
-    /// What is written at the segment's path: its audio, nothing, or 4 KiB that are not a movie.
-    var contents = Contents.audio
-}
-
-/// `<directory>/Synthetic.toma` with one complete take written as the recorder would: `seconds` of 30 fps
-/// 640×360 `SampleFactory` video from `base`, the microphone segments `mic` (by default one as long as the
-/// video; no microphone track at all when `microphone` is false), and the manifest on disk.
-func makeSyntheticPackage(
-    in directory: URL, seconds: Double, mic: [MicSegment]? = nil, microphone: Bool = true, noise: Bool = false
-) async throws -> ProjectPackage {
-    let package = try ProjectPackage.create(in: directory, name: "Synthetic", app: AppInfo(name: "Tests", version: "0"), now: Date())
-
-    let videoURL = package.segmentURL(take: takeID, track: displayID, index: 1)
-    try FileManager.default.createDirectory(at: videoURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let video = try FragmentedTrackWriter(url: videoURL, media: .video(framesPerSecond: 30), realTime: false)
-    for i in 0..<Int((seconds * 30).rounded()) {
-        let pts = base.adding(seconds: Double(i) / 30)
-        try video.append(noise
-            ? noiseVideoSample(width: 640, height: 360, pts: pts.cmTime, seed: UInt64(i))
-            : SampleFactory.videoSample(width: 640, height: 360, pts: pts, frameIndex: i))
-    }
-    let videoResult = try await video.finish(at: base.adding(seconds: seconds))
-    #expect(video.failure == nil)
-
-    var micRecords: [SegmentRecord] = []
-    for (k, segment) in (microphone ? mic ?? [MicSegment(start: 0, seconds: seconds)] : []).enumerated() {
-        let url = package.segmentURL(take: takeID, track: micID, index: k + 1)
-        let start = base.adding(seconds: segment.start)
-        var end = start.adding(seconds: segment.seconds)
-        if segment.contents == .garbage {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data(repeating: 0x42, count: 4096).write(to: url)
-        } else if segment.contents == .audio {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let audio = try FragmentedTrackWriter(url: url, media: .audio, realTime: false)
-            for block in 0..<Int((segment.seconds * 100).rounded()) {
-                try audio.append(SampleFactory.audioSample(
-                    pts: start.adding(seconds: Double(block) / 100), frames: 480, sampleRate: 48_000, channels: segment.channels))
-            }
-            end = try await audio.finish(at: end).endHostTime
-            #expect(audio.failure == nil)
-        }
-        micRecords.append(SegmentRecord(
-            index: k + 1, file: try package.relativePath(of: url), startHostTime: start,
-            endHostTime: end, endReason: segment.endReason, droppedFrames: 0, heartbeatFrames: 0))
-    }
-
-    var tracks = [
-        TrackRecord(
-            id: displayID, kind: .display,
-            source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1),
-            segments: [SegmentRecord(
-                index: 1, file: try package.relativePath(of: videoURL), startHostTime: base,
-                endHostTime: videoResult.endHostTime, endReason: .stopped, droppedFrames: 0, heartbeatFrames: 0)]),
-    ]
-    if microphone {
-        tracks.append(TrackRecord(
-            id: micID, kind: .microphone, source: TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic"),
-            segments: micRecords))
-    }
-    let take = TakeRecord(id: takeID, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks)
-    try ManifestStore(package: package).update { $0.takes.append(take) }
-    return package
-}
+let displaySource = TrackSource(
+    name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1)
+let micSource = TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic")
 
 /// Root mean square of `samples[from ..< to]`, with `from` and `to` in seconds of a stream that starts at
 /// `start` seconds, 48 kHz.

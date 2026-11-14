@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import RecorderKitTestSupport
 import Testing
 // Not @testable: the recorder, recovery and render modules use only the public API.
 import ProjectFormat
@@ -112,7 +113,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func explicitFlushWritesImmediately() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let writer = try EventLogWriter(url: url)
         writer.append(marker(1))
@@ -187,7 +188,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func reopenedWriterAppendsToEarlierEvents() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let first = try EventLogWriter(url: url)
         first.append(marker(1))
@@ -200,7 +201,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func writerReopenedAfterCrashStartsOnANewLine() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         try (#"{"t":1,"type":"marker"}"# + "\n" + #"{"t":2,"type":"cur"#).write(to: url, atomically: false, encoding: .utf8)
         let writer = try EventLogWriter(url: url)
@@ -214,7 +215,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func writerReopenedAfterMissingNewlineKeepsTheLastEvent() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         try #"{"t":1,"type":"marker"}"#.write(to: url, atomically: false, encoding: .utf8)
         let writer = try EventLogWriter(url: url)
@@ -225,7 +226,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func droppedWriterIsReleasedAndKeepsItsEvents() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         weak var released: EventLogWriter?
         do {
@@ -239,7 +240,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func unencodableEventIsDroppedAndReportedOnce() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let writer = try EventLogWriter(url: url)
         writer.append(marker(1))
@@ -259,7 +260,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func writerNeedsAnExistingDirectory() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("missing/events.jsonl")
         let error = #expect(throws: POSIXError.self) { try EventLogWriter(url: url) }
         #expect(error?.code == .ENOENT)
@@ -269,7 +270,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 // MARK: - Reader
 
 @Test func readerDropsTruncatedTail() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         try (#"{"t":1,"type":"marker"}"# + "\n" + #"{"t":2,"type":"cur"#).write(to: url, atomically: false, encoding: .utf8)
         let r = try EventLogReader.read(url)
@@ -298,7 +299,7 @@ struct BadLine: Sendable, CustomTestStringConvertible {
     BadLine(name: "zeros left by a power loss", text: String(repeating: "\u{0}", count: 64)),
 ])
 func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let cursor = InputEvent(t: HostTime(nanoseconds: 3), kind: .cursor(x: 10.5, y: 20))
         try (line(marker(1)) + badLine.text + "\n" + line(cursor)).write(to: url, atomically: false, encoding: .utf8)
@@ -310,7 +311,7 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
 }
 
 @Test func lastLineThatOnlyLacksItsNewlineIsKept() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let contents = try line(marker(1)) + #"{"t":2,"type":"resumed"}"#
         try contents.write(to: url, atomically: false, encoding: .utf8)
@@ -323,7 +324,7 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
 }
 
 @Test func unknownEventTypeAtTailIsKeptNotTruncated() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         // A whole line of a type a newer version writes, missing only its line break.
         let newer = #"{"dy":1,"t":2,"type":"scroll"}"#
         let contents = try line(marker(1)) + newer
@@ -346,7 +347,7 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
 }
 
 @Test func truncateLeavesWholeLinesAlone() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let empty = dir.appendingPathComponent("empty.jsonl")
         try Data().write(to: empty)
         #expect(try !EventLogReader.truncateIncompleteTail(empty))
@@ -362,7 +363,7 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
 }
 
 @Test func truncateFindsTheLineStartFarFromTheEnd() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         // A torn tail longer than one read chunk, after many whole lines.
         let lines = try (0..<5000).map { try line(marker(UInt64($0))) }.joined()
@@ -374,7 +375,7 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
 }
 
 @Test func readingOrRepairingAMissingFileThrows() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         #expect(throws: (any Error).self) { try EventLogReader.read(url) }
         let error = #expect(throws: POSIXError.self) { try EventLogReader.truncateIncompleteTail(url) }

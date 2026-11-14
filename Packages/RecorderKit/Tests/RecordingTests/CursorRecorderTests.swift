@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import Foundation
+import RecorderKitTestSupport
 import Synchronization
 import Testing
 import ProjectFormat

@@ -2,6 +2,7 @@
 import AppSupport
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Testing
 
 private let utc = TimeZone(identifier: "UTC")!
@@ -13,15 +14,6 @@ private let date: Date = {
     calendar.timeZone = utc
     return calendar.date(from: DateComponents(year: 2026, month: 11, day: 13, hour: 9, minute: 5, second: 7))!
 }()
-
-/// A fresh, empty directory that is removed when `body` returns.
-private func withTemporaryDirectory<T>(_ body: (URL) throws -> T) throws -> T {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("AppSupportTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: url) }
-    return try body(url)
-}
 
 @Test func nameIsThePrefixAndTheDateAndTime() {
     #expect(ProjectFolder.baseName(prefix: "Recording", date: date, timeZone: utc) == "Recording 2026-11-13 09.05.07")

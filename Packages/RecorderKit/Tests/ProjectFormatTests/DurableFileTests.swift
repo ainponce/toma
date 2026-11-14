@@ -1,31 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
+import RecorderKitTestSupport
 import Testing
 // Not @testable: these are the APIs other modules use, so they must be public.
 import ProjectFormat
-
-private struct HdiutilFailed: Error, CustomStringConvertible {
-    var arguments: [String]
-    var status: Int32
-    var output: String
-    var description: String { "hdiutil \(arguments.joined(separator: " ")) exited \(status): \(output)" }
-}
-
-private func hdiutil(_ arguments: String...) throws {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-    process.arguments = arguments
-    let output = Pipe()
-    process.standardOutput = output
-    process.standardError = output
-    try process.run()
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw HdiutilFailed(arguments: arguments, status: process.terminationStatus, output: String(decoding: data, as: UTF8.self))
-    }
-}
 
 private func fileSystemType(at url: URL) throws -> String {
     var info = statfs()
@@ -34,18 +13,15 @@ private func fileSystemType(at url: URL) throws -> String {
 }
 
 @Test func barrierAndFullSyncWorkOnHFSPlus() async throws {
-    try await withTemporaryDirectory { dir in
-        let image = dir.appendingPathComponent("TomaTest.dmg")
-        let mount = dir.appendingPathComponent("mnt", isDirectory: true)
-        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: false)
-        try hdiutil("create", "-size", "20m", "-fs", "HFS+", "-volname", "TomaTest", image.path)
-        try hdiutil("attach", "-nobrowse", "-mountpoint", mount.path, image.path)
+    try withTemporaryDirectory { dir in
+        let disk = try DiskImage.attach(sizeMegabytes: 20, fileSystem: .hfsPlus, in: dir)
+        let mount = disk.mountPoint
         defer {
             do {
-                try hdiutil("detach", mount.path)
+                try disk.detach()
             } catch {
                 Issue.record(error)
-                try? hdiutil("detach", "-force", mount.path)
+                try? disk.detach(force: true)
             }
         }
         #expect(try fileSystemType(at: mount) == "hfs")
@@ -67,7 +43,7 @@ private func fileSystemType(at url: URL) throws -> String {
 }
 
 @Test func writeAtomicallyNeverFollowsASymlinkAtTheTemporaryPath() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let victim = dir.appendingPathComponent("victim.txt")
         let victimBytes = Data("not the manifest".utf8)
         try victimBytes.write(to: victim)

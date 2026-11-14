@@ -2,6 +2,7 @@
 import AVFoundation
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Recording
 import Recovery
 import Render
@@ -14,29 +15,19 @@ import Testing
 
 private let settings = ExportSettings(outputSize: [640, 360], framesPerSecond: 30)
 
-/// Adds display segments to the synthetic package's take, after the one it has.
-private func appendDisplaySegments(_ package: ProjectPackage, _ segments: [SegmentRecord]) throws {
-    try ManifestStore(package: package).update { manifest in
-        let display = try #require(manifest.takes[0].tracks.firstIndex { $0.id == displayID })
-        manifest.takes[0].tracks[display].segments += segments
-    }
-}
-
-private func displaySegment(_ package: ProjectPackage, index: Int, from start: Double, to end: Double, reason: SegmentEndReason) throws -> SegmentRecord {
-    SegmentRecord(
-        index: index, file: try package.relativePath(of: package.segmentURL(take: takeID, track: displayID, index: index)),
-        startHostTime: base.adding(seconds: start), endHostTime: base.adding(seconds: end), endReason: reason,
-        droppedFrames: 0, heartbeatFrames: 0)
-}
-
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func unreadableAndMissingScreenSegmentsAreListed() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1, mic: [MicSegment(start: 0, seconds: 3)])
-        try appendDisplaySegments(package, [
-            try displaySegment(package, index: 2, from: 1, to: 2, reason: .unreadable(bytes: 4096)),
-            try displaySegment(package, index: 3, from: 2, to: 3, reason: .recoveredAfterCrash),  // its file is gone
-        ])
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try builder.addEmptySegment(
+            track: displayID, index: 2, start: base.adding(seconds: 1), end: base.adding(seconds: 2), endReason: .unreadable(bytes: 4096),
+            file: .absent)
+        try builder.addEmptySegment(  // its file is gone
+            track: displayID, index: 3, start: base.adding(seconds: 2), end: base.adding(seconds: 3), endReason: .recoveredAfterCrash,
+            file: .absent)
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        let package = try builder.write().package
         let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: settings)
             .export(to: dir.appending(path: "out.mp4")) { _ in }
         #expect(summary.missingAudio.isEmpty)
@@ -47,12 +38,16 @@ func unreadableAndMissingScreenSegmentsAreListed() async throws {
     }
 }
 
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func screenSegmentThatCannotBeOpenedIsListed() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try await makeSyntheticPackage(in: dir, seconds: 1, mic: [MicSegment(start: 0, seconds: 2)])
-        try Data(repeating: 0x5A, count: 4096).write(to: package.segmentURL(take: takeID, track: displayID, index: 2))
-        try appendDisplaySegments(package, [try displaySegment(package, index: 2, from: 1, to: 2, reason: .stopped)])
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try builder.addEmptySegment(
+            track: displayID, index: 2, start: base.adding(seconds: 1), end: base.adding(seconds: 2), endReason: .stopped,
+            file: .garbage(bytes: 4096))
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 2)])
+        let package = try builder.write().package
         let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: settings)
             .export(to: dir.appending(path: "out.mp4")) { _ in }
         try #require(summary.missingVideo.count == 1, "\(summary.missingVideo)")
@@ -79,36 +74,21 @@ private func screenIndex(of url: URL, take: TakeRecord, at time: Double) async t
 private func withCrashedPackage<T>(
     in dir: URL, seconds: Int, _ body: (ProjectPackage) async throws -> T
 ) async throws -> T {
-    let package = try ProjectPackage.create(in: dir, name: "Crashed", app: AppInfo(name: "Tests", version: "0"), now: Date())
-    let videoURL = package.segmentURL(take: takeID, track: displayID, index: 1)
-    let audioURL = package.segmentURL(take: takeID, track: micID, index: 1)
-    for url in [videoURL, audioURL] {
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    }
-    let video = try FragmentedTrackWriter(url: videoURL, media: .video(framesPerSecond: 30), realTime: false)
-    for i in 0..<(seconds * 30) {
-        try video.append(SampleFactory.videoSample(width: 640, height: 360, pts: base.adding(seconds: Double(i) / 30), frameIndex: i))
-    }
-    let audio = try FragmentedTrackWriter(url: audioURL, media: .audio, realTime: false)
-    for k in 0..<(seconds * 100) {
-        try audio.append(SampleFactory.audioSample(pts: base.adding(seconds: Double(k) / 100), frames: 480, sampleRate: 48_000, channels: 1))
-    }
-    let take = TakeRecord(id: takeID, status: .recording, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: [
-        TrackRecord(
-            id: displayID, kind: .display,
-            source: TrackSource(name: "Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1),
-            segments: [SegmentRecord(index: 1, file: try package.relativePath(of: videoURL), startHostTime: base, droppedFrames: 0, heartbeatFrames: 0)]),
-        TrackRecord(
-            id: micID, kind: .microphone, source: TrackSource(name: "Mic", deviceUniqueID: "mic"),
-            segments: [SegmentRecord(index: 1, file: try package.relativePath(of: audioURL), startHostTime: base, droppedFrames: 0, heartbeatFrames: 0)]),
-    ])
-    try ManifestStore(package: package).update { $0.takes.append(take) }
-    return try await withExtendedLifetime((video, audio)) { try await body(package) }
+    let builder = try TakeBuilder(in: dir, name: "Crashed")
+    try await builder.addVideoTrack(
+        id: displayID,
+        source: TrackSource(name: "Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1),
+        segments: [VideoSegmentSpec(start: base, seconds: Double(seconds), endReason: nil, leaveOpen: true)])
+    try await builder.addAudioTrack(
+        id: micID, source: TrackSource(name: "Mic", deviceUniqueID: "mic"),
+        segments: [AudioSegmentSpec(start: base, seconds: Double(seconds), endReason: nil, leaveOpen: true)])
+    let package = try builder.write(status: .recording).package
+    return try await withExtendedLifetime(builder) { try await body(package) }
 }
 
 /// A take a crash left open, its segments never finalized: recovery closes it, and the export decodes its
 /// screen and its microphone up to the last second recovered.
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func recoveredUnfinalizedSegmentsExportToTheirEnd() async throws {
     try await withTemporaryDirectory { dir in
         try await withCrashedPackage(in: dir, seconds: 5) { package in
@@ -166,7 +146,7 @@ private func corruptMediaData(of url: URL, box n: Int) throws {
 
 /// A fragment in the middle of a recovered screen segment holds garbage: the export goes on past it,
 /// decoding the frames after it, or lists what it could not decode. It is never silent.
-@Test(.enabled(if: metalAvailable))
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func corruptFragmentIsSkippedOrListed() async throws {
     try await withTemporaryDirectory { dir in
         try await withCrashedPackage(in: dir, seconds: 6) { package in

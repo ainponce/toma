@@ -4,6 +4,7 @@ import CoreMedia
 import Foundation
 import ProjectFormat
 @testable import Recording
+import RecorderKitTestSupport
 import SyntheticCapture
 import Testing
 

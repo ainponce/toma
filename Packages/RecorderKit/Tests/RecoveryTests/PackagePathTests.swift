@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Testing
 
 @testable import Recovery
@@ -139,7 +140,7 @@ private func expectNeedsRepair(_ results: [ScanResult], _ package: ProjectPackag
 }
 
 @Test func takeFolderTheManifestDoesNotListIsReported() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)
         try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
         // A take whose first manifest write never landed: its segment is on disk, the manifest knows nothing.
@@ -162,7 +163,7 @@ private func expectNeedsRepair(_ results: [ScanResult], _ package: ProjectPackag
 }
 
 @Test func takeFolderWithAFreeLockTheManifestDoesNotListIsReported() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)
         try FileManager.default.createDirectory(at: package.takeDirectory("take-001"), withIntermediateDirectories: false)
         try Data("{}".utf8).write(to: package.lockURL(take: "take-001"))

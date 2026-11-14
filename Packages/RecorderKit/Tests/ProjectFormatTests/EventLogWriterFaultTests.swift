@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import RecorderKitTestSupport
 import Synchronization
 import Testing
 // @testable for the I/O seam and `tick()`, so failures can be injected and the timer driven by hand.
@@ -81,7 +82,7 @@ private func line(_ event: InputEvent) throws -> String {
 }
 
 @Test func timerSyncFailureIsThrownOnceByTheNextFlush() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let io = FaultyIO()
         io.state.withLock { $0.failingBarrierSyncs = 1 }
@@ -100,7 +101,7 @@ private func line(_ event: InputEvent) throws -> String {
 }
 
 @Test func timerWriteFailureIsThrownOnceByTheNextFlush() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let io = FaultyIO()
         io.state.withLock { $0.failingWrites = 1 }
@@ -119,7 +120,7 @@ private func line(_ event: InputEvent) throws -> String {
 }
 
 @Test func closeThrowsAnEarlierSyncFailureEvenWhenItsOwnSyncSucceeds() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let io = FaultyIO()
         io.state.withLock { $0.failingBarrierSyncs = 1 }
@@ -136,7 +137,7 @@ private func line(_ event: InputEvent) throws -> String {
 }
 
 @Test func shortWriteResumesFromTheByteWhereItStopped() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let io = FaultyIO()
         io.state.withLock {
@@ -161,7 +162,7 @@ private func line(_ event: InputEvent) throws -> String {
 }
 
 @Test func flushThrowsItsOwnWriteFailureOnlyOnce() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let io = FaultyIO()
         io.state.withLock { $0.failingWrites = 1 }
@@ -176,7 +177,7 @@ private func line(_ event: InputEvent) throws -> String {
 }
 
 @Test func eachEarlierFailureIsThrownOnce() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("events.jsonl")
         let io = FaultyIO()
         io.state.withLock { $0.failingBarrierSyncs = 1 }

@@ -2,6 +2,7 @@
 import AVFoundation
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import SyntheticCapture
 import Testing
 
@@ -17,12 +18,9 @@ extension RealTimeRecordingTests {
 
         @Test func realDiskFullClosesTakeCleanly() async throws {
             try await withTemporaryDirectory { directory in
-                let image = directory.appending(path: "full.dmg")
-                let volume = directory.appending(path: "volume", directoryHint: .isDirectory)
-                try FileManager.default.createDirectory(at: volume, withIntermediateDirectories: false)
-                try hdiutil(["create", "-size", "300m", "-fs", "APFS", "-volname", "TomaDiskFull", image.path])
-                try hdiutil(["attach", "-nobrowse", "-mountpoint", volume.path, image.path])
-                defer { detach(volume) }
+                let disk = try DiskImage.attach(sizeMegabytes: 300, fileSystem: .apfs, in: directory)
+                let volume = disk.mountPoint
+                defer { detach(disk) }
 
                 let package = try ProjectPackage.create(
                     in: volume, name: "Full", app: AppInfo(name: "Tests", version: "0"), now: Date())
@@ -134,36 +132,12 @@ private func errorChain(_ error: NSError, depth: Int = 0) -> String {
     return text
 }
 
-private struct HdiutilError: Error, CustomStringConvertible {
-    var arguments: [String]
-    var status: Int32
-    var output: String
-    var description: String { "hdiutil \(arguments.joined(separator: " ")) exited \(status): \(output)" }
-}
-
-@discardableResult
-private func hdiutil(_ arguments: [String]) throws -> String {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-    process.arguments = arguments
-    let pipe = Pipe()
-    process.standardOutput = pipe
-    process.standardError = pipe
-    try process.run()
-    let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        throw HdiutilError(arguments: arguments, status: process.terminationStatus, output: output)
-    }
-    return output
-}
-
 /// Detaches the volume, forcing it if a plain detach fails, so no test leaves a volume mounted.
-private func detach(_ volume: URL) {
-    if (try? hdiutil(["detach", volume.path])) != nil { return }
+private func detach(_ disk: DiskImage) {
+    if (try? disk.detach()) != nil { return }
     do {
-        try hdiutil(["detach", "-force", volume.path])
+        try disk.detach(force: true)
     } catch {
-        Issue.record("Could not detach \(volume.path): \(error)")
+        Issue.record("Could not detach \(disk.mountPoint.path): \(error)")
     }
 }

@@ -21,6 +21,8 @@ let package = Package(
         .target(name: "Render", dependencies: ["ProjectFormat"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
         .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording"]),
+        // Shared by every test target; not a product.
+        .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture"]),
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
@@ -28,12 +30,17 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
-        .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat"]),
-        .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat"]),
-        .testTarget(name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat"]),
-        .testTarget(name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
-        .testTarget(name: "ExportTests", dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat"]),
-        .testTarget(name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture"]),
+        .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(
+            name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(
+            name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(
+            name: "ExportTests",
+            dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(
+            name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )

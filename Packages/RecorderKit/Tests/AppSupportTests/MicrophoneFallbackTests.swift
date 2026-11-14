@@ -3,6 +3,7 @@ import AppSupport
 import CoreMedia
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Recording
 import SyntheticCapture
 import Testing
@@ -50,14 +51,6 @@ private func startTake(video: SyntheticVideoSource, microphone: StartTrackingSou
     }
     _ = try await coordinator.stop()
     return nil
-}
-
-private func withTemporaryDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("AppSupportTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: url) }
-    return try await body(url)
 }
 
 @Test func aMicrophoneThatFailsToStartIsDroppedForARetry() async throws {

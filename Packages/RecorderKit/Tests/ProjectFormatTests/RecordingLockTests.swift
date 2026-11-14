@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
+import RecorderKitTestSupport
 import Testing
 @testable import ProjectFormat
 
@@ -13,7 +14,7 @@ extension RecordingLockInfo {
 }
 
 @Test func heldLockIsDetectedFromSecondOpen() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("recording.lock")
         let held = try RecordingLock.acquire(at: url, info: .fixture)
         #expect(RecordingLock.isHeld(at: url))
@@ -23,7 +24,7 @@ extension RecordingLockInfo {
 }
 
 @Test func secondAcquireFailsWithWouldBlock() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("recording.lock")
         let held = try RecordingLock.acquire(at: url, info: .fixture)
         defer { held.release() }
@@ -34,7 +35,7 @@ extension RecordingLockInfo {
 }
 
 @Test func releasedLockIsFree() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("recording.lock")
         let held = try RecordingLock.acquire(at: url, info: .fixture)
         held.release()
@@ -47,7 +48,7 @@ extension RecordingLockInfo {
 }
 
 @Test func staleLockFileFromACrashIsNotHeld() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("recording.lock")
         try Data("left behind by a crashed recorder".utf8).write(to: url)
         #expect(!RecordingLock.isHeld(at: url))

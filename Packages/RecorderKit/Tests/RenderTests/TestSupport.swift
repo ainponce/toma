@@ -1,42 +1,22 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import AVFoundation
-import CoreMedia
 import CoreVideo
 import Foundation
-import Metal
 import ProjectFormat
-import Recording
 import SyntheticCapture
-import Testing
 
 /// An arbitrary host time well after boot.
 let base = HostTime(nanoseconds: 5_000_000_000_000)
 
-/// Whether the tests that draw run: on a machine with a Metal device, and always in CI (`TOMA_CI=1`), where a
-/// runner without one must fail them loudly instead of skipping them and staying green.
-let metalAvailable = MTLCreateSystemDefaultDevice() != nil || ProcessInfo.processInfo.environment["TOMA_CI"] == "1"
-
 let takeID = "take-001"
 let trackID = "display-1"
 
-/// A fresh, empty directory that is removed when `body` returns.
-func withTemporaryDirectory<T>(_ body: (URL) async throws -> T) async throws -> T {
-    let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("RenderTests-\(UUID().uuidString)", isDirectory: true)
-    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
-    defer { try? FileManager.default.removeItem(at: url) }
-    return try await body(url)
-}
-
-/// `<directory>/Test.toma` with an empty manifest.
-func makePackage(in directory: URL) throws -> ProjectPackage {
-    try ProjectPackage.create(in: directory, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
+func displaySource(globalFrame: Rect?, pixelScale: Double = 1) -> TrackSource {
+    TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: globalFrame, pixelScale: pixelScale)
 }
 
 func displayTrack(globalFrame: Rect?, pixelScale: Double = 1, segments: [SegmentRecord]) -> TrackRecord {
     TrackRecord(
-        id: trackID, kind: .display,
-        source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: globalFrame, pixelScale: pixelScale),
+        id: trackID, kind: .display, source: displaySource(globalFrame: globalFrame, pixelScale: pixelScale),
         segments: segments)
 }
 
@@ -56,26 +36,6 @@ func segment(index: Int = 1, start: HostTime, end: HostTime?, reason: SegmentEnd
     SegmentRecord(
         index: index, file: "takes/\(takeID)/\(trackID)/seg-\(String(format: "%04d", index)).mov",
         startHostTime: start, endHostTime: end, endReason: reason, droppedFrames: 0, heartbeatFrames: 0)
-}
-
-/// Writes segment `index` of the display track: `seconds` of 30 fps synthetic video from `start`, the frames
-/// numbered from `firstFrame` (`SampleFactory.color(forFrame:)`), finished at `start + seconds`.
-func writeSegment(
-    in package: ProjectPackage, index: Int, start: HostTime, seconds: Double, firstFrame: Int = 0,
-    width: Int = 640, height: Int = 360
-) async throws -> SegmentRecord {
-    let url = package.segmentURL(take: takeID, track: trackID, index: index)
-    try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-    let writer = try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: 30), realTime: false)
-    for i in 0..<Int((seconds * 30).rounded()) {
-        try writer.append(SampleFactory.videoSample(
-            width: width, height: height, pts: start.adding(seconds: Double(i) / 30), frameIndex: firstFrame + i))
-    }
-    let result = try await writer.finish(at: start.adding(seconds: seconds))
-    #expect(writer.failure == nil)
-    return SegmentRecord(
-        index: index, file: try package.relativePath(of: url), startHostTime: start,
-        endHostTime: result.endHostTime, endReason: .stopped, droppedFrames: 0, heartbeatFrames: 0)
 }
 
 /// The palette index of a decoded frame, read near its bottom-right corner, away from the moving white square.

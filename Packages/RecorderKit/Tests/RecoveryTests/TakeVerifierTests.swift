@@ -1,47 +1,41 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import ProjectFormat
+import RecorderKitTestSupport
 import Recording
 import Testing
 
 @testable import Recovery
 
 /// A closed take with a finished display segment and a finished mic segment of the given lengths. The
-/// manifest says the display segment lasts `displayRecordedSeconds` (its file's length by default).
+/// manifest says the display segment lasts `displayRecordedSeconds` (its file's length by default) and
+/// dropped `displayDropped` frames.
 private func completeTake(
     in dir: URL, status: TakeStatus = .complete, displaySeconds: Double, micSeconds: Double,
     displayRecordedSeconds: Double? = nil, displayDropped: Int = 0
 ) async throws -> ProjectPackage {
-    let package = try makePackage(in: dir)
-    try addTake(makeTake(status: status, tracks: [
-        displayTrack([try segmentRecord(
-            package, track: "display-1", start: base, end: base.adding(seconds: displayRecordedSeconds ?? displaySeconds),
-            reason: .stopped, dropped: displayDropped)]),
-        micTrack([try segmentRecord(
-            package, track: "mic", start: base, end: base.adding(seconds: micSeconds), reason: .stopped)]),
-    ]), to: package)
-    _ = try await writeVideo(
-        to: package.segmentURL(take: "take-001", track: "display-1", index: 1),
-        start: base, seconds: displaySeconds, finish: true)
-    _ = try await writeAudio(
-        to: package.segmentURL(take: "take-001", track: "mic", index: 1), start: base, seconds: micSeconds, finish: true)
+    let builder = try TakeBuilder(in: dir)
+    try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: displaySeconds)])
+    try await builder.addAudioTrack(id: "mic", source: micSource, segments: [AudioSegmentSpec(start: base, seconds: micSeconds)])
+    let package = try builder.write(status: status).package
+    if displayRecordedSeconds != nil || displayDropped != 0 {
+        try ManifestStore(package: package).update { manifest in
+            manifest.takes[0].tracks[0].segments[0].endHostTime = base.adding(seconds: displayRecordedSeconds ?? displaySeconds)
+            manifest.takes[0].tracks[0].segments[0].droppedFrames = displayDropped
+        }
+    }
     return package
 }
 
 @Test func verifyFailsOnEmptyMicSegment() async throws {
     try await withTemporaryDirectory { dir in
-        let package = try makePackage(in: dir)
-        try addTake(makeTake(status: .recovered, tracks: [
-            displayTrack([try segmentRecord(
-                package, track: "display-1", start: base, end: base.adding(seconds: 3), reason: .stopped)]),
-            micTrack([try segmentRecord(package, track: "mic", start: base, end: base, reason: .empty)]),
-        ]), to: package)
-        _ = try await writeVideo(
-            to: package.segmentURL(take: "take-001", track: "display-1", index: 1), start: base, seconds: 3, finish: true)
-        try #require(FileManager.default.createFile(
-            atPath: package.segmentURL(take: "take-001", track: "mic", index: 1).path, contents: Data()))
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: "display-1", source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
+        try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: .empty, file: .zeroBytes)
+        let project = try builder.write(status: .recovered)
 
-        let results = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 2, maxDropRatio: nil)
+        let results = await TakeVerifier.verify(project, minDuration: 2, maxDropRatio: nil)
 
         try #require(results.map(\.trackID) == ["display-1", "mic"])
         let display = results[0], mic = results[1]
@@ -163,7 +157,7 @@ private func completeTake(
 // MARK: - LoadedProject
 
 @Test func loadedProjectReadsLastTakeAndItsEvents() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)
         try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
         try addTake(makeTake("take-002", status: .complete, tracks: [displayTrack([])]), to: package)
@@ -193,7 +187,7 @@ private func completeTake(
 }
 
 @Test func loadedProjectRefusesPackageWithoutTakes() async throws {
-    try await withTemporaryDirectory { dir in
+    try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)
         #expect(throws: LoadedProjectError.noTakes) { try LoadedProject.load(package.url) }
     }
