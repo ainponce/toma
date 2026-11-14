@@ -290,7 +290,9 @@ struct ExportMP4: AsyncParsableCommand {
             step; if the export fails or is killed, the destination is left as it was (a partial file left by \
             a kill is removed by the next export). Never writes into a .toma package. Prints the progress \
             every 10 % as "progress: <n> %", then "exported: <path>", then a "warning: no audio …" line for \
-            each span where recorded microphone audio could not be read and the MP4 is silent.
+            each span where recorded microphone audio could not be read and the MP4 is silent, and a \
+            "warning: no video …" line for each span where the screen could not be decoded and the MP4 \
+            shows the frame before it.
             """
     )
 
@@ -337,6 +339,10 @@ struct ExportMP4: AsyncParsableCommand {
         print("exported: \(destination.path)")
         for missing in summary.missingAudio {
             print("warning: no audio from \(missing.file) from \(String(format: "%.2f", missing.start)) s to "
+                + "\(String(format: "%.2f", missing.end)) s: \(missing.reason)")
+        }
+        for missing in summary.missingVideo {
+            print("warning: no video from \(missing.file) from \(String(format: "%.2f", missing.start)) s to "
                 + "\(String(format: "%.2f", missing.end)) s: \(missing.reason)")
         }
     }

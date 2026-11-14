@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Render
 
 /// What an MP4 export produces: frame size and rate. The video bitrate follows from them.
 public struct ExportSettings: Sendable, Equatable {
@@ -38,9 +39,13 @@ public struct ExportSummary: Sendable, Equatable {
     /// Spans of the video where recorded microphone audio could not be used, in time order: they are
     /// silent in the MP4.
     public var missingAudio: [MissingAudio]
+    /// Spans of the video where the screen could not be decoded, in time order: they show the frame before
+    /// them (`FrameRenderer.missingVideo`).
+    public var missingVideo: [MissingVideo]
 
-    public init(missingAudio: [MissingAudio] = []) {
+    public init(missingAudio: [MissingAudio] = [], missingVideo: [MissingVideo] = []) {
         self.missingAudio = missingAudio
+        self.missingVideo = missingVideo
     }
 }
 

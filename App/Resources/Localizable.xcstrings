@@ -919,6 +919,46 @@
         }
       }
     },
+    "The video was exported, but %lld parts of the screen couldn't be read: they show the frame before them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld part of the screen couldn't be read: it shows the frame before it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld parts of the screen couldn't be read: they show the frame before them."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero no se pudo leer %lld parte de la pantalla: muestra el cuadro anterior."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero no se pudieron leer %lld partes de la pantalla: muestran el cuadro anterior."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "There isn't enough free disk space to record (%@ available)." : {
       "localizations" : {
         "es" : {

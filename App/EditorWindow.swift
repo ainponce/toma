@@ -217,9 +217,14 @@ final class EditorModel {
             do {
                 let summary = try await exporter.export(to: destination, progress: progress)
                 exportState = .finished(destination)
+                var leftOut: [String] = []
                 if !summary.missingAudio.isEmpty {
-                    showAlert(String(localized: "The video was exported, but \(summary.missingAudio.count) parts have no sound: their microphone audio couldn't be read."), style: .warning)
+                    leftOut.append(String(localized: "The video was exported, but \(summary.missingAudio.count) parts have no sound: their microphone audio couldn't be read."))
                 }
+                if !summary.missingVideo.isEmpty {
+                    leftOut.append(String(localized: "The video was exported, but \(summary.missingVideo.count) parts of the screen couldn't be read: they show the frame before them."))
+                }
+                if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
             } catch let error where Self.isCancellation(error) {
                 exportState = .idle
             } catch {

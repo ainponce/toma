@@ -32,7 +32,7 @@ let package = Package(
         .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
-        .testTarget(name: "ExportTests", dependencies: ["Export", "Render", "Recording", "SyntheticCapture", "ProjectFormat"]),
+        .testTarget(name: "ExportTests", dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat"]),
         .testTarget(name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture"]),
     ],
     swiftLanguageModes: [.v6]

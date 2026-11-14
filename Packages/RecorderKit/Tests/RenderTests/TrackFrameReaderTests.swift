@@ -95,6 +95,16 @@ private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
             let buffer = try #require(reader.pixelBuffer(at: base.adding(seconds: seconds)), "at \(seconds) s")
             #expect(frameIndex(of: buffer) == 29, "at \(seconds) s")
         }
+        // Every span held over is listed: the marked and missing ones from the start, the garbage once read.
+        let gaps = reader.gaps
+        #expect(gaps.map(\.file) == [2, 4, 5, 3].map { "takes/\(takeID)/\(trackID)/seg-000\($0).mov" })
+        #expect(gaps.map { $0.start.seconds(since: base) } == [1, 3, 4, 2])
+        #expect(gaps.map { $0.end.seconds(since: base) } == [2, 4, 5, 3])
+        #expect(Array(gaps.map(\.reason).prefix(3)) == [.empty, .fileMissing, .unreadable])
+        guard case .cannotOpen = gaps.last?.reason else {
+            Issue.record("expected cannotOpen for the garbage file, got \(String(describing: gaps.last))")
+            return
+        }
     }
 }
 
@@ -176,14 +186,20 @@ func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
         #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.51)))) == 29)
         #expect(loader.calls == 1)
         let next = try #require(reader.pixelBuffer(at: base.adding(seconds: 1.55)))
+        let gap = try #require(reader.gaps.first)
+        #expect(reader.gaps.count == 1 && gap.reason == .loadTimedOut && gap.file == "takes/\(takeID)/\(trackID)/seg-0002.mov")
+        #expect(abs(gap.start.seconds(since: base) - 1.51) < 1e-6)
         if backoff == 0 {
             // Tried again on the next request, which now loads.
             #expect(loader.calls == 2)
             #expect(frameIndex(of: next) == 30 + 16)
+            #expect(abs(gap.end.seconds(since: base) - 1.51) < 1e-6)
         } else {
             // Still backing off: no new attempt, so a stuck load stalls one frame, not every frame.
             #expect(loader.calls == 1)
             #expect(frameIndex(of: next) == 29)
+            // The span grows with every frame shown while it backs off.
+            #expect(abs(gap.end.seconds(since: base) - 1.55) < 1e-6)
         }
     }
 }
@@ -204,5 +220,8 @@ func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
         #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.51)))) == 29)
         #expect(frameIndex(of: try #require(reader.pixelBuffer(at: base.adding(seconds: 1.21)))) == 29)
         #expect(calls.calls == 1)
+        #expect(reader.gaps == [TrackFrameReader.Gap(
+            file: "takes/\(takeID)/\(trackID)/seg-0002.mov", start: base.adding(seconds: 1), end: second.endHostTime ?? base,
+            reason: .cannotOpen("injected"))])
     }
 }

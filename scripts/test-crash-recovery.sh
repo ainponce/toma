@@ -5,7 +5,8 @@
 # with SIGKILL 10 s in, recovers the take and verifies that every track kept at least 8 s, ends with
 # the take and dropped at most 1 % of its frames. Once with a moving screen, once with a screen that
 # stops changing after 2 s (heartbeats). After the first, an MP4 export of the recovered take is
-# killed as soon as it is writing: the package must be unchanged, and the next export must succeed.
+# killed as soon as it is writing: the package must be unchanged, and the next export must succeed,
+# leave nothing out (no "warning: no …" line: every recovered segment decodes) and last at least 8 s.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -54,6 +55,19 @@ export_crash() {
     echo "FAIL: the export changed the package"
     exit 1
   fi
+  if grep -q '^warning: no ' "$TMP/export.out"; then
+    echo "FAIL: the export left out part of the recovered take:"
+    grep '^warning: no ' "$TMP/export.out"
+    exit 1
+  fi
+  # The MP4's length, from its audio track (the take has a microphone).
+  local SECONDS_EXPORTED
+  SECONDS_EXPORTED=$(afinfo "$TMP/out.mp4" | awk '/estimated duration/ { print $3; exit }')
+  if ! awk -v d="${SECONDS_EXPORTED:-0}" 'BEGIN { exit !(d >= 8) }'; then
+    echo "FAIL: the export lasts ${SECONDS_EXPORTED:-an unknown number of} s, less than 8 s"
+    exit 1
+  fi
+  echo "export: ${SECONDS_EXPORTED} s, nothing left out"
 }
 
 # One hash of every file in package $1 (manifest.json included) with its path.

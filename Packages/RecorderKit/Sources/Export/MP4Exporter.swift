@@ -37,7 +37,8 @@ public final class MP4Exporter: Sendable {
     }
 
     /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete,
-    /// and returns what it had to leave out (microphone audio that could not be read is silence).
+    /// and returns what it had to leave out: microphone audio that could not be read is silence, and screen
+    /// video that could not be decoded shows the frame before it.
     ///
     /// Rendering and encoding run on a queue of their own, never on the caller's thread or the main thread.
     /// `progress` is called one call at a time, in order, never on the main thread (hop to the main actor
@@ -83,7 +84,9 @@ public final class MP4Exporter: Sendable {
             try Self.fullSync(partial)
             guard !Task.isCancelled else { throw ExportError.cancelled }
             try Self.move(partial, to: destination)
-            summary = ExportSummary(missingAudio: session.missingAudio.sorted { ($0.start, $0.end) < ($1.start, $1.end) })
+            summary = ExportSummary(
+                missingAudio: session.missingAudio.sorted { ($0.start, $0.end) < ($1.start, $1.end) },
+                missingVideo: renderer.missingVideo)
         } catch {
             if unlink(partial.path) != 0 {
                 let code = errno

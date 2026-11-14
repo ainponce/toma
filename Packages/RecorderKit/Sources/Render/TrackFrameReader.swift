@@ -14,8 +14,12 @@ import os
 /// decoding the open reader (the export path); a step back or a longer jump opens a new reader `preroll`
 /// before the time. At most one `AVAssetReader` is open at a time.
 ///
-/// A segment whose video track takes longer than `trackLoadTimeout` to load is skipped (a gap) for
-/// `timeoutBackoff` seconds and then tried again; only a load that fails marks it unreadable.
+/// When decoding stops with an error partway through a segment, the next time asked for after the last
+/// frame decoded opens a reader again right after that frame; if it stops at the same frame again, each
+/// further attempt starts `preroll` seconds later, until one decodes or the segment ends. A segment whose
+/// video track takes longer than `trackLoadTimeout` to load is skipped (a gap) for `timeoutBackoff` seconds
+/// and then tried again; only a load that fails marks it unreadable. Every span shown with the frame before
+/// it for one of these reasons is in `gaps`, so no gap goes unreported.
 ///
 /// Thread-safe: calls are serialized. Blocks while it loads and decodes (`copyNextSampleBuffer`, and up to
 /// `trackLoadTimeout` for a track): never call it from a Swift concurrency thread. Many blocked callers
@@ -27,10 +31,14 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// most two seconds of video.
     static let preroll = 1.0
     static let trackLoadTimeout = DispatchTimeInterval.seconds(10)
+    /// The frame interval assumed until two frames of a reader give the real one.
+    static let defaultFrameInterval = 1.0 / 30
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "TrackFrameReader")
 
     private struct Segment {
         var index: Int
+        /// `SegmentRecord.file`.
+        var file: String
         var start: HostTime
         var end: HostTime?
         var url: URL
@@ -40,6 +48,19 @@ public final class TrackFrameReader: @unchecked Sendable {
         var media: (asset: AVURLAsset, track: AVAssetTrack)?
         /// After a load timed out: no new attempt before this wall-clock host time.
         var retryAfter: HostTime?
+        /// Why its video track could not be loaded, once a load failed.
+        var loadFailure: String?
+        /// Decoding last stopped with an error after the frame at `lastGood`, `attempts` times in a row;
+        /// `gaveUp` once no reader can get past it before the segment ends.
+        var failure: (lastGood: HostTime, attempts: Int, gaveUp: Bool)?
+    }
+
+    /// A span of host time shown with the frame before it, and why.
+    struct Gap: Equatable {
+        var file: String
+        var start: HostTime
+        var end: HostTime
+        var reason: MissingVideo.Reason
     }
 
     /// The outcome of loading a segment's video track.
@@ -53,8 +74,8 @@ public final class TrackFrameReader: @unchecked Sendable {
 
     private enum Opening {
         case opened(OpenReader)
-        /// Nothing can be read from the segment.
-        case unreadable
+        /// Nothing can be read from the segment; why.
+        case unreadable(String)
         /// Its track has not loaded yet; try again after the backoff.
         case later
     }
@@ -74,6 +95,11 @@ public final class TrackFrameReader: @unchecked Sendable {
         var next: Frame?
         var finished = false
         var lastRequest: HostTime
+        /// Frames presented at or before this time are dropped: a reader opened again after a read failure
+        /// starts after the frame it holds.
+        var skipThrough: HostTime?
+        /// Seconds between the last two frames decoded.
+        var frameInterval = TrackFrameReader.defaultFrameInterval
     }
 
     private let lock = NSLock()
@@ -81,6 +107,7 @@ public final class TrackFrameReader: @unchecked Sendable {
     private var segments: [Segment]
     private var open: OpenReader?
     private var openedReaders = 0
+    private var recordedGaps: [Gap] = []
     /// Loads a segment's video track; tests replace it. Called with the lock held.
     var trackLoader: (AVURLAsset) -> TrackLoad = TrackFrameReader.loadFirstVideoTrack(of:)
     /// Wall-clock seconds a segment whose track load timed out is skipped before the next attempt.
@@ -89,6 +116,11 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// How many readers have been opened, for tests.
     var openedReaderCount: Int { lock.withLock { openedReaders } }
 
+    /// The spans shown with the frame before them so far, in the order they were found: the segments the
+    /// manifest marks unusable or whose file is missing from the start, the others as frames were asked for.
+    /// Consecutive spans of a segment for the same reason are merged.
+    var gaps: [Gap] { lock.withLock { recordedGaps } }
+
     /// Never throws and reads nothing yet: every segment is opened when it is first needed.
     public init(package: ProjectPackage, track: TrackRecord) {
         trackID = track.id
@@ -96,15 +128,22 @@ public final class TrackFrameReader: @unchecked Sendable {
             .sorted { $0.startHostTime < $1.startHostTime }
             .map { record in
                 let url = package.url.appending(path: record.file)
-                let usable: Bool
-                switch record.endReason {
-                case .empty, .unreadable: usable = false
-                default: usable = FileManager.default.fileExists(atPath: url.path)
-                }
                 return Segment(
-                    index: record.index, start: record.startHostTime, end: record.endHostTime, url: url,
-                    usable: usable, media: nil, retryAfter: nil)
+                    index: record.index, file: record.file, start: record.startHostTime, end: record.endHostTime, url: url,
+                    usable: true, media: nil, retryAfter: nil, loadFailure: nil, failure: nil)
             }
+        for k in segments.indices {
+            let reason: MissingVideo.Reason
+            switch track.segments.first(where: { $0.index == segments[k].index })?.endReason {
+            case .empty?: reason = .empty
+            case .unreadable?: reason = .unreadable
+            default:
+                guard !FileManager.default.fileExists(atPath: segments[k].url.path) else { continue }
+                reason = .fileMissing
+            }
+            segments[k].usable = false
+            noteGap(k, from: segments[k].start, to: segments[k].end ?? segments[k].start, reason)
+        }
     }
 
     deinit {
@@ -134,7 +173,7 @@ public final class TrackFrameReader: @unchecked Sendable {
            time.seconds(since: reader.lastRequest) < Self.sequentialWindow {
             advance(&reader, to: time)
             open = reader
-            return reader.current
+            return readOnIfStoppedEarly(k, at: time) ?? reader.current
         }
 
         let segment = segments[k]
@@ -142,24 +181,76 @@ public final class TrackFrameReader: @unchecked Sendable {
         let end = segment.end.map { $0.seconds(since: segment.start) } ?? offset
         let from = max(0, min(offset, end) - Self.preroll)
         // From 0 too if nothing turns up, in case the frame shown at `time` came more than `preroll` earlier.
+        var failure: String?
         for start in from > 0 ? [from, 0] : [0] {
             var reader: OpenReader
             switch openReader(k, from: start) {
             case .opened(let opened):
                 reader = opened
             case .later:
+                noteGap(k, from: time, to: time, .loadTimedOut)
                 return nil
-            case .unreadable:
-                markUnusable(k, "cannot be opened")
+            case .unreadable(let why):
+                markUnusable(k, .cannotOpen(why))
                 return nil
             }
             advance(&reader, to: time)
             open = reader
-            if let current = reader.current { return current }
+            if reader.current != nil { return readOnIfStoppedEarly(k, at: time) ?? reader.current }
             if start == 0, reader.next != nil { return nil }  // it has frames, all after `time`
+            if reader.reader.status == .failed { failure = Self.describe(reader.reader.error) }
         }
-        markUnusable(k, "has no frames")
+        markUnusable(k, failure.map { .readFailed($0) } ?? .unreadable)
         return nil
+    }
+
+    /// Whether the open reader of segment `k` stopped with an error before `time`, inside the segment:
+    /// it has no frame after the one it holds, and more of the segment comes after that frame.
+    private func stoppedEarly(_ reader: OpenReader, at time: HostTime) -> Bool {
+        guard reader.finished, reader.next == nil, reader.reader.status == .failed,
+              let held = reader.current, time > held.time
+        else { return false }
+        if let failure = segments[reader.segment].failure, failure.lastGood == held.time, failure.gaveUp { return false }
+        return segments[reader.segment].end.map { held.time.adding(seconds: reader.frameInterval) < $0 } ?? true
+    }
+
+    /// When the open reader of segment `k` stopped with an error before `time`, opens one again after the
+    /// frame it holds (later and later if it keeps stopping there), records the span it skips, and returns
+    /// the frame to show at `time`: the new reader's, or the held one. `nil` if it did not stop early.
+    private func readOnIfStoppedEarly(_ k: Int, at time: HostTime) -> Frame? {
+        guard let failed = open, failed.segment == k, stoppedEarly(failed, at: time), let held = failed.current else {
+            return nil
+        }
+        let error = Self.describe(failed.reader.error)
+        let attempts = segments[k].failure.map { $0.lastGood == held.time ? $0.attempts + 1 : 1 } ?? 1
+        segments[k].failure = (held.time, attempts, false)
+        let interval = failed.frameInterval
+        let firstMissing = held.time.adding(seconds: interval)
+        // Right after the held frame first: a read error that does not come back costs nothing. Then past it.
+        let resumeAt = firstMissing.adding(seconds: Double(attempts - 1) * Self.preroll)
+        if let end = segments[k].end, resumeAt >= end {
+            segments[k].failure = (held.time, attempts, true)
+            noteGap(k, from: firstMissing, to: end, .readFailed(error))
+            Self.logger.error(
+                "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index): cannot read past \(held.time.nanoseconds) ns; holding that frame to the segment's end")
+            return held
+        }
+        if attempts > 1 { noteGap(k, from: firstMissing, to: resumeAt, .readFailed(error)) }
+        switch openReader(k, from: resumeAt.seconds(since: segments[k].start)) {
+        case .opened(var reader):
+            reader.current = held
+            reader.skipThrough = held.time
+            reader.frameInterval = interval
+            advance(&reader, to: time)
+            open = reader
+            return reader.current
+        case .later:
+            noteGap(k, from: firstMissing, to: time, .loadTimedOut)
+        case .unreadable(let why):
+            segments[k].failure = (held.time, attempts, true)
+            noteGap(k, from: firstMissing, to: segments[k].end ?? time, .cannotOpen(why))
+        }
+        return held
     }
 
     /// Decodes up to the first frame after `time`.
@@ -168,6 +259,9 @@ public final class TrackFrameReader: @unchecked Sendable {
         while true {
             if let next = reader.next {
                 guard next.time <= time else { break }
+                if let current = reader.current, next.time > current.time {
+                    reader.frameInterval = next.time.seconds(since: current.time)
+                }
                 reader.current = next
                 reader.next = nil
             }
@@ -184,9 +278,9 @@ public final class TrackFrameReader: @unchecked Sendable {
             }
             let pts = sample.presentationTimeStamp
             guard let pixelBuffer = CMSampleBufferGetImageBuffer(sample), pts.isNumeric else { continue }
-            reader.next = Frame(
-                time: HostTime(nanoseconds: segmentStart.nanoseconds &+ HostTime(pts).nanoseconds),
-                pixelBuffer: pixelBuffer)
+            let frameTime = HostTime(nanoseconds: segmentStart.nanoseconds &+ HostTime(pts).nanoseconds)
+            if let skipThrough = reader.skipThrough, frameTime <= skipThrough { continue }
+            reader.next = Frame(time: frameTime, pixelBuffer: pixelBuffer)
         }
         reader.lastRequest = time
     }
@@ -195,7 +289,7 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// The open reader stays open if the segment's track is not loaded yet.
     private func openReader(_ k: Int, from offset: Double) -> Opening {
         guard let (asset, track) = loadMedia(k) else {
-            return segments[k].retryAfter == nil ? .unreadable : .later
+            return segments[k].retryAfter == nil ? .unreadable(segments[k].loadFailure ?? "the file has no readable video track") : .later
         }
         close()
         let reader: AVAssetReader
@@ -204,11 +298,11 @@ public final class TrackFrameReader: @unchecked Sendable {
         } catch {
             Self.logger.error(
                 "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index): no reader: \(String(describing: error), privacy: .public)")
-            return .unreadable
+            return .unreadable(Self.describe(error))
         }
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: Self.outputSettings)
         output.alwaysCopiesSampleData = false
-        guard reader.canAdd(output) else { return .unreadable }
+        guard reader.canAdd(output) else { return .unreadable("the reader takes no output for the video track") }
         reader.add(output)
         if offset > 0 {
             reader.timeRange = CMTimeRange(
@@ -217,7 +311,7 @@ public final class TrackFrameReader: @unchecked Sendable {
         guard reader.startReading() else {
             Self.logger.error(
                 "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index): cannot start reading: \(String(describing: reader.error), privacy: .public)")
-            return .unreadable
+            return .unreadable(Self.describe(reader.error))
         }
         openedReaders += 1
         return .opened(OpenReader(segment: k, reader: reader, output: output, lastRequest: segments[k].start))
@@ -228,11 +322,25 @@ public final class TrackFrameReader: @unchecked Sendable {
         open = nil
     }
 
-    private func markUnusable(_ k: Int, _ why: String) {
+    private func markUnusable(_ k: Int, _ reason: MissingVideo.Reason) {
         segments[k].usable = false
         if open?.segment == k { close() }
+        noteGap(k, from: segments[k].start, to: segments[k].end ?? segments[k].start, reason)
         Self.logger.error(
-            "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index) \(why, privacy: .public): holding the frame before it")
+            "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index) cannot be used (\(String(describing: reason), privacy: .public)): holding the frame before it")
+    }
+
+    /// Records that `from ... to` of segment `k` is shown with the frame before it, merged into the last
+    /// span when it is of the same segment and reason and starts within `sequentialWindow` of its end.
+    private func noteGap(_ k: Int, from: HostTime, to: HostTime, _ reason: MissingVideo.Reason) {
+        let file = segments[k].file
+        let end = max(from, to)
+        if let last = recordedGaps.indices.last, recordedGaps[last].file == file, recordedGaps[last].reason == reason,
+           from.seconds(since: recordedGaps[last].end) <= Self.sequentialWindow, from >= recordedGaps[last].start {
+            recordedGaps[last].end = max(recordedGaps[last].end, end)
+            return
+        }
+        recordedGaps.append(Gap(file: file, start: from, end: end, reason: reason))
     }
 
     /// The file of segment `k` and its video track, loaded once. `nil` with `retryAfter` set while a
@@ -248,6 +356,7 @@ public final class TrackFrameReader: @unchecked Sendable {
             return (asset, track)
         case .failed(let reason):
             segments[k].retryAfter = nil
+            segments[k].loadFailure = reason
             Self.logger.error(
                 "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index): no video track: \(reason, privacy: .public)")
             return nil
@@ -257,6 +366,17 @@ public final class TrackFrameReader: @unchecked Sendable {
                 "Track \(self.trackID, privacy: .public) segment \(self.segments[k].index): loading timed out, trying again in \(self.timeoutBackoff) s")
             return nil
         }
+    }
+
+    /// `domain code: description` of an error and of the one under it: the same text for the same failure
+    /// every time (unlike `String(describing:)`, which shows addresses), so spans of one failure merge.
+    static func describe(_ error: (any Error)?) -> String {
+        guard let error = error.map({ $0 as NSError }) else { return "no error given" }
+        var text = "\(error.domain) \(error.code): \(error.localizedDescription)"
+        if let underlying = error.userInfo[NSUnderlyingErrorKey] as? NSError {
+            text += " (\(underlying.domain) \(underlying.code))"
+        }
+        return text
     }
 
     /// Loads the first video track of `asset`, waiting at most `trackLoadTimeout`.

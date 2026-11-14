@@ -53,6 +53,21 @@ public final class FrameRenderer: @unchecked Sendable {
     /// Output seconds the take lasts.
     public var duration: Double { evaluator.duration }
 
+    /// The spans of the screen shown with the frame before them so far, because a segment could not be
+    /// decoded there (`TrackFrameReader`), in output seconds clamped to `[0, duration]`, in time order. After
+    /// drawing every frame of the timeline in order (an export), it lists every such span of the output.
+    public var missingVideo: [MissingVideo] {
+        let start = evaluator.timelineStart, duration = evaluator.duration
+        return (reader?.gaps ?? [])
+            .compactMap { gap -> MissingVideo? in
+                let from = gap.start.seconds(since: start), to = gap.end.seconds(since: start)
+                guard to >= 0, from <= duration else { return nil }
+                let clamped = min(max(from, 0), duration)
+                return MissingVideo(file: gap.file, start: clamped, end: max(clamped, min(to, duration)), reason: gap.reason)
+            }
+            .sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+    }
+
     /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps.
     /// - Parameter device: the system default device when `nil`.
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
