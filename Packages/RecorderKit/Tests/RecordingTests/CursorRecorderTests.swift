@@ -10,6 +10,8 @@ import ProjectFormat
     /// A location that moves to a new point every 3rd call.
     final class SteppingLocation: Sendable {
         private let calls = Mutex(0)
+        /// How many times the recorder read the location.
+        var callCount: Int { calls.withLock { $0 } }
         func next() -> CGPoint {
             let n = calls.withLock { $0 += 1; return $0 }
             return CGPoint(x: Double((n - 1) / 3), y: 7)
@@ -37,11 +39,14 @@ import ProjectFormat
                 return nil
             }
             #expect(points.count == events.count)
-            // The location moves every third sample: a new point at a third of the sample rate, for the time
-            // that really passed.
-            let expected = elapsed * CursorRecorder.sampleRate / 3
-            #expect(Double(points.count) >= 0.6 * expected && Double(points.count) <= 1.4 * expected,
-                    "got \(points.count) in \(elapsed) s")
+            // Every change of position is recorded once, and only those: the location moves every third read.
+            // Counted against the reads the recorder made, not the time slept, so a loaded machine that fires
+            // the timer less often still passes. A read in flight as `stop()` runs may record nothing.
+            let calls = source.callCount
+            #expect(calls >= 6, "\(calls) reads in \(elapsed) s")
+            #expect(points.count == (calls + 2) / 3 || points.count == (calls + 2) / 3 - 1, "\(points.count) points from \(calls) reads")
+            // Never faster than the sample rate.
+            #expect(Double(calls) <= elapsed * CursorRecorder.sampleRate * 1.1 + 2, "\(calls) reads in \(elapsed) s")
             for (a, b) in zip(points, points.dropFirst()) {
                 #expect(a != b)
             }

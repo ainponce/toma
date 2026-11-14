@@ -584,7 +584,8 @@ extension RealTimeRecordingTests {
             try await withTemporaryDirectory { directory in
                 let made = Mutex(0)
                 let configuration = RecordingConfiguration(restartBackoff: [.milliseconds(1200)])
-                let rig = try Rig(in: directory, tracks: [.display], configuration: configuration) { url, media in
+                let source = CountingSource(inner: SyntheticVideoSource(width: 640, height: 360, framesPerSecond: 30))
+                let rig = try Rig(in: directory, sources: [source], configuration: configuration) { url, media in
                     let inner = try FragmentedTrackWriter(url: url, media: media)
                     let count = made.withLock { count in
                         count += 1
@@ -601,7 +602,6 @@ extension RealTimeRecordingTests {
                 let display = try #require(take.track("display-1"))
                 try #require(display.segments.count == 1)
                 let segment = display.segments[0]
-                let fps = 30.0
                 // Two writers failed on their first sample: the first was retried with the next sample,
                 // the second waited the backoff. Not a writer per sample, and no file was left behind.
                 #expect(made.withLock { $0 } == 3)
@@ -610,18 +610,21 @@ extension RealTimeRecordingTests {
                     atPath: rig.package.trackDirectory(take: id, track: "display-1").path)
                 #expect(files == ["seg-0001.mov"])
                 let takeStart = try #require(try rig.events(id).first { if case .displayGeometry = $0.kind { true } else { false } }).t
-                let waited = segment.startHostTime.seconds(since: takeStart)
-                #expect(waited > 1.1)
-                // The samples dropped while waiting are recorded in the segment that followed: at least most
-                // of what the source delivered in the time it actually waited.
-                let expectedDropped = Int(waited * fps * 0.7)
-                #expect(segment.droppedFrames >= expectedDropped, "\(segment.droppedFrames) dropped in \(waited) s")
+                #expect(segment.startHostTime.seconds(since: takeStart) > 1.1)
+                // Every sample the source delivered before the segment's first frame was dropped, in a row, and
+                // is counted in the segment that followed: counted against what the source really delivered, not
+                // against the time waited, which a loaded machine fills with fewer frames.
+                let delivered = source.deliveredTimes
+                let droppedBefore = delivered.filter { $0 < segment.startHostTime }.count
+                #expect(droppedBefore >= 2, "\(droppedBefore) samples before the segment")
+                #expect(segment.droppedFrames >= droppedBefore && segment.droppedFrames <= delivered.count,
+                        "\(segment.droppedFrames) dropped, \(droppedBefore) delivered before the segment")
                 await rig.warningsDone.value
                 let failures: [RecordingWarning] = [.writerFailed(track: "display-1"), .writerFailed(track: "display-1")]
-                if expectedDropped >= TrackPipeline.droppedSamplesWarningCount {
+                if droppedBefore >= TrackPipeline.droppedSamplesWarningCount {
                     #expect(rig.warnings.all == failures + [.samplesDropped(track: "display-1")])
                 } else {
-                    // Whether that many came in a row depends on how many the source got out in that time.
+                    // Fewer in a row than the warning needs; the writer's own drops later could still reach it.
                     #expect(rig.warnings.all == failures || rig.warnings.all == failures + [.samplesDropped(track: "display-1")])
                 }
             }
@@ -973,21 +976,25 @@ final class WarningLog: Sendable {
     }
 }
 
-/// Wraps a real writer: fails its appends from `failAfter` seconds after creation (with `failure`,
-/// by default `NSError(domain: "TestWriter", code: 7)`), or throws `finishError` after finishing the file.
+/// Wraps a real writer: fails its appends from `failAfter` seconds after creation, or after
+/// `failAfterAppends` appends went through (with `failure`, by default `NSError(domain: "TestWriter", code: 7)`),
+/// or throws `finishError` after finishing the file.
 final class ScriptedWriter: TrackWriting {
     private let inner: FragmentedTrackWriter
     private let failAt: HostTime?
+    private let failAfterAppends: Int?
     private let failureToInject: NSError
     private let finishError: (any Error)?
     private var injected: NSError?
+    private var appends = 0
 
     init(
-        inner: FragmentedTrackWriter, failAfter seconds: Double? = nil,
+        inner: FragmentedTrackWriter, failAfter seconds: Double? = nil, failAfterAppends: Int? = nil,
         failure: NSError = NSError(domain: "TestWriter", code: 7), finishError: (any Error)? = nil
     ) {
         self.inner = inner
         self.failAt = seconds.map { HostTime.now().adding(seconds: $0) }
+        self.failAfterAppends = failAfterAppends
         self.failureToInject = failure
         self.finishError = finishError
     }
@@ -1003,9 +1010,10 @@ final class ScriptedWriter: TrackWriting {
     var lastWrittenAudio: AudioFilePosition? { inner.lastWrittenAudio }
 
     func append(_ sample: CMSampleBuffer) throws {
-        if injected == nil, let failAt, HostTime.now() >= failAt {
+        if injected == nil, failAt.map({ HostTime.now() >= $0 }) ?? false || failAfterAppends.map({ appends >= $0 }) ?? false {
             injected = failureToInject
         }
+        if injected == nil { appends += 1 }
         if let injected { throw WriterError.appendFailed(injected.localizedDescription) }
         try inner.append(sample)
     }
@@ -1050,6 +1058,56 @@ final class MeasuredTake: @unchecked Sendable {
         let outer = stopped.seconds(since: beforeStart), inner = stopping.seconds(since: started)
         #expect(span <= outer + 0.05, "\(span) s, longer than the \(outer) s measured", sourceLocation: sourceLocation)
         #expect(span >= inner - 0.3, "\(span) s, shorter than the \(inner) s measured", sourceLocation: sourceLocation)
+    }
+}
+
+/// A synthetic display that records the presentation time of every sample it delivers.
+final class CountingSource: CaptureSource {
+    let inner: SyntheticVideoSource
+    private let delivered = Mutex<[HostTime]>([])
+
+    init(inner: SyntheticVideoSource) {
+        self.inner = inner
+    }
+
+    var trackID: String { inner.trackID }
+    var kind: TrackKind { inner.kind }
+    var media: TrackMedia { inner.media }
+    var sourceInfo: TrackSource { inner.sourceInfo }
+    var activeDeviceUniqueID: String? { inner.activeDeviceUniqueID }
+    /// The PTS of every sample delivered so far, in order.
+    var deliveredTimes: [HostTime] { delivered.withLock { $0 } }
+
+    func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
+        try await inner.start(on: queue, sink: CountingSink(sink: sink) { [weak self] time in self?.record(time) })
+    }
+
+    private func record(_ time: HostTime) {
+        delivered.withLock { $0.append(time) }
+    }
+
+    func stop() async {
+        await inner.stop()
+    }
+}
+
+/// Passes every call on to `sink`, telling `record` the PTS of each sample first.
+private final class CountingSink: CaptureSink {
+    private let sink: any CaptureSink
+    private let record: @Sendable (HostTime) -> Void
+
+    init(sink: any CaptureSink, record: @escaping @Sendable (HostTime) -> Void) {
+        self.sink = sink
+        self.record = record
+    }
+
+    func source(_ trackID: String, didOutput sample: CMSampleBuffer) {
+        record(HostTime(sample.presentationTimeStamp))
+        sink.source(trackID, didOutput: sample)
+    }
+
+    func source(_ trackID: String, didStopWithError error: any Error) {
+        sink.source(trackID, didStopWithError: error)
     }
 }
 

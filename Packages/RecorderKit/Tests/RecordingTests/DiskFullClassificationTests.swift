@@ -60,12 +60,19 @@ import Testing
                         count += 1
                         return count == 1
                     }
-                    return first ? ScriptedWriter(inner: inner, failAfter: 0.3, failure: failure) : inner
+                    // A few frames, so the segment has started, then the failure.
+                    return first ? ScriptedWriter(inner: inner, failAfterAppends: 3, failure: failure) : inner
                 },
                 clock: HostTime.now, onDiskFull: { diskFullCalls.withLock { $0 += 1 } }, freeBytes: { freeBytes })
             let pipeline = TrackPipeline(source: source, context: context, isSoleDisplay: true)
             try await pipeline.start()
-            try await Task.sleep(for: .milliseconds(1200))
+            // Until the failure was handled: the take told about the full disk, or a new segment started.
+            let handled = await eventually(timeout: .seconds(30)) {
+                full ? diskFullCalls.withLock { $0 } >= 1 : store.manifest.takes.first?.tracks.first?.segments.count == 2
+            }
+            #expect(handled)
+            // A full disk opens no segment however long the track goes on.
+            try await Task.sleep(for: .milliseconds(300))
             #expect(await pipeline.close(reason: .stopped, at: HostTime.now()).isEmpty)
             warningsContinuation.finish()
 
