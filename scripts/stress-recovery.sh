@@ -5,7 +5,8 @@
 # and the default microphone with content that moves the whole time, samples the recorder's memory
 # at 5, 15 and 30 min, kills it with SIGKILL at 30 min, recovers the take and verifies that every
 # track kept at least 1798 s. Prints, per track, its duration, droppedFrames and the endReason of
-# each segment. Fails if a track was lost (trackLost) or there is no mic track.
+# each segment. Fails if a track was lost or stopped recording for good (trackLost, or trackPaused or
+# displayPaused: its restarts were used up) or there is no mic track.
 #
 #   bash scripts/stress-recovery.sh [folder]
 #
@@ -129,9 +130,9 @@ for (( i = 0; i < $(json "takes.$TAKE.tracks"); i++ )); do
 done
 
 FAILED=0
-if grep -q 'trackLost' "$LOGS/out"; then
-  echo "FAIL: a track was lost:"
-  grep 'trackLost' "$LOGS/out"
+if grep -qE 'trackLost|trackPaused|displayPaused' "$LOGS/out"; then
+  echo "FAIL: a track was lost or stopped recording:"
+  grep -E 'trackLost|trackPaused|displayPaused' "$LOGS/out"
   FAILED=1
 fi
 if [ "$HAS_MIC" != 1 ]; then

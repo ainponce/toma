@@ -769,6 +769,16 @@
         }
       }
     },
+    "The microphone stopped recording. Still trying to bring it back." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El micrófono dejó de grabar. Se sigue intentando recuperarlo."
+          }
+        }
+      }
+    },
     "The microphone stopped recording. The recording continues without it." : {
       "localizations" : {
         "es" : {

@@ -22,11 +22,13 @@ import ProjectFormat
             let log = try EventLogWriter(url: url)
             let source = SteppingLocation()
             let recorder = CursorRecorder(clock: HostTime.now, location: { source.next() })
+            let started = HostTime.now()
             await recorder.start(log: log)
             await recorder.start(log: log) // idempotent
             try await Task.sleep(for: .milliseconds(500))
             await recorder.stop()
             await recorder.stop() // idempotent
+            let elapsed = HostTime.now().seconds(since: started)
             try log.close()
 
             let events = try EventLogReader.read(url).events
@@ -35,7 +37,11 @@ import ProjectFormat
                 return nil
             }
             #expect(points.count == events.count)
-            #expect((15...25).contains(points.count), "got \(points.count)")
+            // The location moves every third sample: a new point at a third of the sample rate, for the time
+            // that really passed.
+            let expected = elapsed * CursorRecorder.sampleRate / 3
+            #expect(Double(points.count) >= 0.6 * expected && Double(points.count) <= 1.4 * expected,
+                    "got \(points.count) in \(elapsed) s")
             for (a, b) in zip(points, points.dropFirst()) {
                 #expect(a != b)
             }

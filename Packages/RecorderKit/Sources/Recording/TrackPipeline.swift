@@ -87,6 +87,9 @@ actor TrackPipeline: CaptureSink {
     private let context: PipelineContext
     /// The only display of the take: it keeps retrying instead of being given up.
     private let isSoleDisplay: Bool
+    /// The track keeps retrying once its restart attempts are used up: the only display, or a microphone
+    /// (a USB or Bluetooth one can take far longer than the backoff to come back).
+    private let keepsRetrying: Bool
     private let heartbeatTimer: (any DispatchSourceTimer)?
     private let syncTimer: any DispatchSourceTimer
     private var state = State()
@@ -199,6 +202,7 @@ actor TrackPipeline: CaptureSink {
         self.media = source.media
         self.context = context
         self.isSoleDisplay = isSoleDisplay
+        self.keepsRetrying = isSoleDisplay || source.kind == .microphone
         if case .video = source.media {
             heartbeatTimer = DispatchSource.makeTimerSource(queue: queue)
         } else {
@@ -304,8 +308,9 @@ actor TrackPipeline: CaptureSink {
     // MARK: - Jobs
 
     /// Brings the source back after a stream error, waiting `restartBackoff[n]` before attempt `n`.
-    /// Once the list is used up the sole display keeps trying at its last interval; any other track
-    /// is lost. Stops as soon as a pause or the close takes over (it cancels this task).
+    /// Once the list is used up the sole display and a microphone keep trying at its last interval,
+    /// warning `displayPaused` or `trackPaused` once; any other track is lost. Stops as soon as a pause
+    /// or the close takes over (it cancels this task).
     private func restart() async {
         dispatchPrecondition(condition: .onQueue(queue))
         let backoff = context.configuration.restartBackoff
@@ -315,10 +320,10 @@ actor TrackPipeline: CaptureSink {
             let delay: Duration
             if attempt < backoff.count {
                 delay = backoff[attempt]
-            } else if isSoleDisplay {
+            } else if keepsRetrying {
                 if !reportedPaused {
                     reportedPaused = true
-                    context.warnings.yield(.displayPaused(track: trackID))
+                    context.warnings.yield(isSoleDisplay ? .displayPaused(track: trackID) : .trackPaused(track: trackID))
                 }
                 delay = backoff.last ?? .seconds(1)
             } else {

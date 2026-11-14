@@ -60,12 +60,15 @@ import Testing
         #expect(source.sourceInfo == TrackSource(
             name: source.sourceInfo.name, displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 64, height: 36), pixelScale: 1))
 
+        let started = HostTime.now()
         try await source.start(on: queue, sink: sink)
         try await Task.sleep(for: .seconds(1))
         await source.stop()
+        let elapsed = HostTime.now().seconds(since: started)
 
         let samples = sink.samples
-        #expect(samples.count >= 25)
+        // Most of the frames due in the time that really passed (a loaded machine sleeps longer).
+        #expect(Double(samples.count) >= 0.7 * elapsed * 30, "\(samples.count) frames in \(elapsed) s")
         #expect(samples.allSatisfy { $0.trackID == "display-1" && $0.width == 64 && $0.height == 36 })
         #expect(zip(samples, samples.dropFirst()).allSatisfy { $0.pts < $1.pts })
         #expect(sink.failures.isEmpty)

@@ -123,7 +123,7 @@ private func expectEveryChannelKept(
 /// One step of a 24-bit sample: the most a Float32 source may change through ALAC.
 private let alac24BitStep: Float = 1.0 / Float(1 << 23)
 
-@Test(arguments: [1, 2, 4, 8, 10]) func audioChannelCounts(channels: Int) async throws {
+@Test(arguments: [1, 2, 3, 4, 6, 8, 10]) func audioChannelCounts(channels: Int) async throws {
     try await withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("seg-0001.mov")
         // A multi-input interface labels its channels as discrete, which has no ALAC layout of its own.

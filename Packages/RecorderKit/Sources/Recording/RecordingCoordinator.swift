@@ -9,7 +9,8 @@ import Synchronization
 public typealias WriterFactory = @Sendable (URL, TrackMedia) throws -> any TrackWriting
 
 public struct RecordingConfiguration: Sendable {
-    /// Wait before each restart attempt after a stream error; its length is the number of attempts.
+    /// Wait before each restart attempt after a stream error; its length is the number of attempts. The
+    /// only display and a microphone then keep trying at the last interval; any other track is lost.
     public var restartBackoff: [Duration]
     /// How often a video track checks for a static screen and repeats its last frame.
     public var heartbeatInterval: Duration
@@ -33,10 +34,15 @@ public enum RecordingWarning: Sendable, Equatable {
     case streamInterrupted(track: String)
     /// The stream of `track` is running again, in a new segment.
     case streamRestarted(track: String)
-    /// Restarts of `track` were exhausted: it records nothing more in this take.
+    /// Restarts of `track` were exhausted: it records nothing more in this take. Never sent for the
+    /// only display or for a microphone, which keep trying (`displayPaused`, `trackPaused`).
     case trackLost(track: String)
     /// The only display could not be restarted with the configured attempts; it keeps trying.
     case displayPaused(track: String)
+    /// The microphone `track` could not be restarted with the configured attempts: it records nothing
+    /// until it comes back, and keeps trying at the last interval (each restart falls back to the default
+    /// input). `streamRestarted` follows when it does.
+    case trackPaused(track: String)
     /// The writer of `track` failed; its segment was closed and the next sample opens a new one.
     case writerFailed(track: String)
     /// `track` could not write `TrackPipeline.droppedSamplesWarningCount` samples in a row (its writer

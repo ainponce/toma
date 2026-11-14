@@ -323,6 +323,8 @@ final class RecordingController {
                 : String(localized: "The screen stopped recording.")
         case .displayPaused:
             message = String(localized: "Screen capture is paused. Still trying to restart it.")
+        case .trackPaused:
+            message = String(localized: "The microphone stopped recording. Still trying to bring it back.")
         case .writerFailed(let track):
             message = microphone(track)
                 ? String(localized: "Saving the microphone failed. Continuing in a new file.")

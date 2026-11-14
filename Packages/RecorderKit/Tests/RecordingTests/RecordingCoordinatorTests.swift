@@ -19,11 +19,12 @@ extension RealTimeRecordingTests {
         @Test func startStopProducesCompleteTake() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory)
-                let id = try await rig.coordinator.start()
+                let times = MeasuredTake()
+                let id = try await times.start(rig.coordinator)
                 // The reserve is really allocated while recording, and given back at the end.
                 #expect((rig.reserveBytes(id) ?? 0) >= Int64(TakeReserve.size))
                 try await Task.sleep(for: .seconds(2))
-                let record = try await rig.coordinator.stop()
+                let record = try await times.stop(rig.coordinator)
 
                 #expect(rig.reserveBytes(id) == nil)
                 let take = try rig.takeOnDisk(id)
@@ -36,9 +37,9 @@ extension RealTimeRecordingTests {
                     #expect(segment.index == 1)
                     #expect(segment.endReason == .stopped)
                     #expect(segment.file == "takes/\(id)/\(track.id)/seg-0001.mov")
-                    let end = try #require(segment.endHostTime)
-                    #expect(abs(end.seconds(since: segment.startHostTime) - 2) < 0.3)
-                    #expect(abs(try await rig.duration(of: segment) - 2) < 0.3)
+                    let span = try #require(segment.endHostTime).seconds(since: segment.startHostTime)
+                    times.expectSpansTheTake(span)
+                    #expect(abs(try await rig.duration(of: segment) - span) < 0.15, "\(track.id) lasts \(span) s")
                 }
                 #expect(rig.lockIsFree(id))
                 let events = try rig.events(id)
@@ -107,27 +108,53 @@ extension RealTimeRecordingTests {
             }
         }
 
-        @Test func exhaustedRestartsMarkTrackLost() async throws {
+        @Test func microphoneKeepsRetryingAfterItsRestartsAreUsedUp() async throws {
             try await withTemporaryDirectory { directory in
                 let configuration = RecordingConfiguration(restartBackoff: [.milliseconds(10), .milliseconds(10)])
                 let rig = try Rig(in: directory, configuration: configuration)
                 let id = try await rig.coordinator.start()
                 try await Task.sleep(for: .milliseconds(500))
-                rig.mic.failOnStart = 99
+                // More failures than restart attempts: a USB microphone that takes long to come back.
+                rig.mic.failOnStart = 6
                 rig.mic.failNow(domain: "AVFoundationErrorDomain", code: -11819)
-                #expect(await eventually { rig.warnings.all.contains(.trackLost(track: "mic")) })
-                #expect(rig.mic.startCount == 3)
+                #expect(await eventually { rig.liveTrack(id, "mic")?.segments.count == 2 })
                 try await Task.sleep(for: .milliseconds(500))
                 _ = try await rig.coordinator.stop()
 
                 let take = try rig.takeOnDisk(id)
                 #expect(take.status == .complete)
-                #expect(take.track("mic")?.segments.map(\.endReason) == [.streamError(domain: "AVFoundationErrorDomain", code: -11819)])
-                let display = try #require(take.track("display-1"))
-                #expect(display.segments.map(\.endReason) == [.stopped])
-                #expect(try await rig.duration(of: display.segments[0]) > 0.9)
-                #expect(rig.mic.startCount == 3)
+                let mic = try #require(take.track("mic"))
+                #expect(mic.segments.map(\.endReason) == [.streamError(domain: "AVFoundationErrorDomain", code: -11819), .stopped])
+                #expect(try await rig.duration(of: mic.segments[1]) > 0.3)
+                #expect(rig.mic.startCount == 8)
+                #expect(take.track("display-1")?.segments.map(\.endReason) == [.stopped])
                 #expect(rig.lockIsFree(id))
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.streamInterrupted(track: "mic"), .trackPaused(track: "mic"), .streamRestarted(track: "mic")])
+            }
+        }
+
+        @Test func exhaustedRestartsMarkASecondDisplayLost() async throws {
+            try await withTemporaryDirectory { directory in
+                let first = SyntheticVideoSource(width: 320, height: 180, framesPerSecond: 30)
+                let second = SyntheticVideoSource(trackID: "display-2", width: 320, height: 180, framesPerSecond: 30)
+                let configuration = RecordingConfiguration(restartBackoff: [.milliseconds(10), .milliseconds(10)])
+                let rig = try Rig(in: directory, sources: [first, second], configuration: configuration)
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(500))
+                second.failOnStart = 99
+                second.failNow(domain: "SCStreamErrorDomain", code: -3815)
+                #expect(await eventually { rig.warnings.all.contains(.trackLost(track: "display-2")) })
+                #expect(second.startCount == 3)
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await rig.coordinator.stop()
+
+                let take = try rig.takeOnDisk(id)
+                #expect(take.track("display-2")?.segments.map(\.endReason) == [.streamError(domain: "SCStreamErrorDomain", code: -3815)])
+                #expect(take.track("display-1")?.segments.map(\.endReason) == [.stopped])
+                #expect(second.startCount == 3)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.streamInterrupted(track: "display-2"), .trackLost(track: "display-2")])
             }
         }
 
@@ -301,16 +328,22 @@ extension RealTimeRecordingTests {
         @Test func staticScreenDoesNotTruncateDuration() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, tracks: [.display])
-                let id = try await rig.coordinator.start()
+                let times = MeasuredTake()
+                let id = try await times.start(rig.coordinator)
                 try await Task.sleep(for: .milliseconds(500))
                 rig.display.pauseFrames(true)
+                let still = HostTime.now()
                 try await Task.sleep(for: .milliseconds(2500))
-                _ = try await rig.coordinator.stop()
+                _ = try await times.stop(rig.coordinator)
 
                 let segment = try #require(try rig.takeOnDisk(id).track("display-1")?.segments.first)
-                #expect(abs(try await rig.duration(of: segment) - 3) < 0.25)
-                #expect(abs(try await videoMediaEnd(of: rig.url(of: segment)) - 3) < 0.25)
-                #expect(segment.heartbeatFrames >= 3)
+                // The still screen goes on in heartbeats to the stop: the segment lasts the whole take.
+                let span = try #require(segment.endHostTime).seconds(since: segment.startHostTime)
+                times.expectSpansTheTake(span)
+                #expect(abs(try await rig.duration(of: segment) - span) < 0.15)
+                #expect(abs(try await videoMediaEnd(of: rig.url(of: segment)) - span) < 0.25)
+                let stillSeconds = times.stopping.seconds(since: still)
+                #expect(Double(segment.heartbeatFrames) >= (stillSeconds / 0.5 * 0.6).rounded(.down), "over \(stillSeconds) s")
             }
         }
 
@@ -568,6 +601,7 @@ extension RealTimeRecordingTests {
                 let display = try #require(take.track("display-1"))
                 try #require(display.segments.count == 1)
                 let segment = display.segments[0]
+                let fps = 30.0
                 // Two writers failed on their first sample: the first was retried with the next sample,
                 // the second waited the backoff. Not a writer per sample, and no file was left behind.
                 #expect(made.withLock { $0 } == 3)
@@ -576,13 +610,20 @@ extension RealTimeRecordingTests {
                     atPath: rig.package.trackDirectory(take: id, track: "display-1").path)
                 #expect(files == ["seg-0001.mov"])
                 let takeStart = try #require(try rig.events(id).first { if case .displayGeometry = $0.kind { true } else { false } }).t
-                #expect(segment.startHostTime.seconds(since: takeStart) > 1.1)
-                // The samples dropped while waiting are recorded in the segment that followed.
-                #expect(segment.droppedFrames >= 30)
+                let waited = segment.startHostTime.seconds(since: takeStart)
+                #expect(waited > 1.1)
+                // The samples dropped while waiting are recorded in the segment that followed: at least most
+                // of what the source delivered in the time it actually waited.
+                let expectedDropped = Int(waited * fps * 0.7)
+                #expect(segment.droppedFrames >= expectedDropped, "\(segment.droppedFrames) dropped in \(waited) s")
                 await rig.warningsDone.value
-                #expect(rig.warnings.all == [
-                    .writerFailed(track: "display-1"), .writerFailed(track: "display-1"), .samplesDropped(track: "display-1"),
-                ])
+                let failures: [RecordingWarning] = [.writerFailed(track: "display-1"), .writerFailed(track: "display-1")]
+                if expectedDropped >= TrackPipeline.droppedSamplesWarningCount {
+                    #expect(rig.warnings.all == failures + [.samplesDropped(track: "display-1")])
+                } else {
+                    // Whether that many came in a row depends on how many the source got out in that time.
+                    #expect(rig.warnings.all == failures || rig.warnings.all == failures + [.samplesDropped(track: "display-1")])
+                }
             }
         }
 
@@ -982,6 +1023,35 @@ final class ScriptedWriter: TrackWriting {
 }
 
 struct FinishFailure: Error {}
+
+/// The host times around a take's `start()` and `stop()`, so a test measures against the time that
+/// really passed, not the time it slept: under load a sleep lasts longer than asked.
+final class MeasuredTake: @unchecked Sendable {
+    private(set) var beforeStart = HostTime(nanoseconds: 0)
+    private(set) var started = HostTime(nanoseconds: 0)
+    private(set) var stopping = HostTime(nanoseconds: 0)
+    private(set) var stopped = HostTime(nanoseconds: 0)
+
+    func start(_ coordinator: RecordingCoordinator) async throws -> String {
+        beforeStart = HostTime.now()
+        defer { started = HostTime.now() }
+        return try await coordinator.start()
+    }
+
+    func stop(_ coordinator: RecordingCoordinator) async throws -> TakeRecord {
+        stopping = HostTime.now()
+        defer { stopped = HostTime.now() }
+        return try await coordinator.stop()
+    }
+
+    /// A segment recorded the whole take lasts no longer than from before `start()` to after `stop()`, and
+    /// at least from `start()`'s return to the `stop()` call, less what its first and last samples take.
+    func expectSpansTheTake(_ span: Double, sourceLocation: SourceLocation = #_sourceLocation) {
+        let outer = stopped.seconds(since: beforeStart), inner = stopping.seconds(since: started)
+        #expect(span <= outer + 0.05, "\(span) s, longer than the \(outer) s measured", sourceLocation: sourceLocation)
+        #expect(span >= inner - 0.3, "\(span) s, shorter than the \(inner) s measured", sourceLocation: sourceLocation)
+    }
+}
 
 /// A cursor location that moves on every call, so every sample is recorded.
 final class MovingLocation: Sendable {
