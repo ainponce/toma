@@ -17,7 +17,10 @@ import os
 /// A segment whose video track takes longer than `trackLoadTimeout` to load is skipped (a gap) for
 /// `timeoutBackoff` seconds and then tried again; only a load that fails marks it unreadable.
 ///
-/// Thread-safe: calls are serialized.
+/// Thread-safe: calls are serialized. Blocks while it loads and decodes (`copyNextSampleBuffer`, and up to
+/// `trackLoadTimeout` for a track): never call it from a Swift concurrency thread. Many blocked callers
+/// there leave the cooperative pool no thread, and every task of the app stops. Use a dispatch queue
+/// (`PreviewPreparation`, the exporter's queue) or the main thread for a single frame.
 public final class TrackFrameReader: @unchecked Sendable {
     static let sequentialWindow = 2.0
     /// Keyframes come every second, so a reader opened this long before a time reaches it decoding at

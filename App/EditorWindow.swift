@@ -99,11 +99,6 @@ final class EditorModel {
 
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Editor")
 
-    private enum LoadError: Error {
-        case unfinished
-        case cannotDraw
-    }
-
     /// While playing, the time shown is published at most this often.
     private static let playbackPublishInterval = Duration.milliseconds(100)
 
@@ -119,36 +114,24 @@ final class EditorModel {
 
     // MARK: Loading
 
-    /// Reads the take and prepares the preview off the main thread: reading the events and the first
-    /// frame of a segment blocks.
+    /// Reads the take and prepares the preview on `PreviewPreparation`'s queue, never on the main thread or
+    /// a Swift concurrency thread: reading the events and the first frame of a segment blocks.
     func load() {
         state = .loading
         let url = packageURL, take = takeID
         Task {
             do {
-                let (project, preview, length) = try await Task.detached(priority: .userInitiated) {
-                    let project = try LoadedProject.load(url, take: take)
-                    guard project.take.status != .recording else { throw LoadError.unfinished }
-                    // Its own renderer: an export makes another one.
-                    let renderer = try FrameRenderer(project: project, outputSize: previewOutputSize)
-                    let preview = PreviewRenderer(renderer: renderer)
-                    do {
-                        _ = try preview.snapshot(at: 0)  // loads the first segment's track now
-                    } catch {
-                        Self.logger.error("Cannot draw the first frame: \(String(describing: error), privacy: .public)")
-                        throw LoadError.cannotDraw
-                    }
-                    return (project, preview, renderer.duration)
-                }.value
+                let prepared = try await PreviewPreparation.prepare(url: url, take: take, outputSize: previewOutputSize)
                 guard !closed else { return }
-                self.project = project
-                duration = length
+                project = prepared.project
+                duration = prepared.duration
                 currentTime = 0
                 isPlaying = false
-                state = .ready(preview)
-            } catch LoadError.unfinished {
+                state = .ready(prepared.preview)
+            } catch PreviewPreparationError.unfinished {
                 state = .failed(String(localized: "This recording hasn't finished saving. If it isn't being recorded now, recover it with Recover Recordings… in the menu bar."))
-            } catch LoadError.cannotDraw {
+            } catch PreviewPreparationError.cannotDraw(let reason) {
+                Self.logger.error("Cannot draw the first frame: \(reason, privacy: .public)")
                 state = .failed(String(localized: "Couldn't draw the preview."))
             } catch {
                 Self.logger.error("Cannot open \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")

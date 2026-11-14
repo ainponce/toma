@@ -12,6 +12,9 @@ import os
 /// that does not follow the view's size. A drawable of another size is not drawn (and logged once).
 /// `renderPreview` is the one drawing call, used by `draw(in:)` and by `snapshot(at:)`. Errors while
 /// drawing or on the GPU are logged once each, not on every frame.
+///
+/// Drawing decodes frames synchronously (`TrackFrameReader`), so it blocks: never call `snapshot(at:)` or
+/// `renderPreview` from a Swift concurrency thread. `PreviewPreparation` prepares one on its own queue.
 public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendable {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "PreviewRenderer")
     /// How often Debug builds log the average frame rate, in seconds.
