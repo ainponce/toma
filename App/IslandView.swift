@@ -30,16 +30,19 @@ final class IslandModel {
     @ObservationIgnored let hotKeys: HotKeyCenter
     /// The teleprompter's settings, for its switch in the open recording island.
     @ObservationIgnored let teleprompter: TeleprompterSetting
+    /// The desktops of the island's display, in the open island and the open recording island.
+    @ObservationIgnored let desktops: DesktopsModel
     /// What the content does to the island.
     @ObservationIgnored var send: (IslandEvent) -> Void = { _ in }
 
     init(
-        recording: RecordingController, hotKeys: HotKeyCenter, teleprompter: TeleprompterSetting, top: ScreenTop, reduceMotion: Bool,
-        reduceTransparency: Bool
+        recording: RecordingController, hotKeys: HotKeyCenter, teleprompter: TeleprompterSetting, desktops: DesktopsModel,
+        top: ScreenTop, reduceMotion: Bool, reduceTransparency: Bool
     ) {
         self.recording = recording
         self.hotKeys = hotKeys
         self.teleprompter = teleprompter
+        self.desktops = desktops
         self.top = top
         outline = IslandGeometry.shape(.rest, on: top)
         self.reduceMotion = reduceMotion
@@ -126,7 +129,8 @@ private struct IslandContent: View {
                 .onTapGesture { model.send(.clicked) }
         case .open:
             if let panel = model.panel {
-                IslandOpenPanel(panel: panel, topInset: model.notchBand, startFailure: model.startFailure, send: model.send)
+                IslandOpenPanel(
+                    panel: panel, desktops: model.desktops, topInset: model.notchBand, startFailure: model.startFailure, send: model.send)
             }
         case .choosing:
             BelowTheNotch(band: model.notchBand) { ChoosingRow(send: model.send) }

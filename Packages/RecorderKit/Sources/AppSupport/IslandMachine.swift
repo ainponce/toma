@@ -71,6 +71,11 @@ public enum IslandEvent: Equatable, Sendable {
     case saved(SavedTake)
     /// A take could not start: the open island says why.
     case startFailed
+    /// Something of the system's opens at the top of the screen, where the island is: Mission Control (the
+    /// island joins all its spaces and would stay open over its bar of desktops) or the Accessibility
+    /// prompt (which `AXIsProcessTrustedWithOptions` shows without waiting for it). The open recording island
+    /// goes back to its wings at once, the open island to rest; nothing else changes.
+    case systemUIOpened
 }
 
 /// Which state the island is in, from what happens to it. `now` is a monotonic time the app passes
@@ -132,7 +137,7 @@ public struct IslandMachine: Equatable, Sendable {
             hasStartFailure = true
             go(to: .open)
             return
-        case .clicked, .toggle, .dismiss, .beganChoosing, .endedChoosing:
+        case .clicked, .toggle, .dismiss, .beganChoosing, .endedChoosing, .systemUIOpened:
             break
         }
         switch (state, event) {
@@ -152,9 +157,11 @@ public struct IslandMachine: Equatable, Sendable {
             deadline = now + Self.peekGrace
         case (.rest, .clicked), (.rest, .toggle), (.peek, .clicked), (.peek, .toggle):
             go(to: .open)
-        case (.open, .toggle), (.open, .dismiss), (.choosing, .toggle):
+        case (.open, .toggle), (.open, .dismiss), (.open, .systemUIOpened), (.choosing, .toggle):
             hasStartFailure = false
             go(to: .rest)
+        case (.recordingOpen, .systemUIOpened):
+            go(to: .recording)
         case (.saved, .toggle), (.saved, .clicked):
             // Record Another.
             go(to: .open)

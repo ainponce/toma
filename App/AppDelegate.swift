@@ -69,7 +69,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let island = IslandPanel(recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop)
+        let island = IslandPanel(recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, probe: probe)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }

@@ -150,6 +150,8 @@ struct OnboardingView: View {
     }
 }
 
+/// A permission with its state and what to do about it. Accessibility is optional, with a note: its button
+/// is the island's "Give Permission…", the prompt the first time and System Settings after (plan decision 27).
 private struct PermissionRow: View {
     let kind: PermissionKind
     let state: PermissionState
@@ -157,23 +159,53 @@ private struct PermissionRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Image(systemName: kind == .screenRecording ? "display" : "mic")
+            Image(systemName: symbol)
                 .font(.title2)
                 .frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
-                Text(kind == .screenRecording ? "Screen Recording" : "Microphone")
+                title
                     .font(.headline)
+                if kind == .accessibility {
+                    Text("Optional: only to switch desktops from the notch.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 status
             }
             Spacer()
-            switch state {
-            case .granted:
+            switch (kind, state) {
+            case (_, .granted):
                 EmptyView()
-            case .notDetermined:
+            case (.accessibility, _):
+                Button("Give Permission…") {
+                    if state == .notDetermined {
+                        Task { await model.request(kind) }
+                    } else {
+                        model.openSettings(for: kind)
+                    }
+                }
+            case (_, .notDetermined):
                 Button("Allow…") { Task { await model.request(kind) } }
-            case .denied:
+            case (_, .denied):
                 Button("Open System Settings") { model.openSettings(for: kind) }
             }
+        }
+    }
+
+    private var symbol: String {
+        switch kind {
+        case .screenRecording: "display"
+        case .microphone: "mic"
+        case .accessibility: "accessibility"
+        }
+    }
+
+    private var title: Text {
+        switch kind {
+        case .screenRecording: Text("Screen Recording")
+        case .microphone: Text("Microphone")
+        case .accessibility: Text("Accessibility")
         }
     }
 

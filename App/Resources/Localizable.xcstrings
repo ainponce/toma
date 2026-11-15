@@ -1,6 +1,17 @@
 {
   "sourceLanguage" : "en",
   "strings" : {
+    "%1$@ — %2$@" : {
+      "comment" : "A desktop of an app in full screen: the app, and its window's title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ — %2$@"
+          }
+        }
+      }
+    },
     "%@ (details: %@)" : {
       "comment" : "A damaged project: its name, and recovery's technical reason",
       "localizations" : {
@@ -79,6 +90,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ya hay una grabación en curso."
+          }
+        }
+      }
+    },
+    "Accessibility" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Accesibilidad"
           }
         }
       }
@@ -407,6 +428,28 @@
         }
       }
     },
+    "Desktop" : {
+      "comment" : "A display's only desktop (Space), and the open island's section of desktops",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escritorio"
+          }
+        }
+      }
+    },
+    "Desktop %lld" : {
+      "comment" : "A desktop (Space) among several: its number, as Mission Control names it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escritorio %lld"
+          }
+        }
+      }
+    },
     "Display" : {
       "comment" : "What to record: a whole display",
       "localizations" : {
@@ -515,6 +558,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "De otros escritorios"
+          }
+        }
+      }
+    },
+    "Give Permission…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dar permiso…"
           }
         }
       }
@@ -651,6 +704,16 @@
         }
       }
     },
+    "Mission Control" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mission Control"
+          }
+        }
+      }
+    },
     "Native" : {
       "comment" : "Display resolution: the display's own pixels",
       "localizations" : {
@@ -679,6 +742,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nueva grabación o detener"
+          }
+        }
+      }
+    },
+    "Next Desktop" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escritorio siguiente"
           }
         }
       }
@@ -871,6 +944,16 @@
         }
       }
     },
+    "Optional: only to switch desktops from the notch." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opcional: solo para cambiar de escritorio desde el notch."
+          }
+        }
+      }
+    },
     "Part of the recording couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -976,6 +1059,16 @@
         }
       }
     },
+    "Previous Desktop" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escritorio anterior"
+          }
+        }
+      }
+    },
     "Quit" : {
       "localizations" : {
         "es" : {
@@ -1063,6 +1156,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grabando"
+          }
+        }
+      }
+    },
+    "Recording follows the desktop in front." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La grabación sigue al escritorio que está adelante."
           }
         }
       }
@@ -1968,6 +2071,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS u otra app ya usan este atajo."
+          }
+        }
+      }
+    },
+    "To switch desktops from here, Toma needs the Accessibility permission. ⌃← and ⌃→ work the same from the keyboard." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para cambiar de escritorio desde acá, Toma necesita el permiso de Accesibilidad. Con ⌃← y ⌃→ se puede cambiar igual desde el teclado."
+          }
+        }
+      }
+    },
+    "To switch desktops from here, turn on “Move left a space” and “Move right a space” in System Settings › Keyboard › Keyboard Shortcuts › Mission Control." : {
+      "comment" : "The names of the settings as macOS shows them in each language",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para cambiar de escritorio desde acá, activar “Mover un espacio a la izquierda” y “Mover un espacio a la derecha” en Ajustes del Sistema › Teclado › Atajos de teclado › Mission Control."
           }
         }
       }

@@ -9,11 +9,13 @@ import Testing
 struct FakeProbe: PermissionProbe {
     var screen: PermissionState
     var mic: PermissionState
+    var accessibility: PermissionState = .notDetermined
 
     func state(of kind: PermissionKind) -> PermissionState {
         switch kind {
         case .screenRecording: screen
         case .microphone: mic
+        case .accessibility: accessibility
         }
     }
 
@@ -49,6 +51,15 @@ struct FakeProbe: PermissionProbe {
     #expect(r == PreflightResult(missing: [], recordMicrophone: false, canRecord: true))
 }
 
+@Test func optionalPermissionsAreNeverMissing() {
+    for accessibility in [PermissionState.notDetermined, .denied] {
+        let probe = FakeProbe(screen: .granted, mic: .granted, accessibility: accessibility)
+        #expect(RecordingPreflight.evaluate(probe: probe, wantsMicrophone: true) == PreflightResult(missing: [], recordMicrophone: true, canRecord: true))
+        let missing = FakeProbe(screen: .denied, mic: .notDetermined, accessibility: accessibility)
+        #expect(RecordingPreflight.evaluate(probe: missing, wantsMicrophone: true).missing == [.screenRecording, .microphone])
+    }
+}
+
 // MARK: - System Settings
 
 @Test func settingsOpenThePrivacyPaneOfEachPermission() {
@@ -56,6 +67,8 @@ struct FakeProbe: PermissionProbe {
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
     #expect(PermissionSettings.url(for: .microphone).absoluteString
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
+    #expect(PermissionSettings.url(for: .accessibility).absoluteString
+        == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
 }
 
 // MARK: - System probe
@@ -74,6 +87,8 @@ final class FakeSystem: Sendable {
     let screenRequests = Atomic(0)
     let microphone = Mutex(AVAuthorizationStatus.notDetermined)
     let microphoneAnswer = Atomic(false)
+    let accessibilityTrusted = Atomic(false)
+    let accessibilityPrompts = Atomic(0)
 
     func probe(_ defaults: UserDefaults) -> SystemPermissionProbe {
         SystemPermissionProbe(
@@ -84,7 +99,9 @@ final class FakeSystem: Sendable {
                 return self.screenAllowed.load(ordering: .relaxed)
             },
             microphoneStatus: { self.microphone.withLock { $0 } },
-            microphoneRequest: { self.microphoneAnswer.load(ordering: .relaxed) })
+            microphoneRequest: { self.microphoneAnswer.load(ordering: .relaxed) },
+            accessibilityTrusted: { self.accessibilityTrusted.load(ordering: .relaxed) },
+            accessibilityPrompt: { self.accessibilityPrompts.add(1, ordering: .relaxed) })
     }
 }
 
@@ -135,5 +152,32 @@ func microphoneRequestGivesTheAnswer(answer: Bool, expected: PermissionState) as
         #expect(await probe.request(.microphone) == expected)
         // Asking about the microphone leaves the screen recording state alone.
         #expect(probe.state(of: .screenRecording) == .notDetermined)
+    }
+}
+
+@Test func accessibilityFollowsTrust() async {
+    await withDefaults { defaults in
+        let system = FakeSystem()
+        let probe = system.probe(defaults)
+        #expect(probe.state(of: .accessibility) == .notDetermined)
+        // The prompt only adds Toma to the list: the user has not allowed it yet.
+        #expect(await probe.request(.accessibility) == .denied)
+        #expect(system.accessibilityPrompts.load(ordering: .relaxed) == 1)
+        #expect(probe.state(of: .accessibility) == .denied)
+        #expect(defaults.bool(forKey: "permissionRequested.accessibility"))
+        // Remembered in the defaults; the other permissions are left alone.
+        #expect(system.probe(defaults).state(of: .accessibility) == .denied)
+        #expect(probe.state(of: .screenRecording) == .notDetermined)
+
+        system.accessibilityTrusted.store(true, ordering: .relaxed)
+        #expect(probe.state(of: .accessibility) == .granted)
+        #expect(await probe.request(.accessibility) == .granted)
+    }
+    await withDefaults { defaults in
+        // Allowed in System Settings without being asked.
+        let system = FakeSystem()
+        system.accessibilityTrusted.store(true, ordering: .relaxed)
+        #expect(system.probe(defaults).state(of: .accessibility) == .granted)
+        #expect(system.accessibilityPrompts.load(ordering: .relaxed) == 0)
     }
 }

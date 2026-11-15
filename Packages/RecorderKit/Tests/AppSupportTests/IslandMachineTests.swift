@@ -521,6 +521,35 @@ import Testing
         #expect(choosing.state == .open && choosing.hasStartFailure)
     }
 
+    @Test func systemUIOpenedGetsTheIslandOutOfTheWay() {
+        // Mission Control from the open recording island: the wings at once, without the 650 ms.
+        var open = recordingOpen()
+        open.handle(.systemUIOpened, at: .seconds(10))
+        #expect(open.state == .recording && open.deadline == nil)
+        // Also once the pointer had left.
+        var leaving = recordingOpen()
+        leaving.handle(.pointerExited, at: .seconds(10))
+        leaving.handle(.systemUIOpened, at: .milliseconds(10_100))
+        #expect(leaving.state == .recording && leaving.deadline == nil)
+
+        // "Give Permission…" from the open panel: it closes, and says no more why a take did not start.
+        var panel = machine(after: [.clicked, .startFailed])
+        panel.handle(.systemUIOpened, at: .seconds(5))
+        #expect(panel.state == .rest && !panel.hasStartFailure)
+
+        // Elsewhere nothing changes.
+        var wings = recordingOpen()
+        wings.handle(.pointerExited, at: .seconds(10))
+        wings.tick(at: .seconds(11))
+        #expect(wings.state == .recording)
+        wings.handle(.systemUIOpened, at: .seconds(12))
+        #expect(wings.state == .recording)
+        #expect(machine(after: [.systemUIOpened]).state == .rest)
+        #expect(machine(after: [.pointerEntered, .systemUIOpened]).state == .peek)
+        #expect(machine(after: [.clicked, .beganChoosing, .systemUIOpened]).state == .choosing)
+        #expect(machine(after: [.clicked, .phaseChanged(.countingDown(remaining: 3)), .systemUIOpened]).state == .countdown(remaining: 3))
+    }
+
     @Test func pointerInsideTheZoneOrTheIslandCountsAsInside() {
         var presence = PointerPresence()
         #expect(presence.entered(.zone(1)) == .pointerEntered)

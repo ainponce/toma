@@ -123,11 +123,13 @@ final class OpenPanelModel {
     }
 }
 
-/// The open island (700 × 400, notch design §5.2): the mode, what to record, the camera, audio and the
-/// teleprompter's switch, the settings and Record, and above Record why the last take could not start.
-/// Window, Area and what this version does not record yet are drawn, disabled.
+/// The open island (700 × 400, notch design §5.2): the mode, what to record (with the desktops, for a
+/// display), the camera, audio and the teleprompter's switch, the settings and Record, and above Record why
+/// a jump to another desktop posted nothing and why the last take could not start. Window, Area and what
+/// this version does not record yet are drawn, disabled.
 struct IslandOpenPanel: View {
     @Bindable var panel: OpenPanelModel
+    let desktops: DesktopsModel
     /// Under the notch, the black band at the top.
     let topInset: Double
     /// Why the last take could not start (`userFacingDescription(of:)`), while the island says so.
@@ -150,6 +152,10 @@ struct IslandOpenPanel: View {
             .frame(maxHeight: .infinity)
             // Over the columns only: ✕ above and Settings and Record below take one click with the card open.
             .overlay(alignment: .bottomLeading) { settingsCard }
+            if let problem = desktops.problem {
+                DesktopsProblemRow(model: desktops, problem: problem)
+                    .transition(.opacity)
+            }
             if let startFailure { StartFailureRow(description: startFailure) }
             footer
         }
@@ -159,6 +165,7 @@ struct IslandOpenPanel: View {
         .foregroundStyle(.white)
         .font(.system(size: 13))
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: panel.showsSettings)
+        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: desktops.problem)
     }
 
     /// The settings card, just above the Settings button; a click on the columns around it closes it, and
@@ -261,7 +268,12 @@ struct IslandOpenPanel: View {
             Label("Choose on Screen", systemImage: "display")
         }
         .buttonStyle(GlassButtonStyle())
-        // Task 16d: the desktops by name ("Desktop") go here.
+        VStack(alignment: .leading, spacing: 6) {
+            ColumnSubtitle(
+                text: Text("Desktop", comment: "A display's only desktop (Space), and the open island's section of desktops"),
+                icon: "rectangle.3.group")
+            DesktopsList(model: desktops, layout: .column)
+        }
         Spacer(minLength: 0)
     }
 

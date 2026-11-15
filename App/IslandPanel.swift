@@ -43,6 +43,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// Shared by the teleprompter and the island's switches.
     private let teleprompterSetting: TeleprompterSetting
     private let teleprompter: TeleprompterPanel
+    /// The desktops of the display the island is on, for the open island and the open recording island.
+    private let desktops: DesktopsModel
     /// Kept up to date from launch, so opening the panel never waits for it.
     private let microphones = MicrophoneList()
     private var machine = IslandMachine()
@@ -71,13 +73,19 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private var tops: [UInt32: ScreenTop]
     private var names: [UInt32: String]
     /// The display the island is on.
-    private var displayID: UInt32
+    private var displayID: UInt32 {
+        didSet { desktops.displayID = displayID }
+    }
 
     /// How often the pointer's screen is read while recording (plan decision 22).
     private static let pointerInterval = Duration.milliseconds(250)
 
-    /// The island starts at rest on the screen with the pointer.
-    init(recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting) {
+    /// The island starts at rest on the screen with the pointer. `probe` asks for Accessibility, to jump to
+    /// another desktop.
+    init(
+        recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
+        probe: any PermissionProbe
+    ) {
         self.recording = recording
         self.countdown = countdown
         self.afterStop = afterStop
@@ -92,8 +100,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         let workspace = NSWorkspace.shared
         teleprompterSetting = TeleprompterSetting(store: store)
         teleprompter = TeleprompterPanel(setting: teleprompterSetting, recording: recording)
+        desktops = DesktopsModel(displayID: displayID, probe: probe)
         model = IslandModel(
-            recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, top: top,
+            recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, desktops: desktops, top: top,
             reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
             reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency)
         let rest = IslandGeometry.shape(.rest, on: top)
@@ -113,6 +122,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         panel.onCancel = { [weak self] in self?.escape() }
         panel.onClose = { [weak self] in self?.close() }
         model.send = { [weak self] event in self?.send(event) }
+        desktops.send = { [weak self] event in self?.send(event) }
         root.onEnter = { [weak self] in self?.pointer(entered: .island) }
         root.onExit = { [weak self] in self?.pointer(exited: .island) }
         let link = root.displayLink(target: self, selector: #selector(frameTick(_:)))

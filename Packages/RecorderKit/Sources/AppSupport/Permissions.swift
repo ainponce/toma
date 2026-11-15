@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
-/// A system permission a recording needs.
+/// A system permission the app asks for.
 public enum PermissionKind: String, CaseIterable, Sendable {
     /// Required: without it nothing can be recorded.
     case screenRecording
     /// Optional: without it the take is recorded without audio.
     case microphone
+    /// Optional, and never needed to record: only to switch desktops from the island, by posting ⌃← and ⌃→
+    /// (`SpaceJumper`). Asked for only when the user asks to (plan decision 27).
+    case accessibility
 }
 
 public enum PermissionState: Sendable, Equatable {
@@ -31,6 +35,8 @@ public protocol PermissionProbe: Sendable {
 /// `notDetermined` until it has been requested once, and `denied` after that; the first request is
 /// remembered in `defaults`. macOS may only report a screen recording permission given in System
 /// Settings after the app is opened again. The microphone follows `AVCaptureDevice`'s authorization status.
+/// Accessibility also only answers yes or no (`AXIsProcessTrusted`), and is remembered the same way: so
+/// the second "Give Permission…" opens System Settings instead of the prompt again.
 public struct SystemPermissionProbe: PermissionProbe {
     /// `UserDefaults` is documented as thread-safe, but not annotated `Sendable`.
     private struct Defaults: @unchecked Sendable {
@@ -42,6 +48,8 @@ public struct SystemPermissionProbe: PermissionProbe {
     private let screenRequest: @Sendable () -> Bool
     private let microphoneStatus: @Sendable () -> AVAuthorizationStatus
     private let microphoneRequest: @Sendable () async -> Bool
+    private let accessibilityTrusted: @Sendable () -> Bool
+    private let accessibilityPrompt: @Sendable () -> Void
 
     public init(defaults: UserDefaults = .standard) {
         self.init(
@@ -49,7 +57,14 @@ public struct SystemPermissionProbe: PermissionProbe {
             screenPreflight: { CGPreflightScreenCaptureAccess() },
             screenRequest: { CGRequestScreenCaptureAccess() },
             microphoneStatus: { AVCaptureDevice.authorizationStatus(for: .audio) },
-            microphoneRequest: { await AVCaptureDevice.requestAccess(for: .audio) })
+            microphoneRequest: { await AVCaptureDevice.requestAccess(for: .audio) },
+            accessibilityTrusted: { AXIsProcessTrusted() },
+            accessibilityPrompt: {
+                // The key as text, its documented value: `kAXTrustedCheckOptionPrompt` is a global C `var`, which
+                // Swift 6 refuses to read ("not concurrency-safe"), with or without `takeUnretainedValue()`.
+                // The prompt adds Toma to the list in System Settings and offers to open it; it returns at once.
+                _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+            })
     }
 
     /// For tests: the system calls replaced.
@@ -58,13 +73,17 @@ public struct SystemPermissionProbe: PermissionProbe {
         screenPreflight: @escaping @Sendable () -> Bool,
         screenRequest: @escaping @Sendable () -> Bool,
         microphoneStatus: @escaping @Sendable () -> AVAuthorizationStatus,
-        microphoneRequest: @escaping @Sendable () async -> Bool
+        microphoneRequest: @escaping @Sendable () async -> Bool,
+        accessibilityTrusted: @escaping @Sendable () -> Bool,
+        accessibilityPrompt: @escaping @Sendable () -> Void
     ) {
         self.defaults = Defaults(value: defaults)
         self.screenPreflight = screenPreflight
         self.screenRequest = screenRequest
         self.microphoneStatus = microphoneStatus
         self.microphoneRequest = microphoneRequest
+        self.accessibilityTrusted = accessibilityTrusted
+        self.accessibilityPrompt = accessibilityPrompt
     }
 
     public func state(of kind: PermissionKind) -> PermissionState {
@@ -79,6 +98,9 @@ public struct SystemPermissionProbe: PermissionProbe {
             case .denied, .restricted: return .denied
             @unknown default: return .denied
             }
+        case .accessibility:
+            if accessibilityTrusted() { return .granted }
+            return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .denied : .notDetermined
         }
     }
 
@@ -89,6 +111,10 @@ public struct SystemPermissionProbe: PermissionProbe {
             return screenRequest() ? .granted : .denied
         case .microphone:
             return await microphoneRequest() ? .granted : .denied
+        case .accessibility:
+            defaults.value.set(true, forKey: Self.requestedKey(kind))
+            accessibilityPrompt()
+            return state(of: kind)
         }
     }
 
@@ -104,6 +130,7 @@ public enum PermissionSettings {
         let pane = switch kind {
         case .screenRecording: "Privacy_ScreenCapture"
         case .microphone: "Privacy_Microphone"
+        case .accessibility: "Privacy_Accessibility"
         }
         return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!
     }
@@ -111,7 +138,7 @@ public enum PermissionSettings {
 
 /// Whether a take can start, and with which sources.
 public struct PreflightResult: Equatable, Sendable {
-    /// The permissions wanted that are not granted, in `PermissionKind.allCases` order.
+    /// The permissions wanted that are not granted, in the order screen recording, microphone.
     public var missing: [PermissionKind]
     /// Whether to record the microphone: wanted and granted.
     public var recordMicrophone: Bool
@@ -125,12 +152,13 @@ public struct PreflightResult: Equatable, Sendable {
     }
 }
 
-/// The check before every take: screen recording is required, the microphone is optional.
+/// The check before every take: screen recording is required, the microphone is optional. The other
+/// permissions (Accessibility) are never asked about: a take never needs them.
 public enum RecordingPreflight {
     /// `wantsMicrophone` is false when the take should not record audio (for example, the Mac has no
     /// microphone): the microphone is then neither missing nor recorded.
     public static func evaluate(probe: any PermissionProbe, wantsMicrophone: Bool) -> PreflightResult {
-        let wanted = PermissionKind.allCases.filter { $0 != .microphone || wantsMicrophone }
+        let wanted: [PermissionKind] = [.screenRecording] + (wantsMicrophone ? [.microphone] : [])
         let states = Dictionary(uniqueKeysWithValues: wanted.map { ($0, probe.state(of: $0)) })
         return PreflightResult(
             missing: wanted.filter { states[$0] != .granted },

@@ -54,9 +54,9 @@ struct RecordingWings: View {
 
 /// The open island while a take records (640 × 226, notch design §5.1): the time, large, whether it is
 /// recording or paused and the microphone's level; pause or resume, marker, restart (asking first) and
-/// stop, and the teleprompter's switch; below them, the take's notices that ask for attention, until they
-/// are resolved. Task 16d adds the desktops and Mission Control between the take's buttons and the
-/// teleprompter.
+/// stop, the desktops by name (or ← →) and Mission Control (§5.5), and the teleprompter's switch; below
+/// them, why a jump to another desktop posted nothing, and the take's notices that ask for attention,
+/// until they are resolved.
 struct IslandRecordingPanel: View {
     let recording: RecordingController
     let model: IslandModel
@@ -77,6 +77,10 @@ struct IslandRecordingPanel: View {
             } else {
                 controls
                     .transition(.opacity)
+                if let problem = model.desktops.problem {
+                    DesktopsProblemRow(model: model.desktops, problem: problem)
+                        .transition(.opacity)
+                }
             }
             // The confirmations were capsules: what is listed is what still asks for attention.
             let notices = recording.notices.filter { $0.presentation != .confirmation }
@@ -93,6 +97,7 @@ struct IslandRecordingPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .foregroundStyle(.white)
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: model.isConfirmingRestart)
+        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: model.desktops.problem)
         .onDisappear {
             if model.isConfirmingRestart { confirm(false) }
         }
@@ -129,7 +134,11 @@ struct IslandRecordingPanel: View {
             RoundControl(symbol: "flag.fill", title: String(localized: "Marker"), isEnabled: !isPaused) { recording.addMarker() }
             RoundControl(symbol: "arrow.counterclockwise", title: String(localized: "Restart")) { confirm(true) }
             RoundControl(symbol: "stop.fill", title: String(localized: "Stop"), isStop: true) { recording.stopRecording() }
-            // Task 16d: a separator, the desktops by name and Mission Control go here.
+            ControlSeparator()
+            DesktopsList(model: model.desktops, layout: .row)
+            RoundControl(symbol: "rectangle.3.group", title: String(localized: "Mission Control")) {
+                model.desktops.openMissionControl()
+            }
             ControlSeparator()
             let teleprompter = model.teleprompter
             RoundControl(symbol: "text.alignleft", title: String(localized: "Teleprompter"), isOn: teleprompter.value.isOn) {
@@ -166,7 +175,7 @@ struct IslandRecordingPanel: View {
 }
 
 /// A round glass button with a symbol, its title as help and for VoiceOver; lit while `isOn`, for a switch.
-private struct RoundControl: View {
+struct RoundControl: View {
     let symbol: String
     let title: String
     var isStop = false
