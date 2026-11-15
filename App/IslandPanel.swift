@@ -34,6 +34,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private let model: IslandModel
     private let zones = IslandHoverZones()
     private let overlay = SelectionOverlay()
+    /// Kept up to date from launch, so opening the panel never waits for it.
+    private let microphones = MicrophoneList()
     private var machine = IslandMachine()
     private var presence = PointerPresence()
     private var width: SpringValue
@@ -79,6 +81,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         panel.contentView = root
         panel.delegate = self
         panel.onCancel = { [weak self] in self?.escape() }
+        panel.onClose = { [weak self] in self?.close() }
         model.send = { [weak self] event in self?.send(event) }
         root.onEnter = { [weak self] in self?.pointer(entered: .island) }
         root.onExit = { [weak self] in self?.pointer(exited: .island) }
@@ -93,6 +96,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         overlay.chose = { [weak self] id in self?.chose(display: id) }
         overlay.ended = { [weak self] in self?.send(.endedChoosing) }
         overlay.leftForAnotherApp = { [weak self] in self?.send(.endedChoosing, .dismiss) }
+        overlay.closed = { [weak self] in self?.close() }
+        overlay.reduceMotion = model.reduceMotion
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { $0.screensChanged() }
         observe(workspace.notificationCenter, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { $0.displayOptionsChanged() }
@@ -126,11 +131,25 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         apply(from: before)
     }
 
-    /// Esc on the island.
+    /// Esc on the island: it closes the settings card if it is open, and otherwise the island.
     private func escape() {
         switch machine.state {
-        case .open: send(.dismiss)
+        case .open:
+            if let panel = model.panel, panel.showsSettings {
+                panel.showsSettings = false
+            } else {
+                send(.dismiss)
+            }
         case .choosing: send(.endedChoosing)
+        case .rest, .peek: break
+        }
+    }
+
+    /// ⌘W while the island or the on-screen selection has the keyboard: the island closes.
+    private func close() {
+        switch machine.state {
+        case .open: send(.dismiss)
+        case .choosing: send(.endedChoosing, .dismiss)
         case .rest, .peek: break
         }
     }
@@ -143,10 +162,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if let event = presence.exited(region) { send(event) }
     }
 
-    /// Entering a zone also brings the island to that screen.
+    /// Entering a zone also brings the island to that screen. If that screen has a notch, the island now
+    /// covers the zone just entered: the pointer is over the island (`updateZones`).
     private func zoneEntered(_ id: UInt32) {
         if canMove { move(to: id) }
         pointer(entered: .zone(id))
+        updateZones()
     }
 
     private func zoneClicked(_ id: UInt32) {
@@ -186,12 +207,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         default:
             break
         }
-        let spring = IslandGeometry.spring(to: state)
-        let animation: Animation =
-            model.reduceMotion
-            ? .easeInOut(duration: Motion.reducedMotionFade.timeInterval)
-            : .spring(response: spring.response, dampingFraction: spring.damping)
-        withAnimation(animation) { model.state = state }
+        withAnimation(.island(IslandGeometry.spring(to: state), reduceMotion: model.reduceMotion)) { model.state = state }
         retargetOutline()
 
         // Out of the keyboard states the keyboard goes back to the app in front: the window server gives
@@ -213,7 +229,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     private func makePanelModel() -> OpenPanelModel {
-        let panelModel = OpenPanelModel(recording: recording, store: store, displays: displayChoices(), islandDisplayID: displayID)
+        let panelModel = OpenPanelModel(
+            recording: recording, store: store, microphones: microphones, displays: displayChoices(), islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)
@@ -299,15 +316,13 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         showOrHide()
     }
 
-    /// On the notch screen it is on, the island stands in for that screen's zone: a pointer over the zone is
-    /// over the island now.
+    /// On the notch screen it is on, the island stands in for that screen's zone, whose panel leaves the
+    /// screen: a pointer over that zone is over the island. Also when the zone is entered after it was
+    /// covered (the island arriving from another screen), since its panel can no longer say it was left.
     private func updateZones() {
         let covered: UInt32? = model.top.notch == nil ? nil : displayID
+        if let covered { presence.islandCovers(.zone(covered)) }
         guard covered != zones.covered else { return }
-        if let covered, presence.inside.contains(.zone(covered)) {
-            _ = presence.entered(.island)
-            _ = presence.exited(.zone(covered))
-        }
         zones.setCovered(covered)
     }
 
@@ -335,6 +350,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         let workspace = NSWorkspace.shared
         model.reduceMotion = workspace.accessibilityDisplayShouldReduceMotion
         model.reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
+        overlay.reduceMotion = model.reduceMotion
     }
 
     // MARK: - Outline

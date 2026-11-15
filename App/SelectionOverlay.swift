@@ -16,6 +16,12 @@ final class SelectionOverlay: NSObject, NSWindowDelegate {
     var ended: () -> Void = {}
     /// The keyboard went to another app (Cmd-Tab, Mission Control) while choosing.
     var leftForAnotherApp: () -> Void = {}
+    /// ⌘W while choosing.
+    var closed: () -> Void = {}
+    /// "Reduce motion": the highlight fades in and out, without scale.
+    var reduceMotion = false {
+        didSet { for screen in screens.values { screen.model.reduceMotion = reduceMotion } }
+    }
 
     private struct Screen {
         let panel: FloatingPanel
@@ -84,7 +90,7 @@ final class SelectionOverlay: NSObject, NSWindowDelegate {
         screens = [:]
         for (id, frame) in current {
             let panel = FloatingPanel(contentRect: frame, level: FloatingPanel.selectionLevel, ignoresMouseEvents: true)
-            let model = OverlayModel(name: names[id] ?? "")
+            let model = OverlayModel(name: names[id] ?? "", reduceMotion: reduceMotion)
             let view = OverlayView(frame: NSRect(origin: .zero, size: frame.size))
             view.wantsLayer = true
             let content = PassthroughHostingView(rootView: SelectionHighlight(model: model))
@@ -98,6 +104,10 @@ final class SelectionOverlay: NSObject, NSWindowDelegate {
             panel.delegate = self
             panel.onCancel = { [weak self] in self?.endedIfChoosing() }
             panel.onConfirm = { [weak self] in self?.endedIfChoosing() }
+            panel.onClose = { [weak self] in
+                guard let self, isChoosing else { return }
+                closed()
+            }
             screens[id] = Screen(panel: panel, view: view, model: model)
         }
     }
@@ -108,7 +118,7 @@ final class SelectionOverlay: NSObject, NSWindowDelegate {
 
     private func setHighlighted(_ highlighted: Bool, on screen: Screen) {
         guard screen.model.isHighlighted != highlighted else { return }
-        withAnimation(.spring(response: Motion.selector.response, dampingFraction: Motion.selector.damping)) {
+        withAnimation(.island(Motion.selector, reduceMotion: reduceMotion)) {
             screen.model.isHighlighted = highlighted
         }
     }
@@ -132,9 +142,11 @@ final class SelectionOverlay: NSObject, NSWindowDelegate {
 private final class OverlayModel {
     var isHighlighted = false
     var name: String
+    var reduceMotion: Bool
 
-    init(name: String) {
+    init(name: String, reduceMotion: Bool) {
         self.name = name
+        self.reduceMotion = reduceMotion
     }
 }
 
@@ -156,7 +168,7 @@ private struct SelectionHighlight: View {
                     .padding(.vertical, 7)
                     .background(Capsule().fill(Color(nsColor: .systemBlue).opacity(0.92)))
                     .padding(.bottom, 36)
-                    .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                    .transition(model.reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94)))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

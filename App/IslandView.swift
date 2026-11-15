@@ -40,11 +40,15 @@ struct IslandView: View {
 
     var body: some View {
         let outline = model.outline
+        // The window's size, whatever the content's (`minWidth`/`minHeight` 0: without them a frame takes the
+        // size of a larger child, and the hosting view centers it): the surface and the cut follow the
+        // window, and the content stays pinned to its top.
         IslandContent(model: model)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
             .islandGlass(
                 IslandOutline(outline), black: isBlack, topBand: model.notchBand, reduceTransparency: model.reduceTransparency)
             .environment(\.colorScheme, .dark)
+            .environment(\.islandReduceMotion, model.reduceMotion)
     }
 
     /// At rest, and peeking, under the notch the island is all black, like the notch.
@@ -69,7 +73,8 @@ private struct IslandContent: View {
                 .id(Self.key(model.state))
                 .transition(model.reduceMotion ? .islandFade : .islandContent)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        // Each state's content keeps its own size, centered and from the top of the window, which cuts it.
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
     }
 
     /// Which content a state shows: a new key is a new content, with its transition.
@@ -160,20 +165,6 @@ private struct ChoosingRow: View {
         .foregroundStyle(.white)
         .lineLimit(1)
         .fixedSize()
-    }
-}
-
-/// A shortcut or key, as a small light cap.
-struct KeyCap: View {
-    let text: String
-
-    var body: some View {
-        Text(verbatim: text)
-            .font(.system(size: 10.5))
-            .opacity(0.6)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color.white.opacity(0.12)))
     }
 }
 

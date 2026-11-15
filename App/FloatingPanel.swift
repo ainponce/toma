@@ -22,6 +22,8 @@ final class FloatingPanel: NSPanel {
     var onCancel: (() -> Void)?
     /// Return or Enter.
     var onConfirm: (() -> Void)?
+    /// ⌘W.
+    var onClose: (() -> Void)?
     /// The key press Esc was last handled for: it can arrive both as a key and as `cancelOperation`.
     private var cancelledEvent: TimeInterval?
 
@@ -56,11 +58,30 @@ final class FloatingPanel: NSPanel {
         cancel()
     }
 
+    /// What reaches the panel after its views: Esc, Return and Tab (the key view loop of Full Keyboard
+    /// Access). Any other key is dropped here, so it does not beep.
     override func keyDown(with event: NSEvent) {
         switch event.keyCode {
         case 53: cancel()  // Esc
         case 36, 76: onConfirm?()  // Return, Enter
-        default: super.keyDown(with: event)
+        case 48: super.keyDown(with: event)  // Tab
+        default: break
+        }
+    }
+
+    /// While the panel is key the keyboard is the panel's, even with another app in front: ⌘W closes what it
+    /// shows, and ⌘Q never quits Toma by surprise. Other shortcuts go to the panel's views as usual.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+        guard isKeyWindow, modifiers == .command else { return super.performKeyEquivalent(with: event) }
+        switch event.charactersIgnoringModifiers?.lowercased() {
+        case "w":
+            onClose?()
+            return true
+        case "q":
+            return true
+        default:
+            return super.performKeyEquivalent(with: event)
         }
     }
 
@@ -112,19 +133,4 @@ class TrackingView: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
     override func mouseEntered(with event: NSEvent) { onEnter?() }
     override func mouseExited(with event: NSEvent) { onExit?() }
-}
-
-extension Duration {
-    /// For AppKit and SwiftUI animations.
-    var timeInterval: TimeInterval {
-        let (seconds, attoseconds) = components
-        return Double(seconds) + Double(attoseconds) / 1e18
-    }
-}
-
-extension NSScreen {
-    /// Its `CGDirectDisplayID`.
-    var displayID: UInt32? {
-        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-    }
 }

@@ -112,4 +112,12 @@ public struct PointerPresence: Equatable, Sendable {
         guard inside.remove(region) != nil else { return nil }
         return inside.isEmpty ? .pointerExited : nil
     }
+
+    /// The island now covers `region` (the zone of the notch it arrived at, whose panel leaves the screen and
+    /// so never says the pointer left): a pointer over it is over the island. Never an event: the pointer
+    /// is as inside as it was.
+    public mutating func islandCovers(_ region: Region) {
+        guard inside.remove(region) != nil else { return }
+        inside.insert(.island)
+    }
 }

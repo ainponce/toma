@@ -21,13 +21,6 @@ struct DisplayChoice: Identifiable {
     }
 }
 
-/// A connected microphone, as the panel lists it.
-struct Microphone: Identifiable {
-    /// `AVCaptureDevice.uniqueID`.
-    let id: String
-    let name: String
-}
-
 /// What the open panel chooses: what to record and the quick settings. It starts from what was saved,
 /// and Record saves it.
 @MainActor @Observable
@@ -35,7 +28,6 @@ final class OpenPanelModel {
     var selection: CaptureSelection
     var quick: QuickSettings
     private(set) var displays: [DisplayChoice]
-    private(set) var microphones: [Microphone]
     /// The settings card over the columns.
     var showsSettings = false
 
@@ -43,13 +35,17 @@ final class OpenPanelModel {
     @ObservationIgnored var highlight: (UInt32?) -> Void = { _ in }
     @ObservationIgnored private let recording: RecordingController
     @ObservationIgnored private let store: SettingsStore
+    @ObservationIgnored private let microphoneList: MicrophoneList
 
     /// The saved selection if its displays are still connected; otherwise the display the island is on.
-    init(recording: RecordingController, store: SettingsStore, displays: [DisplayChoice], islandDisplayID: UInt32) {
+    init(
+        recording: RecordingController, store: SettingsStore, microphones: MicrophoneList, displays: [DisplayChoice],
+        islandDisplayID: UInt32
+    ) {
         self.recording = recording
         self.store = store
+        microphoneList = microphones
         self.displays = displays
-        microphones = DeviceLists.microphones().map { Microphone(id: $0.uniqueID, name: $0.name) }
         let saved = store.settings
         quick = saved.quick
         let connected = Set(displays.map(\.id))
@@ -64,6 +60,9 @@ final class OpenPanelModel {
     func update(displays: [DisplayChoice]) {
         self.displays = displays
     }
+
+    /// The connected microphones, kept up to date by `MicrophoneList`.
+    var microphones: [Microphone] { microphoneList.devices }
 
     /// Why Record is disabled, if it is: what keeps the selection from being recorded, or a take already
     /// in progress.
@@ -125,6 +124,8 @@ struct IslandOpenPanel: View {
     /// Room for the columns: 700 wide, less the margins and the gaps, in the prototype's proportions.
     private static let columnWidths: (Double, Double, Double) = (221, 211.5, 211.5)
 
+    @Environment(\.islandReduceMotion) private var reduceMotion
+
     var body: some View {
         VStack(spacing: 12) {
             header
@@ -134,6 +135,8 @@ struct IslandOpenPanel: View {
                 Column(width: Self.columnWidths.2) { audioAndScript }
             }
             .frame(maxHeight: .infinity)
+            // Over the columns only: ✕ above and Settings and Record below take one click with the card open.
+            .overlay(alignment: .bottomLeading) { settingsCard }
             footer
         }
         .padding(.top, topInset + 12)
@@ -141,21 +144,22 @@ struct IslandOpenPanel: View {
         .padding(.bottom, 16)
         .foregroundStyle(.white)
         .font(.system(size: 13))
-        .overlay(alignment: .bottomLeading) {
-            if panel.showsSettings {
-                ZStack(alignment: .bottomLeading) {
-                    // A click anywhere else in the panel closes the card.
-                    Color.black.opacity(0.001)
-                        .contentShape(Rectangle())
-                        .onTapGesture { panel.showsSettings = false }
-                    SettingsCard(panel: panel)
-                        .padding(.leading, 18)
-                        .padding(.bottom, 58)
-                }
-                .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
+        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: panel.showsSettings)
+    }
+
+    /// The settings card, just above the Settings button; a click on the columns around it closes it, and
+    /// so does Esc (`IslandPanel`).
+    @ViewBuilder
+    private var settingsCard: some View {
+        if panel.showsSettings {
+            ZStack(alignment: .bottomLeading) {
+                Color.black.opacity(0.001)
+                    .contentShape(Rectangle())
+                    .onTapGesture { panel.showsSettings = false }
+                SettingsCard(panel: panel)
             }
+            .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.96, anchor: .bottomLeading)))
         }
-        .animation(.spring(response: Motion.selector.response, dampingFraction: Motion.selector.damping), value: panel.showsSettings)
     }
 
     // MARK: - Header
@@ -512,6 +516,7 @@ private struct DisplayRow: View {
     let choose: () -> Void
     let hovering: (Bool) -> Void
     @State private var isHovered = false
+    @Environment(\.islandReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 8) {
@@ -524,7 +529,9 @@ private struct DisplayRow: View {
                 .font(.system(size: 9, weight: .bold))
                 .frame(width: 18, height: 18)
                 .background(Circle().fill(Color(nsColor: .systemBlue)))
-                .scaleEffect(isChosen ? 1 : 0.001)
+                // It grows in; with "Reduce motion" it fades in.
+                .scaleEffect(reduceMotion || isChosen ? 1 : 0.001)
+                .opacity(reduceMotion && !isChosen ? 0 : 1)
         }
         .padding(.horizontal, 9)
         .padding(.vertical, 6)
@@ -541,121 +548,7 @@ private struct DisplayRow: View {
         .onDisappear {
             if isHovered { hovering(false) }
         }
-        .animation(.spring(response: Motion.selector.response, dampingFraction: Motion.selector.damping), value: isChosen)
-    }
-}
-
-// MARK: - Controls
-
-/// A segmented control with a sliding glass indicator (the selector spring).
-struct GlassSegmented<Value: Hashable>: View {
-    struct Item {
-        let value: Value
-        let title: Text
-        var icon: String?
-        /// Drawn disabled, with this help.
-        var disabledHelp: String?
-    }
-
-    let items: [Item]
-    @Binding var selection: Value
-    var compact = false
-    @Namespace private var namespace
-
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(items.indices, id: \.self) { index in
-                let item = items[index]
-                if let help = item.disabledHelp {
-                    segment(item).disabledWithHelp(help)
-                } else {
-                    segment(item)
-                }
-            }
-        }
-        .padding(3)
-        .background {
-            Capsule().fill(Color.white.opacity(0.07)).overlay(Capsule().stroke(Color.white.opacity(0.11)))
-        }
-        .animation(.spring(response: Motion.selector.response, dampingFraction: Motion.selector.damping), value: selection)
-    }
-
-    private func segment(_ item: Item) -> some View {
-        let isOn = selection == item.value
-        return Button { selection = item.value } label: {
-            HStack(spacing: 6) {
-                if let icon = item.icon { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
-                item.title
-            }
-            .font(.system(size: compact ? 12 : 13))
-            .lineLimit(1)
-            .padding(.horizontal, compact ? 9 : 12)
-            .padding(.vertical, compact ? 3 : 5)
-            .opacity(isOn ? 1 : 0.7)
-            .background {
-                if isOn {
-                    Capsule()
-                        .fill(Color.white.opacity(0.24))
-                        .matchedGeometryEffect(id: "indicator", in: namespace)
-                }
-            }
-            .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-    }
-}
-
-/// The island's glass buttons.
-struct GlassButtonStyle: ButtonStyle {
-    enum Outline { case capsule, circle }
-
-    var shape = Outline.capsule
-    var compact = false
-    var isOn = false
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: compact ? 12 : 13))
-            .lineLimit(1)
-            .padding(.horizontal, shape == .circle ? 0 : (compact ? 10 : 13))
-            .padding(.vertical, shape == .circle ? 0 : (compact ? 4 : 6))
-            .background {
-                let fill = Color.white.opacity(isOn ? 0.26 : (configuration.isPressed ? 0.19 : 0.10))
-                switch shape {
-                case .capsule: Capsule().fill(fill).overlay(Capsule().stroke(Color.white.opacity(0.15)))
-                case .circle: Circle().fill(fill).overlay(Circle().stroke(Color.white.opacity(0.15)))
-                }
-            }
-            .contentShape(Rectangle())
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
-            .opacity(isEnabled ? 1 : 0.32)
-            .animation(.spring(response: Motion.selector.response, dampingFraction: Motion.selector.damping), value: configuration.isPressed)
-    }
-}
-
-/// Record: red, the one prominent button.
-private struct RecordButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
-
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .padding(.leading, 14)
-            .padding(.trailing, 18)
-            .padding(.vertical, 8)
-            .background {
-                Capsule()
-                    .fill(isEnabled
-                        ? AnyShapeStyle(LinearGradient(
-                            colors: [Color(red: 1, green: 0.35, blue: 0.31), Color(red: 0.9, green: 0.21, blue: 0.17)],
-                            startPoint: .top, endPoint: .bottom))
-                        : AnyShapeStyle(Color(red: 0.36, green: 0.19, blue: 0.18)))
-                    .overlay(Capsule().stroke(Color.white.opacity(0.28)))
-            }
-            .foregroundStyle(.white.opacity(isEnabled ? 1 : 0.5))
-            .contentShape(Capsule())
-            .scaleEffect(configuration.isPressed ? 0.95 : 1)
-            .animation(.spring(response: Motion.selector.response, dampingFraction: Motion.selector.damping), value: configuration.isPressed)
+        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: isChosen)
     }
 }
 

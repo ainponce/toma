@@ -42,6 +42,7 @@ private struct IslandGlass: ViewModifier {
     let topBand: Double
     let reduceTransparency: Bool
     @Namespace private var namespace
+    @Environment(\.islandReduceMotion) private var reduceMotion
 
     @ViewBuilder
     func body(content: Content) -> some View {
@@ -79,7 +80,8 @@ private struct IslandGlass: ViewModifier {
             }
             Color.black.opacity(black ? 1 : 0)
         }
-        .animation(.easeInOut(duration: 0.32), value: black)
+        // The prototype's fade between black and glass; the design's 200 ms one with "Reduce motion".
+        .animation(.easeInOut(duration: reduceMotion ? Motion.reducedMotionFade.timeInterval : 0.32), value: black)
     }
 
     private var usesLiquidGlass: Bool {

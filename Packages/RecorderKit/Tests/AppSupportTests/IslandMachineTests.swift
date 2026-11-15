@@ -80,4 +80,23 @@ import Testing
         #expect(presence.entered(.zone(2)) == nil)
         #expect(presence.exited(.zone(2)) == .pointerExited)
     }
+
+    @Test func aZoneTheIslandCoversIsTheIsland() {
+        // The island arrives at a notch whose zone has the pointer, and that zone's panel leaves the screen:
+        // its exit never comes, and leaving the island is leaving.
+        var presence = PointerPresence()
+        #expect(presence.entered(.zone(7)) == .pointerEntered)
+        presence.islandCovers(.zone(7))
+        #expect(presence.inside == [.island])
+        #expect(presence.exited(.island) == .pointerExited)
+        #expect(presence.entered(.zone(1)) == .pointerEntered)
+
+        // Covering a zone the pointer is not in changes nothing.
+        var outside = PointerPresence()
+        outside.islandCovers(.zone(7))
+        #expect(outside.inside.isEmpty)
+        #expect(outside.entered(.island) == .pointerEntered)
+        outside.islandCovers(.zone(7))
+        #expect(outside.inside == [.island])
+    }
 }
