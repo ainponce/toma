@@ -19,7 +19,7 @@ import Testing
             let settings = RecorderSettings(
                 selection: selection,
                 quick: QuickSettings(framesPerSecondByDisplay: [1: 30, 2: 120], displayScale: .points),
-                countdownSeconds: 5)
+                countdownSeconds: 5, focusShortcutIdentifier: "2D1E36B2-5C9A-4F83-9C67-1A2B3C4D5E6F")
             store.settings = settings
             #expect(store.settings == settings)
             // Another store reads what this one saved.

@@ -1226,6 +1226,214 @@ enum AwaitPoint: CaseIterable {
             #expect(rig.controller.takeSerial == 3)
         }
     }
+
+    // MARK: - Hooks
+
+    @Test func hooksWrapTheCountdownAndTheTake() async throws {
+        let log = TakeLog()
+        let hooks = FakeHooks(log: log)
+        try await withRig(countdown: 3, hooks: hooks) { rig in
+            hooks.controller = rig.controller
+            hooks.sleeps = { rig.sleep.calls.count }
+            rig.sleep.hold(from: 1)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            log.note(rig.controller.phase)
+            for wait in 1...3 {
+                #expect(await eventually { rig.sleep.heldCall == wait })
+                log.note(rig.controller.phase)
+                if wait == 3 {
+                    rig.creation.close()
+                    rig.sleep.releaseAll()
+                } else {
+                    rig.sleep.release()
+                }
+            }
+            #expect(await eventually { rig.creation.arrivals == 1 })
+            log.note(rig.controller.phase)
+            rig.creation.open()
+            #expect(await eventually { rig.controller.phase.isRecordingATake && hooks.calls.count == 2 })
+            log.note(rig.controller.phase)
+            // Before any wait: the notifications are quiet while the countdown runs.
+            #expect(hooks.sleepsAtWillStart == [0])
+            let request = TakeRequest(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(hooks.calls.first == .willStart(request))
+
+            // A restart counts down again and records a new take within the same hooks.
+            try await Task.sleep(for: .milliseconds(300))
+            rig.controller.restartTake()
+            #expect(await eventually {
+                rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake && hooks.calls.count == 3
+            })
+            #expect(rig.sleep.calls.count == 6)
+
+            rig.stopGate.close()
+            let stopping = Task { await rig.controller.stop(openingEditor: false) }
+            #expect(await eventually { rig.controller.phase == .stopping })
+            log.note(rig.controller.phase)
+            rig.stopGate.open()
+            await stopping.value
+            log.note(rig.controller.phase)
+            // The restart's own phases are not noted, only what it called: one more `takeDidStart`.
+            #expect(log.entries == [
+                .countingDown(3), .takeWillStart, .countingDown(2), .countingDown(1), .starting, .recording, .takeDidStart,
+                .takeDidStart, .stopping, .takeDidEnd, .idle,
+            ])
+            #expect(hooks.calls.map(\.name) == ["willStart", "didStart", "didStart", "didEnd"])
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func stopDuringCountdownEndsTheHooks() async throws {
+        let log = TakeLog()
+        let hooks = FakeHooks(log: log)
+        try await withRig(countdown: 3, hooks: hooks) { rig in
+            hooks.controller = rig.controller
+            rig.sleep.hold(from: 2)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            log.note(rig.controller.phase)
+            #expect(await eventually { rig.sleep.heldCall == 2 })
+            log.note(rig.controller.phase)
+            await rig.controller.stop(openingEditor: true)
+            log.note(rig.controller.phase)
+            #expect(log.entries == [.countingDown(3), .takeWillStart, .countingDown(2), .takeDidEnd, .idle])
+            #expect(try rig.packagesOnDisk().isEmpty)
+            #expect(rig.creation.arrivals == 0 && rig.confirmations == [.countdownCancelled])
+
+            // The countdown of a restart.
+            rig.sleep.releaseAll()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            try await Task.sleep(for: .milliseconds(300))
+            rig.sleep.hold(from: rig.sleep.calls.count + 2)
+            rig.controller.restartTake()
+            #expect(await eventually { rig.sleep.heldCall != nil })
+            #expect(rig.controller.phase == .countingDown(remaining: 2))
+            await rig.controller.stop(openingEditor: true)
+            #expect(rig.controller.phase == .idle)
+            #expect(hooks.calls.map(\.name) == ["willStart", "didEnd", "willStart", "didStart", "didEnd"])
+            #expect(hooks.phases.last == .countingDown(remaining: 2))
+            #expect(rig.takes.packages.count == 1 && rig.editorOpenings.isEmpty)
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: [0, 3]) func stopDuringTakeWillStartEndsTheHooks(countdown: Int) async throws {
+        let hooks = FakeHooks(log: TakeLog())
+        hooks.holdsWillStart = true
+        try await withRig(countdown: countdown, hooks: hooks) { rig in
+            hooks.controller = rig.controller
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { hooks.isHoldingWillStart })
+            let stopping = Task { await rig.controller.stop(openingEditor: true) }
+            await settle()
+            // The stop waits for the hook to return; meanwhile the take is still starting, so another start does
+            // nothing.
+            #expect(rig.controller.phase == (countdown > 0 ? .countingDown(remaining: countdown) : .starting))
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(hooks.calls.map(\.name) == ["willStart"])
+
+            hooks.releaseWillStart()
+            await stopping.value
+            #expect(hooks.calls.map(\.name) == ["willStart", "didEnd"])
+            #expect(rig.controller.phase == .idle && rig.controller.currentRequest == nil)
+            let packages = try rig.packagesOnDisk()
+            #expect(packages.isEmpty && rig.creation.arrivals == 0 && rig.takes.requests.isEmpty)
+            #expect(rig.sleep.calls.isEmpty)  // the countdown never went on
+            #expect(rig.controller.notices.isEmpty)
+            #expect(rig.confirmations == (countdown > 0 ? [.countdownCancelled] : []))
+            #expect(rig.editorOpenings.isEmpty && rig.startFailures.isEmpty && rig.onboardingOpenings == 0)
+        }
+    }
+
+    @Test(arguments: [false, true]) func failedStartEndsTheHooks(afterARetry: Bool) async throws {
+        let hooks = FakeHooks(log: TakeLog())
+        try await withRig(hooks: hooks) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            if afterARetry {
+                // The camera fails, and then, without it, the microphone: there is only one retry.
+                rig.takes.factory.cameraFailures = 99
+                rig.takes.factory.microphoneFailures = 99
+                selection.camera = .systemDefault
+            } else {
+                rig.takes.factory.displayFailures = 99
+            }
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { !rig.startFailures.isEmpty })
+            #expect(rig.takes.requests.count == (afterARetry ? 2 : 1))
+            #expect(hooks.calls.map(\.name) == ["willStart", "didEnd"])
+            #expect(rig.controller.phase == .idle)
+            #expect(rig.termination.began == rig.termination.ended)
+        }
+    }
+
+    @Test func coverWindowsReachTheDisplaySources() async throws {
+        let hooks = FakeHooks(log: TakeLog())
+        hooks.preparation = TakePreparation(includedWindowIDs: [77])
+        try await withRig(hooks: hooks) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.displayIDs = [1, 2]
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.takes.requests.map(\.includedWindowIDs) == [[77]])
+            #expect(rig.controller.currentRequest?.includedWindowIDs == [77])
+            #expect(rig.takes.factory.displayCalls.map(\.id) == [1, 2])
+            #expect(rig.takes.factory.displayCalls.map(\.includedWindowIDs) == [[77], [77]])
+
+            // A restart records with the same windows: its hooks were not called again.
+            try await Task.sleep(for: .milliseconds(300))
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            #expect(rig.takes.requests.map(\.includedWindowIDs) == [[77], [77]])
+            #expect(rig.takes.factory.displayCalls.map(\.id) == [1, 2, 1, 2])
+            #expect(rig.takes.factory.displayCalls.map(\.includedWindowIDs) == [[77], [77], [77], [77]])
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test func takeDidStartGetsTheRecordingTake() async throws {
+        let hooks = FakeHooks(log: TakeLog())
+        try await withRig(hooks: hooks) { rig in
+            hooks.controller = rig.controller
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { hooks.calls.count == 2 })
+            try await Task.sleep(for: .milliseconds(300))
+            rig.controller.restartTake()
+            #expect(await eventually { hooks.calls.count == 3 })
+            await rig.controller.stop(openingEditor: true)
+
+            let started = zip(rig.takes.packages, rig.takes.recordings).map { package, recording in
+                FakeHooks.Call.didStart(
+                    package: package.url, takeID: recording.startedTakeID ?? "none", request: rig.takes.requests[0])
+            }
+            #expect(started.count == 2)
+            #expect(Array(hooks.calls.dropFirst().prefix(2)) == started)
+            #expect(rig.editorOpenings.map(\.take) == [rig.takes.recordings.last?.startedTakeID])
+            // Each once its take recorded.
+            #expect(hooks.phases.map(\.isRecordingATake) == [false, true, true, false])
+        }
+    }
+
+    @Test func failingShortcutDoesNotBlockTheTake() async throws {
+        let suite = "RecordingControllerTests-focus-\(UUID().uuidString)"
+        let focusDefaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
+        defer { focusDefaults.removePersistentDomain(forName: suite) }
+        let runner = FakeShortcuts { _ in throw ShortcutsCLIError.timedOut }
+        let hooks = FocusTakeHooks(focus: FocusGuard(runner: runner, defaults: focusDefaults), shortcut: { "ID" })
+        try await withRig(hooks: hooks) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.focusShortcutFailed])
+            #expect(focusDefaults.string(forKey: FocusGuard.activeKey) == nil)
+            await rig.controller.stop(openingEditor: false)
+
+            // Nothing was turned on, so nothing is turned off.
+            #expect(runner.runs == [ShortcutRun("ID", "on")])
+            let package = try #require(rig.takes.packages.first)
+            #expect(try rig.takesOnDisk(package.url).map(\.status) == [.complete])
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
 }
 
 // MARK: - Rig
@@ -1233,6 +1441,112 @@ enum AwaitPoint: CaseIterable {
 extension RecordingController.Phase {
     fileprivate var isRecordingATake: Bool {
         if case .recording = self { true } else { false }
+    }
+}
+
+extension FakeFactory {
+    /// The display sources made, in order: of which display, keeping which windows of this app.
+    fileprivate var displayCalls: [(id: UInt32, includedWindowIDs: [UInt32])] {
+        calls.compactMap { call in
+            guard case .display(let id, _, _, _, let included) = call else { return nil }
+            return (id, included)
+        }
+    }
+}
+
+/// What happened around a take, in order: the phases a test notes and the hooks' calls.
+@MainActor private final class TakeLog {
+    enum Entry: Equatable {
+        case countingDown(Int), starting, recording, stopping, idle
+        case takeWillStart, takeDidStart, takeDidEnd
+    }
+
+    private(set) var entries: [Entry] = []
+    private var lastPhase: Entry?
+
+    /// Notes `phase`, unless it is the phase noted last.
+    func note(_ phase: RecordingController.Phase) {
+        let entry: Entry =
+            switch phase {
+            case .idle: .idle
+            case .countingDown(let remaining): .countingDown(remaining)
+            case .starting: .starting
+            case .recording: .recording
+            case .stopping: .stopping
+            }
+        guard entry != lastPhase else { return }
+        lastPhase = entry
+        entries.append(entry)
+    }
+
+    func append(_ entry: Entry) {
+        entries.append(entry)
+    }
+}
+
+/// Take hooks that log each call in `log`, after the controller's phase then, and prepare takes as `preparation` says.
+/// With `holdsWillStart`, `takeWillStart` waits until `releaseWillStart()`.
+@MainActor private final class FakeHooks: TakeHooks {
+    enum Call: Equatable {
+        case willStart(TakeRequest)
+        case didStart(package: URL, takeID: String, request: TakeRequest)
+        case didEnd
+
+        var name: String {
+            switch self {
+            case .willStart: "willStart"
+            case .didStart: "didStart"
+            case .didEnd: "didEnd"
+            }
+        }
+    }
+
+    let log: TakeLog
+    var preparation = TakePreparation()
+    var holdsWillStart = false
+    /// Whose phase the calls note, once the test sets it.
+    weak var controller: RecordingController?
+    private(set) var calls: [Call] = []
+    /// The controller's phase at each call.
+    private(set) var phases: [RecordingController.Phase] = []
+    /// How many countdown waits had begun at each `takeWillStart`, as `sleeps` tells.
+    private(set) var sleepsAtWillStart: [Int] = []
+    var sleeps: () -> Int = { 0 }
+    private var heldWillStart: CheckedContinuation<Void, Never>?
+
+    var isHoldingWillStart: Bool { heldWillStart != nil }
+
+    init(log: TakeLog) {
+        self.log = log
+    }
+
+    func releaseWillStart() {
+        heldWillStart?.resume()
+        heldWillStart = nil
+    }
+
+    func takeWillStart(_ request: TakeRequest) async -> TakePreparation {
+        record(.willStart(request), as: .takeWillStart)
+        sleepsAtWillStart.append(sleeps())
+        if holdsWillStart { await withCheckedContinuation { heldWillStart = $0 } }
+        return preparation
+    }
+
+    func takeDidStart(package: ProjectPackage, takeID: String, request: TakeRequest) async {
+        record(.didStart(package: package.url, takeID: takeID, request: request), as: .takeDidStart)
+    }
+
+    func takeDidEnd() async {
+        record(.didEnd, as: .takeDidEnd)
+    }
+
+    private func record(_ call: Call, as entry: TakeLog.Entry) {
+        if let phase = controller?.phase {
+            phases.append(phase)
+            log.note(phase)
+        }
+        calls.append(call)
+        log.append(entry)
     }
 }
 
@@ -1246,12 +1560,13 @@ extension RecordingController.Phase {
 /// The countdown lasts `countdown` seconds (none unless a test is about it), each of them a wait of
 /// `Rig.sleep`, which returns at once unless the test holds it. A stop does `afterStop`.
 /// The camera and system audio start as `camera` and `systemAudio` (allowed unless a test is about it), and the
-/// saved camera style is `cameraStyle`. The takes' coordinators wait `restartBackoff` between restarts, if given.
+/// saved camera style is `cameraStyle`. The takes' coordinators wait `restartBackoff` between restarts, if given. The
+/// controller calls `hooks` around each take, if given.
 @MainActor private func withRig(
     screenRecording: PermissionState = .granted, microphone: PermissionState = .granted, camera: PermissionState = .granted,
     systemAudio: PermissionState = .granted, hasMicrophone: Bool = true, keepingTakes: Bool = true, countdown: Int = 0,
     afterStop: AfterStop = .openEditor, cameraStyle: CameraStyle = .default, restartBackoff: [Duration]? = nil,
-    _ body: (Rig) async throws -> Void
+    hooks: (any TakeHooks)? = nil, _ body: (Rig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "RecordingControllerTests-\(UUID().uuidString)"
@@ -1263,7 +1578,8 @@ extension RecordingController.Phase {
             in: directory, defaults: defaults,
             probe: GatedProbe(screenRecording: screenRecording, microphone: microphone, camera: camera, systemAudio: systemAudio),
             hasMicrophone: hasMicrophone, keepingTakes: keepingTakes,
-            configuration: restartBackoff.map { RecordingConfiguration(restartBackoff: $0) } ?? RecordingConfiguration()))
+            configuration: restartBackoff.map { RecordingConfiguration(restartBackoff: $0) } ?? RecordingConfiguration(),
+            hooks: hooks))
     }
 }
 
@@ -1302,7 +1618,7 @@ extension RecordingController.Phase {
 
     init(
         in directory: URL, defaults: UserDefaults, probe: GatedProbe, hasMicrophone: Bool, keepingTakes: Bool,
-        configuration: RecordingConfiguration
+        configuration: RecordingConfiguration, hooks: (any TakeHooks)?
     ) {
         let folder = directory.appendingPathComponent("Movies/Toma", isDirectory: true)
         let (creation, startGate, stopGate, autoStopGate) = (Gate(), Gate(), Gate(), Gate())
@@ -1330,7 +1646,7 @@ extension RecordingController.Phase {
             termination: termination,
             now: { [now] in now.date },
             sleep: { [sleep] duration in try await sleep.sleep(duration) })
-        controller = RecordingController(probe: probe, environment: environment, defaults: defaults)
+        controller = RecordingController(probe: probe, environment: environment, defaults: defaults, hooks: hooks)
         controller.openEditor = { [weak self] url, take in self?.editorOpenings.append(EditorOpening(package: url, take: take)) }
         controller.showStartFailure = { [weak self] error in self?.startFailures.append(error) }
         controller.onConfirmation = { [weak self] confirmation in self?.confirmations.append(confirmation) }
@@ -1360,7 +1676,8 @@ extension RecordingController.Phase {
 }
 
 /// What `prepareTake` was asked for, and the takes it made: the plan `TakePlanner` makes of the request
-/// with display 1 connected and `factory`'s synthetic sources, recorded by a coordinator behind the rig's gates.
+/// with displays 1 (the main one) and 2 connected and `factory`'s synthetic sources, recorded by a coordinator behind
+/// the rig's gates.
 @MainActor private final class PreparedTakes {
     /// A take `prepare` made, held weakly: whether it has been freed.
     struct MadeTake {
@@ -1372,6 +1689,7 @@ extension RecordingController.Phase {
 
     private static let displays = [
         DisplayInfo(id: 1, frame: Rect(x: 0, y: 0, width: 64, height: 36), scale: 1, isMain: true, maximumFramesPerSecond: 60),
+        DisplayInfo(id: 2, frame: Rect(x: 64, y: 0, width: 64, height: 36), scale: 1, isMain: false, maximumFramesPerSecond: 60),
     ]
 
     let factory = FakeFactory()
@@ -1440,9 +1758,12 @@ private final class GatedTakeRecording: TakeRecording {
     private let continuation: AsyncStream<RecordingWarning>.Continuation
     private let autoStopCount = Atomic(0)
     private let acceptedStyles = Mutex<[CameraStyle]>([])
+    private let startedID = Mutex<String?>(nil)
 
     /// How many times the auto-stop handler has been called.
     var autoStops: Int { autoStopCount.load(ordering: .relaxed) }
+    /// The take ID `start()` returned, once it has.
+    var startedTakeID: String? { startedID.withLock { $0 } }
     /// The camera styles the coordinator accepted, in order.
     var cameraStyles: [CameraStyle] { acceptedStyles.withLock { $0 } }
 
@@ -1491,7 +1812,9 @@ private final class GatedTakeRecording: TakeRecording {
 
     func start() async throws -> String {
         await startGate.pass()
-        return try await coordinator.start()
+        let takeID = try await coordinator.start()
+        startedID.withLock { $0 = takeID }
+        return takeID
     }
 
     func stop() async throws -> TakeRecord {

@@ -22,6 +22,9 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var savedAreas: SavedAreas = .init()
     /// The proportion an area is drawn with: the last one chosen.
     public var aspectLock: AspectLock = .free
+    /// The user's shortcut that turns Do Not Disturb on and off around each take (`FocusGuard`), by its Shortcuts
+    /// identifier (`ShortcutInfo.identifier`, which a rename does not change); `nil`: none.
+    public var focusShortcutIdentifier: String?
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -29,7 +32,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public init(
         selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
         hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
-        cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free
+        cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
+        focusShortcutIdentifier: String? = nil
     ) {
         self.selection = selection
         self.quick = quick
@@ -40,6 +44,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.cameraStyle = cameraStyle
         self.savedAreas = savedAreas
         self.aspectLock = aspectLock
+        self.focusShortcutIdentifier = focusShortcutIdentifier
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -56,6 +61,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         cameraStyle = (try? container.decodeIfPresent(CameraStyle.self, forKey: .cameraStyle)) ?? defaults.cameraStyle
         savedAreas = (try? container.decodeIfPresent(SavedAreas.self, forKey: .savedAreas)) ?? defaults.savedAreas
         aspectLock = (try? container.decodeIfPresent(AspectLock.self, forKey: .aspectLock)) ?? defaults.aspectLock
+        focusShortcutIdentifier =
+            (try? container.decodeIfPresent(String.self, forKey: .focusShortcutIdentifier)) ?? defaults.focusShortcutIdentifier
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

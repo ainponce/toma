@@ -10,7 +10,8 @@ import os
 /// stop has closed the take it is saved (`lastSaved`), and the editor opens on it unless
 /// `RecorderSettings.afterStop` says to stay. Every take is counted down first (`RecorderSettings.countdown`).
 /// While recording, the user can pause the take, mark moments of it, and restart it: the take goes to the
-/// trash and a new one starts.
+/// trash and a new one starts. Its hooks (`TakeHooks`, Do Not Disturb) run from before the countdown until the last
+/// take of a request is closed, restarts included.
 @MainActor @Observable
 public final class RecordingController {
     public enum Phase: Equatable, Sendable {
@@ -134,6 +135,11 @@ public final class RecordingController {
     @ObservationIgnored private let probe: any PermissionProbe
     @ObservationIgnored let environment: TakeEnvironment
     @ObservationIgnored private let defaults: UserDefaults
+    @ObservationIgnored private let hooks: (any TakeHooks)?
+    /// `takeWillStart` was called, and its `takeDidEnd` is still owed (`endHooks()`).
+    @ObservationIgnored private var hooksBegan = false
+    /// The hooks' `takeDidStart` calls, each made once the one before has returned; `takeDidEnd` waits for them.
+    @ObservationIgnored private var startedHooks: Task<Void, Never>?
     @ObservationIgnored var take: Take?
     @ObservationIgnored private var startTask: Task<Void, Never>?
     /// Closes the take: a stop's, or a restart's until the new take starts.
@@ -159,10 +165,14 @@ public final class RecordingController {
     @ObservationIgnored var markersWritten = 0
     private(set) var recordedTime = RecordedTime()
 
-    public init(probe: any PermissionProbe, environment: TakeEnvironment, defaults: UserDefaults = .standard) {
+    public init(
+        probe: any PermissionProbe, environment: TakeEnvironment, defaults: UserDefaults = .standard,
+        hooks: (any TakeHooks)? = nil
+    ) {
         self.probe = probe
         self.environment = environment
         self.defaults = defaults
+        self.hooks = hooks
         lastProjectURL = defaults.string(forKey: Self.lastProjectKey).map { URL(fileURLWithPath: $0, isDirectory: true) }
     }
 
@@ -221,6 +231,7 @@ public final class RecordingController {
 
     /// The notices of the take start as `carried`, which stay whether or not it starts.
     private func start(_ request: TakeRequest, carrying carried: [TakeNotice], countdown: Int, restarting: Bool) async {
+        var request = request
         let wantsMicrophone = request.selection.microphone != .off
         let usesMicrophone = usesMicrophone(request)
         let wantsCamera = request.selection.camera != .off
@@ -230,11 +241,13 @@ public final class RecordingController {
         if !restarting {
             if usesMicrophone { await askIfNeverAsked(.microphone) }
             if wantsCamera { await askIfNeverAsked(.camera) }
+            // Once the permissions are answered, with the countdown on screen and before its first second, so the
+            // notifications are quiet while it runs. A restart keeps what they prepared, as it keeps the permissions.
+            if !startCancelled { await beginHooks(for: &request) }
         }
-        // Task 17a: `takeWillStart` goes here, once the permissions are answered and before the countdown;
-        // a restart skips it, as it skips the permissions.
 
-        // A stop during the countdown cancels this task: the wait in progress ends at once.
+        // A stop during the countdown cancels this task: the wait in progress ends at once. A stop during the hooks
+        // waits for them, and ends the start here.
         do {
             for remaining in stride(from: countdown, to: 0, by: -1) {
                 guard !startCancelled else { throw CancellationError() }
@@ -243,13 +256,17 @@ public final class RecordingController {
                 if remaining > 1 { setPhase(.countingDown(remaining: remaining - 1)) }
             }
         } catch {
-            // Stopped while counting down: nothing was made.
+            // Stopped while counting down: nothing was made, and nothing the hooks said applies.
+            notices = carried
+            await endHooks()
             setPhase(.idle)
             onConfirmation(.countdownCancelled)
             return
         }
         let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request))
         guard preflight.canRecord, !startCancelled else {
+            notices = carried
+            await endHooks()
             setPhase(.idle)
             // Screen recording was turned off meanwhile.
             if !startCancelled { openOnboarding() }
@@ -269,7 +286,6 @@ public final class RecordingController {
             addNotice(.systemAudioNotRequested)
         }
 
-        var request = request
         var retried = false
         while true {
             switch await attempt(request, granted: preflight.granted) {
@@ -278,6 +294,7 @@ public final class RecordingController {
             case .cancelled:
                 // No take was recorded: nothing said about it applies.
                 notices = carried
+                await endHooks()
                 setPhase(.idle)
                 return
             case .failed(let error, let failedOptional):
@@ -293,11 +310,48 @@ public final class RecordingController {
                 }
                 // No take was recorded: the failure says why, and nothing said about the take applies.
                 notices = carried
+                await endHooks()
                 setPhase(.idle)
                 if !startCancelled { showStartFailure(error) }
                 return
             }
         }
+    }
+
+    /// Calls the hooks' `takeWillStart` for `request`, in a task of its own: a stop meanwhile cancels the start, not
+    /// the hooks, which run to their end. From now on their `takeDidEnd` is owed. The take, and its restarts, keep the
+    /// windows they prepared; what they could not do is said.
+    private func beginHooks(for request: inout TakeRequest) async {
+        guard let hooks else { return }
+        hooksBegan = true
+        let asked = request
+        let preparation = await Task { await hooks.takeWillStart(asked) }.value
+        request.includedWindowIDs = preparation.includedWindowIDs
+        currentRequest?.includedWindowIDs = preparation.includedWindowIDs
+        for notice in preparation.notices { addNotice(notice) }
+    }
+
+    /// Tells the hooks that `takeID` of `package` records now, once they have heard of the takes before it.
+    private func hooksDidStart(package: ProjectPackage, takeID: String, request: TakeRequest) {
+        guard let hooks, hooksBegan else { return }
+        let previous = startedHooks
+        startedHooks = Task {
+            await previous?.value
+            await hooks.takeDidStart(package: package, takeID: takeID, request: request)
+        }
+    }
+
+    /// Calls the hooks' `takeDidEnd`, once for their `takeWillStart` and after their `takeDidStart` calls, in a task of
+    /// its own: a cancelled start does not cancel it, so Do Not Disturb is turned off all the same.
+    private func endHooks() async {
+        guard hooksBegan, let hooks else { return }
+        hooksBegan = false
+        let started = startedHooks
+        startedHooks = nil
+        await Task {
+            await started?.value
+            await hooks.takeDidEnd()
+        }.value
     }
 
     private enum AttemptOutcome {
@@ -384,7 +438,7 @@ public final class RecordingController {
 
         Self.logger.notice("Starting a take in \(package.url.path, privacy: .public)")
         do {
-            _ = try await starting.value
+            let takeID = try await starting.value
             // A stop that came while starting has the take now, or has already closed it.
             guard stopTask == nil, take?.recording === recording else { return .handedToStop }
             let since = environment.now()
@@ -395,6 +449,7 @@ public final class RecordingController {
             if let meter = prepared.microphoneMeter { watchForSilence(of: meter, in: recording) }
             // The take refused a style while it started.
             if let style = currentRequest?.cameraStyle, style != request.cameraStyle { sendCameraStyle(style, to: recording) }
+            hooksDidStart(package: package, takeID: takeID, request: request)
             return .started
         } catch {
             Self.logger.error("The take could not start: \(String(describing: error), privacy: .public)")
@@ -416,9 +471,10 @@ public final class RecordingController {
         Task { await stop(outcome) }
     }
 
-    /// Closes the take, if any, and returns once it is closed; a stop already in progress is waited for, and
-    /// so is a start still checking permissions or creating the project, which then gives up. A countdown
-    /// ends at once, without waiting for the second in progress, and nothing is recorded. A restart still
+    /// Closes the take, if any, and returns once it is closed and its hooks have ended (`takeDidEnd`); a stop
+    /// already in progress is waited for, and so is a start still checking permissions, in its hooks'
+    /// `takeWillStart` or creating the project, which then gives up. A countdown ends at once, without waiting
+    /// for the second in progress, and nothing is recorded. A restart still
     /// closing its take ends as this stop: the take is kept and no new one starts. Safe to call at any
     /// time, also while quitting. With `openingEditor` the take is saved and opened; without it (quitting)
     /// it is neither.
@@ -461,7 +517,7 @@ public final class RecordingController {
         let recorded = recordedTime.elapsed(at: environment.now())
         setPhase(.stopping)
         let closed = await closeAndHear(take)
-        finish(take, closed, as: outcome, recorded: recorded)
+        await finish(take, closed, as: outcome, recorded: recorded)
     }
 
     /// Closes the take, hears all its warnings and the answers to the user's requests sent to it (a marker
@@ -488,10 +544,13 @@ public final class RecordingController {
         return closed
     }
 
-    /// Says how closing went, lets the take go and goes back to idle. A take that recorded something is
-    /// the last project and, unless closed to quit, saved for the island with the time it had `recorded`;
-    /// its editor opens if `outcome` says so.
-    func finish(_ take: Take, _ closed: ClosedTake, as outcome: StopOutcome, recorded: Duration) {
+    /// Ends the hooks, says how closing went, lets the take go and goes back to idle. A take that recorded
+    /// something is the last project and, unless closed to quit, saved for the island with the time it had
+    /// `recorded`; its editor opens if `outcome` says so.
+    func finish(_ take: Take, _ closed: ClosedTake, as outcome: StopOutcome, recorded: Duration) async {
+        // Before the phase leaves `.stopping`: a quit waits for Do Not Disturb to go off, and no new take starts
+        // while it does.
+        await endHooks()
         if let error = closed.error {
             lastCloseError = error
             addNotice(.closedWithError)

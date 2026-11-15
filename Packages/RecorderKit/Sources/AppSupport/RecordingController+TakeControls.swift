@@ -106,7 +106,7 @@ extension RecordingController {
             // Kept, as a stop would: the stops that came waited for this one, so the take is saved here, once,
             // as they asked (the disk's own stop follows the settings), or as the disk's stop when none came.
             // Quitting saves nothing and opens no editor, also when the disk stopped the take.
-            finish(take, closed, as: stopDuringRestart ?? savingAsTheSettingsSay(), recorded: recorded)
+            await finish(take, closed, as: stopDuringRestart ?? savingAsTheSettingsSay(), recorded: recorded)
             return
         }
         // From here to the new start nothing suspends, so a stop either came before or finds the new start.

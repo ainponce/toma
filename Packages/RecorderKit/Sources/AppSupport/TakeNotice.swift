@@ -45,4 +45,7 @@ public enum TakeNotice: Equatable, Sendable {
     /// The microphone has heard nothing in the first seconds recorded (`SilenceWatch`); it goes away once
     /// it hears something.
     case microphoneSilent
+    /// The shortcut that turns Do Not Disturb on failed or did not end in time (`FocusGuard`): notifications may sound
+    /// during the take. They never appear in the video.
+    case focusShortcutFailed
 }

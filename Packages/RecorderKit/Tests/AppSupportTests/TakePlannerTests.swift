@@ -262,6 +262,8 @@ final class FakeFactory: CaptureSourceFactory {
         case input(windowTrack: WindowTrack?, displayIDs: [UInt32])
     }
 
+    /// How many times each new display fails to start.
+    var displayFailures = 0
     /// How many times each new microphone fails to start.
     var microphoneFailures = 0
     /// How many times each new camera fails to start.
@@ -275,7 +277,9 @@ final class FakeFactory: CaptureSourceFactory {
 
     func display(id: UInt32, framesPerSecond: Int, scale: CaptureScale, area: Rect?, includedWindowIDs: [UInt32]) -> any CaptureSource {
         calls.append(.display(id: id, framesPerSecond: framesPerSecond, scale: scale, area: area, includedWindowIDs: includedWindowIDs))
-        return SyntheticVideoSource(trackID: "display-\(id)", width: 64, height: 36, framesPerSecond: framesPerSecond)
+        let display = SyntheticVideoSource(trackID: "display-\(id)", width: 64, height: 36, framesPerSecond: framesPerSecond)
+        display.failOnStart = displayFailures
+        return display
     }
 
     /// The synthetic window always says its ID is 4242.
