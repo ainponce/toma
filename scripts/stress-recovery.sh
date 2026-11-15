@@ -22,8 +22,12 @@
 #
 # For checking the gate itself, the timings can be shortened (DURATION, KILL_AT, MIN_DURATION, and RSS_AT,
 # seconds separated by spaces: the first is compared with the last) and RECORDER_DEV can name a recorder-dev
-# to run instead of building one.
+# to run instead of building one. STRESS_FLAGS (empty by default) is passed to `recorder-dev record` as more
+# options, for example STRESS_FLAGS="--display 1 --display 2" or STRESS_FLAGS="--window 1234" (IDs from
+# `recorder-dev list-sources`).
 set -euo pipefail
+
+STRESS_FLAGS=${STRESS_FLAGS:-}
 
 DURATION=${DURATION:-3600}
 KILL_AT=${KILL_AT:-1800}
@@ -70,7 +74,8 @@ trap cleanup EXIT
 caffeinate -ims -t $(( DURATION + 100 )) &
 CAFFEINATE_PID=$!
 
-"$BIN" record "$DIR" --duration "$DURATION" > "$LOGS/out" 2> "$LOGS/err" &
+# shellcheck disable=SC2086  # STRESS_FLAGS holds zero or more options
+"$BIN" record "$DIR" --duration "$DURATION" $STRESS_FLAGS > "$LOGS/out" 2> "$LOGS/err" &
 PID=$!
 until [ -s "$LOGS/out" ]; do
   if ! kill -0 "$PID" 2>/dev/null; then

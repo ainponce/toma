@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import AppKit
 import ArgumentParser
 import CoreGraphics
 import Darwin
@@ -114,22 +115,33 @@ struct SynthRecord: AsyncParsableCommand {
 
 struct Record: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Records the main display, a camera (--camera), the default microphone and system audio (--system-audio).",
+        abstract: "Records displays (the main one by default) or a window, a camera (--camera), the default microphone and system audio (--system-audio).",
         discussion: """
             Needs Screen Recording and Microphone permission for the terminal that runs it, Camera permission \
             with --camera, and System Audio Recording with --system-audio. Creates \
             <directory>/record-<date>-<time>.toma and prints its absolute path as the first line once recording \
             has started, like synth-record. Sleep and screen lock pause the take, as in the app.
 
-            The tracks, in this order: the main display at 60 fps, camera at 30 fps (--camera), at 1080p unless \
-            --camera-preset says otherwise, mic, and system-audio (--system-audio). The camera records in the \
-            smallest of its formats that covers the preset at 30 fps, or its largest at 30 fps if none does; the \
-            macOS log (subsystem dev.toma.Toma, category CameraSessionHost) says when the session changed that \
-            format or rate and it was set again. --camera default records the system's preferred camera; \
-            --camera <uniqueID> (from list-sources) that camera, or the system's preferred one while it is not \
-            connected. A camera that is disconnected, taken by another app or suspended (a closed lid) is \
-            restarted as in the app, on the system's preferred camera while it is gone: "warning:" lines say so, \
-            and the take's events.jsonl logs a deviceChanged event when another camera takes over.
+            The tracks, in this order: each --display in the order given (the main display when there is neither \
+            --display nor --window), the --window, both at --fps (60 by default), camera at 30 fps (--camera), at \
+            1080p unless --camera-preset says otherwise, mic, and system-audio (--system-audio). The display and \
+            window IDs are the ones list-sources prints. --area x,y,w,h (global points) marks the area of an Area \
+            take on its one --display: the track still records the whole display, and the manifest keeps the area. \
+            --points records one pixel per point instead of the display's own pixels (half of them on Retina). \
+            Notification Center (the notifications and the desktop widgets) is never recorded, nor is this tool. \
+            A display that changes resolution, or a window that is resized, goes on in a new segment at its new size.
+
+            With --window, a "visibility: <visible|otherSpace|hidden>" line is printed each time the window's \
+            visibility changes: otherSpace while it is in another Space and still recorded, hidden once no frame \
+            has come for a second while it is not on screen (minimized, or still in another Space).
+
+            The camera records in the smallest of its formats that covers the preset at 30 fps, or its largest at \
+            30 fps if none does; the macOS log (subsystem dev.toma.Toma, category CameraSessionHost) says when the \
+            session changed that format or rate and it was set again. --camera default records the system's \
+            preferred camera; --camera <uniqueID> (from list-sources) that camera, or the system's preferred one \
+            while it is not connected. A camera that is disconnected, taken by another app or suspended (a closed \
+            lid) is restarted as in the app, on the system's preferred camera while it is gone: "warning:" lines \
+            say so, and the take's events.jsonl logs a deviceChanged event when another camera takes over.
 
             --system-audio all records every app but this tool and the notification and alert sounds; \
             --system-audio <bundleID,…> (from list-sources) only those apps and their helpers, silence while \
@@ -138,7 +150,8 @@ struct Record: AsyncParsableCommand {
             the track is silent.
 
             The cursor is sampled at 120 Hz, but clicks may be missing: a command-line tool has no \
-            NSApplication, and the mouse-button monitors may not deliver there.
+            NSApplication, and the mouse-button monitors may not deliver there. The displays' geometry is logged \
+            when it changes, and the window's at 10 Hz.
             """
     )
 
@@ -147,6 +160,21 @@ struct Record: AsyncParsableCommand {
 
     @Option(help: "Seconds to record.")
     var duration: Double
+
+    @Option(name: .customLong("display"), help: "A display to record, by its ID from list-sources. Repeat it for more displays.")
+    var displays: [UInt32] = []
+
+    @Option(help: "A window to record, by its ID from list-sources.")
+    var window: UInt32?
+
+    @Option(help: "The area of an Area take, x,y,w,h in global points; needs one --display.")
+    var area: String?
+
+    @Option(help: "Frames per second of the displays and the window.")
+    var fps = 60
+
+    @Flag(help: "Record one pixel per point instead of the display's own pixels.")
+    var points = false
 
     @Option(help: "Also record a camera: default, or a camera's uniqueID from list-sources.")
     var camera: String?
@@ -159,6 +187,12 @@ struct Record: AsyncParsableCommand {
 
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
+        guard fps > 0 else { throw ValidationError("--fps must be positive.") }
+        guard Set(displays).count == displays.count else { throw ValidationError("Each --display can be given once.") }
+        if let area {
+            guard Self.rect(area) != nil else { throw ValidationError("--area takes x,y,w,h in points, with w and h positive.") }
+            guard displays.count == 1 else { throw ValidationError("--area needs exactly one --display.") }
+        }
         if let camera, camera.isEmpty { throw ValidationError("--camera takes default or a camera's uniqueID.") }
         if cameraPreset != nil, camera == nil { throw ValidationError("--camera-preset needs --camera.") }
         if let systemAudio, Self.scope(systemAudio) == nil {
@@ -173,10 +207,39 @@ struct Record: AsyncParsableCommand {
         return bundleIDs.isEmpty ? nil : .applications(bundleIDs)
     }
 
+    /// `x,y,w,h`, with `w` and `h` positive; `nil` otherwise.
+    static func rect(_ argument: String) -> Rect? {
+        let values = argument.split(separator: ",", omittingEmptySubsequences: false)
+            .compactMap { Double($0.trimmingCharacters(in: .whitespaces)) }
+        guard values.count == 4, values.allSatisfy(\.isFinite), values[2] > 0, values[3] > 0 else { return nil }
+        return Rect(x: values[0], y: values[1], width: values[2], height: values[3])
+    }
+
     func run() async throws {
-        // On the main thread the display gets its user-visible name.
-        let display = await MainActor.run { DisplayCaptureSource(displayID: CGMainDisplayID(), framesPerSecond: 60) }
-        var sources: [any CaptureSource] = [display]
+        let scale: CaptureScale = points ? .points : .native
+        let displayIDs = displays.isEmpty && window == nil ? [CGMainDisplayID()] : displays
+        let captureArea = area.flatMap(Self.rect)
+        let fps = fps
+        // On the main thread a display gets its user-visible name.
+        var sources: [any CaptureSource] = await MainActor.run {
+            displayIDs.map { DisplayCaptureSource(displayID: $0, framesPerSecond: fps, scale: scale, captureArea: captureArea) }
+        }
+        var input: [any InputRecorder] = [CursorRecorder()]
+        if !displayIDs.isEmpty {
+            // The scale the tracks record, as their first displayGeometry says.
+            input.append(DisplayGeometryRecorder(displayIDs: displayIDs, query: { displayID in
+                DisplayGeometryRecorder.liveQuery(displayID).flatMap { geometry in
+                    DisplayCaptureSource.recordedPixelScale(displayScale: geometry.scale, scale: scale).map { (geometry.frame, $0) }
+                }
+            }))
+        }
+        if let window {
+            let source = WindowCaptureSource(windowID: window, framesPerSecond: fps, scale: scale)
+            sources.append(source)
+            input.append(WindowGeometryRecorder(
+                trackID: source.trackID, windowID: window, lastCompleteFrame: { source.lastCompleteFrameTime },
+                onVisibilityChange: { print("visibility: \($0.rawValue)") }))
+        }
         if let camera {
             sources.append(CameraCaptureSource(
                 host: CameraSessionHost(), preferredDeviceUniqueID: camera == "default" ? nil : camera,
@@ -188,7 +251,7 @@ struct Record: AsyncParsableCommand {
         }
         try await recordTake(
             in: directory, prefix: "record", duration: duration,
-            sources: sources, input: CursorRecorder(),
+            sources: sources, input: CompositeInputRecorder(input),
             systemActivity: SystemActivityMonitor.live())
     }
 }
@@ -196,16 +259,18 @@ struct Record: AsyncParsableCommand {
 struct ListSources: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "list-sources",
-        abstract: "Lists the displays, cameras, microphones and audio processes that can be recorded, with their IDs.",
+        abstract: "Lists the displays, windows, cameras, microphones and audio processes that can be recorded, with their IDs.",
         discussion: """
             One line per source: "display <CGDirectDisplayID>: <name>, <width>×<height> pt at (<x>, <y>), \
-            <scale>x", "camera <uniqueID>: <name>" and "microphone <uniqueID>: <name>", followed by "main", \
-            "asleep" (it records nothing until it wakes), "system preferred", "Continuity Camera" or \
-            "default" where they apply. Then one line per process connected to the audio system: "audio \
-            process <pid>: bundle <bundle ID or none>, path <executable or unknown>", followed by "playing" \
-            while it plays audio and "excluded" when system audio never records it (notification and alert \
-            sounds). The camera uniqueIDs and the bundle IDs are what record takes (--camera, --system-audio). \
-            Needs no permission.
+            <scale>x", "window <CGWindowID>: <bundle ID or app name>, \"<title>\", <width>×<height> pt at \
+            (<x>, <y>)" for each window on screen in the normal layer (titles need the Screen Recording \
+            permission; without it they are empty), "camera <uniqueID>: <name>" and "microphone <uniqueID>: \
+            <name>", followed by "main", "asleep" (it records nothing until it wakes), "system preferred", \
+            "Continuity Camera" or "default" where they apply. Then one line per process connected to the audio \
+            system: "audio process <pid>: bundle <bundle ID or none>, path <executable or unknown>", followed by \
+            "playing" while it plays audio and "excluded" when system audio never records it (notification and \
+            alert sounds). The display and window IDs, the camera uniqueIDs and the bundle IDs are what record \
+            takes (--display, --window, --camera, --system-audio). Needs no permission.
             """
     )
 
@@ -223,6 +288,7 @@ struct ListSources: AsyncParsableCommand {
             if CGDisplayIsAsleep(displayID) != 0 { line += ", asleep" }
             print(line)
         }
+        for line in windowLines() { print(line) }
         for camera in CameraCatalog.devices() {
             var line = "camera \(camera.uniqueID): \(camera.name)"
             if camera.isSystemPreferred { line += ", system preferred" }
@@ -247,6 +313,24 @@ struct ListSources: AsyncParsableCommand {
         }
     }
 
+    /// The windows on screen in the normal layer (0), front to back, as `CGWindowListCopyWindowInfo` lists them.
+    private func windowLines() -> [String] {
+        let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+            as? [[CFString: Any]] ?? []
+        return windows.compactMap { window in
+            guard window[kCGWindowLayer] as? Int == 0, let id = (window[kCGWindowNumber] as? NSNumber)?.uint32Value,
+                  let boundsDictionary = window[kCGWindowBounds] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDictionary as CFDictionary)
+            else { return nil }
+            let pid = (window[kCGWindowOwnerPID] as? NSNumber)?.int32Value
+            let app = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
+                ?? window[kCGWindowOwnerName] as? String ?? "unknown"
+            let title = window[kCGWindowName] as? String ?? ""
+            return "window \(id): \(app), \"\(title)\", \(format(bounds.width))×\(format(bounds.height)) pt at "
+                + "(\(format(bounds.minX)), \(format(bounds.minY)))"
+        }
+    }
+
     /// Asleep ones included: the active list leaves them out, and with the only display asleep it is empty.
     private func onlineDisplayIDs() -> [CGDirectDisplayID] {
         var count: UInt32 = 0
@@ -254,6 +338,11 @@ struct ListSources: AsyncParsableCommand {
         var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
         guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return [] }
         return Array(ids.prefix(Int(count)))
+    }
+
+    /// A whole number without decimals, anything else with two.
+    private func format(_ value: CGFloat) -> String {
+        format(Double(value))
     }
 
     /// A whole number without decimals, anything else with two.

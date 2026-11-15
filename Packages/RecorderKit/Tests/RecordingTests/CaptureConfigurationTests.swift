@@ -37,6 +37,61 @@ import Testing
         #expect(DisplayCaptureSource(displayID: 7, framesPerSecond: 30, scale: .points).sourceInfo.pixelScale == 1)
     }
 
+    @Test func areaDoesNotNarrowTheCapture() {
+        // makeConfiguration takes no area: the whole display is recorded, and the area only goes to the manifest.
+        let area = Rect(x: 100, y: 100, width: 800, height: 450)
+        #expect(DisplayCaptureSource(displayID: 7, framesPerSecond: 30, captureArea: area).sourceInfo.captureArea == area)
+        #expect(DisplayCaptureSource(displayID: 7, framesPerSecond: 30).sourceInfo.captureArea == nil)
+    }
+
+    @Test func displayExclusionsFindAppsWithoutVisibleWindows() {
+        let own = getpid()
+        let apps: [(pid: pid_t, bundleID: String?)] = [
+            (own, "dev.toma.Toma"), (77, "com.apple.notificationcenterui"), (80, "com.apple.Safari"), (81, nil),
+        ]
+        let bundleIDs = DisplayExclusions.bundleIdentifiers
+        #expect(bundleIDs == ["com.apple.notificationcenterui"])
+
+        let all = DisplayExclusions.excluded(apps: apps, ownPID: own, bundleIDs: bundleIDs)
+        #expect(all.pids == [own, 77] && all.missingBundleIDs.isEmpty && !all.ownAppMissing)
+
+        let withoutNotifications = DisplayExclusions.excluded(apps: apps.filter { $0.pid != 77 }, ownPID: own, bundleIDs: bundleIDs)
+        #expect(withoutNotifications.pids == [own])
+        #expect(withoutNotifications.missingBundleIDs == ["com.apple.notificationcenterui"] && !withoutNotifications.ownAppMissing)
+
+        let withoutOwn = DisplayExclusions.excluded(apps: apps.filter { $0.pid != own }, ownPID: own, bundleIDs: bundleIDs)
+        #expect(withoutOwn.pids == [77] && withoutOwn.missingBundleIDs.isEmpty && withoutOwn.ownAppMissing)
+    }
+
+    @Test func windowConfigurationMatchesTheWindowBounds() {
+        let c = WindowCaptureSource.makeConfiguration(pixelSize: CGSize(width: 1800, height: 1200), framesPerSecond: 30)
+        #expect(c.width == 1800 && c.height == 1200 && c.showsCursor == false && c.showMouseClicks == false)
+        #expect(c.includeChildWindows && c.ignoreShadowsSingleWindow && c.ignoreGlobalClipSingleWindow)
+        #expect(c.pixelFormat == kCVPixelFormatType_32BGRA && c.minimumFrameInterval == CMTime(value: 1, timescale: 30) && c.queueDepth == 6)
+        #expect(c.capturesAudio == false && c.captureResolution == .best && c.colorSpaceName == CGColorSpace.sRGB)
+    }
+
+    @Test func windowIdentifiesItsTrack() {
+        // No window has this ID: the source still names its track, and records nothing until it is found.
+        let missing = CGWindowID(0xFFFF_FFF0)
+        let window = WindowCaptureSource(windowID: missing, framesPerSecond: 30)
+        #expect(window.trackID == "window-\(missing)" && window.kind == .window && window.media == .video(framesPerSecond: 30))
+        #expect(window.activeDeviceUniqueID == nil && window.lastCompleteFrameTime == nil)
+        #expect(window.sourceInfo == TrackSource(name: "Window \(missing)", windowID: missing))
+        #expect(WindowCaptureSource(windowID: missing, scale: .points).sourceInfo.pixelScale == 1)
+    }
+
+    @Test func frameGeometryIsReadFromTheFrameInfo() {
+        let sample = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 1), frameIndex: 0)
+        setFrameInfo(.contentRect, CGRect(x: 0, y: 0, width: 750, height: 500).dictionaryRepresentation, on: sample)
+        setFrameInfo(.contentScale, (5.0 / 6.0) as CFNumber, on: sample)
+        setFrameInfo(.scaleFactor, 2.0 as CFNumber, on: sample)
+        #expect(StreamFrameGeometry(sample) == StreamFrameGeometry(
+            contentRect: CGRect(x: 0, y: 0, width: 750, height: 500), contentScale: 5.0 / 6.0, scaleFactor: 2))
+        let unmarked = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 2), frameIndex: 1)
+        #expect(StreamFrameGeometry(unmarked) == nil)
+    }
+
     @Test func onlyCompleteFramesAreForwarded() {
         let complete = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 1), frameIndex: 0)
         setFrameStatus(.complete, on: complete)
@@ -350,10 +405,14 @@ import Testing
 
 /// Sets `SCStreamFrameInfo.status` on the first sample attachment, as ScreenCaptureKit does.
 private func setFrameStatus(_ status: SCFrameStatus, on sample: CMSampleBuffer) {
+    setFrameInfo(.status, status.rawValue as CFNumber, on: sample)
+}
+
+/// Sets `key` to `value` on the first sample attachment, as ScreenCaptureKit does.
+private func setFrameInfo(_ key: SCStreamFrameInfo, _ value: CFTypeRef, on sample: CMSampleBuffer) {
     let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true)!
     let dictionary = unsafeBitCast(CFArrayGetValueAtIndex(attachments, 0), to: CFMutableDictionary.self)
-    let key = SCStreamFrameInfo.status.rawValue as CFString
-    let value = status.rawValue as CFNumber
+    let key = key.rawValue as CFString
     CFDictionarySetValue(
         dictionary, Unmanaged.passUnretained(key).toOpaque(), Unmanaged.passUnretained(value).toOpaque())
 }

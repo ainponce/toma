@@ -45,6 +45,8 @@ public protocol CaptureSource: AnyObject, Sendable {
 public enum CaptureSourceError: Error, Equatable {
     /// The display is not among the shareable displays (disconnected or asleep).
     case displayNotFound(displayID: UInt32)
+    /// The window is not among the shareable windows (it was closed).
+    case windowNotFound(windowID: UInt32)
     /// No audio input device is available.
     case microphoneNotFound
     /// The capture session refused the device input or its output (a microphone's or a camera's).

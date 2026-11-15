@@ -1982,6 +1982,16 @@
         }
       }
     },
+    "The display isn't available." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pantalla no está disponible."
+          }
+        }
+      }
+    },
     "The export was canceled." : {
       "localizations" : {
         "es" : {
@@ -2008,16 +2018,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta copia de la app no incluye los avisos de licencias."
-          }
-        }
-      }
-    },
-    "The main display isn't available." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "La pantalla principal no está disponible."
           }
         }
       }
@@ -2269,6 +2269,16 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "The window can't be found. It may have been closed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encuentra la ventana. Puede que se haya cerrado."
           }
         }
       }

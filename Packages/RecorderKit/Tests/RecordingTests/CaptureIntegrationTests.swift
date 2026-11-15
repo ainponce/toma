@@ -38,6 +38,48 @@ import Testing
         #expect(sink.failures.isEmpty)
     }
 
+    /// Opens a Finder window on a new folder and records it.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RECORDER_INTEGRATION"] == "1"))
+    func capturesAFinderWindowForTwoSeconds() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("toma-window-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let opener = Process()
+        opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        opener.arguments = [folder.path]
+        try opener.run()
+        opener.waitUntilExit()
+        var found: CGWindowID?
+        _ = await eventually {
+            found = finderWindow(titled: folder.lastPathComponent)
+            return found != nil
+        }
+        let windowID = try #require(found, "no Finder window titled \(folder.lastPathComponent)")
+
+        let queue = DispatchSerialQueue(label: "test.capture.window")
+        let sink = RecordingSink(queue: queue)
+        let source = WindowCaptureSource(windowID: windowID)
+        #expect(source.trackID == "window-\(windowID)")
+        let info = source.sourceInfo
+        #expect(info.windowID == windowID && info.bundleIdentifier == "com.apple.finder")
+        let frame = try #require(info.globalFrame)
+        let scale = try #require(info.pixelScale)
+
+        try await source.start(on: queue, sink: sink)
+        try await Task.sleep(for: .seconds(2))
+        await source.stop()
+
+        let samples = sink.samples
+        #expect(samples.count >= 1)
+        #expect(samples.allSatisfy { $0.isCompleteFrame && $0.trackID == source.trackID && abs($0.lag) < 1 })
+        #expect(zip(samples, samples.dropFirst()).allSatisfy { $0.pts < $1.pts })
+        let size = WindowStreamSizing.pixelSize(
+            contentRect: CGRect(x: 0, y: 0, width: frame.width, height: frame.height), contentScale: 1, scaleFactor: scale)
+        #expect(samples.contains { $0.width == Int(size.width) && $0.height == Int(size.height) })
+        #expect(source.lastCompleteFrameTime != nil)
+        #expect(sink.failures.isEmpty)
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["RECORDER_INTEGRATION"] == "1"))
     func capturesDefaultMicrophone() async throws {
         let queue = DispatchSerialQueue(label: "test.capture.microphone")
@@ -121,6 +163,15 @@ import Testing
         // -40 dBFS; at -160 the permission was refused.
         #expect(peak > 0.01, "peak \(String(format: "%.1f", dBFS)) dBFS")
     }
+}
+
+/// The on-screen Finder window whose title is `title` (titles are readable with the Screen Recording permission).
+private func finderWindow(titled title: String) -> CGWindowID? {
+    let windows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[CFString: Any]] ?? []
+    let window = windows.first {
+        $0[kCGWindowOwnerName] as? String == "Finder" && $0[kCGWindowName] as? String == title && $0[kCGWindowLayer] as? Int == 0
+    }
+    return (window?[kCGWindowNumber] as? NSNumber)?.uint32Value
 }
 
 /// Forwards to `sink` and keeps the largest absolute sample value of the Float32 audio it sees.

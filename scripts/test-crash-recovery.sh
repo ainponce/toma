@@ -3,12 +3,13 @@
 #
 # Crash test with synthetic sources (needs no permission): records a 20 s take, kills the recorder
 # with SIGKILL 10 s in, recovers the take and verifies that every track kept at least 8 s, ends with
-# the take and dropped at most 1 % of its frames. Three times: with a moving screen; with a screen that
-# stops changing after 2 s (heartbeats); and with five tracks, every kind but a window (two displays, a
-# camera, the microphone and system audio), each of which verify must pass. After the first and the
-# third, an MP4 export of the recovered take is killed as soon as it is writing: the package must be
-# unchanged, and the next export must succeed, leave nothing out (no "warning: no …" line: every
-# recovered segment decodes) and last at least 8 s.
+# the take and dropped at most 1 % of its frames. Four times: with a moving screen; with a screen that
+# stops changing after 2 s (heartbeats); with five tracks, every kind but a window (two displays, a
+# camera, the microphone and system audio), each of which verify must pass; and with a window instead
+# of a display (the window and the microphone). After the first and the third, an MP4 export of the
+# recovered take is killed as soon as it is writing: the package must be unchanged, and the next export
+# must succeed, leave nothing out (no "warning: no …" line: every recovered segment decodes) and last at
+# least 8 s.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -124,4 +125,5 @@ run_case() {
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
+run_case "--window" "" "window-4242 mic"
 echo "crash test passed"

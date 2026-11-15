@@ -54,7 +54,9 @@ private func description(of error: RecordingError) -> String {
 private func description(of error: CaptureSourceError) -> String {
     switch error {
     case .displayNotFound:
-        String(localized: "The main display isn't available.")
+        String(localized: "The display isn't available.")
+    case .windowNotFound:
+        String(localized: "The window can't be found. It may have been closed.")
     case .microphoneNotFound:
         String(localized: "No microphone found.")
     case .sessionConfigurationFailed:
