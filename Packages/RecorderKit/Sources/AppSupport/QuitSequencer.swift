@@ -6,9 +6,9 @@ import os
 /// recorded is closed first: the quit goes ahead once it is closed (even if closing failed: the take can
 /// still be recovered), or once `quitTimeLimit` has passed if it is not closed by then. An export in progress
 /// is cancelled once the user says so (without asking while powering off), and the quit goes ahead only once
-/// it has ended and removed its partial file; then, when the take is being closed too, as above, but at once
-/// if the time limit has already passed. Powering off starts closing the take before the system asks the app
-/// to quit, and that quit waits for the same close and the same time limit.
+/// it has ended and removed its partial file; then the take is closed as above (also one started meanwhile),
+/// but the quit goes ahead at once if the time limit has already passed. Powering off starts closing the take
+/// before the system asks the app to quit, and that quit waits for the same close and the same time limit.
 @MainActor
 public final class QuitSequencer {
     /// How long quitting waits for the take to close.
@@ -62,12 +62,12 @@ public final class QuitSequencer {
             terminationPending = true
             closeTakeWithinTimeLimit()
             return .terminateLater
-        case .confirmCancelExport(let alsoClosingTake):
+        case .confirmCancelExport:
             guard confirmCancelExport() else { return .terminateCancel }
-            cancelExportsThenQuit(alsoClosingTake: alsoClosingTake)
+            cancelExportsThenQuit()
             return .terminateLater
-        case .cancelExportFirst(let alsoClosingTake):
-            cancelExportsThenQuit(alsoClosingTake: alsoClosingTake)
+        case .cancelExportFirst:
+            cancelExportsThenQuit()
             return .terminateLater
         }
     }
@@ -82,17 +82,16 @@ public final class QuitSequencer {
     }
 
     /// Cancels the exports and waits for them to end; only then is the quit pending, so neither the take's
-    /// close nor the time limit lets it go ahead before. Then, in the order of `.closeTakeFirst`: with a take
-    /// to close too, the quit goes ahead at once if the time limit has passed, or once the take is closed or
-    /// the limit passes; otherwise, now.
-    private func cancelExportsThenQuit(alsoClosingTake: Bool) {
+    /// close nor the time limit lets it go ahead before. Then, in the order of `.closeTakeFirst`: the quit goes
+    /// ahead at once if the time limit has passed, or once the take is closed or the limit passes. The take is
+    /// closed also when the decision had none (`alsoClosingTake` false): one may have started from the island
+    /// or a shortcut while the exports were cancelled, and closing costs nothing without one.
+    private func cancelExportsThenQuit() {
         Self.logger.notice("Quitting during an export: cancelling it first")
         Task {
             await cancelExports()
             terminationPending = true
-            if !alsoClosingTake {
-                replyToTermination(takeClosed: true)
-            } else if quitTimeLimitPassed {
+            if quitTimeLimitPassed {
                 replyToTermination(takeClosed: false)
             } else {
                 closeTakeWithinTimeLimit()  // a close in progress replies when it ends, or its time limit does

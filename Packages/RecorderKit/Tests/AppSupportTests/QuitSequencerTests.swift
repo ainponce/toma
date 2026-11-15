@@ -15,12 +15,14 @@ import Testing
         #expect(rig.sequencer.isPoweringOff)
         #expect(rig.sequencer.shouldTerminate(.cancelExportFirst(alsoClosingTake: true), confirmCancelExport: nobodyIsAsked) == .terminateLater)
         await waitUntil { rig.calls.closesEnded == 1 && rig.calls.exportCancels == 1 }
+        #expect(rig.calls.closesEnded == 1)
         await settle()
         #expect(rig.calls.replies.isEmpty, "the export has not removed its partial file yet")
 
         rig.exports.open()
         await waitUntil { !rig.calls.replies.isEmpty }
         #expect(rig.calls.replies == [true])
+        #expect(rig.calls.closeCalls == 2, "closed again once the exports end; without a take it returns at once")
     }
 
     @Test func quitAfterTimeLimitDuringExportRepliesOnceExportsEnd() async {
@@ -131,7 +133,49 @@ import Testing
         rig.exports.open()
         await waitUntil { !rig.calls.replies.isEmpty }
         #expect(rig.calls.replies == [true])
-        #expect(rig.calls.closeCalls == 0, "no take to close")
+        #expect(rig.calls.closeCalls == 1, "closed anyway: a take may have started meanwhile")
+    }
+
+    /// A take started from the island or a shortcut while the export was being cancelled (AppKit still handles
+    /// events while a quit waits) is closed before the quit goes ahead.
+    @Test func aTakeStartedDuringTheExportCancelIsClosedBeforeTheQuit() async {
+        let rig = QuitRig(timeLimit: .never)
+        rig.exports.close()
+        #expect(rig.sequencer.shouldTerminate(.confirmCancelExport(alsoClosingTake: false)) { true } == .terminateLater)
+        await waitUntil { rig.calls.exportCancels == 1 }
+        rig.take.close()  // the take started meanwhile, and takes a while to close
+
+        rig.exports.open()
+        await waitUntil { rig.calls.closeCalls == 1 }
+        await settle()
+        #expect(rig.calls.replies.isEmpty, "the take is still closing")
+
+        rig.take.open()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [true])
+        #expect(rig.calls.closesEnded == 1)
+    }
+
+    /// The same take, and then a power off whose close passes the time limit while the export is still being
+    /// cancelled: in the order of `.closeTakeFirst`, the quit goes ahead as soon as the exports end.
+    @Test func aTakeStartedDuringTheExportCancelKeepsTheTimeLimit() async {
+        let rig = QuitRig(timeLimit: .alreadyPassed)
+        rig.exports.close()
+        rig.take.close()
+        #expect(rig.sequencer.shouldTerminate(.confirmCancelExport(alsoClosingTake: false)) { true } == .terminateLater)
+        await waitUntil { rig.calls.exportCancels == 1 }
+        rig.sequencer.powerOff(isRecording: true)
+        await waitUntil { rig.sequencer.quitTimeLimitPassed }
+
+        rig.exports.open()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [false])
+        #expect(rig.calls.closeCalls == 1 && rig.calls.closesEnded == 0, "the quit did not wait for the take")
+
+        rig.take.open()
+        await waitUntil { rig.calls.closesEnded == 1 }
+        await settle()
+        #expect(rig.calls.replies == [false])
     }
 }
 
@@ -146,11 +190,15 @@ import Testing
     for _ in 0..<10 { await Task.yield() }
 }
 
-/// Lets the sequencer's tasks run until `condition` holds, for at most a few seconds.
-@MainActor private func waitUntil(_ condition: () -> Bool) async {
+/// Lets the sequencer's tasks run until `condition` holds; records an issue if it does not within a few seconds.
+@MainActor private func waitUntil(_ condition: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async {
     let clock = ContinuousClock()
     let end = clock.now + .seconds(5)
-    while !condition(), clock.now < end {
+    while !condition() {
+        guard clock.now < end else {
+            Issue.record("timed out waiting for the condition", sourceLocation: sourceLocation)
+            return
+        }
         try? await Task.sleep(for: .milliseconds(1))
     }
 }
