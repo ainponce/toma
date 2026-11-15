@@ -632,11 +632,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     /// What hangs under the island goes where the island is now, in the same frame: the teleprompter, and
-    /// the capsule under the teleprompter while it is on the screen (under the island otherwise).
+    /// the capsule under what `TeleprompterLayout.capsuleAnchor` says.
     private func placeHanging() {
         let frame = panel.frame
         teleprompter.follow(frame)
-        capsule.follow(teleprompter.isShown ? teleprompter.frame : frame)
+        capsule.follow(TeleprompterLayout.capsuleAnchor(island: frame, teleprompterOnScreen: teleprompter.isShown))
     }
 
     /// The island grew under a pointer that did not move, or shrank away from it: no tracking event says so.

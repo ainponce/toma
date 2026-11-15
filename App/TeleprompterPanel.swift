@@ -38,11 +38,11 @@ final class TeleprompterSetting {
 
 /// The teleprompter (notch design §5.4): a glass panel 640 × 160 that hangs `TeleprompterLayout.gap` under the
 /// island and follows it on every step of its spring (`follow`, called from the island's display link), shown
-/// where `TeleprompterLayout.isVisible` says. The script goes up at the chosen speed only while the take
-/// records and is not paused (nor being edited), stepped by a display link of its own; it goes back to the top
-/// with each new take (`RecordingController.takeSerial`) and whenever the teleprompter comes back on the screen
-/// with no take recording (a new take's panel or countdown, a restart's countdown), so it never shows where the
-/// last take left it. It is never key, except while its script is edited.
+/// where `TeleprompterLayout.isVisible` says. The script goes up at the chosen speed only as
+/// `TeleprompterRules.scrolls` says, stepped by a display link of its own that rests once the script is at its
+/// end; it goes back to the top with each new take (`RecordingController.takeSerial`) and as
+/// `TeleprompterRules.startsFromTheTop` says, so it never shows where the last take left it. It is never key,
+/// except while its script is edited, which ends as `TeleprompterRules` says.
 @MainActor
 final class TeleprompterPanel: NSObject, NSWindowDelegate {
     var reduceMotion = false {
@@ -61,7 +61,6 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
 
     /// On the screen, also while it fades out.
     var isShown: Bool { panel.isVisible }
-    var frame: CGRect { panel.frame }
 
     private let setting: TeleprompterSetting
     private let recording: RecordingController
@@ -97,6 +96,7 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         panel.onClose = { [weak self] in self?.endEditing() }
         model.beginEditing = { [weak self] in self?.beginEditing() }
         model.endEditing = { [weak self] in self?.endEditing() }
+        model.scrollLimitChanged = { [weak self] in self?.updateScrolling() }
         let link = content.displayLink(target: self, selector: #selector(scrollTick(_:)))
         link.isPaused = true
         link.add(to: .main, forMode: .common)
@@ -111,13 +111,11 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         panel.setFrameOrigin(origin)
     }
 
-    /// The island is now in `state`. Counting down ends the editing: the take is about to read the script.
+    /// The island is now in `state`.
     func update(island state: IslandState) {
         let before = island
         island = state
-        if case .countdown = state {
-            if case .countdown = before {} else { endEditing() }
-        }
+        if TeleprompterRules.endsEditing(from: before, to: state) { endEditing() }
         showOrHide()
     }
 
@@ -132,15 +130,18 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         }
     }
 
+    /// The keyboard went elsewhere (by now the panel is no longer key, so it is not taken back).
     func windowDidResignKey(_ notification: Notification) {
+        if TeleprompterRules.endsEditingOnLosingKeyboard(island: island) { endEditing() }
         resignedKey()
     }
 
     // MARK: - The take
 
+    /// The take, and every setting: whether it shows, and what can change how far the script goes up.
     private func observe() {
         withObservationTracking {
-            _ = setting.value.isOn
+            _ = setting.value
             _ = recording.phase
             _ = recording.isUserPaused
             _ = recording.isPaused
@@ -164,9 +165,9 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         if case .recording = recording.phase { true } else { false }
     }
 
-    /// The take records and is paused by nobody, and the script is not being edited.
     private var isRunning: Bool {
-        isRecordingATake && !recording.isUserPaused && !recording.isPaused && !model.isEditing
+        TeleprompterRules.scrolls(
+            phase: recording.phase, isUserPaused: recording.isUserPaused, isPaused: recording.isPaused, isEditing: model.isEditing)
     }
 
     // MARK: - Showing and hiding
@@ -175,7 +176,7 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         if TeleprompterLayout.isVisible(isOn: setting.value.isOn, island: island) {
             let returning = !panel.isVisible || isHiding
             isHiding = false
-            if returning, !isRecordingATake { model.scroll.reset() }
+            if TeleprompterRules.startsFromTheTop(returning: returning, isRecording: isRecordingATake) { model.scroll.reset() }
             if !panel.isVisible {
                 panel.alphaValue = 0
                 panel.orderFrontRegardless()
@@ -237,10 +238,11 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
 
     // MARK: - Scrolling
 
-    /// The display link runs only while the teleprompter is seen and its script goes up.
+    /// The display link runs only while the teleprompter is seen and its script goes up, and has somewhere
+    /// to go: it rests at the end, or with a script shorter than the reading area, until the text changes.
     private func updateScrolling() {
         guard let displayLink else { return }
-        let scrolls = panel.isVisible && !isHiding && isRunning
+        let scrolls = panel.isVisible && !isHiding && isRunning && !model.scroll.isAtEnd(maximum: model.maximumOffset)
         if scrolls, displayLink.isPaused { lastFrameTime = nil }
         displayLink.isPaused = !scrolls
     }
@@ -252,6 +254,7 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         var scroll = model.scroll
         scroll.advance(seconds: seconds, speed: setting.value.speed, isRunning: isRunning, maximum: model.maximumOffset)
         if scroll != model.scroll { model.scroll = scroll }
+        if scroll.isAtEnd(maximum: model.maximumOffset) { updateScrolling() }
     }
 }
 
@@ -263,22 +266,39 @@ private final class TeleprompterModel {
     var reduceMotion = false
     var reduceTransparency = false
     /// The script as it is read, with the room before and after it (`TeleprompterView.leadIn`, `leadOut`).
-    var contentHeight = 0.0
+    private(set) var contentHeight = 0.0
 
     @ObservationIgnored let setting: TeleprompterSetting
     @ObservationIgnored var beginEditing: () -> Void = {}
     @ObservationIgnored var endEditing: () -> Void = {}
+    /// How far the script can go up changed.
+    @ObservationIgnored var scrollLimitChanged: () -> Void = {}
 
     init(setting: TeleprompterSetting) {
         self.setting = setting
     }
 
     /// How far the script can go up: until its last line is at the bottom of the clear band.
-    var maximumOffset: Double { contentHeight - TeleprompterView.readingHeight }
+    var maximumOffset: Double { Self.maximumOffset(contentHeight: contentHeight) }
+
+    /// The script was laid out again (another size, or edited): the scroll keeps its place in it.
+    func contentHeightChanged(to height: Double) {
+        guard height != contentHeight else { return }
+        var scroll = scroll
+        scroll.contentHeightChanged(from: contentHeight, to: height, maximum: Self.maximumOffset(contentHeight: height))
+        contentHeight = height
+        if scroll != self.scroll { self.scroll = scroll }
+        scrollLimitChanged()
+    }
+
+    private static func maximumOffset(contentHeight: Double) -> Double {
+        contentHeight - TeleprompterView.readingHeight
+    }
 }
 
-/// The script, large and centered, fading out at the top and the bottom; the controls under it. The
-/// background and the script follow the opacity chosen; the controls stay as they are.
+/// The script, large and centered, fading out at the top and the bottom; the controls under it. The opacity
+/// chosen is that of a dark tint over the glass (the glass itself never changes: as in the prototype) and of
+/// the script; the controls stay as they are.
 private struct TeleprompterView: View {
     static let barHeight = 38.0
     static let readingHeight = TeleprompterLayout.height - barHeight
@@ -287,6 +307,9 @@ private struct TeleprompterView: View {
     /// Room after the last line, so it can go up into the clear band above the bottom fade.
     static let leadOut = readingHeight * 0.3
     static let radius = 24.0
+    /// The prototype's tint over the glass, `tintOpacity` × the opacity chosen.
+    static let tint = Color(red: 16 / 255, green: 16 / 255, blue: 22 / 255)
+    static let tintOpacity = 0.78
 
     let model: TeleprompterModel
 
@@ -308,9 +331,10 @@ private struct TeleprompterView: View {
         }
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
         .background {
-            Color.clear
+            // With "Reduce transparency" the glass is solid, and the tint over it keeps it so.
+            Self.tint
+                .opacity(Self.tintOpacity * model.setting.value.opacity)
                 .islandGlass(outline, black: false, topBand: 0, reduceTransparency: model.reduceTransparency)
-                .opacity(model.setting.value.opacity)
         }
         .clipShape(outline)
         .foregroundStyle(.white)
@@ -345,7 +369,7 @@ private struct ScriptReader: View {
         .fixedSize(horizontal: false, vertical: true)
         .padding(.top, TeleprompterView.leadIn)
         .padding(.bottom, TeleprompterView.leadOut)
-        .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { model.contentHeight = $0 }
+        .onGeometryChange(for: Double.self) { Double($0.size.height) } action: { model.contentHeightChanged(to: $0) }
         .offset(y: -model.scroll.offset)
         // The reading area's size, whatever the script's: it stays pinned to the top, and is cut.
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)

@@ -77,12 +77,17 @@ import Testing
         #expect(TeleprompterLayout.width == 640 && TeleprompterLayout.height == 160 && TeleprompterLayout.gap == 10)
     }
 
-    @Test func teleprompterShowsOnlyWhereTheDesignDoes() {
-        let saved = SavedTake(
+    /// Where the teleprompter shows, and where it does not.
+    private static let shown: [IslandState] = [.open, .countdown(remaining: 3), .recording, .recordingOpen, .notice(.microphoneSilent)]
+    private static let hidden: [IslandState] = [
+        .rest, .peek, .choosing, .saving,
+        .saved(SavedTake(
             projectURL: URL(fileURLWithPath: "/tmp/Recording.toma"), duration: .seconds(5), markers: 0, trackKinds: [.display],
-            openedEditor: false)
-        let shown: [IslandState] = [.open, .countdown(remaining: 3), .recording, .recordingOpen, .notice(.microphoneSilent)]
-        let hidden: [IslandState] = [.rest, .peek, .choosing, .saving, .saved(saved)]
+            openedEditor: false)),
+    ]
+
+    @Test func teleprompterShowsOnlyWhereTheDesignDoes() {
+        let (shown, hidden) = (Self.shown, Self.hidden)
         for state in shown + hidden {
             #expect(!TeleprompterLayout.isVisible(isOn: false, island: state))
         }
@@ -92,5 +97,87 @@ import Testing
         for state in hidden {
             #expect(!TeleprompterLayout.isVisible(isOn: true, island: state))
         }
+    }
+
+    @Test func scrollKeepsItsPlaceWhenTheTextReflows() {
+        var scroll = TeleprompterScroll()
+        for _ in 0..<5 { scroll.advance(seconds: 1, speed: 1, isRunning: true, maximum: 1000) }
+        #expect(scroll.offset == 120)
+        // A larger size: the text is twice as tall, and so is the way it went.
+        scroll.contentHeightChanged(from: 400, to: 800, maximum: 678)
+        #expect(scroll.offset == 240)
+        // A smaller one: back to the same place.
+        scroll.contentHeightChanged(from: 800, to: 400, maximum: 278)
+        #expect(scroll.offset == 120)
+        // A script made shorter than where it was: at its new end, not past it.
+        scroll.contentHeightChanged(from: 400, to: 200, maximum: 50)
+        #expect(scroll.offset == 50)
+        // Shorter than what is visible: at the top.
+        scroll.contentHeightChanged(from: 200, to: 100, maximum: -22)
+        #expect(scroll.offset == 0)
+        // Measured for the first time: nothing to scale from.
+        var first = TeleprompterScroll()
+        first.contentHeightChanged(from: 0, to: 500, maximum: 378)
+        #expect(first.offset == 0)
+    }
+
+    @Test func scrollKnowsWhenItReachedTheEnd() {
+        var scroll = TeleprompterScroll()
+        #expect(!scroll.isAtEnd(maximum: 100))
+        #expect(scroll.isAtEnd(maximum: 0) && scroll.isAtEnd(maximum: -40))  // nothing to scroll
+        for _ in 0..<4 { scroll.advance(seconds: 1, speed: 1, isRunning: true, maximum: 100) }
+        #expect(scroll.offset == 96 && !scroll.isAtEnd(maximum: 100))
+        scroll.advance(seconds: 1, speed: 1, isRunning: true, maximum: 100)
+        #expect(scroll.isAtEnd(maximum: 100))
+        // The text grew: there is more to read.
+        #expect(!scroll.isAtEnd(maximum: 300))
+    }
+
+    @Test func scriptGoesUpOnlyWhileTheTakeRecordsUnpaused() {
+        let recording = RecordingController.Phase.recording(since: Date())
+        #expect(TeleprompterRules.scrolls(phase: recording, isUserPaused: false, isPaused: false, isEditing: false))
+        #expect(!TeleprompterRules.scrolls(phase: recording, isUserPaused: true, isPaused: false, isEditing: false))
+        #expect(!TeleprompterRules.scrolls(phase: recording, isUserPaused: false, isPaused: true, isEditing: false))
+        #expect(!TeleprompterRules.scrolls(phase: recording, isUserPaused: false, isPaused: false, isEditing: true))
+        for phase: RecordingController.Phase in [.idle, .countingDown(remaining: 3), .starting, .stopping] {
+            #expect(!TeleprompterRules.scrolls(phase: phase, isUserPaused: false, isPaused: false, isEditing: false))
+        }
+    }
+
+    @Test func teleprompterStartsFromTheTopWhenItComesBackWithoutATake() {
+        // Back on the screen for a new take's panel or countdown, or a restart's countdown.
+        #expect(TeleprompterRules.startsFromTheTop(returning: true, isRecording: false))
+        // Turned off and on again during the take: where it was.
+        #expect(!TeleprompterRules.startsFromTheTop(returning: true, isRecording: true))
+        // Already on the screen.
+        #expect(!TeleprompterRules.startsFromTheTop(returning: false, isRecording: false))
+        #expect(!TeleprompterRules.startsFromTheTop(returning: false, isRecording: true))
+    }
+
+    @Test func countdownEndsEditing() {
+        for state in Self.shown + Self.hidden where state != .countdown(remaining: 3) {
+            #expect(TeleprompterRules.endsEditing(from: state, to: .countdown(remaining: 3)))
+            #expect(!TeleprompterRules.endsEditing(from: .countdown(remaining: 3), to: state))
+        }
+        // One second of the countdown to the next.
+        #expect(!TeleprompterRules.endsEditing(from: .countdown(remaining: 3), to: .countdown(remaining: 2)))
+        #expect(!TeleprompterRules.endsEditing(from: .recordingOpen, to: .recording))
+        #expect(!TeleprompterRules.endsEditing(from: .recording, to: .notice(.microphoneSilent)))
+    }
+
+    @Test func editingEndsWhenTheKeyboardLeaves() {
+        // Recording (or counting down), the script would stay frozen until Done.
+        for state: IslandState in [.countdown(remaining: 3), .recording, .recordingOpen, .notice(.microphoneSilent)] {
+            #expect(TeleprompterRules.endsEditingOnLosingKeyboard(island: state))
+        }
+        // The open island keeps it: a click in another app closes the island, and the teleprompter with it.
+        #expect(!TeleprompterRules.endsEditingOnLosingKeyboard(island: .open))
+        #expect(!TeleprompterRules.endsEditingOnLosingKeyboard(island: .choosing))
+    }
+
+    @Test func capsuleHangsUnderTheTeleprompterWhileItIsOnScreen() {
+        let island = CGRect(x: 578, y: 950, width: 356, height: 32)
+        #expect(TeleprompterLayout.capsuleAnchor(island: island, teleprompterOnScreen: true) == CGRect(x: 436, y: 780, width: 640, height: 160))
+        #expect(TeleprompterLayout.capsuleAnchor(island: island, teleprompterOnScreen: false) == island)
     }
 }

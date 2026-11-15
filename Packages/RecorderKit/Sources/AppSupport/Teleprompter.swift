@@ -75,6 +75,19 @@ public struct TeleprompterScroll: Equatable, Sendable {
     public mutating func reset() {
         offset = 0
     }
+
+    /// The text was laid out again (another size, or the script edited): it is `newHeight` tall instead of
+    /// `oldHeight`. The scroll keeps its place in it, as a share of the height, never past `maximum` (the new
+    /// height less what is visible); measured for the first time (`oldHeight` 0), it only keeps within it.
+    public mutating func contentHeightChanged(from oldHeight: Double, to newHeight: Double, maximum: Double) {
+        if oldHeight > 0, newHeight > 0 { offset *= newHeight / oldHeight }
+        offset = min(max(offset, 0), max(0, maximum))
+    }
+
+    /// The script has gone as far up as it can (or never had anywhere to go): nothing to step.
+    public func isAtEnd(maximum: Double) -> Bool {
+        offset >= max(0, maximum)
+    }
 }
 
 /// Where the teleprompter is, and when it shows.
@@ -96,6 +109,47 @@ public enum TeleprompterLayout {
         switch island {
         case .open, .countdown, .recording, .recordingOpen, .notice: return true
         case .rest, .peek, .choosing, .saving, .saved: return false
+        }
+    }
+
+    /// What the confirmation capsule hangs from, `gap` under it: the teleprompter while it is on the screen
+    /// (fading out included), so neither covers the other; the island otherwise. AppKit coordinates.
+    public static func capsuleAnchor(island: CGRect, teleprompterOnScreen: Bool) -> CGRect {
+        teleprompterOnScreen ? frame(below: island) : island
+    }
+}
+
+/// How the teleprompter reads the script, and when its text field gives way to it.
+public enum TeleprompterRules {
+    /// The script goes up while the take records and nobody paused it (neither the user nor the system),
+    /// and not while it is being edited: the text read is not on the screen then.
+    public static func scrolls(phase: RecordingController.Phase, isUserPaused: Bool, isPaused: Bool, isEditing: Bool) -> Bool {
+        guard case .recording = phase else { return false }
+        return !isUserPaused && !isPaused && !isEditing
+    }
+
+    /// The teleprompter comes back on the screen (`returning`: it was off it, or leaving it) with no take
+    /// recording: a new take's panel or countdown, or a restart's countdown. It reads from the top, never
+    /// from where the last take left it. During a take (turned off and on again) it stays where it was.
+    public static func startsFromTheTop(returning: Bool, isRecording: Bool) -> Bool {
+        returning && !isRecording
+    }
+
+    /// The island starts counting down: the take is about to read the script, so editing it ends (never from
+    /// one second of the countdown to the next).
+    public static func endsEditing(from before: IslandState, to after: IslandState) -> Bool {
+        guard case .countdown = after else { return false }
+        if case .countdown = before { return false }
+        return true
+    }
+
+    /// The teleprompter lost the keyboard (a click in another app) while its script was edited: editing ends,
+    /// or the script would stay still until Done, except with the open island (or while choosing), which a
+    /// click in another app closes, the teleprompter with it.
+    public static func endsEditingOnLosingKeyboard(island: IslandState) -> Bool {
+        switch island {
+        case .open, .choosing: false
+        case .rest, .peek, .countdown, .recording, .recordingOpen, .notice, .saving, .saved: true
         }
     }
 }

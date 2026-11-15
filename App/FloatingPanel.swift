@@ -71,12 +71,17 @@ final class FloatingPanel: NSPanel {
     }
 
     /// While the panel is key the keyboard is the panel's, even with another app in front: ⌘W closes what it
-    /// shows, and ⌘Q never quits Toma by surprise. While a text is edited (the teleprompter's script), the
-    /// editing shortcuts (⌘X, ⌘C, ⌘V, ⌘A, ⌘Z, ⇧⌘Z) go straight to it, as the app's Edit menu would send them,
-    /// also while Toma is not the active app (a floating panel never activates it). Other shortcuts go to the
-    /// panel's views as usual.
+    /// shows, and ⌘Q never quits Toma by surprise. While a text is edited (the teleprompter's script), Esc is
+    /// `onCancel` (a text view would take it for word completion, and the window's key equivalents come
+    /// first, as a dialog's Cancel button does), and the editing shortcuts (⌘X, ⌘C, ⌘V, ⌘A, ⌘Z, ⇧⌘Z) go
+    /// straight to it, as the app's Edit menu would send them, also while Toma is not the active app (a
+    /// floating panel never activates it). Other shortcuts go to the panel's views as usual.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
+        if isKeyWindow, event.keyCode == 53, modifiers.isEmpty, firstResponder is NSText, onCancel != nil {
+            cancel()
+            return true
+        }
         guard isKeyWindow, modifiers == .command || modifiers == [.command, .shift] else {
             return super.performKeyEquivalent(with: event)
         }
