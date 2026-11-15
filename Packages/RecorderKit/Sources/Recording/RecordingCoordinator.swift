@@ -45,7 +45,7 @@ public enum RecordingWarning: Sendable, Equatable {
     case trackPaused(track: String)
     /// The writer of `track` failed; its segment was closed and the next sample opens a new one.
     case writerFailed(track: String)
-    /// `track` could not write `TrackPipeline.droppedSamplesWarningCount` samples in a row (its writer
+    /// `track` could not write `SegmentAccounting.warningCount` samples in a row (its writer
     /// refused them or could not be opened). They are counted in `droppedFrames` of the segment that
     /// refused them, or of the next segment (the last one if no other follows).
     case samplesDropped(track: String)
@@ -158,6 +158,8 @@ public actor RecordingCoordinator {
     private let configuration: RecordingConfiguration
     private let writerFactory: WriterFactory
     private let clock: @Sendable () -> HostTime
+    /// The waits of the maintenance and the disk watchdog, and every track's timers and restart waits.
+    private let ticks: RecordingTicks
     private let commands: AsyncStream<Command>
     private let commandsContinuation: AsyncStream<Command>.Continuation
 
@@ -196,7 +198,8 @@ public actor RecordingCoordinator {
         systemActivity: AsyncStream<SystemActivity>,
         configuration: RecordingConfiguration = .init(),
         writerFactory: @escaping WriterFactory = { url, media in try FragmentedTrackWriter(url: url, media: media) },
-        clock: @escaping @Sendable () -> HostTime = HostTime.now
+        clock: @escaping @Sendable () -> HostTime = HostTime.now,
+        ticks: RecordingTicks = .live
     ) {
         let ids = sources.map(\.trackID)
         precondition(Set(ids).count == ids.count, "RecordingCoordinator: track IDs must be unique, got \(ids)")
@@ -210,6 +213,7 @@ public actor RecordingCoordinator {
         self.configuration = configuration
         self.writerFactory = writerFactory
         self.clock = clock
+        self.ticks = ticks
     }
 
     /// Called once when the take stops by itself because the disk is full, with the closed take and
@@ -327,7 +331,7 @@ public actor RecordingCoordinator {
 
             let context = PipelineContext(
                 package: package, takeID: takeID, store: store, log: log, warnings: warningsContinuation,
-                configuration: configuration, writerFactory: writerFactory, clock: clock,
+                configuration: configuration, writerFactory: writerFactory, clock: clock, ticks: ticks,
                 onDiskFull: { [weak self] in
                     reserve.release()  // before the writer's caller writes anything else
                     Task { await self?.diskFilled() }
@@ -617,7 +621,7 @@ public actor RecordingCoordinator {
         var missed = 0
         while true {
             do {
-                try await Task.sleep(for: diskMonitor.interval)
+                try await ticks.sleep(diskMonitor.interval)
             } catch {
                 return
             }
@@ -634,7 +638,7 @@ public actor RecordingCoordinator {
     private func maintain() async {
         while true {
             do {
-                try await Task.sleep(for: configuration.syncInterval)
+                try await ticks.sleep(configuration.syncInterval)
             } catch {
                 return
             }

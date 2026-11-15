@@ -64,7 +64,7 @@ import Testing
                     // A few frames, so the segment has started, then the failure.
                     return first ? ScriptedWriter(inner: inner, failAfterAppends: 3, failure: failure) : inner
                 },
-                clock: HostTime.now, onDiskFull: { diskFullCalls.withLock { $0 += 1 } }, freeBytes: { freeBytes })
+                clock: HostTime.now, ticks: .live, onDiskFull: { diskFullCalls.withLock { $0 += 1 } }, freeBytes: { freeBytes })
             let pipeline = TrackPipeline(source: source, context: context, isSoleDisplay: true)
             try await pipeline.start()
             // Until the failure was handled: the take told about the full disk, or a new segment started.

@@ -102,9 +102,6 @@ public final class TakeBuilder {
     private var framesWritten: [String: Int] = [:]
     private var written = false
 
-    /// Seconds of host time between two `audioClock` anchors of a segment (`TrackPipeline.audioClockInterval`).
-    private static let audioClockInterval = 5.0
-
     /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`.
     public init(in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion) throws {
         package = try ProjectPackage.create(in: directory, name: name, app: AppInfo(name: "Tests", version: "0"), now: Date())
@@ -150,18 +147,16 @@ public final class TakeBuilder {
                 spec.start.adding(seconds: Double(k * frames) / spec.sampleRate * rate)
             }
             let blocks = Int((spec.seconds * spec.sampleRate / Double(frames)).rounded())
-            // The rule of `TrackPipeline.logAudioClock`: after each block, the block the writer wrote last,
-            // once 5 s of host time have passed since the last anchor (frame 0 at the segment's start).
-            var lastAnchor = spec.start
+            // The pipeline's rule: after each block, the anchor for the block the writer wrote last.
+            var anchors = AudioClockAnchors(segmentStart: spec.start)
             for k in 0..<blocks {
                 let sample = SampleFactory.audioSample(
                     pts: pts(ofBlock: k), frames: frames, sampleRate: spec.sampleRate, channels: spec.channels)
                 try writer.append(spec.transform?(k, sample) ?? sample)
-                guard spec.logsAudioClock, let written = writer.lastWrittenAudio, written.frame > 0,
-                      written.hostTime.seconds(since: lastAnchor) >= Self.audioClockInterval
+                guard spec.logsAudioClock, let written = writer.lastWrittenAudio,
+                      let anchor = anchors.anchor(for: written)
                 else { continue }
-                lastAnchor = written.hostTime
-                events.append(InputEvent(t: written.hostTime, kind: .audioClock(track: id, frame: written.frame)))
+                events.append(InputEvent(t: anchor.hostTime, kind: .audioClock(track: id, frame: anchor.frame)))
             }
             let end = try await close(writer, at: pts(ofBlock: blocks), leaveOpen: spec.leaveOpen, url: url)
             try record(index: index, of: id, url: url, start: spec.start, end: end, endReason: spec.endReason)

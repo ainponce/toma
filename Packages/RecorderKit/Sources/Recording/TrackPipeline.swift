@@ -4,6 +4,7 @@ import Darwin
 import Dispatch
 import Foundation
 import ProjectFormat
+import Synchronization
 
 /// What every pipeline of a take shares with the coordinator.
 struct PipelineContext: Sendable {
@@ -15,6 +16,7 @@ struct PipelineContext: Sendable {
     let configuration: RecordingConfiguration
     let writerFactory: WriterFactory
     let clock: @Sendable () -> HostTime
+    let ticks: RecordingTicks
     /// A write ran out of disk space. Gives the take's reserve back before returning, so the writes
     /// that follow have room, and has the coordinator close the take as `diskFull`.
     let onDiskFull: @Sendable () -> Void
@@ -58,25 +60,19 @@ struct PipelineContext: Sendable {
 /// Records one capture source into segment files, opening a new segment at every interruption.
 ///
 /// The source delivers on `queue`, which is also this actor's executor, so the sink calls enter the
-/// actor with `assumeIsolated`. Restarts, `Task.sleep`, `finish` and the coordinator's commands are
-/// actor methods and resume on the same queue.
+/// actor with `assumeIsolated`. Restarts and their waits (`RecordingTicks.sleep`), `finish` and the
+/// coordinator's commands are actor methods and resume on the same queue.
 ///
-/// Every access to `state` runs inside a dispatch block on `queue`: the sink calls, the timers, and
-/// `onQueue` for the actor's jobs. Jobs and blocks are serialized by the queue either way, but
-/// ThreadSanitizer models that ordering only between dispatch blocks, not for Swift jobs on the same
-/// queue, and can report state they share as a race (a standalone reproduction does). So jobs never
-/// touch `state` directly. A writer handed to a finishing task has left `state`; only that task uses it.
+/// Every access to `state` runs inside a dispatch block on `queue`: the sink calls, the timers
+/// (`RecordingTicks.every` runs them on `queue`), and `onQueue` for the actor's jobs. Jobs and blocks
+/// are serialized by the queue either way, but ThreadSanitizer models that ordering only between
+/// dispatch blocks, not for Swift jobs on the same queue, and can report state they share as a race (a
+/// standalone reproduction does). So jobs never touch `state` directly. A writer handed to a finishing
+/// task has left `state`; only that task uses it.
 actor TrackPipeline: CaptureSink {
     /// How far behind the clock a heartbeat is stamped, so it never lands after a frame that was
     /// captured but not delivered yet (the writer would reject that frame).
     static let heartbeatSafetyMargin = 0.1
-    /// A segment that lasted at least this long before its writer failed does not count towards
-    /// the backoff that repeated writer failures get.
-    static let healthySegmentSeconds = 1.0
-    /// Samples dropped in a row after which `samplesDropped` is sent.
-    static let droppedSamplesWarningCount = 30
-    /// Seconds of audio between two `audioClock` events of a segment.
-    static let audioClockInterval = 5.0
 
     let queue: DispatchSerialQueue
     nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
@@ -87,12 +83,11 @@ actor TrackPipeline: CaptureSink {
     private let context: PipelineContext
     /// The only display of the take: it keeps retrying instead of being given up.
     private let isSoleDisplay: Bool
-    /// The track keeps retrying once its restart attempts are used up: the only display, or a microphone
-    /// (a USB or Bluetooth one can take far longer than the backoff to come back).
+    /// The track keeps retrying once its restart attempts are used up (`RestartPolicy.keepsRetrying`).
     private let keepsRetrying: Bool
-    private let heartbeatTimer: (any DispatchSourceTimer)?
-    private let syncTimer: any DispatchSourceTimer
-    private var state = State()
+    private let heartbeatTimer: (any RecordingTimer)?
+    private let syncTimer: any RecordingTimer
+    private var state: State
 
     private enum Phase: Equatable {
         /// Not started yet.
@@ -125,12 +120,11 @@ actor TrackPipeline: CaptureSink {
         var deviceUniqueID: String?
         /// A writer hit ENOSPC: samples are dropped until the take closes.
         var outOfDiskSpace = false
-        /// Writers in a row that failed early or could not be created.
-        var writerFailures = 0
+        var writerBackoff: WriterFailureBackoff
+        /// No segment opens before this time: `clock()` when a writer failed, plus the wait
+        /// `writerBackoff` gave; `nil` when the next sample may open one.
         var reopenNotBefore: HostTime?
-        /// Samples dropped while no segment could take them; the next segment counts them.
-        var pendingDropped = 0
-        var droppedInARow = 0
+        var accounting = SegmentAccounting()
     }
 
     /// The segment being written. Owned by `state` until it is closed, then by its finishing task.
@@ -152,8 +146,8 @@ actor TrackPipeline: CaptureSink {
         var dropped = 0
         /// The running total last logged as `droppedSamples`.
         var loggedDropped = 0
-        /// Host time of the last `audioClock` event; the segment's start, frame 0, to begin with.
-        var lastAudioClock: HostTime?
+        /// Made once the segment's start is known.
+        var audioClock: AudioClockAnchors?
 
         init(writer: any TrackWriting, index: Int, url: URL, file: String, startSignal: StartSignal) {
             self.writer = writer
@@ -175,6 +169,20 @@ actor TrackPipeline: CaptureSink {
     /// Set by the writer's `onStart`. Separate from `OpenSegment` so the writer does not retain it.
     private final class StartSignal {
         var hostTime: HostTime?
+    }
+
+    /// How the timers, made in `init` before the pipeline exists, reach it: weakly, so they never keep it alive.
+    private final class TimerTarget: Sendable {
+        private struct Reference {
+            weak var pipeline: TrackPipeline?
+        }
+
+        private let reference = Mutex(Reference())
+
+        var pipeline: TrackPipeline? {
+            get { reference.withLock { $0.pipeline } }
+            set { reference.withLock { $0.pipeline = newValue } }
+        }
     }
 
     private struct ClosingSegment {
@@ -202,22 +210,18 @@ actor TrackPipeline: CaptureSink {
         self.media = source.media
         self.context = context
         self.isSoleDisplay = isSoleDisplay
-        self.keepsRetrying = isSoleDisplay || source.kind == .microphone
+        self.keepsRetrying = RestartPolicy.keepsRetrying(kind: source.kind, isSoleScreen: isSoleDisplay)
+        self.state = State(writerBackoff: WriterFailureBackoff(backoff: context.configuration.restartBackoff))
+        let target = TimerTarget()
         if case .video = source.media {
-            heartbeatTimer = DispatchSource.makeTimerSource(queue: queue)
+            heartbeatTimer = context.ticks.every(context.configuration.heartbeatInterval, queue) {
+                target.pipeline?.heartbeatTimerFired()
+            }
         } else {
             heartbeatTimer = nil
         }
-        syncTimer = DispatchSource.makeTimerSource(queue: queue)
-
-        let heartbeat = context.configuration.heartbeatInterval.dispatchInterval
-        heartbeatTimer?.setEventHandler { [weak self] in self?.heartbeatTimerFired() }
-        heartbeatTimer?.schedule(deadline: .now() + heartbeat, repeating: heartbeat, leeway: .milliseconds(10))
-        heartbeatTimer?.activate()
-        let sync = context.configuration.syncInterval.dispatchInterval
-        syncTimer.setEventHandler { [weak self] in self?.syncTimerFired() }
-        syncTimer.schedule(deadline: .now() + sync, repeating: sync, leeway: .milliseconds(50))
-        syncTimer.activate()
+        syncTimer = context.ticks.every(context.configuration.syncInterval, queue) { target.pipeline?.syncTimerFired() }
+        target.pipeline = self
     }
 
     deinit {
@@ -289,10 +293,7 @@ actor TrackPipeline: CaptureSink {
         heartbeatTimer?.cancel()
         syncTimer.cancel()
         await waitForFinishing()
-        let dropped = await onQueue { pipeline in
-            defer { pipeline.state.pendingDropped = 0 }
-            return pipeline.state.pendingDropped
-        }
+        let dropped = await onQueue { $0.state.accounting.takePending() }
         if dropped > 0 {
             context.updateTrack(trackID) { track in
                 guard !track.segments.isEmpty else { return }
@@ -307,34 +308,29 @@ actor TrackPipeline: CaptureSink {
 
     // MARK: - Jobs
 
-    /// Brings the source back after a stream error, waiting `restartBackoff[n]` before attempt `n`.
+    /// Brings the source back after a stream error, following a `RestartPolicy` of `restartBackoff`.
     /// Once the list is used up the sole display and a microphone keep trying at its last interval,
     /// warning `displayPaused` or `trackPaused` once; any other track is lost. Stops as soon as a pause
     /// or the close takes over (it cancels this task).
     private func restart() async {
         dispatchPrecondition(condition: .onQueue(queue))
-        let backoff = context.configuration.restartBackoff
-        var attempt = 0
-        var reportedPaused = false
+        var policy = RestartPolicy(backoff: context.configuration.restartBackoff, keepsRetrying: keepsRetrying)
         while true {
             let delay: Duration
-            if attempt < backoff.count {
-                delay = backoff[attempt]
-            } else if keepsRetrying {
-                if !reportedPaused {
-                    reportedPaused = true
-                    context.warnings.yield(isSoleDisplay ? .displayPaused(track: trackID) : .trackPaused(track: trackID))
-                }
-                delay = backoff.last ?? .seconds(1)
-            } else {
+            switch policy.next() {
+            case .wait(let wait):
+                delay = wait
+            case .warnPausedThenWait(let wait):
+                context.warnings.yield(isSoleDisplay ? .displayPaused(track: trackID) : .trackPaused(track: trackID))
+                delay = wait
+            case .giveUp:
                 if await onQueue({ $0.restartsExhausted() }) {
                     context.warnings.yield(.trackLost(track: trackID))
                 }
                 return
             }
-            attempt += 1
             do {
-                try await Task.sleep(for: delay)
+                try await context.ticks.sleep(delay)
             } catch {
                 return
             }
@@ -481,7 +477,7 @@ actor TrackPipeline: CaptureSink {
         do {
             try segment.writer.append(sample)
             appended = true
-            state.droppedInARow = 0
+            state.accounting.written()
             segment.lastTakenPTS = pts
             segment.lastSampleEnd = max(segment.lastSampleEnd ?? pts, Self.end(of: sample, at: pts))
             switch media {
@@ -503,31 +499,21 @@ actor TrackPipeline: CaptureSink {
         }
     }
 
-    /// After an audio append, logs `audioClock` for the sample the writer wrote last (`lastWrittenAudio`)
-    /// once `audioClockInterval` has passed since the last event: the frame of the segment's file it starts
-    /// at and its host time. Frame 0 is the segment's start.
-    ///
-    /// The frame is the writer's count of frames written, so audio it drops in real time (its queue full)
-    /// never shifts the anchors: they always name a frame that is in the file.
+    /// After an audio append, logs the `audioClock` anchor `AudioClockAnchors` gives for the sample the
+    /// writer wrote last (`lastWrittenAudio`): the frame of the segment's file it starts at and its host time.
     private func logAudioClock(_ segment: OpenSegment) {
         guard let start = segment.startHostTime ?? segment.startSignal.hostTime,
-              let written = segment.writer.lastWrittenAudio, written.frame > 0
+              let written = segment.writer.lastWrittenAudio
         else { return }
-        let last = segment.lastAudioClock ?? start
-        guard written.hostTime.seconds(since: last) >= Self.audioClockInterval else { return }
-        segment.lastAudioClock = written.hostTime
-        context.log.append(InputEvent(t: written.hostTime, kind: .audioClock(track: trackID, frame: written.frame)))
+        if segment.audioClock == nil { segment.audioClock = AudioClockAnchors(segmentStart: start) }
+        guard let anchor = segment.audioClock?.anchor(for: written) else { return }
+        context.log.append(InputEvent(t: anchor.hostTime, kind: .audioClock(track: trackID, frame: anchor.frame)))
     }
 
     /// Counts a sample that was not written, and warns once it has happened many times in a row.
     private func countDropped(in segment: OpenSegment?) {
-        if let segment {
-            segment.dropped += 1
-        } else {
-            state.pendingDropped += 1
-        }
-        state.droppedInARow += 1
-        if state.droppedInARow == Self.droppedSamplesWarningCount {
+        segment?.dropped += 1
+        if state.accounting.dropped(withOpenSegment: segment != nil) {
             context.warnings.yield(.samplesDropped(track: trackID))
         }
     }
@@ -545,8 +531,7 @@ actor TrackPipeline: CaptureSink {
                 let signal = StartSignal()
                 writer.onStart = { [signal] in signal.hostTime = $0 }
                 let segment = OpenSegment(writer: writer, index: index, url: url, file: file, startSignal: signal)
-                segment.dropped = state.pendingDropped
-                state.pendingDropped = 0
+                segment.dropped = state.accounting.takePending()
                 state.segment = segment
                 return segment
             } catch WriterError.fileExists {
@@ -554,7 +539,7 @@ actor TrackPipeline: CaptureSink {
                 state.nextIndex += 1
             } catch {
                 context.warnings.yield(.writerFailed(track: trackID))
-                noteWriterFailure(healthy: false)
+                noteWriterFailure(segmentSeconds: nil)
                 return nil
             }
         }
@@ -583,23 +568,16 @@ actor TrackPipeline: CaptureSink {
             state.outOfDiskSpace = true
             context.onDiskFull()
         } else {
-            let lasted = segment.startHostTime.flatMap { start in segment.latestTime.map { $0.seconds(since: start) } } ?? 0
-            noteWriterFailure(healthy: lasted >= Self.healthySegmentSeconds)
+            let lasted = segment.startHostTime.flatMap { start in segment.latestTime.map { $0.seconds(since: start) } }
+            noteWriterFailure(segmentSeconds: lasted)
         }
     }
 
-    /// The next sample opens a new segment at once after a writer that ran fine for a while; writers
-    /// that keep failing early wait `restartBackoff[n]` between attempts, so a broken writer does not
-    /// spin out a file per sample.
-    private func noteWriterFailure(healthy: Bool) {
-        state.writerFailures = healthy ? 1 : state.writerFailures + 1
-        let backoff = context.configuration.restartBackoff
-        guard state.writerFailures > 1, !backoff.isEmpty else {
-            state.reopenNotBefore = nil
-            return
-        }
-        let delay = backoff[min(state.writerFailures - 2, backoff.count - 1)]
-        state.reopenNotBefore = context.clock().adding(seconds: delay.seconds)
+    /// Holds the next segment back for as long as `writerBackoff` says after a writer that held
+    /// `segmentSeconds` of media failed (`nil`: it never started, or could not be created).
+    private func noteWriterFailure(segmentSeconds: Double?) {
+        state.reopenNotBefore = state.writerBackoff.writerFailed(segmentSeconds: segmentSeconds)
+            .map { context.clock().adding(seconds: $0.seconds) }
     }
 
     /// Hands the open segment, if any, to a task that finishes it at `time`. A segment that never
@@ -609,14 +587,14 @@ actor TrackPipeline: CaptureSink {
         guard let segment = state.segment else { return }
         state.segment = nil
         if segment.startHostTime == nil {
-            state.pendingDropped += segment.dropped
+            state.accounting.addPending(segment.dropped)
             segment.dropped = 0
             var existing = stat()
             if state.nextIndex == segment.index + 1, lstat(segment.url.path, &existing) != 0 {
                 state.nextIndex = segment.index
             }
         } else if !failureReported, segment.writer.failure == nil {
-            state.writerFailures = 0
+            state.writerBackoff.segmentClosedNormally()
             state.reopenNotBefore = nil
         }
         let number = state.finishCount
@@ -783,17 +761,5 @@ actor TrackPipeline: CaptureSink {
         let duration = sample.duration
         guard duration.isNumeric, duration > .zero else { return pts }
         return pts.adding(seconds: duration.seconds)
-    }
-}
-
-extension Duration {
-    var seconds: Double {
-        let (seconds, attoseconds) = components
-        return Double(seconds) + Double(attoseconds) / 1e18
-    }
-
-    var dispatchInterval: DispatchTimeInterval {
-        let (seconds, attoseconds) = components
-        return .nanoseconds(max(1, Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000)))
     }
 }

@@ -543,6 +543,40 @@ extension RealTimeRecordingTests {
             }
         }
 
+        @Test func heartbeatRunsOnEachManualTick() async throws {
+            try await withTemporaryDirectory { directory in
+                let ticks = ManualTicks()
+                // A heartbeat is stamped `heartbeatSafetyMargin` before `clock()` and must come after the last frame
+                // or heartbeat: the clock moves 0.5 s before every tick, as the timer's would.
+                let clock = OffsetClock()
+                let interval = RecordingConfiguration().heartbeatInterval
+                let rig = try Rig(in: directory, tracks: [.display], writerFactory: { url, media in
+                    let writer = try FragmentedTrackWriter(url: url, media: media)
+                    // The ticks come microseconds apart, not 500 ms: give the encoder the time an interval would,
+                    // or a real-time writer skips a heartbeat that finds it busy.
+                    writer.inputHasRoom = { input in
+                        let deadline = HostTime.now().adding(seconds: 1)
+                        while !input.isReadyForMoreMediaData, HostTime.now() < deadline { usleep(1000) }
+                        return input.isReadyForMoreMediaData
+                    }
+                    return writer
+                }, clock: clock.now, ticks: ticks.ticks)
+                let id = try await rig.coordinator.start()
+                #expect(await eventually { rig.liveTrack(id, "display-1")?.segments.count == 1 })
+                rig.display.pauseFrames(true)
+                // The first tick after frames only sets their count back to 0.
+                clock.advance(seconds: 0.5)
+                await ticks.fire(every: interval)
+                for _ in 0..<3 {
+                    clock.advance(seconds: 0.5)
+                    await ticks.fire(every: interval)
+                }
+                let record = try await rig.coordinator.stop()
+
+                #expect(record.track("display-1")?.segments.map(\.heartbeatFrames) == [3])
+            }
+        }
+
         @Test func diskFullStopsTakeCleanly() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory)
@@ -671,6 +705,45 @@ extension RealTimeRecordingTests {
                 #expect(rig.display.startCount == 1)
                 #expect(try rig.takeOnDisk(id).track("display-1")?.segments.count == 1)
                 #expect(!FileManager.default.fileExists(atPath: rig.package.segmentURL(take: id, track: "display-1", index: 2).path))
+            }
+        }
+
+        @Test func restartWaitsForEachBackoffStepWithoutRealTime() async throws {
+            try await withTemporaryDirectory { directory in
+                // Default backoff (500 ms first); the other waits are the maintenance's 2 s and the disk watchdog's 50 ms.
+                let ticks = ManualTicks()
+                let rig = try Rig(in: directory, tracks: [.display], ticks: ticks.ticks)
+                let id = try await rig.coordinator.start()
+                #expect(await eventually { rig.liveTrack(id, "display-1")?.segments.count == 1 })
+                rig.display.failNow(domain: "SCStreamErrorDomain", code: -3821)
+                // The error reaches the pipeline's queue asynchronously.
+                #expect(await eventually { ticks.pendingSleeps(of: .milliseconds(500)) == 1 })
+                #expect(rig.display.startCount == 1)
+                await ticks.releaseSleep(of: .milliseconds(500))
+                #expect(await eventually { rig.display.startCount == 2 })
+                #expect(await eventually { rig.warnings.all.contains(.streamRestarted(track: "display-1")) })
+                #expect(ticks.pendingSleeps(of: .seconds(1)) == 0)
+                _ = try await rig.coordinator.stop()
+
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.streamInterrupted(track: "display-1"), .streamRestarted(track: "display-1")])
+            }
+        }
+
+        /// A stop cancels the restart and waits for it: the manual wait must end on cancellation, or this hangs.
+        @Test(.timeLimit(.minutes(1))) func stopDuringAManualRestartWaitReturns() async throws {
+            try await withTemporaryDirectory { directory in
+                let ticks = ManualTicks()
+                let rig = try Rig(in: directory, tracks: [.display], ticks: ticks.ticks)
+                let id = try await rig.coordinator.start()
+                #expect(await eventually { rig.liveTrack(id, "display-1")?.segments.count == 1 })
+                rig.display.failNow(domain: "SCStreamErrorDomain", code: -3821)
+                #expect(await eventually { ticks.pendingSleeps(of: .milliseconds(500)) == 1 })
+                _ = try await rig.coordinator.stop()
+
+                #expect(ticks.pendingSleeps(of: .milliseconds(500)) == 0)
+                #expect(rig.display.startCount == 1)
+                #expect(try rig.takeOnDisk(id).track("display-1")?.segments.count == 1)
             }
         }
 
@@ -803,11 +876,12 @@ extension RealTimeRecordingTests {
                         "\(segment.droppedFrames) dropped, \(droppedBefore) delivered before the segment")
                 await rig.warningsDone.value
                 let failures: [RecordingWarning] = [.writerFailed(track: "display-1"), .writerFailed(track: "display-1")]
-                if droppedBefore >= TrackPipeline.droppedSamplesWarningCount {
+                if droppedBefore >= SegmentAccounting.warningCount {
                     #expect(rig.warnings.all == failures + [.samplesDropped(track: "display-1")])
                 } else {
-                    // Fewer in a row than the warning needs; the writer's own drops later could still reach it.
-                    #expect(rig.warnings.all == failures || rig.warnings.all == failures + [.samplesDropped(track: "display-1")])
+                    // Fewer in a row than the warning needs: the segment's first frame ended the run, and the few
+                    // frames recorded after it cannot make another run that long.
+                    #expect(rig.warnings.all == failures)
                 }
             }
         }
@@ -1039,7 +1113,8 @@ struct Rig {
         input: any InputRecorder = NoInputRecorder(),
         configuration: RecordingConfiguration = .init(),
         writerFactory: WriterFactory? = nil,
-        clock: @escaping @Sendable () -> HostTime = HostTime.now
+        clock: @escaping @Sendable () -> HostTime = HostTime.now,
+        ticks: RecordingTicks = .live
     ) throws {
         package = try ProjectPackage.create(in: directory, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
         let (stream, continuation) = AsyncStream.makeStream(of: SystemActivity.self)
@@ -1054,7 +1129,8 @@ struct Rig {
             systemActivity: stream,
             configuration: configuration,
             writerFactory: writerFactory ?? { url, media in try FragmentedTrackWriter(url: url, media: media) },
-            clock: clock
+            clock: clock,
+            ticks: ticks
         )
         warningsDone = Task { [warnings, coordinator] in
             for await warning in coordinator.warnings { warnings.append(warning) }
@@ -1255,6 +1331,19 @@ final class PinnedClock: Sendable {
     /// `now()` returns `time` until it is pinned to `nil`.
     func pin(_ time: HostTime?) {
         pinned.withLock { $0 = time }
+    }
+}
+
+/// The host clock moved ahead by what the test added.
+final class OffsetClock: Sendable {
+    private let offset = Mutex(0.0)
+
+    func now() -> HostTime {
+        HostTime.now().adding(seconds: offset.withLock { $0 })
+    }
+
+    func advance(seconds: Double) {
+        offset.withLock { $0 += seconds }
     }
 }
 

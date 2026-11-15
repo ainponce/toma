@@ -414,10 +414,3 @@ public enum EventLogReader {
         return bytes
     }
 }
-
-extension Duration {
-    fileprivate var dispatchInterval: DispatchTimeInterval {
-        let (seconds, attoseconds) = components
-        return .nanoseconds(Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000))
-    }
-}

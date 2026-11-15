@@ -2,10 +2,6 @@
 
 Lo que la revisión final de la fase 0 decidió no corregir todavía, con el motivo y el momento en que hay que hacerlo. Nada de esto es un defecto conocido de lo que la fase 0 graba; son huecos de cobertura, deudas de mantenimiento y endurecimientos que tienen su momento.
 
-## Antes de construir sobre lo que hay
-
-- **Reloj y ticks inyectables en `TrackPipeline` y `RecordingCoordinator`.** Partir su `State` en tipos de valor (`RestartPolicy`, `WriterFailureBackoff`, `SegmentAccounting`, `AudioClockAnchors`) con pruebas síncronas, y llevar la extensión de `Duration` a su propio archivo. *Por qué después:* mantenimiento; la ronda final ya quitó la inestabilidad de las pruebas que medían contra el tiempo dormido. *Cuándo:* antes de que la fase 1a sume las pistas de cámara y de audio del sistema.
-
 ## Grabación
 
 - **Retener el acuse del reposo hasta que la pausa cerró los segmentos** (`IORegisterForSystemPower` con `IOAllowPowerChange`, o una espera acotada en el observador de `willSleep`). *Por qué después:* todavía no hay evidencia de que `finishWriting` falle atravesando un reposo, y bloquear el hilo que avisa arriesga un deadlock. *Cuándo:* después de la comprobación del dueño con la tapa cerrada (`docs/release.md`, comprobación 2 de la revisión final).
@@ -32,7 +28,6 @@ Lo que la revisión final de la fase 0 decidió no corregir todavía, con el mot
 
 Lo que la nueva revisión de la revisión final dejó abierto: hallazgos menores sin corregir y cosas que quedaron fuera de su alcance. Ninguno cambia lo que la fase 0 graba.
 
-- **`writersThatKeepFailingWaitBeforeReopening`, rama else** (`RecordingCoordinatorTests.swift:623-626`): con menos de 30 muestras descartadas acepta el aviso con o sin él. *Arreglo:* exigir que no haya aviso en esa rama.
 - **`RecoveryScanner.swift:63-66` (con `:83`):** una carpeta de toma sin listar que solo tiene un `recording.lock` viejo se reporta como si tuviera archivos grabados que el manifiesto no lista, y `needsRepair` oculta las tomas `.recoverable` listadas del mismo paquete (hoy no ocurre: una toma por paquete). *Arreglo:* redactar el motivo según lo hallado (segmento o solo lock) y, si hace falta, devolver también las tomas recuperables.
 - **`docs/release.md:224`:** la sección vieja apunta a "Prueba en seco después de la revisión final", que no existe; falta el registro de la release ad hoc posterior a los arreglos de F8. *Arreglo:* agregarla al final (shasums de `dist/` sin cambios, `build/adhoc-dist/`, 0 llamadas a `security`, comprobación de LICENSE) o quitar el puntero.
 - **`docs/format/README.md:313`:** el punto "Un `.reserve` que quedó en disco…" quedó suelto bajo `## Cierre de una toma`. *Arreglo:* devolverlo al final de la sección `## .reserve` (después de `:301`).
