@@ -36,4 +36,7 @@ public enum TakeNotice: Equatable, Sendable {
     case closedWithError
     /// The take that was restarted could not be moved to the trash: it stays in the projects folder.
     case couldNotMoveToTrash
+    /// The microphone has heard nothing in the first seconds recorded (`SilenceWatch`); it goes away once
+    /// it hears something.
+    case microphoneSilent
 }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// What the island shows (notch design §5.1). Tasks 16a and 16b add the take's states.
+/// What the island shows (notch design §5.1). Task 16b adds the states of a take being saved.
 public enum IslandState: Equatable, Sendable {
     /// Nothing: on a screen with a notch it is the notch; elsewhere it is not drawn.
     case rest
@@ -10,13 +10,20 @@ public enum IslandState: Equatable, Sendable {
     case open
     /// Choosing what to record on the screen itself.
     case choosing
+    /// The countdown before a take: the number of seconds left.
+    case countdown(remaining: Int)
+    /// A take is being recorded: the wings at each side of the notch, with the time and the microphone.
+    case recording
+    /// The pointer is over the recording island: the time, the take's controls and its notices.
+    case recordingOpen
 
     /// Whether the island is the key window: only in the states that use the keyboard (Esc, and a click
-    /// elsewhere closing it), so it never keeps what the user types in their own app.
+    /// elsewhere closing it), so it never keeps what the user types in their own app. While recording
+    /// it never is: Esc closes the island, not the take (notch design §5.1).
     public var needsKeyboard: Bool {
         switch self {
-        case .rest, .peek: false
-        case .open, .choosing: true
+        case .rest, .peek, .recording, .recordingOpen: false
+        case .open, .choosing, .countdown: true
         }
     }
 }
@@ -37,6 +44,11 @@ public enum IslandEvent: Equatable, Sendable {
     case beganChoosing
     /// Done, Return, Esc or the choice itself.
     case endedChoosing
+    /// The recording controller is in a new phase: a take counts down, starts, records, closes or ends.
+    case phaseChanged(RecordingController.Phase)
+    /// The open recording island shows a confirmation (restarting the take), or no longer does: while it
+    /// does, the island stays open.
+    case confirmationShown(Bool)
 }
 
 /// Which state the island is in, from what happens to it. `now` is a monotonic time the app passes
@@ -45,15 +57,37 @@ public struct IslandMachine: Equatable, Sendable {
     /// How long a peek waits after the pointer leaves before going back to rest: enough to reach the pill
     /// 38 pt below the zone of a screen without a notch.
     public static let peekGrace: Duration = .milliseconds(300)
+    /// How long the open recording island waits after the pointer leaves before collapsing to the wings.
+    public static let collapseDelay: Duration = .milliseconds(650)
 
     public private(set) var state = IslandState.rest
     /// When the machine wants a `tick`.
     public private(set) var deadline: Duration?
+    /// The pointer is over the island (the last of `pointerEntered` and `pointerExited`).
+    private var isPointerInside = false
+    /// The open recording island shows a confirmation.
+    private var isConfirming = false
 
     public init() {}
 
     public mutating func handle(_ event: IslandEvent, at now: Duration) {
+        switch event {
+        case .pointerEntered: isPointerInside = true
+        case .pointerExited: isPointerInside = false
+        case .confirmationShown(let shown): isConfirming = shown
+        default: break
+        }
+        if case .phaseChanged(let phase) = event {
+            follow(phase)
+            return
+        }
         switch (state, event) {
+        case (.recording, .pointerEntered):
+            go(to: .recordingOpen)
+        case (.recordingOpen, .pointerEntered), (.recordingOpen, .confirmationShown(true)):
+            deadline = nil
+        case (.recordingOpen, .pointerExited), (.recordingOpen, .confirmationShown(false)):
+            if !isPointerInside, !isConfirming { deadline = now + Self.collapseDelay }
         case (.rest, .pointerEntered):
             go(to: .peek)
         case (.peek, .pointerEntered):
@@ -77,13 +111,35 @@ public struct IslandMachine: Equatable, Sendable {
         guard let deadline, now >= deadline else { return }
         switch state {
         case .peek: go(to: .rest)
-        case .rest, .open, .choosing: self.deadline = nil
+        case .recordingOpen: go(to: .recording)
+        case .rest, .open, .choosing, .countdown, .recording: self.deadline = nil
+        }
+    }
+
+    /// The take's phase moves the island: the countdown from wherever it is; the wings once the take starts
+    /// (the open recording island stays open); rest once the take has closed, or did not start. A phase
+    /// that is not a take's changes nothing at rest, open or choosing. Task 16b shows a take being saved
+    /// instead of going to rest while it closes.
+    private mutating func follow(_ phase: RecordingController.Phase) {
+        switch phase {
+        case .countingDown(let remaining):
+            go(to: .countdown(remaining: remaining))
+        case .starting, .recording:
+            if state != .recordingOpen, state != .recording { go(to: .recording) }
+        case .stopping:
+            go(to: .rest)
+        case .idle:
+            switch state {
+            case .countdown, .recording, .recordingOpen: go(to: .rest)
+            case .rest, .peek, .open, .choosing: break
+            }
         }
     }
 
     private mutating func go(to state: IslandState) {
         self.state = state
         deadline = nil
+        if state != .recordingOpen { isConfirming = false }
     }
 }
 

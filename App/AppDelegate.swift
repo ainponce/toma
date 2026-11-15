@@ -5,18 +5,22 @@ import ProjectFormat
 import os
 
 /// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
-/// launch, the permissions and licenses windows, editors (also for projects opened from Finder), the Dock
-/// icon, and closing a take before quitting.
+/// launch, the permissions, settings and licenses windows, the global shortcuts, editors (also for projects
+/// opened from Finder), the Dock icon, and closing a take before quitting.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recording: RecordingController
     let updater: UpdaterController
+    /// The global shortcuts.
+    let hotKeys: HotKeyCenter
     private let probe: any PermissionProbe = SystemPermissionProbe()
+    private let store = SettingsStore()
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
     private var onboarding: OnboardingWindowController?
     private var notices: ThirdPartyNoticesWindowController?
+    private var settings: SettingsWindowController?
     /// The recording control at the notch; made once the app has launched.
     private var island: IslandPanel?
     private var powerOffObserver: (any NSObjectProtocol)?
@@ -38,14 +42,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         recording = RecordingController(probe: probe, environment: LiveTakeEnvironment.make())
         updater = UpdaterController(recording: recording, exportGate: exportGate)
+        hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
         super.init()
+        hotKeys.perform = { [weak self] action in self?.perform(action) }
         exportGate.busyChanged = { [weak self] in self?.updater.exportStateChanged() }
         recording.openEditor = { [weak self] url, take in self?.showEditor(for: url, take: take) }
         recording.openOnboarding = { [weak self] in self?.showOnboarding() }
         recording.showStartFailure = { [weak self] error in self?.showStartFailure(error) }
         recording.recordingStateChanged = { [weak self] in
-            self?.updateActivationPolicy()
-            self?.updater.recordingStateChanged()
+            guard let self else { return }
+            updateActivationPolicy()
+            updater.recordingStateChanged()
+            hotKeys.update(isRecording: recording.isRecording)
         }
         recovery.recovered = { [weak self] urls in self?.showRecovered(urls) }
     }
@@ -53,7 +61,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let island = IslandPanel(recording: recording)
+        let island = IslandPanel(recording: recording, hotKeys: hotKeys)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         self.island = island
@@ -197,6 +205,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(onboarding)
     }
 
+    func showSettings() {
+        if settings == nil {
+            settings = SettingsWindowController(store: store, hotKeys: hotKeys) { [weak self] in
+                guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
+                settings = nil
+                updateActivationPolicy()
+            }
+        }
+        present(settings)
+    }
+
+    /// A global shortcut was pressed.
+    private func perform(_ action: HotKeyAction) {
+        switch action {
+        case .islandOrStop: island?.shortcutPressed()
+        case .pauseResume: recording.togglePause()
+        case .marker: recording.addMarker()
+        case .restartTake: recording.restartTake()
+        }
+    }
+
     func showThirdPartyNotices() {
         if notices == nil {
             notices = ThirdPartyNoticesWindowController { [weak self] in
@@ -258,7 +287,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// In the Dock and Cmd-Tab only while a window is open, no take is being recorded and the island is
     /// not open or choosing. The island's own panels are not windows here.
     private func updateActivationPolicy(activatingIfRegular: Bool = true) {
-        let openWindows = editors.count + (onboarding == nil ? 0 : 1) + (notices == nil ? 0 : 1)
+        let openWindows = editors.count + (onboarding == nil ? 0 : 1) + (notices == nil ? 0 : 1) + (settings == nil ? 0 : 1)
         let policy = ActivationPolicyDecision.policy(
             openWindows: openWindows, isRecording: recording.isRecording, isSelecting: island?.isSelecting ?? false)
         guard NSApp.activationPolicy() != policy else { return }

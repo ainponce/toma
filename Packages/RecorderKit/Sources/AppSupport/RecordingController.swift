@@ -7,12 +7,16 @@ import os
 
 /// Records takes of what the user chose, one at a time, each into a new project in
 /// `environment.projectsFolder`, with the chosen microphone when there is one and it is allowed. Opens
-/// the editor on the take once it is closed. While recording, the user can pause the take, mark moments
-/// of it, and restart it: the take goes to the trash and a new one starts.
+/// the editor on the take once it is closed. Every take is counted down first (`RecorderSettings.countdown`).
+/// While recording, the user can pause the take, mark moments of it, and restart it: the take goes to the
+/// trash and a new one starts.
 @MainActor @Observable
 public final class RecordingController {
     public enum Phase: Equatable, Sendable {
         case idle
+        /// Counting down before the take: nothing is recorded, nor any project made, until it is over. The
+        /// seconds left.
+        case countingDown(remaining: Int)
         /// Checking permissions and starting the sources.
         case starting
         case recording(since: Date)
@@ -35,9 +39,28 @@ public final class RecordingController {
     public internal(set) var lastProjectURL: URL? {
         didSet { defaults.set(lastProjectURL?.path, forKey: Self.lastProjectKey) }
     }
+    /// What the take was asked to record, from the countdown until the controller is idle again. A restart
+    /// records it again, and does not change it.
+    public private(set) var currentRequest: TakeRequest?
+    /// The start waits for the answer to a system permission prompt: the island makes room for it.
+    public private(set) var isAskingPermission = false
 
-    /// From the moment a take is asked for until it is closed.
+    /// From the moment a take is asked for (its countdown included) until it is closed.
     public var isRecording: Bool { phase != .idle }
+
+    /// Whether the take records a microphone: one was chosen, and no notice says it is not recorded (the
+    /// Mac has none, access is off, it did not start or it was lost).
+    public var recordsMicrophone: Bool {
+        guard let currentRequest, currentRequest.selection.microphone != .off else { return false }
+        let without: [TakeNotice] = [.noMicrophone, .microphoneAccessOff, .microphoneFailedToStart, .trackLost(.microphone)]
+        return !notices.contains(where: without.contains)
+    }
+
+    /// The peak of the microphone's last block, in dBFS, while a take records it; `AudioPeak.silence`
+    /// otherwise. Read it as often as it is drawn: it is not observed.
+    public var microphoneLevel: Float {
+        take?.microphoneMeter?.peakDecibels ?? AudioPeak.silence
+    }
 
     public var hasLastProject: Bool {
         lastProjectURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
@@ -55,6 +78,8 @@ public final class RecordingController {
 
     private static let lastProjectKey = "lastProjectPath"
     private static let maximumNotices = 6
+    /// How often the microphone is checked for silence.
+    private static let silenceCheckInterval = Duration.milliseconds(250)
     static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
 
     /// What closing a take found.
@@ -76,6 +101,8 @@ public final class RecordingController {
         let starting: Task<String, any Error>
         /// Hears the take's warnings; ends when they do, once the take is closed or has failed to start.
         let warnings: Task<Void, Never>
+        /// The take's microphone, metered.
+        let microphoneMeter: MeteredSource?
     }
 
     @ObservationIgnored private let probe: any PermissionProbe
@@ -87,11 +114,14 @@ public final class RecordingController {
     @ObservationIgnored var stopTask: Task<Void, Never>?
     /// Set by a stop that came before the take had a recording: the start gives up.
     @ObservationIgnored private var startCancelled = false
-    /// What the take was asked to record, from the start until the controller is idle again. A restart
-    /// records it again.
-    @ObservationIgnored var currentRequest: TakeRequest?
     /// The take's pause, resume and marker requests, each sent once the one before has returned.
     @ObservationIgnored var userRequests: Task<Void, Never>?
+    /// The pauses and resumes sent to the take that have not returned yet.
+    @ObservationIgnored var pendingPauseRequests = 0
+    /// Whether the user's pause is on, as the take last accepted it.
+    @ObservationIgnored var acceptedUserPause = false
+    /// Tells the take's notices when its microphone hears nothing (`SilenceWatch`).
+    @ObservationIgnored private var silenceWatch: Task<Void, Never>?
     /// The current take stopped by itself because the disk is full.
     @ObservationIgnored var autoStopped = false
     /// `stopTask` is a restart closing its take.
@@ -117,40 +147,68 @@ public final class RecordingController {
 
     // MARK: - Start
 
-    /// Records `selection` with `settings`. A microphone that is `.off` is neither asked for nor missed.
+    /// Records `selection` with `settings`, once the countdown is over. A microphone that is `.off` is
+    /// neither asked for nor missed. Without screen recording the permissions open, and nothing counts down.
     public func startRecording(selection: CaptureSelection, settings: QuickSettings) {
         guard phase == .idle else { return }
-        begin(TakeRequest(selection: selection, settings: settings), carrying: [])
-    }
-
-    /// Starts a take of `request`; `carried` is what the user should still know about the take it restarts.
-    func begin(_ request: TakeRequest, carrying carried: [TakeNotice]) {
-        startCancelled = false
-        currentRequest = request
-        setPhase(.starting)
-        startTask = Task { await start(request, carrying: carried) }
-    }
-
-    /// The notices of the take start as `carried`, which stay whether or not it starts.
-    private func start(_ request: TakeRequest, carrying carried: [TakeNotice]) async {
-        let wantsMicrophone = request.selection.microphone != .off
-        // Chosen, and the Mac has one.
-        let usesMicrophone = wantsMicrophone && environment.hasMicrophone()
-        var preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
-        guard preflight.canRecord else {
-            setPhase(.idle)
+        let request = TakeRequest(selection: selection, settings: settings)
+        guard RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone(request)).canRecord else {
             openOnboarding()
             return
         }
-        // Never asked: the system asks now, and the take starts with the answer.
-        if usesMicrophone, probe.state(of: .microphone) == .notDetermined {
+        begin(request, carrying: [], restarting: false)
+    }
+
+    /// Starts a take of `request`, counting down `RecorderSettings.countdown` seconds first (read now, so a
+    /// change applies from the next take or restart); `carried` is what the user should still know about the
+    /// take it restarts. A restart does not ask for permissions again.
+    func begin(_ request: TakeRequest, carrying carried: [TakeNotice], restarting: Bool) {
+        startCancelled = false
+        currentRequest = request
+        let countdown = SettingsStore(defaults: defaults).settings.countdown
+        setPhase(countdown > 0 ? .countingDown(remaining: countdown) : .starting)
+        startTask = Task { await start(request, carrying: carried, countdown: countdown, restarting: restarting) }
+    }
+
+    /// Chosen, and the Mac has one.
+    private func usesMicrophone(_ request: TakeRequest) -> Bool {
+        request.selection.microphone != .off && environment.hasMicrophone()
+    }
+
+    /// The notices of the take start as `carried`, which stay whether or not it starts.
+    private func start(_ request: TakeRequest, carrying carried: [TakeNotice], countdown: Int, restarting: Bool) async {
+        let wantsMicrophone = request.selection.microphone != .off
+        let usesMicrophone = usesMicrophone(request)
+        // Never asked: the system asks now, while the countdown shows its first second, and the take
+        // starts with the answer.
+        if !restarting, usesMicrophone, probe.state(of: .microphone) == .notDetermined {
+            isAskingPermission = true
             _ = await probe.request(.microphone)
-            preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
+            isAskingPermission = false
         }
-        guard preflight.canRecord, !startCancelled else {
+        // Task 17a: `takeWillStart` goes here, once the permissions are answered and before the countdown.
+
+        // A stop during the countdown cancels this task: the wait in progress ends at once.
+        do {
+            for remaining in stride(from: countdown, to: 0, by: -1) {
+                guard !startCancelled else { throw CancellationError() }
+                try await environment.sleep(.seconds(1))
+                guard !startCancelled, !Task.isCancelled else { throw CancellationError() }
+                if remaining > 1 { setPhase(.countingDown(remaining: remaining - 1)) }
+            }
+        } catch {
+            // Stopped while counting down: nothing was made.
             setPhase(.idle)
             return
         }
+        let preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
+        guard preflight.canRecord, !startCancelled else {
+            setPhase(.idle)
+            // Screen recording was turned off meanwhile.
+            if !startCancelled { openOnboarding() }
+            return
+        }
+        setPhase(.starting)
 
         notices = carried
         if !carried.contains(.closedWithError) { lastCloseError = nil }
@@ -251,7 +309,8 @@ public final class RecordingController {
                 self?.received(warning, from: recording, kinds: kinds)
             }
         }
-        take = Take(recording: recording, package: package, starting: starting, warnings: warnings)
+        take = Take(
+            recording: recording, package: package, starting: starting, warnings: warnings, microphoneMeter: prepared.microphoneMeter)
         environment.termination.takeBegan()
 
         Self.logger.notice("Starting a take in \(package.url.path, privacy: .public)")
@@ -263,6 +322,7 @@ public final class RecordingController {
             recordedTime.began(at: since)
             if isPaused { recordedTime.paused(at: since) }
             setPhase(.recording(since: since))
+            if let meter = prepared.microphoneMeter { watchForSilence(of: meter, in: recording) }
             return .started
         } catch {
             Self.logger.error("The take could not start: \(String(describing: error), privacy: .public)")
@@ -281,9 +341,10 @@ public final class RecordingController {
     }
 
     /// Closes the take, if any, and returns once it is closed; a stop already in progress is waited for, and
-    /// so is a start still checking permissions or creating the project, which then gives up. A restart
-    /// still closing its take ends as this stop: the take is kept and no new one starts. Safe to call at
-    /// any time, also while quitting.
+    /// so is a start still checking permissions or creating the project, which then gives up. A countdown
+    /// ends at once, without waiting for the second in progress, and nothing is recorded. A restart still
+    /// closing its take ends as this stop: the take is kept and no new one starts. Safe to call at any
+    /// time, also while quitting.
     public func stop(openingEditor: Bool) async {
         if let stopTask {
             if isRestarting { stopDuringRestart = openingEditor && stopDuringRestart != false }
@@ -291,9 +352,16 @@ public final class RecordingController {
             return
         }
         guard let take else {
-            if phase == .starting {
+            switch phase {
+            case .countingDown:
+                startCancelled = true
+                startTask?.cancel()
+                await startTask?.value
+            case .starting:
                 startCancelled = true
                 await startTask?.value
+            case .idle, .recording, .stopping:
+                break
             }
             return
         }
@@ -359,8 +427,12 @@ public final class RecordingController {
     func releaseTake() {
         isPaused = false
         isUserPaused = false
+        acceptedUserPause = false
+        pendingPauseRequests = 0
         autoStopped = false
         userRequests = nil
+        silenceWatch?.cancel()
+        silenceWatch = nil
         recordedTime = RecordedTime()
         take = nil
         environment.termination.takeEnded()
@@ -385,6 +457,32 @@ public final class RecordingController {
     /// A project was recovered: it becomes the last project.
     public func noteRecovered(_ url: URL) {
         lastProjectURL = url
+    }
+
+    // MARK: - Microphone
+
+    /// Every `silenceCheckInterval`, while `recording` is the take, tells `SilenceWatch` how loud `meter`
+    /// is and how long the take has recorded: `microphoneSilent` comes once if it hears nothing, and goes
+    /// once it hears something.
+    private func watchForSilence(of meter: MeteredSource, in recording: any TakeRecording) {
+        silenceWatch?.cancel()
+        silenceWatch = Task { [weak self] in
+            var watch = SilenceWatch()
+            while true {
+                try? await Task.sleep(for: Self.silenceCheckInterval)
+                guard !Task.isCancelled, let self, take?.recording === recording else { return }
+                let recorded = recordedTime.elapsed(at: environment.now())
+                switch watch.observe(peakDecibels: meter.peakDecibels, recordedSeconds: Double(recorded.components.seconds)) {
+                case .listening:
+                    break
+                case .silent:
+                    addNotice(.microphoneSilent)
+                case .heard:
+                    notices.removeAll { $0 == .microphoneSilent }
+                    return
+                }
+            }
+        }
     }
 
     // MARK: - Helpers

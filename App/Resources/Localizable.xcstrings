@@ -325,6 +325,16 @@
         }
       }
     },
+    "Countdown" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta regresiva"
+          }
+        }
+      }
+    },
     "Display" : {
       "comment" : "What to record: a whole display",
       "localizations" : {
@@ -362,6 +372,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dibujar en la pantalla"
+          }
+        }
+      }
+    },
+    "Esc to cancel" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esc para cancelar"
           }
         }
       }
@@ -487,6 +507,16 @@
         }
       }
     },
+    "Marker" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador"
+          }
+        }
+      }
+    },
     "Microphone" : {
       "localizations" : {
         "es" : {
@@ -548,6 +578,39 @@
         }
       }
     },
+    "New Recording or Stop" : {
+      "comment" : "Settings: the shortcut that opens the island at rest and stops a take",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nueva grabación o detener"
+          }
+        }
+      }
+    },
+    "No Shortcut" : {
+      "comment" : "Settings: an action without a shortcut",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin atajo"
+          }
+        }
+      }
+    },
+    "No Signal" : {
+      "comment" : "The recording wings: the microphone hears nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin señal"
+          }
+        }
+      }
+    },
     "No display is chosen to record." : {
       "localizations" : {
         "es" : {
@@ -589,7 +652,7 @@
       }
     },
     "None" : {
-      "comment" : "System audio: record none",
+      "comment" : "System audio: record none; the countdown: none",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -692,8 +755,19 @@
         }
       }
     },
+    "Pause or Resume" : {
+      "comment" : "Settings: the shortcut that pauses or resumes the take",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pausar o reanudar"
+          }
+        }
+      }
+    },
     "Paused" : {
-      "comment" : "Menu item while the user has paused the take",
+      "comment" : "Menu item, and the open island, while the user has paused the take",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -818,6 +892,24 @@
         }
       }
     },
+    "Recording (island state)" : {
+      "comment" : "The open island while a take records: its state",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recording"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabando"
+          }
+        }
+      }
+    },
     "Recording stopped: the disk is almost full." : {
       "localizations" : {
         "es" : {
@@ -914,6 +1006,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La recuperación ya está en curso."
+          }
+        }
+      }
+    },
+    "Remove Shortcut" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar el atajo"
+          }
+        }
+      }
+    },
+    "Restart" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reiniciar"
+          }
+        }
+      }
+    },
+    "Restart Take" : {
+      "comment" : "Settings: the shortcut that restarts the take",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reiniciar la toma"
+          }
+        }
+      }
+    },
+    "Restart the take? This one goes to the trash." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Reiniciar la toma? La actual va a la papelera."
+          }
+        }
+      }
+    },
+    "Resume" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reanudar"
           }
         }
       }
@@ -1018,6 +1161,36 @@
         }
       }
     },
+    "Settings…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustes…"
+          }
+        }
+      }
+    },
+    "Shortcuts" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atajos"
+          }
+        }
+      }
+    },
+    "Shortcuts need ⌘ or ⌃." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los atajos necesitan ⌘ o ⌃."
+          }
+        }
+      }
+    },
     "Show Trash in Finder" : {
       "localizations" : {
         "es" : {
@@ -1084,6 +1257,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Iniciando la grabación…"
+          }
+        }
+      }
+    },
+    "Stop" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Detener"
           }
         }
       }
@@ -1194,6 +1377,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "El micrófono no se inició."
+          }
+        }
+      }
+    },
+    "The microphone isn't picking up any sound." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El micrófono no está recibiendo sonido."
           }
         }
       }
@@ -1535,6 +1728,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta combinación de grabación todavía no está disponible."
+          }
+        }
+      }
+    },
+    "This shortcut is used by macOS or another app." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS u otra app ya usan este atajo."
+          }
+        }
+      }
+    },
+    "Type Shortcut" : {
+      "comment" : "Settings: the shortcut recorder waits for keys",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir el atajo"
           }
         }
       }

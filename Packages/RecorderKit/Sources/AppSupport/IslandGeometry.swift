@@ -59,7 +59,7 @@ public enum IslandGeometry {
     public static let hoverZoneSize = CGSize(width: 60, height: 8)
 
     public static func shape(_ state: IslandState, on top: ScreenTop) -> IslandShape {
-        // Under a notch. Tasks 16a and 16b add the take's states.
+        // Under a notch. Task 16b adds the states of a take being saved.
         let notchWidth = top.notch.map { Double($0.width) } ?? 0
         let (width, height, radius): (Double, Double, Double) =
             switch state {
@@ -67,6 +67,9 @@ public enum IslandGeometry {
             case .peek: (notchWidth + 90, top.menuBarHeight + 14, 21)
             case .open: (700, 400, 34)
             case .choosing: (560, 48, 24)
+            case .countdown: (236, 214, 62)
+            case .recording: (320, top.menuBarHeight, 13)
+            case .recordingOpen: (640, 226, 34)
             }
         guard top.notch == nil else {
             return IslandShape(width: width, height: height, bottomRadius: radius, roundsTopCorners: false)
@@ -77,7 +80,8 @@ public enum IslandGeometry {
             switch state {
             case .rest: (132, 34)
             case .peek: (262, 38)
-            case .open, .choosing: (width, height)
+            case .recording: (300, 36)
+            case .open, .choosing, .countdown, .recordingOpen: (width, height)
             }
         return IslandShape(width: pillWidth, height: pillHeight, bottomRadius: min(radius + 4, pillHeight / 2), roundsTopCorners: true)
     }
@@ -101,9 +105,9 @@ public enum IslandGeometry {
     /// The spring the island's outline takes toward `state`.
     public static func spring(to state: IslandState) -> Spring {
         switch state {
-        case .open, .choosing: Motion.islandExpand
+        case .open, .choosing, .countdown, .recordingOpen: Motion.islandExpand
         case .peek: Motion.islandPeek
-        case .rest: Motion.islandCollapse
+        case .rest, .recording: Motion.islandCollapse
         }
     }
 }

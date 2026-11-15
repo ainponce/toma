@@ -102,9 +102,9 @@ public final class SyntheticVideoSource: CaptureSource {
     }
 }
 
-/// A fake microphone: 10 ms blocks of `SampleFactory` audio, paced in real time. The first block
-/// is stamped with `clock()` at `start` (or where the previous run ended, if that is later, so PTS
-/// never go back across a restart); each block moves the next PTS by
+/// A fake microphone: 10 ms blocks of `SampleFactory` audio at `amplitude`, paced in real time. The
+/// first block is stamped with `clock()` at `start` (or where the previous run ended, if that is later,
+/// so PTS never go back across a restart); each block moves the next PTS by
 /// `frames / sampleRate × (1 + clockSkewPPM / 1e6)`, like a device clock that drifts from the host's.
 /// `sampleRate` must be at least 100 Hz, so a 10 ms block has at least one frame.
 public final class SyntheticAudioSource: CaptureSource {
@@ -124,6 +124,13 @@ public final class SyntheticAudioSource: CaptureSource {
 
     public var activeDeviceUniqueID: String? { audio.withLock { $0.activeDeviceUniqueID } }
 
+    /// How loud the sine of the blocks is, as a fraction of full scale: 0.25 unless changed; 0 is a
+    /// microphone that hears nothing. Can be changed while it delivers: the next block has it.
+    public var amplitude: Float {
+        get { audio.withLock { $0.amplitude } }
+        set { audio.withLock { $0.amplitude = newValue } }
+    }
+
     /// Calls to `start`, including the ones that threw.
     public var startCount: Int { runner.startCount }
     /// The next `failOnStart` calls to `start` throw `NSError(domain: "Synthetic", code: -1)`.
@@ -140,6 +147,7 @@ public final class SyntheticAudioSource: CaptureSource {
     private struct Audio {
         var sampleRate: Double
         var channels: Int
+        var amplitude: Float = 0.25
         var deviceUniqueID = "synthetic-mic"
         var activeDeviceUniqueID: String?
         var timeline: Timeline?
@@ -162,6 +170,7 @@ public final class SyntheticAudioSource: CaptureSource {
         var frames: Int
         var sampleRate: Double
         var channels: Int
+        var amplitude: Float
     }
 
     public init(
@@ -228,7 +237,8 @@ public final class SyntheticAudioSource: CaptureSource {
         for _ in 0..<Self.maximumBlocksPerTick {
             guard let block = nextDueBlock() else { return }
             let sample = SampleFactory.audioSample(
-                pts: block.pts, frames: block.frames, sampleRate: block.sampleRate, channels: block.channels)
+                pts: block.pts, frames: block.frames, sampleRate: block.sampleRate, channels: block.channels,
+                amplitude: block.amplitude)
             sink.source(trackID, didOutput: sample)
         }
     }
@@ -244,7 +254,7 @@ public final class SyntheticAudioSource: CaptureSource {
             let pts = timeline.nextPTS(clockSkewPPM: clockSkewPPM)
             timeline.emittedSeconds += Double(frames) / audio.sampleRate
             audio.timeline = timeline
-            return Block(pts: pts, frames: frames, sampleRate: audio.sampleRate, channels: audio.channels)
+            return Block(pts: pts, frames: frames, sampleRate: audio.sampleRate, channels: audio.channels, amplitude: audio.amplitude)
         }
     }
 

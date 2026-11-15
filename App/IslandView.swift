@@ -17,11 +17,19 @@ final class IslandModel {
     var reduceTransparency: Bool
     /// The open panel's choices, while the island is open or choosing.
     var panel: OpenPanelModel?
+    /// The open recording island asks whether to restart the take.
+    var isConfirmingRestart = false
 
+    /// The take the island shows.
+    @ObservationIgnored let recording: RecordingController
+    /// The global shortcuts, which the island names.
+    @ObservationIgnored let hotKeys: HotKeyCenter
     /// What the content does to the island.
     @ObservationIgnored var send: (IslandEvent) -> Void = { _ in }
 
-    init(top: ScreenTop, reduceMotion: Bool, reduceTransparency: Bool) {
+    init(recording: RecordingController, hotKeys: HotKeyCenter, top: ScreenTop, reduceMotion: Bool, reduceTransparency: Bool) {
+        self.recording = recording
+        self.hotKeys = hotKeys
         self.top = top
         outline = IslandGeometry.shape(.rest, on: top)
         self.reduceMotion = reduceMotion
@@ -51,12 +59,12 @@ struct IslandView: View {
             .environment(\.islandReduceMotion, model.reduceMotion)
     }
 
-    /// At rest, and peeking, under the notch the island is all black, like the notch.
+    /// At rest, peeking and in its recording wings, under the notch the island is all black, like the notch.
     private var isBlack: Bool {
         guard model.top.notch != nil else { return false }
         switch model.state {
-        case .rest, .peek: return true
-        case .open, .choosing: return false
+        case .rest, .peek, .recording: return true
+        case .open, .choosing, .countdown, .recordingOpen: return false
         }
     }
 }
@@ -77,13 +85,17 @@ private struct IslandContent: View {
         .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top)
     }
 
-    /// Which content a state shows: a new key is a new content, with its transition.
+    /// Which content a state shows: a new key is a new content, with its transition. Every second of the
+    /// countdown is the same content, whose number changes inside it.
     private static func key(_ state: IslandState) -> Int {
         switch state {
         case .rest: 0
         case .peek: 1
         case .open: 2
         case .choosing: 3
+        case .countdown: 4
+        case .recording: 5
+        case .recordingOpen: 6
         }
     }
 
@@ -96,7 +108,7 @@ private struct IslandContent: View {
                 .contentShape(Rectangle())
                 .onTapGesture { model.send(.clicked) }
         case .peek:
-            BelowTheNotch(band: model.notchBand) { PeekRow() }
+            BelowTheNotch(band: model.notchBand) { PeekRow(shortcut: model.hotKeys.bindings.combos[.islandOrStop]) }
                 .contentShape(Rectangle())
                 .onTapGesture { model.send(.clicked) }
         case .open:
@@ -105,6 +117,12 @@ private struct IslandContent: View {
             }
         case .choosing:
             BelowTheNotch(band: model.notchBand) { ChoosingRow(send: model.send) }
+        case .countdown(let remaining):
+            CountdownView(remaining: remaining, topInset: model.notchBand)
+        case .recording:
+            RecordingWings(recording: model.recording)
+        case .recordingOpen:
+            IslandRecordingPanel(recording: model.recording, model: model, topInset: model.notchBand, send: model.send)
         }
     }
 }
@@ -122,8 +140,10 @@ private struct BelowTheNotch<Content: View>: View {
     }
 }
 
-/// The record icon, "New Recording" and the island's shortcut.
+/// The record icon, "New Recording" and the island's shortcut, if it has one.
 private struct PeekRow: View {
+    let shortcut: KeyCombo?
+
     var body: some View {
         HStack(spacing: 7) {
             Image(systemName: "record.circle")
@@ -132,8 +152,7 @@ private struct PeekRow: View {
                 .font(.system(size: 12))
             Text("New Recording")
                 .font(.system(size: 12, weight: .medium))
-            // Task 16a shows the configured shortcut's displayString.
-            KeyCap(text: "⇧⌘2")
+            if let shortcut { KeyCap(text: shortcut.displayString) }
         }
         .foregroundStyle(.white)
         .lineLimit(1)

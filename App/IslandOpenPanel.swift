@@ -30,6 +30,10 @@ final class OpenPanelModel {
     private(set) var displays: [DisplayChoice]
     /// The settings card over the columns.
     var showsSettings = false
+    /// How long the countdown before a take lasts, saved at once.
+    private(set) var countdownSeconds: Int
+    /// The chosen microphone's level, while the panel shows it.
+    let levelPreview = MicrophoneLevelPreview()
 
     /// The pointer is over the row of this display (`nil`: over none).
     @ObservationIgnored var highlight: (UInt32?) -> Void = { _ in }
@@ -48,6 +52,7 @@ final class OpenPanelModel {
         self.displays = displays
         let saved = store.settings
         quick = saved.quick
+        countdownSeconds = saved.countdown
         let connected = Set(displays.map(\.id))
         if let selection = saved.selection, !selection.displayIDs.isEmpty, selection.displayIDs.allSatisfy(connected.contains) {
             self.selection = selection
@@ -96,8 +101,16 @@ final class OpenPanelModel {
         quick.framesPerSecondByDisplay[display.id] = value
     }
 
-    /// Saves the selection and the settings and starts the take, at the frame rates the settings show.
-    func record(send: (IslandEvent) -> Void) {
+    func setCountdown(_ seconds: Int) {
+        countdownSeconds = seconds
+        var settings = store.settings
+        settings.countdownSeconds = seconds
+        store.settings = settings
+    }
+
+    /// Saves the selection and the settings and starts the take, at the frame rates the settings show. The
+    /// take's phase takes the island to the countdown (or the wings).
+    func record() {
         guard recordProblem == nil else { return }
         var quick = quick
         for display in displays where selection.displayIDs.contains(display.id) {
@@ -107,8 +120,6 @@ final class OpenPanelModel {
         settings.selection = selection
         settings.quick = quick
         store.settings = settings
-        // Task 16a: the phase takes the island to the countdown instead.
-        send(.toggle)
         recording.startRecording(selection: selection, settings: quick)
     }
 }
@@ -322,10 +333,11 @@ struct IslandOpenPanel: View {
         .pickerStyle(.menu)
         .labelsHidden()
         .controlSize(.small)
+        MicrophoneLevelRow(preview: panel.levelPreview, choice: panel.selection.microphone)
         ColumnSubtitle(text: Text("System Audio"), icon: "speaker.wave.2.fill")
         GlassSegmented(
             items: [
-                .init(value: SystemAudioTab.none, title: Text("None", comment: "System audio: record none")),
+                .init(value: SystemAudioTab.none, title: Text("None", comment: "System audio: record none; the countdown: none")),
                 .init(value: .all, title: Text("All", comment: "System audio: record all of it")),
                 .init(value: .byApp, title: Text("By App")),
             ],
@@ -389,7 +401,7 @@ struct IslandOpenPanel: View {
             let problem = panel.recordProblem
             // The reason is on a container: a disabled button shows no help.
             HStack {
-                Button { panel.record(send: send) } label: {
+                Button { panel.record() } label: {
                     Label {
                         Text("Record", comment: "The button that starts a recording")
                     } icon: {
@@ -431,6 +443,21 @@ private struct SettingsCard: View {
                 }
             }
             Divider().overlay(Color.white.opacity(0.12))
+            HStack(spacing: 8) {
+                Text("Countdown").opacity(0.75)
+                Spacer(minLength: 0)
+                GlassSegmented(
+                    items: RecorderSettings.countdownOptions.map { seconds in
+                        .init(
+                            value: seconds,
+                            title: seconds == 0
+                                ? Text("None", comment: "System audio: record none; the countdown: none")
+                                : Text(verbatim: "\(seconds.formatted()) s"))
+                    },
+                    selection: Binding(get: { panel.countdownSeconds }, set: { panel.setCountdown($0) }),
+                    compact: true)
+            }
+            Divider().overlay(Color.white.opacity(0.12))
             SettingsToggle(title: Text("Do Not Disturb"), icon: "moon.fill").upcoming(.doNotDisturb)
             SettingsToggle(title: Text("Hide Desktop Icons"), icon: "eye.slash").upcoming(.hideDesktopIcons)
         }
@@ -445,6 +472,27 @@ private struct SettingsCard: View {
         // Clicks on the card stay on it.
         .contentShape(Rectangle())
         .onTapGesture {}
+    }
+}
+
+/// The chosen microphone's live level (plan decision 31), heard while the panel shows it: nothing without
+/// microphone access (asked for when Record is clicked) or with the microphone off.
+private struct MicrophoneLevelRow: View {
+    let preview: MicrophoneLevelPreview
+    let choice: DeviceChoice
+
+    var body: some View {
+        // Always there, so it appears and disappears with the panel whether or not it shows the meter.
+        Color.clear
+            .frame(height: 12)
+            .overlay(alignment: .leading) {
+                if preview.isListening {
+                    LevelMeter(peak: { preview.peakDecibels }, bars: 6, height: 12)
+                }
+            }
+            .onAppear { preview.listen(to: choice) }
+            .onChange(of: choice) { preview.listen(to: choice) }
+            .onDisappear { preview.listen(to: nil) }
     }
 }
 

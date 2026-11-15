@@ -26,7 +26,8 @@ enum LiveTakeEnvironment {
             },
             prepareTake: { package, request, granted in try prepareTake(in: package, request, granted: granted, volume: folder) },
             termination: ProcessTerminationGuard(),
-            now: { Date() })
+            now: { Date() },
+            sleep: { duration in try await Task.sleep(for: duration) })
     }
 
     /// The connected displays, from `NSScreen.screens`.
@@ -57,6 +58,7 @@ enum LiveTakeEnvironment {
         logger.notice("Recording \(package.url.path, privacy: .public): \(tracks, privacy: .public)")
         return PreparedTake(
             recording: coordinator, microphone: plan.optional.first,
-            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }))
+            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }),
+            microphoneMeter: plan.microphoneMeter)
     }
 }

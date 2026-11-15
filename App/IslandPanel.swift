@@ -7,14 +7,15 @@ import SwiftUI
 /// The island: one floating panel at the top center of the screen with the pointer, whose frame is always
 /// its visible outline (it never covers clicks outside it). Its width, height and radius are springs
 /// stepped at the display's rate; its content is `IslandView`. It runs `IslandMachine` on what the
-/// pointer, clicks and keys do, and owns the hover zones and the on-screen selection.
+/// pointer, clicks, keys and the take's phase do, and owns the hover zones and the on-screen selection.
+/// While a take records it follows the pointer from screen to screen.
 @MainActor
 final class IslandPanel: NSObject, NSWindowDelegate {
     /// Open or choosing what to record: the app stays out of the Dock meanwhile.
     var isSelecting: Bool {
         switch machine.state {
         case .open, .choosing: true
-        case .rest, .peek: false
+        case .rest, .peek, .countdown, .recording, .recordingOpen: false
         }
     }
 
@@ -44,8 +45,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private var displayLink: CADisplayLink?
     private var lastFrameTime: CFTimeInterval?
     private var deadlineTask: Task<Void, Never>?
+    /// While the wings show: moves the island to the screen with the pointer.
+    private var pointerWatch: Task<Void, Never>?
+    /// The take's phase the machine was last told.
+    private var phase: RecordingController.Phase
     /// The panel is fading out to rest on a screen without a notch.
     private var isHiding = false
+    /// The panel is fading out to another screen, while recording.
+    private var isChangingScreens = false
     /// For the life of the app.
     private var observers: [any NSObjectProtocol] = []
     private let origin = ContinuousClock.now
@@ -54,9 +61,13 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// The display the island is on.
     private var displayID: UInt32
 
+    /// How often the pointer's screen is read while recording (plan decision 22).
+    private static let pointerInterval = Duration.milliseconds(250)
+
     /// The island starts at rest on the screen with the pointer.
-    init(recording: RecordingController) {
+    init(recording: RecordingController, hotKeys: HotKeyCenter) {
         self.recording = recording
+        phase = recording.phase
         let screens = Self.readScreens()
         tops = screens.tops
         names = screens.names
@@ -64,7 +75,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         let top = tops[displayID] ?? ScreenTop(frame: NSScreen.main?.frame ?? .zero, notch: nil, menuBarHeight: 24)
         let workspace = NSWorkspace.shared
         model = IslandModel(
-            top: top, reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
+            recording: recording, hotKeys: hotKeys, top: top, reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
             reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency)
         let rest = IslandGeometry.shape(.rest, on: top)
         width = SpringValue(value: rest.width, spring: Motion.islandCollapse)
@@ -106,12 +117,45 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         applyOutline()
         updateZones()
         showOrHide()
+        observeRecording()
     }
 
     /// "New Recording" in the menu: the island opens on the screen with the pointer.
     func invoke() {
         if canMove, let id = Self.pointerDisplayID() { move(to: id) }
         send(.clicked)
+    }
+
+    /// The island's shortcut (⇧⌘2): during a take it stops it, its countdown included; otherwise the
+    /// island opens on the screen with the pointer, or closes.
+    func shortcutPressed() {
+        if recording.isRecording {
+            recording.stopRecording()
+            return
+        }
+        if canMove, let id = Self.pointerDisplayID() { move(to: id) }
+        send(.toggle)
+    }
+
+    // MARK: - The take
+
+    /// Tells the machine every new phase of the take, and makes room for a system prompt the start waits for.
+    private func observeRecording() {
+        withObservationTracking {
+            _ = recording.phase
+            _ = recording.isAskingPermission
+        } onChange: { [weak self] in
+            // Called before the change: read it once it is made.
+            Task { @MainActor in self?.recordingChanged() }
+        }
+    }
+
+    private func recordingChanged() {
+        observeRecording()
+        if yieldsToSystemPrompt != recording.isAskingPermission { yieldsToSystemPrompt = recording.isAskingPermission }
+        guard recording.phase != phase else { return }
+        phase = recording.phase
+        send(.phaseChanged(phase))
     }
 
     // MARK: - Events
@@ -131,7 +175,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         apply(from: before)
     }
 
-    /// Esc on the island: it closes the settings card if it is open, and otherwise the island.
+    /// Esc on the island: it closes the settings card if it is open, and otherwise the island; during the
+    /// countdown it cancels the take. While recording the island never has the keyboard.
     private func escape() {
         switch machine.state {
         case .open:
@@ -141,16 +186,18 @@ final class IslandPanel: NSObject, NSWindowDelegate {
                 send(.dismiss)
             }
         case .choosing: send(.endedChoosing)
-        case .rest, .peek: break
+        case .countdown: recording.stopRecording()
+        case .rest, .peek, .recording, .recordingOpen: break
         }
     }
 
-    /// ⌘W while the island or the on-screen selection has the keyboard: the island closes.
+    /// ⌘W while the island or the on-screen selection has the keyboard: the island closes. It never stops
+    /// a take: Esc and the island's shortcut do.
     private func close() {
         switch machine.state {
         case .open: send(.dismiss)
         case .choosing: send(.endedChoosing, .dismiss)
-        case .rest, .peek: break
+        case .rest, .peek, .countdown, .recording, .recordingOpen: break
         }
     }
 
@@ -162,10 +209,15 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if let event = presence.exited(region) { send(event) }
     }
 
-    /// Entering a zone also brings the island to that screen. If that screen has a notch, the island now
-    /// covers the zone just entered: the pointer is over the island (`updateZones`).
+    /// Entering a zone also brings the island to that screen (with a fade while recording). If that screen
+    /// has a notch, the island now covers the zone just entered: the pointer is over the island
+    /// (`updateZones`).
     private func zoneEntered(_ id: UInt32) {
-        if canMove { move(to: id) }
+        if canMove {
+            move(to: id)
+        } else if machine.state == .recording {
+            changeScreens(to: id)
+        }
         pointer(entered: .zone(id))
         updateZones()
     }
@@ -207,6 +259,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         default:
             break
         }
+        if state != .recordingOpen { model.isConfirmingRestart = false }
         withAnimation(.island(IslandGeometry.spring(to: state), reduceMotion: model.reduceMotion)) { model.state = state }
         retargetOutline()
 
@@ -219,12 +272,13 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         }
         if before == .choosing { overlay.end() }
         switch state {
-        case .rest, .peek: overlay.end()
+        case .rest, .peek, .countdown, .recording, .recordingOpen: overlay.end()
         case .open, .choosing: break
         }
         showOrHide()
         if state == .choosing { overlay.beginChoosing(names: names, pointerDisplayID: Self.pointerDisplayID()) }
         updateZones()
+        watchPointer(state == .recording)
         selectingChanged()
     }
 
@@ -293,11 +347,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     // MARK: - Screens
 
-    /// The island goes to another screen only from rest or a peek.
+    /// The island goes to another screen only from rest or a peek; while recording it changes screens with
+    /// a fade (`changeScreens`).
     private var canMove: Bool {
         switch machine.state {
         case .rest, .peek: true
-        case .open, .choosing: false
+        case .open, .choosing, .countdown, .recording, .recordingOpen: false
         }
     }
 
@@ -314,6 +369,58 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         retargetOutline()
         updateZones()
         showOrHide()
+    }
+
+    /// While the wings show, the island is on the screen with the pointer: every `pointerInterval` it reads
+    /// where the pointer is, and changes screens if it is on another one.
+    private func watchPointer(_ watching: Bool) {
+        guard watching else {
+            pointerWatch?.cancel()
+            pointerWatch = nil
+            return
+        }
+        guard pointerWatch == nil else { return }
+        pointerWatch = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.pointerInterval)
+                guard !Task.isCancelled, let self else { return }
+                if machine.state == .recording, let id = Self.pointerDisplayID() { changeScreens(to: id) }
+            }
+        }
+    }
+
+    /// While recording, the island goes to `id`'s screen with a fade of `Motion.reducedMotionFade` (half out,
+    /// half in), already in its outline there.
+    private func changeScreens(to id: UInt32) {
+        guard id != displayID, tops[id] != nil, !isChangingScreens, panel.isVisible else { return }
+        isChangingScreens = true
+        let half = Motion.reducedMotionFade.timeInterval / 2
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = half
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            MainActor.assumeIsolated { self?.arrive(at: id, fadingIn: half) }
+        }
+    }
+
+    /// Out of sight: the island is put on `id`'s screen in its outline there, and fades in.
+    private func arrive(at id: UInt32, fadingIn duration: TimeInterval) {
+        isChangingScreens = false
+        if let top = tops[id] {
+            displayID = id
+            model.top = top
+            let shape = IslandGeometry.shape(machine.state, on: top)
+            let spring = IslandGeometry.spring(to: machine.state)
+            width = SpringValue(value: shape.width, spring: spring)
+            height = SpringValue(value: shape.height, spring: spring)
+            radius = SpringValue(value: shape.bottomRadius, spring: spring)
+            landOutline()
+            updateZones()
+        }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = duration
+            panel.animator().alphaValue = 1
+        }
     }
 
     /// On the notch screen it is on, the island stands in for that screen's zone, whose panel leaves the

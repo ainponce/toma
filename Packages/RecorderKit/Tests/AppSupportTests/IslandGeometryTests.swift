@@ -46,6 +46,23 @@ import Testing
         #expect(IslandGeometry.hoverZone(on: top) == CGRect(x: 2442, y: 1072, width: 60, height: 8))
     }
 
+    @Test func recordingShapesFollowTheDesignTable() {
+        let top = Self.notchScreen
+        #expect(IslandGeometry.shape(.countdown(remaining: 3), on: top) == IslandShape(width: 236, height: 214, bottomRadius: 62, roundsTopCorners: false))
+        #expect(IslandGeometry.shape(.countdown(remaining: 1), on: top) == IslandGeometry.shape(.countdown(remaining: 3), on: top))
+        #expect(IslandGeometry.shape(.recording, on: top) == IslandShape(width: 320, height: 32, bottomRadius: 13, roundsTopCorners: false))
+        #expect(IslandGeometry.shape(.recordingOpen, on: top) == IslandShape(width: 640, height: 226, bottomRadius: 34, roundsTopCorners: false))
+
+        let external = Self.externalScreen
+        #expect(IslandGeometry.shape(.recording, on: external) == IslandShape(width: 300, height: 36, bottomRadius: 17, roundsTopCorners: true))
+        #expect(IslandGeometry.shape(.countdown(remaining: 3), on: external) == IslandShape(width: 236, height: 214, bottomRadius: 66, roundsTopCorners: true))
+        #expect(IslandGeometry.shape(.recordingOpen, on: external) == IslandShape(width: 640, height: 226, bottomRadius: 38, roundsTopCorners: true))
+
+        #expect(IslandGeometry.spring(to: .countdown(remaining: 3)) == Motion.islandExpand)
+        #expect(IslandGeometry.spring(to: .recordingOpen) == Motion.islandExpand)
+        #expect(IslandGeometry.spring(to: .recording) == Motion.islandCollapse)
+    }
+
     @Test func springsFollowTheDesignTable() {
         #expect(IslandGeometry.spring(to: .open) == Spring(damping: 0.86, response: 0.56))
         #expect(IslandGeometry.spring(to: .choosing) == Spring(damping: 0.86, response: 0.56))

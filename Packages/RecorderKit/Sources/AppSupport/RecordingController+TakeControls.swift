@@ -4,15 +4,28 @@ import Recording
 
 /// The user's controls over the take being recorded: pause, markers and restart.
 extension RecordingController {
-    /// Pauses the take being recorded, or resumes it if the user paused it. The time recorded stops when
-    /// the take really pauses (`RecordedTime` follows the take's `paused` and `resumed`).
+    /// Pauses the take being recorded, or resumes it if the user paused it. `isUserPaused` changes at once,
+    /// and goes back to what the take last accepted if the take refuses (it is closing). The time recorded
+    /// stops when the take really pauses (`RecordedTime` follows the take's `paused` and `resumed`).
     public func togglePause() {
         guard case .recording = phase, let recording = take?.recording else { return }
         let pausing = !isUserPaused
         isUserPaused = pausing
-        send(to: recording, pausing ? "pause" : "resume") { recording in
+        pendingPauseRequests += 1
+        send(
+            to: recording, pausing ? "pause" : "resume",
+            then: { [weak self] accepted in self?.pauseReturned(pausing: pausing, accepted: accepted, from: recording) }
+        ) { recording in
             if pausing { try await recording.pause() } else { try await recording.resume() }
         }
+    }
+
+    /// Once every pause and resume sent has returned, `isUserPaused` is what the take last accepted.
+    private func pauseReturned(pausing: Bool, accepted: Bool, from recording: any TakeRecording) {
+        guard take?.recording === recording else { return }
+        if accepted { acceptedUserPause = pausing }
+        pendingPauseRequests -= 1
+        if pendingPauseRequests == 0 { isUserPaused = acceptedUserPause }
     }
 
     /// Marks this moment of the take being recorded. Nothing is written while the take is paused.
@@ -21,27 +34,30 @@ extension RecordingController {
         send(to: recording, "marker") { recording in _ = try await recording.addMarker() }
     }
 
-    /// Sends `request` once the requests sent before it have returned, so they reach the take in order. A
-    /// take that is closing refuses it.
+    /// Sends `request` once the requests sent before it have returned, so they reach the take in order, and
+    /// then tells whether the take accepted it. A take that is closing refuses it.
     private func send(
-        to recording: any TakeRecording, _ name: String, _ request: @escaping @Sendable (any TakeRecording) async throws -> Void
+        to recording: any TakeRecording, _ name: String, then returned: @escaping @MainActor (_ accepted: Bool) -> Void = { _ in },
+        _ request: @escaping @Sendable (any TakeRecording) async throws -> Void
     ) {
         let previous = userRequests
         userRequests = Task {
             await previous?.value
             do {
                 try await request(recording)
+                returned(true)
             } catch {
                 Self.logger.notice("The take refused the \(name, privacy: .public): \(String(describing: error), privacy: .public)")
+                returned(false)
             }
         }
     }
 
     /// Closes the take being recorded without opening it, moves its project to the trash and records a new
-    /// take of the same request, in a new project. What the restart could not do is said in the notices:
-    /// a take that closed with an error is kept (`closedWithError`), and so is one that could not be moved
-    /// (`couldNotMoveToTrash`); the new take starts either way. A take the disk stopped is kept and opened,
-    /// and nothing new starts; so does a stop that comes while the take closes.
+    /// take of the same request, in a new project, after counting down again. What the restart could not do
+    /// is said in the notices: a take that closed with an error is kept (`closedWithError`), and so is one
+    /// that could not be moved (`couldNotMoveToTrash`); the new take starts either way. A take the disk
+    /// stopped is kept and opened, and nothing new starts; so does a stop that comes while the take closes.
     public func restartTake() {
         guard case .recording = phase, stopTask == nil, let take, let request = currentRequest else { return }
         isRestarting = true
@@ -84,6 +100,6 @@ extension RecordingController {
         }
         notices = carried
         stopTask = nil
-        begin(request, carrying: carried)
+        begin(request, carrying: carried, restarting: true)
     }
 }

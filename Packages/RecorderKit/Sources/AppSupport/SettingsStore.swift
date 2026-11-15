@@ -7,13 +7,22 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     /// What was chosen to record last; `nil` until something is chosen.
     public var selection: CaptureSelection?
     public var quick: QuickSettings
-    /// How long the countdown before a take lasts.
+    /// How long the countdown before a take lasts, in seconds: 0, 3, 5 or 10 (`countdownOptions`).
     public var countdownSeconds: Int = 3
+    /// The global shortcuts.
+    public var hotKeys: HotKeyBindings = .defaults
 
-    public init(selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3) {
+    /// The countdowns the settings offer.
+    public static let countdownOptions = [0, 3, 5, 10]
+
+    public init(
+        selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
+        hotKeys: HotKeyBindings = .defaults
+    ) {
         self.selection = selection
         self.quick = quick
         self.countdownSeconds = countdownSeconds
+        self.hotKeys = hotKeys
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -24,6 +33,12 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         selection = (try? container.decodeIfPresent(CaptureSelection.self, forKey: .selection)) ?? defaults.selection
         quick = (try? container.decodeIfPresent(QuickSettings.self, forKey: .quick)) ?? defaults.quick
         countdownSeconds = (try? container.decodeIfPresent(Int.self, forKey: .countdownSeconds)) ?? defaults.countdownSeconds
+        hotKeys = (try? container.decodeIfPresent(HotKeyBindings.self, forKey: .hotKeys)) ?? defaults.hotKeys
+    }
+
+    /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.
+    public var countdown: Int {
+        min(max(countdownSeconds, 0), Self.countdownOptions.max() ?? 0)
     }
 }
 

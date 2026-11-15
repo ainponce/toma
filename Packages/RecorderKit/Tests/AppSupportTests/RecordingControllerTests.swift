@@ -92,6 +92,7 @@ enum AwaitPoint: CaseIterable {
                 TakeRequest(selection: withoutMicrophone, settings: QuickSettings()),
             ])
             #expect(rig.controller.notices.contains(.microphoneFailedToStart))
+            #expect(!rig.controller.recordsMicrophone)
             await rig.controller.stop(openingEditor: true)
 
             #expect(rig.controller.phase == .idle)
@@ -113,7 +114,9 @@ enum AwaitPoint: CaseIterable {
             rig.controller.startRecording(selection: selection, settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             #expect(rig.controller.notices.contains(.cameraNotRecordedYet))
+            #expect(rig.controller.recordsMicrophone)
             await rig.controller.stop(openingEditor: false)
+            #expect(!rig.controller.recordsMicrophone)  // no take
 
             let package = try #require(rig.takes.packages.first)
             let take = try #require(try rig.takesOnDisk(package.url).first)
@@ -133,6 +136,7 @@ enum AwaitPoint: CaseIterable {
             selection.microphone = .off
             rig.controller.startRecording(selection: selection, settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(!rig.controller.recordsMicrophone)
             await rig.controller.stop(openingEditor: false)
 
             #expect(rig.probe.requests.isEmpty)
@@ -542,6 +546,191 @@ enum AwaitPoint: CaseIterable {
             #expect(rig.controller.phase == .idle)
         }
     }
+
+    // MARK: - Countdown
+
+    @Test func countdownTicksThreeTwoOneThenStarts() async throws {
+        try await withRig(countdown: 3) { rig in
+            rig.sleep.hold(from: 1)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            // In the act, before anything waits.
+            #expect(rig.controller.phase == .countingDown(remaining: 3))
+            #expect(rig.controller.currentRequest == TakeRequest(selection: .mainDisplay(1), settings: QuickSettings()))
+            #expect(rig.recordingStateChanges == 1)  // counting down is recording, for the Dock and the updater
+            for (wait, remaining) in [(1, 3), (2, 2), (3, 1)] {
+                #expect(await eventually { rig.sleep.heldCall == wait })
+                #expect(rig.controller.phase == .countingDown(remaining: remaining))
+                if wait == 3 { rig.creation.close() }  // the project is created only once the countdown is over
+                #expect(rig.creation.arrivals == 0)
+                rig.sleep.release()
+            }
+            #expect(await eventually { rig.creation.arrivals == 1 })
+            #expect(rig.controller.phase == .starting)
+            rig.creation.open()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.sleep.calls == [.seconds(1), .seconds(1), .seconds(1)])
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.currentRequest == nil)
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func stopDuringCountdownStartsNothing() async throws {
+        try await withRig(countdown: 3) { rig in
+            rig.sleep.hold(from: 2)
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.sleep.heldCall == 2 })
+            #expect(rig.controller.phase == .countingDown(remaining: 2))
+            // Returns although the second in progress is never let go.
+            await rig.controller.stop(openingEditor: true)
+
+            #expect(rig.sleep.wasCancelled)
+            #expect(rig.controller.phase == .idle)
+            #expect(rig.controller.currentRequest == nil)
+            let packages = try rig.packagesOnDisk()
+            #expect(packages.isEmpty)
+            #expect(rig.creation.arrivals == 0 && rig.takes.requests.isEmpty)
+            #expect(rig.controller.notices.isEmpty)  // nothing was recorded, so nothing is said about it
+            #expect(rig.termination.began == 0 && rig.termination.ended == 0)
+            #expect(rig.editorOpenings.isEmpty && rig.startFailures.isEmpty)
+            #expect(rig.recordingStateChanges == 2)
+        }
+    }
+
+    @Test func askingForTheMicrophoneIsVisible() async throws {
+        try await withRig(microphone: .notDetermined, countdown: 3) { rig in
+            rig.probe.gate.close()
+            rig.sleep.hold(from: 1)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(rig.controller.phase == .countingDown(remaining: 3))
+            #expect(await eventually { rig.controller.isAskingPermission })
+            #expect(rig.controller.phase == .countingDown(remaining: 3))
+            #expect(rig.sleep.calls.isEmpty)  // the countdown waits for the answer
+            rig.probe.gate.open()
+            // Answered: no longer asking, before the countdown goes on.
+            #expect(await eventually { rig.sleep.heldCall == 1 })
+            #expect(!rig.controller.isAskingPermission)
+            #expect(rig.controller.phase == .countingDown(remaining: 3))
+            rig.sleep.releaseAll()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(!rig.controller.isAskingPermission)
+            #expect(rig.probe.requests == [.microphone])
+            #expect(rig.takes.grants == [[.screenRecording, .microphone]])
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
+    @Test func zeroCountdownStartsImmediately() async throws {
+        try await withRig(countdown: 0) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(rig.controller.phase == .starting)
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.sleep.calls.isEmpty)
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
+    @Test func noScreenPermissionOpensThePermissionsWithoutCounting() async throws {
+        try await withRig(screenRecording: .denied, countdown: 3) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(rig.controller.phase == .idle && rig.controller.currentRequest == nil)
+            #expect(rig.onboardingOpenings == 1)
+            #expect(rig.recordingStateChanges == 0)
+            #expect(rig.sleep.calls.isEmpty && rig.probe.requests.isEmpty)
+        }
+    }
+
+    @Test func restartTakeCountsDownAgain() async throws {
+        try await withRig(countdown: 3) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.sleep.calls.count == 3)
+            let request = TakeRequest(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(rig.controller.currentRequest == request)
+            try await Task.sleep(for: .milliseconds(300))
+
+            rig.sleep.hold(from: 4)
+            rig.controller.restartTake()
+            #expect(await eventually { rig.sleep.heldCall == 4 })
+            #expect(rig.controller.phase == .countingDown(remaining: 3))
+            #expect(rig.controller.currentRequest == request)
+            #expect(rig.takes.packages.count == 1)  // the new take waits for the countdown
+            rig.sleep.releaseAll()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            #expect(rig.sleep.calls == Array(repeating: .seconds(1), count: 6))
+            #expect(rig.controller.currentRequest == request)
+            #expect(rig.recordingStateChanges == 1)
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.currentRequest == nil)
+        }
+    }
+
+    // MARK: - Microphone level
+
+    @Test func microphoneSilentNoticeComesAndGoes() async throws {
+        try await withRig { rig in
+            let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+            rig.now.set(start)
+            #expect(rig.controller.microphoneLevel == -160)  // no take
+            // A microphone that hears nothing from its first block on.
+            rig.startGate.close()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.startGate.arrivals == 1 })
+            let microphone = try #require(rig.takes.factory.microphones.last)
+            microphone.amplitude = 0
+            rig.startGate.open()
+            #expect(await eventually { rig.controller.phase == .recording(since: start) })
+            #expect(await eventually { rig.controller.microphoneLevel == -160 })
+
+            rig.now.set(start + 4)
+            try await Task.sleep(for: .milliseconds(600))  // two checks of the silence
+            #expect(!rig.controller.notices.contains(.microphoneSilent))
+            rig.now.set(start + 5)
+            #expect(await eventually { rig.controller.notices.contains(.microphoneSilent) })
+            #expect(rig.controller.notices.filter { $0 == .microphoneSilent }.count == 1)
+
+            microphone.amplitude = 0.25
+            #expect(await eventually { abs(rig.controller.microphoneLevel - -12.04) < 0.1 })
+            #expect(await eventually { !rig.controller.notices.contains(.microphoneSilent) })
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.microphoneLevel == -160)
+        }
+    }
+
+    @Test func aMicrophoneThatHearsIsNeverSilent() async throws {
+        try await withRig { rig in
+            let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+            rig.now.set(start)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase == .recording(since: start) })
+            #expect(await eventually { abs(rig.controller.microphoneLevel - -12.04) < 0.1 })
+            try await Task.sleep(for: .milliseconds(300))
+            rig.now.set(start + 10)
+            try await Task.sleep(for: .milliseconds(600))
+            #expect(!rig.controller.notices.contains(.microphoneSilent))
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
+    @Test func refusedPauseLeavesTheTakeUnpaused() async throws {
+        try await withRig { rig in
+            // The take closes on its own (the disk is full), and the controller hears of it late: a pause
+            // asked for meanwhile is refused.
+            rig.autoStopGate.close()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+            #expect(await eventually { rig.controller.notices.contains(.stoppedForDiskSpace) })
+            rig.controller.togglePause()
+            #expect(rig.controller.isUserPaused)  // at once, while the take is asked
+            #expect(await eventually { !rig.controller.isUserPaused })
+            #expect(rig.controller.phase.isRecordingATake)
+            rig.autoStopGate.open()
+            #expect(await eventually { rig.controller.phase == .idle })
+        }
+    }
 }
 
 // MARK: - Rig
@@ -559,17 +748,20 @@ extension RecordingController.Phase {
 
 /// A controller whose takes are recorded in a fresh folder with its own defaults, both removed afterwards.
 /// Without `keepingTakes`, the rig holds the takes it makes only weakly (`PreparedTakes.made`).
+/// The countdown lasts `countdown` seconds (none unless a test is about it), each of them a wait of
+/// `Rig.sleep`, which returns at once unless the test holds it.
 @MainActor private func withRig(
-    microphone: PermissionState = .granted, hasMicrophone: Bool = true, keepingTakes: Bool = true,
-    _ body: (Rig) async throws -> Void
+    screenRecording: PermissionState = .granted, microphone: PermissionState = .granted, hasMicrophone: Bool = true,
+    keepingTakes: Bool = true, countdown: Int = 0, _ body: (Rig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "RecordingControllerTests-\(UUID().uuidString)"
         let defaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
         defer { defaults.removePersistentDomain(forName: suite) }
+        SettingsStore(defaults: defaults).settings = RecorderSettings(countdownSeconds: countdown)
         try await body(Rig(
-            in: directory, defaults: defaults, microphone: microphone, hasMicrophone: hasMicrophone,
-            keepingTakes: keepingTakes))
+            in: directory, defaults: defaults, screenRecording: screenRecording, microphone: microphone,
+            hasMicrophone: hasMicrophone, keepingTakes: keepingTakes))
     }
 }
 
@@ -594,14 +786,20 @@ extension RecordingController.Phase {
     let termination: CountingTerminationGuard
     let disk: FakeDisk
     let now = TestNow()
+    /// The countdown's waits.
+    let sleep = CountdownSleep()
     let takes: PreparedTakes
     let controller: RecordingController
     private(set) var editorOpenings: [EditorOpening] = []
     private(set) var startFailures: [any Error] = []
     /// How many times `isRecording` changed.
     private(set) var recordingStateChanges = 0
+    private(set) var onboardingOpenings = 0
 
-    init(in directory: URL, defaults: UserDefaults, microphone: PermissionState, hasMicrophone: Bool, keepingTakes: Bool) {
+    init(
+        in directory: URL, defaults: UserDefaults, screenRecording: PermissionState, microphone: PermissionState,
+        hasMicrophone: Bool, keepingTakes: Bool
+    ) {
         let folder = directory.appendingPathComponent("Movies/Toma", isDirectory: true)
         let (creation, startGate, stopGate, autoStopGate) = (Gate(), Gate(), Gate(), Gate())
         let termination = CountingTerminationGuard()
@@ -609,7 +807,7 @@ extension RecordingController.Phase {
         let takes = PreparedTakes(
             disk: disk, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate, keepingTakes: keepingTakes)
         self.folder = folder
-        probe = GatedProbe(microphone: microphone)
+        probe = GatedProbe(screenRecording: screenRecording, microphone: microphone)
         (self.creation, self.startGate, self.stopGate, self.autoStopGate) = (creation, startGate, stopGate, autoStopGate)
         self.termination = termination
         self.disk = disk
@@ -625,11 +823,13 @@ extension RecordingController.Phase {
             },
             prepareTake: { package, request, granted in try takes.prepare(package, request, granted) },
             termination: termination,
-            now: { [now] in now.date })
+            now: { [now] in now.date },
+            sleep: { [sleep] duration in try await sleep.sleep(duration) })
         controller = RecordingController(probe: probe, environment: environment, defaults: defaults)
         controller.openEditor = { [weak self] url, take in self?.editorOpenings.append(EditorOpening(package: url, take: take)) }
         controller.showStartFailure = { [weak self] error in self?.startFailures.append(error) }
         controller.recordingStateChanged = { [weak self] in self?.recordingStateChanges += 1 }
+        controller.openOnboarding = { [weak self] in self?.onboardingOpenings += 1 }
     }
 
     /// The packages in the projects folder; none if it was never created.
@@ -699,7 +899,8 @@ extension RecordingController.Phase {
         made.append(MadeTake(recording: recording, coordinator: coordinator))
         return PreparedTake(
             recording: recording, microphone: plan.optional.first,
-            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }))
+            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }),
+            microphoneMeter: plan.microphoneMeter)
     }
 }
 
@@ -830,23 +1031,25 @@ private final class Gate: Sendable {
     }
 }
 
-/// Screen recording is granted; the microphone starts as given, and the system prompt for it, held
+/// Screen recording and the microphone start as given, and the system prompt for the microphone, held
 /// by `gate`, grants it.
 private final class GatedProbe: PermissionProbe {
     let gate = Gate()
+    private let screenRecording: PermissionState
     private let microphone: Mutex<PermissionState>
     private let requested = Mutex<[PermissionKind]>([])
 
     /// What was requested, in order.
     var requests: [PermissionKind] { requested.withLock { $0 } }
 
-    init(microphone: PermissionState) {
+    init(screenRecording: PermissionState, microphone: PermissionState) {
+        self.screenRecording = screenRecording
         self.microphone = Mutex(microphone)
     }
 
     func state(of kind: PermissionKind) -> PermissionState {
         switch kind {
-        case .screenRecording: .granted
+        case .screenRecording: screenRecording
         case .microphone: microphone.withLock { $0 }
         }
     }
@@ -857,6 +1060,79 @@ private final class GatedProbe: PermissionProbe {
         guard kind == .microphone else { return state(of: kind) }
         microphone.withLock { $0 = .granted }
         return .granted
+    }
+}
+
+/// The countdown's `sleep`: records every wait and returns at once, except the waits from the one
+/// `hold(from:)` names on, each held until `release()`. A held wait whose task is cancelled throws
+/// `CancellationError` at once, as `Task.sleep` does.
+private final class CountdownSleep: Sendable {
+    private struct State {
+        var calls: [Duration] = []
+        /// The first call (1-based) that is held.
+        var holdingFrom: Int?
+        /// The call held now, and who waits in it.
+        var held: (call: Int, continuation: CheckedContinuation<Void, any Error>)?
+        /// The call cancelled before it was held.
+        var cancelledCall: Int?
+        var wasCancelled = false
+    }
+
+    private let state = Mutex(State())
+
+    /// Every wait asked for, in order.
+    var calls: [Duration] { state.withLock { $0.calls } }
+    /// The wait being held, by its number (1-based).
+    var heldCall: Int? { state.withLock { $0.held?.call } }
+    var wasCancelled: Bool { state.withLock { $0.wasCancelled } }
+
+    func hold(from call: Int) {
+        state.withLock { $0.holdingFrom = call }
+    }
+
+    /// Lets the wait being held go on; the next ones are still held.
+    func release() {
+        let held = state.withLock { state in
+            defer { state.held = nil }
+            return state.held
+        }
+        held?.continuation.resume()
+    }
+
+    /// Lets the wait being held go on, and holds none from now on.
+    func releaseAll() {
+        state.withLock { $0.holdingFrom = nil }
+        release()
+    }
+
+    func sleep(_ duration: Duration) async throws {
+        try Task.checkCancellation()
+        let call = state.withLock { state in
+            state.calls.append(duration)
+            return state.calls.count
+        }
+        guard let first = state.withLock({ $0.holdingFrom }), call >= first else { return }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                let cancelled = state.withLock { state in
+                    guard state.cancelledCall != call else { return true }
+                    state.held = (call, continuation)
+                    return false
+                }
+                if cancelled { continuation.resume(throwing: CancellationError()) }
+            }
+        } onCancel: {
+            let held = state.withLock { state -> CheckedContinuation<Void, any Error>? in
+                state.wasCancelled = true
+                guard let held = state.held, held.call == call else {
+                    state.cancelledCall = call
+                    return nil
+                }
+                state.held = nil
+                return held.continuation
+            }
+            held?.resume(throwing: CancellationError())
+        }
     }
 }
 

@@ -16,11 +16,16 @@ public struct TakePlan {
     /// take is recorded again without it (`MicrophoneFallback`).
     public var optional: [StartTrackingSource]
     public var input: any InputRecorder
+    /// The microphone as it was made, inside the `StartTrackingSource` of `sources`: it says how loud it is.
+    public var microphoneMeter: MeteredSource? = nil
 
-    public init(sources: [any CaptureSource], optional: [StartTrackingSource], input: any InputRecorder) {
+    public init(
+        sources: [any CaptureSource], optional: [StartTrackingSource], input: any InputRecorder, microphoneMeter: MeteredSource? = nil
+    ) {
         self.sources = sources
         self.optional = optional
         self.input = input
+        self.microphoneMeter = microphoneMeter
     }
 }
 
@@ -39,8 +44,8 @@ public enum TakePlanError: Error, Equatable {
 public enum TakePlanner {
     /// The displays in the order of `selection.displayIDs` (each once), at their frame rate and the
     /// display scale of `settings`; then the microphone, if chosen and `.microphone` is granted, also
-    /// listed in `optional`. The camera is not recorded yet: the plan has no camera, and the controller
-    /// says so (`TakeNotice.cameraNotRecordedYet`).
+    /// listed in `optional` and metered (`microphoneMeter`). The camera is not recorded yet: the plan has no
+    /// camera, and the controller says so (`TakeNotice.cameraNotRecordedYet`).
     public static func plan(
         _ selection: CaptureSelection,
         settings: QuickSettings,
@@ -54,12 +59,16 @@ public enum TakePlanner {
             factory.display(id: id, framesPerSecond: settings.framesPerSecond(display: id), scale: settings.displayScale)
         }
         var optional: [StartTrackingSource] = []
+        var microphoneMeter: MeteredSource?
         if granted.contains(.microphone), selection.microphone != .off {
-            let microphone = StartTrackingSource(factory.microphone(selection.microphone))
+            let meter = MeteredSource(factory.microphone(selection.microphone))
+            let microphone = StartTrackingSource(meter)
             sources.append(microphone)
             optional.append(microphone)
+            microphoneMeter = meter
         }
-        return TakePlan(sources: sources, optional: optional, input: factory.input(displayIDs: displayIDs))
+        return TakePlan(
+            sources: sources, optional: optional, input: factory.input(displayIDs: displayIDs), microphoneMeter: microphoneMeter)
     }
 
     /// What keeps `selection` from being recorded with `displays` connected, whatever the permissions:

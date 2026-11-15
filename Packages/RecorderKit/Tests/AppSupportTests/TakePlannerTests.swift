@@ -69,7 +69,9 @@ import Testing
         ])
         let microphone = try #require(plan.optional.first)
         #expect(plan.optional.count == 1 && plan.sources.last === microphone)
-        #expect(microphone.base === factory.microphones.first && factory.microphones.count == 1)
+        // Metered inside: the source the take tracks is the one it measures.
+        let meter = try #require(plan.microphoneMeter)
+        #expect(microphone.base === meter && meter.base === factory.microphones.first && factory.microphones.count == 1)
 
         var off = selection
         off.microphone = .off
@@ -78,7 +80,7 @@ import Testing
             let factory = FakeFactory()
             let plan = try TakePlanner.plan(selection, settings: QuickSettings(), displays: Self.displays, granted: granted, factory: factory)
             #expect(plan.sources.map(\.trackID) == ["display-1"])
-            #expect(plan.optional.isEmpty)
+            #expect(plan.optional.isEmpty && plan.microphoneMeter == nil)
             #expect(factory.calls == [.display(id: 1, framesPerSecond: 60, scale: .native), .input(displayIDs: [1])])
         }
     }

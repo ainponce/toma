@@ -23,11 +23,17 @@ public struct PreparedTake {
     public var microphone: StartTrackingSource?
     /// The kind of each track, by track ID, to say which one a warning is about.
     public var kinds: [String: TrackKind]
+    /// The microphone, metered (`TakePlan.microphoneMeter`): how loud it is, while the take records.
+    public var microphoneMeter: MeteredSource? = nil
 
-    public init(recording: any TakeRecording, microphone: StartTrackingSource? = nil, kinds: [String: TrackKind]) {
+    public init(
+        recording: any TakeRecording, microphone: StartTrackingSource? = nil, kinds: [String: TrackKind],
+        microphoneMeter: MeteredSource? = nil
+    ) {
         self.recording = recording
         self.microphone = microphone
         self.kinds = kinds
+        self.microphoneMeter = microphoneMeter
     }
 }
 
@@ -72,6 +78,9 @@ public struct TakeEnvironment {
     public var prepareTake: @MainActor (ProjectPackage, TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake
     public var termination: any TerminationGuarding
     public var now: @Sendable () -> Date
+    /// Waits, for the countdown: `Task.sleep` in the app. Throws `CancellationError` once the task waiting
+    /// is cancelled (a stop during the countdown).
+    public var sleep: @Sendable (Duration) async throws -> Void
 
     public init(
         projectsFolder: URL,
@@ -81,7 +90,8 @@ public struct TakeEnvironment {
         createPackage: @escaping @Sendable (URL, String, AppInfo, Date) throws -> ProjectPackage,
         prepareTake: @escaping @MainActor (ProjectPackage, TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake,
         termination: any TerminationGuarding,
-        now: @escaping @Sendable () -> Date
+        now: @escaping @Sendable () -> Date,
+        sleep: @escaping @Sendable (Duration) async throws -> Void
     ) {
         self.projectsFolder = projectsFolder
         self.app = app
@@ -91,5 +101,6 @@ public struct TakeEnvironment {
         self.prepareTake = prepareTake
         self.termination = termination
         self.now = now
+        self.sleep = sleep
     }
 }

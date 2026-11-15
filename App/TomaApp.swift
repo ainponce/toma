@@ -17,12 +17,21 @@ struct TomaApp: App {
     }
 }
 
-/// `record.circle` at rest; `record.circle.fill` in red while a take is being recorded.
+/// `record.circle` at rest; `record.circle.fill` in red while a take is being recorded, followed by the
+/// time it has recorded.
 private struct MenuBarIcon: View {
     let recording: RecordingController
 
     var body: some View {
-        if recording.isRecording {
+        if case .recording = recording.phase {
+            TimelineView(.periodic(from: .now, by: 1)) { context in
+                HStack(spacing: 4) {
+                    Image(nsImage: Self.recordingImage)
+                    Text(verbatim: recording.elapsed(at: context.date).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2))))
+                        .monospacedDigit()
+                }
+            }
+        } else if recording.isRecording {
             Image(nsImage: Self.recordingImage)
         } else {
             Image(systemName: "record.circle")
@@ -51,8 +60,12 @@ private struct MenuContent: View {
     var body: some View {
         switch recording.phase {
         case .idle:
-            // Task 16a adds the island's shortcut.
             Button("New Recording") { app.newRecording() }
+                .keyboardShortcut(app.hotKeys.bindings.combos[.islandOrStop]?.menuShortcut)
+        case .countingDown:
+            Text("Starting recording…")
+            // Cancels the countdown: nothing is recorded.
+            Button("Stop Recording") { recording.stopRecording() }
         case .starting:
             Text("Starting recording…")
         case .recording:
@@ -63,7 +76,7 @@ private struct MenuContent: View {
             }
             // The user's pause first: a lock during it changes nothing for the take.
             if recording.isUserPaused {
-                Text("Paused", comment: "Menu item while the user has paused the take")
+                Text("Paused", comment: "Menu item, and the open island, while the user has paused the take")
             } else if recording.isPaused {
                 Text("Paused (screen locked or Mac asleep)", comment: "Menu item while a take is paused because the screen is locked or the Mac sleeps")
             }
@@ -85,6 +98,7 @@ private struct MenuContent: View {
         }
         Button("Recover Recordings…") { app.recoverRecordings() }
         Button("Permissions…") { app.showOnboarding() }
+        Button("Settings…") { app.showSettings() }
         Divider()
         Button("Check for Updates…") { updater.checkForUpdates() }
             .disabled(recording.isRecording || !updater.isCheckAvailable)
