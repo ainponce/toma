@@ -10,6 +10,9 @@ import Synchronization
 /// write itself fails, the change stays in memory, the error is rethrown, and the
 /// next `update` or `flushPending()` writes it again.
 ///
+/// The store keeps the manifest's `formatVersion` as it was read: a package's version is decided when it is
+/// created and nothing rewrites it, so a version 1 package stays at version 1.
+///
 /// Use one `ManifestStore` per package, in a single writer process: every write goes
 /// through the same `manifest.json.tmp`, so two writers would overwrite each other's
 /// temporary file.
@@ -34,8 +37,8 @@ public final class ManifestStore: Sendable {
         state.withLock { $0.manifest }
     }
 
-    /// Applies `body` and writes the result. If `body` throws or its result cannot be
-    /// encoded, nothing changes and the error is rethrown.
+    /// Applies `body` and writes the result, with the manifest's `formatVersion` as it was (a change of it
+    /// is undone). If `body` throws or its result cannot be encoded, nothing changes and the error is rethrown.
     ///
     /// `body` runs while the store's lock is held, and the lock is not recursive:
     /// `body` must never call back into this store.
@@ -43,6 +46,7 @@ public final class ManifestStore: Sendable {
         try state.withLock { state in
             var manifest = state.manifest
             try body(&manifest)
+            manifest.formatVersion = state.manifest.formatVersion
             let data = try ProjectJSON.encoder().encode(manifest)
             state.manifest = manifest
             state.needsWrite = true

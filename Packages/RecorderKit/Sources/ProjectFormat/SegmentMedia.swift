@@ -8,8 +8,16 @@ extension TrackKind {
     /// Whether the track's segments hold video; the others hold audio.
     public var isVideo: Bool {
         switch self {
-        case .display: true
-        case .microphone: false
+        case .display, .window, .camera: true
+        case .microphone, .systemAudio: false
+        }
+    }
+
+    /// Whether the track records what is on screen: a display or a window.
+    public var isScreen: Bool {
+        switch self {
+        case .display, .window: true
+        case .camera, .microphone, .systemAudio: false
         }
     }
 }

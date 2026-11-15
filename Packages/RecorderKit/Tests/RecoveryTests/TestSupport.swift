@@ -33,6 +33,8 @@ func takeOnDisk(_ package: ProjectPackage, _ id: String) throws -> TakeRecord {
 let displaySource = TrackSource(
     name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1)
 let micSource = TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic")
+let cameraSource = TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera")
+let systemAudioSource = TrackSource(name: "Synthetic System Audio", excludedBundleIDs: ["dev.toma.Toma"])
 
 func displayTrack(_ segments: [SegmentRecord]) -> TrackRecord {
     TrackRecord(id: "display-1", kind: .display, source: displaySource, segments: segments)

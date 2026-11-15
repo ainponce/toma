@@ -247,3 +247,24 @@ private final class ReaderCounters: Sendable {
         #expect(store.manifest.takes.isEmpty)
     }
 }
+
+@Test func updateKeepsTheFormatVersion() async throws {
+    try withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
+        // A package an earlier version created: it stays at its version whatever is changed in it.
+        var old = try ManifestStore(package: package).manifest
+        old.formatVersion = 1
+        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(old), to: package.manifestURL)
+
+        let store = try ManifestStore(package: package)
+        try store.update { manifest in
+            manifest.formatVersion = Manifest.currentFormatVersion
+            manifest.takes.append(take("take-001"))
+        }
+
+        #expect(store.manifest.formatVersion == 1)
+        let reread = try ManifestStore(package: package).manifest
+        #expect(reread.formatVersion == 1)
+        #expect(reread.takes.map(\.id) == ["take-001"])
+    }
+}

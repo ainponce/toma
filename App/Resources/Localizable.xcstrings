@@ -227,6 +227,26 @@
         }
       }
     },
+    "Camera capture resumed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reanudó la captura de la cámara."
+          }
+        }
+      }
+    },
+    "Camera capture was interrupted. Trying again…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se interrumpió la captura de la cámara. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
     "Can't check the free disk space." : {
       "localizations" : {
         "es" : {
@@ -1427,6 +1447,26 @@
         }
       }
     },
+    "Saving system audio failed. Continuing in a new file." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló el guardado del audio del sistema. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
+    "Saving the camera failed. Continuing in a new file." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló el guardado de la cámara. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
     "Saving the microphone failed. Continuing in a new file." : {
       "localizations" : {
         "es" : {
@@ -1453,6 +1493,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Guardando la toma"
+          }
+        }
+      }
+    },
+    "Saving the window failed. Continuing in a new file." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló el guardado de la ventana. Se sigue en un archivo nuevo."
           }
         }
       }
@@ -1578,6 +1628,16 @@
         }
       }
     },
+    "Some camera frames couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron guardar algunos cuadros de la cámara."
+          }
+        }
+      }
+    },
     "Some microphone audio couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -1604,6 +1664,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudieron guardar algunos cuadros de la pantalla."
+          }
+        }
+      }
+    },
+    "Some system audio couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar parte del audio del sistema."
+          }
+        }
+      }
+    },
+    "Some window frames couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron guardar algunos cuadros de la ventana."
           }
         }
       }
@@ -1689,6 +1769,46 @@
         }
       }
     },
+    "System audio capture resumed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reanudó la captura del audio del sistema."
+          }
+        }
+      }
+    },
+    "System audio capture was interrupted. Trying again…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se interrumpió la captura del audio del sistema. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "System audio stopped recording. Still trying to bring it back." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El audio del sistema dejó de grabarse. Se sigue intentando recuperarlo."
+          }
+        }
+      }
+    },
+    "System audio stopped recording. The recording continues without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El audio del sistema dejó de grabarse. La grabación sigue sin él."
+          }
+        }
+      }
+    },
     "Take saved" : {
       "localizations" : {
         "es" : {
@@ -1716,6 +1836,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tamaño de letra"
+          }
+        }
+      }
+    },
+    "The camera stopped recording. Still trying to bring it back." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara dejó de grabar. Se sigue intentando recuperarla."
+          }
+        }
+      }
+    },
+    "The camera stopped recording. The recording continues without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara dejó de grabar. La grabación sigue sin ella."
           }
         }
       }
@@ -2041,6 +2181,16 @@
         }
       }
     },
+    "The window stopped recording." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ventana dejó de grabarse."
+          }
+        }
+      }
+    },
     "There isn't enough free disk space to record (%@ available)." : {
       "localizations" : {
         "es" : {
@@ -2292,6 +2442,36 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ventana"
+          }
+        }
+      }
+    },
+    "Window capture is paused. Still trying to restart it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La captura de la ventana está en pausa. Se sigue intentando reanudarla."
+          }
+        }
+      }
+    },
+    "Window capture resumed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reanudó la captura de la ventana."
+          }
+        }
+      }
+    },
+    "Window capture was interrupted. Trying again…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se interrumpió la captura de la ventana. Se vuelve a intentar…"
           }
         }
       }

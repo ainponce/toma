@@ -12,8 +12,8 @@ public enum RecoveryError: Error, Equatable {
     case anotherTakeRecording
     /// The manifest has no take with this ID.
     case takeNotFound(String)
-    /// The manifest was written by a newer version of the format; rewriting it could lose what this
-    /// version does not know about. Nothing was changed.
+    /// The manifest is of a version of the format outside `Manifest.supportedFormatVersions`, for example a
+    /// newer one: rewriting it could lose what this version does not know about. Nothing was changed.
     case unsupportedFormatVersion(Int)
     /// A path of the take could leave the package: an ID or segment file the manifest gives
     /// (`Manifest.validatePaths()`), or a symlink inside the take (`ProjectPackage.checkLayout`).
@@ -29,7 +29,8 @@ public enum RecoveryError: Error, Equatable {
 public enum TakeRecovery {
     /// Takes the take's recording lock, keeps it while recovering, and closes the take as `recovered`:
     ///
-    /// - every open segment gets the end of what can be read (`recoveredAfterCrash`), or `empty` (no
+    /// - every open segment gets the end of what can be read (`recoveredAfterCrash`) of its track's media
+    ///   (video in a `display`, `window` or `camera` track, audio in the others), or `empty` (no such
     ///   sample: 0 bytes, or the file is gone) or `unreadable(bytes:)` (a non-empty file whose contents
     ///   cannot be read, left untouched), with `endHostTime == startHostTime` for those two. Its
     ///   `droppedFrames` is the last `droppedSamples` total the recorder logged for it (0 if none);
@@ -40,8 +41,8 @@ public enum TakeRecovery {
     /// - the cut-short last line of `events.jsonl` is truncated, as before any append;
     /// - `.reserve` is deleted: it is scratch space, never take data.
     ///
-    /// The manifest is written once, with all of it. Idempotent: a take that is no longer `recording`
-    /// is returned as it is.
+    /// The manifest is written once, with all of it, and keeps its `formatVersion`: a version 1 package
+    /// stays at version 1. Idempotent: a take that is no longer `recording` is returned as it is.
     ///
     /// Throws without changing anything: `RecoveryError.invalidPath` for a take ID that is not
     /// `take-NNN`, a manifest with a path that could leave the package, or a symlink (or an entry of the
@@ -79,7 +80,7 @@ public enum TakeRecovery {
         defer { lock.release() }
 
         let version = try Manifest.formatVersion(of: Data(contentsOf: package.manifestURL))
-        guard version <= Manifest.currentFormatVersion else { throw RecoveryError.unsupportedFormatVersion(version) }
+        guard Manifest.supportedFormatVersions.contains(version) else { throw RecoveryError.unsupportedFormatVersion(version) }
         let store = try ManifestStore(package: package)
         let snapshot = store.manifest
         guard let take = snapshot.takes.first(where: { $0.id == takeID }) else { throw RecoveryError.takeNotFound(takeID) }

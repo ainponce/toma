@@ -344,7 +344,10 @@ extension TrackKind {
     fileprivate var savedTakeName: String {
         switch self {
         case .display: String(localized: "Display", comment: "What to record: a whole display")
+        case .window: String(localized: "Window", comment: "What to record: one window")
+        case .camera: String(localized: "Camera")
         case .microphone: String(localized: "Microphone")
+        case .systemAudio: String(localized: "System Audio")
         }
     }
 }

@@ -116,6 +116,33 @@ private func completeTake(
     }
 }
 
+@Test func verifierCountsCameraFramesAndSystemAudioBlocks() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(
+            id: "camera", kind: .camera, source: cameraSource,
+            segments: [VideoSegmentSpec(start: base, seconds: 3, framesPerSecond: 30)])
+        try await builder.addAudioTrack(
+            id: "system-audio", kind: .systemAudio, source: systemAudioSource,
+            segments: [AudioSegmentSpec(start: base, seconds: 3, channels: 2)])
+        let package = try builder.write().package
+
+        let results = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 2.5, maxDropRatio: 0.01)
+
+        #expect(results.map(\.trackID) == ["camera", "system-audio"])
+        #expect(results.allSatisfy { $0.ok }, "\(results.map { $0.reason ?? "" })")
+
+        // 2 dropped in each: over 1 % of the camera's 90 frames, under 1 % of the system audio's 300 blocks of 10 ms.
+        try ManifestStore(package: package).update { manifest in
+            for i in manifest.takes[0].tracks.indices { manifest.takes[0].tracks[i].segments[0].droppedFrames = 2 }
+        }
+        let dropped = await TakeVerifier.verify(try LoadedProject.load(package.url), minDuration: 2.5, maxDropRatio: 0.01)
+        try #require(dropped.count == 2)
+        #expect(dropped[0].reason?.contains("dropped 2 of 92 frames") == true, "\(dropped[0].reason ?? "")")
+        #expect(dropped[1].ok, "\(dropped[1].reason ?? "")")
+    }
+}
+
 @Test func verifyAllowsTwoSecondsBetweenTracksOfATakeACrashLeftOpen() async throws {
     #expect(TakeVerifier.openEndTolerance == 2 * FragmentedTrackWriter.defaultFragmentInterval.seconds)
     try await withTemporaryDirectory { dir in
@@ -181,8 +208,11 @@ private func completeTake(
             try LoadedProject.load(package.url, take: "take-009")
         }
         // Newer and not decodable as this version's `Manifest`: still recognized as newer.
-        try Data(#"{"formatVersion":2,"projects":[]}"#.utf8).write(to: package.manifestURL)
-        #expect(throws: LoadedProjectError.unsupportedFormatVersion(2)) { try LoadedProject.load(package.url) }
+        try Data(#"{"formatVersion":3,"projects":[]}"#.utf8).write(to: package.manifestURL)
+        #expect(throws: LoadedProjectError.unsupportedFormatVersion(3)) { try LoadedProject.load(package.url) }
+        // No version of the format is below 1.
+        try Data(#"{"formatVersion":0,"projects":[]}"#.utf8).write(to: package.manifestURL)
+        #expect(throws: LoadedProjectError.unsupportedFormatVersion(0)) { try LoadedProject.load(package.url) }
     }
 }
 

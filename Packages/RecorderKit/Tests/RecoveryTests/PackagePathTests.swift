@@ -162,6 +162,26 @@ private func expectNeedsRepair(_ results: [ScanResult], _ package: ProjectPackag
     }
 }
 
+@Test func scannerNamesALeftoverLockAsSuch() throws {
+    try withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake("take-001", status: .complete, tracks: [micTrack([])]), to: package)
+        // A recorder that died after taking the lock and before the take's first manifest write.
+        try FileManager.default.createDirectory(at: package.takeDirectory("take-002"), withIntermediateDirectories: false)
+        try Data("{}".utf8).write(to: package.lockURL(take: "take-002"))
+
+        let lockOnly = "takes/take-002 holds only a leftover recording.lock and manifest.json does not list it"
+        #expect(RecoveryScanner.scan(directory: dir) == [.needsRepair(package: package, reason: lockOnly)])
+
+        // Next to a folder with recorded files, each is named for what it holds.
+        let orphan = package.segmentURL(take: "take-003", track: "camera", index: 1)
+        try FileManager.default.createDirectory(at: orphan.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 100).write(to: orphan)
+        let recorded = "takes/take-003 holds recorded files that manifest.json does not list"
+        #expect(RecoveryScanner.scan(directory: dir) == [.needsRepair(package: package, reason: "\(recorded); \(lockOnly)")])
+    }
+}
+
 @Test func takeFolderWithAFreeLockTheManifestDoesNotListIsReported() async throws {
     try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)

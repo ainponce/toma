@@ -39,8 +39,9 @@ public struct CameraFrame: Equatable, Sendable {
 }
 
 /// How the camera looks: its shape, its size and its place (notch design §5.6). The live bubble and the
-/// render share its one geometry, `frame(in:)` (plan decision 25). Only a value for now: nothing writes it in
-/// a project until the format has room for it (Tasks 6 and 7); the app remembers it in its settings.
+/// render share its one geometry, `frame(in:)` (plan decision 25). Format version 2 keeps it in a project: a
+/// take's initial style (`TakeRecord.cameraStyle`) and its changes while recording (`InputEvent.Kind.cameraStyle`).
+/// The app also remembers it in its settings.
 public struct CameraStyle: Codable, Equatable, Sendable {
     public var shape: CameraShape
     /// The side of the camera as a fraction of the region's height (and, in the video, of the output's), so it

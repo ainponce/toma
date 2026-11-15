@@ -32,6 +32,10 @@ extension InputEvent {
          #"{"count":12,"t":5,"track":"display-1","type":"droppedSamples"}"#),
         (InputEvent(t: HostTime(nanoseconds: 5), kind: .audioClock(track: "mic", frame: 240_000)),
          #"{"frame":240000,"t":5,"track":"mic","type":"audioClock"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .windowGeometry(track: "window-4242", frame: Rect(x: 100, y: 80, width: 800, height: 600), onScreen: true)),
+         #"{"frame":{"height":600,"width":800,"x":100,"y":80},"onScreen":true,"t":5,"track":"window-4242","type":"windowGeometry"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .cameraStyle(CameraStyle(shape: .landscape, size: CameraStyle.small, anchor: .topLeading))),
+         #"{"style":{"anchor":"topLeading","shape":"landscape","size":0.17},"t":5,"type":"cameraStyle"}"#),
     ]
 }
 
@@ -59,6 +63,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
     #expect(Set(types) == [
         "cursor", "mouseDown", "mouseUp", "displayGeometry", "segmentStarted",
         "streamInterrupted", "paused", "resumed", "deviceChanged", "marker", "droppedSamples", "audioClock",
+        "windowGeometry", "cameraStyle",
     ])
 }
 

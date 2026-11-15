@@ -22,7 +22,8 @@ public struct ProjectPackage: Sendable, Hashable {
         self.url = url
     }
 
-    /// Creates `<directory>/<name>.toma` with `takes/`, `cache/` and an empty manifest.
+    /// Creates `<directory>/<name>.toma` with `takes/`, `cache/` and an empty manifest of the current format
+    /// version (`Manifest.currentFormatVersion`), which the package keeps.
     ///
     /// `directory` must already exist. Throws `CocoaError(.fileWriteFileExists)` if the
     /// package already exists, leaving it untouched.

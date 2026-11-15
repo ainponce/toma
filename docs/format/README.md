@@ -1,6 +1,6 @@
 # Formato de proyecto de Toma
 
-**Versión 1 (`formatVersion: 1`), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad.
+**Versión 2 (`formatVersion: 2`), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad. Los lectores de esta versión leen también los paquetes de la versión 1, que se quedan en la versión 1 (ver [Cambios de la versión 2](#cambios-de-la-versión-2)).
 
 El formato es público para que cualquier herramienta pueda leer, verificar o recuperar una grabación sin la app. Las reglas de este documento son las que sigue el código de `Packages/RecorderKit/Sources/ProjectFormat`.
 
@@ -15,10 +15,16 @@ MiVideo.toma/
                                la fase 1 (en la fase 0 no existe)
   takes/
     take-001/
-      display-1/               una carpeta por pista, con el id de la pista
+      display-1/               una carpeta por pista, con el id de la pista (display-<CGDirectDisplayID>)
         seg-0001.mov           un archivo por segmento (QuickTime fragmentado)
         seg-0002.mov
+      window-4242/             una ventana, en vez de las pantallas (window-<CGWindowID>; versión 2)
+        seg-0001.mov
+      camera/                  la cámara (versión 2)
+        seg-0001.mov
       mic/
+        seg-0001.mov
+      system-audio/            el audio del sistema (versión 2)
         seg-0001.mov
       events.jsonl             un evento por línea: cursor, clics, cortes de stream, pausas
       recording.lock           lock de la grabación en curso (ver más abajo)
@@ -31,11 +37,11 @@ MiVideo.toma/
 - Los segmentos se numeran desde 1 con cuatro dígitos (`seg-0001.mov`). Cada pista abre un segmento nuevo cada vez que su captura se interrumpe (pausa, error del stream, cambio de formato), así un corte nunca daña lo grabado antes.
 - Los segmentos son películas fragmentadas, con fragmentos de 1 s: si la app, el sistema o la batería se apagan de golpe, se puede leer todo hasta el último fragmento escrito.
 - Los segmentos de micrófono guardan todos los canales del dispositivo, en su orden: ALAC hasta 8 canales y LPCM Float32 con distribución discreta (`kAudioChannelLayoutTag_DiscreteInOrder`) desde 9. La distribución de canales que declara un archivo de 3 a 8 canales es la que ALAC exige para esa cantidad (por ejemplo `MPEG_5_1_D` para 6) y es solo una etiqueta: el canal *n* del archivo es la entrada *n* del dispositivo, no el altavoz que la etiqueta nombra.
-- Las pistas de cámara, audio del sistema y iPhone/iPad, y las imágenes de cursor (`cursors/`), llegan en fases posteriores con sus propias carpetas dentro de la toma.
+- Las pistas de iPhone/iPad, las imágenes de cursor (`cursors/`) y los eventos de scroll llegan en fases posteriores.
 
 ## `manifest.json`
 
-Ejemplo completo de un proyecto con una toma terminada: la pantalla tuvo un corte del stream (error `-3821`) y siguió en un segundo segmento; el micrófono grabó sin cortes.
+Ejemplo completo de un proyecto con una toma terminada: la pantalla tuvo un corte del stream (error `-3821`) y siguió en un segundo segmento; la cámara, el micrófono y el audio del sistema grabaron sin cortes, y la cámara empezó con el estilo por defecto.
 
 ```json
 {
@@ -44,9 +50,14 @@ Ejemplo completo de un proyecto con una toma terminada: la pantalla tuvo un cort
     "version" : "0.1.0"
   },
   "createdAt" : "2026-11-13T16:00:00Z",
-  "formatVersion" : 1,
+  "formatVersion" : 2,
   "takes" : [
     {
+      "cameraStyle" : {
+        "anchor" : "bottomTrailing",
+        "shape" : "circle",
+        "size" : 0.24
+      },
       "id" : "take-001",
       "startedAt" : "2026-11-13T16:00:12Z",
       "status" : "complete",
@@ -93,6 +104,27 @@ Ejemplo completo de un proyecto con una toma terminada: la pantalla tuvo un cort
           }
         },
         {
+          "id" : "camera",
+          "kind" : "camera",
+          "segments" : [
+            {
+              "droppedFrames" : 0,
+              "endHostTime" : 81334000000000,
+              "endReason" : {
+                "type" : "stopped"
+              },
+              "file" : "takes/take-001/camera/seg-0001.mov",
+              "heartbeatFrames" : 0,
+              "index" : 1,
+              "startHostTime" : 81234590000000
+            }
+          ],
+          "source" : {
+            "deviceUniqueID" : "0x1420000005ac8600",
+            "name" : "FaceTime HD Camera"
+          }
+        },
+        {
           "id" : "mic",
           "kind" : "microphone",
           "segments" : [
@@ -112,6 +144,29 @@ Ejemplo completo de un proyecto con una toma terminada: la pantalla tuvo un cort
             "deviceUniqueID" : "BuiltInMicrophoneDevice",
             "name" : "MacBook Pro Microphone"
           }
+        },
+        {
+          "id" : "system-audio",
+          "kind" : "systemAudio",
+          "segments" : [
+            {
+              "droppedFrames" : 0,
+              "endHostTime" : 81334000000000,
+              "endReason" : {
+                "type" : "stopped"
+              },
+              "file" : "takes/take-001/system-audio/seg-0001.mov",
+              "heartbeatFrames" : 0,
+              "index" : 1,
+              "startHostTime" : 81234575000000
+            }
+          ],
+          "source" : {
+            "excludedBundleIDs" : [
+              "dev.toma.Toma"
+            ],
+            "name" : "System Audio"
+          }
         }
       ]
     }
@@ -125,14 +180,15 @@ Reglas de escritura:
 - Los campos opcionales se omiten cuando no tienen valor (nunca se escribe `null`).
 - El archivo se reemplaza entero en cada cambio: se borra un `manifest.json.tmp` que haya quedado (aunque sea un enlace simbólico, que nunca se sigue), se crea uno nuevo con `O_CREAT | O_EXCL | O_NOFOLLOW`, se fuerza a disco con `F_FULLFSYNC`, se renombra sobre `manifest.json` con `rename(2)` y se fuerza a disco también la carpeta del paquete con `F_FULLFSYNC`, para que el cambio de nombre sobreviva a un corte de energía. Si el volumen no admite `F_FULLFSYNC`, se usa `fsync`. Un lector ve siempre el manifiesto anterior o el nuevo, nunca uno a medias.
 - Después de un corte de energía puede quedar un `manifest.json.tmp` más nuevo que `manifest.json` (completo en disco, pero sin el cambio de nombre). Los lectores lo ignoran y usan `manifest.json`; la recuperación puede revisarlo más adelante. La próxima escritura lo borra y crea uno nuevo.
-- Una toma entra al manifiesto, ya `recording`, antes de que se grabe nada: si esa primera escritura no llega al disco (después de un reintento con el espacio del `.reserve` si faltó espacio), la toma no empieza, y se sueltan el lock y el `.reserve`. Una carpeta de `takes/` que el manifiesto no lista pero que tiene un segmento o un `recording.lock` que nadie tiene hace que el paquete sea *para reparar*.
+- Una toma entra al manifiesto, ya `recording`, antes de que se grabe nada: si esa primera escritura no llega al disco (después de un reintento con el espacio del `.reserve` si faltó espacio), la toma no empieza, y se sueltan el lock y el `.reserve`. Una carpeta de `takes/` que el manifiesto no lista pero que tiene un segmento o un `recording.lock` que nadie tiene hace que el paquete sea *para reparar*, y el motivo dice cuál de las dos cosas encontró (archivos grabados, o solo un `recording.lock` que quedó).
 - Un solo proceso escribe el manifiesto de un paquete por vez, porque todas las escrituras usan el mismo `manifest.json.tmp`.
+- `formatVersion` se decide al crear el paquete y ninguna escritura lo cambia: un paquete de la versión 1 se reescribe como versión 1.
 
 ### Campos
 
 | Campo | Tipo | Significado |
 |---|---|---|
-| `formatVersion` | entero | Versión del formato. Hoy, `1`. |
+| `formatVersion` | entero | Versión del formato con que se creó el paquete: `2` en los paquetes nuevos, `1` en los de antes. Nunca cambia (ver [Cambios de la versión 2](#cambios-de-la-versión-2)). |
 | `app` | objeto | `name` y `version` de la app que creó el proyecto. |
 | `createdAt` | fecha | Creación del proyecto. |
 | `takes` | lista | Tomas en el orden en que se grabaron. |
@@ -145,25 +201,53 @@ Reglas de escritura:
 | `status` | texto | `recording` (se está grabando, o la app murió sin cerrarla), `complete` (la cerró la app) o `recovered` (la cerró la recuperación tras un crash). |
 | `startedAt` | fecha | Inicio de la toma. |
 | `tracks` | lista | Pistas de la toma. |
+| `cameraStyle` | objeto | Desde la versión 2, solo en tomas con cámara: cómo se ve la cámara desde el principio de la toma (ver abajo). Los eventos `cameraStyle` lo cambian durante la toma. Si falta (una toma sin cámara o un paquete v1), la cámara es un círculo mediano abajo a la derecha, `{"anchor":"bottomTrailing","shape":"circle","size":0.24}`. |
+
+**Estilo de la cámara** (`cameraStyle`, en la toma y en el evento del mismo nombre)
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `shape` | texto | `circle`, `roundedSquare` (cuadrado con las esquinas redondeadas), `portrait` (vertical, 3:4) o `landscape` (horizontal, 16:9). |
+| `size` | número | El lado de la cámara como fracción del alto de la salida, así no depende de la pantalla: `0.17` (chica), `0.24` (mediana) o `0.33` (grande). |
+| `anchor` | texto | Uno de los 8 lugares, en las esquinas y en el medio de los bordes de lo que se graba: `topLeading`, `top`, `topTrailing`, `leading`, `trailing`, `bottomLeading`, `bottom` o `bottomTrailing` (`leading` es siempre la izquierda y `trailing` la derecha). Se guarda el lugar, no coordenadas. |
+
+Dónde se dibuja, en una región de ancho `W` y alto `H` (en el video, la salida entera; la burbuja en vivo usa la misma regla sobre lo que se graba): con `s = size × H` y `a` el ancho sobre el alto de la forma (1 para `circle` y `roundedSquare`, 3/4 para `portrait`, 16/9 para `landscape`), una caja con el área del cuadrado de lado `s`, de ancho `s·√a` y alto `s/√a`; a `0.032 × H` de los bordes de su anclaje y centrada en el otro eje (`top` y `bottom` a lo ancho, `leading` y `trailing` a lo alto). El radio de las esquinas es la mitad del lado menor en `circle`, `0.26 × s` en `roundedSquare`, `20/750 × H` en `portrait` y `18/750 × H` en `landscape`. Es `CameraStyle.frame(in:)` de `ProjectFormat`.
 
 **Pista** (`tracks[]`)
 
 | Campo | Tipo | Significado |
 |---|---|---|
-| `id` | texto | Identificador único dentro de la toma y nombre de su carpeta (por ejemplo `display-1`, `mic`). |
-| `kind` | texto | `display` o `microphone`. |
+| `id` | texto | Identificador único dentro de la toma y nombre de su carpeta: `display-<CGDirectDisplayID>` (por ejemplo `display-1`), `window-<CGWindowID>`, `camera`, `mic` o `system-audio`. |
+| `kind` | texto | Qué graba la pista (ver abajo). |
 | `source` | objeto | Qué se grabó (ver abajo). |
 | `segments` | lista | Segmentos en orden de `index`. |
 
+**Tipo de pista** (`kind`)
+
+| `kind` | Qué graba | Segmentos | Campos de `source` |
+|---|---|---|---|
+| `display` | Una pantalla entera. En modo Área también graba la pantalla entera, y el área elegida va en `captureArea`. | video | `name`, `displayID`, `globalFrame`, `pixelScale`, `captureArea` |
+| `window` | Una ventana (desde la versión 2). Una toma graba pantallas o una ventana. | video | `name`, `windowID`, `bundleIdentifier`, `globalFrame`, `pixelScale` |
+| `camera` | Una cámara (desde la versión 2). | video | `name`, `deviceUniqueID` |
+| `microphone` | Un micrófono. | audio | `name`, `deviceUniqueID` |
+| `systemAudio` | El sonido que reproduce la Mac (desde la versión 2). | audio | `name`, `includedBundleIDs` o `excludedBundleIDs` |
+
+Una toma puede tener varias pistas `systemAudio`, con ids distintos. En la fase 1a la app graba una, `system-audio`, que mezcla las apps elegidas; la fase 3 agrega una por app.
+
 **Fuente** (`source`): solo están los campos que corresponden al tipo de pista.
 
-| Campo | Tipo | Significado |
-|---|---|---|
-| `name` | texto | Nombre visible de la pantalla o del dispositivo. |
-| `displayID` | entero | `CGDirectDisplayID` de la pantalla. |
-| `deviceUniqueID` | texto | `uniqueID` del dispositivo de audio. |
-| `globalFrame` | objeto | `x`, `y`, `width`, `height` en puntos globales, con el origen arriba a la izquierda de la pantalla principal. |
-| `pixelScale` | número | Píxeles por punto de lo grabado (2 en una pantalla Retina grabada a resolución nativa, 1 con la escala Puntos). |
+| Campo | Tipo | Pistas | Significado |
+|---|---|---|---|
+| `name` | texto | todas | Nombre visible de la pantalla, de la ventana (su app y su título) o del dispositivo. |
+| `displayID` | entero | `display` | `CGDirectDisplayID` de la pantalla. |
+| `deviceUniqueID` | texto | `microphone`, `camera` | `uniqueID` del micrófono o de la cámara. |
+| `globalFrame` | objeto | `display`, `window` | `x`, `y`, `width`, `height` en puntos globales, con el origen arriba a la izquierda de la pantalla principal. En una ventana, dónde estaba al empezar la toma; después, ver el evento `windowGeometry`. |
+| `pixelScale` | número | `display`, `window` | Píxeles por punto de lo grabado (2 en una pantalla Retina grabada a resolución nativa, 1 con la escala Puntos). |
+| `windowID` | entero | `window` | `CGWindowID` de la ventana (desde la versión 2). |
+| `bundleIdentifier` | texto | `window` | Bundle identifier de la app de la ventana (desde la versión 2). |
+| `captureArea` | objeto | `display` | Solo en pantallas grabadas en modo Área: el área elegida, en puntos globales como `globalFrame` (desde la versión 2). La pista graba la pantalla entera; el área es lo que se muestra. |
+| `includedBundleIDs` | lista de textos | `systemAudio` | Las apps elegidas: se graba solo su sonido. Si falta, se graban todas las apps menos las de `excludedBundleIDs` (desde la versión 2). |
+| `excludedBundleIDs` | lista de textos | `systemAudio` | Las apps cuyo sonido no se graba cuando se graban todas; la app excluye siempre a la propia Toma (desde la versión 2). |
 
 **Segmento** (`segments[]`)
 
@@ -199,12 +283,15 @@ Todo lo que pasa durante la toma además de los cuadros y el audio: el cursor, l
 {"displayID":1,"frame":{"height":982,"width":1512,"x":0,"y":0},"scale":2,"t":81234567000000,"type":"displayGeometry"}
 {"index":1,"t":81234567890123,"track":"display-1","type":"segmentStarted"}
 {"index":1,"t":81234570000000,"track":"mic","type":"segmentStarted"}
+{"index":1,"t":81234575000000,"track":"system-audio","type":"segmentStarted"}
+{"index":1,"t":81234590000000,"track":"camera","type":"segmentStarted"}
 {"t":81234600000000,"type":"cursor","x":640.5,"y":402}
 {"t":81234608333333,"type":"cursor","x":642.25,"y":401}
 {"button":"left","t":81234650000000,"type":"mouseDown","x":642.25,"y":401}
 {"button":"left","t":81234720000000,"type":"mouseUp","x":642.25,"y":401}
 {"code":-3821,"domain":"SCStreamErrorDomain","t":81276901234567,"track":"display-1","type":"streamInterrupted"}
 {"index":2,"t":81277458000000,"track":"display-1","type":"segmentStarted"}
+{"style":{"anchor":"topLeading","shape":"circle","size":0.24},"t":81290000000000,"type":"cameraStyle"}
 {"t":81300000000000,"type":"marker"}
 ```
 
@@ -218,7 +305,7 @@ Reglas de escritura:
 - Las líneas van en el orden en que se registraron, que no siempre es el orden de `t`: un clic llega con el instante que le puso el sistema y el cursor se muestrea en otra cola. Quien necesite orden temporal ordena por `t`.
 - Un solo proceso escribe el archivo de una toma por vez.
 
-**Coordenadas.** `x`, `y` (cursor y clics) y `frame` (`displayGeometry`) están en puntos globales, el espacio de `CGEvent.location` y de `globalFrame` en el manifiesto: el origen está arriba a la izquierda de la pantalla principal, `y` crece hacia abajo, y una pantalla a la izquierda o arriba de la principal tiene coordenadas negativas. La posición dentro de la grabación de una pantalla es `(x − globalFrame.x, y − globalFrame.y)` en puntos, o eso por `pixelScale` en píxeles. macOS da el cursor con fracciones de punto, así que `x` e `y` no siempre son enteros.
+**Coordenadas.** `x`, `y` (cursor y clics) y `frame` (`displayGeometry` y `windowGeometry`) están en puntos globales, el espacio de `CGEvent.location` y de `globalFrame` en el manifiesto: el origen está arriba a la izquierda de la pantalla principal, `y` crece hacia abajo, y una pantalla a la izquierda o arriba de la principal tiene coordenadas negativas. La posición dentro de la grabación de una pantalla es `(x − globalFrame.x, y − globalFrame.y)` en puntos, o eso por `pixelScale` en píxeles. macOS da el cursor con fracciones de punto, así que `x` e `y` no siempre son enteros.
 
 ### Tipos
 
@@ -231,11 +318,13 @@ Reglas de escritura:
 | `segmentStarted` | `track`, `index` | La pista `track` (su `id` en el manifiesto) abrió el segmento `index`. `t` es el `startHostTime` del segmento; la recuperación lo usa si el archivo quedó en disco pero el segmento no llegó al manifiesto. |
 | `streamInterrupted` | `track`, `domain`, `code` | El stream de captura de la pista falló con ese error (dominio y código del `NSError`). La pista sigue en un segmento nuevo, que tiene su propio `segmentStarted`. |
 | `paused` | `reason` | La captura se detuvo en todas las pistas, que cierran su segmento como `paused`. `reason` es `willSleep` (la Mac va a entrar en reposo), `screenLocked`, que cubre dos cosas: la pantalla se bloqueó, o las pantallas se apagaron (las dos se pliegan en un solo estado, que termina solo cuando la pantalla está desbloqueada y encendida, así encender las pantallas sobre la pantalla de bloqueo no reanuda nada), o `user` (desde la fase 1a: el usuario pausó la toma, que sigue en pausa hasta que la reanuda, aunque mientras tanto se bloquee y desbloquee la pantalla). Mientras se graba, la app no deja que las pantallas se apaguen solas por inactividad, así que eso pasa solo si el usuario las apaga o bloquea la Mac. Con varios motivos a la vez hay un solo `paused`, con el `reason` del que empezó la pausa, y un solo `resumed`, cuando ya no queda ninguno. Un lector no falla ante un `reason` que no conoce. |
-| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. Entre un `paused` y su `resumed` no se graba nada: tampoco hay eventos `cursor`, `mouseDown` ni `mouseUp` (privacidad: ni la pantalla de bloqueo ni sus clics). |
+| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. Entre un `paused` y su `resumed` no se graba nada: tampoco hay eventos `cursor`, `mouseDown`, `mouseUp`, `windowGeometry` ni `cameraStyle` (privacidad: ni la pantalla de bloqueo ni sus clics). |
 | `deviceChanged` | `track`, `deviceUniqueID` | La pista siguió grabando desde otro dispositivo (el `uniqueID` del dispositivo de audio), por ejemplo porque se desconectó el micrófono. |
 | `marker` | | Una marca que el usuario puso mientras grababa. La app la escribe desde la fase 1a; nunca entre un `paused` y su `resumed`, donde no se graba nada. |
 | `droppedSamples` | `track`, `count` | Total de muestras (cuadros o bloques de audio) que la pista `track` perdió hasta ahora en su segmento actual, el que abrió su último `segmentStarted`. Se escribe cada 2 s mientras se graba, solo si cambió, y no toca el manifiesto: es lo que la recuperación usa como `droppedFrames` de un segmento que la app no llegó a cerrar. |
 | `audioClock` | `track`, `frame` | La muestra número `frame` del archivo del segmento actual de la pista de audio `track` (contando desde 0, la muestra de `startHostTime`) se capturó en `t`. El archivo de audio solo cuenta muestras y el reloj del dispositivo no va exactamente al ritmo del host, así que la grabación escribe uno cada 5 s de audio de cada segmento, con el instante del bloque que empieza en esa muestra, y el export ubica el audio por host time interpolando entre ellos (ver [Tiempos](#tiempos)). `frame` cuenta solo las muestras escritas en el archivo, así que el audio que el escritor descarta en tiempo real (su cola llena) no corre las anclas: cada una nombra una muestra que está en el archivo. Un lector descarta un ancla que no avanza en `frame` y en `t` respecto de la última que usa, o que se aparta más de 5000 ppm de la frecuencia del archivo respecto de la anterior. |
+| `windowGeometry` | `track`, `frame`, `onScreen` | Desde la versión 2. Dónde está la ventana de la pista `window` `track`: su rectángulo en puntos globales (`x`, `y`, `width`, `height`) y si macOS la tiene en pantalla. `onScreen` es `false` tanto con la ventana minimizada u oculta como en otro Space, donde se sigue grabando. Se escribe al empezar la toma y cada vez que cambia el marco o `onScreen`. El render usa el último con `t` hasta el instante que dibuja, o `globalFrame` si no hay ninguno. |
+| `cameraStyle` | `style` | Desde la versión 2. La cámara se ve con el estilo `style` (`shape`, `size`, `anchor`, como el `cameraStyle` de la toma) desde `t`: el usuario movió la burbuja o le cambió la forma o el tamaño mientras grababa. El `cameraStyle` de la toma es el estilo de antes del primero. Un cambio hecho en pausa se escribe en el instante de reanudar, justo después de `resumed`, y un estilo igual al último escrito no se escribe. |
 
 Una línea de cada tipo, exactamente como se escribe:
 
@@ -252,6 +341,8 @@ Una línea de cada tipo, exactamente como se escribe:
 {"t":5,"type":"marker"}
 {"count":12,"t":5,"track":"display-1","type":"droppedSamples"}
 {"frame":240000,"t":5,"track":"mic","type":"audioClock"}
+{"frame":{"height":600,"width":800,"x":100,"y":80},"onScreen":true,"t":5,"track":"window-4242","type":"windowGeometry"}
+{"style":{"anchor":"topLeading","shape":"landscape","size":0.17},"t":5,"type":"cameraStyle"}
 ```
 
 ### Lectura después de un crash
@@ -299,6 +390,7 @@ Mientras se graba una toma existe `takes/<toma>/.reserve`: 8 MiB de ceros escrit
 
 - Es espacio de reserva, no datos de la toma. Si el disco se llena (el monitor de espacio pide parar, o una escritura de un segmento, del manifiesto o de `events.jsonl` falla con `ENOSPC`, o falla de otra forma con menos de 16 MiB libres en el volumen), la grabación lo borra primero y recién después hace las escrituras finales: cerrar los segmentos como `diskFull`, cerrar `events.jsonl` y marcar la toma `complete`. Al cerrar una toma por cualquier otro motivo también se borra.
 - Una toma no empieza si el volumen tiene menos espacio libre que el que la detendría (1 GB disponibles ahora, sin contar el espacio purgable), aunque el espacio para uso importante sea mayor.
+- Un `.reserve` que quedó en disco después de un crash no significa nada: la recuperación lo ignora y lo borra.
 
 ## Cierre de una toma
 
@@ -310,7 +402,6 @@ La regla es la de los segmentos: el manifiesto dice que algo terminó solo cuand
 4. se suelta el lock (se borra `recording.lock` y se cierra).
 
 La recuperación nunca toca una toma `complete`, así que si la app muere entre 2 y 3 la toma queda `recording` y se recupera con su `events.jsonl` entero; al revés, se perderían para siempre sus últimas líneas.
-- Un `.reserve` que quedó en disco después de un crash no significa nada: la recuperación lo ignora y lo borra.
 
 ## Recuperación después de un crash
 
@@ -318,11 +409,11 @@ Una toma con `status` `recording` cuyo `recording.lock` no tiene nadie quedó ab
 
 - Antes de tocar nada comprueba las rutas (ver [Rutas](#el-paquete)): con un `id`, un `file` o un enlace simbólico que podrían sacarla del paquete, no cambia nada y no crea nada fuera de él. `events.jsonl` se abre con `O_NOFOLLOW` y tiene que ser un archivo común.
 - Toma el lock de la toma mientras trabaja. No recupera nada mientras otra toma del mismo paquete se está grabando (su grabador es quien escribe `manifest.json`), y lo vuelve a comprobar, junto con que el manifiesto no haya cambiado, justo antes de escribirlo. Las tomas de un paquete se recuperan de a una y antes de grabar algo nuevo en él.
-- No toca un manifiesto con un `formatVersion` mayor que el que conoce.
+- No toca un manifiesto de un `formatVersion` que no lee (uno mayor que el que conoce). Al escribir el manifiesto conserva su `formatVersion`: un paquete v1 recuperado sigue siendo v1.
 - Hace terminar `events.jsonl` en un límite de línea, como antes de agregarle líneas (ver arriba).
 - Cierra cada segmento abierto (sin `endHostTime` o sin `endReason`) según lo que se puede leer de su archivo:
   - `recoveredAfterCrash`, con `endHostTime` igual a `startHostTime` más la duración legible, que llega hasta el último fragmento completo;
-  - `empty` si el archivo tiene 0 bytes, no tiene ninguna muestra del tipo de su pista o ya no existe;
+  - `empty` si el archivo tiene 0 bytes, no tiene ninguna muestra del tipo de su pista (video en `display`, `window` y `camera`; audio en `microphone` y `systemAudio`) o ya no existe;
   - `unreadable` con `bytes` si el archivo no está vacío pero su contenido no se puede leer; el archivo queda intacto;
   - en `empty` y `unreadable`, `endHostTime` es igual a `startHostTime`;
   - `droppedFrames` es el último `droppedSamples` del segmento (0 si no hay) y `heartbeatFrames` es 0.
@@ -339,6 +430,21 @@ La vista previa del editor y el export MP4 dibujan con el mismo código, y desde
 - **Cuadros de la pantalla** (`TrackFrameReader`). En un tiempo se muestra el último cuadro presentado en ese instante o antes. Un segmento `empty` o `unreadable`, un archivo que falta, uno que no se puede abrir o leer, y lo que no se pudo decodificar son huecos: se mantiene el cuadro anterior (o el fondo, antes del primer cuadro legible), y cada hueco se informa (`FrameRenderer.missingVideo`, `ExportSummary.missingVideo`). Si la lectura se corta con un error a mitad de un segmento, se vuelve a abrir justo después del último cuadro y, si se corta en el mismo lugar, cada vez `preroll` (1 s) más adelante, hasta decodificar o llegar al final del segmento.
 - **Dibujo** (`FrameRenderer`, `Compositor`). Todo pasa por `FrameRenderer.encode(at:into:commandBuffer:)`, que dibuja con `Compositor.encode` en una textura `.bgra8Unorm` del tamaño de salida: `render(at:into:)` (un `CVPixelBuffer` 32BGRA, para el export) y `renderBytes(at:)` (bytes BGRA sin relleno) lo usan, igual que la vista previa. Mismo proyecto, mismo tiempo y mismo tamaño dan los mismos bytes en la vista previa y en el export.
 - **Audio** (`MicrophoneTimeline`). El primer micrófono se ubica en la misma línea de tiempo por host time (ver [Tiempos](#tiempos)); lo que no se pudo usar queda en silencio y se informa (`ExportSummary.missingAudio`).
+
+## Cambios de la versión 2
+
+La versión 2 llega con la fase 1a. Los paquetes nuevos se crean con `formatVersion: 2`.
+
+- Tipos de pista nuevos: `window` (una ventana, en `window-<CGWindowID>/`), `camera` (en `camera/`) y `systemAudio` (en `system-audio/`). La recuperación y la verificación leen video en `display`, `window` y `camera`, y audio en `microphone` y `systemAudio`.
+- Campos nuevos de `source`, después de `pixelScale`: `windowID`, `bundleIdentifier`, `captureArea`, `includedBundleIDs` y `excludedBundleIDs`.
+- El campo `cameraStyle` de la toma: el estilo inicial de la cámara.
+- Eventos nuevos: `windowGeometry` y `cameraStyle`.
+
+Compatibilidad:
+
+- Un lector de la versión 2 lee las versiones 1 y 2 (`Manifest.supportedFormatVersions`, `1...2`) y rechaza cualquier otra antes de decodificar el manifiesto: un paquete de una versión más nueva es *para reparar* y no se toca. Un lector de la versión 1 rechaza así los paquetes v2.
+- Un paquete v1 se lee como siempre: no tiene ninguno de los campos nuevos, y su toma no tiene `cameraStyle`.
+- **Un paquete v1 se queda en v1.** La versión se decide al crear el paquete y nadie la reescribe: ni la recuperación ni la app cambian un proyecto viejo en silencio, y nada que la versión 1 no define se escribe en un paquete v1.
 
 ## Los datos crudos nunca se borran
 

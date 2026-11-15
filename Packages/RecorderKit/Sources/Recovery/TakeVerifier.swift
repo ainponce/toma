@@ -33,11 +33,11 @@ public enum TakeVerifier {
     /// to its last complete fragment, so two healthy tracks can differ by up to a fragment, plus the
     /// one being written. Two of `FragmentedTrackWriter.defaultFragmentInterval` (1 s).
     static let openEndTolerance = 2.0
-    /// A microphone's dropped frames are 10 ms blocks, the synthetic microphone's block length.
+    /// The dropped frames of an audio track (a microphone or system audio) are 10 ms blocks, the block length
+    /// of the synthetic audio sources.
     static let audioFramesPerSecond = 100.0
 
-    /// Verifies every track of `project.take`, display and microphone alike, in manifest order. A track
-    /// passes when:
+    /// Verifies every track of `project.take`, of every kind, in manifest order. A track passes when:
     ///
     /// - every segment file opens and has media of the track's kind (not missing, not empty), and its
     ///   readable media does not end more than the tolerance before the segment's `endHostTime`;
@@ -45,9 +45,10 @@ public enum TakeVerifier {
     /// - its readable media ends no more than the tolerance before the take's, which is the latest
     ///   readable end of any of its tracks;
     /// - with `maxDropRatio`, `droppedFrames / (frames + droppedFrames)` is at most `maxDropRatio`.
-    ///   `frames` are the frames that were written: for a display, the video samples in its files
-    ///   (heartbeat repeats included); for a microphone, which drops 10 ms blocks, the readable
-    ///   seconds × 100. A real microphone's blocks are longer than 10 ms, so its ratio reads low.
+    ///   `frames` are the frames that were written: for a video track (a display, a window or a camera),
+    ///   the video samples in its files (heartbeat repeats included); for an audio track (a microphone or
+    ///   system audio), which drops 10 ms blocks, the readable seconds × 100. A real device's blocks are
+    ///   longer than 10 ms, so its ratio reads low.
     ///
     /// The tolerance is 1 s for a `complete` take and 2 s for one a crash left open (`recovered` or
     /// still `recording`), whose tracks end at their last complete 1 s fragment.
@@ -127,13 +128,13 @@ public enum TakeVerifier {
                 }
                 guard countingFrames else { continue }
                 switch track.kind {
-                case .display:
+                case .display, .window, .camera:
                     do {
                         result.frames += Double(try countSamples(of: mediaTrack, in: asset))
                     } catch {
                         result.problems.append("\(name): frames cannot be counted: \(error.localizedDescription)")
                     }
-                case .microphone:
+                case .microphone, .systemAudio:
                     result.frames += seconds * audioFramesPerSecond
                 }
             }

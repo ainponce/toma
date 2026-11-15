@@ -48,6 +48,12 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// clock drifts from the host's, so the recording logs one every few seconds of audio and the export
         /// places the audio by host time through them.
         case audioClock(track: String, frame: Int)
+        /// Where the window of window track `track` is (`frame`, in global points), and whether macOS has it on
+        /// screen (`onScreen` is `false` both while it is minimized or hidden and while it is on another Space).
+        case windowGeometry(track: String, frame: Rect, onScreen: Bool)
+        /// The camera looks like this from `t` on: the user moved it or changed its shape or size while
+        /// recording. The take's `cameraStyle` is how it looked before the first one.
+        case cameraStyle(CameraStyle)
     }
 
     /// The event as one line of compact JSON with its keys in alphabetical order,
@@ -70,11 +76,12 @@ public struct InputEvent: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case t, type, x, y, button, displayID, frame, scale, track, index, domain, code, reason, deviceUniqueID, count
+        case onScreen, style
     }
 
     private enum EventType: String, Codable {
         case cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker
-        case droppedSamples, audioClock
+        case droppedSamples, audioClock, windowGeometry, cameraStyle
     }
 
     public init(from decoder: any Decoder) throws {
@@ -137,6 +144,14 @@ public struct InputEvent: Codable, Equatable, Sendable {
                 track: try container.decode(String.self, forKey: .track),
                 frame: try container.decode(Int.self, forKey: .frame)
             )
+        case .windowGeometry:
+            kind = .windowGeometry(
+                track: try container.decode(String.self, forKey: .track),
+                frame: try container.decode(Rect.self, forKey: .frame),
+                onScreen: try container.decode(Bool.self, forKey: .onScreen)
+            )
+        case .cameraStyle:
+            kind = .cameraStyle(try container.decode(CameraStyle.self, forKey: .style))
         }
         self.init(t: t, kind: kind)
     }
@@ -192,6 +207,14 @@ public struct InputEvent: Codable, Equatable, Sendable {
             try container.encode(EventType.audioClock, forKey: .type)
             try container.encode(track, forKey: .track)
             try container.encode(frame, forKey: .frame)
+        case let .windowGeometry(track, frame, onScreen):
+            try container.encode(EventType.windowGeometry, forKey: .type)
+            try container.encode(track, forKey: .track)
+            try container.encode(frame, forKey: .frame)
+            try container.encode(onScreen, forKey: .onScreen)
+        case let .cameraStyle(style):
+            try container.encode(EventType.cameraStyle, forKey: .type)
+            try container.encode(style, forKey: .style)
         }
     }
 }

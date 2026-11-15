@@ -102,11 +102,15 @@ public final class TakeBuilder {
     private var framesWritten: [String: Int] = [:]
     private var written = false
 
-    /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`.
+    /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`: with an older one, the package
+    /// an earlier version of the app would have created, which keeps that version.
     public init(in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion) throws {
         package = try ProjectPackage.create(in: directory, name: name, app: AppInfo(name: "Tests", version: "0"), now: Date())
         if formatVersion != Manifest.currentFormatVersion {
-            try ManifestStore(package: package).update { $0.formatVersion = formatVersion }
+            // Written here: `ManifestStore` keeps the version a package was created with.
+            var manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
+            manifest.formatVersion = formatVersion
+            try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
         }
     }
 

@@ -587,7 +587,9 @@ public final class RecordingController {
         case .trackLost(let track):
             notice = .trackLost(kind(track))
             if kind(track) == .microphone { recordsMicrophone = false }
-        case .displayPaused: notice = .screenPaused
+        case .displayPaused(let track):
+            // The only screen of a take recorded in Window mode is its window.
+            notice = kind(track) == .window ? .trackPaused(.window) : .screenPaused
         case .trackPaused(let track): notice = .trackPaused(kind(track))
         case .writerFailed(let track): notice = .writerFailed(kind(track))
         case .samplesDropped(let track): notice = .samplesDropped(kind(track))

@@ -28,3 +28,20 @@ import Testing
         }
     }
 }
+
+/// A package an earlier version of the app created: the manifest says so before and after the take is written.
+@Test func takeBuilderWritesAnOlderFormatVersion() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir, formatVersion: 1)
+        let created = try Data(contentsOf: builder.package.manifestURL)
+        #expect(try Manifest.formatVersion(of: created) == 1)
+        try await builder.addAudioTrack(
+            id: "mic", source: TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic"),
+            segments: [AudioSegmentSpec(start: HostTime(nanoseconds: 5_000_000_000_000), seconds: 1)])
+        let project = try builder.write()
+
+        #expect(project.manifest.formatVersion == 1)
+        #expect(try LoadedProject.load(builder.package.url).manifest == project.manifest)
+        #expect(project.take.tracks.map(\.id) == ["mic"])
+    }
+}

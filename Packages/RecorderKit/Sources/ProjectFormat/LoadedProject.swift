@@ -21,14 +21,17 @@ public struct LoadedProject: Sendable {
     /// Reads the package at `url`, its take `take` (the last one in the manifest when `nil`) and that
     /// take's events.
     ///
-    /// Throws `LoadedProjectError` for a manifest of a newer format version, one with a path that could
-    /// leave the package (`Manifest.validatePaths()`), a package without takes or an unknown take, and
-    /// the underlying error if the manifest or the event log cannot be read.
+    /// Throws `LoadedProjectError` for a manifest of a format version outside `Manifest.supportedFormatVersions`
+    /// (a newer one, for example), one with a path that could leave the package
+    /// (`Manifest.validatePaths()`), a package without takes or an unknown take, and the underlying error if
+    /// the manifest or the event log cannot be read.
     public static func load(_ url: URL, take: String? = nil) throws -> LoadedProject {
         let package = ProjectPackage(url: url)
         let data = try Data(contentsOf: package.manifestURL)
         let version = try Manifest.formatVersion(of: data)
-        guard version <= Manifest.currentFormatVersion else { throw LoadedProjectError.unsupportedFormatVersion(version) }
+        guard Manifest.supportedFormatVersions.contains(version) else {
+            throw LoadedProjectError.unsupportedFormatVersion(version)
+        }
         let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
         do {
             try manifest.validatePaths()
@@ -52,7 +55,8 @@ public struct LoadedProject: Sendable {
 }
 
 public enum LoadedProjectError: Error, Equatable {
-    /// The manifest was written by a newer version of the format, which this version cannot read safely.
+    /// The manifest is of a version of the format outside `Manifest.supportedFormatVersions`, for example a
+    /// newer one, which this version cannot read safely.
     case unsupportedFormatVersion(Int)
     /// The manifest has no takes.
     case noTakes

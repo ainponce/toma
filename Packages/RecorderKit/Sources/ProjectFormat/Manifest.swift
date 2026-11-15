@@ -26,7 +26,11 @@ public struct Rect: Codable, Equatable, Sendable {
 
 /// The contents of `manifest.json`: what was recorded and where it lives in the package.
 public struct Manifest: Codable, Equatable, Sendable {
-    public static let currentFormatVersion = 1
+    /// The version new packages are created with. A package keeps the version it was created with: nothing
+    /// rewrites it (a version 1 package stays at version 1).
+    public static let currentFormatVersion = 2
+    /// The versions this version reads. A manifest of any other version is refused before it is decoded.
+    public static let supportedFormatVersions = 1...2
 
     public var formatVersion: Int
     public var app: AppInfo
@@ -47,12 +51,17 @@ public struct TakeRecord: Codable, Equatable, Sendable {
     public var status: TakeStatus
     public var startedAt: Date
     public var tracks: [TrackRecord]
+    /// How the camera looks from the start of the take (notch design §6); the `cameraStyle` events of
+    /// `events.jsonl` change it while recording. Only in takes with a camera, and never in a version 1
+    /// package: without it, the camera is `CameraStyle.default`.
+    public var cameraStyle: CameraStyle?
 
-    public init(id: String, status: TakeStatus, startedAt: Date, tracks: [TrackRecord]) {
+    public init(id: String, status: TakeStatus, startedAt: Date, tracks: [TrackRecord], cameraStyle: CameraStyle? = nil) {
         self.id = id
         self.status = status
         self.startedAt = startedAt
         self.tracks = tracks
+        self.cameraStyle = cameraStyle
     }
 
     public func track(_ id: String) -> TrackRecord? {
@@ -84,30 +93,64 @@ public struct TrackRecord: Codable, Equatable, Sendable {
     }
 }
 
-public enum TrackKind: String, Codable, Sendable {
-    case display, microphone
+/// What a track records. `window`, `camera` and `systemAudio` are new in format version 2.
+public enum TrackKind: String, Codable, Sendable, CaseIterable {
+    /// A whole display, or an area of it (`TrackSource.captureArea`).
+    case display
+    /// One window.
+    case window
+    /// A camera.
+    case camera
+    case microphone
+    /// The sound the Mac plays: every app but the excluded ones, or only the chosen ones.
+    case systemAudio
 }
 
 /// What a track recorded. Only the fields that apply to its kind are set.
 public struct TrackSource: Codable, Equatable, Sendable {
+    /// The display's, window's (its app and title) or device's visible name.
     public var name: String
+    /// The `CGDirectDisplayID` of a display.
     public var displayID: UInt32?
+    /// The `uniqueID` of a microphone or a camera.
     public var deviceUniqueID: String?
+    /// Where a display or a window is, in global points.
     public var globalFrame: Rect?
+    /// Pixels per point of what a display or a window recorded.
     public var pixelScale: Double?
+    /// The `CGWindowID` of a window.
+    public var windowID: UInt32?
+    /// The bundle identifier of a window's app.
+    public var bundleIdentifier: String?
+    /// The area of a display recorded in Area mode, in global points. The track records the whole display.
+    public var captureArea: Rect?
+    /// System audio of only these apps; `nil`, every app but `excludedBundleIDs`.
+    public var includedBundleIDs: [String]?
+    /// Apps whose sound system audio leaves out when it records every app.
+    public var excludedBundleIDs: [String]?
 
     public init(
         name: String,
         displayID: UInt32? = nil,
         deviceUniqueID: String? = nil,
         globalFrame: Rect? = nil,
-        pixelScale: Double? = nil
+        pixelScale: Double? = nil,
+        windowID: UInt32? = nil,
+        bundleIdentifier: String? = nil,
+        captureArea: Rect? = nil,
+        includedBundleIDs: [String]? = nil,
+        excludedBundleIDs: [String]? = nil
     ) {
         self.name = name
         self.displayID = displayID
         self.deviceUniqueID = deviceUniqueID
         self.globalFrame = globalFrame
         self.pixelScale = pixelScale
+        self.windowID = windowID
+        self.bundleIdentifier = bundleIdentifier
+        self.captureArea = captureArea
+        self.includedBundleIDs = includedBundleIDs
+        self.excludedBundleIDs = excludedBundleIDs
     }
 }
 
