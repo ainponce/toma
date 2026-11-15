@@ -314,7 +314,8 @@ private func losses(_ grace: inout SpaceSwitchGrace, at times: Duration...) -> [
             return ["enabled": enabled, "value": ["parameters": [65535, key, modifiers], "type": "standard"]]
         }
         let control = 0x4_0000, option = 0x8_0000, command = 0x10_0000, fn = 0x80_0000
-        // Never changed: macOS's defaults, on.
+        // Never changed: macOS's defaults, on. With no shortcut ever customized there is no value at all.
+        #expect(SpaceJumper.shortcutsState(in: nil) == .on)
         #expect(SpaceJumper.shortcutsState(in: [String: Any]()) == .on)
         // Other ⌃fn-arrow shortcuts (window tiling, the shifted variants) do not matter.
         let others: [String: Any] = [
@@ -335,9 +336,9 @@ private func losses(_ grace: inout SpaceSwitchGrace, at times: Duration...) -> [
         #expect(SpaceJumper.shortcutsState(in: ["81": entry(enabled: true, key: 125)]) == .off)
         #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: true, key: 123, modifiers: control | option | fn)]) == .off)
         #expect(SpaceJumper.shortcutsState(in: ["81": entry(enabled: true, key: 124, modifiers: command | fn)]) == .off)
-        // What cannot be read, or has another shape: unknown, and nothing is posted either.
-        #expect(SpaceJumper.shortcutsState(in: nil) == .unknown)
+        // A value of another shape: unknown, and nothing is posted either.
         #expect(SpaceJumper.shortcutsState(in: ["79", "81"]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: 42) == .unknown)
         #expect(SpaceJumper.shortcutsState(in: ["79": 1]) == .unknown)
         #expect(SpaceJumper.shortcutsState(in: ["79": ["value": ["parameters": [65535, 123, control]]]]) == .unknown)
         #expect(SpaceJumper.shortcutsState(in: ["79": ["enabled": "yes"]]) == .unknown)

@@ -25,12 +25,13 @@ public enum SpaceJump {
 ///
 /// Whether they are on is read, fresh before every jump, from the preferences System Settings writes (the
 /// public `CFPreferencesCopyAppValue`, `AppleSymbolicHotKeys` of `com.apple.symbolichotkeys`), entries 79
-/// ("Move left a space") and 81 ("Move right a space"): a missing entry is macOS's default, on; an entry is
+/// ("Move left a space") and 81 ("Move right a space"): no value at all (no shortcut was ever customized) or
+/// a missing entry is macOS's default, on; an entry is
 /// on only if it is enabled and, if it carries keys (`value.parameters`: character, key code, modifiers), they
 /// are ← (123) or → (124) with control and no other of ⌘ ⇧ ⌥ (fn and the keypad allowed, as the arrows
 /// have them). macOS writes an entry with only `enabled` once a shortcut is switched without new keys: it
-/// keeps its default keys. Preferences that cannot be read, or of another shape, are unknown: nothing is
-/// posted either. `CopySymbolicHotKeys` cannot say which shortcut an entry is: other ⌃fn-arrow shortcuts are
+/// keeps its default keys. A value of another shape (not a dictionary, or 79 or 81 of a wrong type) is
+/// unknown: nothing is posted either. `CopySymbolicHotKeys` cannot say which shortcut an entry is: other ⌃fn-arrow shortcuts are
 /// listed there with the same keys.
 @MainActor
 public final class SpaceJumper {
@@ -102,7 +103,7 @@ public final class SpaceJumper {
     /// What macOS's preferences say about "Move left a space" and "Move right a space", both.
     enum ShortcutsState: Equatable, Sendable {
         case on, off
-        /// The preferences cannot be read, or have another shape.
+        /// The preferences have another shape.
         case unknown
     }
 
@@ -123,9 +124,11 @@ public final class SpaceJumper {
         return shortcutsState(in: CFPreferencesCopyAppValue("AppleSymbolicHotKeys" as CFString, domain))
     }
 
-    /// `symbolicHotKeys` is the value of `AppleSymbolicHotKeys`: on when both shortcuts are, unknown when
-    /// either cannot be told, off otherwise.
+    /// `symbolicHotKeys` is the value of `AppleSymbolicHotKeys`, `nil` when there is none (every shortcut at its
+    /// default): on when both shortcuts are, unknown when either cannot be told, off otherwise.
     nonisolated static func shortcutsState(in symbolicHotKeys: Any?) -> ShortcutsState {
+        // Never customized: every shortcut at macOS's default, on.
+        guard let symbolicHotKeys else { return .on }
         guard let hotKeys = symbolicHotKeys as? [String: Any] else { return .unknown }
         let states = [state(of: hotKeys[moveLeftASpace], key: leftArrow), state(of: hotKeys[moveRightASpace], key: rightArrow)]
         if states.contains(.unknown) { return .unknown }
