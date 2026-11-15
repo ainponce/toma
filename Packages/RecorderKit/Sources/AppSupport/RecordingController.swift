@@ -135,6 +135,8 @@ public final class RecordingController {
             case .started, .handedToStop:
                 return
             case .cancelled:
+                // No take was recorded: nothing said about it applies.
+                notices = []
                 setPhase(.idle)
                 return
             case .failed(let error, let microphoneFailed):
@@ -146,6 +148,8 @@ public final class RecordingController {
                     request.selection.microphone = .off
                     continue
                 }
+                // No take was recorded: the failure says why, and nothing said about the take applies.
+                notices = []
                 setPhase(.idle)
                 if !startCancelled { showStartFailure(error) }
                 return

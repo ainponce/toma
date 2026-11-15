@@ -37,17 +37,43 @@ import Testing
             // Saved by a version whose quick settings had no display scale.
             let saved = RecorderSettings(
                 selection: .mainDisplay(1), quick: QuickSettings(framesPerSecondByDisplay: [1: 30], displayScale: .points))
-            var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(saved)) as? [String: Any])
-            var quick = try #require(json["quick"] as? [String: Any])
-            #expect(quick.removeValue(forKey: "displayScale") != nil)
-            json["quick"] = quick
-            defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.key)
+            try save(saved, in: defaults, changing: "quick") { #expect($0.removeValue(forKey: "displayScale") != nil) }
             #expect(store.settings.quick == QuickSettings(framesPerSecondByDisplay: [1: 30], displayScale: .native))
             #expect(store.settings.selection == .mainDisplay(1) && store.settings.countdownSeconds == 3)
 
             defaults.set(Data("not settings".utf8), forKey: SettingsStore.key)
             #expect(store.settings == RecorderSettings())
         }
+    }
+
+    @Test func settingsThisVersionCannotReadKeepTheRest() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            let saved = RecorderSettings(
+                selection: .mainDisplay(1), quick: QuickSettings(framesPerSecondByDisplay: [1: 30], displayScale: .points),
+                countdownSeconds: 10)
+
+            // A capture mode from another version.
+            try save(saved, in: defaults, changing: "selection") { $0["mode"] = "teleport" }
+            #expect(store.settings == RecorderSettings(selection: nil, quick: saved.quick, countdownSeconds: 10))
+
+            // A display scale from another version.
+            try save(saved, in: defaults, changing: "quick") { $0["displayScale"] = "half" }
+            #expect(store.settings == RecorderSettings(
+                selection: .mainDisplay(1), quick: QuickSettings(framesPerSecondByDisplay: [1: 30], displayScale: .native),
+                countdownSeconds: 10))
+        }
+    }
+
+    /// Saves `settings` in `defaults` as another version could have: with `change` made to the object at `key`.
+    private func save(
+        _ settings: RecorderSettings, in defaults: UserDefaults, changing key: String, _ change: (inout [String: Any]) -> Void
+    ) throws {
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+        var object = try #require(json[key] as? [String: Any])
+        change(&object)
+        json[key] = object
+        defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.key)
     }
 
     /// A defaults suite of its own, removed when `body` returns.

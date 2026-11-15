@@ -126,35 +126,37 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
-    @Test func microphoneOffIsNeverRequested() async throws {
-        // With a microphone that was never allowed, and without one.
-        for hasMicrophone in [true, false] {
-            try await withRig(microphone: .notDetermined, hasMicrophone: hasMicrophone) { rig in
-                var selection = CaptureSelection.mainDisplay(1)
-                selection.microphone = .off
-                rig.controller.startRecording(selection: selection, settings: QuickSettings())
-                #expect(await eventually { rig.controller.phase.isRecordingATake })
-                await rig.controller.stop(openingEditor: false)
+    /// With a microphone that was never allowed, and without one.
+    @Test(arguments: [true, false]) func microphoneOffIsNeverRequested(hasMicrophone: Bool) async throws {
+        try await withRig(microphone: .notDetermined, hasMicrophone: hasMicrophone) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.microphone = .off
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            await rig.controller.stop(openingEditor: false)
 
-                #expect(rig.probe.requests.isEmpty)
-                #expect(!rig.controller.notices.contains(.noMicrophone) && !rig.controller.notices.contains(.microphoneAccessOff))
-                #expect(!rig.controller.notices.contains(.cameraNotRecordedYet))
-                #expect(rig.takes.grants == [[.screenRecording]])
-                let package = try #require(rig.takes.packages.first)
-                let take = try #require(try rig.takesOnDisk(package.url).first)
-                #expect(take.status == .complete && take.tracks.map(\.kind) == [.display])
-                #expect(rig.startFailures.isEmpty)
-            }
+            #expect(rig.probe.requests.isEmpty)
+            #expect(!rig.controller.notices.contains(.noMicrophone) && !rig.controller.notices.contains(.microphoneAccessOff))
+            #expect(!rig.controller.notices.contains(.cameraNotRecordedYet))
+            #expect(rig.takes.grants == [[.screenRecording]])
+            let package = try #require(rig.takes.packages.first)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.status == .complete && take.tracks.map(\.kind) == [.display])
+            #expect(rig.startFailures.isEmpty)
         }
     }
 
     @Test func planFailureLeavesNoPackage() async throws {
-        try await withRig { rig in
-            rig.controller.startRecording(selection: .mainDisplay(9), settings: QuickSettings())
+        // Without a microphone and with the camera on: the start has something to say about the take.
+        try await withRig(hasMicrophone: false) { rig in
+            var selection = CaptureSelection.mainDisplay(9)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
             #expect(await eventually { !rig.startFailures.isEmpty })
 
             #expect(rig.startFailures.map { $0 as? TakePlanError } == [.displayNotFound(9)])
             #expect(rig.controller.phase == .idle)
+            #expect(rig.controller.notices.isEmpty)  // about a take that was not recorded
             let leftovers = try FileManager.default.contentsOfDirectory(atPath: rig.folder.path)
             #expect(leftovers.isEmpty)
             #expect(rig.takes.requests.count == 1 && rig.takes.recordings.isEmpty)
@@ -189,7 +191,9 @@ enum AwaitPoint: CaseIterable {
     @Test func quitWhileStartingWaitsAndLeavesNoEmptyPackage() async throws {
         try await withRig { rig in
             rig.creation.close()
-            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
             #expect(await eventually { rig.creation.arrivals == 1 })
             let returned = Flag()
             let quitting = Task {
@@ -202,6 +206,7 @@ enum AwaitPoint: CaseIterable {
             await quitting.value
 
             #expect(rig.controller.phase == .idle)
+            #expect(rig.controller.notices.isEmpty)  // the camera notice was about a take that was not recorded
             #expect(try FileManager.default.contentsOfDirectory(atPath: rig.folder.path).isEmpty)
             #expect(rig.takes.packages.isEmpty)
             #expect(rig.editorOpenings.isEmpty)

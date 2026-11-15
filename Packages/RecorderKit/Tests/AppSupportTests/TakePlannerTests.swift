@@ -18,6 +18,18 @@ import Testing
         #expect(QuickSettings().framesPerSecond(display: 3) == 60 && QuickSettings().displayScale == .native)
     }
 
+    @Test func frameRatesBelowOneAreRecordedAtSixty() throws {
+        let settings = QuickSettings(framesPerSecondByDisplay: [1: 0, 2: -30])
+        #expect(settings.framesPerSecond(display: 1) == 60 && settings.framesPerSecond(display: 2) == 60)
+        #expect(QuickSettings(framesPerSecondByDisplay: [1: 24]).framesPerSecond(display: 1) == 24)
+
+        var selection = CaptureSelection.mainDisplay(1)
+        selection.displayIDs = [1, 2]
+        let factory = FakeFactory()
+        let plan = try TakePlanner.plan(selection, settings: settings, displays: Self.displays, granted: Self.allGranted, factory: factory)
+        #expect(plan.sources.map(\.media) == [.video(framesPerSecond: 60), .video(framesPerSecond: 60), .audio])
+    }
+
     @Test func planForTwoDisplaysMakesTwoDisplayTracksInOrder() throws {
         var selection = CaptureSelection.mainDisplay(1)
         selection.displayIDs = [2, 1]

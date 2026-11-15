@@ -16,13 +16,14 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.countdownSeconds = countdownSeconds
     }
 
-    /// A field missing from what was saved (by a version that did not have it) takes its default.
+    /// A field missing from what was saved (by a version that did not have it), or that this version
+    /// cannot read (a selection with a mode from another version), takes its default; the others are kept.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = RecorderSettings()
-        selection = try container.decodeIfPresent(CaptureSelection.self, forKey: .selection) ?? defaults.selection
-        quick = try container.decodeIfPresent(QuickSettings.self, forKey: .quick) ?? defaults.quick
-        countdownSeconds = try container.decodeIfPresent(Int.self, forKey: .countdownSeconds) ?? defaults.countdownSeconds
+        selection = (try? container.decodeIfPresent(CaptureSelection.self, forKey: .selection)) ?? defaults.selection
+        quick = (try? container.decodeIfPresent(QuickSettings.self, forKey: .quick)) ?? defaults.quick
+        countdownSeconds = (try? container.decodeIfPresent(Int.self, forKey: .countdownSeconds)) ?? defaults.countdownSeconds
     }
 }
 
@@ -38,7 +39,7 @@ public final class SettingsStore {
         self.defaults = defaults
     }
 
-    /// What was saved last; the defaults when nothing was, or what was saved cannot be read.
+    /// What was saved last; the defaults when nothing was, or what was saved is not settings at all.
     public var settings: RecorderSettings {
         get {
             guard let data = defaults.data(forKey: Self.key) else { return RecorderSettings() }

@@ -226,12 +226,14 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
 - [ ] Task 5a (el ciclo de vida de la toma pasó a `AppSupport`): repetir las comprobaciones 2, 5, 6 y 8 de las verificaciones manuales de la Task 12 de la fase 0 ("Pendientes del dueño de la fase 0", arriba), con `make build` y `build/Build/Products/Debug/Toma.app`. En la 2, el tiempo del menú ("Grabando 0:00:xx") ahora lo dibuja un `TimelineView`: anotar si se ve y si avanza con el menú abierto.
 - [ ] Task 5a: Cmd-Q durante "Iniciando la grabación…". Para que el arranque espere, borrar antes el permiso del micrófono (`tccutil reset Microphone dev.toma.Toma`) y salir mientras el sistema lo pide: la app sale cuando termina el arranque (al responder el pedido, o a los 30 s del límite para salir) y `~/Movies/Toma` no tiene un paquete vacío nuevo.
 - [ ] Task 5a: bloquear la pantalla 20 s durante una toma: el tiempo del menú no avanza mientras está bloqueada y, al desbloquear, sigue desde donde quedó.
+- [ ] Task 14a: grabar la pantalla principal ("Grabar pantalla principal") sin ventanas de Toma abiertas; durante la toma abrir una ventana de Toma (por ejemplo "Licencias de terceros…" desde el menú): no sale en el video, y el arranque no tarda notablemente más que antes.
 
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 5a. Comprobaciones 2, 5, 6 y 8 de la Task 12 de la fase 0 | pendiente | pendiente | pendiente |
 | 5a. Cmd-Q durante "Iniciando la grabación…" sin paquete vacío nuevo | pendiente | pendiente | pendiente |
 | 5a. El tiempo del menú no avanza con la pantalla bloqueada | pendiente | pendiente | pendiente |
+| 14a. Una ventana de Toma abierta durante la toma no sale en el video; el arranque no tarda más | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 
