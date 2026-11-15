@@ -26,8 +26,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     var selectingChanged: () -> Void = {}
 
     /// While a system permission prompt (drawn by another process, at the top center) is up, the island
-    /// goes down to `.normal` so it is never over it (Tasks 16a and 16e): the microphone's, which a take's
-    /// start waits for, and the camera's, which turning the camera on waits for.
+    /// goes down to `.normal` so it is never over it (Tasks 16a, 16e and 15): the microphone's, which a take's
+    /// start waits for, the camera's, which turning the camera on waits for, and system audio's, which turning
+    /// system audio on shows.
     var yieldsToSystemPrompt = false {
         didSet { panel.level = yieldsToSystemPrompt ? .normal : FloatingPanel.islandLevel }
     }
@@ -50,11 +51,20 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// Kept up to date from launch, so opening the panel never waits for them.
     private let microphones = CaptureDeviceList(listing: { DeviceLists.microphones() })
     private let cameras = CaptureDeviceList(listing: { DeviceLists.cameras() })
+    /// The open apps, for system audio by app.
+    private let audioApplications = AudioApplicationList()
     /// The camera's look and permission, for the bubble and the open island's camera column.
     private let camera: CameraSetting
+    /// System audio's permission, asked for when it is turned on in the open island.
+    private let systemAudio: SystemAudioSetting
     private let bubble: CameraBubblePanel
     /// The camera prompt is up.
     private var isAskingForCamera = false
+    /// System audio was asked for with the island open. macOS shows its prompt and never says when it is
+    /// answered (the request is over in a second, the prompt may stay): the island stays under it, and open
+    /// while the keyboard is the prompt's, until it leaves the open state; once the request is over it takes the
+    /// keyboard back when the pointer comes over it.
+    private var isMakingRoomForSystemAudio = false
     private var machine = IslandMachine()
     private var presence = PointerPresence()
     private var width: SpringValue
@@ -110,6 +120,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         teleprompter = TeleprompterPanel(setting: teleprompterSetting, recording: recording)
         desktops = DesktopsModel(displayID: displayID, probe: probe)
         camera = CameraSetting(store: store, probe: probe)
+        systemAudio = SystemAudioSetting(probe: probe)
         bubble = CameraBubblePanel(setting: camera, preview: SharedCameraPreview(host: cameraHost))
         model = IslandModel(
             recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, desktops: desktops, top: top,
@@ -133,7 +144,10 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         panel.onClose = { [weak self] in self?.close() }
         model.send = { [weak self] event in self?.send(event) }
         desktops.send = { [weak self] event in self?.send(event) }
-        root.onEnter = { [weak self] in self?.pointer(entered: .island) }
+        root.onEnter = { [weak self] in
+            self?.pointer(entered: .island)
+            self?.keyboardBackAfterSystemAudioPrompt()
+        }
         root.onExit = { [weak self] in self?.pointer(exited: .island) }
         let link = root.displayLink(target: self, selector: #selector(frameTick(_:)))
         link.isPaused = true
@@ -144,10 +158,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         zones.exited = { [weak self] id in self?.pointer(exited: .zone(id)) }
         zones.clicked = { [weak self] id in self?.zoneClicked(id) }
         overlay.chose = { [weak self] id in self?.chose(display: id) }
+        overlay.choseWindow = { [weak self] window in self?.chose(window: window) }
         overlay.ended = { [weak self] in self?.send(.endedChoosing) }
         overlay.leftForAnotherApp = { [weak self] in self?.send(.endedChoosing, .dismiss) }
         overlay.closed = { [weak self] in self?.close() }
         overlay.reduceMotion = model.reduceMotion
+        overlay.reduceTransparency = model.reduceTransparency
         capsule.reduceMotion = model.reduceMotion
         capsule.reduceTransparency = model.reduceTransparency
         teleprompter.reduceMotion = model.reduceMotion
@@ -157,6 +173,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         teleprompter.islandTakesKeyboard = { [weak self] in self?.takeKeyboardBack() ?? false }
         bubble.reduceMotion = model.reduceMotion
         camera.askingChanged = { [weak self] asking in self?.cameraPromptChanged(asking) }
+        // A take in progress follows the bubble: let go, or given another shape or size (notch design §5.6).
+        camera.changed = { [weak recording] style in recording?.setCameraStyle(style) }
+        systemAudio.askingChanged = { [weak self] asking in self?.systemAudioRequested(asking) }
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { $0.screensChanged() }
         observe(workspace.notificationCenter, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { $0.displayOptionsChanged() }
@@ -228,8 +247,15 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     private func updateYield() {
-        let yields = recording.isAskingPermission || isAskingForCamera
+        let yields = recording.isAskingPermission || isAskingForCamera || isMakingRoomForSystemAudio
         if yieldsToSystemPrompt != yields { yieldsToSystemPrompt = yields }
+    }
+
+    /// System audio is being asked for: the island makes room for the prompt from now until it is no longer open.
+    private func systemAudioRequested(_ asking: Bool) {
+        guard asking, machine.state == .open else { return }
+        isMakingRoomForSystemAudio = true
+        updateYield()
     }
 
     /// The camera prompt came up, or was answered: the island makes room for it meanwhile, and then takes the
@@ -342,19 +368,34 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         send(.endedChoosing)
     }
 
+    /// The pointer came over the open island after system audio was asked for: the prompt, which had the keyboard,
+    /// was most likely answered, so the island takes it back (Esc, and a click elsewhere closing it). If the
+    /// prompt is still up it stays over the island, and a click on it leaves the island open.
+    private func keyboardBackAfterSystemAudioPrompt() {
+        guard isMakingRoomForSystemAudio, !systemAudio.isAsking, !panel.isKeyWindow else { return }
+        _ = takeKeyboardBack()
+    }
+
+    private func chose(window: WindowCandidate) {
+        model.panel?.choose(window: window)
+        send(.endedChoosing)
+    }
+
     func windowDidResignKey(_ notification: Notification) {
         keyboardLeft()
     }
 
     /// The island or the teleprompter lost the keyboard: a click elsewhere closes the open island, unless the
     /// keyboard went to another of Toma's floating windows (the on-screen selection, the teleprompter, a menu)
-    /// or to the camera prompt, or the desktop changed under it (a jump from the island, or ⌃← ⌃→: macOS makes
-    /// a window of that desktop key). Then the island stays open and takes the keyboard back.
+    /// or to the camera's prompt or system audio's, or the desktop changed under it (a jump from the island, or
+    /// ⌃← ⌃→: macOS makes a window of that desktop key). Then the island stays open and takes the keyboard back.
     private func keyboardLeft() {
         guard machine.state == .open else { return }
         // Once the new key window is known.
         Task { @MainActor [weak self] in
-            guard let self, machine.state == .open, !panel.isKeyWindow, !isAskingForCamera else { return }
+            guard let self, machine.state == .open, !panel.isKeyWindow, !isAskingForCamera, !isMakingRoomForSystemAudio else {
+                return
+            }
             if let key = NSApp.keyWindow, !key.styleMask.contains(.titled) { return }
             if desktops.keyboardLostToADesktopChange() {
                 _ = takeKeyboardBack()
@@ -386,6 +427,10 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             break
         }
         if state != .recordingOpen { model.isConfirmingRestart = false }
+        if state != .open, isMakingRoomForSystemAudio {
+            isMakingRoomForSystemAudio = false
+            updateYield()
+        }
         withAnimation(.island(IslandGeometry.spring(to: state), reduceMotion: model.reduceMotion)) { model.state = state }
         retargetOutline()
 
@@ -404,7 +449,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         // Key only on entering a keyboard state: never again at each second of the countdown, which would
         // take the keyboard back from an app the user clicked into meanwhile.
         showOrHide(makingKey: IslandState.becomesKey(from: before, to: state))
-        if state == .choosing { overlay.beginChoosing(names: names, pointerDisplayID: Self.pointerDisplayID()) }
+        if state == .choosing {
+            overlay.beginChoosing(choosing, names: names, barTops: areaBarTops(), pointerDisplayID: Self.pointerDisplayID())
+        }
         updateZones()
         watchPointer(state == .recording)
         teleprompter.update(island: state)
@@ -422,12 +469,33 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private func makePanelModel() -> OpenPanelModel {
         let panelModel = OpenPanelModel(
             recording: recording, store: store, countdown: countdown, afterStop: afterStop, teleprompter: teleprompterSetting,
-            camera: camera, microphones: microphones, cameras: cameras, displays: displayChoices(), islandDisplayID: displayID)
+            camera: camera, systemAudio: systemAudio, audioApplications: audioApplications, microphones: microphones,
+            cameras: cameras, displays: displayChoices(), islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)
         }
+        panelModel.confirm = { [weak self] confirmation in self?.showConfirmation(confirmation) }
         return panelModel
+    }
+
+    /// What "Choose on Screen" chooses: what the open island's mode records.
+    private var choosing: SelectionOverlay.Choosing {
+        guard let panel = model.panel else { return .display }
+        switch panel.selection.mode {
+        case .display: return .display
+        case .window: return .window(panel)
+        case .area: return .area(panel)
+        }
+    }
+
+    /// Where the area bar goes on each screen, from its top: under the choosing island (where it would be on that
+    /// screen) and the confirmation capsule that may hang from it.
+    private func areaBarTops() -> [UInt32: Double] {
+        tops.mapValues { top in
+            let island = IslandGeometry.frame(IslandGeometry.shape(.choosing, on: top), on: top)
+            return Double(top.frame.maxY - island.minY) + ConfirmationCapsule.clearance
+        }
     }
 
     private func displayChoices() -> [DisplayChoice] {
@@ -611,6 +679,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         model.reduceMotion = workspace.accessibilityDisplayShouldReduceMotion
         model.reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
         overlay.reduceMotion = model.reduceMotion
+        overlay.reduceTransparency = model.reduceTransparency
         capsule.reduceMotion = model.reduceMotion
         capsule.reduceTransparency = model.reduceTransparency
         teleprompter.reduceMotion = model.reduceMotion

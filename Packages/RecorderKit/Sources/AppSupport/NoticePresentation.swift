@@ -36,6 +36,8 @@ public enum IslandConfirmation: Equatable, Sendable {
     case movedToTrash
     /// A stop ended the countdown: nothing was recorded.
     case countdownCancelled
+    /// The area drawn is among the saved areas ("Save Area").
+    case areaSaved
 
     /// How long the capsule shows.
     public static let displayDuration: Duration = .seconds(2)

@@ -2,7 +2,7 @@
   "sourceLanguage" : "en",
   "strings" : {
     "%1$@ — %2$@" : {
-      "comment" : "A desktop of an app in full screen: the app, and its window's title",
+      "comment" : "An app and its window's title: a desktop of an app in full screen, or a window to record",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -114,6 +114,16 @@
         }
       }
     },
+    "Adjust Area" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustar el área"
+          }
+        }
+      }
+    },
     "All" : {
       "comment" : "System audio: record all of it",
       "localizations" : {
@@ -183,6 +193,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Área"
+          }
+        }
+      }
+    },
+    "Area saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Área guardada."
           }
         }
       }
@@ -287,6 +307,16 @@
         }
       }
     },
+    "Choose Apps…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir apps…"
+          }
+        }
+      }
+    },
     "Choose on Screen" : {
       "localizations" : {
         "es" : {
@@ -314,6 +344,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hacer clic en una pantalla para grabarla."
+          }
+        }
+      }
+    },
+    "Click a window to record it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer clic en una ventana para grabarla."
           }
         }
       }
@@ -542,6 +582,16 @@
         }
       }
     },
+    "Drag to draw the area." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar para dibujar el área."
+          }
+        }
+      }
+    },
     "Draw on Screen" : {
       "localizations" : {
         "es" : {
@@ -559,6 +609,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Editar"
+          }
+        }
+      }
+    },
+    "Encoder load %@" : {
+      "comment" : "How much of the encoder's budget the take would use, as 42 %",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Carga del codificador %@"
           }
         }
       }
@@ -613,6 +674,17 @@
         }
       }
     },
+    "Free" : {
+      "comment" : "An area's proportion: none",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Libre"
+          }
+        }
+      }
+    },
     "From Other Desktops" : {
       "localizations" : {
         "es" : {
@@ -629,6 +701,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dar permiso…"
+          }
+        }
+      }
+    },
+    "Grid" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grilla"
           }
         }
       }
@@ -759,6 +841,16 @@
         }
       }
     },
+    "Menus don't appear in a window recording, and popovers may not either." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los menús no salen al grabar una ventana, y puede que los popovers tampoco."
+          }
+        }
+      }
+    },
     "Microphone" : {
       "localizations" : {
         "es" : {
@@ -805,6 +897,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mission Control"
+          }
+        }
+      }
+    },
+    "Move the area or change its size." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover el área o cambiar su tamaño."
           }
         }
       }
@@ -1256,12 +1358,35 @@
         }
       }
     },
-    "Record several displays" : {
+    "Record secondary displays at %lld fps" : {
+      "comment" : "A change that lightens the encoder's load",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Grabar varias pantallas"
+            "value" : "Grabar las pantallas secundarias a %lld fps"
+          }
+        }
+      }
+    },
+    "Record the camera at %@" : {
+      "comment" : "A change that lightens the encoder's load: the camera's quality, as 1080p",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar la cámara en %@"
+          }
+        }
+      }
+    },
+    "Record the camera at %lld fps" : {
+      "comment" : "A change that lightens the encoder's load",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar la cámara a %lld fps"
           }
         }
       }
@@ -1485,6 +1610,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuadrado redondeado"
+          }
+        }
+      }
+    },
+    "Save Area" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar el área"
           }
         }
       }
@@ -2393,6 +2528,16 @@
         }
       }
     },
+    "The whole display is recorded: what's outside the area is saved too. The area can be changed later." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se graba la pantalla completa: lo que queda fuera del área también se guarda. El área se puede cambiar después."
+          }
+        }
+      }
+    },
     "The window can't be found. It may have been closed." : {
       "localizations" : {
         "es" : {
@@ -2530,6 +2675,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta grabación no terminó de guardarse"
+          }
+        }
+      }
+    },
+    "This setup may be too much for the encoder." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta combinación puede ser demasiado para el codificador."
           }
         }
       }
@@ -2704,6 +2859,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se interrumpió la captura de la ventana. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "With many menus, Area or Display works better." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con muchos menús, mejor Área o Pantalla."
           }
         }
       }

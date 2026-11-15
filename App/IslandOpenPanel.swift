@@ -40,19 +40,37 @@ final class OpenPanelModel {
     let camera: CameraSetting
     /// The chosen microphone's level, while the panel shows it.
     let levelPreview = MicrophoneLevelPreview()
+    /// System audio's permission, asked for when system audio is turned on.
+    let systemAudio: SystemAudioSetting
+    /// The open apps, for system audio by app.
+    let audioApplications: AudioApplicationList
+    /// The window chosen in Window mode, as the window server told it when it was chosen.
+    var chosenWindow: WindowCandidate?
+    /// Window mode's windows of other desktops, by app; read each time the window column shows.
+    var otherDesktopWindows: [AppWindows] = []
+    /// The areas saved ("Save Area"), saved at once.
+    private(set) var savedAreas: SavedAreas
+    /// The proportion an area is drawn with, saved at once.
+    private(set) var aspectLock: AspectLock
+    /// The grid of thirds over the area being drawn.
+    var showsGrid = true
 
     /// The pointer is over the row of this display (`nil`: over none).
     @ObservationIgnored var highlight: (UInt32?) -> Void = { _ in }
+    /// The capsule under the island confirms what the user just did.
+    @ObservationIgnored var confirm: (IslandConfirmation) -> Void = { _ in }
     @ObservationIgnored private let recording: RecordingController
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private let microphoneList: CaptureDeviceList
     @ObservationIgnored private let cameraList: CaptureDeviceList
 
-    /// The saved selection if its displays are still connected; otherwise the display the island is on. The
-    /// camera is on only if it is allowed: what the panel shows is what is recorded.
+    /// The saved selection, with what is no longer there left out: the displays that are not connected (the
+    /// display the island is on when none is left), an area of a display that is not connected, a window that is
+    /// closed. The camera is on only if it is allowed: what the panel shows is what is recorded.
     init(
         recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        teleprompter: TeleprompterSetting, camera: CameraSetting, microphones: CaptureDeviceList, cameras: CaptureDeviceList,
+        teleprompter: TeleprompterSetting, camera: CameraSetting, systemAudio: SystemAudioSetting,
+        audioApplications: AudioApplicationList, microphones: CaptureDeviceList, cameras: CaptureDeviceList,
         displays: [DisplayChoice], islandDisplayID: UInt32
     ) {
         self.recording = recording
@@ -61,19 +79,27 @@ final class OpenPanelModel {
         self.afterStop = afterStop
         self.teleprompter = teleprompter
         self.camera = camera
+        self.systemAudio = systemAudio
+        self.audioApplications = audioApplications
         microphoneList = microphones
         cameraList = cameras
         self.displays = displays
         let saved = store.settings
         quick = saved.quick
+        savedAreas = saved.savedAreas
+        aspectLock = saved.aspectLock
         let connected = Set(displays.map(\.id))
-        if let selection = saved.selection, !selection.displayIDs.isEmpty, selection.displayIDs.allSatisfy(connected.contains) {
-            self.selection = selection
-        } else {
-            selection = .mainDisplay(islandDisplayID)
-        }
+        var selection = saved.selection ?? .mainDisplay(islandDisplayID)
+        selection.displayIDs = selection.displayIDs.filter(connected.contains)
+        if selection.displayIDs.isEmpty { selection.displayIDs = [islandDisplayID] }
+        if let area = selection.area, !connected.contains(area.displayID) { selection.area = nil }
+        let window = selection.windowID.flatMap(WindowList.window)
+        if window == nil { selection.windowID = nil }
+        chosenWindow = window
+        self.selection = selection
         camera.refreshPermission()
-        if camera.permission != .granted { selection.camera = .off }
+        if camera.permission != .granted { self.selection.camera = .off }
+        systemAudio.refreshPermission()
     }
 
     /// Displays were connected or disconnected.
@@ -115,51 +141,65 @@ final class OpenPanelModel {
         return recording.isRecording ? RecordingError.alreadyStarted : nil
     }
 
-    /// The display whose frame rate the settings show: the first one chosen.
-    var chosenDisplay: DisplayChoice? {
-        selection.displayIDs.first.flatMap { id in displays.first { $0.id == id } }
+    /// The displays the take records whole, each at its frame rate: the chosen ones in Display mode, the area's in
+    /// Area mode, none in Window mode.
+    var recordedDisplays: [DisplayChoice] {
+        let ids: [UInt32] =
+            switch selection.mode {
+            case .display: selection.displayIDs
+            case .area: selection.area.map { [$0.displayID] } ?? []
+            case .window: []
+            }
+        return ids.compactMap { id in displays.first { $0.id == id } }
     }
 
+    /// "Choose on Screen" in Display mode: that display alone.
     func choose(display id: UInt32) {
         selection.displayIDs = [id]
     }
 
-    /// 30, and 60 when the display reaches it.
-    func framesPerSecondOptions(for display: DisplayChoice) -> [Int] {
-        display.info.maximumFramesPerSecond >= 60 ? [30, 60] : [30]
+    /// A display's row: marked, or no longer; the displays keep the order of the list.
+    func toggle(display id: UInt32) {
+        var chosen = Set(selection.displayIDs)
+        if chosen.contains(id) { chosen.remove(id) } else { chosen.insert(id) }
+        selection.displayIDs = displays.map(\.id).filter(chosen.contains)
     }
 
-    /// The frame rate the display records at, among the ones it offers.
-    func framesPerSecond(for display: DisplayChoice) -> Int {
-        let chosen = quick.framesPerSecond(display: display.id)
-        let options = framesPerSecondOptions(for: display)
-        return options.contains(chosen) ? chosen : options[0]
-    }
-
-    func setFramesPerSecond(_ value: Int, for display: DisplayChoice) {
-        quick.framesPerSecondByDisplay[display.id] = value
+    /// The quick settings a take records with: the frame rates the settings show for its displays.
+    var recordedQuick: QuickSettings {
+        var quick = quick
+        for display in recordedDisplays {
+            quick.framesPerSecondByDisplay[display.id] = framesPerSecond(for: display)
+        }
+        return quick
     }
 
     /// Saves the selection and the settings and starts the take, at the frame rates the settings show. The
     /// take's phase takes the island to the countdown (or the wings).
     func record() {
         guard recordProblem == nil else { return }
-        var quick = quick
-        for display in displays where selection.displayIDs.contains(display.id) {
-            quick.framesPerSecondByDisplay[display.id] = framesPerSecond(for: display)
-        }
+        let quick = recordedQuick
         var settings = store.settings
         settings.selection = selection
         settings.quick = quick
         store.settings = settings
         recording.startRecording(selection: selection, settings: quick)
     }
+
+    /// Area mode's saved areas and proportion, changed and saved at once, whatever else Record saves.
+    func setAreaSettings(saved: SavedAreas? = nil, lock: AspectLock? = nil) {
+        if let saved { savedAreas = saved }
+        if let lock { aspectLock = lock }
+        var settings = store.settings
+        settings.savedAreas = savedAreas
+        settings.aspectLock = aspectLock
+        store.settings = settings
+    }
 }
 
-/// The open island (700 × 400, notch design §5.2): the mode, what to record (with the desktops, for a
-/// display), the camera, audio and the teleprompter's switch, the settings and Record, and above Record why
-/// a jump to another desktop posted nothing and why the last take could not start. Window, Area and what
-/// this version does not record yet are drawn, disabled.
+/// The open island (700 × 400, notch design §5.2): the mode, what to record (displays with the desktops, a
+/// window, or an area), the camera, audio and the teleprompter's switch, the settings, the encoder's load and
+/// Record, and above Record why a jump to another desktop posted nothing and why the last take could not start.
 struct IslandOpenPanel: View {
     @Bindable var panel: OpenPanelModel
     let desktops: DesktopsModel
@@ -263,8 +303,8 @@ struct IslandOpenPanel: View {
         ColumnTitle(text: Text("What to Record"), icon: modeIcon)
         switch panel.selection.mode {
         case .display: displayColumn
-        case .window: windowColumn
-        case .area: areaColumn
+        case .window: WindowChoiceColumn(panel: panel, send: send)
+        case .area: AreaChoiceColumn(panel: panel, send: send)
         }
     }
 
@@ -276,27 +316,18 @@ struct IslandOpenPanel: View {
         }
     }
 
+    /// Every display, each marked or not: a take records the marked ones.
     @ViewBuilder
     private var displayColumn: some View {
         VStack(spacing: 2) {
             ForEach(panel.displays) { display in
-                DisplayRow(
-                    display: display, isChosen: panel.selection.displayIDs.contains(display.id),
-                    choose: { panel.choose(display: display.id) },
+                ChoiceRow(
+                    title: Text(verbatim: display.name), subtitle: Text(verbatim: display.resolution),
+                    isChosen: panel.selection.displayIDs.contains(display.id),
+                    choose: { panel.toggle(display: display.id) },
                     hovering: { panel.highlight($0 ? display.id : nil) })
             }
         }
-        Toggle(isOn: Binding(
-            get: { panel.selection.displayIDs.count > 1 },
-            set: { several in
-                panel.selection.displayIDs = several ? panel.displays.map(\.id) : Array(panel.selection.displayIDs.prefix(1))
-            }
-        )) {
-            Text("Record several displays").font(.system(size: 12))
-        }
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-        .upcoming(.severalDisplays)
         Button { send(.beganChoosing) } label: {
             Label("Choose on Screen", systemImage: "display")
         }
@@ -307,29 +338,6 @@ struct IslandOpenPanel: View {
                 icon: "rectangle.3.group")
             DesktopsList(model: desktops, layout: .column)
         }
-        Spacer(minLength: 0)
-    }
-
-    /// Task 15 enables them: choosing sets `windowID` (and the area `area`).
-    @ViewBuilder
-    private var windowColumn: some View {
-        Button {} label: { Label("Choose on Screen", systemImage: "macwindow") }
-            .buttonStyle(GlassButtonStyle())
-            .upcoming(.windowChoice)
-        Button {} label: { Label("From Other Desktops", systemImage: "rectangle.3.group") }
-            .buttonStyle(GlassButtonStyle(compact: true))
-            .upcoming(.otherDesktopWindows)
-        Spacer(minLength: 0)
-    }
-
-    @ViewBuilder
-    private var areaColumn: some View {
-        Button {} label: { Label("Draw on Screen", systemImage: "viewfinder") }
-            .buttonStyle(GlassButtonStyle())
-            .upcoming(.areaChoice)
-        Button {} label: { Label("Saved Areas", systemImage: "bookmark") }
-            .buttonStyle(GlassButtonStyle(compact: true))
-            .upcoming(.areaChoice)
         Spacer(minLength: 0)
     }
 
@@ -453,10 +461,6 @@ struct IslandOpenPanel: View {
         case device(String)
     }
 
-    private enum SystemAudioTab: Hashable {
-        case none, all, byApp
-    }
-
     @ViewBuilder
     private var audioAndScript: some View {
         ColumnTitle(text: Text("Audio and Script"), icon: "mic.fill")
@@ -476,29 +480,7 @@ struct IslandOpenPanel: View {
         .controlSize(.small)
         MicrophoneLevelRow(preview: panel.levelPreview, choice: panel.selection.microphone)
         ColumnSubtitle(text: Text("System Audio"), icon: "speaker.wave.2.fill")
-        GlassSegmented(
-            items: [
-                .init(value: SystemAudioTab.none, title: Text("None", comment: "System audio: record none; the countdown: none")),
-                .init(value: .all, title: Text("All", comment: "System audio: record all of it")),
-                .init(value: .byApp, title: Text("By App")),
-            ],
-            selection: Binding(
-                get: {
-                    switch panel.selection.systemAudio {
-                    case .off: SystemAudioTab.none
-                    case .all: .all
-                    case .applications: .byApp
-                    }
-                },
-                set: { tab in
-                    switch tab {
-                    case .none: panel.selection.systemAudio = .off
-                    case .all: panel.selection.systemAudio = .all
-                    case .byApp: panel.selection.systemAudio = .applications([])
-                    }
-                }),
-            compact: true)
-        .upcoming(.systemAudio)
+        SystemAudioPicker(panel: panel)
         HStack {
             ColumnSubtitle(text: Text("Teleprompter"), icon: "text.alignleft")
             Spacer()
@@ -545,6 +527,7 @@ struct IslandOpenPanel: View {
                 Label("Settings", systemImage: "slider.horizontal.3")
             }
             .buttonStyle(GlassButtonStyle(isOn: panel.showsSettings))
+            LoadIndicator(verdict: panel.load) { panel.showsSettings = true }
             Spacer()
             let problem = panel.recordProblem
             // The reason is on a container: a disabled button shows no help.
@@ -563,73 +546,6 @@ struct IslandOpenPanel: View {
             .contentShape(Rectangle())
             .help(problem.map(userFacingDescription(of:)) ?? "")
         }
-    }
-}
-
-/// The settings card: the chosen display's frame rate and resolution, and what is coming.
-private struct SettingsCard: View {
-    @Bindable var panel: OpenPanelModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let display = panel.chosenDisplay {
-                Text(verbatim: display.name).font(.system(size: 12, weight: .medium)).opacity(0.75)
-                HStack(spacing: 8) {
-                    GlassSegmented(
-                        items: panel.framesPerSecondOptions(for: display).map { .init(value: $0, title: Text(verbatim: "\($0) fps")) },
-                        selection: Binding(
-                            get: { panel.framesPerSecond(for: display) },
-                            set: { panel.setFramesPerSecond($0, for: display) }),
-                        compact: true)
-                    GlassSegmented(
-                        items: [
-                            .init(value: CaptureScale.native, title: Text("Native", comment: "Display resolution: the display's own pixels")),
-                            .init(value: CaptureScale.points, title: Text("Points", comment: "Display resolution: one pixel per point")),
-                        ],
-                        selection: $panel.quick.displayScale,
-                        compact: true)
-                }
-            }
-            Divider().overlay(Color.white.opacity(0.12))
-            HStack(spacing: 8) {
-                Text("Countdown").opacity(0.75)
-                Spacer(minLength: 0)
-                GlassSegmented(
-                    items: RecorderSettings.countdownOptions.map { .init(value: $0, title: CountdownSetting.label(for: $0)) },
-                    selection: Binding(get: { panel.countdown.seconds }, set: { panel.countdown.set($0) }),
-                    compact: true)
-            }
-            HStack(spacing: 8) {
-                Text("When Recording Stops").opacity(0.75)
-                Spacer(minLength: 0)
-                // A menu, as the microphone's: it opens without activating the app.
-                Picker(selection: Binding(get: { panel.afterStop.value }, set: { panel.afterStop.set($0) })) {
-                    ForEach(AfterStop.allCases, id: \.self) { value in
-                        AfterStopSetting.label(for: value).tag(value)
-                    }
-                } label: {
-                    Text("When Recording Stops")
-                }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
-                .fixedSize()
-            }
-            Divider().overlay(Color.white.opacity(0.12))
-            SettingsToggle(title: Text("Do Not Disturb"), icon: "moon.fill").upcoming(.doNotDisturb)
-            SettingsToggle(title: Text("Hide Desktop Icons"), icon: "eye.slash").upcoming(.hideDesktopIcons)
-        }
-        .font(.system(size: 12.5))
-        .padding(12)
-        .frame(width: 310, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(white: 0.1).opacity(0.96))
-                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.white.opacity(0.16)))
-        }
-        // Clicks on the card stay on it.
-        .contentShape(Rectangle())
-        .onTapGesture {}
     }
 }
 
@@ -681,117 +597,12 @@ private struct MicrophoneLevelRow: View {
     }
 }
 
-/// A switch with an icon and a title, for what is not in this version yet (no field to bind to).
-private struct SettingsToggle: View {
-    let title: Text
-    let icon: String
-
-    var body: some View {
-        Toggle(isOn: .constant(false)) {
-            Label { title } icon: { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
-        }
-        .toggleStyle(.switch)
-        .controlSize(.mini)
-    }
-}
-
-// MARK: - Rows and columns
-
-private struct Column<Content: View>: View {
-    let width: Double
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) { content }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 11)
-            .frame(width: width, alignment: .topLeading)
-            .frame(maxHeight: .infinity, alignment: .top)
-            .background {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color.white.opacity(0.055))
-                    .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).stroke(Color.white.opacity(0.10)))
-            }
-    }
-}
-
-private struct ColumnTitle: View {
-    let text: Text
-    var icon: String?
-
-    var body: some View {
-        HStack(spacing: 6) {
-            if let icon { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
-            text.textCase(.uppercase).tracking(0.9)
-        }
-        .font(.system(size: 11, weight: .semibold))
-        .opacity(0.62)
-    }
-}
-
-private struct ColumnSubtitle: View {
-    let text: Text
-    var icon: String?
-
-    var body: some View {
-        HStack(spacing: 5) {
-            if let icon { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
-            text
-        }
-        .font(.system(size: 11))
-        .opacity(0.62)
-    }
-}
-
-private struct DisplayRow: View {
-    let display: DisplayChoice
-    let isChosen: Bool
-    let choose: () -> Void
-    let hovering: (Bool) -> Void
-    @State private var isHovered = false
-    @Environment(\.islandReduceMotion) private var reduceMotion
-
-    var body: some View {
-        HStack(spacing: 8) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(verbatim: display.name).font(.system(size: 12.5)).lineLimit(1)
-                Text(verbatim: display.resolution).font(.system(size: 11)).opacity(0.6)
-            }
-            Spacer(minLength: 0)
-            Image(systemName: "checkmark")
-                .font(.system(size: 9, weight: .bold))
-                .frame(width: 18, height: 18)
-                .background(Circle().fill(Color(nsColor: .systemBlue)))
-                // It grows in; with "Reduce motion" it fades in.
-                .scaleEffect(reduceMotion || isChosen ? 1 : 0.001)
-                .opacity(reduceMotion && !isChosen ? 0 : 1)
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 6)
-        .background {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isChosen ? Color(nsColor: .systemBlue).opacity(0.30) : Color.white.opacity(isHovered ? 0.08 : 0))
-        }
-        .contentShape(Rectangle())
-        .onTapGesture(perform: choose)
-        .onHover { inside in
-            isHovered = inside
-            hovering(inside)
-        }
-        .onDisappear {
-            if isHovered { hovering(false) }
-        }
-        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: isChosen)
-    }
-}
-
 // MARK: - Coming later
 
 /// What the island draws but this version does not do yet (decision 21). Each later task deletes its
-/// cases: 15 the five of the selection and `systemAudio`; 17a `doNotDisturb`; 17b `hideDesktopIcons` and the
-/// type.
+/// cases: 17a `doNotDisturb`; 17b `hideDesktopIcons` and the type.
 enum UpcomingControl: CaseIterable {
-    case windowChoice, otherDesktopWindows, areaChoice, severalDisplays, systemAudio, doNotDisturb, hideDesktopIcons
+    case doNotDisturb, hideDesktopIcons
 }
 
 extension View {

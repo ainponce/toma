@@ -20,6 +20,8 @@ final class CameraSetting {
 
     /// The system's prompt is about to show (`true`) or was answered (`false`): the island makes room for it.
     @ObservationIgnored var askingChanged: (Bool) -> Void = { _ in }
+    /// The style changed (the bubble let go, another shape or size): a take in progress records it.
+    @ObservationIgnored var changed: (CameraStyle) -> Void = { _ in }
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private let probe: any PermissionProbe
 
@@ -38,6 +40,7 @@ final class CameraSetting {
         var settings = store.settings
         settings.cameraStyle = changed
         store.settings = settings
+        self.changed(changed)
     }
 
     /// Reads the permission again: it can change in System Settings.
@@ -66,7 +69,9 @@ final class CameraSetting {
 
 /// The live camera bubble (notch design §5.3 and §5.6), seen while the camera is on and the island is in use
 /// (`CameraBubbleLayout.isVisible`): a floating panel at `style.frame(in: region)`, the region being what is
-/// recorded (`CameraBubbleLayout.region`, with the pointer's display among the chosen ones). It follows the
+/// recorded (`CameraBubbleLayout.region`, with the pointer's display among the chosen ones, the area, or the
+/// window's frame as it is now: it is read again every 250 ms while the bubble shows, and the bubble follows the
+/// window with the shape spring). It follows the
 /// pointer 1:1 from where it was grabbed; let go, it goes to the place nearest to where its momentum takes it,
 /// with a spring (`Motion.bubbleRelease`) that starts at the gesture's velocity, and a haptic tap as the place
 /// is chosen. Shape and size changes are a spring too (`Motion.bubbleShape`); with "Reduce motion" every
@@ -95,6 +100,8 @@ final class CameraBubblePanel: NSObject {
     private var regionSource: RegionSource?
     /// The region the frame was last placed in.
     private var placedRegion: Rect?
+    /// The recorded window's frame, while the bubble shows in Window mode.
+    private let windowFrame = WindowFrameWatch()
     /// The camera the preview was last started with; `nil` while it is off.
     private var shownCamera: DeviceChoice?
     /// Only the newest start says whether the camera can be seen.
@@ -163,6 +170,8 @@ final class CameraBubblePanel: NSObject {
         bubble.pressed = { [weak self] event in self?.dragBegan(event) }
         bubble.dragged = { [weak self] event in self?.dragMoved(event) }
         bubble.released = { [weak self] event in self?.dragEnded(event) }
+        windowFrame.moved = { [weak self] in self?.windowMoved() }
+        bubble.contextMenu = { [weak self] in self.map { CameraBubbleMenu.make(for: $0.setting) } }
         let link = bubble.displayLink(target: self, selector: #selector(frameTick(_:)))
         link.isPaused = true
         link.add(to: .main, forMode: .common)
@@ -213,7 +222,9 @@ final class CameraBubblePanel: NSObject {
 
     private var isShown: Bool { panel.isVisible && !isHiding }
 
-    private func refresh() {
+    /// `following`: the region moved with what is recorded (a window that moved), so the bubble goes after it with
+    /// the shape spring instead of being put there.
+    private func refresh(following: Bool = false) {
         let selection = selection()
         let cameraOn = selection.map { $0.camera != .off } == true && setting.permission == .granted
         guard let selection, CameraBubbleLayout.isVisible(cameraOn: cameraOn, island: island),
@@ -222,29 +233,39 @@ final class CameraBubblePanel: NSObject {
             hide()
             return
         }
-        show(selection.camera, in: region)
+        show(selection.camera, in: region, following: following)
     }
 
     private func region(for selection: CaptureSelection) -> Rect? {
         let source = RegionSource(selection)
         if !isShown || source != regionSource {
             regionSource = source
+            windowFrame.watch(selection.mode == .window ? selection.windowID : nil)
             region = CameraBubbleLayout.region(
-                for: selection, displays: LiveTakeEnvironment.displays(), pointer: Self.pointer(), windowFrame: nil)
+                for: selection, displays: LiveTakeEnvironment.displays(), pointer: Self.pointer(), windowFrame: windowFrame.frame)
         }
         return region
     }
 
-    /// On the screen at the style's frame in `region`: there at once if it is appearing or the region changed,
-    /// otherwise with the shape spring (never under the pointer that drags it).
-    private func show(_ camera: DeviceChoice, in region: Rect) {
+    /// The recorded window moved or changed its size (or closed): the bubble follows it.
+    private func windowMoved() {
+        guard regionSource?.mode == .window else { return }
+        region = windowFrame.frame
+        refresh(following: true)
+    }
+
+    /// On the screen at the style's frame in `region`: there at once if it is appearing or the region changed
+    /// (unless it is `following` what is recorded), otherwise with the shape spring (never under the pointer that
+    /// drags it).
+    private func show(_ camera: DeviceChoice, in region: Rect, following: Bool) {
         let appearing = !panel.isVisible
         let target = setting.style.frame(in: region)
-        if appearing || region != placedRegion {
+        if appearing || (region != placedRegion && !following) {
             placedRegion = region
             land(on: target)
-        } else if drag == nil {
-            head(to: target)
+        } else {
+            placedRegion = region
+            if drag == nil { head(to: target) }
         }
         if appearing {
             panel.alphaValue = 0
@@ -262,6 +283,7 @@ final class CameraBubblePanel: NSObject {
 
     private func hide() {
         endDrag()
+        windowFrame.stop()
         guard panel.isVisible, !isHiding else { return }
         isHiding = true
         fade(to: 0) { [weak self] in
@@ -491,6 +513,8 @@ private final class BubbleView: NSView {
     var pressed: (NSEvent) -> Void = { _ in }
     var dragged: (NSEvent) -> Void = { _ in }
     var released: (NSEvent) -> Void = { _ in }
+    /// Its shape and size (`CameraBubbleMenu`), on a secondary click or a Control-click.
+    var contextMenu: () -> NSMenu? = { nil }
 
     var cornerRadius: CGFloat = 0 {
         didSet {
@@ -543,7 +567,16 @@ private final class BubbleView: NSView {
     }
 
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { pressed(event) }
+    override func menu(for event: NSEvent) -> NSMenu? { contextMenu() }
+
+    override func mouseDown(with event: NSEvent) {
+        if event.modifierFlags.contains(.control), let menu = contextMenu() {
+            NSMenu.popUpContextMenu(menu, with: event, for: self)
+            return
+        }
+        pressed(event)
+    }
+
     override func mouseDragged(with event: NSEvent) { dragged(event) }
     override func mouseUp(with event: NSEvent) { released(event) }
 }

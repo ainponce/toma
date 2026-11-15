@@ -16,6 +16,9 @@ import SwiftUI
 final class ConfirmationCapsule {
     /// Between the bottom edge of what it hangs from and the capsule's top.
     private static let gap = 10.0
+    /// How far below what it hangs from a capsule reaches, with the same gap after it: what is placed under the
+    /// island while one may show keeps clear of it (the area bar).
+    static var clearance: Double { 2 * gap + CapsuleLabel.height }
 
     var reduceMotion = false {
         didSet { model.reduceMotion = reduceMotion }
@@ -99,6 +102,7 @@ extension IslandConfirmation {
         case .paused: CapsuleItem(symbol: "pause.fill", text: String(localized: "Paused."), tint: NoticePresentation.attention.tint)
         case .movedToTrash: CapsuleItem(symbol: "trash", text: String(localized: "The take went to the trash."))
         case .countdownCancelled: CapsuleItem(symbol: "xmark", text: String(localized: "Countdown cancelled."))
+        case .areaSaved: CapsuleItem(symbol: "bookmark.fill", text: String(localized: "Area saved."))
         }
     }
 }

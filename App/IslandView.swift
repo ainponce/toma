@@ -133,7 +133,7 @@ private struct IslandContent: View {
                     panel: panel, desktops: model.desktops, topInset: model.notchBand, startFailure: model.startFailure, send: model.send)
             }
         case .choosing:
-            BelowTheNotch(band: model.notchBand) { ChoosingRow(send: model.send) }
+            BelowTheNotch(band: model.notchBand) { ChoosingRow(panel: model.panel, send: model.send) }
         case .countdown(let remaining):
             CountdownView(remaining: remaining, topInset: model.notchBand)
         case .recording:
@@ -190,17 +190,19 @@ private struct PeekRow: View {
     }
 }
 
-/// While choosing on the screen: what to do, how to go back, and Done.
+/// While choosing on the screen: what to do for the mode chosen, how to go back, and Done.
 private struct ChoosingRow: View {
+    let panel: OpenPanelModel?
     let send: (IslandEvent) -> Void
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "display")
+            Image(systemName: symbol)
                 .symbolRenderingMode(.hierarchical)
                 .font(.system(size: 12))
-            Text("Click a display to record it.")
+            hint
                 .font(.system(size: 12, weight: .medium))
+                .contentTransition(.opacity)
             KeyCap(text: String(localized: "Esc to go back"))
             Button { send(.endedChoosing) } label: {
                 Text("Done")
@@ -214,6 +216,25 @@ private struct ChoosingRow: View {
         .foregroundStyle(.white)
         .lineLimit(1)
         .fixedSize()
+    }
+
+    private var mode: CaptureMode { panel?.selection.mode ?? .display }
+
+    private var symbol: String {
+        switch mode {
+        case .display: "display"
+        case .window: "macwindow"
+        case .area: "viewfinder"
+        }
+    }
+
+    private var hint: Text {
+        switch mode {
+        case .display: Text("Click a display to record it.")
+        case .window: Text("Click a window to record it.")
+        case .area:
+            panel?.selection.area == nil ? Text("Drag to draw the area.") : Text("Move the area or change its size.")
+        }
     }
 }
 
