@@ -13,10 +13,26 @@ public enum DurableFile {
     /// at the temporary path is removed first, and the new one is created, never opened: a symlink
     /// planted there is removed, not followed.
     public static func writeAtomically(_ data: Data, to url: URL) throws {
+        try writeThroughTemporaryFile(data, to: url) { rename($0, $1) }
+    }
+
+    /// Writes `data` as a new file at `url`, never over one that is there: a reader, or the next launch after a
+    /// crash, sees no file or the whole one.
+    ///
+    /// As `writeAtomically`, through `<url>.tmp`, but moved with `renamex_np(2)` and `RENAME_EXCL`: if anything is
+    /// at `url` (a file, a folder, a symlink, which is not followed), throws `POSIXError(.EEXIST)`, leaves it as it
+    /// is and removes the temporary file.
+    public static func writeNew(_ data: Data, to url: URL) throws {
+        try writeThroughTemporaryFile(data, to: url) { renamex_np($0, $1, UInt32(RENAME_EXCL)) }
+    }
+
+    /// Writes `<url>.tmp`, full-synced, moves it to `url` with `move` (a `rename(2)`; -1 and `errno` when it
+    /// fails), and full-syncs the parent directory.
+    private static func writeThroughTemporaryFile(_ data: Data, to url: URL, moving move: (String, String) -> Int32) throws {
         let temporaryPath = url.path + ".tmp"
         do {
             try writeAndFullSync(data, toNewFileAt: temporaryPath)
-            guard rename(temporaryPath, url.path) == 0 else { throw POSIXError.current() }
+            guard move(temporaryPath, url.path) == 0 else { throw POSIXError.current() }
         } catch {
             unlink(temporaryPath)
             throw error

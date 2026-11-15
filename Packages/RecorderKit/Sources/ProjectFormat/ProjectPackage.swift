@@ -11,6 +11,7 @@ import Foundation
 ///   takes/<take>/<track>/seg-0001.mov
 ///   takes/<take>/events.jsonl
 ///   takes/<take>/recording.lock
+///   takes/<take>/wallpapers/display-<id>.png
 ///   cache/
 /// ```
 public struct ProjectPackage: Sendable, Hashable {
@@ -81,6 +82,12 @@ public struct ProjectPackage: Sendable, Hashable {
 
     public func lockURL(take: String) -> URL {
         takeDirectory(take).appendingPathComponent("recording.lock", isDirectory: false)
+    }
+
+    /// `takes/<take>/wallpapers/`: optional, a picture of the wallpaper of each display the take records, as it
+    /// was when the take started.
+    public func wallpapersDirectory(take: String) -> URL {
+        takeDirectory(take).appendingPathComponent("wallpapers", isDirectory: true)
     }
 
     /// `takes/<take>/.reserve`: space the recorder holds while recording a take and frees to close it

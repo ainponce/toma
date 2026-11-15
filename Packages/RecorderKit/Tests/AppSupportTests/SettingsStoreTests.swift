@@ -11,6 +11,7 @@ import Testing
             let store = SettingsStore(defaults: defaults)
             #expect(store.settings == RecorderSettings(selection: nil, quick: QuickSettings(), countdownSeconds: 3))
             #expect(store.settings.countdownSeconds == 3 && store.settings.quick == QuickSettings())
+            #expect(!store.settings.hideDesktopIcons)
 
             let selection = CaptureSelection(
                 mode: .area, displayIDs: [2, 1], windowID: 42,
@@ -19,7 +20,7 @@ import Testing
             let settings = RecorderSettings(
                 selection: selection,
                 quick: QuickSettings(framesPerSecondByDisplay: [1: 30, 2: 120], displayScale: .points),
-                countdownSeconds: 5, focusShortcutIdentifier: "2D1E36B2-5C9A-4F83-9C67-1A2B3C4D5E6F")
+                countdownSeconds: 5, focusShortcutIdentifier: "2D1E36B2-5C9A-4F83-9C67-1A2B3C4D5E6F", hideDesktopIcons: true)
             store.settings = settings
             #expect(store.settings == settings)
             // Another store reads what this one saved.

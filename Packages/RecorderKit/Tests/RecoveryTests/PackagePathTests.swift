@@ -73,6 +73,41 @@ private func expectNeedsRepair(_ results: [ScanResult], _ package: ProjectPackag
     }
 }
 
+@Test func symlinkedWallpapersFolderIsNeverFollowed() async throws {
+    try await withTemporaryDirectory { dir in
+        let outside = dir.appendingPathComponent("outside", isDirectory: true)
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: false)
+        let package = try makePackage(in: dir)
+        try addOpenTake(to: package)
+        try FileManager.default.createSymbolicLink(at: package.wallpapersDirectory(take: "take-001"), withDestinationURL: outside)
+
+        expectNeedsRepair(RecoveryScanner.scan(directory: dir), package)
+        await #expect(throws: RecoveryError.invalidPath(.unexpectedEntry("takes/take-001/wallpapers"))) {
+            try await TakeRecovery.recover(package: package, takeID: "take-001")
+        }
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path).isEmpty)
+        #expect(try takeOnDisk(package, "take-001").status == .recording)
+    }
+}
+
+@Test func recoveryLeavesTheWallpapersAsTheyAre() async throws {
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addOpenTake(to: package)
+        let wallpapers = package.wallpapersDirectory(take: "take-001")
+        try FileManager.default.createDirectory(at: wallpapers, withIntermediateDirectories: false)
+        let snapshot = wallpapers.appendingPathComponent("display-1.png")
+        try victimBytes.write(to: snapshot)
+
+        #expect(RecoveryScanner.scan(directory: dir) == [.recoverable(package: package, takeID: "take-001")])
+        #expect(try await TakeRecovery.recover(package: package, takeID: "take-001").status == .recovered)
+
+        #expect(try FileManager.default.contentsOfDirectory(atPath: wallpapers.path) == ["display-1.png"])
+        #expect(try Data(contentsOf: snapshot) == victimBytes)
+    }
+}
+
 @Test func takeFolderSymlinkedOutsideThePackageIsNotTouched() async throws {
     try await withTemporaryDirectory { dir in
         let outside = dir.appendingPathComponent("outside", isDirectory: true)

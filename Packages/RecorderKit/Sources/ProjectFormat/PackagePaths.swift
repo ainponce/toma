@@ -75,15 +75,16 @@ extension ProjectPackage {
         "seg-" + String(format: "%04d", index) + ".mov"
     }
 
-    /// Throws `unexpectedEntry` if `takes/`, the folder of `take` or the folder of one of its tracks is a
-    /// symlink or not a folder, or if its `recording.lock`, `events.jsonl` or `.reserve` is a symlink or
-    /// not a regular file. Entries that do not exist are fine: a take may not have them yet. Reads nothing
+    /// Throws `unexpectedEntry` if `takes/`, the folder of `take`, its `wallpapers/` or the folder of one of its
+    /// tracks is a symlink or not a folder, or if its `recording.lock`, `events.jsonl` or `.reserve` is a symlink
+    /// or not a regular file. Entries that do not exist are fine: a take may not have them yet. Reads nothing
     /// and changes nothing. The package's own path may go through symlinks (`/var` is one): only what is
     /// inside it is checked.
     public func checkLayout(of take: TakeRecord) throws(PackagePathError) {
         try ProjectPackage.validateTakeID(take.id)
         try check(takesURL, isDirectory: true)
         try check(takeDirectory(take.id), isDirectory: true)
+        try check(wallpapersDirectory(take: take.id), isDirectory: true)
         for track in take.tracks where ProjectPackage.isValidTrackID(track.id) {
             try check(trackDirectory(take: take.id, track: track.id), isDirectory: true)
         }
