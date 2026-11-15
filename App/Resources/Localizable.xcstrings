@@ -52,6 +52,17 @@
         }
       }
     },
+    "All" : {
+      "comment" : "System audio: record all of it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todo"
+          }
+        }
+      }
+    },
     "Allowed" : {
       "comment" : "The state of a permission",
       "localizations" : {
@@ -103,6 +114,47 @@
         }
       }
     },
+    "Area" : {
+      "comment" : "What to record: a rectangle of a display",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Área"
+          }
+        }
+      }
+    },
+    "Audio and Script" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio y guion"
+          }
+        }
+      }
+    },
+    "By App" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Por app"
+          }
+        }
+      }
+    },
+    "Camera" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cámara"
+          }
+        }
+      }
+    },
     "Can't check the free disk space." : {
       "localizations" : {
         "es" : {
@@ -129,6 +181,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Buscar actualizaciones…"
+          }
+        }
+      }
+    },
+    "Choose on Screen" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir en la pantalla"
+          }
+        }
+      }
+    },
+    "Click a display to record it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer clic en una pantalla para grabarla."
+          }
+        }
+      }
+    },
+    "Coming in phase 2." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Llega en la fase 2."
+          }
+        }
+      }
+    },
+    "Coming in this version." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Llega en esta versión."
           }
         }
       }
@@ -233,6 +325,57 @@
         }
       }
     },
+    "Display" : {
+      "comment" : "What to record: a whole display",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pantalla"
+          }
+        }
+      }
+    },
+    "Do Not Disturb" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No Molestar"
+          }
+        }
+      }
+    },
+    "Done" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Listo"
+          }
+        }
+      }
+    },
+    "Draw on Screen" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dibujar en la pantalla"
+          }
+        }
+      }
+    },
+    "Esc to go back" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esc para volver"
+          }
+        }
+      }
+    },
     "Export MP4…" : {
       "localizations" : {
         "es" : {
@@ -259,6 +402,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Exportando…"
+          }
+        }
+      }
+    },
+    "From Other Desktops" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De otros escritorios"
+          }
+        }
+      }
+    },
+    "Hide Desktop Icons" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar íconos"
           }
         }
       }
@@ -364,6 +527,27 @@
         }
       }
     },
+    "Native" : {
+      "comment" : "Display resolution: the display's own pixels",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nativa"
+          }
+        }
+      }
+    },
+    "New Recording" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nueva grabación"
+          }
+        }
+      }
+    },
     "No display is chosen to record." : {
       "localizations" : {
         "es" : {
@@ -400,6 +584,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No hay grabaciones para recuperar."
+          }
+        }
+      }
+    },
+    "None" : {
+      "comment" : "System audio: record none",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No"
           }
         }
       }
@@ -442,6 +637,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Aceptar"
+          }
+        }
+      }
+    },
+    "Off" : {
+      "comment" : "Microphone: none",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagado"
           }
         }
       }
@@ -527,6 +733,17 @@
         }
       }
     },
+    "Points" : {
+      "comment" : "Display resolution: one pixel per point",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Puntos"
+          }
+        }
+      }
+    },
     "Quit" : {
       "localizations" : {
         "es" : {
@@ -547,12 +764,23 @@
         }
       }
     },
-    "Record Main Display" : {
+    "Record" : {
+      "comment" : "The button that starts a recording",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Grabar pantalla principal"
+            "value" : "Grabar"
+          }
+        }
+      }
+    },
+    "Record several displays" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar varias pantallas"
           }
         }
       }
@@ -679,6 +907,16 @@
         }
       }
     },
+    "Saved Areas" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Áreas guardadas"
+          }
+        }
+      }
+    },
     "Saving recording…" : {
       "localizations" : {
         "es" : {
@@ -759,6 +997,16 @@
         }
       }
     },
+    "Settings" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustes"
+          }
+        }
+      }
+    },
     "Show in Finder" : {
       "localizations" : {
         "es" : {
@@ -825,6 +1073,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Detener grabación"
+          }
+        }
+      }
+    },
+    "System Audio" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio del sistema"
+          }
+        }
+      }
+    },
+    "System Default" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Predeterminado del sistema"
           }
         }
       }
@@ -1286,6 +1554,27 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "What to Record" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Qué grabar"
+          }
+        }
+      }
+    },
+    "Window" : {
+      "comment" : "What to record: one window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ventana"
           }
         }
       }

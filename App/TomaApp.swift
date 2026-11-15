@@ -48,9 +48,8 @@ private struct MenuContent: View {
     var body: some View {
         switch recording.phase {
         case .idle:
-            Button("Record Main Display") {
-                recording.startRecording(selection: .mainDisplay(CGMainDisplayID()), settings: SettingsStore().settings.quick)
-            }
+            // Task 16a adds the island's shortcut.
+            Button("New Recording") { app.newRecording() }
         case .starting:
             Text("Starting recording…")
         case .recording:

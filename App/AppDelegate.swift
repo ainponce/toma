@@ -4,9 +4,9 @@ import AppSupport
 import ProjectFormat
 import os
 
-/// Owns the recording, the updater, the windows and the app's life: the recovery prompt at launch, the
-/// permissions and licenses windows, editors (also for projects opened from Finder), the Dock icon, and
-/// closing a take before quitting.
+/// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
+/// launch, the permissions and licenses windows, editors (also for projects opened from Finder), the Dock
+/// icon, and closing a take before quitting.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recording: RecordingController
@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editors: [URL: EditorWindowController] = [:]
     private var onboarding: OnboardingWindowController?
     private var notices: ThirdPartyNoticesWindowController?
+    /// The recording control at the notch; made once the app has launched.
+    private var island: IslandPanel?
     private var powerOffObserver: (any NSObjectProtocol)?
     /// The take is being closed to quit or power off.
     private var closingForQuit = false
@@ -51,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let island = IslandPanel(recording: recording)
+        // Opening or closing the island never activates the app.
+        island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
+        self.island = island
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -171,6 +177,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Menu actions
 
+    /// Opens the island on the screen with the pointer.
+    func newRecording() {
+        island?.invoke()
+    }
+
     func recoverRecordings() {
         Task { await recovery.run(in: recording.projectsFolder, atLaunch: false) }
     }
@@ -244,12 +255,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller?.window?.makeKeyAndOrderFront(nil)
     }
 
-    /// In the Dock and Cmd-Tab only while a window is open and no take is being recorded.
-    private func updateActivationPolicy() {
+    /// In the Dock and Cmd-Tab only while a window is open, no take is being recorded and the island is
+    /// not open or choosing. The island's own panels are not windows here.
+    private func updateActivationPolicy(activatingIfRegular: Bool = true) {
         let openWindows = editors.count + (onboarding == nil ? 0 : 1) + (notices == nil ? 0 : 1)
-        let policy = ActivationPolicyDecision.policy(openWindows: openWindows, isRecording: recording.isRecording)
+        let policy = ActivationPolicyDecision.policy(
+            openWindows: openWindows, isRecording: recording.isRecording, isSelecting: island?.isSelecting ?? false)
         guard NSApp.activationPolicy() != policy else { return }
         NSApp.setActivationPolicy(policy)
-        if policy == .regular { NSApp.activate() }
+        if policy == .regular, activatingIfRegular { NSApp.activate() }
     }
 }
