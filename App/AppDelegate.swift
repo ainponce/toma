@@ -6,7 +6,7 @@ import os
 
 /// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
 /// launch, the permissions, settings and licenses windows, the global shortcuts, editors (also for projects
-/// opened from Finder), the Dock icon, and closing a take before quitting.
+/// opened from Finder), the Dock icon, and what a quit waits for (`QuitSequencer`).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recording: RecordingController
@@ -28,18 +28,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The recording control at the notch; made once the app has launched.
     private var island: IslandPanel?
     private var powerOffObserver: (any NSObjectProtocol)?
-    /// The take is being closed to quit or power off.
-    private var closingForQuit = false
-    /// Logging out, restarting or shutting down: nobody is asked before an export is cancelled.
-    private var poweringOff = false
-    /// Closing to quit has taken longer than `quitTimeLimit`.
-    private var quitTimeLimitPassed = false
-    /// `applicationShouldTerminate` answered `.terminateLater` and waits for a reply.
-    private var terminationPending = false
-    private var terminationReplied = false
-
-    /// How long quitting waits for the take to close.
-    private static let quitTimeLimit = Duration.seconds(30)
+    /// Closes the take and cancels the exports before a quit goes ahead. Its time limit runs on the suspending
+    /// clock: it stops counting while the Mac sleeps, so closing the lid after quitting does not use it up and
+    /// quit before the take is closed.
+    private lazy var quit = QuitSequencer(
+        closeTake: { [recording] in await recording.stop(openingEditor: false) },
+        cancelExports: { [weak self] in
+            guard let self else { return }
+            for editor in Array(editors.values) { await editor.cancelExportAndWait() }
+        },
+        reply: { _ in NSApp.reply(toApplicationShouldTerminate: true) },
+        sleep: { try await Task.sleep(for: $0, clock: .suspending) })
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
@@ -85,35 +84,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Nothing in progress is lost to a quit (`TerminationDecision`). A take in progress is closed before
-    /// quitting: the app quits once `stop()` returns (even if closing failed: the take can still be recovered),
-    /// or after `quitTimeLimit` if it has not returned by then. An export in progress is cancelled only once
-    /// the user says so (without asking while powering off), and the app quits once it has ended and removed
-    /// its partial file.
+    /// Nothing in progress is lost to a quit (`TerminationDecision`): the take is closed and the exports are
+    /// cancelled first, within `QuitSequencer.quitTimeLimit` for the take; the user is asked before an export
+    /// is cancelled, unless the Mac is powering off.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let decision = TerminationDecision.decide(
-            isRecording: recording.isRecording, isExporting: exportGate.isBusy, isPoweringOff: poweringOff)
-        switch decision {
-        case .now:
-            return .terminateNow
-        case .closeTakeFirst:
-            if quitTimeLimitPassed {
-                // Closing for a power off already took too long.
-                Self.logger.error("Quitting before the take closed; it stays recoverable")
-                return .terminateNow
-            }
-            Self.logger.notice("Quitting while recording: closing the take first")
-            terminationPending = true
-            closeTakeBeforeQuitting()
-            return .terminateLater
-        case .confirmCancelExport(let alsoClosingTake):
-            guard confirmCancellingExport() else { return .terminateCancel }
-            cancelExportsBeforeQuitting(alsoClosingTake: alsoClosingTake)
-            return .terminateLater
-        case .cancelExportFirst(let alsoClosingTake):
-            cancelExportsBeforeQuitting(alsoClosingTake: alsoClosingTake)
-            return .terminateLater
-        }
+            isRecording: recording.isRecording, isExporting: exportGate.isBusy, isPoweringOff: quit.isPoweringOff)
+        return quit.shouldTerminate(decision) { confirmCancellingExport() }
     }
 
     private func confirmCancellingExport() -> Bool {
@@ -127,58 +104,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Cancels the export and waits for it to end (it removes its partial file), closes the take too when
-    /// asked, and then lets the pending quit go ahead.
-    private func cancelExportsBeforeQuitting(alsoClosingTake: Bool) {
-        terminationPending = true
-        Self.logger.notice("Quitting during an export: cancelling it first")
-        let open = Array(editors.values)
-        Task {
-            for editor in open { await editor.cancelExportAndWait() }
-            if alsoClosingTake, recording.isRecording {
-                closeTakeBeforeQuitting()  // replies once the take is closed, or after the time limit
-            } else {
-                replyToTermination(takeClosed: true)
-            }
-        }
-    }
-
     /// Logging out, restarting or shutting down: the take starts closing now, before the system asks the
-    /// app to quit, which then waits for the same stop and the same time limit.
+    /// app to quit.
     private func willPowerOff() {
-        poweringOff = true
-        guard recording.isRecording else { return }
-        Self.logger.notice("Powering off while recording: closing the take")
-        closeTakeBeforeQuitting()
-    }
-
-    /// Starts closing the take, once, with `quitTimeLimit`; whichever ends first answers a pending quit.
-    private func closeTakeBeforeQuitting() {
-        guard !closingForQuit else { return }
-        closingForQuit = true
-        let deadline = Task {
-            // Suspending: the limit stops counting while the Mac sleeps, so closing the lid after quitting does
-            // not use it up and quit before the take is closed.
-            try? await Task.sleep(for: Self.quitTimeLimit, clock: .suspending)
-            guard !Task.isCancelled else { return }
-            quitTimeLimitPassed = true
-            replyToTermination(takeClosed: false)
-        }
-        Task {
-            await recording.stop(openingEditor: false)
-            deadline.cancel()
-            closingForQuit = false
-            quitTimeLimitPassed = false
-            replyToTermination(takeClosed: true)
-        }
-    }
-
-    /// Lets a pending quit go ahead; only the first call replies.
-    private func replyToTermination(takeClosed: Bool) {
-        guard terminationPending, !terminationReplied else { return }
-        terminationReplied = true
-        if !takeClosed { Self.logger.error("Quitting before the take closed; it stays recoverable") }
-        NSApp.reply(toApplicationShouldTerminate: true)
+        quit.powerOff(isRecording: recording.isRecording)
     }
 
     /// Projects opened from Finder (or dropped on the app) open in the editor.
