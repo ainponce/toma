@@ -399,16 +399,6 @@
         }
       }
     },
-    "Coming in this version." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Llega en esta versión."
-          }
-        }
-      }
-    },
     "Couldn't draw the preview." : {
       "localizations" : {
         "es" : {
@@ -732,6 +722,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ocultar íconos"
+          }
+        }
+      }
+    },
+    "Hide desktop icons while recording" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar los íconos del escritorio al grabar"
           }
         }
       }

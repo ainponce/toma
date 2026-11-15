@@ -6,9 +6,9 @@ import Observation
 import SwiftUI
 import os
 
-/// The app's settings: the countdown before a take, what a stop does, the shortcut that turns Do Not Disturb on
-/// and the global shortcuts. A titled window like the permissions one, so while it is open (and no take records)
-/// the app is in the Dock.
+/// The app's settings: the countdown before a take, what a stop does, hiding the desktop's icons, the shortcut that
+/// turns Do Not Disturb on and the global shortcuts. A titled window like the permissions one, so while it is open
+/// (and no take records) the app is in the Dock.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
@@ -16,11 +16,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        focusShortcut: FocusShortcutSetting, onClose: @escaping () -> Void
+        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, onClose: @escaping () -> Void
     ) {
         self.onClose = onClose
         model = SettingsModel(
-            store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut)
+            store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
+            focusShortcut: focusShortcut)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered,
             defer: false)
@@ -106,6 +107,28 @@ final class AfterStopSetting {
     }
 }
 
+/// Whether the desktop's icons are hidden while recording (`RecorderSettings.hideDesktopIcons`): the one place it is
+/// read and saved for the settings window and the island's settings card, which both show it as it is now. The take's
+/// hooks read the saved value at every start.
+@MainActor @Observable
+final class HideDesktopIconsSetting {
+    private(set) var isOn: Bool
+
+    @ObservationIgnored private let store: SettingsStore
+
+    init(store: SettingsStore) {
+        self.store = store
+        isOn = store.settings.hideDesktopIcons
+    }
+
+    func set(_ isOn: Bool) {
+        self.isOn = isOn
+        var settings = store.settings
+        settings.hideDesktopIcons = isOn
+        store.settings = settings
+    }
+}
+
 /// The shortcut of the user's that turns Do Not Disturb on around each take (`RecorderSettings.focusShortcutIdentifier`):
 /// the one place it is read and saved for the settings window and the island's settings card, which both show it as it
 /// is now, with the user's shortcuts to choose it from (`ShortcutsCLI.list()`). The take's hooks read the saved value at
@@ -174,18 +197,20 @@ final class SettingsModel {
     @ObservationIgnored let hotKeys: HotKeyCenter
     @ObservationIgnored let countdown: CountdownSetting
     @ObservationIgnored let afterStop: AfterStopSetting
+    @ObservationIgnored let hideDesktopIcons: HideDesktopIconsSetting
     @ObservationIgnored let focusShortcut: FocusShortcutSetting
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private var monitor: Any?
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        focusShortcut: FocusShortcutSetting
+        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting
     ) {
         self.store = store
         self.hotKeys = hotKeys
         self.countdown = countdown
         self.afterStop = afterStop
+        self.hideDesktopIcons = hideDesktopIcons
         self.focusShortcut = focusShortcut
     }
 
@@ -278,6 +303,9 @@ private struct SettingsView: View {
                 }
             } label: {
                 Text("When Recording Stops")
+            }
+            Toggle(isOn: Binding(get: { model.hideDesktopIcons.isOn }, set: { model.hideDesktopIcons.set($0) })) {
+                Text("Hide desktop icons while recording")
             }
             Section {
                 FocusShortcutPicker(setting: model.focusShortcut)

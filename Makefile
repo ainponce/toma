@@ -13,7 +13,7 @@ test:
 # exit criterion). Suites that do not exist yet match nothing; each task that adds one is covered from then on.
 tsan:
 	TSAN_OPTIONS=$${TSAN_OPTIONS:-halt_on_error=1} swift test --package-path Packages/RecorderKit --sanitize=thread \
-		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|CaptureRunLifecycleTests|WindowCaptureTests|LevelMeterTests|CountdownTests'
+		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|CaptureRunLifecycleTests|WindowCaptureTests|LevelMeterTests|CountdownTests|FocusGuardTests'
 
 crash-test:
 	bash scripts/test-crash-recovery.sh

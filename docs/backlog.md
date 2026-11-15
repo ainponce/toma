@@ -8,7 +8,24 @@ Lo que la revisión final de la fase 0 decidió no corregir todavía, con el mot
 - **Cambio rápido de usuario** (`sessionDidResignActive`): pausar la toma como con el bloqueo. *Por qué después:* hace falta un cambio de usuario real para ver qué notificaciones llegan. *Cuándo:* después de una comprobación del dueño.
 - **Borrar un `.reserve` huérfano** de una carpeta de toma cuyo lock está libre, la liste o no el manifiesto. *Por qué después:* la ventana de crash entre crear la reserva y agregar la toma es de microsegundos, y que falle un `unlink` es muy improbable; desde la revisión final esas carpetas, si tienen un segmento o un lock, aparecen como *para reparar*.
 - **Variantes Int16 e Int24 intercaladas en `SampleFactory`** para las pruebas de canales del escritor. *Por qué después:* la capa de dispositivo entrega Float32 en la práctica; la revisión final agregó los casos baratos de 3 y 6 canales.
-- **Quitar el marcador del audio del sistema por app.** Mientras ninguna app elegida está abierta, `SystemAudioSelection.targets` nombra el proceso propio (`.only([ownObjectID])`) y `ProcessTapSource` graba silencio. *Por qué después:* no se sabe si Core Audio acepta un tap sin procesos (`.only([])`). *Cuándo:* si la comprobación del dueño de la Task 10 ("Lista vacía", `docs/release.md`) muestra que funciona.
+
+## Lo que deja abierto el hito 1a
+
+Lo que la captura completa (hito 1a) deja para hitos o fases posteriores. Los dos últimos dependen de comprobaciones del dueño que todavía no se hicieron: no son trabajo decidido.
+
+- **Animación de los cambios de geometría.** Cuando la pantalla o la ventana grabada cambia de marco a mitad de toma (eventos `displayGeometry` y `windowGeometry`), el render pasa al marco nuevo sin transición. *Cuándo:* hito 1b, con el editor con estilo.
+- **Pista "Pantalla" editable.** Con varias pantallas, el render muestra toda la toma la que contiene el primer cursor (`ScreenChoice`); elegir en la línea de tiempo qué pantalla se ve en cada tramo es del editor. *Cuándo:* hito 1b.
+- **Imágenes y hotspot del cursor (`cursors/<hash>.png`) y el scroll en `events.jsonl`** (spec §7.2 y §7.4). El hito 1a no los graba (decisión 20 del plan). *Cuándo:* antes del editor del hito 1b, que los necesita para el cursor con estilo.
+- **"Ventana con menús".** El modo Ventana graba con `desktopIndependentWindow`, y los menús y popovers (ventanas aparte) no salen; la columna Ventana sugiere Área o Pantalla. Una opción que grabe la pantalla de la ventana con `SCContentFilter(display:including:)`: la ventana y las del mismo PID con `windowLayer ≥ kCGPopUpMenuWindowLevel`. *Cuándo:* cuando se pida.
+- **Espejo y layouts de la cámara** (la cámara a pantalla completa, al lado de la pantalla). Hoy el video de la cámara no se espeja y va siempre en su burbuja. *Cuándo:* hito 1c.
+- **Ver, ajustar y borrar en el editor los cambios de estilo de la cámara** (los eventos `cameraStyle` de la toma; diseño del notch §5.6). *Cuándo:* hitos 1b y 1c.
+- **Papelera en la biblioteca.** Reiniciar una toma manda el proyecto viejo a `~/Movies/Toma/Trash`, que hoy solo se ve en Finder. *Cuándo:* hito 1c, con la biblioteca.
+- **El guion del teleprompter por proyecto**, con su avance en la línea de tiempo (diseño del notch §5.4). Hoy hay un solo guion, en los ajustes. *Cuándo:* fase 3.
+- **Confirmar las claves de `CGSCopyManagedDisplaySpaces` con cada macOS nuevo** (`SpacesReader`, la excepción de APIs privadas). Si cambian, no hay lista de escritorios y la isla muestra ← → y Mission Control. *Cuándo:* con cada beta de macOS.
+- **Una pista de audio del sistema por app.** Hoy "Por app" graba las apps elegidas en una sola pista `system-audio`. *Cuándo:* fase 3.
+- **El limitador de la mezcla.** El export suma las pistas de audio a ganancia 1 y recorta a [−1, 1]; el limitador y el volumen por pista llegan con la pestaña Audio del editor. *Cuándo:* con la pestaña Audio.
+- **Quitar el marcador del audio del sistema por app** — *pendiente de la comprobación del dueño en `docs/release.md`* (Task 10, "Lista vacía"). Mientras ninguna app elegida está abierta, `SystemAudioSelection.targets` nombra el proceso propio (`.only([ownObjectID])`) y `ProcessTapSource` graba silencio, porque no se sabe si Core Audio acepta un tap sin procesos (`.only([])`). *Cuándo:* solo si esa comprobación muestra que `[]` funciona.
+- **Tap con la salida como sub-dispositivo, o audio del sistema con ScreenCaptureKit como respaldo** — *pendiente de la comprobación del dueño en `docs/release.md`* (Task 10, el último punto: el agregado sin sub-dispositivo). Si el agregado sin sub-dispositivo no entrega audio con el permiso dado, el respaldo de `ProcessTapSource`: la salida por defecto como sub-dispositivo principal, tomando del IOProc solo el búfer del stream del tap, y un cambio de la salida por defecto termina la corrida. Si las taps no sirven en esa Mac, el audio del sistema con ScreenCaptureKit, con lo observado. *Cuándo:* solo si esa comprobación lo pide.
 
 ## Editor y export
 

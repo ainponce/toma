@@ -32,8 +32,8 @@ extension OpenPanelModel {
 
 /// The settings card (notch design §5.2): on the left, what the take records at — the frame rate of each display
 /// it records (or of the window), one resolution for all, and the camera's quality and frame rate while it is on;
-/// on the right, the countdown, what a stop does, Do Not Disturb and what is coming; at the bottom the encoder's load,
-/// with what would lighten it.
+/// on the right, the countdown, what a stop does, Do Not Disturb and hiding the desktop's icons; at the bottom the
+/// encoder's load, with what would lighten it.
 struct SettingsCard: View {
     @Bindable var panel: OpenPanelModel
 
@@ -139,7 +139,9 @@ struct SettingsCard: View {
                 .fixedSize()
             }
             FocusShortcutToggle(setting: panel.focusShortcut)
-            SettingsToggle(title: Text("Hide Desktop Icons"), icon: "eye.slash").upcoming(.hideDesktopIcons)
+            SettingsToggle(
+                title: Text("Hide Desktop Icons"), icon: "eye.slash",
+                isOn: Binding(get: { panel.hideDesktopIcons.isOn }, set: { panel.hideDesktopIcons.set($0) }))
         }
     }
 
@@ -222,13 +224,14 @@ private struct FocusShortcutToggle: View {
     }
 }
 
-/// A switch with an icon and a title, for what is not in this version yet (no field to bind to).
+/// A switch with an icon and a title.
 private struct SettingsToggle: View {
     let title: Text
     let icon: String
+    @Binding var isOn: Bool
 
     var body: some View {
-        Toggle(isOn: .constant(false)) {
+        Toggle(isOn: $isOn) {
             Label { title } icon: { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
         }
         .toggleStyle(.switch)

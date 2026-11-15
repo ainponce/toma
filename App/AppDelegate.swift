@@ -23,6 +23,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let countdown: CountdownSetting
     /// What a stop does once the take is saved, shared by the island's settings card and the settings window.
     private let afterStop: AfterStopSetting
+    /// Whether the desktop's icons are hidden while recording, shared by the island's settings card and the settings
+    /// window.
+    private let hideDesktopIcons: HideDesktopIconsSetting
     /// Turns Do Not Disturb on and off around each take with the user's shortcut.
     private let focus = FocusGuard(runner: ShortcutsCLI())
     /// The shortcut it runs, shared by the island's settings card and the settings window.
@@ -60,6 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
         countdown = CountdownSetting(store: store)
         afterStop = AfterStopSetting(store: store)
+        hideDesktopIcons = HideDesktopIconsSetting(store: store)
         focusShortcut = FocusShortcutSetting(store: store, runner: ShortcutsCLI())
         super.init()
         hotKeys.perform = { [weak self] action in self?.perform(action) }
@@ -85,8 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // meanwhile runs its shortcut after this one.
         Task { await focus.recoverAfterLaunch() }
         let island = IslandPanel(
-            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut,
-            probe: probe, cameraHost: cameraHost)
+            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop,
+            hideDesktopIcons: hideDesktopIcons, focusShortcut: focusShortcut, probe: probe, cameraHost: cameraHost)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
@@ -166,7 +170,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showSettings() {
         if settings == nil {
             settings = SettingsWindowController(
-                store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut
+                store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
+                focusShortcut: focusShortcut
             ) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil

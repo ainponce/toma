@@ -34,6 +34,8 @@ final class OpenPanelModel {
     let countdown: CountdownSetting
     /// What a stop does once the take is saved, as the settings window shows it too.
     let afterStop: AfterStopSetting
+    /// Whether the desktop's icons are hidden while recording, as the settings window shows it too.
+    let hideDesktopIcons: HideDesktopIconsSetting
     /// The shortcut that turns Do Not Disturb on around each take, as the settings window shows it too.
     let focusShortcut: FocusShortcutSetting
     /// Whether the teleprompter shows, as its switch in the open recording island shows it too.
@@ -71,14 +73,15 @@ final class OpenPanelModel {
     /// closed. The camera is on only if it is allowed: what the panel shows is what is recorded.
     init(
         recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        focusShortcut: FocusShortcutSetting, teleprompter: TeleprompterSetting, camera: CameraSetting,
-        systemAudio: SystemAudioSetting, audioApplications: AudioApplicationList, microphones: CaptureDeviceList,
-        cameras: CaptureDeviceList, displays: [DisplayChoice], islandDisplayID: UInt32
+        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, teleprompter: TeleprompterSetting,
+        camera: CameraSetting, systemAudio: SystemAudioSetting, audioApplications: AudioApplicationList,
+        microphones: CaptureDeviceList, cameras: CaptureDeviceList, displays: [DisplayChoice], islandDisplayID: UInt32
     ) {
         self.recording = recording
         self.store = store
         self.countdown = countdown
         self.afterStop = afterStop
+        self.hideDesktopIcons = hideDesktopIcons
         self.focusShortcut = focusShortcut
         self.teleprompter = teleprompter
         self.camera = camera
@@ -581,20 +584,9 @@ private struct MicrophoneLevelRow: View {
     }
 }
 
-// MARK: - Coming later
-
-/// What the island draws but this version does not do yet (decision 21). 17b deletes `hideDesktopIcons` and the
-/// type.
-enum UpcomingControl: CaseIterable {
-    case hideDesktopIcons
-}
+// MARK: - Disabled with help
 
 extension View {
-    /// Drawn, bound to its field, disabled, with "Coming in this version." as its help.
-    func upcoming(_ control: UpcomingControl) -> some View {
-        disabledWithHelp(String(localized: "Coming in this version."))
-    }
-
     /// Disabled inside, with `help` on a container outside: a disabled control shows no help.
     func disabledWithHelp(_ help: String) -> some View {
         HStack(spacing: 0) { disabled(true) }

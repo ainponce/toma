@@ -29,11 +29,13 @@ MiVideo.toma/
       events.jsonl             un evento por línea: cursor, clics, cortes de stream, pausas
       recording.lock           lock de la grabación en curso (ver más abajo)
       .reserve                 espacio reservado mientras se graba (ver más abajo)
+      wallpapers/              opcional: el fondo de cada pantalla grabada, al empezar la toma (versión 2)
+        display-1.png          uno por pantalla (display-<CGDirectDisplayID>.png)
   cache/                       regenerable: transcripciones, sugerencias, miniaturas
 ```
 
 - Las tomas se llaman `take-001`, `take-002`, … Un número nunca se reutiliza: la toma nueva recibe el número siguiente al más alto del manifiesto y salta cualquier carpeta que ya exista en `takes/`.
-- **Rutas.** Un paquete puede venir de cualquier lado (una carpeta compartida, una descarga), así que ninguna herramienta sigue una ruta del manifiesto sin comprobarla. El `id` de una toma es `take-` y tres o más dígitos; el de una pista, solo letras ASCII, dígitos y `-`; el `file` de un segmento es exactamente `takes/<toma>/<pista>/seg-NNNN.mov` para su `index`. Dentro de una toma, `takes/`, la carpeta de la toma, las de sus pistas, `recording.lock`, `events.jsonl` y `.reserve` no pueden ser enlaces simbólicos ni de otro tipo (carpetas las carpetas, archivos comunes los archivos). Un paquete que no cumple algo de esto es *para reparar*: la recuperación no lo toca y el editor no lo abre. La ruta del paquete en sí sí puede pasar por enlaces (`/var` es uno, o una carpeta Movies enlazada): solo se comprueba lo que está dentro.
+- **Rutas.** Un paquete puede venir de cualquier lado (una carpeta compartida, una descarga), así que ninguna herramienta sigue una ruta del manifiesto sin comprobarla. El `id` de una toma es `take-` y tres o más dígitos; el de una pista, solo letras ASCII, dígitos y `-`; el `file` de un segmento es exactamente `takes/<toma>/<pista>/seg-NNNN.mov` para su `index`. Dentro de una toma, `takes/`, la carpeta de la toma, su `wallpapers/`, las de sus pistas, `recording.lock`, `events.jsonl` y `.reserve` no pueden ser enlaces simbólicos ni de otro tipo (carpetas las carpetas, archivos comunes los archivos). Un paquete que no cumple algo de esto es *para reparar*: la recuperación no lo toca y el editor no lo abre. La ruta del paquete en sí sí puede pasar por enlaces (`/var` es uno, o una carpeta Movies enlazada): solo se comprueba lo que está dentro.
 - Los segmentos se numeran desde 1 con cuatro dígitos (`seg-0001.mov`). Cada pista abre un segmento nuevo cada vez que su captura se interrumpe (pausa, error del stream, cambio de formato), así un corte nunca daña lo grabado antes.
 - Los segmentos son películas fragmentadas, con fragmentos de 1 s: si la app, el sistema o la batería se apagan de golpe, se puede leer todo hasta el último fragmento escrito.
 - Los segmentos de micrófono guardan todos los canales del dispositivo, en su orden: ALAC hasta 8 canales y LPCM Float32 con distribución discreta (`kAudioChannelLayoutTag_DiscreteInOrder`) desde 9. La distribución de canales que declara un archivo de 3 a 8 canales es la que ALAC exige para esa cantidad (por ejemplo `MPEG_5_1_D` para 6) y es solo una etiqueta: el canal *n* del archivo es la entrada *n* del dispositivo, no el altavoz que la etiqueta nombra.
@@ -392,6 +394,15 @@ Mientras se graba una toma existe `takes/<toma>/.reserve`: 8 MiB de ceros escrit
 - Una toma no empieza si el volumen tiene menos espacio libre que el que la detendría (1 GB disponibles ahora, sin contar el espacio purgable), aunque el espacio para uso importante sea mayor.
 - Un `.reserve` que quedó en disco después de un crash no significa nada: la recuperación lo ignora y lo borra.
 
+## `wallpapers/`
+
+Opcional (versión 2). `takes/<toma>/wallpapers/display-<CGDirectDisplayID>.png` es una foto del fondo de pantalla de una pantalla que graba la toma, sacada al empezar a grabar: una por pantalla grabada (en modo Área, la del área; en modo Ventana, la que tiene la mayor parte de la ventana en ese momento). Es el fondo tal como se ve en el escritorio de ese momento (dinámico, en mosaico o el propio de ese escritorio), sin los íconos, los widgets, el Dock, la barra de menús ni ninguna ventana, con los píxeles de la pantalla, en sRGB. Es para el fondo "blur del escritorio original" del editor (spec §13), que llega con el editor con estilo.
+
+- Es una carpeta común, nunca un enlace simbólico (ver [Rutas](#el-paquete)).
+- Cada foto se escribe una sola vez y nunca sobre otra: `display-<id>.png.tmp` forzado a disco con `F_FULLFSYNC`, movido con `renamex_np(2)` y `RENAME_EXCL` (si ya hay algo con ese nombre, no se toca y el temporal se borra), y la carpeta forzada a disco.
+- Puede faltar la carpeta, o la foto de alguna pantalla: en una toma de la versión 1, en las de `recorder-dev`, o si la foto no se pudo sacar o guardar (la toma sigue igual y la app lo anota en su registro). Nada depende de ella para leer o exportar una toma.
+- La recuperación no la toca.
+
 ## Cierre de una toma
 
 La regla es la de los segmentos: el manifiesto dice que algo terminó solo cuando eso ya está en el disco. Al cerrar una toma, en este orden:
@@ -443,6 +454,7 @@ La versión 2 llega con la fase 1a. Los paquetes nuevos se crean con `formatVers
 - Tipos de pista nuevos: `window` (una ventana, en `window-<CGWindowID>/`), `camera` (en `camera/`) y `systemAudio` (en `system-audio/`). La recuperación y la verificación leen video en `display`, `window` y `camera`, y audio en `microphone` y `systemAudio`.
 - Campos nuevos de `source`, después de `pixelScale`: `windowID`, `bundleIdentifier`, `captureArea`, `includedBundleIDs` y `excludedBundleIDs`.
 - El campo `cameraStyle` de la toma: el estilo inicial de la cámara.
+- La carpeta opcional `takes/<toma>/wallpapers/`, con la foto del fondo de cada pantalla grabada (ver [`wallpapers/`](#wallpapers)).
 - Eventos nuevos: `windowGeometry` y `cameraStyle`.
 
 Compatibilidad:
