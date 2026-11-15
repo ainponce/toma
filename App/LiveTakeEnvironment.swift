@@ -7,8 +7,9 @@ import ProjectFormat
 import Recording
 import os
 
-/// The take environment of the app: projects in `~/Movies/<app>/`, the main display and the default
-/// microphone, the cursor, the free disk space and the system's sleep and lock.
+/// The take environment of the app: projects in `~/Movies/<app>/`, the displays and microphone chosen
+/// (`TakePlanner` with `LiveCaptureSourceFactory`), the cursor, the free disk space and the system's sleep
+/// and lock.
 @MainActor
 enum LiveTakeEnvironment {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
@@ -23,23 +24,39 @@ enum LiveTakeEnvironment {
             createPackage: { folder, prefix, app, now in
                 try ProjectFolder.createPackage(in: folder, prefix: prefix, app: app, now: now)
             },
-            prepareTake: { package, request in prepareTake(in: package, request, volume: folder) },
+            prepareTake: { package, request, granted in try prepareTake(in: package, request, granted: granted, volume: folder) },
             termination: ProcessTerminationGuard(),
             now: { Date() })
     }
 
-    private static func prepareTake(in package: ProjectPackage, _ request: TakeRequest, volume: URL) -> PreparedTake {
-        let microphone = request.withMicrophone ? StartTrackingSource(MicrophoneCaptureSource(preferredDeviceUniqueID: nil)) : nil
-        let sources: [any CaptureSource] = [DisplayCaptureSource(displayID: CGMainDisplayID())] + (microphone.map { [$0] } ?? [])
+    /// The connected displays, from `NSScreen.screens`.
+    static func displays() -> [DisplayInfo] {
+        let key = NSDeviceDescriptionKey("NSScreenNumber")
+        return NSScreen.screens.compactMap { screen in
+            guard let id = (screen.deviceDescription[key] as? NSNumber)?.uint32Value else { return nil }
+            let bounds = CGDisplayBounds(id)
+            return DisplayInfo(
+                id: id,
+                frame: Rect(x: Double(bounds.minX), y: Double(bounds.minY), width: Double(bounds.width), height: Double(bounds.height)),
+                scale: Double(screen.backingScaleFactor),
+                isMain: id == CGMainDisplayID(),
+                maximumFramesPerSecond: screen.maximumFramesPerSecond)
+        }
+    }
+
+    private static func prepareTake(
+        in package: ProjectPackage, _ request: TakeRequest, granted: Set<PermissionKind>, volume: URL
+    ) throws -> PreparedTake {
+        let plan = try TakePlanner.plan(
+            request.selection, settings: request.settings, displays: displays(), granted: granted,
+            factory: LiveCaptureSourceFactory())
         let coordinator = RecordingCoordinator(
-            package: package, sources: sources, input: CursorRecorder(),
+            package: package, sources: plan.sources, input: plan.input,
             diskMonitor: DiskSpaceMonitor(volumeURL: volume), systemActivity: SystemActivityMonitor.live())
-        let ownWindows = NSApp.windows.filter { $0.isVisible && $0.isOnActiveSpace }.count
-        // ScreenCaptureKit only knows an app with an on-screen window: with none, excluding this app's
-        // windows from the capture may do nothing. The menu bar is never captured anyway.
-        logger.notice("Recording \(package.url.path, privacy: .public) with \(ownWindows) visible windows of our own")
+        let tracks = plan.sources.map(\.trackID).joined(separator: ", ")
+        logger.notice("Recording \(package.url.path, privacy: .public): \(tracks, privacy: .public)")
         return PreparedTake(
-            recording: coordinator, microphone: microphone,
-            kinds: Dictionary(uniqueKeysWithValues: sources.map { ($0.trackID, $0.kind) }))
+            recording: coordinator, microphone: plan.optional.first,
+            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }))
     }
 }

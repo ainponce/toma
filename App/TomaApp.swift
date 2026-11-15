@@ -48,7 +48,9 @@ private struct MenuContent: View {
     var body: some View {
         switch recording.phase {
         case .idle:
-            Button("Record Main Display") { recording.startRecording() }
+            Button("Record Main Display") {
+                recording.startRecording(selection: .mainDisplay(CGMainDisplayID()), settings: SettingsStore().settings.quick)
+            }
         case .starting:
             Text("Starting recording…")
         case .recording:

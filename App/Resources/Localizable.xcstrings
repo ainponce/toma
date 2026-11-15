@@ -283,6 +283,16 @@
         }
       }
     },
+    "In this version the camera is only a preview: this recording doesn't include it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En esta versión la cámara es solo una vista previa: esta grabación no la incluye."
+          }
+        }
+      }
+    },
     "Later" : {
       "comment" : "Button: leave the unfinished recordings as they are for now",
       "localizations" : {
@@ -350,6 +360,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se interrumpió la captura del micrófono. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "No display is chosen to record." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se eligió ninguna pantalla para grabar."
           }
         }
       }
@@ -809,6 +829,16 @@
         }
       }
     },
+    "The chosen display isn't available." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La pantalla elegida no está disponible."
+          }
+        }
+      }
+    },
     "The export was canceled." : {
       "localizations" : {
         "es" : {
@@ -1196,6 +1226,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta grabación no terminó de guardarse"
+          }
+        }
+      }
+    },
+    "This recording setup isn't available yet." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta combinación de grabación todavía no está disponible."
           }
         }
       }

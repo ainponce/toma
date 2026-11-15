@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AppSupport
 import Export
 import Foundation
 import ProjectFormat
@@ -23,6 +24,7 @@ private func appErrorDescription(_ error: any Error) -> String? {
     switch error {
     case let error as RecordingError: description(of: error)
     case let error as CaptureSourceError: description(of: error)
+    case let error as TakePlanError: description(of: error)
     case let error as WriterError: description(of: error)
     case let error as RecoveryError: description(of: error)
     case let error as LoadedProjectError: description(of: error)
@@ -57,6 +59,17 @@ private func description(of error: CaptureSourceError) -> String {
         String(localized: "The microphone couldn't be set up.")
     case .sessionDidNotStart:
         String(localized: "The microphone didn't start.")
+    }
+}
+
+private func description(of error: TakePlanError) -> String {
+    switch error {
+    case .noScreenChosen:
+        String(localized: "No display is chosen to record.")
+    case .displayNotFound:
+        String(localized: "The chosen display isn't available.")
+    case .notAvailableYet:
+        String(localized: "This recording setup isn't available yet.")
     }
 }
 

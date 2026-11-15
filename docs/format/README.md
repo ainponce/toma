@@ -163,7 +163,7 @@ Reglas de escritura:
 | `displayID` | entero | `CGDirectDisplayID` de la pantalla. |
 | `deviceUniqueID` | texto | `uniqueID` del dispositivo de audio. |
 | `globalFrame` | objeto | `x`, `y`, `width`, `height` en puntos globales, con el origen arriba a la izquierda de la pantalla principal. |
-| `pixelScale` | número | Píxeles por punto de la pantalla (2 en una pantalla Retina). |
+| `pixelScale` | número | Píxeles por punto de lo grabado (2 en una pantalla Retina grabada a resolución nativa, 1 con la escala Puntos). |
 
 **Segmento** (`segments[]`)
 
@@ -227,7 +227,7 @@ Reglas de escritura:
 | `cursor` | `x`, `y` | Posición del puntero. La grabación la muestrea a 120 Hz y escribe una línea solo cuando cambia. |
 | `mouseDown` | `button`, `x`, `y` | Se presionó un botón del mouse (`left`, `right` u `other` para cualquier otro) en esa posición. |
 | `mouseUp` | `button`, `x`, `y` | Se soltó un botón del mouse en esa posición. |
-| `displayGeometry` | `displayID`, `frame`, `scale` | Una pantalla grabada: su `CGDirectDisplayID`, su rectángulo en puntos globales (`x`, `y`, `width`, `height`) y sus píxeles por punto. Se escribe al empezar la toma para cada pantalla. En esta versión es informativo: la geometría que usa el render es `globalFrame` del manifiesto. |
+| `displayGeometry` | `displayID`, `frame`, `scale` | Una pantalla grabada: su `CGDirectDisplayID`, su rectángulo en puntos globales (`x`, `y`, `width`, `height`) y los píxeles por punto grabados. Se escribe al empezar la toma para cada pantalla. En esta versión es informativo: la geometría que usa el render es `globalFrame` del manifiesto. |
 | `segmentStarted` | `track`, `index` | La pista `track` (su `id` en el manifiesto) abrió el segmento `index`. `t` es el `startHostTime` del segmento; la recuperación lo usa si el archivo quedó en disco pero el segmento no llegó al manifiesto. |
 | `streamInterrupted` | `track`, `domain`, `code` | El stream de captura de la pista falló con ese error (dominio y código del `NSError`). La pista sigue en un segmento nuevo, que tiene su propio `segmentStarted`. |
 | `paused` | `reason` | La captura se detuvo en todas las pistas, que cierran su segmento como `paused`. `reason` es `willSleep` (la Mac va a entrar en reposo) o `screenLocked`, que cubre dos cosas: la pantalla se bloqueó, o las pantallas se apagaron (las dos se pliegan en un solo estado, que termina solo cuando la pantalla está desbloqueada y encendida, así encender las pantallas sobre la pantalla de bloqueo no reanuda nada). Mientras se graba, la app no deja que las pantallas se apaguen solas por inactividad, así que eso pasa solo si el usuario las apaga o bloquea la Mac. Con varios motivos a la vez hay un solo `paused` y un solo `resumed`. Un lector no falla ante un `reason` que no conoce. |

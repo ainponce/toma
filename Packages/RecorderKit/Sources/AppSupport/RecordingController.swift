@@ -5,8 +5,9 @@ import ProjectFormat
 import Recording
 import os
 
-/// Records takes, one at a time, each into a new project in `environment.projectsFolder`, with the
-/// microphone when there is one and it is allowed. Opens the editor on the take once it is closed.
+/// Records takes of what the user chose, one at a time, each into a new project in
+/// `environment.projectsFolder`, with the chosen microphone when there is one and it is allowed. Opens
+/// the editor on the take once it is closed.
 @MainActor @Observable
 public final class RecordingController {
     public enum Phase: Equatable, Sendable {
@@ -88,25 +89,28 @@ public final class RecordingController {
 
     // MARK: - Start
 
-    public func startRecording() {
+    /// Records `selection` with `settings`. A microphone that is `.off` is neither asked for nor missed.
+    public func startRecording(selection: CaptureSelection, settings: QuickSettings) {
         guard phase == .idle else { return }
         startCancelled = false
         setPhase(.starting)
-        startTask = Task { await start() }
+        startTask = Task { await start(TakeRequest(selection: selection, settings: settings)) }
     }
 
-    private func start() async {
-        let hasMicrophone = environment.hasMicrophone()
-        var preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: hasMicrophone)
+    private func start(_ request: TakeRequest) async {
+        let wantsMicrophone = request.selection.microphone != .off
+        // Chosen, and the Mac has one.
+        let usesMicrophone = wantsMicrophone && environment.hasMicrophone()
+        var preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
         guard preflight.canRecord else {
             setPhase(.idle)
             openOnboarding()
             return
         }
         // Never asked: the system asks now, and the take starts with the answer.
-        if hasMicrophone, probe.state(of: .microphone) == .notDetermined {
+        if usesMicrophone, probe.state(of: .microphone) == .notDetermined {
             _ = await probe.request(.microphone)
-            preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: hasMicrophone)
+            preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
         }
         guard preflight.canRecord, !startCancelled else {
             setPhase(.idle)
@@ -115,15 +119,19 @@ public final class RecordingController {
 
         notices = []
         lastCloseError = nil
-        if !hasMicrophone {
+        if wantsMicrophone, !usesMicrophone {
             addNotice(.noMicrophone)
-        } else if !preflight.recordMicrophone {
+        } else if usesMicrophone, !preflight.recordMicrophone {
             addNotice(.microphoneAccessOff)
         }
+        // The camera is only a preview in this version: the take goes on without it.
+        if request.selection.camera != .off { addNotice(.cameraNotRecordedYet) }
 
-        var withMicrophone = preflight.recordMicrophone
+        var granted: Set<PermissionKind> = [.screenRecording]
+        if preflight.recordMicrophone { granted.insert(.microphone) }
+        var request = request
         while true {
-            switch await attempt(withMicrophone: withMicrophone) {
+            switch await attempt(request, granted: granted) {
             case .started, .handedToStop:
                 return
             case .cancelled:
@@ -131,11 +139,11 @@ public final class RecordingController {
                 return
             case .failed(let error, let microphoneFailed):
                 // A broken microphone must not keep the screen from being recorded: once, in a new
-                // project, with the display alone. The failed project is left as it is.
-                if withMicrophone, microphoneFailed, !startCancelled {
-                    Self.logger.notice("The microphone could not start; recording the display alone in a new project")
+                // project, without it. The failed project is left as it is.
+                if request.selection.microphone != .off, microphoneFailed, !startCancelled {
+                    Self.logger.notice("The microphone could not start; recording without it in a new project")
                     addNotice(.microphoneFailedToStart)
-                    withMicrophone = false
+                    request.selection.microphone = .off
                     continue
                 }
                 setPhase(.idle)
@@ -157,8 +165,8 @@ public final class RecordingController {
         case failed(any Error, microphoneFailed: Bool)
     }
 
-    /// Creates a new project and starts recording a take in it.
-    private func attempt(withMicrophone: Bool) async -> AttemptOutcome {
+    /// Creates a new project and starts recording a take of `request` in it.
+    private func attempt(_ request: TakeRequest, granted: Set<PermissionKind>) async -> AttemptOutcome {
         let folder = environment.projectsFolder
         let (create, prefix, app, now) = (environment.createPackage, environment.projectNamePrefix, environment.app, environment.now())
         let package: ProjectPackage
@@ -171,16 +179,20 @@ public final class RecordingController {
         }
         guard !startCancelled else {
             // Stopped while the project was being created: nothing was recorded in it.
-            do {
-                try ProjectFolder.removeIfUnused(package)
-            } catch {
-                Self.logger.error("Cannot remove the unused project \(package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
-            }
+            removeIfUnused(package)
             return .cancelled
         }
 
         // From here to `take = …` nothing suspends, so a stop either cancelled the start above or finds the take.
-        let prepared = environment.prepareTake(package, TakeRequest(withMicrophone: withMicrophone))
+        let prepared: PreparedTake
+        do {
+            prepared = try environment.prepareTake(package, request, granted)
+        } catch {
+            // Nothing was recorded in the project.
+            Self.logger.error("The take cannot be recorded: \(String(describing: error), privacy: .public)")
+            removeIfUnused(package)
+            return .failed(error, microphoneFailed: false)
+        }
         let recording = prepared.recording
         let kinds = prepared.kinds
         let starting = Task { [weak self] in
@@ -284,6 +296,15 @@ public final class RecordingController {
         recordedTime = RecordedTime()
         take = nil
         environment.termination.takeEnded()
+    }
+
+    /// Removes a project of a start that recorded nothing in it.
+    private func removeIfUnused(_ package: ProjectPackage) {
+        do {
+            try ProjectFolder.removeIfUnused(package)
+        } catch {
+            Self.logger.error("Cannot remove the unused project \(package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
+        }
     }
 
     // MARK: - Other actions

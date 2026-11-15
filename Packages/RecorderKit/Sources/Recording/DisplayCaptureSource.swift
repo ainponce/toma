@@ -8,7 +8,15 @@ import ScreenCaptureKit
 import Synchronization
 import os
 
-/// Captures one display with ScreenCaptureKit at native pixels, without the cursor and without the
+/// How many pixels a display is recorded at.
+public enum CaptureScale: String, Codable, Sendable, CaseIterable {
+    /// The display's own pixels (2 per point on Retina).
+    case native
+    /// One pixel per point: a smaller file, less sharp on Retina.
+    case points
+}
+
+/// Captures one display with ScreenCaptureKit at `CaptureScale`, without the cursor and without the
 /// app's own windows. Only complete frames are delivered.
 public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     public let trackID: String
@@ -18,6 +26,7 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
 
     private let displayID: CGDirectDisplayID
     private let framesPerSecond: Int
+    private let scale: CaptureScale
     private let name: String
     private let state = Mutex(State())
 
@@ -52,16 +61,18 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "DisplayCaptureSource")
 
-    public init(displayID: CGDirectDisplayID, framesPerSecond: Int = 60) {
+    public init(displayID: CGDirectDisplayID, framesPerSecond: Int = 60, scale: CaptureScale = .native) {
         self.trackID = "display-\(displayID)"
         self.media = .video(framesPerSecond: framesPerSecond)
         self.displayID = displayID
         self.framesPerSecond = framesPerSecond
+        self.scale = scale
         self.name = Self.displayName(displayID)
         super.init()
     }
 
-    /// `globalFrame` is `CGDisplayBounds` (global points, origin at the top left of the main display).
+    /// `globalFrame` is `CGDisplayBounds` (global points, origin at the top left of the main display);
+    /// `pixelScale`, the pixels per point recorded (`recordedPixelScale`).
     public var sourceInfo: TrackSource {
         let bounds = CGDisplayBounds(displayID)
         return TrackSource(
@@ -70,7 +81,7 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
             globalFrame: Rect(
                 x: Double(bounds.minX), y: Double(bounds.minY),
                 width: Double(bounds.width), height: Double(bounds.height)),
-            pixelScale: Self.pixelScale(of: displayID)
+            pixelScale: Self.recordedPixelScale(displayScale: Self.pixelScale(of: displayID), scale: scale)
         )
     }
 
@@ -84,7 +95,9 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
         if let previous, previous.started { await stopCapture(previous.stream) }
         await lastQueue?.drain()
 
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // Every window, on screen or not: with only the on-screen ones, the app is listed (and excluded)
+        // only if it has a window on screen right now.
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw CaptureSourceError.displayNotFound(displayID: displayID)
         }
@@ -93,7 +106,8 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
         let configuration = Self.makeConfiguration(
             contentRect: filter.contentRect,
             pointPixelScale: Double(filter.pointPixelScale),
-            framesPerSecond: framesPerSecond
+            framesPerSecond: framesPerSecond,
+            scale: scale
         )
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
@@ -198,12 +212,18 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
 
     // MARK: - Configuration
 
-    /// Native pixels (`contentRect` × `pointPixelScale`), no cursor, BGRA in sRGB, at most
-    /// `framesPerSecond`, no audio.
-    public static func makeConfiguration(contentRect: CGRect, pointPixelScale: Double, framesPerSecond: Int) -> SCStreamConfiguration {
+    /// `contentRect` × `pointPixelScale` pixels at `.native`, `contentRect`'s points at `.points`; no cursor,
+    /// BGRA in sRGB, at most `framesPerSecond`, no audio.
+    public static func makeConfiguration(
+        contentRect: CGRect, pointPixelScale: Double, framesPerSecond: Int, scale: CaptureScale = .native
+    ) -> SCStreamConfiguration {
+        let pixelsPerPoint = switch scale {
+        case .native: pointPixelScale
+        case .points: 1.0
+        }
         let configuration = SCStreamConfiguration()
-        configuration.width = Int((Double(contentRect.width) * pointPixelScale).rounded())
-        configuration.height = Int((Double(contentRect.height) * pointPixelScale).rounded())
+        configuration.width = Int((Double(contentRect.width) * pixelsPerPoint).rounded())
+        configuration.height = Int((Double(contentRect.height) * pixelsPerPoint).rounded())
         configuration.captureResolution = .best
         configuration.showsCursor = false
         configuration.showMouseClicks = false
@@ -225,6 +245,15 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
             let status = SCFrameStatus(rawValue: rawStatus)
         else { return false }
         return status == .complete
+    }
+
+    /// The pixels per point of the recording of a display with `displayScale` pixels per point (`nil`
+    /// when unknown): the display's own at `.native`, 1 at `.points`.
+    public static func recordedPixelScale(displayScale: Double?, scale: CaptureScale) -> Double? {
+        switch scale {
+        case .native: displayScale
+        case .points: 1
+        }
     }
 
     /// Pixels per point of the display's current mode (2 on Retina), or `nil` if it is not online.

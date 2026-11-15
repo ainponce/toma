@@ -9,6 +9,8 @@ public enum TakeNotice: Equatable, Sendable {
     case microphoneAccessOff
     /// The microphone did not start: the take is recorded again, in a new project, without it.
     case microphoneFailedToStart
+    /// The camera is on, but this version only shows it as a preview: the take is recorded without it.
+    case cameraNotRecordedYet
     /// The capture of a track of this kind failed; it is being restarted.
     case streamInterrupted(TrackKind)
     /// The capture of a track of this kind runs again.

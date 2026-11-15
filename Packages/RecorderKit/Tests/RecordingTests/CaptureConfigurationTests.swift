@@ -22,6 +22,21 @@ import Testing
         #expect(c.colorSpaceName == CGColorSpace.sRGB)
     }
 
+    @Test func displayConfigurationAtPointsScale() {
+        let c = DisplayCaptureSource.makeConfiguration(
+            contentRect: CGRect(x: 0, y: 0, width: 1512, height: 982), pointPixelScale: 2, framesPerSecond: 30, scale: .points)
+        #expect(c.width == 1512 && c.height == 982 && c.minimumFrameInterval == CMTime(value: 1, timescale: 30))
+    }
+
+    @Test func pointsScaleRecordsPixelScaleOne() {
+        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: 2, scale: .points) == 1)
+        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: nil, scale: .points) == 1)
+        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: 2, scale: .native) == 2)
+        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: nil, scale: .native) == nil)
+        // Whatever the display's own scale, the manifest gets the recorded one.
+        #expect(DisplayCaptureSource(displayID: 7, framesPerSecond: 30, scale: .points).sourceInfo.pixelScale == 1)
+    }
+
     @Test func onlyCompleteFramesAreForwarded() {
         let complete = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 1), frameIndex: 0)
         setFrameStatus(.complete, on: complete)

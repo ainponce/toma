@@ -6,7 +6,6 @@ import ProjectFormat
 import RecorderKitTestSupport
 import Recording
 import Synchronization
-import SyntheticCapture
 import Testing
 
 /// Where a start waits, and so where a stop can come.
@@ -34,7 +33,7 @@ enum AwaitPoint: CaseIterable {
             case .coordinatorStop: rig.stopGate
             }
             gate.close()
-            rig.controller.startRecording()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
 
             switch point {
             case .microphonePrompt, .packageCreation, .coordinatorStart:
@@ -83,10 +82,15 @@ enum AwaitPoint: CaseIterable {
 
     @Test func microphoneFailureRetriesOnceWithoutMicrophone() async throws {
         try await withRig { rig in
-            rig.takes.microphoneFailures = 99
-            rig.controller.startRecording()
+            rig.takes.factory.microphoneFailures = 99
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
-            #expect(rig.takes.requests == [TakeRequest(withMicrophone: true), TakeRequest(withMicrophone: false)])
+            var withoutMicrophone = CaptureSelection.mainDisplay(1)
+            withoutMicrophone.microphone = .off
+            #expect(rig.takes.requests == [
+                TakeRequest(selection: .mainDisplay(1), settings: QuickSettings()),
+                TakeRequest(selection: withoutMicrophone, settings: QuickSettings()),
+            ])
             #expect(rig.controller.notices.contains(.microphoneFailedToStart))
             await rig.controller.stop(openingEditor: true)
 
@@ -102,9 +106,66 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
+    @Test func cameraOnRecordsWithoutCameraAndSaysSo() async throws {
+        try await withRig { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices.contains(.cameraNotRecordedYet))
+            await rig.controller.stop(openingEditor: false)
+
+            let package = try #require(rig.takes.packages.first)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.status == .complete && take.tracks.map(\.kind) == [.display, .microphone])
+            #expect(rig.takes.grants == [[.screenRecording, .microphone]])
+            #expect(rig.takes.factory.calls == [
+                .display(id: 1, framesPerSecond: 60, scale: .native), .microphone(.systemDefault), .input(displayIDs: [1]),
+            ])
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test func microphoneOffIsNeverRequested() async throws {
+        // With a microphone that was never allowed, and without one.
+        for hasMicrophone in [true, false] {
+            try await withRig(microphone: .notDetermined, hasMicrophone: hasMicrophone) { rig in
+                var selection = CaptureSelection.mainDisplay(1)
+                selection.microphone = .off
+                rig.controller.startRecording(selection: selection, settings: QuickSettings())
+                #expect(await eventually { rig.controller.phase.isRecordingATake })
+                await rig.controller.stop(openingEditor: false)
+
+                #expect(rig.probe.requests.isEmpty)
+                #expect(!rig.controller.notices.contains(.noMicrophone) && !rig.controller.notices.contains(.microphoneAccessOff))
+                #expect(!rig.controller.notices.contains(.cameraNotRecordedYet))
+                #expect(rig.takes.grants == [[.screenRecording]])
+                let package = try #require(rig.takes.packages.first)
+                let take = try #require(try rig.takesOnDisk(package.url).first)
+                #expect(take.status == .complete && take.tracks.map(\.kind) == [.display])
+                #expect(rig.startFailures.isEmpty)
+            }
+        }
+    }
+
+    @Test func planFailureLeavesNoPackage() async throws {
+        try await withRig { rig in
+            rig.controller.startRecording(selection: .mainDisplay(9), settings: QuickSettings())
+            #expect(await eventually { !rig.startFailures.isEmpty })
+
+            #expect(rig.startFailures.map { $0 as? TakePlanError } == [.displayNotFound(9)])
+            #expect(rig.controller.phase == .idle)
+            let leftovers = try FileManager.default.contentsOfDirectory(atPath: rig.folder.path)
+            #expect(leftovers.isEmpty)
+            #expect(rig.takes.requests.count == 1 && rig.takes.recordings.isEmpty)
+            #expect(rig.termination.began == rig.termination.ended)
+            #expect(rig.editorOpenings.isEmpty)
+        }
+    }
+
     @Test func diskAutoStopRacingUserStopOpensEditorOnce() async throws {
         try await withRig { rig in
-            rig.controller.startRecording()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
             // The disk has won: the take is closing on its own when the user stops it.
@@ -128,7 +189,7 @@ enum AwaitPoint: CaseIterable {
     @Test func quitWhileStartingWaitsAndLeavesNoEmptyPackage() async throws {
         try await withRig { rig in
             rig.creation.close()
-            rig.controller.startRecording()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.creation.arrivals == 1 })
             let returned = Flag()
             let quitting = Task {
@@ -150,7 +211,7 @@ enum AwaitPoint: CaseIterable {
 
     @Test func lateNoticesAfterReleaseAreIgnored() async throws {
         try await withRig { rig in
-            rig.controller.startRecording()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             let first = try #require(rig.takes.recordings.first)
             first.deliverAfterClose(.paused(reason: "screenLocked"))
@@ -159,7 +220,7 @@ enum AwaitPoint: CaseIterable {
             await settle()
             #expect(!rig.controller.isPaused)
 
-            rig.controller.startRecording()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             #expect(!rig.controller.isPaused)
             #expect(rig.controller.notices.isEmpty)
@@ -184,13 +245,13 @@ extension RecordingController.Phase {
 
 /// A controller whose takes are recorded in a fresh folder with its own defaults, both removed afterwards.
 @MainActor private func withRig(
-    microphone: PermissionState = .granted, _ body: (Rig) async throws -> Void
+    microphone: PermissionState = .granted, hasMicrophone: Bool = true, _ body: (Rig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "RecordingControllerTests-\(UUID().uuidString)"
         let defaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
         defer { defaults.removePersistentDomain(forName: suite) }
-        try await body(Rig(in: directory, defaults: defaults, microphone: microphone))
+        try await body(Rig(in: directory, defaults: defaults, microphone: microphone, hasMicrophone: hasMicrophone))
     }
 }
 
@@ -217,7 +278,7 @@ extension RecordingController.Phase {
     private(set) var editorOpenings: [EditorOpening] = []
     private(set) var startFailures: [any Error] = []
 
-    init(in directory: URL, defaults: UserDefaults, microphone: PermissionState) {
+    init(in directory: URL, defaults: UserDefaults, microphone: PermissionState, hasMicrophone: Bool) {
         let folder = directory.appendingPathComponent("Movies/Toma", isDirectory: true)
         let (creation, startGate, stopGate) = (Gate(), Gate(), Gate())
         let termination = CountingTerminationGuard()
@@ -233,12 +294,12 @@ extension RecordingController.Phase {
             projectsFolder: folder,
             app: AppInfo(name: "Tests", version: "0"),
             projectNamePrefix: "Recording",
-            hasMicrophone: { true },
+            hasMicrophone: { hasMicrophone },
             createPackage: { folder, prefix, app, now in
                 creation.passBlocking()
                 return try ProjectFolder.createPackage(in: folder, prefix: prefix, app: app, now: now)
             },
-            prepareTake: { package, request in takes.prepare(package, request) },
+            prepareTake: { package, request, granted in try takes.prepare(package, request, granted) },
             termination: termination,
             now: { Date() })
         controller = RecordingController(probe: probe, environment: environment, defaults: defaults)
@@ -259,12 +320,18 @@ extension RecordingController.Phase {
     }
 }
 
-/// What `prepareTake` was asked for, and the takes it made: a synthetic display and, when asked, a
-/// synthetic microphone, recorded by a coordinator behind the rig's gates.
+/// What `prepareTake` was asked for, and the takes it made: the plan `TakePlanner` makes of the request
+/// with display 1 connected and `factory`'s synthetic sources, recorded by a coordinator behind the rig's gates.
 @MainActor private final class PreparedTakes {
-    /// How many times each new microphone fails to start.
-    var microphoneFailures = 0
+    private static let displays = [
+        DisplayInfo(id: 1, frame: Rect(x: 0, y: 0, width: 64, height: 36), scale: 1, isMain: true, maximumFramesPerSecond: 60),
+    ]
+
+    let factory = FakeFactory()
     private(set) var requests: [TakeRequest] = []
+    /// The permissions granted for each request.
+    private(set) var grants: [Set<PermissionKind>] = []
+    /// The packages of the takes made.
     private(set) var packages: [ProjectPackage] = []
     private(set) var recordings: [GatedTakeRecording] = []
     private let disk: FakeDisk
@@ -277,25 +344,20 @@ extension RecordingController.Phase {
         self.stopGate = stopGate
     }
 
-    func prepare(_ package: ProjectPackage, _ request: TakeRequest) -> PreparedTake {
+    func prepare(_ package: ProjectPackage, _ request: TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake {
         requests.append(request)
+        grants.append(granted)
+        let plan = try TakePlanner.plan(
+            request.selection, settings: request.settings, displays: Self.displays, granted: granted, factory: factory)
         packages.append(package)
-        var microphone: StartTrackingSource?
-        if request.withMicrophone {
-            let audio = SyntheticAudioSource()
-            audio.failOnStart = microphoneFailures
-            microphone = StartTrackingSource(audio)
-        }
-        let sources: [any CaptureSource] = [SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30)]
-            + (microphone.map { [$0] } ?? [])
         let coordinator = RecordingCoordinator(
-            package: package, sources: sources, input: NoInputRecorder(),
+            package: package, sources: plan.sources, input: plan.input,
             diskMonitor: disk.monitor(volume: package.url), systemActivity: AsyncStream { $0.finish() })
         let recording = GatedTakeRecording(coordinator: coordinator, startGate: startGate, stopGate: stopGate)
         recordings.append(recording)
         return PreparedTake(
-            recording: recording, microphone: microphone,
-            kinds: Dictionary(uniqueKeysWithValues: sources.map { ($0.trackID, $0.kind) }))
+            recording: recording, microphone: plan.optional.first,
+            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }))
     }
 }
 
@@ -412,6 +474,10 @@ private final class Gate: Sendable {
 private final class GatedProbe: PermissionProbe {
     let gate = Gate()
     private let microphone: Mutex<PermissionState>
+    private let requested = Mutex<[PermissionKind]>([])
+
+    /// What was requested, in order.
+    var requests: [PermissionKind] { requested.withLock { $0 } }
 
     init(microphone: PermissionState) {
         self.microphone = Mutex(microphone)
@@ -425,6 +491,7 @@ private final class GatedProbe: PermissionProbe {
     }
 
     func request(_ kind: PermissionKind) async -> PermissionState {
+        requested.withLock { $0.append(kind) }
         await gate.pass()
         guard kind == .microphone else { return state(of: kind) }
         microphone.withLock { $0 = .granted }

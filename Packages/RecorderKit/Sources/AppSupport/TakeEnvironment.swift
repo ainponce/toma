@@ -5,11 +5,13 @@ import Recording
 
 /// What a take is asked to record.
 public struct TakeRequest: Equatable, Sendable {
-    /// Record the microphone too: it is there and allowed, and has not failed to start for this take.
-    public var withMicrophone: Bool
+    /// What the user chose, with the microphone `.off` once it has failed to start for this take.
+    public var selection: CaptureSelection
+    public var settings: QuickSettings
 
-    public init(withMicrophone: Bool) {
-        self.withMicrophone = withMicrophone
+    public init(selection: CaptureSelection, settings: QuickSettings) {
+        self.selection = selection
+        self.settings = settings
     }
 }
 
@@ -65,8 +67,9 @@ public struct TakeEnvironment {
     /// Creates a new project: the folder, the prefix, the app and the time it is named after. Called off
     /// the main thread (creating a package syncs it to disk).
     public var createPackage: @Sendable (URL, String, AppInfo, Date) throws -> ProjectPackage
-    /// The sources of a take and what records them into the project.
-    public var prepareTake: @MainActor (ProjectPackage, TakeRequest) -> PreparedTake
+    /// The sources of a take, with the permissions granted, and what records them into the project: the
+    /// connected displays and `TakePlanner.plan`, whose `TakePlanError` it throws.
+    public var prepareTake: @MainActor (ProjectPackage, TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake
     public var termination: any TerminationGuarding
     public var now: @Sendable () -> Date
 
@@ -76,7 +79,7 @@ public struct TakeEnvironment {
         projectNamePrefix: String,
         hasMicrophone: @escaping @MainActor () -> Bool,
         createPackage: @escaping @Sendable (URL, String, AppInfo, Date) throws -> ProjectPackage,
-        prepareTake: @escaping @MainActor (ProjectPackage, TakeRequest) -> PreparedTake,
+        prepareTake: @escaping @MainActor (ProjectPackage, TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake,
         termination: any TerminationGuarding,
         now: @escaping @Sendable () -> Date
     ) {
