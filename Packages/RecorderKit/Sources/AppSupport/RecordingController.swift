@@ -25,14 +25,14 @@ public final class RecordingController {
     /// resumes. The user's own pause is `isUserPaused`.
     public private(set) var isPaused = false
     /// The user paused the take (`togglePause()`): nothing is recorded until they resume it.
-    public private(set) var isUserPaused = false
+    public internal(set) var isUserPaused = false
     /// What the user should know about the current or the last take, oldest first: at most
     /// `maximumNotices`, never the same one twice in a row.
-    public private(set) var notices: [TakeNotice] = []
+    public internal(set) var notices: [TakeNotice] = []
     /// Why closing the current or the last take failed in part (`TakeNotice.closedWithError`).
-    public private(set) var lastCloseError: (any Error)?
+    public internal(set) var lastCloseError: (any Error)?
     /// The project of the last take recorded or recovered.
-    public private(set) var lastProjectURL: URL? {
+    public internal(set) var lastProjectURL: URL? {
         didSet { defaults.set(lastProjectURL?.path, forKey: Self.lastProjectKey) }
     }
 
@@ -55,10 +55,10 @@ public final class RecordingController {
 
     private static let lastProjectKey = "lastProjectPath"
     private static let maximumNotices = 6
-    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
+    static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
 
     /// What closing a take found.
-    private struct ClosedTake {
+    struct ClosedTake {
         /// The take's ID, if its start returned one.
         var takeID: String?
         /// The take started, so something was recorded.
@@ -69,7 +69,7 @@ public final class RecordingController {
     }
 
     /// What a take holds while it is open.
-    private struct Take {
+    struct Take {
         let recording: any TakeRecording
         let package: ProjectPackage
         /// The take's `start()`, which a stop waits for before stopping.
@@ -79,26 +79,26 @@ public final class RecordingController {
     }
 
     @ObservationIgnored private let probe: any PermissionProbe
-    @ObservationIgnored private let environment: TakeEnvironment
+    @ObservationIgnored let environment: TakeEnvironment
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private var take: Take?
+    @ObservationIgnored var take: Take?
     @ObservationIgnored private var startTask: Task<Void, Never>?
     /// Closes the take: a stop's, or a restart's until the new take starts.
-    @ObservationIgnored private var stopTask: Task<Void, Never>?
+    @ObservationIgnored var stopTask: Task<Void, Never>?
     /// Set by a stop that came before the take had a recording: the start gives up.
     @ObservationIgnored private var startCancelled = false
     /// What the take was asked to record, from the start until the controller is idle again. A restart
     /// records it again.
-    @ObservationIgnored private var currentRequest: TakeRequest?
+    @ObservationIgnored var currentRequest: TakeRequest?
     /// The take's pause, resume and marker requests, each sent once the one before has returned.
-    @ObservationIgnored private var userRequests: Task<Void, Never>?
+    @ObservationIgnored var userRequests: Task<Void, Never>?
     /// The current take stopped by itself because the disk is full.
-    @ObservationIgnored private var autoStopped = false
+    @ObservationIgnored var autoStopped = false
     /// `stopTask` is a restart closing its take.
-    @ObservationIgnored private var isRestarting = false
+    @ObservationIgnored var isRestarting = false
     /// A stop came while a restart closed its take: the restart ends as that stop, opening the editor if
     /// every stop that came asked to (`nil`: no stop came). Quitting asks for none, and wins.
-    @ObservationIgnored private var stopDuringRestart: Bool?
+    @ObservationIgnored var stopDuringRestart: Bool?
     private var recordedTime = RecordedTime()
 
     public init(probe: any PermissionProbe, environment: TakeEnvironment, defaults: UserDefaults = .standard) {
@@ -124,7 +124,7 @@ public final class RecordingController {
     }
 
     /// Starts a take of `request`; `carried` is what the user should still know about the take it restarts.
-    private func begin(_ request: TakeRequest, carrying carried: [TakeNotice]) {
+    func begin(_ request: TakeRequest, carrying carried: [TakeNotice]) {
         startCancelled = false
         currentRequest = request
         setPhase(.starting)
@@ -309,7 +309,7 @@ public final class RecordingController {
     }
 
     /// Closes the take and hears all its warnings; does not let it go.
-    private func closeAndHear(_ take: Take) async -> ClosedTake {
+    func closeAndHear(_ take: Take) async -> ClosedTake {
         var closed = ClosedTake()
         // Whichever way the start ends; the start logs its own failure.
         closed.takeID = try? await take.starting.value
@@ -330,7 +330,7 @@ public final class RecordingController {
     }
 
     /// Says how closing went, lets the take go and goes back to idle; opens the editor on the take when asked.
-    private func finish(_ take: Take, _ closed: ClosedTake, openingEditor: Bool) {
+    func finish(_ take: Take, _ closed: ClosedTake, openingEditor: Bool) {
         if let error = closed.error {
             lastCloseError = error
             addNotice(.closedWithError)
@@ -356,7 +356,7 @@ public final class RecordingController {
         setPhase(.idle)
     }
 
-    private func releaseTake() {
+    func releaseTake() {
         isPaused = false
         isUserPaused = false
         autoStopped = false
@@ -375,91 +375,6 @@ public final class RecordingController {
         }
     }
 
-    // MARK: - Pause, markers and restart
-
-    /// Pauses the take being recorded, or resumes it if the user paused it. The time recorded stops when
-    /// the take really pauses (`RecordedTime` follows the take's `paused` and `resumed`).
-    public func togglePause() {
-        guard case .recording = phase, let recording = take?.recording else { return }
-        let pausing = !isUserPaused
-        isUserPaused = pausing
-        send(to: recording, pausing ? "pause" : "resume") { recording in
-            if pausing { try await recording.pause() } else { try await recording.resume() }
-        }
-    }
-
-    /// Marks this moment of the take being recorded. Nothing is written while the take is paused.
-    public func addMarker() {
-        guard case .recording = phase, !isUserPaused, !isPaused, let recording = take?.recording else { return }
-        send(to: recording, "marker") { recording in _ = try await recording.addMarker() }
-    }
-
-    /// Sends `request` once the requests sent before it have returned, so they reach the take in order. A
-    /// take that is closing refuses it.
-    private func send(
-        to recording: any TakeRecording, _ name: String, _ request: @escaping @Sendable (any TakeRecording) async throws -> Void
-    ) {
-        let previous = userRequests
-        userRequests = Task {
-            await previous?.value
-            do {
-                try await request(recording)
-            } catch {
-                Self.logger.notice("The take refused the \(name, privacy: .public): \(String(describing: error), privacy: .public)")
-            }
-        }
-    }
-
-    /// Closes the take being recorded without opening it, moves its project to the trash and records a new
-    /// take of the same request, in a new project. What the restart could not do is said in the notices:
-    /// a take that closed with an error is kept (`closedWithError`), and so is one that could not be moved
-    /// (`couldNotMoveToTrash`); the new take starts either way. A take the disk stopped is kept and opened,
-    /// and nothing new starts; so does a stop that comes while the take closes.
-    public func restartTake() {
-        guard case .recording = phase, stopTask == nil, let take, let request = currentRequest else { return }
-        isRestarting = true
-        stopDuringRestart = nil
-        stopTask = Task { await restart(take, request: request) }
-    }
-
-    private func restart(_ take: Take, request: TakeRequest) async {
-        setPhase(.stopping)
-        let closed = await closeAndHear(take)
-        isRestarting = false
-        // The disk won if it stopped the take, whichever close came first.
-        let endedForDiskSpace = autoStopped
-            || closed.record?.tracks.contains { $0.segments.contains { $0.endReason == .diskFull } } == true
-        if endedForDiskSpace || stopDuringRestart != nil {
-            // Kept, as a stop would: the stops that came waited for this one, so the editor opens here, once,
-            // if they asked for it (the disk's own stop does), or for the disk when none came. Quitting asks
-            // for no editor, also when the disk stopped the take.
-            finish(take, closed, openingEditor: stopDuringRestart ?? endedForDiskSpace)
-            return
-        }
-        // From here to the new start nothing suspends, so a stop either came before or finds the new start.
-        releaseTake()
-        var carried: [TakeNotice] = []
-        if let error = closed.error {
-            // Closed in part: kept where it is.
-            lastCloseError = error
-            carried.append(.closedWithError)
-            lastProjectURL = take.package.url
-        } else if closed.opened {
-            do {
-                // A rename on the same volume: quick enough for the main actor.
-                let trashed = try ProjectTrash.move(take.package, projectsFolder: environment.projectsFolder)
-                Self.logger.notice("Moved the restarted take to \(trashed.path, privacy: .public)")
-            } catch {
-                Self.logger.error("Cannot move \(take.package.url.path, privacy: .public) to the trash: \(String(describing: error), privacy: .public)")
-                carried.append(.couldNotMoveToTrash)
-                lastProjectURL = take.package.url
-            }
-        }
-        notices = carried
-        stopTask = nil
-        begin(request, carrying: carried)
-    }
-
     // MARK: - Other actions
 
     public func openLastProject() {
@@ -474,7 +389,7 @@ public final class RecordingController {
 
     // MARK: - Helpers
 
-    private func setPhase(_ phase: Phase) {
+    func setPhase(_ phase: Phase) {
         guard self.phase != phase else { return }
         let wasRecording = isRecording
         self.phase = phase
