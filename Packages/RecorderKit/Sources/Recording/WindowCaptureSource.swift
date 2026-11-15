@@ -42,19 +42,19 @@ public final class WindowCaptureSource: NSObject, CaptureSource, SCStreamOutput,
     public var lastCompleteFrameTime: HostTime? { capture.lastCompleteFrameTime }
 
     /// `name` is "<app> — <title>" (the app alone without a title); `globalFrame`, the window's `kCGWindowBounds`
-    /// (global points); `pixelScale`, the pixels per point recorded (`DisplayCaptureSource.recordedPixelScale`, with
+    /// (global points); `pixelScale`, the pixels per point recorded (`ScreenCapture.recordedPixelScale`, with
     /// the scale of the display under the window's center). A window that does not exist only has its ID.
     public var sourceInfo: TrackSource {
         guard let window = WindowListEntry(windowID: windowID) else {
             return TrackSource(
-                name: "Window \(windowID)", pixelScale: DisplayCaptureSource.recordedPixelScale(displayScale: nil, scale: scale),
+                name: "Window \(windowID)", pixelScale: ScreenCapture.recordedPixelScale(displayScale: nil, scale: scale),
                 windowID: windowID)
         }
         let app = window.ownerName ?? window.bundleIdentifier ?? "Window \(windowID)"
         return TrackSource(
             name: window.title.map { "\(app) — \($0)" } ?? app,
             globalFrame: Rect(window.bounds),
-            pixelScale: DisplayCaptureSource.recordedPixelScale(displayScale: window.displayScale, scale: scale),
+            pixelScale: ScreenCapture.recordedPixelScale(displayScale: window.displayScale, scale: scale),
             windowID: windowID,
             bundleIdentifier: window.bundleIdentifier
         )
@@ -68,7 +68,7 @@ public final class WindowCaptureSource: NSObject, CaptureSource, SCStreamOutput,
                 throw CaptureSourceError.windowNotFound(windowID: windowID)
             }
             let filter = SCContentFilter(desktopIndependentWindow: window)
-            let pixelsPerPoint = DisplayCaptureSource.recordedPixelScale(displayScale: Double(filter.pointPixelScale), scale: scale) ?? 1
+            let pixelsPerPoint = ScreenCapture.recordedPixelScale(displayScale: Double(filter.pointPixelScale), scale: scale) ?? 1
             let size = WindowStreamSizing.pixelSize(
                 contentRect: CGRect(origin: .zero, size: window.frame.size), contentScale: 1, scaleFactor: pixelsPerPoint)
             return ScreenStreamCapture.Setup(
@@ -143,7 +143,7 @@ struct WindowListEntry {
         if CGGetDisplaysWithPoint(CGPoint(x: bounds.midX, y: bounds.midY), 1, &displayID, &count) != .success || count == 0 {
             guard CGGetDisplaysWithRect(bounds, 1, &displayID, &count) == .success, count > 0 else { return nil }
         }
-        return DisplayCaptureSource.pixelScale(of: displayID)
+        return ScreenCapture.pixelScale(of: displayID)
     }
 }
 

@@ -29,10 +29,10 @@ import Testing
     }
 
     @Test func pointsScaleRecordsPixelScaleOne() {
-        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: 2, scale: .points) == 1)
-        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: nil, scale: .points) == 1)
-        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: 2, scale: .native) == 2)
-        #expect(DisplayCaptureSource.recordedPixelScale(displayScale: nil, scale: .native) == nil)
+        #expect(ScreenCapture.recordedPixelScale(displayScale: 2, scale: .points) == 1)
+        #expect(ScreenCapture.recordedPixelScale(displayScale: nil, scale: .points) == 1)
+        #expect(ScreenCapture.recordedPixelScale(displayScale: 2, scale: .native) == 2)
+        #expect(ScreenCapture.recordedPixelScale(displayScale: nil, scale: .native) == nil)
         // Whatever the display's own scale, the manifest gets the recorded one.
         #expect(DisplayCaptureSource(displayID: 7, framesPerSecond: 30, scale: .points).sourceInfo.pixelScale == 1)
     }
@@ -61,6 +61,22 @@ import Testing
 
         let withoutOwn = DisplayExclusions.excluded(apps: apps.filter { $0.pid != own }, ownPID: own, bundleIDs: bundleIDs)
         #expect(withoutOwn.pids == [77] && withoutOwn.missingBundleIDs.isEmpty && withoutOwn.ownAppMissing)
+    }
+
+    @Test func excludedAppsThatLaunchNeedANewFilter() {
+        let notifications = "com.apple.notificationcenterui"
+        func launched(_ before: [(pid: pid_t, bundleID: String?)], _ after: [(pid: pid_t, bundleID: String?)]) -> [String] {
+            DisplayExclusions.launched(before: before, after: after, bundleIDs: DisplayExclusions.bundleIdentifiers)
+        }
+        // Notification Center relaunched: a new process with an excluded bundle ID (the whole list, before and after).
+        #expect(launched([(77, notifications), (80, "com.apple.Safari")], [(80, "com.apple.Safari"), (91, notifications)]) == [notifications])
+        // An insertion, as the running applications' KVO reports it: the inserted apps, no old value.
+        #expect(launched([], [(91, notifications)]) == [notifications])
+        // Two of its processes at once: one refresh.
+        #expect(launched([], [(91, notifications), (94, notifications)]) == [notifications])
+        // The same process, other apps, an app without a bundle ID, a removal: nothing.
+        #expect(launched([(77, notifications)], [(77, notifications), (92, "com.apple.Safari"), (93, nil)]).isEmpty)
+        #expect(launched([(77, notifications)], []).isEmpty)
     }
 
     @Test func windowConfigurationMatchesTheWindowBounds() {
@@ -98,9 +114,9 @@ import Testing
         let idle = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 2), frameIndex: 1)
         setFrameStatus(.idle, on: idle)
         let unmarked = SampleFactory.videoSample(width: 32, height: 32, pts: HostTime(nanoseconds: 3), frameIndex: 2)
-        #expect(DisplayCaptureSource.isCompleteFrame(complete))
-        #expect(!DisplayCaptureSource.isCompleteFrame(idle))
-        #expect(!DisplayCaptureSource.isCompleteFrame(unmarked))
+        #expect(ScreenCapture.isCompleteFrame(complete))
+        #expect(!ScreenCapture.isCompleteFrame(idle))
+        #expect(!ScreenCapture.isCompleteFrame(unmarked))
     }
 
     @Test func displayAndMicrophoneIdentifyTheirTracks() {

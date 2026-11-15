@@ -115,7 +115,7 @@ public final class RecordingSink: CaptureSink {
             height: image.map(CVPixelBufferGetHeight),
             sampleRate: audio?.mSampleRate,
             channels: audio.map { Int($0.mChannelsPerFrame) },
-            isCompleteFrame: DisplayCaptureSource.isCompleteFrame(sample),
+            isCompleteFrame: ScreenCapture.isCompleteFrame(sample),
             lag: now.seconds(since: pts)
         )
         log.withLock { $0.samples.append(delivery) }

@@ -31,6 +31,21 @@ public enum DisplayExclusions {
         let present = Set(apps.compactMap(\.bundleID))
         return (pids, bundleIDs.filter { !present.contains($0) }, !apps.contains { $0.pid == ownPID })
     }
+
+    /// The bundle IDs among `bundleIDs` of the apps in `after` whose process is not in `before`, each once, in the order
+    /// of `after`: the excluded apps that launched when the running applications went from `before` to `after` (the
+    /// whole lists, or, for an insertion, nothing and the apps inserted).
+    static func launched(
+        before: [(pid: pid_t, bundleID: String?)], after: [(pid: pid_t, bundleID: String?)], bundleIDs: [String]
+    ) -> [String] {
+        let running = Set(before.map(\.pid))
+        var launched: [String] = []
+        for app in after where !running.contains(app.pid) {
+            guard let bundleID = app.bundleID, bundleIDs.contains(bundleID), !launched.contains(bundleID) else { continue }
+            launched.append(bundleID)
+        }
+        return launched
+    }
 }
 
 /// Captures one display with ScreenCaptureKit at `CaptureScale`, without the cursor, the app's own windows (but for
@@ -40,7 +55,9 @@ public enum DisplayExclusions {
 /// When the display changes resolution or proportion the stream follows it (`ScreenStreamCapture`), so every frame
 /// covers the whole display with the geometry of its moment, and the pipeline opens a `.formatChanged` segment. When
 /// an app of `excludedBundleIDs` launches while it runs (Notification Center restarting), the filter is made again,
-/// so the new process is left out too.
+/// so the new process is left out too. Launches are heard from `NSWorkspace.runningApplications` (key-value
+/// observed), which also lists the apps without a Dock icon (`LSUIElement`, as Notification Center is) that
+/// `didLaunchApplicationNotification` leaves out, and from that notification as well.
 public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     public let trackID: String
     public let kind = TrackKind.display
@@ -56,11 +73,18 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
     private let name: String
     private let capture: ScreenStreamCapture
     /// Hears the apps that launch, from the first `start` until `stop`.
-    private let launches = Mutex<ObserverToken?>(nil)
+    private let launches = Mutex<LaunchWatch?>(nil)
 
-    /// A notification observer. `@unchecked Sendable`: it is only handed back to `removeObserver`.
-    private struct ObserverToken: @unchecked Sendable {
-        let value: any NSObjectProtocol
+    /// What hears the apps that launch. `@unchecked Sendable`: the observer is only handed back to `removeObserver`,
+    /// and the observation only invalidated.
+    private struct LaunchWatch: @unchecked Sendable {
+        let notification: any NSObjectProtocol
+        let runningApplications: NSKeyValueObservation
+
+        func end() {
+            NSWorkspace.shared.notificationCenter.removeObserver(notification)
+            runningApplications.invalidate()
+        }
     }
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "DisplayCaptureSource")
@@ -91,11 +115,12 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
     }
 
     deinit {
-        if let token = launches.withLock({ $0 }) { NSWorkspace.shared.notificationCenter.removeObserver(token.value) }
+        launches.withLock { $0 }?.end()
     }
 
     /// `globalFrame` is `CGDisplayBounds` (global points, origin at the top left of the main display);
-    /// `pixelScale`, the pixels per point recorded (`recordedPixelScale`); `captureArea`, the area chosen, if any.
+    /// `pixelScale`, the pixels per point recorded (`ScreenCapture.recordedPixelScale`); `captureArea`, the area chosen,
+    /// if any.
     public var sourceInfo: TrackSource {
         let bounds = CGDisplayBounds(displayID)
         return TrackSource(
@@ -104,7 +129,7 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
             globalFrame: Rect(
                 x: Double(bounds.minX), y: Double(bounds.minY),
                 width: Double(bounds.width), height: Double(bounds.height)),
-            pixelScale: Self.recordedPixelScale(displayScale: Self.pixelScale(of: displayID), scale: scale),
+            pixelScale: ScreenCapture.recordedPixelScale(displayScale: ScreenCapture.pixelScale(of: displayID), scale: scale),
             captureArea: captureArea
         )
     }
@@ -121,9 +146,10 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
     }
 
     public func stop() async {
-        if let token = launches.withLock({ token in defer { token = nil }; return token }) {
-            NSWorkspace.shared.notificationCenter.removeObserver(token.value)
-        }
+        launches.withLock { watch in
+            defer { watch = nil }
+            return watch
+        }?.end()
         await capture.stop()
     }
 
@@ -160,17 +186,31 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
     }
 
     /// From the first `start` until `stop`: an app of `excludedBundleIDs` that launches gets the filter made again.
+    /// `runningApplications` changes (on the main thread) for every app; `didLaunchApplicationNotification` is not
+    /// posted for an app without a Dock icon, Notification Center among them.
     private func observeLaunches() {
-        launches.withLock { token in
-            guard token == nil else { return }
-            let observer = NSWorkspace.shared.notificationCenter.addObserver(
+        launches.withLock { watch in
+            guard watch == nil else { return }
+            let workspace = NSWorkspace.shared
+            let notification = workspace.notificationCenter.addObserver(
                 forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: nil
             ) { [weak self] notification in
                 let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 guard let self, let bundleID = app?.bundleIdentifier, excludedBundleIDs.contains(bundleID) else { return }
                 Task { await self.refreshFilter(launched: bundleID) }
             }
-            token = ObserverToken(value: observer)
+            let runningApplications = workspace.observe(\.runningApplications, options: [.old, .new]) { [weak self] _, change in
+                guard let self else { return }
+                let apps = { (apps: [NSRunningApplication]?) in
+                    (apps ?? []).map { (pid: $0.processIdentifier, bundleID: $0.bundleIdentifier) }
+                }
+                let launched = DisplayExclusions.launched(
+                    before: apps(change.oldValue), after: apps(change.newValue), bundleIDs: excludedBundleIDs)
+                for bundleID in launched {
+                    Task { await self.refreshFilter(launched: bundleID) }
+                }
+            }
+            watch = LaunchWatch(notification: notification, runningApplications: runningApplications)
         }
     }
 
@@ -179,6 +219,8 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
     private func refreshFilter(launched bundleID: String) async {
         for attempt in 1...Self.relaunchAttempts {
             if attempt > 1 { try? await Task.sleep(for: .seconds(1)) }
+            Self.logger.notice(
+                "\(self.trackID, privacy: .public) makes its filter again: \(bundleID, privacy: .public) launched (attempt \(attempt))")
             let made: (filter: SCContentFilter, missingBundleIDs: [String])
             do {
                 made = try await makeFilter()
@@ -186,8 +228,16 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
                 Self.logger.error("\(self.trackID, privacy: .public) could not make its filter again: \(error, privacy: .public)")
                 return
             }
-            guard await capture.updateContentFilter(made.filter) else { return }
-            if !made.missingBundleIDs.contains(bundleID) { return }
+            do {
+                guard try await capture.updateContentFilter(made.filter) else { return }
+            } catch {
+                Self.logger.error("\(self.trackID, privacy: .public) could not update its filter: \(error, privacy: .public)")
+                return
+            }
+            if !made.missingBundleIDs.contains(bundleID) {
+                Self.logger.notice("\(self.trackID, privacy: .public) excludes \(bundleID, privacy: .public) again")
+                return
+            }
         }
     }
 
@@ -218,33 +268,6 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
             width: Int((Double(contentRect.width) * pixelsPerPoint).rounded()),
             height: Int((Double(contentRect.height) * pixelsPerPoint).rounded()),
             framesPerSecond: framesPerSecond)
-    }
-
-    /// True for a sample whose `SCStreamFrameInfo.status` is `.complete`: the only frames that
-    /// carry a new image. Idle, blank, suspended, started and stopped frames are not forwarded.
-    public static func isCompleteFrame(_ sample: CMSampleBuffer) -> Bool {
-        guard sample.isValid, CMSampleBufferGetImageBuffer(sample) != nil,
-            let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: false)
-                as? [[SCStreamFrameInfo: Any]],
-            let rawStatus = attachments.first?[.status] as? Int,
-            let status = SCFrameStatus(rawValue: rawStatus)
-        else { return false }
-        return status == .complete
-    }
-
-    /// The pixels per point of the recording of a display with `displayScale` pixels per point (`nil`
-    /// when unknown): the display's own at `.native`, 1 at `.points`.
-    public static func recordedPixelScale(displayScale: Double?, scale: CaptureScale) -> Double? {
-        switch scale {
-        case .native: displayScale
-        case .points: 1
-        }
-    }
-
-    /// Pixels per point of the display's current mode (2 on Retina), or `nil` if it is not online.
-    static func pixelScale(of displayID: CGDirectDisplayID) -> Double? {
-        guard let mode = CGDisplayCopyDisplayMode(displayID), mode.width > 0 else { return nil }
-        return Double(mode.pixelWidth) / Double(mode.width)
     }
 
     /// The display's localized name (for example "Built-in Retina Display") when created on the main

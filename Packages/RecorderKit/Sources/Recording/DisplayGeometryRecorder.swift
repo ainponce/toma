@@ -53,7 +53,7 @@ public final class DisplayGeometryRecorder: InputRecorder, Sendable {
 
     /// `CGDisplayBounds` and the pixels per point of the display's current mode, or `nil` if it is not online.
     public static func liveQuery(_ displayID: UInt32) -> (frame: Rect, scale: Double)? {
-        guard let scale = DisplayCaptureSource.pixelScale(of: displayID) else { return nil }
+        guard let scale = ScreenCapture.pixelScale(of: displayID) else { return nil }
         return (Rect(CGDisplayBounds(displayID)), scale)
     }
 

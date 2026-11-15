@@ -38,17 +38,20 @@ import Testing
         #expect(sink.failures.isEmpty)
     }
 
-    /// Opens a Finder window on a new folder and records it.
+    /// Opens a Finder window on a new folder, records it, and closes it (the first run makes macOS ask whether the
+    /// terminal may control Finder: allow it, or close the window by hand).
     @Test(.enabled(if: ProcessInfo.processInfo.environment["RECORDER_INTEGRATION"] == "1"))
     func capturesAFinderWindowForTwoSeconds() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("toma-window-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        let opener = Process()
-        opener.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        opener.arguments = [folder.path]
-        try opener.run()
-        opener.waitUntilExit()
+        try run("/usr/bin/open", [folder.path])
+        // Runs before the folder is removed.
+        defer {
+            try? run("/usr/bin/osascript", [
+                "-e", "tell application \"Finder\" to close (every window whose name is \"\(folder.lastPathComponent)\")",
+            ])
+        }
         var found: CGWindowID?
         _ = await eventually {
             found = finderWindow(titled: folder.lastPathComponent)
@@ -163,6 +166,15 @@ import Testing
         // -40 dBFS; at -160 the permission was refused.
         #expect(peak > 0.01, "peak \(String(format: "%.1f", dBFS)) dBFS")
     }
+}
+
+/// Runs `executable` with `arguments` and waits for it to exit.
+private func run(_ executable: String, _ arguments: [String]) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: executable)
+    process.arguments = arguments
+    try process.run()
+    process.waitUntilExit()
 }
 
 /// The on-screen Finder window whose title is `title` (titles are readable with the Screen Recording permission).

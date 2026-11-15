@@ -14,8 +14,10 @@ import os
 ///
 /// A run's stream starts in its `start` and stops once, when the run ends: from the `start` or `stop` that comes next
 /// or from the stream's own error (then it has stopped already), or, if the run ends while the stream is still
-/// starting, from its own `start` as soon as it has started. `start` and `stop` wait for every stream being stopped,
-/// so two streams of a source never overlap.
+/// starting, from its own `start` as soon as it has started. `start` and `stop` wait for every `stopCapture` in flight,
+/// so a stream that had started is stopped before the next one is made. A stream still starting when its run ends is
+/// not stopping yet, and the next run's stream can be made while it starts; it stops once started, and none of its
+/// frames reaches a sink.
 ///
 /// On each complete frame it reads the frame's geometry (`StreamFrameGeometry`). When `WindowStreamSizing.resize` asks
 /// for another size (a window resized, a display whose resolution or proportion changed), the stream is given the
@@ -59,8 +61,8 @@ final class ScreenStreamCapture: Sendable {
         on queue: DispatchSerialQueue, sink: any CaptureSink, output: some SCStreamOutput & SCStreamDelegate,
         setup: () async throws -> Setup
     ) async throws {
-        // The previous run's stream, if any, stops; it has stopped, and its deliveries have finished, before this
-        // run's stream is made.
+        // The previous run's stream, if any, stops (one still starting stops once its own `start` has started it);
+        // the stops in flight and the deliveries already queued finish before this run's stream is made.
         let (id, lastQueue) = runs.beginStart()
         await waitForStops()
         await lastQueue?.drain()
@@ -104,14 +106,10 @@ final class ScreenStreamCapture: Sendable {
         await lastQueue?.drain()
     }
 
-    /// Gives the active run's stream `filter`. `false` when no run is active.
-    func updateContentFilter(_ filter: SCContentFilter) async -> Bool {
+    /// Gives the active run's stream `filter`. `false` when no run is active; throws what the stream refused.
+    func updateContentFilter(_ filter: SCContentFilter) async throws -> Bool {
         guard let run = runs.activeRun() else { return false }
-        do {
-            try await run.resource.stream.updateContentFilter(filter)
-        } catch {
-            Self.logger.error("updateContentFilter failed for \(self.trackID, privacy: .public): \(error, privacy: .public)")
-        }
+        try await run.resource.stream.updateContentFilter(filter)
         return true
     }
 
@@ -125,7 +123,7 @@ final class ScreenStreamCapture: Sendable {
 
     /// The source's `stream(_:didOutputSampleBuffer:of:)`, on the run's queue.
     func output(_ stream: SCStream, didOutput sample: CMSampleBuffer, of type: SCStreamOutputType) {
-        guard type == .screen, DisplayCaptureSource.isCompleteFrame(sample) else { return }
+        guard type == .screen, ScreenCapture.isCompleteFrame(sample) else { return }
         let streamID = ObjectIdentifier(stream)
         guard let run = runs.activeRun(matching: { ObjectIdentifier($0.stream) == streamID }) else { return }
         lastComplete.withLock { $0 = HostTime.now() }
@@ -146,7 +144,7 @@ final class ScreenStreamCapture: Sendable {
 
     /// On the run's queue.
     private func follow(_ geometry: StreamFrameGeometry, run: CaptureRunLifecycle<StreamRun>.ActiveRun) {
-        let pixelsPerPoint = DisplayCaptureSource.recordedPixelScale(displayScale: geometry.scaleFactor, scale: scale) ?? 1
+        let pixelsPerPoint = ScreenCapture.recordedPixelScale(displayScale: geometry.scaleFactor, scale: scale) ?? 1
         let now = HostTime.now()
         let decision = run.resource.resizes.withLock { throttle in
             let size = WindowStreamSizing.resize(
@@ -186,7 +184,7 @@ final class ScreenStreamCapture: Sendable {
             defer { throttle.applied(size, at: HostTime.now()) }
             return throttle.configured
         }
-        Self.logger.info(
+        Self.logger.notice(
             "\(self.trackID, privacy: .public) follows its content: \(Int(previous.width))×\(Int(previous.height)) to \(configuration.width)×\(configuration.height) px")
         run.stream.updateConfiguration(configuration) { [trackID] error in
             guard let error else { return }

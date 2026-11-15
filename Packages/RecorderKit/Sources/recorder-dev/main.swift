@@ -229,7 +229,7 @@ struct Record: AsyncParsableCommand {
             // The scale the tracks record, as their first displayGeometry says.
             input.append(DisplayGeometryRecorder(displayIDs: displayIDs, query: { displayID in
                 DisplayGeometryRecorder.liveQuery(displayID).flatMap { geometry in
-                    DisplayCaptureSource.recordedPixelScale(displayScale: geometry.scale, scale: scale).map { (geometry.frame, $0) }
+                    ScreenCapture.recordedPixelScale(displayScale: geometry.scale, scale: scale).map { (geometry.frame, $0) }
                 }
             }))
         }
