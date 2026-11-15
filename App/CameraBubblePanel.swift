@@ -273,6 +273,8 @@ final class CameraBubblePanel: NSObject {
             previewGeneration += 1
             preview.stop()
             shownCamera = nil
+            // Next time it shows what that start says, not what the last one said.
+            bubble.isUnavailable = false
         }
     }
 
@@ -300,6 +302,7 @@ final class CameraBubblePanel: NSObject {
                 guard let self, generation == previewGeneration else { return }
                 bubble.isUnavailable = false
             } catch {
+                // It shows no camera at all (`CameraPreviewProviding.start`).
                 Self.logger.error("Cannot show the camera: \(String(describing: error), privacy: .public)")
                 guard let self, generation == previewGeneration else { return }
                 bubble.isUnavailable = true
@@ -314,17 +317,17 @@ final class CameraBubblePanel: NSObject {
 
     // MARK: - Dragging
 
-    /// Caught where it is: it stops there, and the places show.
+    /// Caught where it is: it stops there. Caught in flight it is lifted at once (the places show and the shadow
+    /// deepens); at rest, once it moves, so a click that does not move it shows nothing.
     private func dragBegan(_ event: NSEvent) {
-        guard isShown, let region = placedRegion else { return }
+        guard isShown, placedRegion != nil else { return }
         let wasMoving = !(x.isSettled && y.isSettled)
         hold(at: CGPoint(x: x.value, y: y.value))
         let pointer = Self.pointer()
         drag = Drag(
             grab: CGVector(dx: pointer.x - x.value, dy: pointer.y - y.value),
             samples: [.init(time: event.timestamp, point: CGPoint(x: x.value, y: y.value))], moved: wasMoving)
-        showPlaces(in: region)
-        shadowView.setLifted(true, animated: !reduceMotion)
+        if wasMoving { lift() }
     }
 
     /// 1:1 with the pointer.
@@ -332,7 +335,10 @@ final class CameraBubblePanel: NSObject {
         guard var drag else { return }
         let pointer = Self.pointer()
         let origin = CGPoint(x: pointer.x - drag.grab.dx, y: pointer.y - drag.grab.dy)
-        if origin.x != x.value || origin.y != y.value { drag.moved = true }
+        if !drag.moved, origin.x != x.value || origin.y != y.value {
+            drag.moved = true
+            lift()
+        }
         hold(at: origin)
         drag.samples.append(.init(time: event.timestamp, point: origin))
         drag.samples.removeAll { $0.time < event.timestamp - 2 * CameraBubbleLayout.releaseVelocitySpan }
@@ -367,15 +373,19 @@ final class CameraBubblePanel: NSObject {
         setting.update { $0.anchor = style.anchor }
     }
 
+    /// Put down: the places go and the shadow is back, if it was lifted.
     private func endDrag() {
-        guard drag != nil else { return }
-        drag = nil
+        guard let drag else { return }
+        self.drag = nil
+        guard drag.moved else { return }
         places.orderOut(nil)
         shadowView.setLifted(false, animated: !reduceMotion)
     }
 
-    /// The 8 places of the region, under the bubble and its shadow.
-    private func showPlaces(in region: Rect) {
+    /// The bubble is being dragged: the 8 places of its region show, under it and its shadow, and the shadow deepens.
+    private func lift() {
+        guard let region = placedRegion else { return }
+        shadowView.setLifted(true, animated: !reduceMotion)
         places.setFrame(ScreenCoordinates.appKit(fromGlobal: region, primaryScreenHeight: Self.primaryScreenHeight), display: false)
         let centers = CameraBubbleLayout.anchorFrames(style: setting.style, region: region).map { place in
             CGPoint(x: place.rect.x + place.rect.width / 2 - region.x, y: place.rect.y + place.rect.height / 2 - region.y)
