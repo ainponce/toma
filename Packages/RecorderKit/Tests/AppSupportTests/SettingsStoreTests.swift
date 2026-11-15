@@ -46,6 +46,33 @@ import Testing
         }
     }
 
+    @Test func quickSettingsSavedBeforeTheNewFieldsKeepTheirValues() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            // Saved as Task 14a did: frame rates by display and the scale, without the window's and the camera's.
+            let saved = RecorderSettings(
+                selection: .mainDisplay(1),
+                quick: QuickSettings(
+                    framesPerSecondByDisplay: [1: 30, 2: 120], displayScale: .points, windowFramesPerSecond: 24, cameraPreset: .p2160,
+                    cameraFramesPerSecond: 60))
+            try save(saved, in: defaults, changing: "quick") { quick in
+                for key in ["windowFramesPerSecond", "cameraPreset", "cameraFramesPerSecond"] {
+                    #expect(quick.removeValue(forKey: key) != nil, "\(key)")
+                }
+            }
+            let quick = store.settings.quick
+            #expect(quick.framesPerSecondByDisplay == [1: 30, 2: 120] && quick.displayScale == .points)
+            #expect(quick.windowFramesPerSecond == 60 && quick.cameraPreset == .p1080 && quick.cameraFramesPerSecond == 30)
+
+            // All of them saved now are read back; a preset from another version takes its default.
+            store.settings = saved
+            #expect(SettingsStore(defaults: defaults).settings == saved)
+            try save(saved, in: defaults, changing: "quick") { $0["cameraPreset"] = "p4320" }
+            #expect(store.settings.quick == QuickSettings(
+                framesPerSecondByDisplay: [1: 30, 2: 120], displayScale: .points, windowFramesPerSecond: 24, cameraFramesPerSecond: 60))
+        }
+    }
+
     @Test func settingsThisVersionCannotReadKeepTheRest() throws {
         try withDefaults { defaults in
             let store = SettingsStore(defaults: defaults)

@@ -17,7 +17,7 @@ enum DeviceLists {
         cameraDiscovery().devices.map { (uniqueID: $0.uniqueID, name: $0.localizedName) }
     }
 
-    /// The cameras the island lists, also the preview's last resort (`CameraPreviewHost`).
+    /// The cameras the island lists.
     static func cameraDiscovery() -> AVCaptureDevice.DiscoverySession {
         AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external], mediaType: .video, position: .unspecified)

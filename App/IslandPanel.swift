@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import QuartzCore
+import Recording
 import SwiftUI
 
 /// The island: one floating panel at the top center of the screen with the pointer, whose frame is always
@@ -88,10 +89,10 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private static let pointerInterval = Duration.milliseconds(250)
 
     /// The island starts at rest on the screen with the pointer. `probe` asks for Accessibility, to jump to
-    /// another desktop.
+    /// another desktop; the bubble shows the camera of `cameraHost`, the session the take records.
     init(
         recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        probe: any PermissionProbe
+        probe: any PermissionProbe, cameraHost: CameraSessionHost
     ) {
         self.recording = recording
         self.countdown = countdown
@@ -109,7 +110,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         teleprompter = TeleprompterPanel(setting: teleprompterSetting, recording: recording)
         desktops = DesktopsModel(displayID: displayID, probe: probe)
         camera = CameraSetting(store: store, probe: probe)
-        bubble = CameraBubblePanel(setting: camera, preview: CameraPreviewHost())
+        bubble = CameraBubblePanel(setting: camera, preview: SharedCameraPreview(host: cameraHost))
         model = IslandModel(
             recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, desktops: desktops, top: top,
             reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,

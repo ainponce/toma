@@ -35,7 +35,7 @@ final class MicrophoneLevelPreview {
         guard wanted != self.choice else { return }
         self.choice = wanted
         let previous = source
-        let next = wanted.map { MeteredSource(LiveCaptureSourceFactory().microphone($0)) }
+        let next = wanted.map { MeteredSource(LiveCaptureSourceFactory.microphone($0)) }
         source = next
         isListening = false
         let before = lastChange

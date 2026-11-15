@@ -87,3 +87,21 @@ El criterio de memoria compara el primer RSS (5 min) con el último (2 h 50 min)
 ## Prueba opcional de reinicio
 
 Pasó a [`docs/release.md`](release.md#prueba-opcional-de-reinicio), con su tabla de resultados.
+
+## Presupuesto del encoder (hito 1a)
+
+`EncoderLoad` (Task 14) estima si el encoder de hardware da abasto con una toma: suma los píxeles por segundo de todas las pistas de video (ancho × alto × fps de cada pantalla, también la pantalla entera de un área, de la ventana y de la cámara) y los compara con `EncoderLoad.defaultBudgetPixelsPerSecond`, 800 000 000 píxeles/s. Desde el 80 % (`warnRatio`) la carga es alta y desde el 100 % pasada; en los dos casos la isla sugiere, en orden, bajar a 30 fps las pantallas que no son la principal, bajar la cámara a 1080p y bajarla a 30 fps. El presupuesto se puede cambiar sin compilar con la clave `encoderBudgetPixelsPerSecond` de los defaults de la app (`defaults write dev.toma.Toma encoderBudgetPixelsPerSecond -int <píxeles/s>`; la toma siguiente ya lo usa) y en el log de la app (subsistema `dev.toma.Toma`, categoría `Recording`) una toma con carga alta dice qué porcentaje del presupuesto usa.
+
+Calibración (dueño, desde Terminal.app con los permisos de Grabación de pantalla, Micrófono y Cámara; los agentes no la corren):
+
+1. `recorder-dev record <carpeta> --duration 300 --display <principal> --display <secundaria> --camera default` (60 fps, el valor por defecto de `--fps`), con las dos pantallas en movimiento (un video o una animación en cada una).
+2. `recorder-dev verify <paquete> --max-drop-ratio 0.005`: anotar el porcentaje de cuadros perdidos de cada pista.
+3. Si alguna pista supera el 0,5 %, bajar `defaultBudgetPixelsPerSecond` hasta la carga medida × 0,8 (la carga medida es la suma de ancho × alto × fps de las tres pistas, con el tamaño de cada segmento) y anotar el valor nuevo y por qué.
+
+| Medición | Valor |
+|---|---|
+| Fecha, Mac, macOS | pendiente |
+| Pantallas (píxeles y fps) y cámara (formato grabado) | pendiente |
+| Carga medida (píxeles/s) | pendiente |
+| Cuadros perdidos por pista (`verify --max-drop-ratio 0.005`) | pendiente |
+| Presupuesto resultante | 800 000 000 (sin calibrar) |

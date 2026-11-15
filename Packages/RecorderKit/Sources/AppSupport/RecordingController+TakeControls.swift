@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import ProjectFormat
 import Recording
 
-/// The user's controls over the take being recorded: pause, markers and restart.
+/// The user's controls over the take being recorded: pause, markers, the camera's look and restart.
 extension RecordingController {
     /// Pauses the take being recorded, or resumes it if the user paused it. `isUserPaused` changes at once,
     /// and goes back to what the take last accepted if the take refuses (it is closing). The time recorded
@@ -44,6 +45,21 @@ extension RecordingController {
         ) { recording in _ = try await recording.addMarker() }
     }
 
+    /// The camera looks like `style` from now on (the user moved the bubble, or chose another shape or size). While
+    /// recording, the take writes it (`TakeRecording.setCameraStyle`); counting down or starting, the take starts
+    /// with it, or gets it as soon as it records; a restart starts with it. Without a take, nothing.
+    public func setCameraStyle(_ style: CameraStyle) {
+        guard currentRequest != nil else { return }
+        currentRequest?.cameraStyle = style
+        guard case .recording = phase, let recording = take?.recording else { return }
+        sendCameraStyle(style, to: recording)
+    }
+
+    /// Sends `style` to `recording`, in order with the user's other requests.
+    func sendCameraStyle(_ style: CameraStyle, to recording: any TakeRecording) {
+        send(to: recording, "camera style") { recording in try await recording.setCameraStyle(style) }
+    }
+
     /// Sends `request` once the requests sent before it have returned, so they reach the take in order, and
     /// then tells whether the take accepted it. A take that is closing refuses it.
     private func send(
@@ -64,7 +80,8 @@ extension RecordingController {
     }
 
     /// Closes the take being recorded without opening it, moves its project to the trash (and confirms it)
-    /// and records a new take of the same request, in a new project, after counting down again. What the
+    /// and records a new take of the same request (with the camera style in force), in a new project, after
+    /// counting down again. What the
     /// restart could not do is said in the notices: a take that closed with an error is kept
     /// (`closedWithError`), and so is one that could not be moved (`couldNotMoveToTrash`); the new take
     /// starts either way. A take the disk stopped is kept and saved as the disk's stop would, and nothing
@@ -113,7 +130,8 @@ extension RecordingController {
             }
         }
         stopTask = nil
-        // The new take's notices start as `carried`.
-        begin(request, carrying: carried, restarting: true)
+        // The new take's notices start as `carried`; its camera style is the one in force (it may have changed while
+        // the take closed).
+        begin(currentRequest ?? request, carrying: carried, restarting: true)
     }
 }

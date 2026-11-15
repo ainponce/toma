@@ -18,6 +18,9 @@ public protocol TakeRecording: AnyObject, Sendable {
     func resume() async throws
     /// Marks this moment of the take and returns it. `RecordingError.notRecording` unless recording (not paused).
     @discardableResult func addMarker() async throws -> HostTime
+    /// The camera looks like `style` from now on; written once the take records, if it is not paused. A take without
+    /// a camera writes nothing. `RecordingError.notRecording` unless recording or paused (also while it starts).
+    func setCameraStyle(_ style: CameraStyle) async throws
 }
 
 extension RecordingCoordinator: TakeRecording {}

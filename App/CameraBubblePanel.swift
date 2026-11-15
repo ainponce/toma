@@ -71,7 +71,9 @@ final class CameraSetting {
 /// with a spring (`Motion.bubbleRelease`) that starts at the gesture's velocity, and a haptic tap as the place
 /// is chosen. Shape and size changes are a spring too (`Motion.bubbleShape`); with "Reduce motion" every
 /// change is immediate and appearing is a fade. While it is dragged the 8 places show. Its shadow is a panel
-/// of its own under it, which lets the mouse through. It is never key.
+/// of its own under it, which lets the mouse through. It is never key. In the app its camera is
+/// `SharedCameraPreview`: the session the take records, so the bubble and the camera track show the same camera,
+/// and a change of camera takes both along.
 @MainActor
 final class CameraBubblePanel: NSObject {
     var reduceMotion = false

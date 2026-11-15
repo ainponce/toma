@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import QuartzCore
 import Synchronization
 import os
 
@@ -100,8 +101,8 @@ enum CameraLeaseRules {
 /// its format and rate are checked then, and set again if they changed.
 ///
 /// The session is configured, started and stopped on a serial queue of its own: `startRunning()` blocks.
-/// `@unchecked Sendable`: the session, its input and its output are only touched on that queue (the preview
-/// layer is attached where `makePreviewLayer()` is called), and the state is in a `Mutex`.
+/// `@unchecked Sendable`: the session, its input, its output and the preview layers' connections are only touched on
+/// that queue, and the state is in a `Mutex`.
 public final class CameraSessionHost: @unchecked Sendable {
     /// Configured only on `queue`.
     let session = AVCaptureSession()
@@ -125,6 +126,8 @@ public final class CameraSessionHost: @unchecked Sendable {
         /// the camera kept another format or rate, and while the session is stopped.
         var configuration: CameraSessionConfiguration?
         var activeDeviceUniqueID: String?
+        /// Told when the session's camera changes (`setOnCameraChange`).
+        var onCameraChange: (@Sendable (String) -> Void)?
 
         var isPinned: Bool { leases.values.contains(true) }
     }
@@ -182,9 +185,27 @@ public final class CameraSessionHost: @unchecked Sendable {
         return CameraLease(host: self, id: granted.id, device: granted.device)
     }
 
-    /// A layer that shows what the session captures while it runs. Not mirrored: the app mirrors it.
+    /// A layer that shows what the session captures while it runs. Not mirrored: the app mirrors it, again after each
+    /// change of camera (`setOnCameraChange`), since a new input gives the layer a new connection with the default
+    /// settings.
+    ///
+    /// It is attached to the session on the session's queue, after what is queued there (a lease being given, say),
+    /// with the session's camera locked, and the camera's format and rate are set again if attaching changed them:
+    /// a new connection may make the session choose a format of its own, and a bubble that appears during a take
+    /// never changes what the take records. A lease asked for after this call finds it attached.
     public func makePreviewLayer() -> AVCaptureVideoPreviewLayer {
-        AVCaptureVideoPreviewLayer(session: session)
+        let layer = AVCaptureVideoPreviewLayer()
+        let attaching = PreviewLayer(value: layer)
+        queue.async { [self] in attach(attaching.value) }
+        return layer
+    }
+
+    /// `handler` is told on the session's queue, with the camera's unique ID, each time a lease gives the session a new
+    /// input (another camera, or the one before put back when the new one is refused): once the change is committed,
+    /// so what shows the session can mirror its layer again. A restart of the camera track that moves to another
+    /// camera (a USB camera unplugged, say) takes the bubble along this way. `nil` tells nobody.
+    public func setOnCameraChange(_ handler: (@Sendable (_ deviceUniqueID: String) -> Void)?) {
+        state.withLock { $0.onCameraChange = handler }
     }
 
     /// Returns once everything queued on the session's queue before the call has run: the leases that ended
@@ -208,6 +229,27 @@ public final class CameraSessionHost: @unchecked Sendable {
     }
 
     // MARK: - On the session's queue
+
+    /// A preview layer on its way to the session's queue. `@unchecked Sendable`: only attached there.
+    private struct PreviewLayer: @unchecked Sendable {
+        let value: AVCaptureVideoPreviewLayer
+    }
+
+    /// Attaches `layer` with the session's camera locked, and sets the camera's format and rate again if that changed
+    /// them. Without a camera that can be locked (none yet, or another process holds it), it is only attached: the
+    /// next lease sets the format again if it changed.
+    private func attach(_ layer: AVCaptureVideoPreviewLayer) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        let device = currentInput()?.device
+        let locked = device.map { (try? $0.lockForConfiguration()) != nil } ?? false
+        defer { if locked { device?.unlockForConfiguration() } }
+        // Off the main thread: an explicit transaction, so the layer's change is committed now.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.session = session
+        CATransaction.commit()
+        if locked, let device { enforceConfiguration(on: device) }
+    }
 
     /// A lease that was given: its ID and the camera the session had then.
     private struct Granted: @unchecked Sendable {
@@ -300,6 +342,10 @@ public final class CameraSessionHost: @unchecked Sendable {
         let input = try kept ?? AVCaptureDeviceInput(device: device)
 
         state.withLock { $0.configuration = nil }
+        // The camera of the input added, if one was. Declared before the commit's `defer`, so this one runs after
+        // the commit: the layers have their new connections by then.
+        var addedCamera: String?
+        defer { if let addedCamera { cameraChanged(to: addedCamera) } }
         session.beginConfiguration()
         defer { session.commitConfiguration() }
         if input !== current {
@@ -307,12 +353,14 @@ public final class CameraSessionHost: @unchecked Sendable {
             guard session.canAddInput(input) else {
                 if let current, session.canAddInput(current) {
                     session.addInput(current)
+                    addedCamera = current.device.uniqueID
                 } else {
                     state.withLock { $0.activeDeviceUniqueID = nil }
                 }
                 throw CaptureSourceError.sessionConfigurationFailed
             }
             session.addInput(input)
+            addedCamera = device.uniqueID
             // The leases alive already see this camera, even if what follows fails.
             state.withLock { $0.activeDeviceUniqueID = device.uniqueID }
         }
@@ -355,6 +403,12 @@ public final class CameraSessionHost: @unchecked Sendable {
 
     private func currentInput() -> AVCaptureDeviceInput? {
         session.inputs.lazy.compactMap { $0 as? AVCaptureDeviceInput }.first
+    }
+
+    /// Tells `onCameraChange` the session now captures the camera `uniqueID`.
+    private func cameraChanged(to uniqueID: String) {
+        dispatchPrecondition(condition: .onQueue(queue))
+        state.withLock { $0.onCameraChange }?(uniqueID)
     }
 
     // MARK: - The camera's format and rate

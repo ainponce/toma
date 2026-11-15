@@ -50,13 +50,3 @@ public final class StartTrackingSource: CaptureSource {
         }
     }
 }
-
-/// A broken microphone must not keep the screen from being recorded.
-public enum MicrophoneFallback {
-    /// Whether a take whose start threw `error` should be recorded again with the display alone: the
-    /// microphone's own start failed. A take stopped while starting (a cancellation) is not retried.
-    public static func shouldRetryWithoutMicrophone(after error: any Error, microphone: StartTrackingSource?) -> Bool {
-        guard !(error is CancellationError), let microphone else { return false }
-        return microphone.firstStartFailure != nil
-    }
-}

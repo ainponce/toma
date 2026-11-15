@@ -7,12 +7,16 @@ public enum TakeNotice: Equatable, Sendable {
     case noMicrophone
     /// Microphone access is not allowed: the take is recorded without audio.
     case microphoneAccessOff
-    /// The microphone did not start: the take is recorded again, in a new project, without it.
-    case microphoneFailedToStart
-    /// The camera is on, but this version only shows it as a preview: the take is recorded without it.
-    case cameraNotRecordedYet
+    /// The source of this kind (the camera, the microphone or system audio) did not start: the take is recorded
+    /// again, in a new project, without it.
+    case optionalSourceFailedToStart(TrackKind)
     /// Camera access is not allowed: the take is recorded without the camera.
     case cameraAccessOff
+    /// System audio is chosen but its permission was never asked for (it is asked for when it is turned on in the
+    /// island, never as a take starts): the take is recorded without it.
+    case systemAudioNotRequested
+    /// The window being recorded is minimized or hidden: the take goes on, and records it again once it is back.
+    case windowHidden
     /// The capture of a track of this kind failed; it is being restarted.
     case streamInterrupted(TrackKind)
     /// The capture of a track of this kind runs again.

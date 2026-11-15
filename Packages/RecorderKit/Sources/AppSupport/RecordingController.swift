@@ -6,7 +6,7 @@ import Recording
 import os
 
 /// Records takes of what the user chose, one at a time, each into a new project in
-/// `environment.projectsFolder`, with the chosen microphone when there is one and it is allowed. Once a
+/// `environment.projectsFolder`, with the chosen camera, microphone and system audio when they are allowed. Once a
 /// stop has closed the take it is saved (`lastSaved`), and the editor opens on it unless
 /// `RecorderSettings.afterStop` says to stay. Every take is counted down first (`RecorderSettings.countdown`).
 /// While recording, the user can pause the take, mark moments of it, and restart it: the take goes to the
@@ -43,9 +43,9 @@ public final class RecordingController {
     /// The last take a stop closed and kept: the user's stop or the disk's, also when closing it failed in
     /// part (`closedWithError`). Not a take that was restarted, nor one closed to quit.
     public private(set) var lastSaved: SavedTake?
-    /// What the take was asked to record, from the countdown until the controller is idle again. A restart
-    /// records it again, and does not change it.
-    public private(set) var currentRequest: TakeRequest?
+    /// What the take was asked to record, from the countdown until the controller is idle again, with the camera
+    /// style in force (`setCameraStyle`). A restart records it again, and does not change it.
+    public internal(set) var currentRequest: TakeRequest?
     /// The start waits for the answer to a system permission prompt: the island makes room for it.
     public private(set) var isAskingPermission = false
     /// Goes up by one each time a take starts recording, also the new take of each restart: the teleprompter
@@ -175,13 +175,14 @@ public final class RecordingController {
 
     // MARK: - Start
 
-    /// Records `selection` with `settings`, once the countdown is over. A microphone that is `.off` is
+    /// Records `selection` with `settings`, once the countdown is over, the camera looking as
+    /// `RecorderSettings.cameraStyle` says (read now). A microphone, a camera or system audio that is `.off` is
     /// neither asked for nor missed. Without screen recording the permissions open, and nothing counts down.
     public func startRecording(selection: CaptureSelection, settings: QuickSettings) {
         guard phase == .idle else { return }
-        let request = TakeRequest(selection: selection, settings: settings)
-        let wanted = wantedPermissions(usesMicrophone: usesMicrophone(request))
-        guard RecordingPreflight.evaluate(probe: probe, wanted: wanted).canRecord else {
+        let request = TakeRequest(
+            selection: selection, settings: settings, cameraStyle: SettingsStore(defaults: defaults).settings.cameraStyle)
+        guard RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request)).canRecord else {
             openOnboarding()
             return
         }
@@ -208,22 +209,27 @@ public final class RecordingController {
         request.selection.microphone != .off && environment.hasMicrophone()
     }
 
-    /// What the preflight asks about: screen recording, and the microphone when the take uses one. The camera is
-    /// not recorded yet (`TakeNotice.cameraNotRecordedYet`).
-    private func wantedPermissions(usesMicrophone: Bool) -> Set<PermissionKind> {
-        usesMicrophone ? [.screenRecording, .microphone] : [.screenRecording]
+    /// What the preflight asks about: screen recording, and the microphone, the camera and system audio when the take
+    /// uses them.
+    private func wantedPermissions(_ request: TakeRequest) -> Set<PermissionKind> {
+        var wanted: Set<PermissionKind> = [.screenRecording]
+        if usesMicrophone(request) { wanted.insert(.microphone) }
+        if request.selection.camera != .off { wanted.insert(.camera) }
+        if request.selection.systemAudio != .off { wanted.insert(.systemAudio) }
+        return wanted
     }
 
     /// The notices of the take start as `carried`, which stay whether or not it starts.
     private func start(_ request: TakeRequest, carrying carried: [TakeNotice], countdown: Int, restarting: Bool) async {
         let wantsMicrophone = request.selection.microphone != .off
         let usesMicrophone = usesMicrophone(request)
-        // Never asked: the system asks now, while the countdown shows its first second, and the take
-        // starts with the answer.
-        if !restarting, usesMicrophone, probe.state(of: .microphone) == .notDetermined {
-            isAskingPermission = true
-            _ = await probe.request(.microphone)
-            isAskingPermission = false
+        let wantsCamera = request.selection.camera != .off
+        // Never asked: the system asks now, while the countdown shows its first second, and the take starts with
+        // the answer (the prompt is gone by then, so it is not in the video). System audio is never asked for here:
+        // its prompt does not wait for an answer.
+        if !restarting {
+            if usesMicrophone { await askIfNeverAsked(.microphone) }
+            if wantsCamera { await askIfNeverAsked(.camera) }
         }
         // Task 17a: `takeWillStart` goes here, once the permissions are answered and before the countdown;
         // a restart skips it, as it skips the permissions.
@@ -242,7 +248,7 @@ public final class RecordingController {
             onConfirmation(.countdownCancelled)
             return
         }
-        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(usesMicrophone: usesMicrophone))
+        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request))
         guard preflight.canRecord, !startCancelled else {
             setPhase(.idle)
             // Screen recording was turned off meanwhile.
@@ -258,10 +264,13 @@ public final class RecordingController {
         } else if usesMicrophone, !preflight.recordMicrophone {
             addNotice(.microphoneAccessOff)
         }
-        // The camera is only a preview in this version: the take goes on without it.
-        if request.selection.camera != .off { addNotice(.cameraNotRecordedYet) }
+        if wantsCamera, !preflight.granted.contains(.camera) { addNotice(.cameraAccessOff) }
+        if request.selection.systemAudio != .off, probe.state(of: .systemAudio) == .notDetermined {
+            addNotice(.systemAudioNotRequested)
+        }
 
         var request = request
+        var retried = false
         while true {
             switch await attempt(request, granted: preflight.granted) {
             case .started, .handedToStop:
@@ -271,13 +280,15 @@ public final class RecordingController {
                 notices = carried
                 setPhase(.idle)
                 return
-            case .failed(let error, let microphoneFailed):
-                // A broken microphone must not keep the screen from being recorded: once, in a new
-                // project, without it. The failed project is left as it is.
-                if request.selection.microphone != .off, microphoneFailed, !startCancelled {
-                    Self.logger.notice("The microphone could not start; recording without it in a new project")
-                    addNotice(.microphoneFailedToStart)
-                    request.selection.microphone = .off
+            case .failed(let error, let failedOptional):
+                // A broken camera, microphone or system audio must not keep the screen from being recorded: once,
+                // in a new project, without the ones that failed. The failed project is left as it is.
+                if !failedOptional.isEmpty, !retried, !startCancelled {
+                    retried = true
+                    let kinds = failedOptional.map(\.rawValue).joined(separator: ", ")
+                    Self.logger.notice("Could not start \(kinds, privacy: .public); recording again without it, in a new project")
+                    for kind in failedOptional { addNotice(.optionalSourceFailedToStart(kind)) }
+                    request.skipping.formUnion(failedOptional)
                     continue
                 }
                 // No take was recorded: the failure says why, and nothing said about the take applies.
@@ -296,9 +307,17 @@ public final class RecordingController {
         case cancelled
         /// A stop came while starting: it closes the take.
         case handedToStop
-        /// The take did not start and its resources are released. `microphoneFailed`: because the
-        /// microphone did not start.
-        case failed(any Error, microphoneFailed: Bool)
+        /// The take did not start and its resources are released. `failedOptional`: the kinds of the optional
+        /// sources whose own start failed, in track order.
+        case failed(any Error, failedOptional: [TrackKind])
+    }
+
+    /// Asks for `kind` if it was never asked for, and waits for the answer.
+    private func askIfNeverAsked(_ kind: PermissionKind) async {
+        guard probe.state(of: kind) == .notDetermined else { return }
+        isAskingPermission = true
+        _ = await probe.request(kind)
+        isAskingPermission = false
     }
 
     /// Creates a new project and starts recording a take of `request` in it.
@@ -311,7 +330,7 @@ public final class RecordingController {
             package = try await Task.detached { try create(folder, prefix, app, now) }.value
         } catch {
             Self.logger.error("Cannot create a project in \(folder.path, privacy: .public): \(String(describing: error), privacy: .public)")
-            return .failed(error, microphoneFailed: false)
+            return .failed(error, failedOptional: [])
         }
         guard !startCancelled else {
             // Stopped while the project was being created: nothing was recorded in it.
@@ -320,6 +339,9 @@ public final class RecordingController {
         }
 
         // From here to `take = …` nothing suspends, so a stop either cancelled the start above or finds the take.
+        // The camera starts as it looks now: a change while the take starts is sent once it records.
+        var request = request
+        request.cameraStyle = currentRequest?.cameraStyle ?? request.cameraStyle
         let prepared: PreparedTake
         do {
             prepared = try environment.prepareTake(package, request, granted)
@@ -327,7 +349,13 @@ public final class RecordingController {
             // Nothing was recorded in the project.
             Self.logger.error("The take cannot be recorded: \(String(describing: error), privacy: .public)")
             removeIfUnused(package)
-            return .failed(error, microphoneFailed: false)
+            return .failed(error, failedOptional: [])
+        }
+        switch prepared.load {
+        case .ok:
+            break
+        case .high(let ratio, _), .over(let ratio, _):
+            Self.logger.notice("The take uses \(Int((ratio * 100).rounded()), privacy: .public) % of the encoder's budget")
         }
         let recording = prepared.recording
         let kinds = prepared.kinds
@@ -365,6 +393,8 @@ public final class RecordingController {
             takeSerial += 1
             setPhase(.recording(since: since))
             if let meter = prepared.microphoneMeter { watchForSilence(of: meter, in: recording) }
+            // The take refused a style while it started.
+            if let style = currentRequest?.cameraStyle, style != request.cameraStyle { sendCameraStyle(style, to: recording) }
             return .started
         } catch {
             Self.logger.error("The take could not start: \(String(describing: error), privacy: .public)")
@@ -372,7 +402,8 @@ public final class RecordingController {
             await warnings.value
             guard stopTask == nil, take?.recording === recording else { return .handedToStop }
             releaseTake()
-            return .failed(error, microphoneFailed: MicrophoneFallback.shouldRetryWithoutMicrophone(after: error, microphone: prepared.microphone))
+            let failed = OptionalSourceFallback.failedOptionalKinds(after: error, among: prepared.optional)
+            return .failed(error, failedOptional: prepared.optional.map(\.kind).filter(failed.contains))
         }
     }
 
@@ -526,6 +557,19 @@ public final class RecordingController {
     /// A project was recovered: it becomes the last project.
     public func noteRecovered(_ url: URL) {
         lastProjectURL = url
+    }
+
+    // MARK: - Window
+
+    /// The window being recorded is now `visibility` (`LiveCaptureSourceFactory`'s window watcher): hidden, the take
+    /// says so until it is visible again or in another Space (a window in another Space is still recorded, and
+    /// changing Spaces says nothing). Without a take, nothing.
+    public func windowVisibilityChanged(_ visibility: WindowVisibility) {
+        guard take != nil else { return }
+        switch visibility {
+        case .hidden: if !notices.contains(.windowHidden) { addNotice(.windowHidden) }
+        case .visible, .otherSpace: notices.removeAll { $0 == .windowHidden }
+        }
     }
 
     // MARK: - Microphone

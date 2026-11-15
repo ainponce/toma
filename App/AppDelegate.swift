@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import ProjectFormat
+import Recording
 import os
 
 /// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
@@ -14,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The global shortcuts.
     let hotKeys: HotKeyCenter
     private let probe: any PermissionProbe = SystemPermissionProbe()
+    /// The app's one camera session: the bubble shows it and the take records it (plan decision 28).
+    private let cameraHost = CameraSessionHost()
     private let store = SettingsStore()
     /// The countdown before a take, shared by the island's settings card and the settings window.
     private let countdown: CountdownSetting
@@ -43,7 +46,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
     override init() {
-        recording = RecordingController(probe: probe, environment: LiveTakeEnvironment.make())
+        // The controller hears whether the window it records can be seen; it is made with the environment that tells.
+        weak var controller: RecordingController?
+        let environment = LiveTakeEnvironment.make(cameraHost: cameraHost) { controller?.windowVisibilityChanged($0) }
+        recording = RecordingController(probe: probe, environment: environment)
+        controller = recording
         updater = UpdaterController(recording: recording, exportGate: exportGate)
         hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
         countdown = CountdownSetting(store: store)
@@ -68,7 +75,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let island = IslandPanel(recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, probe: probe)
+        let island = IslandPanel(
+            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, probe: probe, cameraHost: cameraHost)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }

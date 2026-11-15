@@ -82,8 +82,10 @@ private func description(of error: TakePlanError) -> String {
         String(localized: "No display is chosen to record.")
     case .displayNotFound:
         String(localized: "The chosen display isn't available.")
-    case .notAvailableYet:
-        String(localized: "This recording setup isn't available yet.")
+    case .noWindowChosen:
+        String(localized: "No window is chosen to record.")
+    case .noAreaChosen:
+        String(localized: "No area is chosen to record.")
     }
 }
 

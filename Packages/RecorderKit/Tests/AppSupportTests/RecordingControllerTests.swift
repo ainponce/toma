@@ -24,6 +24,15 @@ enum AwaitPoint: CaseIterable {
 
 /// Takes of real coordinators recording synthetic sources, each started and stopped as the app does.
 @MainActor @Suite(.serialized) struct RecordingControllerTests {
+    /// The synthetic window alone, by the ID it says it has.
+    private static let window: CaptureSelection = {
+        var selection = CaptureSelection.mainDisplay(1)
+        selection.mode = .window
+        selection.windowID = 4242
+        selection.microphone = .off
+        return selection
+    }()
+
     @Test(arguments: AwaitPoint.allCases) func stopAtEachAwaitPoint(point: AwaitPoint) async throws {
         try await withRig(microphone: .notDetermined) { rig in
             let gate = switch point {
@@ -85,13 +94,13 @@ enum AwaitPoint: CaseIterable {
             rig.takes.factory.microphoneFailures = 99
             rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
-            var withoutMicrophone = CaptureSelection.mainDisplay(1)
-            withoutMicrophone.microphone = .off
             #expect(rig.takes.requests == [
                 TakeRequest(selection: .mainDisplay(1), settings: QuickSettings()),
-                TakeRequest(selection: withoutMicrophone, settings: QuickSettings()),
+                TakeRequest(selection: .mainDisplay(1), settings: QuickSettings(), skipping: [.microphone]),
             ])
-            #expect(rig.controller.notices.contains(.microphoneFailedToStart))
+            #expect(rig.controller.notices == [.optionalSourceFailedToStart(.microphone)])
+            // What the user asked for: a restart tries the microphone again.
+            #expect(rig.controller.currentRequest == TakeRequest(selection: .mainDisplay(1), settings: QuickSettings()))
             #expect(!rig.controller.recordsMicrophone)
             await rig.controller.stop(openingEditor: true)
 
@@ -107,25 +116,272 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
-    @Test func cameraOnRecordsWithoutCameraAndSaysSo() async throws {
+    @Test func cameraFailureRetriesOnceWithoutTheCamera() async throws {
+        try await withRig { rig in
+            rig.takes.factory.cameraFailures = 99
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.takes.requests.map(\.skipping) == [[], [.camera]])
+            #expect(rig.controller.notices == [.optionalSourceFailedToStart(.camera)])
+            #expect(rig.controller.recordsMicrophone)
+            await rig.controller.stop(openingEditor: true)
+
+            #expect(try rig.packagesOnDisk().count == 2)  // the failed project is left as it is
+            let second = try #require(rig.takes.packages.last)
+            let take = try #require(try rig.takesOnDisk(second.url).first)
+            #expect(take.status == .complete && take.tracks.map(\.kind) == [.display, .microphone])
+            #expect(rig.takes.factory.cameras.count == 1)  // the retry made none
+            #expect(rig.editorOpenings.map(\.package.lastPathComponent) == [second.url.lastPathComponent])
+            #expect(rig.startFailures.isEmpty)
+            #expect(rig.termination.began == 2 && rig.termination.ended == 2)
+        }
+    }
+
+    @Test func aRetryThatFailsAgainSaysWhy() async throws {
+        try await withRig { rig in
+            // The camera fails first; then, without it, the microphone. There is only one retry.
+            rig.takes.factory.cameraFailures = 99
+            rig.takes.factory.microphoneFailures = 99
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { !rig.startFailures.isEmpty })
+            #expect(rig.takes.requests.map(\.skipping) == [[], [.camera]])
+            #expect(rig.controller.phase == .idle && rig.controller.notices.isEmpty)
+            #expect(rig.startFailures.map { ($0 as NSError).domain } == ["Synthetic"])
+            #expect(rig.termination.began == rig.termination.ended)
+        }
+    }
+
+    @Test func deniedCameraRecordsWithoutItAndSaysSo() async throws {
+        try await withRig(camera: .denied) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.cameraAccessOff])
+            await rig.controller.stop(openingEditor: false)
+
+            #expect(rig.probe.requests.isEmpty)  // denied: only System Settings can allow it
+            #expect(rig.takes.grants == [[.screenRecording, .microphone]])
+            let package = try #require(rig.takes.packages.first)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.status == .complete && take.tracks.map(\.kind) == [.display, .microphone])
+            #expect(rig.takes.factory.cameras.isEmpty)
+        }
+    }
+
+    @Test func anUndecidedCameraIsAskedForBeforeTheTake() async throws {
+        try await withRig(camera: .notDetermined, countdown: 3) { rig in
+            rig.probe.gate.close()
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .device(uniqueID: "camera-1")
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.probe.gate.arrivals == 1 })
+            #expect(rig.controller.isAskingPermission && rig.probe.requests == [.camera])
+            #expect(rig.sleep.calls.isEmpty)  // the countdown waits for the answer
+            rig.probe.gate.open()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(!rig.controller.isAskingPermission && rig.controller.notices.isEmpty)
+            await rig.controller.stop(openingEditor: false)
+
+            #expect(rig.takes.grants == [[.screenRecording, .microphone, .camera]])
+            let package = try #require(rig.takes.packages.first)
+            #expect(try rig.takesOnDisk(package.url).first?.tracks.map(\.kind) == [.display, .camera, .microphone])
+            #expect(rig.takes.factory.calls.contains(.camera(.device(uniqueID: "camera-1"), preset: .p1080, framesPerSecond: 30)))
+
+            // A restart asks nothing again.
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 3 && rig.controller.phase.isRecordingATake })
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.probe.requests == [.camera])
+        }
+    }
+
+    @Test func systemAudioIsNeverRequestedWhenRecordingStarts() async throws {
+        try await withRig(systemAudio: .notDetermined) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.systemAudio = .all
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.systemAudioNotRequested])
+            await rig.controller.stop(openingEditor: false)
+
+            #expect(!rig.probe.requests.contains(.systemAudio))
+            #expect(rig.takes.grants == [[.screenRecording, .microphone]])
+            let package = try #require(rig.takes.packages.first)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.tracks.map(\.kind) == [.display, .microphone])
+            #expect(rig.takes.factory.systemAudios.isEmpty)
+        }
+    }
+
+    @Test func cameraStyleReachesTheTake() async throws {
+        let chosen = CameraStyle(shape: .portrait, size: 0.33, anchor: .top)
+        try await withRig(cameraStyle: chosen) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            selection.systemAudio = .applications(["com.example.app"])
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.currentRequest?.cameraStyle == chosen)
+            #expect(rig.controller.notices.isEmpty)
+            await rig.controller.stop(openingEditor: false)
+
+            #expect(rig.takes.grants == [[.screenRecording, .microphone, .camera, .systemAudio]])
+            #expect(rig.takes.requests.map(\.cameraStyle) == [chosen])
+            let package = try #require(rig.takes.packages.first)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.tracks.map(\.kind) == [.display, .camera, .microphone, .systemAudio])
+            #expect(take.cameraStyle == chosen)
+            #expect(try rig.cameraStyleEvents(package, take: take.id).isEmpty)
+        }
+    }
+
+    @Test func cameraStyleChangesDuringATakeReachTheCoordinator() async throws {
+        let changed = CameraStyle(shape: .roundedSquare, size: CameraStyle.small, anchor: .topLeading)
+        try await withRig(countdown: 3) { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            // Without a take there is nothing to change.
+            rig.controller.setCameraStyle(changed)
+            #expect(rig.controller.currentRequest == nil)
+
+            // While recording: the take writes it.
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let recording = try #require(rig.takes.recordings.last)
+            rig.controller.setCameraStyle(changed)
+            #expect(rig.controller.currentRequest?.cameraStyle == changed)
+            #expect(await eventually { recording.cameraStyles == [changed] })
+            await rig.controller.stop(openingEditor: false)
+            let first = try #require(rig.takes.packages.last)
+            let firstTake = try #require(try rig.takesOnDisk(first.url).first)
+            #expect(firstTake.cameraStyle == .default)
+            #expect(try rig.cameraStyleEvents(first, take: firstTake.id) == [changed])
+
+            // While counting down: only the request changes, and the take starts with it.
+            rig.sleep.hold(from: 4)
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.sleep.heldCall == 4 })
+            #expect(rig.controller.currentRequest?.cameraStyle == .default)
+            rig.controller.setCameraStyle(changed)
+            #expect(rig.controller.currentRequest?.cameraStyle == changed)
+            rig.sleep.releaseAll()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            await rig.controller.stop(openingEditor: false)
+            let second = try #require(rig.takes.packages.last)
+            let secondTake = try #require(try rig.takesOnDisk(second.url).first)
+            #expect(secondTake.cameraStyle == changed)
+            #expect(try rig.cameraStyleEvents(second, take: secondTake.id).isEmpty)
+            #expect(rig.takes.recordings.last?.cameraStyles == [])
+            #expect(rig.takes.requests.map(\.cameraStyle) == [.default, changed])
+        }
+    }
+
+    @Test func aCameraStyleChosenWhileStartingReachesTheTake() async throws {
+        let changed = CameraStyle(shape: .landscape, size: CameraStyle.large, anchor: .bottomLeading)
+        try await withRig { rig in
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            // The take's `start()` is held: the coordinator refuses a style until it records.
+            rig.startGate.close()
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.startGate.arrivals == 1 })
+            #expect(rig.controller.phase == .starting)
+            rig.controller.setCameraStyle(changed)
+            #expect(rig.controller.currentRequest?.cameraStyle == changed)
+            rig.startGate.open()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let recording = try #require(rig.takes.recordings.last)
+            // Sent once the take has started.
+            #expect(await eventually { recording.cameraStyles == [changed] })
+            await rig.controller.stop(openingEditor: false)
+            let package = try #require(rig.takes.packages.last)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.cameraStyle == .default)
+            #expect(try rig.cameraStyleEvents(package, take: take.id) == [changed])
+
+            // Changed and changed back while starting: the take already has it, and nothing is sent.
+            rig.startGate.close()
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.startGate.arrivals == 2 })
+            rig.controller.setCameraStyle(changed)
+            rig.controller.setCameraStyle(.default)
+            rig.startGate.open()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            try await Task.sleep(for: .milliseconds(200))  // a style sent would have been applied
+            #expect(rig.takes.recordings.last?.cameraStyles == [])
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
+    @Test func restartUsesTheCameraStyleInForce() async throws {
+        let changed = CameraStyle(shape: .circle, size: CameraStyle.large, anchor: .leading)
         try await withRig { rig in
             var selection = CaptureSelection.mainDisplay(1)
             selection.camera = .systemDefault
             rig.controller.startRecording(selection: selection, settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
-            #expect(rig.controller.notices.contains(.cameraNotRecordedYet))
-            #expect(rig.controller.recordsMicrophone)
+            rig.controller.setCameraStyle(changed)
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            #expect(rig.takes.requests.map(\.cameraStyle) == [.default, changed])
             await rig.controller.stop(openingEditor: false)
-            #expect(!rig.controller.recordsMicrophone)  // no take
+            let package = try #require(rig.takes.packages.last)
+            #expect(try rig.takesOnDisk(package.url).first?.cameraStyle == changed)
+        }
+    }
 
+    @Test func hiddenWindowShowsANoticeUntilItReturns() async throws {
+        try await withRig { rig in
+            // Without a take, nothing is said.
+            rig.controller.windowVisibilityChanged(.hidden)
+            #expect(rig.controller.notices.isEmpty)
+
+            rig.controller.startRecording(selection: Self.window, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.controller.windowVisibilityChanged(.otherSpace)  // another Space is still recorded
+            #expect(rig.controller.notices.isEmpty)
+            rig.controller.windowVisibilityChanged(.hidden)
+            #expect(rig.controller.notices == [.windowHidden])
+            rig.controller.windowVisibilityChanged(.hidden)
+            #expect(rig.controller.notices == [.windowHidden])
+            rig.controller.windowVisibilityChanged(.visible)
+            #expect(rig.controller.notices.isEmpty)
+            rig.controller.windowVisibilityChanged(.hidden)
+            rig.controller.windowVisibilityChanged(.otherSpace)
+            #expect(rig.controller.notices.isEmpty)
+            await rig.controller.stop(openingEditor: false)
+
+            rig.controller.windowVisibilityChanged(.hidden)
+            #expect(rig.controller.notices.isEmpty)
             let package = try #require(rig.takes.packages.first)
-            let take = try #require(try rig.takesOnDisk(package.url).first)
-            #expect(take.status == .complete && take.tracks.map(\.kind) == [.display, .microphone])
-            #expect(rig.takes.grants == [[.screenRecording, .microphone]])
-            #expect(rig.takes.factory.calls == [
-                .display(id: 1, framesPerSecond: 60, scale: .native), .microphone(.systemDefault), .input(displayIDs: [1]),
-            ])
-            #expect(rig.startFailures.isEmpty)
+            #expect(try rig.takesOnDisk(package.url).first?.tracks.map(\.kind) == [.window])
+            #expect(rig.takes.factory.calls.first == .window(id: 4242, framesPerSecond: 60, scale: .native))
+        }
+    }
+
+    @Test func aPausedWindowShowsItUntilItRestarts() async throws {
+        try await withRig(restartBackoff: [.milliseconds(20)]) { rig in
+            rig.controller.startRecording(selection: Self.window, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let window = try #require(rig.takes.factory.windows.first)
+            // Its restarts fail: the take's only screen is paused, and says so as the window.
+            window.failOnStart = 99
+            window.failNow(domain: "SCStreamErrorDomain", code: -3815)
+            #expect(await eventually { rig.controller.notices.contains(.trackPaused(.window)) })
+            #expect(!rig.controller.notices.contains(.screenPaused))
+            // It comes back: the notice goes.
+            window.failOnStart = 0
+            #expect(await eventually { rig.controller.notices.contains(.streamResumed(.window)) })
+            #expect(!rig.controller.notices.contains(.trackPaused(.window)))
+            #expect(!rig.controller.notices.contains(.streamInterrupted(.window)))
+            await rig.controller.stop(openingEditor: false)
         }
     }
 
@@ -141,7 +397,6 @@ enum AwaitPoint: CaseIterable {
 
             #expect(rig.probe.requests.isEmpty)
             #expect(!rig.controller.notices.contains(.noMicrophone) && !rig.controller.notices.contains(.microphoneAccessOff))
-            #expect(!rig.controller.notices.contains(.cameraNotRecordedYet))
             #expect(rig.takes.grants == [[.screenRecording]])
             let package = try #require(rig.takes.packages.first)
             let take = try #require(try rig.takesOnDisk(package.url).first)
@@ -990,18 +1245,25 @@ extension RecordingController.Phase {
 /// Without `keepingTakes`, the rig holds the takes it makes only weakly (`PreparedTakes.made`).
 /// The countdown lasts `countdown` seconds (none unless a test is about it), each of them a wait of
 /// `Rig.sleep`, which returns at once unless the test holds it. A stop does `afterStop`.
+/// The camera and system audio start as `camera` and `systemAudio` (allowed unless a test is about it), and the
+/// saved camera style is `cameraStyle`. The takes' coordinators wait `restartBackoff` between restarts, if given.
 @MainActor private func withRig(
-    screenRecording: PermissionState = .granted, microphone: PermissionState = .granted, hasMicrophone: Bool = true,
-    keepingTakes: Bool = true, countdown: Int = 0, afterStop: AfterStop = .openEditor, _ body: (Rig) async throws -> Void
+    screenRecording: PermissionState = .granted, microphone: PermissionState = .granted, camera: PermissionState = .granted,
+    systemAudio: PermissionState = .granted, hasMicrophone: Bool = true, keepingTakes: Bool = true, countdown: Int = 0,
+    afterStop: AfterStop = .openEditor, cameraStyle: CameraStyle = .default, restartBackoff: [Duration]? = nil,
+    _ body: (Rig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "RecordingControllerTests-\(UUID().uuidString)"
         let defaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
         defer { defaults.removePersistentDomain(forName: suite) }
-        SettingsStore(defaults: defaults).settings = RecorderSettings(countdownSeconds: countdown, afterStop: afterStop)
+        SettingsStore(defaults: defaults).settings = RecorderSettings(
+            countdownSeconds: countdown, afterStop: afterStop, cameraStyle: cameraStyle)
         try await body(Rig(
-            in: directory, defaults: defaults, screenRecording: screenRecording, microphone: microphone,
-            hasMicrophone: hasMicrophone, keepingTakes: keepingTakes))
+            in: directory, defaults: defaults,
+            probe: GatedProbe(screenRecording: screenRecording, microphone: microphone, camera: camera, systemAudio: systemAudio),
+            hasMicrophone: hasMicrophone, keepingTakes: keepingTakes,
+            configuration: restartBackoff.map { RecordingConfiguration(restartBackoff: $0) } ?? RecordingConfiguration()))
     }
 }
 
@@ -1039,17 +1301,18 @@ extension RecordingController.Phase {
     private(set) var onboardingOpenings = 0
 
     init(
-        in directory: URL, defaults: UserDefaults, screenRecording: PermissionState, microphone: PermissionState,
-        hasMicrophone: Bool, keepingTakes: Bool
+        in directory: URL, defaults: UserDefaults, probe: GatedProbe, hasMicrophone: Bool, keepingTakes: Bool,
+        configuration: RecordingConfiguration
     ) {
         let folder = directory.appendingPathComponent("Movies/Toma", isDirectory: true)
         let (creation, startGate, stopGate, autoStopGate) = (Gate(), Gate(), Gate(), Gate())
         let termination = CountingTerminationGuard()
         let disk = FakeDisk()
         let takes = PreparedTakes(
-            disk: disk, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate, keepingTakes: keepingTakes)
+            disk: disk, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate, keepingTakes: keepingTakes,
+            configuration: configuration)
         self.folder = folder
-        probe = GatedProbe(screenRecording: screenRecording, microphone: microphone)
+        self.probe = probe
         (self.creation, self.startGate, self.stopGate, self.autoStopGate) = (creation, startGate, stopGate, autoStopGate)
         self.termination = termination
         self.disk = disk
@@ -1086,6 +1349,14 @@ extension RecordingController.Phase {
         let data = try Data(contentsOf: ProjectPackage(url: package).manifestURL)
         return try ProjectJSON.decoder().decode(Manifest.self, from: data).takes
     }
+
+    /// The camera styles `take` of `package` wrote, in order.
+    func cameraStyleEvents(_ package: ProjectPackage, take: String) throws -> [CameraStyle] {
+        try EventLogReader.read(package.eventsURL(take: take)).events.compactMap { event in
+            if case .cameraStyle(let style) = event.kind { return style }
+            return nil
+        }
+    }
 }
 
 /// What `prepareTake` was asked for, and the takes it made: the plan `TakePlanner` makes of the request
@@ -1118,31 +1389,37 @@ extension RecordingController.Phase {
     private let stopGate: Gate
     private let autoStopGate: Gate
     private let keepingTakes: Bool
+    private let configuration: RecordingConfiguration
 
-    init(disk: FakeDisk, startGate: Gate, stopGate: Gate, autoStopGate: Gate, keepingTakes: Bool) {
+    init(
+        disk: FakeDisk, startGate: Gate, stopGate: Gate, autoStopGate: Gate, keepingTakes: Bool, configuration: RecordingConfiguration
+    ) {
         self.disk = disk
         self.startGate = startGate
         self.stopGate = stopGate
         self.autoStopGate = autoStopGate
         self.keepingTakes = keepingTakes
+        self.configuration = configuration
     }
 
     func prepare(_ package: ProjectPackage, _ request: TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake {
         requests.append(request)
         grants.append(granted)
         let plan = try TakePlanner.plan(
-            request.selection, settings: request.settings, displays: Self.displays, granted: granted, factory: factory)
+            request.selection, settings: request.settings, displays: Self.displays, granted: granted, skipping: request.skipping,
+            includedWindowIDs: request.includedWindowIDs, factory: factory)
         packages.append(package)
         let coordinator = RecordingCoordinator(
             package: package, sources: plan.sources, input: plan.input,
-            diskMonitor: disk.monitor(volume: package.url), systemActivity: AsyncStream { $0.finish() })
+            diskMonitor: disk.monitor(volume: package.url), systemActivity: AsyncStream { $0.finish() },
+            configuration: configuration, cameraStyle: request.cameraStyle)
         let recording = GatedTakeRecording(
             coordinator: coordinator, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate)
         if keepingTakes { recordings.append(recording) }
         made.append(MadeTake(recording: recording, coordinator: coordinator))
         return PreparedTake(
-            recording: recording, microphone: plan.optional.first,
-            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }),
+            recording: recording, optional: plan.optional,
+            kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }), load: plan.load,
             microphoneMeter: plan.microphoneMeter)
     }
 }
@@ -1162,9 +1439,12 @@ private final class GatedTakeRecording: TakeRecording {
     /// Where `warnings` comes from.
     private let continuation: AsyncStream<RecordingWarning>.Continuation
     private let autoStopCount = Atomic(0)
+    private let acceptedStyles = Mutex<[CameraStyle]>([])
 
     /// How many times the auto-stop handler has been called.
     var autoStops: Int { autoStopCount.load(ordering: .relaxed) }
+    /// The camera styles the coordinator accepted, in order.
+    var cameraStyles: [CameraStyle] { acceptedStyles.withLock { $0 } }
 
     init(coordinator: RecordingCoordinator, startGate: Gate, stopGate: Gate, autoStopGate: Gate) {
         self.coordinator = coordinator
@@ -1230,6 +1510,11 @@ private final class GatedTakeRecording: TakeRecording {
     func addMarker() async throws -> HostTime {
         try await coordinator.addMarker()
     }
+
+    func setCameraStyle(_ style: CameraStyle) async throws {
+        try await coordinator.setCameraStyle(style)
+        acceptedStyles.withLock { $0.append(style) }
+    }
 }
 
 /// Holds whoever passes it while it is closed, and counts who came.
@@ -1282,40 +1567,34 @@ private final class Gate: Sendable {
     }
 }
 
-/// Screen recording and the microphone start as given, and the system prompt for the microphone, held
-/// by `gate`, grants it.
+/// Screen recording, the microphone, the camera and system audio start as given, and the system prompt for the
+/// microphone or the camera, held by `gate`, grants it.
 private final class GatedProbe: PermissionProbe {
     let gate = Gate()
-    private let screenRecording: Mutex<PermissionState>
-    private let microphone: Mutex<PermissionState>
+    private let states: Mutex<[PermissionKind: PermissionState]>
     private let requested = Mutex<[PermissionKind]>([])
 
     /// What was requested, in order.
     var requests: [PermissionKind] { requested.withLock { $0 } }
 
-    init(screenRecording: PermissionState, microphone: PermissionState) {
-        self.screenRecording = Mutex(screenRecording)
-        self.microphone = Mutex(microphone)
+    init(screenRecording: PermissionState, microphone: PermissionState, camera: PermissionState, systemAudio: PermissionState) {
+        states = Mutex([.screenRecording: screenRecording, .microphone: microphone, .camera: camera, .systemAudio: systemAudio])
     }
 
     /// The user changes screen recording in System Settings.
     func setScreenRecording(_ state: PermissionState) {
-        screenRecording.withLock { $0 = state }
+        states.withLock { $0[.screenRecording] = state }
     }
 
     func state(of kind: PermissionKind) -> PermissionState {
-        switch kind {
-        case .screenRecording: screenRecording.withLock { $0 }
-        case .microphone: microphone.withLock { $0 }
-        case .camera, .systemAudio, .accessibility: .notDetermined
-        }
+        states.withLock { $0[kind] } ?? .notDetermined
     }
 
     func request(_ kind: PermissionKind) async -> PermissionState {
         requested.withLock { $0.append(kind) }
         await gate.pass()
-        guard kind == .microphone else { return state(of: kind) }
-        microphone.withLock { $0 = .granted }
+        guard kind == .microphone || kind == .camera else { return state(of: kind) }
+        states.withLock { $0[kind] = .granted }
         return .granted
     }
 }

@@ -278,23 +278,23 @@ import Testing
     }
 
     @Test func noticesThatWaitedShowInTurn() {
-        // A restart that could not move the take to the trash, with the camera on: the carried notice
-        // waits through the countdown, the camera's comes while the take starts, and both show once it
+        // A restart that could not move the take to the trash, with the camera not allowed: the carried
+        // notice waits through the countdown, the camera's comes while the take starts, and both show once it
         // records, in the order they came.
         var island = recordingWings()
         island.handle(.phaseChanged(.stopping), at: .seconds(10))
         island.handle(.phaseChanged(.countingDown(remaining: 3)), at: .seconds(11))
         island.handle(.noticesChanged([.couldNotMoveToTrash]), at: .seconds(11))
         island.handle(.phaseChanged(.starting), at: .seconds(14))
-        island.handle(.noticesChanged([.couldNotMoveToTrash, .cameraNotRecordedYet]), at: .seconds(14))
+        island.handle(.noticesChanged([.couldNotMoveToTrash, .cameraAccessOff]), at: .seconds(14))
         #expect(island.state == .recording)
         island.handle(.phaseChanged(.recording(since: Self.since)), at: .seconds(15))
         #expect(island.state == .notice(.couldNotMoveToTrash) && island.deadline == .seconds(19))
         // A confirmation takes no turn and moves no deadline.
-        island.handle(.noticesChanged([.couldNotMoveToTrash, .cameraNotRecordedYet, .streamResumed(.display)]), at: .seconds(16))
+        island.handle(.noticesChanged([.couldNotMoveToTrash, .cameraAccessOff, .streamResumed(.display)]), at: .seconds(16))
         #expect(island.state == .notice(.couldNotMoveToTrash) && island.deadline == .seconds(19))
         island.tick(at: .seconds(19))
-        #expect(island.state == .notice(.cameraNotRecordedYet) && island.deadline == .seconds(23))
+        #expect(island.state == .notice(.cameraAccessOff) && island.deadline == .seconds(23))
         island.tick(at: .seconds(23))
         #expect(island.state == .recording && island.deadline == nil)
 
@@ -305,11 +305,11 @@ import Testing
         immediate.handle(.phaseChanged(.starting), at: .seconds(11))
         immediate.handle(.noticesChanged([.closedWithError]), at: .seconds(11))
         #expect(immediate.state == .notice(.closedWithError) && immediate.deadline == .seconds(15))
-        immediate.handle(.noticesChanged([.closedWithError, .cameraNotRecordedYet]), at: .seconds(12))
+        immediate.handle(.noticesChanged([.closedWithError, .cameraAccessOff]), at: .seconds(12))
         immediate.handle(.phaseChanged(.recording(since: Self.since)), at: .seconds(13))
         #expect(immediate.state == .notice(.closedWithError) && immediate.deadline == .seconds(15))
         immediate.tick(at: .seconds(15))
-        #expect(immediate.state == .notice(.cameraNotRecordedYet) && immediate.deadline == .seconds(19))
+        #expect(immediate.state == .notice(.cameraAccessOff) && immediate.deadline == .seconds(19))
 
         // One that is resolved before its turn no longer waits; the one showing, resolved, makes way.
         var resolved = recordingWings()

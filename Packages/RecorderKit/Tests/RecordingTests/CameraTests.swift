@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
 import CoreMedia
+import Dispatch
 import ProjectFormat
+import RecorderKitTestSupport
+import Synchronization
 import SyntheticCapture
 import Testing
 
@@ -181,6 +185,30 @@ import Testing
             == .success(CameraLeasePlan(camera: .share, startsSession: true)))
     }
 
+    @Test func aPreviewLayerIsAttachedOnTheSessionQueue() async throws {
+        // The session's queue is held by a lease that is being given: the layer waits for it, so it never changes the
+        // session's connections while a lease configures the camera, nor after it has let go of the camera's lock.
+        let host = CameraSessionHost()
+        let entered = Latch()
+        let release = DispatchSemaphore(value: 0)
+        let leasing = Task {
+            try await host.lease(
+                preferredDeviceUniqueID: nil, preset: .p1080, framesPerSecond: 30, forRecording: false, delivery: nil,
+                isWanted: {
+                    entered.set()
+                    release.wait()
+                    return false
+                })
+        }
+        #expect(await eventually { entered.isSet })
+        let layer = host.makePreviewLayer()
+        #expect(layer.session == nil)
+        release.signal()
+        await #expect(throws: CancellationError.self) { _ = try await leasing.value }
+        await host.drain()
+        #expect(layer.session === host.session)
+    }
+
     // MARK: - Device
 
     @Test func pickFallsBackToSystemPreferred() {
@@ -260,5 +288,16 @@ import Testing
         CameraSessionSnapshot(
             isFirstLease: false, isRunning: running, isPinned: pinned, inputDeviceUniqueID: "builtin", inputConnected: true,
             configuration: configuration("builtin"), deviceMatchesConfiguration: true)
+    }
+}
+
+/// Set once, from any thread.
+private final class Latch: Sendable {
+    private let value = Mutex(false)
+
+    var isSet: Bool { value.withLock { $0 } }
+
+    func set() {
+        value.withLock { $0 = true }
     }
 }

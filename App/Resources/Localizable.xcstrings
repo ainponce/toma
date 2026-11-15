@@ -685,16 +685,6 @@
         }
       }
     },
-    "In this version the camera is only a preview: this recording doesn't include it." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "En esta versión la cámara es solo una vista previa: esta grabación no la incluye."
-          }
-        }
-      }
-    },
     "Large" : {
       "comment" : "The camera bubble's size",
       "localizations" : {
@@ -893,6 +883,16 @@
         }
       }
     },
+    "No area is chosen to record." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se eligió ningún área para grabar."
+          }
+        }
+      }
+    },
     "No camera was found." : {
       "localizations" : {
         "es" : {
@@ -939,6 +939,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No hay grabaciones para recuperar."
+          }
+        }
+      }
+    },
+    "No window is chosen to record." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se eligió ninguna ventana para grabar."
           }
         }
       }
@@ -1851,6 +1861,16 @@
         }
       }
     },
+    "System audio couldn't start. Recording without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar el audio del sistema. Se graba sin él."
+          }
+        }
+      }
+    },
     "System audio stopped recording. Still trying to bring it back." : {
       "localizations" : {
         "es" : {
@@ -1908,6 +1928,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La cámara no puede grabar con la calidad elegida."
+          }
+        }
+      }
+    },
+    "The camera couldn't start. Recording without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar la cámara. Se graba sin ella."
           }
         }
       }
@@ -2022,12 +2052,12 @@
         }
       }
     },
-    "The microphone couldn't start. Recording the screen without audio." : {
+    "The microphone couldn't start. Recording without it." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "No se pudo iniciar el micrófono. Se graba la pantalla sin audio."
+            "value" : "No se pudo iniciar el micrófono. Se graba sin él."
           }
         }
       }
@@ -2118,6 +2148,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se puede guardar el formato de la grabación."
+          }
+        }
+      }
+    },
+    "The screen couldn't start." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar la pantalla."
           }
         }
       }
@@ -2373,6 +2413,16 @@
         }
       }
     },
+    "The window you're recording is minimized or hidden. Recording continues when it's back." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La ventana que se graba está minimizada u oculta. La grabación sigue cuando vuelva."
+          }
+        }
+      }
+    },
     "There isn't enough free disk space to record (%@ available)." : {
       "localizations" : {
         "es" : {
@@ -2484,22 +2534,22 @@
         }
       }
     },
-    "This recording setup isn't available yet." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Esta combinación de grabación todavía no está disponible."
-          }
-        }
-      }
-    },
     "This shortcut is used by macOS or another app." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS u otra app ya usan este atajo."
+          }
+        }
+      }
+    },
+    "To record system audio, first turn it on in the recording control to give permission. Recording without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para grabar el audio del sistema, primero hay que activarlo en el control de grabación y dar el permiso. Se graba sin él."
           }
         }
       }

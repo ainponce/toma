@@ -12,12 +12,20 @@ extension TakeNotice {
             String(localized: "No microphone found. Recording without audio.")
         case .microphoneAccessOff:
             String(localized: "Microphone access is off. Recording without audio.")
-        case .microphoneFailedToStart:
-            String(localized: "The microphone couldn't start. Recording the screen without audio.")
-        case .cameraNotRecordedYet:
-            String(localized: "In this version the camera is only a preview: this recording doesn't include it.")
+        case .optionalSourceFailedToStart(let kind):
+            switch kind {
+            case .camera: String(localized: "The camera couldn't start. Recording without it.")
+            case .microphone: String(localized: "The microphone couldn't start. Recording without it.")
+            case .systemAudio: String(localized: "System audio couldn't start. Recording without it.")
+            // Does not happen: a screen is never optional.
+            case .display, .window: String(localized: "The screen couldn't start.")
+            }
         case .cameraAccessOff:
             String(localized: "Camera access is off. Recording without the camera.")
+        case .systemAudioNotRequested:
+            String(localized: "To record system audio, first turn it on in the recording control to give permission. Recording without it.")
+        case .windowHidden:
+            String(localized: "The window you're recording is minimized or hidden. Recording continues when it's back.")
         case .streamInterrupted(let kind):
             switch kind {
             case .display: String(localized: "Screen capture was interrupted. Trying again…")
