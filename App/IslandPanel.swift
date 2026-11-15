@@ -7,15 +7,16 @@ import SwiftUI
 /// The island: one floating panel at the top center of the screen with the pointer, whose frame is always
 /// its visible outline (it never covers clicks outside it). Its width, height and radius are springs
 /// stepped at the display's rate; its content is `IslandView`. It runs `IslandMachine` on what the
-/// pointer, clicks, keys and the take's phase do, and owns the hover zones and the on-screen selection.
-/// While a take records it follows the pointer from screen to screen.
+/// pointer, clicks, keys and the take (its phase, its notices, the take saved) do, and owns the hover
+/// zones, the on-screen selection and the confirmation capsule under it. While a take records it follows
+/// the pointer from screen to screen.
 @MainActor
 final class IslandPanel: NSObject, NSWindowDelegate {
     /// Open or choosing what to record: the app stays out of the Dock meanwhile.
     var isSelecting: Bool {
         switch machine.state {
         case .open, .choosing: true
-        case .rest, .peek, .countdown, .recording, .recordingOpen: false
+        case .rest, .peek, .countdown, .recording, .recordingOpen, .notice, .saving, .saved: false
         }
     }
 
@@ -30,12 +31,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     private let recording: RecordingController
     private let countdown: CountdownSetting
+    private let afterStop: AfterStopSetting
     private let store = SettingsStore()
     private let panel: FloatingPanel
     private let root: TrackingView
     private let model: IslandModel
     private let zones = IslandHoverZones()
     private let overlay = SelectionOverlay()
+    private let capsule = ConfirmationCapsule()
     /// Kept up to date from launch, so opening the panel never waits for it.
     private let microphones = MicrophoneList()
     private var machine = IslandMachine()
@@ -50,6 +53,10 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private var pointerWatch: Task<Void, Never>?
     /// The take's phase the machine was last told.
     private var phase: RecordingController.Phase
+    /// The take's notices the machine was last told.
+    private var notices: [TakeNotice]
+    /// The saved take the machine was last told.
+    private var saved: SavedTake?
     /// The panel is fading out to rest on a screen without a notch.
     private var isHiding = false
     /// The panel is fading out to another screen, while recording.
@@ -66,10 +73,13 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private static let pointerInterval = Duration.milliseconds(250)
 
     /// The island starts at rest on the screen with the pointer.
-    init(recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting) {
+    init(recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting) {
         self.recording = recording
         self.countdown = countdown
+        self.afterStop = afterStop
         phase = recording.phase
+        notices = recording.notices
+        saved = recording.lastSaved
         let screens = Self.readScreens()
         tops = screens.tops
         names = screens.names
@@ -111,6 +121,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         overlay.leftForAnotherApp = { [weak self] in self?.send(.endedChoosing, .dismiss) }
         overlay.closed = { [weak self] in self?.close() }
         overlay.reduceMotion = model.reduceMotion
+        capsule.reduceMotion = model.reduceMotion
+        capsule.reduceTransparency = model.reduceTransparency
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { $0.screensChanged() }
         observe(workspace.notificationCenter, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { $0.displayOptionsChanged() }
@@ -139,13 +151,28 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         send(.toggle)
     }
 
+    /// A take could not start: the island opens and says why, above Record (no alert during a take).
+    func startFailed(_ error: any Error) {
+        // The start went back to idle first.
+        syncTake()
+        model.startFailure = userFacingDescription(of: error)
+        send(.startFailed)
+    }
+
+    /// The capsule under the island confirms what the user just did.
+    func showConfirmation(_ confirmation: IslandConfirmation) {
+        capsule.show(confirmation.capsule)
+    }
+
     // MARK: - The take
 
-    /// Tells the machine every new phase of the take, and makes room for a system prompt the start waits for.
+    /// Tells the machine what the take does, and makes room for a system prompt the start waits for.
     private func observeRecording() {
         withObservationTracking {
             _ = recording.phase
             _ = recording.isAskingPermission
+            _ = recording.notices
+            _ = recording.lastSaved
         } onChange: { [weak self] in
             // Called before the change: read it once it is made.
             Task { @MainActor in self?.recordingChanged() }
@@ -155,9 +182,30 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private func recordingChanged() {
         observeRecording()
         if yieldsToSystemPrompt != recording.isAskingPermission { yieldsToSystemPrompt = recording.isAskingPermission }
-        guard recording.phase != phase else { return }
-        phase = recording.phase
-        send(.phaseChanged(phase))
+        syncTake()
+    }
+
+    /// Tells the machine what changed in the take since it was last told: its phase first (a restart's
+    /// countdown keeps the notice it carries for when the new take records), then its notices, then a take
+    /// just saved. A new notice that confirms shows in the capsule.
+    private func syncTake() {
+        var events: [IslandEvent] = []
+        if recording.phase != phase {
+            phase = recording.phase
+            events.append(.phaseChanged(phase))
+        }
+        let current = recording.notices
+        if current != notices {
+            let new = current.filter { !notices.contains($0) }
+            notices = current
+            events.append(.noticesChanged(current))
+            for notice in new where notice.presentation == .confirmation { capsule.show(notice.capsule) }
+        }
+        if let lastSaved = recording.lastSaved, lastSaved != saved {
+            saved = lastSaved
+            events.append(.saved(lastSaved))
+        }
+        send(events)
     }
 
     // MARK: - Events
@@ -165,6 +213,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private var now: Duration { ContinuousClock.now - origin }
 
     private func send(_ events: IslandEvent...) {
+        send(events)
+    }
+
+    private func send(_ events: [IslandEvent]) {
+        guard !events.isEmpty else { return }
         let before = machine.state
         let now = now
         for event in events { machine.handle(event, at: now) }
@@ -189,7 +242,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             }
         case .choosing: send(.endedChoosing)
         case .countdown: recording.stopRecording()
-        case .rest, .peek, .recording, .recordingOpen: break
+        case .rest, .peek, .recording, .recordingOpen, .notice, .saving, .saved: break
         }
     }
 
@@ -199,7 +252,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         switch machine.state {
         case .open: send(.dismiss)
         case .choosing: send(.endedChoosing, .dismiss)
-        case .rest, .peek, .countdown, .recording, .recordingOpen: break
+        case .rest, .peek, .countdown, .recording, .recordingOpen, .notice, .saving, .saved: break
         }
     }
 
@@ -250,11 +303,17 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     private func apply(from before: IslandState) {
         armDeadline()
+        // These change without the state changing.
+        if model.attention != machine.attention { model.attention = machine.attention }
+        if !machine.hasStartFailure, model.startFailure != nil { model.startFailure = nil }
         let state = machine.state
         guard state != before else { return }
 
         switch (before, state) {
-        case (.rest, .open), (.peek, .open):
+        case (.choosing, .open):
+            break
+        case (_, .open):
+            // From rest, a peek, a saved take (Record Another) or a start that failed: what was saved.
             model.panel = makePanelModel()
         case (_, .rest), (_, .peek):
             model.panel?.showsSettings = false
@@ -274,7 +333,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         }
         if before == .choosing { overlay.end() }
         switch state {
-        case .rest, .peek, .countdown, .recording, .recordingOpen: overlay.end()
+        case .rest, .peek, .countdown, .recording, .recordingOpen, .notice, .saving, .saved: overlay.end()
         case .open, .choosing: break
         }
         // Key only on entering a keyboard state: never again at each second of the countdown, which would
@@ -288,8 +347,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     private func makePanelModel() -> OpenPanelModel {
         let panelModel = OpenPanelModel(
-            recording: recording, store: store, countdown: countdown, microphones: microphones, displays: displayChoices(),
-            islandDisplayID: displayID)
+            recording: recording, store: store, countdown: countdown, afterStop: afterStop, microphones: microphones,
+            displays: displayChoices(), islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)
@@ -358,7 +417,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private var canMove: Bool {
         switch machine.state {
         case .rest, .peek: true
-        case .open, .choosing, .countdown, .recording, .recordingOpen: false
+        case .open, .choosing, .countdown, .recording, .recordingOpen, .notice, .saving, .saved: false
         }
     }
 
@@ -416,9 +475,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private func arrive(at id: UInt32, fadingIn duration: TimeInterval) {
         isChangingScreens = false
         switch machine.state {
-        case .recording, .recordingOpen:
+        case .recording, .recordingOpen, .notice:
             break
-        case .rest, .peek, .open, .choosing, .countdown:
+        case .rest, .peek, .open, .choosing, .countdown, .saving, .saved:
             showOrHide()
             return
         }
@@ -474,6 +533,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         model.reduceMotion = workspace.accessibilityDisplayShouldReduceMotion
         model.reduceTransparency = workspace.accessibilityDisplayShouldReduceTransparency
         overlay.reduceMotion = model.reduceMotion
+        capsule.reduceMotion = model.reduceMotion
+        capsule.reduceTransparency = model.reduceTransparency
     }
 
     // MARK: - Outline
@@ -534,7 +595,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         let shape = IslandShape(width: width, height: height, bottomRadius: min(max(0, radius.value), limit), roundsTopCorners: roundsTop)
         // The clip first: the frame change draws the window at once.
         model.outline = shape
-        panel.setFrame(IslandGeometry.frame(shape, on: model.top), display: true)
+        let frame = IslandGeometry.frame(shape, on: model.top)
+        panel.setFrame(frame, display: true)
+        capsule.follow(frame)
     }
 
     /// The island grew under a pointer that did not move, or shrank away from it: no tracking event says so.

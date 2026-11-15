@@ -61,7 +61,7 @@ public enum IslandGeometry {
     public static let hoverZoneSize = CGSize(width: 60, height: 8)
 
     public static func shape(_ state: IslandState, on top: ScreenTop) -> IslandShape {
-        // Under a notch. Task 16b adds the states of a take being saved.
+        // Under a notch.
         let notchWidth = top.notch.map { Double($0.width) } ?? 0
         let (width, height, radius): (Double, Double, Double) =
             switch state {
@@ -73,6 +73,9 @@ public enum IslandGeometry {
             // A wing at each side of the notch, whatever its width.
             case .recording: (notchWidth + 2 * wingWidth, top.menuBarHeight, 13)
             case .recordingOpen: (640, 226, 34)
+            // 40 pt under the menu bar: no more than the area below the notch.
+            case .notice: (360, top.menuBarHeight + 40, 20)
+            case .saving, .saved: (490, 140, 32)
             }
         guard top.notch == nil else {
             return IslandShape(width: width, height: height, bottomRadius: radius, roundsTopCorners: false)
@@ -84,7 +87,7 @@ public enum IslandGeometry {
             case .rest: (132, 34)
             case .peek: (262, 38)
             case .recording: (300, 36)
-            case .open, .choosing, .countdown, .recordingOpen: (width, height)
+            case .open, .choosing, .countdown, .recordingOpen, .notice, .saving, .saved: (width, height)
             }
         return IslandShape(width: pillWidth, height: pillHeight, bottomRadius: min(radius + 4, pillHeight / 2), roundsTopCorners: true)
     }
@@ -108,7 +111,7 @@ public enum IslandGeometry {
     /// The spring the island's outline takes toward `state`.
     public static func spring(to state: IslandState) -> Spring {
         switch state {
-        case .open, .choosing, .countdown, .recordingOpen: Motion.islandExpand
+        case .open, .choosing, .countdown, .recordingOpen, .notice, .saving, .saved: Motion.islandExpand
         case .peek: Motion.islandPeek
         case .rest, .recording: Motion.islandCollapse
         }

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// What the island shows (notch design §5.1). Task 16b adds the states of a take being saved.
+/// What the island shows (notch design §5.1).
 public enum IslandState: Equatable, Sendable {
     /// Nothing: on a screen with a notch it is the notch; elsewhere it is not drawn.
     case rest
@@ -16,13 +16,20 @@ public enum IslandState: Equatable, Sendable {
     case recording
     /// The pointer is over the recording island: the time, the take's controls and its notices.
     case recordingOpen
+    /// A notice that asks for attention, for `IslandMachine.noticeDuration`: compact, just under the notch.
+    case notice(TakeNotice)
+    /// The take is being closed.
+    case saving
+    /// The take was saved: how long it is, its markers and its tracks; with "Stay Where I Am", what to do next.
+    case saved(SavedTake)
 
     /// Whether the island is the key window: only in the states that use the keyboard (Esc, and a click
     /// elsewhere closing it), so it never keeps what the user types in their own app. While recording
-    /// it never is: Esc closes the island, not the take (notch design §5.1).
+    /// it never is: Esc closes the island, not the take (notch design §5.1). Nor while it shows a notice
+    /// or a take being saved, which come by themselves.
     public var needsKeyboard: Bool {
         switch self {
-        case .rest, .peek, .recording, .recordingOpen: false
+        case .rest, .peek, .recording, .recordingOpen, .notice, .saving, .saved: false
         case .open, .choosing, .countdown: true
         }
     }
@@ -58,6 +65,12 @@ public enum IslandEvent: Equatable, Sendable {
     /// The open recording island shows a confirmation (restarting the take), or no longer does: while it
     /// does, the island stays open.
     case confirmationShown(Bool)
+    /// The take's notices, as they are now (`RecordingController.notices`).
+    case noticesChanged([TakeNotice])
+    /// A stop closed and kept a take (`RecordingController.lastSaved`).
+    case saved(SavedTake)
+    /// A take could not start: the open island says why.
+    case startFailed
 }
 
 /// Which state the island is in, from what happens to it. `now` is a monotonic time the app passes
@@ -68,14 +81,34 @@ public struct IslandMachine: Equatable, Sendable {
     public static let peekGrace: Duration = .milliseconds(300)
     /// How long the open recording island waits after the pointer leaves before collapsing to the wings.
     public static let collapseDelay: Duration = .milliseconds(650)
+    /// How long a new notice that asks for attention shows by itself (notch design §5.1).
+    public static let noticeDuration: Duration = .seconds(4)
+    /// How long a saved take stays with "Stay Where I Am", unless something is chosen (plan decision 30).
+    public static let savedStayDuration: Duration = .seconds(8)
+    /// How long a saved take shows while its editor opens.
+    public static let savedWhileEditorOpens: Duration = .milliseconds(1500)
+    /// How long the island waits, once the take is closed, for it to be saved: a take that recorded nothing
+    /// (a start that failed with a stop waiting for it) or that a quit closed is never saved.
+    public static let savingGrace: Duration = .seconds(1)
 
     public private(set) var state = IslandState.rest
     /// When the machine wants a `tick`.
     public private(set) var deadline: Duration?
+    /// The right wing's icon: `.stopped` if any notice of the take is, otherwise `.attention` if any is, and
+    /// `nil` when none asks for attention.
+    public private(set) var attention: NoticePresentation?
+    /// The open island says why the last take could not start, until the next one counts down or starts, or
+    /// the island closes.
+    public private(set) var hasStartFailure = false
     /// The pointer is over the island (the last of `pointerEntered` and `pointerExited`).
     private var isPointerInside = false
     /// The open recording island shows a confirmation.
     private var isConfirming = false
+    /// The take's notices, as they were last told.
+    private var notices: [TakeNotice] = []
+    /// The new notices that ask for attention and came before the take records (the start's, during the
+    /// countdown or with the panel open): the first shows once it records.
+    private var pending: [TakeNotice] = []
 
     public init() {}
 
@@ -84,14 +117,24 @@ public struct IslandMachine: Equatable, Sendable {
         case .pointerEntered: isPointerInside = true
         case .pointerExited: isPointerInside = false
         case .confirmationShown(let shown): isConfirming = shown
-        default: break
-        }
-        if case .phaseChanged(let phase) = event {
-            follow(phase)
+        case .phaseChanged(let phase):
+            follow(phase, at: now)
             return
+        case .noticesChanged(let notices):
+            noticesChanged(notices, at: now)
+            return
+        case .saved(let take):
+            saved(take, at: now)
+            return
+        case .startFailed:
+            hasStartFailure = true
+            go(to: .open)
+            return
+        case .clicked, .toggle, .dismiss, .beganChoosing, .endedChoosing:
+            break
         }
         switch (state, event) {
-        case (.recording, .pointerEntered):
+        case (.recording, .pointerEntered), (.notice, .pointerEntered):
             go(to: .recordingOpen)
         case (.recordingOpen, .pointerEntered), (.recordingOpen, .confirmationShown(true)):
             deadline = nil
@@ -106,6 +149,13 @@ public struct IslandMachine: Equatable, Sendable {
         case (.rest, .clicked), (.rest, .toggle), (.peek, .clicked), (.peek, .toggle):
             go(to: .open)
         case (.open, .toggle), (.open, .dismiss), (.choosing, .toggle):
+            hasStartFailure = false
+            go(to: .rest)
+        case (.saved, .toggle), (.saved, .clicked):
+            // Record Another.
+            go(to: .open)
+        case (.saved, .dismiss):
+            // Close, or Open in the Editor.
             go(to: .rest)
         case (.open, .beganChoosing):
             go(to: .choosing)
@@ -119,30 +169,89 @@ public struct IslandMachine: Equatable, Sendable {
     public mutating func tick(at now: Duration) {
         guard let deadline, now >= deadline else { return }
         switch state {
-        case .peek: go(to: .rest)
-        case .recordingOpen: go(to: .recording)
+        case .peek, .saving, .saved: go(to: .rest)
+        case .recordingOpen, .notice: go(to: .recording)
         case .rest, .open, .choosing, .countdown, .recording: self.deadline = nil
         }
     }
 
     /// The take's phase moves the island: the countdown from wherever it is; the wings once the take starts
-    /// (the open recording island stays open); rest once the take has closed, or did not start. A phase
-    /// that is not a take's changes nothing at rest, open or choosing. Task 16b shows a take being saved
-    /// instead of going to rest while it closes.
-    private mutating func follow(_ phase: RecordingController.Phase) {
+    /// (the open recording island and a notice stay), and then the first notice that came before; a take
+    /// being saved while it closes; rest once the take has closed without being saved, or did not start.
+    /// A phase that is not a take's changes nothing at rest, open, choosing or saved.
+    private mutating func follow(_ phase: RecordingController.Phase, at now: Duration) {
         switch phase {
         case .countingDown(let remaining):
+            hasStartFailure = false
             go(to: .countdown(remaining: remaining))
-        case .starting, .recording:
-            if state != .recordingOpen, state != .recording { go(to: .recording) }
+        case .starting:
+            hasStartFailure = false
+            if !showsTheTake { go(to: .recording) }
+        case .recording:
+            if !showsTheTake { go(to: .recording) }
+            let first = pending.first
+            pending = []
+            if state == .recording, let first { show(first, at: now) }
         case .stopping:
-            go(to: .rest)
+            go(to: .saving)
         case .idle:
+            pending = []
             switch state {
-            case .countdown, .recording, .recordingOpen: go(to: .rest)
-            case .rest, .peek, .open, .choosing: break
+            case .saving: deadline = now + Self.savingGrace
+            case .countdown, .recording, .recordingOpen, .notice: go(to: .rest)
+            case .rest, .peek, .open, .choosing, .saved: break
             }
         }
+    }
+
+    /// The wings, the open recording island or a notice.
+    private var showsTheTake: Bool {
+        switch state {
+        case .recording, .recordingOpen, .notice: true
+        case .rest, .peek, .open, .choosing, .countdown, .saving, .saved: false
+        }
+    }
+
+    /// A notice that asks for attention and was not in the last list shows by itself over the wings (or
+    /// replaces the one showing), once the take records if it came before; the open recording island
+    /// lists it. A notice that is no longer in the list (it was resolved) stops showing.
+    private mutating func noticesChanged(_ notices: [TakeNotice], at now: Duration) {
+        let new = notices.filter { $0.presentation != .confirmation && !self.notices.contains($0) }
+        self.notices = notices
+        attention =
+            if notices.contains(where: { $0.presentation == .stopped }) {
+                .stopped
+            } else if notices.contains(where: { $0.presentation == .attention }) {
+                .attention
+            } else {
+                nil
+            }
+        switch state {
+        case .recording:
+            if let first = new.first { show(first, at: now) }
+        case .notice(let shown):
+            if let first = new.first {
+                show(first, at: now)
+            } else if !notices.contains(shown) {
+                go(to: .recording)
+            }
+        case .open, .countdown:
+            pending += new.filter { !pending.contains($0) }
+        case .rest, .peek, .choosing, .recordingOpen, .saving, .saved:
+            break
+        }
+    }
+
+    private mutating func show(_ notice: TakeNotice, at now: Duration) {
+        go(to: .notice(notice))
+        deadline = now + Self.noticeDuration
+    }
+
+    /// The take being saved was: it shows while its editor opens, or until something is chosen.
+    private mutating func saved(_ take: SavedTake, at now: Duration) {
+        guard state == .saving else { return }
+        go(to: .saved(take))
+        deadline = now + (take.openedEditor ? Self.savedWhileEditorOpens : Self.savedStayDuration)
     }
 
     private mutating func go(to state: IslandState) {

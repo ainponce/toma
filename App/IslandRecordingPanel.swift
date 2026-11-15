@@ -4,12 +4,16 @@ import SwiftUI
 
 /// While a take records: the wings at each side of the notch, each `IslandGeometry.wingWidth` wide, or
 /// the pill on a screen without one. On the left the recording dot and the time recorded; on the right
-/// the microphone's level, an amber warning while it hears nothing ("No Signal" in the pill, which has
-/// room for it; the open island always says it), or a crossed-out microphone when the take has none.
+/// a warning icon while a notice asks for attention (amber; red once the take stopped by itself or closed
+/// with an error), and the microphone's level, nothing more while it hears nothing ("No Signal" in the
+/// pill, which has room for it; the open island always says it), or a crossed-out microphone when the
+/// take has none.
 struct RecordingWings: View {
     let recording: RecordingController
     /// The notch's width, which the wings leave free; `nil` on a pill.
     let notchWidth: Double?
+    /// The warning icon's (`IslandMachine.attention`).
+    let attention: NoticePresentation?
 
     var body: some View {
         Group {
@@ -19,7 +23,7 @@ struct RecordingWings: View {
                         .padding(.horizontal, 10)
                         .frame(width: IslandGeometry.wingWidth, alignment: .leading)
                     Color.clear.frame(width: notchWidth)
-                    MicrophoneStatus(recording: recording, namesSilence: false)
+                    MicrophoneStatus(recording: recording, attention: attention, namesSilence: false)
                         .padding(.horizontal, 10)
                         .frame(width: IslandGeometry.wingWidth, alignment: .trailing)
                 }
@@ -27,7 +31,7 @@ struct RecordingWings: View {
                 HStack(spacing: 0) {
                     time
                     Spacer(minLength: 0)
-                    MicrophoneStatus(recording: recording)
+                    MicrophoneStatus(recording: recording, attention: attention)
                 }
                 .padding(.horizontal, 16)
             }
@@ -50,8 +54,8 @@ struct RecordingWings: View {
 
 /// The open island while a take records (640 × 226, notch design §5.1): the time, large, whether it is
 /// recording or paused and the microphone's level; pause or resume, marker, restart (asking first) and
-/// stop. Task 16d adds the desktops and Mission Control after the buttons, Task 16c the teleprompter
-/// switch, and Task 16b the notices below them.
+/// stop; below them, the take's notices that ask for attention, until they are resolved. Task 16d adds the
+/// desktops and Mission Control after the buttons, and Task 16c the teleprompter switch.
 struct IslandRecordingPanel: View {
     let recording: RecordingController
     let model: IslandModel
@@ -73,8 +77,14 @@ struct IslandRecordingPanel: View {
                 controls
                     .transition(.opacity)
             }
-            // Task 16b: the take's notices go here.
-            Spacer(minLength: 0)
+            // The confirmations were capsules: what is listed is what still asks for attention.
+            let notices = recording.notices.filter { $0.presentation != .confirmation }
+            if notices.isEmpty {
+                Spacer(minLength: 0)
+            } else {
+                IslandNoticeList(notices: notices, closeError: recording.lastCloseError)
+                    .frame(maxHeight: .infinity, alignment: .top)
+            }
         }
         .padding(.top, topInset + 12)
         .padding(.horizontal, 18)
@@ -267,32 +277,45 @@ extension Duration {
     }
 }
 
-/// The right wing: the microphone's level; an amber warning, and "No Signal" if `namesSilence`, while it
-/// hears nothing; a crossed-out microphone when the take records none.
+/// The right wing: a warning icon while `attention` is set, then the microphone's level; while it hears
+/// nothing, an amber warning (whatever `attention` is) and "No Signal" if `namesSilence`; a crossed-out
+/// microphone when the take records none.
 private struct MicrophoneStatus: View {
     let recording: RecordingController
+    /// The wing's warning (`IslandMachine.attention`); `nil` in the open island, which lists the notices.
+    var attention: NoticePresentation?
     var bars = 5
     var namesSilence = true
 
     var body: some View {
-        if !recording.recordsMicrophone {
-            Image(systemName: "mic.slash")
-                .font(.system(size: 14))
-                .symbolRenderingMode(.hierarchical)
-                .opacity(0.55)
-        } else if recording.notices.contains(.microphoneSilent) {
-            HStack(spacing: 5) {
+        let silent = recording.recordsMicrophone && recording.notices.contains(.microphoneSilent)
+        HStack(spacing: 5) {
+            if let warning = attention ?? (silent ? .attention : nil) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13))
                     .symbolRenderingMode(.hierarchical)
-                    .accessibilityLabel(Text("No Signal"))
-                if namesSilence { Text("No Signal") }
+                    .foregroundStyle(warning.tint)
+                    .accessibilityLabel(warningLabel(silent: silent, warning: warning))
             }
-            .foregroundStyle(Color(red: 1, green: 0.7, blue: 0.25))
-        } else {
-            let paused = recording.isUserPaused || recording.isPaused
-            // Paused, nothing is recorded: the meter rests.
-            LevelMeter(peak: { paused ? AudioPeak.silence : recording.microphoneLevel }, bars: bars)
+            if !recording.recordsMicrophone {
+                Image(systemName: "mic.slash")
+                    .font(.system(size: 14))
+                    .symbolRenderingMode(.hierarchical)
+                    .opacity(0.55)
+            } else if silent {
+                if namesSilence { Text("No Signal").foregroundStyle(NoticePresentation.attention.tint) }
+            } else {
+                let paused = recording.isUserPaused || recording.isPaused
+                // Paused, nothing is recorded: the meter rests.
+                LevelMeter(peak: { paused ? AudioPeak.silence : recording.microphoneLevel }, bars: bars)
+            }
         }
+    }
+
+    /// What the icon warns about: the silence, or the last notice of its color.
+    private func warningLabel(silent: Bool, warning: NoticePresentation) -> Text {
+        if silent, warning == .attention { return Text("No Signal") }
+        let notice = recording.notices.last { $0.presentation == warning }
+        return Text(verbatim: notice?.text(closeError: recording.lastCloseError) ?? "")
     }
 }

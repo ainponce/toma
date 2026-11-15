@@ -12,6 +12,47 @@
         }
       }
     },
+    "%lld markers" : {
+      "comment" : "A saved take: how many markers it has",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld marker"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld markers"
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld marcador"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld marcadores"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "A file isn't inside the project." : {
       "localizations" : {
         "es" : {
@@ -205,6 +246,26 @@
         }
       }
     },
+    "Close" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cerrar"
+          }
+        }
+      }
+    },
+    "Closing each track's files" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cerrando los archivos de cada pista"
+          }
+        }
+      }
+    },
     "Coming in phase 2." : {
       "localizations" : {
         "es" : {
@@ -331,6 +392,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuenta regresiva"
+          }
+        }
+      }
+    },
+    "Countdown cancelled." : {
+      "comment" : "The capsule under the island once a stop ended the countdown",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuenta cancelada."
           }
         }
       }
@@ -513,6 +585,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marcador"
+          }
+        }
+      }
+    },
+    "Marker added." : {
+      "comment" : "The capsule under the island once a marker was written",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcador puesto."
           }
         }
       }
@@ -735,6 +818,26 @@
         }
       }
     },
+    "Open in the Editor" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir en el editor"
+          }
+        }
+      }
+    },
+    "Open the Editor" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir el editor"
+          }
+        }
+      }
+    },
     "Part of the recording couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -784,6 +887,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "En pausa (pantalla bloqueada o Mac en reposo)"
+          }
+        }
+      }
+    },
+    "Paused." : {
+      "comment" : "The capsule under the island once the user's pause is on",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En pausa."
           }
         }
       }
@@ -856,6 +970,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grabar"
+          }
+        }
+      }
+    },
+    "Record Another" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar otra"
           }
         }
       }
@@ -1101,6 +1225,16 @@
         }
       }
     },
+    "Saving the take" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardando la toma"
+          }
+        }
+      }
+    },
     "Screen Recording" : {
       "localizations" : {
         "es" : {
@@ -1261,6 +1395,16 @@
         }
       }
     },
+    "Stay Where I Am" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quedarme donde estoy"
+          }
+        }
+      }
+    },
     "Stop" : {
       "localizations" : {
         "es" : {
@@ -1297,6 +1441,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Predeterminado del sistema"
+          }
+        }
+      }
+    },
+    "Take saved" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma guardada"
           }
         }
       }
@@ -1487,6 +1641,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo mover la toma a la papelera. Queda en la carpeta de proyectos."
+          }
+        }
+      }
+    },
+    "The take went to the trash." : {
+      "comment" : "The capsule under the island once a restart moved the take to the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La toma quedó en la papelera."
           }
         }
       }
@@ -1809,6 +1974,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Qué grabar"
+          }
+        }
+      }
+    },
+    "When Recording Stops" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al detener"
           }
         }
       }

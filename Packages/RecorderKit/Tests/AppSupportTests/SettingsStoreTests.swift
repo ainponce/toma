@@ -65,6 +65,28 @@ import Testing
         }
     }
 
+    @Test func settingsDefaultToOpeningTheEditor() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            #expect(store.settings.afterStop == .openEditor)
+            #expect(AfterStop.allCases == [.openEditor, .stayHere])
+
+            // Saved by a version without the setting.
+            defaults.set(Data(#"{"countdownSeconds":5}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.afterStop == .openEditor && store.settings.countdownSeconds == 5)
+
+            var settings = store.settings
+            settings.afterStop = .stayHere
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings == settings)
+            #expect(SettingsStore(defaults: defaults).settings.afterStop == .stayHere)
+
+            // A choice from another version: the default, and the rest is kept.
+            defaults.set(Data(#"{"countdownSeconds":10,"afterStop":"ask"}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.afterStop == .openEditor && store.settings.countdownSeconds == 10)
+        }
+    }
+
     /// Saves `settings` in `defaults` as another version could have: with `change` made to the object at `key`.
     private func save(
         _ settings: RecorderSettings, in defaults: UserDefaults, changing key: String, _ change: (inout [String: Any]) -> Void

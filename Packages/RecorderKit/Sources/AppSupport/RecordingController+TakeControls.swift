@@ -20,18 +20,28 @@ extension RecordingController {
         }
     }
 
-    /// Once every pause and resume sent has returned, `isUserPaused` is what the take last accepted.
+    /// Once every pause and resume sent has returned, `isUserPaused` is what the take last accepted. A
+    /// pause the take accepted is confirmed, unless the user has asked to resume since.
     private func pauseReturned(pausing: Bool, accepted: Bool, from recording: any TakeRecording) {
         guard take?.recording === recording else { return }
         if accepted { acceptedUserPause = pausing }
         pendingPauseRequests -= 1
         if pendingPauseRequests == 0 { isUserPaused = acceptedUserPause }
+        if accepted, pausing, isUserPaused { onConfirmation(.paused) }
     }
 
-    /// Marks this moment of the take being recorded. Nothing is written while the take is paused.
+    /// Marks this moment of the take being recorded. Nothing is written while the take is paused. A marker
+    /// the take wrote is confirmed, and counted in the saved take.
     public func addMarker() {
         guard case .recording = phase, !isUserPaused, !isPaused, let recording = take?.recording else { return }
-        send(to: recording, "marker") { recording in _ = try await recording.addMarker() }
+        send(
+            to: recording, "marker",
+            then: { [weak self] accepted in
+                guard let self, accepted, take?.recording === recording else { return }
+                markersWritten += 1
+                onConfirmation(.markerAdded)
+            }
+        ) { recording in _ = try await recording.addMarker() }
     }
 
     /// Sends `request` once the requests sent before it have returned, so they reach the take in order, and
@@ -53,11 +63,12 @@ extension RecordingController {
         }
     }
 
-    /// Closes the take being recorded without opening it, moves its project to the trash and records a new
-    /// take of the same request, in a new project, after counting down again. What the restart could not do
-    /// is said in the notices: a take that closed with an error is kept (`closedWithError`), and so is one
-    /// that could not be moved (`couldNotMoveToTrash`); the new take starts either way. A take the disk
-    /// stopped is kept and opened, and nothing new starts; so does a stop that comes while the take closes.
+    /// Closes the take being recorded without opening it, moves its project to the trash (and confirms it)
+    /// and records a new take of the same request, in a new project, after counting down again. What the
+    /// restart could not do is said in the notices: a take that closed with an error is kept
+    /// (`closedWithError`), and so is one that could not be moved (`couldNotMoveToTrash`); the new take
+    /// starts either way. A take the disk stopped is kept and saved as the disk's stop would, and nothing
+    /// new starts; so does a stop that comes while the take closes, as that stop would.
     public func restartTake() {
         guard case .recording = phase, stopTask == nil, let take, let request = currentRequest else { return }
         isRestarting = true
@@ -66,6 +77,8 @@ extension RecordingController {
     }
 
     private func restart(_ take: Take, request: TakeRequest) async {
+        // Before the phase leaves `.recording`.
+        let recorded = recordedTime.elapsed(at: environment.now())
         setPhase(.stopping)
         let closed = await closeAndHear(take)
         isRestarting = false
@@ -73,10 +86,10 @@ extension RecordingController {
         let endedForDiskSpace = autoStopped
             || closed.record?.tracks.contains { $0.segments.contains { $0.endReason == .diskFull } } == true
         if endedForDiskSpace || stopDuringRestart != nil {
-            // Kept, as a stop would: the stops that came waited for this one, so the editor opens here, once,
-            // if they asked for it (the disk's own stop does), or for the disk when none came. Quitting asks
-            // for no editor, also when the disk stopped the take.
-            finish(take, closed, openingEditor: stopDuringRestart ?? endedForDiskSpace)
+            // Kept, as a stop would: the stops that came waited for this one, so the take is saved here, once,
+            // as they asked (the disk's own stop follows the settings), or as the disk's stop when none came.
+            // Quitting saves nothing and opens no editor, also when the disk stopped the take.
+            finish(take, closed, as: stopDuringRestart ?? savingAsTheSettingsSay(), recorded: recorded)
             return
         }
         // From here to the new start nothing suspends, so a stop either came before or finds the new start.
@@ -92,14 +105,15 @@ extension RecordingController {
                 // A rename on the same volume: quick enough for the main actor.
                 let trashed = try ProjectTrash.move(take.package, projectsFolder: environment.projectsFolder)
                 Self.logger.notice("Moved the restarted take to \(trashed.path, privacy: .public)")
+                onConfirmation(.movedToTrash)
             } catch {
                 Self.logger.error("Cannot move \(take.package.url.path, privacy: .public) to the trash: \(String(describing: error), privacy: .public)")
                 carried.append(.couldNotMoveToTrash)
                 lastProjectURL = take.package.url
             }
         }
-        notices = carried
         stopTask = nil
+        // The new take's notices start as `carried`.
         begin(request, carrying: carried, restarting: true)
     }
 }

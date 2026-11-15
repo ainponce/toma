@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
 import CoreGraphics
+import Foundation
 import Testing
 
 @Suite struct IslandGeometryTests {
@@ -79,6 +80,28 @@ import Testing
         #expect(IslandGeometry.shape(.recording, on: wider) == IslandShape(width: 200 + 168, height: 38, bottomRadius: 13, roundsTopCorners: false))
         // Without a notch, the pill keeps its own size.
         #expect(IslandGeometry.shape(.recording, on: Self.externalScreen) == IslandShape(width: 300, height: 36, bottomRadius: 17, roundsTopCorners: true))
+    }
+
+    @Test func savedShapeFollowsTheDesignTable() {
+        let top = Self.notchScreen
+        let take = SavedTake(
+            projectURL: URL(fileURLWithPath: "/Users/someone/Movies/Toma/Recording.toma", isDirectory: true),
+            duration: .seconds(42), markers: 0, trackKinds: [.display], openedEditor: false)
+        let saving = IslandShape(width: 490, height: 140, bottomRadius: 32, roundsTopCorners: false)
+        #expect(IslandGeometry.shape(.saving, on: top) == saving)
+        #expect(IslandGeometry.shape(.saved(take), on: top) == saving)
+        // The compact notice: 40 pt under the menu bar's height, whatever the notice.
+        #expect(IslandGeometry.shape(.notice(.microphoneSilent), on: top) == IslandShape(width: 360, height: 72, bottomRadius: 20, roundsTopCorners: false))
+        #expect(IslandGeometry.shape(.notice(.stoppedForDiskSpace), on: top) == IslandGeometry.shape(.notice(.microphoneSilent), on: top))
+
+        // Without a notch, the same sizes in a pill.
+        let external = Self.externalScreen
+        #expect(IslandGeometry.shape(.saving, on: external) == IslandShape(width: 490, height: 140, bottomRadius: 36, roundsTopCorners: true))
+        #expect(IslandGeometry.shape(.notice(.microphoneSilent), on: external) == IslandShape(width: 360, height: 64, bottomRadius: 24, roundsTopCorners: true))
+
+        for state in [IslandState.notice(.microphoneSilent), .saving, .saved(take)] {
+            #expect(IslandGeometry.spring(to: state) == Motion.islandExpand)
+        }
     }
 
     @Test func springsFollowTheDesignTable() {

@@ -17,6 +17,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let store = SettingsStore()
     /// The countdown before a take, shared by the island's settings card and the settings window.
     private let countdown: CountdownSetting
+    /// What a stop does once the take is saved, shared by the island's settings card and the settings window.
+    private let afterStop: AfterStopSetting
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
@@ -46,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater = UpdaterController(recording: recording, exportGate: exportGate)
         hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
         countdown = CountdownSetting(store: store)
+        afterStop = AfterStopSetting(store: store)
         super.init()
         hotKeys.perform = { [weak self] action in self?.perform(action) }
         exportGate.busyChanged = { [weak self] in self?.updater.exportStateChanged() }
@@ -54,7 +57,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recording.showStartFailure = { [weak self] error in self?.showStartFailure(error) }
         recording.recordingStateChanged = { [weak self] in
             guard let self else { return }
-            updateActivationPolicy()
+            // Never activated by the take ending: the editor activates the app when it opens, and with "Stay
+            // Where I Am" nothing does.
+            updateActivationPolicy(activatingIfRegular: false)
             updater.recordingStateChanged()
             hotKeys.update(isRecording: recording.isRecording)
         }
@@ -64,9 +69,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let island = IslandPanel(recording: recording, hotKeys: hotKeys, countdown: countdown)
+        let island = IslandPanel(recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
+        recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
         self.island = island
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
@@ -210,7 +216,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         if settings == nil {
-            settings = SettingsWindowController(store: store, hotKeys: hotKeys, countdown: countdown) { [weak self] in
+            settings = SettingsWindowController(store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil
                 updateActivationPolicy()
@@ -242,13 +248,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Windows
 
+    /// Inside the island, above Record: an alert would activate the app during a take.
     private func showStartFailure(_ error: any Error) {
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = String(localized: "Couldn't start recording")
-        alert.informativeText = userFacingDescription(of: error)
-        NSApp.activate()
-        alert.runModal()
+        guard let island else {
+            Self.logger.error("A take could not start before the island was made: \(String(describing: error), privacy: .public)")
+            return
+        }
+        island.startFailed(error)
     }
 
     /// After recovery: every recovered project is the last project in turn, open editors on them load again,

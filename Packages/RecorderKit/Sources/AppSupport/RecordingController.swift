@@ -6,8 +6,9 @@ import Recording
 import os
 
 /// Records takes of what the user chose, one at a time, each into a new project in
-/// `environment.projectsFolder`, with the chosen microphone when there is one and it is allowed. Opens
-/// the editor on the take once it is closed. Every take is counted down first (`RecorderSettings.countdown`).
+/// `environment.projectsFolder`, with the chosen microphone when there is one and it is allowed. Once a
+/// stop has closed the take it is saved (`lastSaved`), and the editor opens on it unless
+/// `RecorderSettings.afterStop` says to stay. Every take is counted down first (`RecorderSettings.countdown`).
 /// While recording, the user can pause the take, mark moments of it, and restart it: the take goes to the
 /// trash and a new one starts.
 @MainActor @Observable
@@ -39,6 +40,9 @@ public final class RecordingController {
     public internal(set) var lastProjectURL: URL? {
         didSet { defaults.set(lastProjectURL?.path, forKey: Self.lastProjectKey) }
     }
+    /// The last take a stop closed and kept: the user's stop or the disk's, also when closing it failed in
+    /// part (`closedWithError`). Not a take that was restarted, nor one closed to quit.
+    public private(set) var lastSaved: SavedTake?
     /// What the take was asked to record, from the countdown until the controller is idle again. A restart
     /// records it again, and does not change it.
     public private(set) var currentRequest: TakeRequest?
@@ -71,6 +75,9 @@ public final class RecordingController {
     @ObservationIgnored public var recordingStateChanged: () -> Void = {}
     /// A take could not start, and nobody stopped it: says why.
     @ObservationIgnored public var showStartFailure: (any Error) -> Void = { _ in }
+    /// Confirms what the user just did: a marker written, a pause on, a restarted take in the trash, a
+    /// countdown cancelled.
+    @ObservationIgnored public var onConfirmation: (IslandConfirmation) -> Void = { _ in }
 
     private static let lastProjectKey = "lastProjectPath"
     private static let maximumNotices = 6
@@ -99,6 +106,26 @@ public final class RecordingController {
         let warnings: Task<Void, Never>
         /// The take's microphone, metered.
         let microphoneMeter: MeteredSource?
+        /// The kind of each of its sources, by track ID: what a saved take says it recorded if closing it
+        /// failed before it could say so.
+        let trackKinds: [TrackKind]
+    }
+
+    /// What happens once a stop has closed its take.
+    enum StopOutcome: Equatable {
+        /// Quitting or powering off: nothing opens, and the take is not saved for the island.
+        case quit
+        /// The take is saved (`lastSaved`), and its editor opens if `opensEditor`.
+        case save(opensEditor: Bool)
+
+        /// Two stops came for one take: quitting wins, and the editor opens only if both asked for it.
+        func joined(with other: StopOutcome?) -> StopOutcome {
+            switch (self, other) {
+            case (.quit, _), (_, .quit?): .quit
+            case (.save(let opens), .save(let otherOpens)?): .save(opensEditor: opens && otherOpens)
+            case (.save, nil): self
+            }
+        }
     }
 
     @ObservationIgnored private let probe: any PermissionProbe
@@ -122,10 +149,12 @@ public final class RecordingController {
     @ObservationIgnored var autoStopped = false
     /// `stopTask` is a restart closing its take.
     @ObservationIgnored var isRestarting = false
-    /// A stop came while a restart closed its take: the restart ends as that stop, opening the editor if
-    /// every stop that came asked to (`nil`: no stop came). Quitting asks for none, and wins.
-    @ObservationIgnored var stopDuringRestart: Bool?
-    private var recordedTime = RecordedTime()
+    /// A stop came while a restart closed its take: the restart ends as that stop (`nil`: no stop came), or
+    /// as all of them joined (`StopOutcome.joined`).
+    @ObservationIgnored var stopDuringRestart: StopOutcome?
+    /// The markers the take has written.
+    @ObservationIgnored var markersWritten = 0
+    private(set) var recordedTime = RecordedTime()
 
     public init(probe: any PermissionProbe, environment: TakeEnvironment, defaults: UserDefaults = .standard) {
         self.probe = probe
@@ -161,6 +190,10 @@ public final class RecordingController {
     func begin(_ request: TakeRequest, carrying carried: [TakeNotice], restarting: Bool) {
         startCancelled = false
         currentRequest = request
+        // From the countdown on, what was said about the last take no longer applies: its notices go, so a
+        // new take that says the same again is heard as new (the island shows new notices).
+        notices = carried
+        if !carried.contains(.closedWithError) { lastCloseError = nil }
         let countdown = SettingsStore(defaults: defaults).settings.countdown
         setPhase(countdown > 0 ? .countingDown(remaining: countdown) : .starting)
         startTask = Task { await start(request, carrying: carried, countdown: countdown, restarting: restarting) }
@@ -196,6 +229,7 @@ public final class RecordingController {
         } catch {
             // Stopped while counting down: nothing was made.
             setPhase(.idle)
+            onConfirmation(.countdownCancelled)
             return
         }
         let preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
@@ -209,8 +243,6 @@ public final class RecordingController {
         recordsMicrophone = preflight.recordMicrophone
         setPhase(.starting)
 
-        notices = carried
-        if !carried.contains(.closedWithError) { lastCloseError = nil }
         if wantsMicrophone, !usesMicrophone {
             addNotice(.noMicrophone)
         } else if usesMicrophone, !preflight.recordMicrophone {
@@ -309,7 +341,8 @@ public final class RecordingController {
             }
         }
         take = Take(
-            recording: recording, package: package, starting: starting, warnings: warnings, microphoneMeter: prepared.microphoneMeter)
+            recording: recording, package: package, starting: starting, warnings: warnings, microphoneMeter: prepared.microphoneMeter,
+            trackKinds: kinds.sorted { $0.key < $1.key }.map(\.value))
         recordsMicrophone = prepared.microphoneMeter != nil
         environment.termination.takeBegan()
 
@@ -336,18 +369,31 @@ public final class RecordingController {
 
     // MARK: - Stop
 
+    /// The user's stop (Stop, the shortcut, the menu): the take is saved, and its editor opens if
+    /// `RecorderSettings.afterStop`, read now, says so.
     public func stopRecording() {
-        Task { await stop(openingEditor: true) }
+        let outcome = savingAsTheSettingsSay()
+        Task { await stop(outcome) }
     }
 
     /// Closes the take, if any, and returns once it is closed; a stop already in progress is waited for, and
     /// so is a start still checking permissions or creating the project, which then gives up. A countdown
     /// ends at once, without waiting for the second in progress, and nothing is recorded. A restart still
     /// closing its take ends as this stop: the take is kept and no new one starts. Safe to call at any
-    /// time, also while quitting.
+    /// time, also while quitting. With `openingEditor` the take is saved and opened; without it (quitting)
+    /// it is neither.
     public func stop(openingEditor: Bool) async {
+        await stop(openingEditor ? .save(opensEditor: true) : .quit)
+    }
+
+    /// Saving the take, opening its editor if `RecorderSettings.afterStop` says so.
+    func savingAsTheSettingsSay() -> StopOutcome {
+        .save(opensEditor: SettingsStore(defaults: defaults).settings.afterStop == .openEditor)
+    }
+
+    private func stop(_ outcome: StopOutcome) async {
         if let stopTask {
-            if isRestarting { stopDuringRestart = openingEditor && stopDuringRestart != false }
+            if isRestarting { stopDuringRestart = outcome.joined(with: stopDuringRestart) }
             await stopTask.value
             return
         }
@@ -365,18 +411,21 @@ public final class RecordingController {
             }
             return
         }
-        let task = Task { await close(take, openingEditor: openingEditor) }
+        let task = Task { await close(take, as: outcome) }
         stopTask = task
         await task.value
     }
 
-    private func close(_ take: Take, openingEditor: Bool) async {
+    private func close(_ take: Take, as outcome: StopOutcome) async {
+        // Before the phase leaves `.recording`.
+        let recorded = recordedTime.elapsed(at: environment.now())
         setPhase(.stopping)
         let closed = await closeAndHear(take)
-        finish(take, closed, openingEditor: openingEditor)
+        finish(take, closed, as: outcome, recorded: recorded)
     }
 
-    /// Closes the take and hears all its warnings; does not let it go.
+    /// Closes the take, hears all its warnings and the answers to the user's requests sent to it (a marker
+    /// it wrote counts); does not let it go.
     func closeAndHear(_ take: Take) async -> ClosedTake {
         var closed = ClosedTake()
         // Whichever way the start ends; the start logs its own failure.
@@ -394,20 +443,29 @@ public final class RecordingController {
         }
         // Its warnings end once it is closed: every one is heard before the take is let go.
         await take.warnings.value
+        // The take refuses what comes once it is closed, so they all return.
+        await userRequests?.value
         return closed
     }
 
-    /// Says how closing went, lets the take go and goes back to idle; opens the editor on the take when asked.
-    func finish(_ take: Take, _ closed: ClosedTake, openingEditor: Bool) {
+    /// Says how closing went, lets the take go and goes back to idle. A take that recorded something is
+    /// the last project and, unless closed to quit, saved for the island with the time it had `recorded`;
+    /// its editor opens if `outcome` says so.
+    func finish(_ take: Take, _ closed: ClosedTake, as outcome: StopOutcome, recorded: Duration) {
         if let error = closed.error {
             lastCloseError = error
             addNotice(.closedWithError)
         }
+        let markers = markersWritten
         endTake()
         stopTask = nil
         guard closed.opened else { return }
         lastProjectURL = take.package.url
-        if openingEditor { openEditor(take.package.url, closed.takeID) }
+        guard case .save(let opensEditor) = outcome else { return }
+        lastSaved = SavedTake(
+            projectURL: take.package.url, duration: recorded, markers: markers,
+            trackKinds: closed.record?.tracks.map(\.kind) ?? take.trackKinds, openedEditor: opensEditor)
+        if opensEditor { openEditor(take.package.url, closed.takeID) }
     }
 
     /// The take stopped by itself because the disk is full: closed like a stop from the menu, unless it was
@@ -415,7 +473,7 @@ public final class RecordingController {
     private func diskStopped(_ recording: any TakeRecording) async {
         guard take?.recording === recording else { return }
         autoStopped = true
-        await stop(openingEditor: true)
+        await stop(savingAsTheSettingsSay())
     }
 
     /// Releases what the take held once it is closed (or failed to start), and goes back to idle.
@@ -431,6 +489,7 @@ public final class RecordingController {
         pendingPauseRequests = 0
         recordsMicrophone = false
         autoStopped = false
+        markersWritten = 0
         userRequests = nil
         silenceWatch?.cancel()
         silenceWatch = nil
@@ -512,8 +571,15 @@ public final class RecordingController {
         let kind: (String) -> TrackKind = { kinds[$0] ?? .display }
         let notice: TakeNotice
         switch warning {
-        case .streamInterrupted(let track): notice = .streamInterrupted(kind(track))
-        case .streamRestarted(let track): notice = .streamResumed(kind(track))
+        case .streamInterrupted(let track):
+            // That it came back no longer holds.
+            notices.removeAll { $0 == .streamResumed(kind(track)) }
+            notice = .streamInterrupted(kind(track))
+        case .streamRestarted(let track):
+            // What it came back from is resolved: the warning goes, and so does the island's icon.
+            let resumed = kind(track)
+            notices.removeAll { $0 == .streamInterrupted(resumed) || $0 == .trackPaused(resumed) || (resumed == .display && $0 == .screenPaused) }
+            notice = .streamResumed(resumed)
         case .trackLost(let track):
             notice = .trackLost(kind(track))
             if kind(track) == .microphone { recordsMicrophone = false }

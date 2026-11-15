@@ -32,6 +32,8 @@ final class OpenPanelModel {
     var showsSettings = false
     /// How long the countdown before a take lasts, as the settings window shows it too.
     let countdown: CountdownSetting
+    /// What a stop does once the take is saved, as the settings window shows it too.
+    let afterStop: AfterStopSetting
     /// The chosen microphone's level, while the panel shows it.
     let levelPreview = MicrophoneLevelPreview()
 
@@ -43,12 +45,13 @@ final class OpenPanelModel {
 
     /// The saved selection if its displays are still connected; otherwise the display the island is on.
     init(
-        recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, microphones: MicrophoneList,
-        displays: [DisplayChoice], islandDisplayID: UInt32
+        recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, afterStop: AfterStopSetting,
+        microphones: MicrophoneList, displays: [DisplayChoice], islandDisplayID: UInt32
     ) {
         self.recording = recording
         self.store = store
         self.countdown = countdown
+        self.afterStop = afterStop
         microphoneList = microphones
         self.displays = displays
         let saved = store.settings
@@ -118,11 +121,14 @@ final class OpenPanelModel {
 }
 
 /// The open island (700 × 400, notch design §5.2): the mode, what to record, the camera, audio, the
-/// settings and Record. Window, Area and what this version does not record yet are drawn, disabled.
+/// settings and Record, and above Record why the last take could not start. Window, Area and what this
+/// version does not record yet are drawn, disabled.
 struct IslandOpenPanel: View {
     @Bindable var panel: OpenPanelModel
     /// Under the notch, the black band at the top.
     let topInset: Double
+    /// Why the last take could not start (`userFacingDescription(of:)`), while the island says so.
+    let startFailure: String?
     let send: (IslandEvent) -> Void
 
     /// Room for the columns: 700 wide, less the margins and the gaps, in the prototype's proportions.
@@ -141,6 +147,7 @@ struct IslandOpenPanel: View {
             .frame(maxHeight: .infinity)
             // Over the columns only: ✕ above and Settings and Record below take one click with the card open.
             .overlay(alignment: .bottomLeading) { settingsCard }
+            if let startFailure { StartFailureRow(description: startFailure) }
             footer
         }
         .padding(.top, topInset + 12)
@@ -444,6 +451,22 @@ private struct SettingsCard: View {
                     selection: Binding(get: { panel.countdown.seconds }, set: { panel.countdown.set($0) }),
                     compact: true)
             }
+            HStack(spacing: 8) {
+                Text("When Recording Stops").opacity(0.75)
+                Spacer(minLength: 0)
+                // A menu, as the microphone's: it opens without activating the app.
+                Picker(selection: Binding(get: { panel.afterStop.value }, set: { panel.afterStop.set($0) })) {
+                    ForEach(AfterStop.allCases, id: \.self) { value in
+                        AfterStopSetting.label(for: value).tag(value)
+                    }
+                } label: {
+                    Text("When Recording Stops")
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .fixedSize()
+            }
             Divider().overlay(Color.white.opacity(0.12))
             SettingsToggle(title: Text("Do Not Disturb"), icon: "moon.fill").upcoming(.doNotDisturb)
             SettingsToggle(title: Text("Hide Desktop Icons"), icon: "eye.slash").upcoming(.hideDesktopIcons)
@@ -459,6 +482,33 @@ private struct SettingsCard: View {
         // Clicks on the card stay on it.
         .contentShape(Rectangle())
         .onTapGesture {}
+    }
+}
+
+/// Why the last take could not start, above Record: "Couldn't start recording" and the reason. A take
+/// never shows an alert, which would activate the app.
+private struct StartFailureRow: View {
+    let description: String
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Spacer(minLength: 0)
+            Image(systemName: NoticePresentation.stopped.symbol)
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(NoticePresentation.stopped.tint)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Couldn't start recording")
+                    .font(.system(size: 12.5, weight: .semibold))
+                Text(verbatim: description)
+                    .font(.system(size: 12))
+                    .opacity(0.75)
+                    .lineLimit(2)
+            }
+            .frame(maxWidth: 440, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+        }
+        .accessibilityElement(children: .combine)
     }
 }
 

@@ -11,18 +11,21 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var countdownSeconds: Int = 3
     /// The global shortcuts.
     public var hotKeys: HotKeyBindings = .defaults
+    /// What a stop does once the take is saved ("When Recording Stops"): open the editor, or stay.
+    public var afterStop: AfterStop = .openEditor
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
 
     public init(
         selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
-        hotKeys: HotKeyBindings = .defaults
+        hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor
     ) {
         self.selection = selection
         self.quick = quick
         self.countdownSeconds = countdownSeconds
         self.hotKeys = hotKeys
+        self.afterStop = afterStop
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -34,6 +37,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         quick = (try? container.decodeIfPresent(QuickSettings.self, forKey: .quick)) ?? defaults.quick
         countdownSeconds = (try? container.decodeIfPresent(Int.self, forKey: .countdownSeconds)) ?? defaults.countdownSeconds
         hotKeys = (try? container.decodeIfPresent(HotKeyBindings.self, forKey: .hotKeys)) ?? defaults.hotKeys
+        afterStop = (try? container.decodeIfPresent(AfterStop.self, forKey: .afterStop)) ?? defaults.afterStop
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

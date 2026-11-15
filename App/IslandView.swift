@@ -19,6 +19,10 @@ final class IslandModel {
     var panel: OpenPanelModel?
     /// The open recording island asks whether to restart the take.
     var isConfirmingRestart = false
+    /// The right wing's warning icon (`IslandMachine.attention`).
+    var attention: NoticePresentation?
+    /// Why the last take could not start, while the open panel says so (`IslandMachine.hasStartFailure`).
+    var startFailure: String?
 
     /// The take the island shows.
     @ObservationIgnored let recording: RecordingController
@@ -64,7 +68,7 @@ struct IslandView: View {
         guard model.top.notch != nil else { return false }
         switch model.state {
         case .rest, .peek, .recording: return true
-        case .open, .choosing, .countdown, .recordingOpen: return false
+        case .open, .choosing, .countdown, .recordingOpen, .notice, .saving, .saved: return false
         }
     }
 }
@@ -86,7 +90,7 @@ private struct IslandContent: View {
     }
 
     /// Which content a state shows: a new key is a new content, with its transition. Every second of the
-    /// countdown is the same content, whose number changes inside it.
+    /// countdown is the same content, whose number changes inside it, and so is every notice.
     private static func key(_ state: IslandState) -> Int {
         switch state {
         case .rest: 0
@@ -96,6 +100,9 @@ private struct IslandContent: View {
         case .countdown: 4
         case .recording: 5
         case .recordingOpen: 6
+        case .notice: 7
+        case .saving: 8
+        case .saved: 9
         }
     }
 
@@ -113,16 +120,29 @@ private struct IslandContent: View {
                 .onTapGesture { model.send(.clicked) }
         case .open:
             if let panel = model.panel {
-                IslandOpenPanel(panel: panel, topInset: model.notchBand, send: model.send)
+                IslandOpenPanel(panel: panel, topInset: model.notchBand, startFailure: model.startFailure, send: model.send)
             }
         case .choosing:
             BelowTheNotch(band: model.notchBand) { ChoosingRow(send: model.send) }
         case .countdown(let remaining):
             CountdownView(remaining: remaining, topInset: model.notchBand)
         case .recording:
-            RecordingWings(recording: model.recording, notchWidth: model.top.notch.map { Double($0.width) })
+            RecordingWings(
+                recording: model.recording, notchWidth: model.top.notch.map { Double($0.width) }, attention: model.attention)
         case .recordingOpen:
             IslandRecordingPanel(recording: model.recording, model: model, topInset: model.notchBand, send: model.send)
+        case .notice(let notice):
+            // Under the notch, in the 40 pt below the menu bar.
+            BelowTheNotch(band: model.notchBand) {
+                IslandNoticeLine(notice: notice, closeError: model.recording.lastCloseError)
+                    .minimumScaleFactor(0.85)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 18)
+            }
+        case .saving:
+            BelowTheNotch(band: model.notchBand) { IslandSavingView() }
+        case .saved(let take):
+            IslandSavedView(take: take, recording: model.recording, topInset: model.notchBand, send: model.send)
         }
     }
 }

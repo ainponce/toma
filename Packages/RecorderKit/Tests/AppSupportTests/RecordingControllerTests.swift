@@ -779,6 +779,166 @@ enum AwaitPoint: CaseIterable {
             #expect(await eventually { rig.controller.phase == .idle })
         }
     }
+
+    // MARK: - After a stop
+
+    @Test func stayHereNeverOpensTheEditor() async throws {
+        try await withRig(afterStop: .stayHere) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.controller.addMarker()
+            #expect(await eventually { rig.confirmations == [.markerAdded] })
+            #expect(rig.controller.lastSaved == nil)
+            rig.controller.stopRecording()
+            #expect(await eventually { rig.controller.phase == .idle && rig.controller.lastSaved != nil })
+            try await Task.sleep(for: .milliseconds(100))  // an editor asked for would have opened
+
+            #expect(rig.editorOpenings.isEmpty)
+            let saved = try #require(rig.controller.lastSaved)
+            let package = try #require(rig.takes.packages.first)
+            #expect(saved.projectURL == package.url && rig.controller.lastProjectURL == package.url)
+            #expect(saved.markers == 1)
+            #expect(saved.trackKinds == [.display, .microphone])
+            #expect(!saved.openedEditor)
+        }
+    }
+
+    @Test(arguments: AfterStop.allCases) func diskAutoStopFollowsTheAfterStopSetting(afterStop: AfterStop) async throws {
+        try await withRig(afterStop: afterStop) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+            #expect(await eventually { rig.controller.phase == .idle && rig.controller.lastSaved != nil })
+            let recording = try #require(rig.takes.recordings.first)
+            #expect(await eventually { recording.autoStops == 1 })
+            try await Task.sleep(for: .milliseconds(100))  // the stop the automatic one asks for has run too
+
+            let saved = try #require(rig.controller.lastSaved)
+            #expect(saved.openedEditor == (afterStop == .openEditor))
+            #expect(rig.editorOpenings.count == (afterStop == .openEditor ? 1 : 0))
+            #expect(rig.controller.notices.contains(.stoppedForDiskSpace))
+            #expect(saved.projectURL == rig.takes.packages.first?.url)
+        }
+    }
+
+    @Test func resumedStreamClearsTheWarning() async throws {
+        try await withRig { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let microphone = try #require(rig.takes.factory.microphones.last)
+            microphone.failNow(domain: "AVFoundationErrorDomain", code: -11819)
+            #expect(await eventually { rig.controller.notices.contains(.streamInterrupted(.microphone)) })
+            // It comes back after the first restart's wait.
+            #expect(await eventually { rig.controller.notices.contains(.streamResumed(.microphone)) })
+            #expect(!rig.controller.notices.contains(.streamInterrupted(.microphone)))
+
+            // Interrupted again: that it came back no longer holds, until it comes back again.
+            microphone.failNow(domain: "AVFoundationErrorDomain", code: -11819)
+            #expect(await eventually { rig.controller.notices == [.streamInterrupted(.microphone)] })
+            #expect(await eventually { rig.controller.notices == [.streamResumed(.microphone)] })
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
+    @Test func savedTakeKeepsTheRecordedTime() async throws {
+        try await withRig { rig in
+            let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+            rig.now.set(start)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase == .recording(since: start) })
+            rig.now.set(start + 3)
+            rig.controller.stopRecording()
+            #expect(await eventually { rig.controller.lastSaved != nil })
+
+            let saved = try #require(rig.controller.lastSaved)
+            #expect(saved.duration == .seconds(3))
+            #expect(saved.markers == 0 && saved.openedEditor)
+            #expect(rig.editorOpenings.map(\.package) == [saved.projectURL])
+        }
+    }
+
+    @Test func aTakeThatClosedWithAnErrorIsStillSaved() async throws {
+        try await withRig(afterStop: .stayHere) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let package = try #require(rig.takes.packages.first)
+            try await Task.sleep(for: .milliseconds(500))
+            // The manifest is replaced through a temporary file in the package folder: closing cannot mark the
+            // take complete, and says nothing about its tracks.
+            let folder = package.url.path
+            try #require(chmod(folder, 0o555) == 0)
+            defer { chmod(folder, 0o755) }
+            rig.controller.stopRecording()
+            #expect(await eventually { rig.controller.phase == .idle && rig.controller.lastSaved != nil })
+            try #require(chmod(folder, 0o755) == 0)
+
+            #expect(rig.controller.notices.contains(.closedWithError) && rig.controller.lastCloseError != nil)
+            let saved = try #require(rig.controller.lastSaved)
+            #expect(saved.projectURL == package.url)
+            #expect(saved.trackKinds == [.display, .microphone])  // the take's sources
+            #expect(!saved.openedEditor && rig.editorOpenings.isEmpty)
+        }
+    }
+
+    @Test func quittingShowsNoSavedTake() async throws {
+        try await withRig { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.phase == .idle)
+            #expect(rig.controller.lastSaved == nil && rig.controller.lastProjectURL != nil)
+            #expect(rig.editorOpenings.isEmpty)
+        }
+    }
+
+    @Test func confirmationsAreReported() async throws {
+        try await withRig(countdown: 3) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.confirmations.isEmpty)
+            rig.controller.addMarker()
+            #expect(await eventually { rig.confirmations == [.markerAdded] })
+            rig.controller.togglePause()
+            #expect(await eventually { rig.confirmations == [.markerAdded, .paused] })
+            rig.controller.togglePause()  // resuming says nothing
+            try await Task.sleep(for: .milliseconds(300))
+
+            // The restart's countdown: its first second is over, the second one is held.
+            rig.sleep.hold(from: 5)
+            rig.controller.restartTake()
+            #expect(await eventually { rig.sleep.heldCall == 5 })
+            #expect(rig.controller.phase == .countingDown(remaining: 2))
+            #expect(rig.confirmations == [.markerAdded, .paused, .movedToTrash])
+            await rig.controller.stop(openingEditor: true)
+
+            #expect(rig.controller.phase == .idle)
+            #expect(rig.confirmations == [.markerAdded, .paused, .movedToTrash, .countdownCancelled])
+            // Neither a restart nor a cancelled countdown saves a take.
+            #expect(rig.controller.lastSaved == nil && rig.editorOpenings.isEmpty)
+        }
+    }
+
+    @Test func aNewTakeStartsWithoutTheLastOnesNotices() async throws {
+        try await withRig(hasMicrophone: false, countdown: 3) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.noMicrophone])
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.notices == [.noMicrophone])  // about the last take, until the next one
+
+            // The next take's countdown: what was said about the last one no longer applies, and the island
+            // hears the same notice again as a new one once the take starts.
+            rig.sleep.hold(from: 4)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(rig.controller.notices.isEmpty)
+            #expect(await eventually { rig.sleep.heldCall == 4 })
+            #expect(rig.controller.notices.isEmpty)
+            rig.sleep.releaseAll()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.noMicrophone])
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
 }
 
 // MARK: - Rig
@@ -797,16 +957,16 @@ extension RecordingController.Phase {
 /// A controller whose takes are recorded in a fresh folder with its own defaults, both removed afterwards.
 /// Without `keepingTakes`, the rig holds the takes it makes only weakly (`PreparedTakes.made`).
 /// The countdown lasts `countdown` seconds (none unless a test is about it), each of them a wait of
-/// `Rig.sleep`, which returns at once unless the test holds it.
+/// `Rig.sleep`, which returns at once unless the test holds it. A stop does `afterStop`.
 @MainActor private func withRig(
     screenRecording: PermissionState = .granted, microphone: PermissionState = .granted, hasMicrophone: Bool = true,
-    keepingTakes: Bool = true, countdown: Int = 0, _ body: (Rig) async throws -> Void
+    keepingTakes: Bool = true, countdown: Int = 0, afterStop: AfterStop = .openEditor, _ body: (Rig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "RecordingControllerTests-\(UUID().uuidString)"
         let defaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
         defer { defaults.removePersistentDomain(forName: suite) }
-        SettingsStore(defaults: defaults).settings = RecorderSettings(countdownSeconds: countdown)
+        SettingsStore(defaults: defaults).settings = RecorderSettings(countdownSeconds: countdown, afterStop: afterStop)
         try await body(Rig(
             in: directory, defaults: defaults, screenRecording: screenRecording, microphone: microphone,
             hasMicrophone: hasMicrophone, keepingTakes: keepingTakes))
@@ -840,6 +1000,8 @@ extension RecordingController.Phase {
     let controller: RecordingController
     private(set) var editorOpenings: [EditorOpening] = []
     private(set) var startFailures: [any Error] = []
+    /// What the controller confirmed, in order.
+    private(set) var confirmations: [IslandConfirmation] = []
     /// How many times `isRecording` changed.
     private(set) var recordingStateChanges = 0
     private(set) var onboardingOpenings = 0
@@ -876,6 +1038,7 @@ extension RecordingController.Phase {
         controller = RecordingController(probe: probe, environment: environment, defaults: defaults)
         controller.openEditor = { [weak self] url, take in self?.editorOpenings.append(EditorOpening(package: url, take: take)) }
         controller.showStartFailure = { [weak self] error in self?.startFailures.append(error) }
+        controller.onConfirmation = { [weak self] confirmation in self?.confirmations.append(confirmation) }
         controller.recordingStateChanged = { [weak self] in self?.recordingStateChanges += 1 }
         controller.openOnboarding = { [weak self] in self?.onboardingOpenings += 1 }
     }

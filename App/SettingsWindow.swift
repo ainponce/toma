@@ -5,16 +5,19 @@ import Carbon
 import Observation
 import SwiftUI
 
-/// The app's settings: the countdown before a take and the global shortcuts. A titled window like the
-/// permissions one, so while it is open (and no take records) the app is in the Dock.
+/// The app's settings: the countdown before a take, what a stop does and the global shortcuts. A titled
+/// window like the permissions one, so while it is open (and no take records) the app is in the Dock.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
     private let model: SettingsModel
 
-    init(store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, onClose: @escaping () -> Void) {
+    init(
+        store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
+        onClose: @escaping () -> Void
+    ) {
         self.onClose = onClose
-        model = SettingsModel(store: store, hotKeys: hotKeys, countdown: countdown)
+        model = SettingsModel(store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered,
             defer: false)
@@ -70,6 +73,36 @@ final class CountdownSetting {
     }
 }
 
+/// What a stop does once the take is saved ("When Recording Stops"): the one place it is read and saved
+/// for the settings window and the island's settings card, which both show it as it is now. The controller
+/// reads the saved value at every stop.
+@MainActor @Observable
+final class AfterStopSetting {
+    private(set) var value: AfterStop
+
+    @ObservationIgnored private let store: SettingsStore
+
+    init(store: SettingsStore) {
+        self.store = store
+        value = store.settings.afterStop
+    }
+
+    func set(_ value: AfterStop) {
+        self.value = value
+        var settings = store.settings
+        settings.afterStop = value
+        store.settings = settings
+    }
+
+    /// How the settings name each choice.
+    static func label(for value: AfterStop) -> Text {
+        switch value {
+        case .openEditor: Text("Open the Editor")
+        case .stayHere: Text("Stay Where I Am")
+        }
+    }
+}
+
 /// What the settings window shows and changes; every change is saved at once.
 @MainActor @Observable
 final class SettingsModel {
@@ -86,13 +119,15 @@ final class SettingsModel {
 
     @ObservationIgnored let hotKeys: HotKeyCenter
     @ObservationIgnored let countdown: CountdownSetting
+    @ObservationIgnored let afterStop: AfterStopSetting
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private var monitor: Any?
 
-    init(store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting) {
+    init(store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting) {
         self.store = store
         self.hotKeys = hotKeys
         self.countdown = countdown
+        self.afterStop = afterStop
     }
 
     var bindings: HotKeyBindings { hotKeys.bindings }
@@ -178,6 +213,13 @@ private struct SettingsView: View {
                 Text("Countdown")
             }
             .pickerStyle(.segmented)
+            Picker(selection: Binding(get: { model.afterStop.value }, set: { model.afterStop.set($0) })) {
+                ForEach(AfterStop.allCases, id: \.self) { value in
+                    AfterStopSetting.label(for: value)
+                }
+            } label: {
+                Text("When Recording Stops")
+            }
             Section {
                 ForEach(HotKeyAction.allCases, id: \.self) { action in
                     ShortcutRow(model: model, action: action)
