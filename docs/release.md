@@ -347,7 +347,7 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
   - [ ] **Fondo dinámico:** lo mismo con un fondo dinámico (o uno que cambia solo): anotar cómo se ve en la tapa y en el video (se espera una imagen fija, la del momento en que empezó la toma o en que se cambió de Space).
   - [ ] **El mouse pasa:** con la tapa puesta, un clic secundario en el escritorio abre el menú del escritorio de Finder, la app de adelante no cambia y Toma no aparece en ⌘Tab ni en el Dock.
   - [ ] **Dos Spaces:** con dos Spaces de fondos distintos, cambiar de Space grabando: la tapa muestra el fondo del Space actual (anotar cuánto tarda en cambiar), y el video también.
-  - [ ] **Dos pantallas y otra resolución:** con dos pantallas, las dos quedan tapadas; cambiar la resolución de una a mitad de toma: su tapa vuelve a cubrirla entera, sin íconos a la vista en los bordes.
+  - [ ] **Dos pantallas y otra resolución:** con dos pantallas, las dos quedan tapadas; cambiar la resolución de una a mitad de toma: su tapa vuelve a cubrirla entera, sin íconos a la vista en los bordes. Grabando solo la principal, desenchufar la secundaria: su tapa se cierra ("Display … is gone: its cover is closed" en el log) y no aparece sobre la principal ni en el video.
   - [ ] **La foto del fondo:** cada toma tiene `takes/<toma>/wallpapers/display-<id>.png` por pantalla grabada (`ls <paquete>/takes/*/wallpapers`), igual al fondo que se ve (sin íconos, Dock, barra de menús ni ventanas) y del tamaño en píxeles de la pantalla; también con "Ocultar íconos" apagado; en modo Ventana, la de la pantalla de la ventana; en modo Área, la del área; después de reiniciar la toma, el proyecto nuevo tiene la suya.
   - [ ] **Nada pendiente:** ningún control de la isla dice "Llega en esta versión.".
 
@@ -373,7 +373,7 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
 | 13/14. Export real con micrófono y audio del sistema: los dos se oyen y van con el video | pendiente | pendiente | pendiente |
 | 15. La isla completa: decisión 1, audio del sistema por primera vez, ventana con un clic, otros escritorios, área 16:9 guardada, dos pantallas, burbuja sobre ventana y área, cambios de la burbuja en el video (soltarla, y forma y tamaño desde su menú), carga del encoder, nada pendiente | pendiente | pendiente | pendiente |
 | 17a. No Molestar con un atajo: antes de la cuenta y al detener, ya activado a mano, cuenta cancelada, `kill -9`, notificaciones, atajo que falla, reiniciar, Ajustes y Permisos | pendiente | pendiente | pendiente |
-| 17b. Ocultar íconos: íconos fuera y fondo adentro (Finder sale, cuenta cancelada, apagado), fondo dinámico, el mouse pasa, dos Spaces, dos pantallas y otra resolución, `wallpapers/display-<id>.png` por pantalla grabada, nada pendiente | pendiente | pendiente | pendiente |
+| 17b. Ocultar íconos: íconos fuera y fondo adentro (Finder sale, cuenta cancelada, apagado), fondo dinámico, el mouse pasa, dos Spaces, dos pantallas, otra resolución y la secundaria desenchufada, `wallpapers/display-<id>.png` por pantalla grabada, nada pendiente | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

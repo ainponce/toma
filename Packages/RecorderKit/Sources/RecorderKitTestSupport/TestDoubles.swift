@@ -147,3 +147,45 @@ public func first<T: Sendable>(of stream: AsyncStream<T>, within timeout: Durati
         return result
     }
 }
+
+/// A call that never returns on its own, not even when its task is cancelled (a system call that hangs), until
+/// `release()`: a test lets it go once it is done, so no task is left waiting.
+public final class NeverReturningCall: Sendable {
+    private struct State {
+        var waiting: [CheckedContinuation<Void, Never>] = []
+        var released = false
+        var cancelled = false
+    }
+
+    private let state = Mutex(State())
+
+    public init() {}
+
+    /// Returns only after `release()`. A cancellation is noted (`wasCancelled`) and does not end the wait.
+    public func wait() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                let released = state.withLock { state in
+                    if !state.released { state.waiting.append(continuation) }
+                    return state.released
+                }
+                if released { continuation.resume() }
+            }
+        } onCancel: {
+            state.withLock { $0.cancelled = true }
+        }
+    }
+
+    /// The task of a call waiting was cancelled.
+    public var wasCancelled: Bool { state.withLock { $0.cancelled } }
+
+    /// The calls waiting return, and later ones return at once.
+    public func release() {
+        let waiting = state.withLock { state in
+            state.released = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+}

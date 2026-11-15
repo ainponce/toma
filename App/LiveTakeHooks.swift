@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
-import CoreGraphics
-import Foundation
 import ProjectFormat
 import os
 
@@ -31,30 +29,23 @@ final class LiveTakeHooks: TakeHooks {
     }
 
     /// The take keeps the wallpaper of each display it records (in Window mode, the one with the window now), as the
-    /// current desktop shows it. One that cannot be taken or saved is logged, and the take goes on.
+    /// current desktop shows it (`WallpaperSnapshot.save`). Each capture has `captureTimeLimit`, so a stop, which waits
+    /// for this, waits that long at most for each display. One that cannot be taken in time or saved is logged, and the
+    /// take goes on.
     func takeDidStart(package: ProjectPackage, takeID: String, request: TakeRequest) async {
         await focus.takeDidStart(package: package, takeID: takeID, request: request)
         let window = request.selection.mode == .window ? request.selection.windowID.flatMap(WindowList.window) : nil
         let displayIDs = WallpaperSnapshot.displayIDs(
             recording: request.selection, displays: LiveTakeEnvironment.displays(), windowFrame: window?.frame)
-        for displayID in displayIDs {
-            let url = WallpaperSnapshot.url(in: package, take: takeID, displayID: displayID)
-            do {
-                try await Self.save(try await WallpaperSnapshot.capture(displayID: displayID), to: url)
-            } catch {
-                Self.logger.error(
-                    "No wallpaper of display \(displayID, privacy: .public) for \(takeID, privacy: .public): \(String(describing: error), privacy: .public)")
-            }
+        let failures = await WallpaperSnapshot.save(displayIDs: displayIDs, in: package, take: takeID)
+        for (displayID, error) in failures.sorted(by: { $0.key < $1.key }) {
+            Self.logger.error(
+                "No wallpaper of display \(displayID, privacy: .public) for \(takeID, privacy: .public): \(String(describing: error), privacy: .public)")
         }
     }
 
     func takeDidEnd() async {
         covers.hide()
         await focus.takeDidEnd()
-    }
-
-    /// Off the main thread: the file is synced to the drive.
-    @concurrent nonisolated private static func save(_ image: CGImage, to url: URL) async throws {
-        try WallpaperSnapshot.write(WallpaperSnapshot.pngData(image), to: url)
     }
 }

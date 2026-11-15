@@ -5,12 +5,14 @@ import Foundation
 /// or size. Detach it before the folder is removed.
 public struct DiskImage: Sendable {
     public enum FileSystem: Sendable {
-        case apfs, hfsPlus
+        /// exFAT has no `RENAME_EXCL` (`renamex_np` gives `ENOTSUP`).
+        case apfs, hfsPlus, exFAT
 
         fileprivate var hdiutilName: String {
             switch self {
             case .apfs: "APFS"
             case .hfsPlus: "HFS+"
+            case .exFAT: "ExFAT"
             }
         }
     }

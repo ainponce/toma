@@ -400,7 +400,8 @@ Opcional (versión 2). `takes/<toma>/wallpapers/display-<CGDirectDisplayID>.png`
 
 - Es una carpeta común, nunca un enlace simbólico (ver [Rutas](#el-paquete)).
 - Cada foto se escribe una sola vez y nunca sobre otra: `display-<id>.png.tmp` forzado a disco con `F_FULLFSYNC`, movido con `renamex_np(2)` y `RENAME_EXCL` (si ya hay algo con ese nombre, no se toca y el temporal se borra), y la carpeta forzada a disco.
-- Puede faltar la carpeta, o la foto de alguna pantalla: en una toma de la versión 1, en las de `recorder-dev`, o si la foto no se pudo sacar o guardar (la toma sigue igual y la app lo anota en su registro). Nada depende de ella para leer o exportar una toma.
+- Puede faltar la carpeta, o la foto de alguna pantalla: en una toma de la versión 1, en las de `recorder-dev`, o si la foto no se pudo sacar en 3 s o guardar (la toma sigue igual y la app lo anota en su registro). Nada depende de ella para leer o exportar una toma.
+- En un volumen sin `RENAME_EXCL` (exFAT o SMB, por ejemplo) `renamex_np` da `ENOTSUP`: ninguna foto se guarda, no queda ningún archivo a medias, la app lo anota y la toma sigue igual.
 - La recuperación no la toca.
 
 ## Cierre de una toma

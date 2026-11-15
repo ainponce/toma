@@ -34,6 +34,10 @@ public enum WallpaperSnapshotError: Error, Equatable {
 /// nothing over it: the desktop covers draw it, and each take keeps one per display it records, taken as it starts
 /// (spec §13, "Blur del escritorio original"), in `takes/<take>/wallpapers/`.
 public enum WallpaperSnapshot {
+    /// How long a capture of the wallpaper may take (`capture` under `withTimeLimit`); it takes a fraction of a second.
+    /// ScreenCaptureKit that does not answer must never keep a take from stopping, nor a countdown from starting.
+    public static let captureTimeLimit = Duration.seconds(3)
+
     /// `takes/<take>/wallpapers/display-<displayID>.png`.
     public static func url(in package: ProjectPackage, take: String, displayID: UInt32) -> URL {
         package.wallpapersDirectory(take: take).appendingPathComponent("display-\(displayID).png", isDirectory: false)
@@ -52,6 +56,27 @@ public enum WallpaperSnapshot {
             guard lstat(folder.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR else { throw POSIXError(.ENOTDIR) }
         }
         try DurableFile.writeNew(png, to: url)
+    }
+
+    /// Takes and saves the wallpaper of each of `displayIDs` for `take` of `package`, one display after the other, each
+    /// `capture` given `timeLimit`. A display whose capture fails or takes longer, or whose picture cannot be saved (on a
+    /// volume without `RENAME_EXCL`, as exFAT or SMB, `writeNew` gives `ENOTSUP`), is left without one and its error is
+    /// returned; the others are saved all the same. Off the main thread: the files are synced to the drive.
+    @concurrent
+    public static func save(
+        displayIDs: [UInt32], in package: ProjectPackage, take: String, timeLimit: Duration = captureTimeLimit,
+        capture: @escaping @Sendable (UInt32) async throws -> CGImage = { try await WallpaperSnapshot.capture(displayID: $0) }
+    ) async -> [UInt32: any Error] {
+        var failures: [UInt32: any Error] = [:]
+        for displayID in displayIDs {
+            do {
+                let image = try await withTimeLimit(timeLimit) { try await capture(displayID) }
+                try write(pngData(image), to: url(in: package, take: take, displayID: displayID))
+            } catch {
+                failures[displayID] = error
+            }
+        }
+        return failures
     }
 
     /// `image` as a PNG.
@@ -98,7 +123,7 @@ public enum WallpaperSnapshot {
     /// Captures the wallpaper of `displayID` at the display's own pixels, as the take records it (BGRA in sRGB, no
     /// cursor: `DisplayCaptureSource.makeConfiguration`): `SCScreenshotManager` with the on-screen windows, desktop
     /// windows included, and every one above the desktop left out (`excludedWindowIDs`). Throws without Screen
-    /// Recording, never asking for it.
+    /// Recording, never asking for it. It has no time limit of its own: `save` and the covers give it `captureTimeLimit`.
     public static func capture(displayID: UInt32) async throws -> CGImage {
         guard CGPreflightScreenCaptureAccess() else { throw WallpaperSnapshotError.noScreenRecordingAccess }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)

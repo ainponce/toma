@@ -55,6 +55,50 @@ import UniformTypeIdentifiers
         }
     }
 
+    @Test func wallpaperSnapshotsGoOnPastACaptureThatNeverReturns() async throws {
+        try await withTemporaryDirectory { dir in
+            let package = try Self.packageWithATake(in: dir)
+            let image = try Self.image(width: 4, height: 2)
+            let call = NeverReturningCall()
+            defer { call.release() }
+            let clock = ContinuousClock()
+            let started = clock.now
+            let failures = await WallpaperSnapshot.save(
+                displayIDs: [1, 2], in: package, take: "take-001", timeLimit: .milliseconds(200)
+            ) { displayID in
+                if displayID == 1 { await call.wait() }
+                return image
+            }
+            #expect(clock.now - started < .seconds(2))
+            #expect(failures.keys.sorted() == [1])
+            #expect(failures[1] as? TimeLimitExceeded == TimeLimitExceeded(limit: .milliseconds(200)))
+            #expect(!FileManager.default.fileExists(atPath: WallpaperSnapshot.url(in: package, take: "take-001", displayID: 1).path))
+            #expect(FileManager.default.fileExists(atPath: WallpaperSnapshot.url(in: package, take: "take-001", displayID: 2).path))
+            #expect(WallpaperSnapshot.captureTimeLimit == .seconds(3))
+        }
+    }
+
+    @Test func wallpaperSnapshotsOnAVolumeWithoutExclusiveRenameAreLeftOut() async throws {
+        try await withTemporaryDirectory { dir in
+            let disk = try DiskImage.attach(sizeMegabytes: 20, fileSystem: .exFAT, in: dir)
+            defer {
+                do {
+                    try disk.detach()
+                } catch {
+                    Issue.record(error)
+                    try? disk.detach(force: true)
+                }
+            }
+            let package = try Self.packageWithATake(in: disk.mountPoint)
+            let image = try Self.image(width: 4, height: 2)
+            let failures = await WallpaperSnapshot.save(displayIDs: [1, 2], in: package, take: "take-001") { _ in image }
+            // Every display is tried, and none leaves a file behind.
+            #expect(failures.keys.sorted() == [1, 2])
+            for error in failures.values { #expect((error as? POSIXError)?.code == .ENOTSUP, "\(error)") }
+            #expect(try FileManager.default.contentsOfDirectory(atPath: package.wallpapersDirectory(take: "take-001").path).isEmpty)
+        }
+    }
+
     @Test func wallpaperCaptureExcludesEverythingAboveTheDesktop() {
         let desktop = Int(CGWindowLevelForKey(.desktopWindow))
         let icons = Int(CGWindowLevelForKey(.desktopIconWindow))
@@ -118,6 +162,13 @@ import UniformTypeIdentifiers
         let empty = WallpaperLayout.imageRect(
             imageSize: .zero, screenSize: CGSize(width: 1512, height: 982), scaling: .scaleProportionallyUpOrDown, allowsClipping: true)
         #expect(empty == CGRect(x: 0, y: 0, width: 1512, height: 982))
+    }
+
+    /// A new package in `directory` with the folder of `take-001`.
+    private static func packageWithATake(in directory: URL) throws -> ProjectPackage {
+        let package = try ProjectPackage.create(in: directory, name: "Recording", app: AppInfo(name: "Toma", version: "1.0"), now: Date())
+        try FileManager.default.createDirectory(at: package.takeDirectory("take-001"), withIntermediateDirectories: false)
+        return package
     }
 
     /// A `width` × `height` image of one color.

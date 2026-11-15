@@ -9,9 +9,11 @@ import os
 /// (`WallpaperSnapshot.capture`; if that fails, the wallpaper's image where macOS draws it, `WallpaperLayout`, over the
 /// fill color). The covers ignore the mouse (a click goes to the desktop below), are on every desktop, never take the
 /// keyboard and never activate the app. Each desktop can have its own wallpaper, so a change of desktop captures it
-/// again; a change of the screens' arrangement or resolution fits the covers to their screens again. The take records
-/// them on purpose (`TakePreparation.includedWindowIDs`): the video shows the wallpaper where the icons are.
-/// Finder's settings are never touched.
+/// again; a change of the screens' arrangement or resolution fits the covers to their screens again, and closes the
+/// cover of a screen that is gone. Each capture has `WallpaperSnapshot.captureTimeLimit`: a ScreenCaptureKit that does
+/// not answer holds the countdown back that long at most for each screen, and its cover draws the wallpaper's image
+/// instead. The take records them on purpose (`TakePreparation.includedWindowIDs`): the video shows the wallpaper where
+/// the icons are. Finder's settings are never touched.
 @MainActor
 final class DesktopCoverController {
     /// Just above the desktop's icons, far under the windows of every app.
@@ -88,11 +90,19 @@ final class DesktopCoverController {
         observers = [(workspace, spaces), (app, screens)]
     }
 
-    /// Each cover over its screen's frame now, drawn again. A cover whose screen is gone stays where it was.
+    /// Each cover over its screen's frame now, drawn again. The cover of a screen that is gone is closed: macOS would
+    /// move it to another screen, over that one's cover. Its window ID stays in the take's request, where a missing
+    /// window is only logged.
     private func refit() {
-        for cover in covers {
-            guard let screen = Self.screen(cover.displayID) else { continue }
-            cover.panel.setFrame(screen.frame, display: false)
+        covers.removeAll { cover in
+            if let screen = Self.screen(cover.displayID) {
+                cover.panel.setFrame(screen.frame, display: false)
+                return false
+            }
+            Self.logger.notice("Display \(cover.displayID, privacy: .public) is gone: its cover is closed")
+            cover.panel.orderOut(nil)
+            cover.panel.close()
+            return true
         }
         redraw()
     }
@@ -116,10 +126,13 @@ final class DesktopCoverController {
         NSScreen.screens.first { $0.displayID == displayID }
     }
 
-    /// The wallpaper as it is seen; if it cannot be captured, its image as macOS draws it.
+    /// The wallpaper as it is seen; if it cannot be captured within `captureTimeLimit`, its image as macOS draws it.
     private static func wallpaper(of displayID: UInt32, on screen: NSScreen) async -> Wallpaper {
         do {
-            return .captured(try await WallpaperSnapshot.capture(displayID: displayID))
+            let captured = try await withTimeLimit(WallpaperSnapshot.captureTimeLimit) {
+                try await WallpaperSnapshot.capture(displayID: displayID)
+            }
+            return .captured(captured)
         } catch {
             logger.error(
                 "Cannot capture the wallpaper of display \(displayID, privacy: .public), drawing its image: \(String(describing: error), privacy: .public)")
