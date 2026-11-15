@@ -40,6 +40,21 @@ private func cursor(_ seconds: Double, x: Double, y: Double) -> InputEvent {
     #expect(screenless.duration == 0)
 }
 
+@Test func systemAudioRecordedPastTheScreenExtendsTheTimeline() {
+    let display = displayTrack(globalFrame: nil, segments: [segment(start: base, end: base.adding(seconds: 3))])
+    let systemAudio = TrackRecord(
+        id: "system-audio", kind: .systemAudio, source: TrackSource(name: "System Audio"),
+        segments: [segment(track: "system-audio", start: base, end: base.adding(seconds: 4))])
+    let microphone = TrackRecord(
+        id: "mic", kind: .microphone, source: TrackSource(name: "Mic"),
+        segments: [segment(track: "mic", start: base, end: base.adding(seconds: 2))])
+    for tracks in [[display, systemAudio], [display, microphone, systemAudio]] {
+        let e = FrameEvaluator(take: makeTake(tracks: tracks), events: [], style: StyleV0(), outputSize: [1920, 1080])
+        #expect(e.timelineStart == base)
+        #expect(e.duration == 4)
+    }
+}
+
 @Test func styleV0Values() {
     let style = StyleV0()
     #expect(style.gradientStart == SIMD4<Float>(0x7F, 0x5A, 0xF0, 255) / 255)

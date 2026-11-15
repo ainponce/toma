@@ -2233,6 +2233,46 @@
         }
       }
     },
+    "The video was exported, but %lld parts have no system audio: it couldn't be read." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld part has no system audio: it couldn't be read."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld parts have no system audio: it couldn't be read."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero %lld parte quedó sin audio del sistema: no se pudo leer."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero %lld partes quedaron sin audio del sistema: no se pudo leer."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "The video was exported, but %lld parts of the camera couldn't be read: they show the frame before them." : {
       "localizations" : {
         "en" : {

@@ -5,43 +5,42 @@ import Foundation
 import ProjectFormat
 import os
 
-/// A take's microphone as one continuous stream of 48 kHz Float32 PCM on the export's timeline, read in
-/// order in blocks ready for the AAC encoder.
+/// One audio track of a take, a microphone or system audio, as one continuous stream of 48 kHz Float32 PCM on the
+/// export's timeline, read in order (`AudioMix` adds the tracks together).
 ///
-/// The track is the take's first microphone track. Each segment is placed by host time: its frames go to
-/// output time `host − timelineStart`, where a frame's host time comes from its segment's clock map
-/// (`ClockMap`). Segments that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a
-/// file of 0 bytes or none) and files that cannot be read are silence, listed in `missingAudio`; so is every
-/// gap between segments longer than `maxClosedGap` (a gap is not missing audio: nothing was recorded there).
-/// A shorter gap (or overlap) after audio is closed: the next segment follows on where the audio before it
-/// ended, which shifts that segment, and only it, by up to `maxClosedGap` (20 ms) from its host time. Output
-/// before the first segment, after the last and past `totalFrames` is silence too.
+/// Each segment is placed by host time: its frames go to output time `host − timelineStart`, where a frame's host
+/// time comes from its segment's clock map (`ClockMap`), made from the track's own `audioClock` anchors. Segments
+/// that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a file of 0 bytes or none) and
+/// files that cannot be read are silence, listed in `missingAudio`; so is every gap between segments longer than
+/// `maxClosedGap` (a gap is not missing audio: nothing was recorded there). A shorter gap (or overlap) after audio is
+/// closed: the next segment follows on where the audio before it ended, which shifts that segment, and only it, by
+/// up to `maxClosedGap` (20 ms) from its host time. Output before the first segment, after the last and past
+/// `totalFrames` is silence too.
 ///
-/// The stream is mono if every segment is, stereo otherwise: a mono segment goes to both channels, and a
-/// segment of more than two channels is mixed down with every channel at unity gain into both, clipped to
-/// full scale. That keeps the level of the one or two live inputs a multichannel interface usually has;
-/// AVFoundation's own downmix gives silence for a discrete layout (`kAudioChannelLayoutTag_DiscreteInOrder`).
+/// The stream has the `channels` it was loaded with, 1 or 2 (`channelCount(of:in:)` says how many the track needs):
+/// a segment with that many goes as it is, a mono one goes to both channels, and any other is mixed down with every
+/// channel at unity gain into each, clipped to full scale. That keeps the level of the one or two live inputs a
+/// multichannel interface usually has; AVFoundation's own downmix gives silence for a discrete layout
+/// (`kAudioChannelLayoutTag_DiscreteInOrder`).
 ///
 /// Not thread-safe: one owner reads it, from one thread at a time.
 final class AudioTrackTimeline {
     static let sampleRate = 48_000.0
     /// The longest gap between two segments that is closed instead of filled with silence.
     static let maxClosedGap = 0.020
-    /// Frames per block handed to the encoder.
-    static let blockFrames = 4096
     /// The largest difference between the rate two consecutive clock anchors imply and the file's sample
     /// rate for the later one to be used: 5000 ppm, well beyond any real device clock.
     static let maxClockDeviation = 0.005
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
-    /// 1 for a mono microphone, 2 otherwise.
+    /// The track's ID (`TrackRecord.id`), for `missingAudio`.
+    let track: String
+    /// Channels of the stream: what `read(into:frames:)` interleaves.
     let channels: Int
     /// Length of the stream, in frames.
     let totalFrames: Int64
-    /// Format of the blocks: interleaved Float32 at `sampleRate` with `channels` channels.
-    let formatDescription: CMAudioFormatDescription
-    /// Output frame of the next block.
+    /// Output frame of the next frame read.
     private(set) var position: Int64 = 0
     /// Spans that are silent because a segment's audio could not be used, as they were found: the
     /// segments that could not be opened when loading, then the ones that failed while reading.
@@ -55,7 +54,6 @@ final class AudioTrackTimeline {
 
     /// A segment that can be read, and where its frames go.
     struct Segment {
-        var index: Int
         /// `SegmentRecord.file`.
         var file: String
         var asset: AVURLAsset
@@ -69,89 +67,94 @@ final class AudioTrackTimeline {
         var span: (start: Double, end: Double)
     }
 
-    /// The microphone of `project` on a timeline whose frame 0 is host time `timelineStart`, `totalFrames`
-    /// long; `nil` if the take has no microphone track. Loads every segment's track, so the stream can then
-    /// be read without waiting.
-    /// - Throws: `ExportError.writerFailed` if the block format cannot be made.
-    static func load(_ project: LoadedProject, timelineStart: HostTime, totalFrames: Int64) async throws -> AudioTrackTimeline? {
-        guard let track = project.take.tracks.first(where: { $0.kind == .microphone }) else { return nil }
+    /// The audio of one segment's file, as far as reading it needs, or why it cannot be used.
+    private enum SegmentAudio {
+        case audio(asset: AVURLAsset, track: AVAssetTrack, sampleRate: Double, channels: Int, frames: Double?)
+        case unusable(MissingAudio.Reason)
+    }
+
+    /// `track` of `project` on a timeline whose frame 0 is host time `timelineStart`, `totalFrames` long, with
+    /// `channels` channels (1 or 2). Loads every segment's track, so the stream can then be read without waiting.
+    /// - Throws: `ExportError.cancelled` if the task is cancelled while loading.
+    static func load(
+        _ project: LoadedProject, track: TrackRecord, timelineStart: HostTime, totalFrames: Int64, channels: Int
+    ) async throws -> AudioTrackTimeline {
+        precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
         let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
         let duration = Double(max(0, totalFrames)) / sampleRate
         var segments: [Segment] = []
         var missing: [MissingAudio] = []
         var rejectedAnchors = 0
-        var maxChannels = 1
         for (k, record) in records.enumerated() {
+            guard !Task.isCancelled else { throw ExportError.cancelled }
             let next = k + 1 < records.count ? records[k + 1].startHostTime : nil
             // Where the segment's audio would go, for the summary: up to its end, the next segment or the export's end.
             let start = record.startHostTime.seconds(since: timelineStart)
             let end = (record.endHostTime ?? next).map { $0.seconds(since: timelineStart) } ?? duration
-            func leaveOut(_ reason: MissingAudio.Reason) {
-                if let entry = missingEntry(file: record.file, start: start, end: end, duration: duration, reason: reason) {
+            switch await openAudio(of: record, in: project.package) {
+            case let .audio(asset, audioTrack, sourceRate, sourceChannels, frames):
+                let anchors = clockAnchors(of: track.id, from: record.startHostTime, before: next, sourceRate: sourceRate, in: project.events)
+                rejectedAnchors += anchors.rejected
+                let map = ClockMap(
+                    start: record.startHostTime, anchors: anchors.kept, sourceRate: sourceRate,
+                    timelineStart: timelineStart, outputRate: sampleRate)
+                segments.append(Segment(
+                    file: record.file, asset: asset, track: audioTrack, map: map, channels: sourceChannels, frames: frames,
+                    span: (start, end)))
+            case .unusable(let reason):
+                logger.error("Audio segment \(record.file, privacy: .public): \(String(describing: reason), privacy: .public); exporting silence")
+                if let entry = missingEntry(track: track.id, file: record.file, start: start, end: end, duration: duration, reason: reason) {
                     missing.append(entry)
                 }
             }
-            switch SegmentAvailability.classify(record, in: project.package) {
-            case .present:
-                break
-            case .missing:
-                logger.error("Microphone segment \(record.index): \(record.file, privacy: .public) is missing; exporting silence")
-                leaveOut(.fileMissing)
-                continue
-            case .empty:
-                leaveOut(.empty)
-                continue
-            case .unreadable:
-                leaveOut(.unreadable)
-                continue
-            }
-            let asset = AVURLAsset(url: project.package.fileURL(record.file))
-            let audio: AVAssetTrack
-            let sourceRate: Double
-            let sourceChannels: Int
-            let frames: Double?
-            do {
-                guard let first = try await asset.loadTracks(withMediaType: .audio).first,
-                      let format = try await first.load(.formatDescriptions).first,
-                      let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
-                      asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0
-                else {
-                    logger.error("Microphone segment \(record.index): no audio track; exporting silence")
-                    leaveOut(.cannotOpen("the file has no audio track"))
-                    continue
-                }
-                audio = first
-                sourceRate = asbd.mSampleRate
-                sourceChannels = Int(asbd.mChannelsPerFrame)
-                let range = try await first.load(.timeRange).duration
-                frames = range.isNumeric ? range.seconds * sampleRate : nil
-            } catch {
-                logger.error("Microphone segment \(record.index): cannot be loaded (\(String(describing: error), privacy: .public)); exporting silence")
-                leaveOut(.cannotOpen(String(describing: error)))
-                continue
-            }
-            maxChannels = max(maxChannels, sourceChannels)
-            let anchors = clockAnchors(of: track.id, from: record.startHostTime, before: next, sourceRate: sourceRate, in: project.events)
-            rejectedAnchors += anchors.rejected
-            let map = ClockMap(
-                start: record.startHostTime, anchors: anchors.kept, sourceRate: sourceRate,
-                timelineStart: timelineStart, outputRate: sampleRate)
-            segments.append(Segment(
-                index: record.index, file: record.file, asset: asset, track: audio, map: map, channels: sourceChannels,
-                frames: frames, span: (start, end)))
         }
         if rejectedAnchors > 0 {
-            logger.error("Microphone track \(track.id, privacy: .public): \(rejectedAnchors) audio clock anchor(s) out of order or off by more than 5000 ppm; not used")
+            logger.error("Audio track \(track.id, privacy: .public): \(rejectedAnchors) audio clock anchor(s) out of order or off by more than 5000 ppm; not used")
         }
-        return try AudioTrackTimeline(segments: segments, missingAudio: missing, channels: min(maxChannels, 2), totalFrames: totalFrames)
+        return AudioTrackTimeline(track: track.id, segments: segments, missingAudio: missing, channels: channels, totalFrames: totalFrames)
     }
 
-    /// `MissingAudio` for output seconds `start ..< end` clamped to the export (`0 ... duration`); `nil` when
-    /// the span lies outside it.
-    static func missingEntry(file: String, start: Double, end: Double, duration: Double, reason: MissingAudio.Reason) -> MissingAudio? {
+    /// The channels the stream of `track` needs: 1 if every segment that can be opened is mono, 2 otherwise.
+    static func channelCount(of track: TrackRecord, in project: LoadedProject) async -> Int {
+        for record in track.segments {
+            if case let .audio(_, _, _, channels, _) = await openAudio(of: record, in: project.package), channels > 1 { return 2 }
+        }
+        return 1
+    }
+
+    /// Opens `record`'s file, unless the manifest and the file system already say it holds nothing
+    /// (`SegmentAvailability`): its first audio track, the track's format and its length.
+    private static func openAudio(of record: SegmentRecord, in package: ProjectPackage) async -> SegmentAudio {
+        switch SegmentAvailability.classify(record, in: package) {
+        case .present: break
+        case .missing: return .unusable(.fileMissing)
+        case .empty: return .unusable(.empty)
+        case .unreadable: return .unusable(.unreadable)
+        }
+        let asset = AVURLAsset(url: package.fileURL(record.file))
+        do {
+            guard let track = try await asset.loadTracks(withMediaType: .audio).first,
+                  let format = try await track.load(.formatDescriptions).first,
+                  let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+                  asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0
+            else { return .unusable(.cannotOpen("the file has no audio track")) }
+            let range = try await track.load(.timeRange).duration
+            return .audio(
+                asset: asset, track: track, sampleRate: asbd.mSampleRate, channels: Int(asbd.mChannelsPerFrame),
+                frames: range.isNumeric ? range.seconds * sampleRate : nil)
+        } catch {
+            return .unusable(.cannotOpen(String(describing: error)))
+        }
+    }
+
+    /// `MissingAudio` of `track` for output seconds `start ..< end` clamped to the export (`0 ... duration`); `nil`
+    /// when the span lies outside it.
+    static func missingEntry(
+        track: String, file: String, start: Double, end: Double, duration: Double, reason: MissingAudio.Reason
+    ) -> MissingAudio? {
         guard end >= 0, start <= duration else { return nil }
         let from = min(max(start, 0), duration)
-        return MissingAudio(file: file, start: from, end: max(from, min(end, duration)), reason: reason)
+        return MissingAudio(track: track, file: file, start: from, end: max(from, min(end, duration)), reason: reason)
     }
 
     /// The audio clock anchors of `track` logged at or after `start` and before `end`, in time order:
@@ -198,54 +201,22 @@ final class AudioTrackTimeline {
         return (kept, rejected)
     }
 
-    init(segments: [Segment], missingAudio: [MissingAudio] = [], channels: Int, totalFrames: Int64) throws {
+    private init(track: String, segments: [Segment], missingAudio: [MissingAudio], channels: Int, totalFrames: Int64) {
+        self.track = track
         self.segments = segments
         self.missingAudio = missingAudio
         self.channels = channels
         self.totalFrames = max(0, totalFrames)
-        var description = AudioStreamBasicDescription(
-            mSampleRate: Self.sampleRate,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagsNativeFloatPacked,
-            mBytesPerPacket: UInt32(MemoryLayout<Float>.size * channels),
-            mFramesPerPacket: 1,
-            mBytesPerFrame: UInt32(MemoryLayout<Float>.size * channels),
-            mChannelsPerFrame: UInt32(channels),
-            mBitsPerChannel: 32,
-            mReserved: 0)
-        var layout = AudioChannelLayout()
-        layout.mChannelLayoutTag = Self.layoutTag(channels: channels)
-        var format: CMAudioFormatDescription?
-        let status = CMAudioFormatDescriptionCreate(
-            allocator: kCFAllocatorDefault, asbd: &description, layoutSize: MemoryLayout<AudioChannelLayout>.size,
-            layout: &layout, magicCookieSize: 0, magicCookie: nil, extensions: nil, formatDescriptionOut: &format)
-        guard status == noErr, let format else {
-            throw ExportError.writerFailed("cannot describe the audio blocks (OSStatus \(status))")
-        }
-        formatDescription = format
     }
 
-    static func layoutTag(channels: Int) -> AudioChannelLayoutTag {
-        channels == 1 ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_Stereo
-    }
-
-    /// `AVChannelLayoutKey` data for `channels` (1 or 2).
-    static func channelLayoutData(channels: Int) -> Data {
-        var layout = AudioChannelLayout()
-        layout.mChannelLayoutTag = layoutTag(channels: channels)
-        return Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size)
-    }
-
-    /// The next block of at most `blockFrames` frames, presented at its output time; `nil` once
-    /// `totalFrames` have been read.
-    func nextBlock() throws -> CMSampleBuffer? {
-        guard position < totalFrames else { return nil }
-        let count = Int(min(Int64(Self.blockFrames), totalFrames - position))
-        var samples = [Float](repeating: 0, count: count * channels)
-        fill(&samples, frames: count)
-        let block = try makeSampleBuffer(samples, frames: count, at: position)
-        position += Int64(count)
-        return block
+    /// Reads the next `frames` frames of the stream into `samples`, which then holds exactly `frames × channels`
+    /// values, interleaved: zeros where there is no audio (gaps, before the first segment, after the last, past
+    /// `totalFrames`).
+    func read(into samples: inout [Float], frames: Int) {
+        samples.removeAll(keepingCapacity: true)
+        samples.append(contentsOf: repeatElement(0, count: frames * channels))
+        fill(&samples, frames: Int(min(Int64(frames), max(0, totalFrames - position))))
+        position += Int64(frames)
     }
 
     /// Writes output frames `position ..< position + count` into `samples`, which starts silent.
@@ -286,7 +257,7 @@ final class AudioTrackTimeline {
                 return active
             } catch {
                 Self.logger.error(
-                    "Microphone segment \(segment.index): cannot be read (\(String(describing: error), privacy: .public)); exporting silence")
+                    "Audio segment \(segment.file, privacy: .public): cannot be read (\(String(describing: error), privacy: .public)); exporting silence")
                 note(segment, from: segment.span.start, .cannotOpen(String(describing: error)))
             }
         }
@@ -296,34 +267,14 @@ final class AudioTrackTimeline {
     /// Adds `segment`'s span from output second `start` on to `missingAudio`.
     private func note(_ segment: Segment, from start: Double, _ reason: MissingAudio.Reason) {
         let duration = Double(totalFrames) / Self.sampleRate
-        if let entry = Self.missingEntry(file: segment.file, start: start, end: segment.span.end, duration: duration, reason: reason) {
+        if let entry = Self.missingEntry(
+            track: track, file: segment.file, start: start, end: segment.span.end, duration: duration, reason: reason) {
             missingAudio.append(entry)
         }
     }
-
-    private func makeSampleBuffer(_ samples: [Float], frames: Int, at position: Int64) throws -> CMSampleBuffer {
-        let byteCount = samples.count * MemoryLayout<Float>.size
-        var block: CMBlockBuffer?
-        var status = CMBlockBufferCreateWithMemoryBlock(
-            allocator: kCFAllocatorDefault, memoryBlock: nil, blockLength: byteCount, blockAllocator: kCFAllocatorDefault,
-            customBlockSource: nil, offsetToData: 0, dataLength: byteCount, flags: kCMBlockBufferAssureMemoryNowFlag,
-            blockBufferOut: &block)
-        guard status == noErr, let block else { throw ExportError.writerFailed("no audio block buffer (OSStatus \(status))") }
-        status = samples.withUnsafeBytes {
-            CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: block, offsetIntoDestination: 0, dataLength: byteCount)
-        }
-        guard status == noErr else { throw ExportError.writerFailed("cannot fill an audio block (OSStatus \(status))") }
-        var sample: CMSampleBuffer?
-        status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
-            allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: formatDescription, sampleCount: frames,
-            presentationTimeStamp: CMTime(value: position, timescale: CMTimeScale(Self.sampleRate)),
-            packetDescriptions: nil, sampleBufferOut: &sample)
-        guard status == noErr, let sample else { throw ExportError.writerFailed("no audio sample buffer (OSStatus \(status))") }
-        return sample
-    }
 }
 
-/// Where the frames of one microphone segment go: a piecewise-linear map between its frames, decoded at
+/// Where the frames of one audio segment go: a piecewise-linear map between its frames, decoded at
 /// the output rate, and output frames, through knots that pair a frame with its host time.
 ///
 /// The first knot is frame 0 at the segment's start; the clock anchors add one each. Beyond the last
@@ -379,7 +330,8 @@ private final class SegmentReader {
     /// Why reading stopped before the end of the file, if it did.
     private(set) var readFailure: String?
 
-    private let index: Int
+    /// `SegmentRecord.file`, for the log.
+    private let file: String
     private let reader: AVAssetReader
     private let output: AVAssetReaderTrackOutput
     private let map: ClockMap
@@ -397,7 +349,7 @@ private final class SegmentReader {
 
     init(_ segment: AudioTrackTimeline.Segment, channels: Int) throws {
         self.segment = segment
-        index = segment.index
+        file = segment.file
         map = segment.map
         self.channels = channels
         sourceChannels = segment.channels
@@ -468,7 +420,7 @@ private final class SegmentReader {
             if reader.status == .failed {
                 let error = reader.error.map { String(describing: $0) } ?? "the reader failed"
                 readFailure = error
-                Self.logger.error("Microphone segment \(self.index): reading stopped (\(error, privacy: .public)); silence after it")
+                Self.logger.error("Audio segment \(self.file, privacy: .public): reading stopped (\(error, privacy: .public)); silence after it")
             }
             return
         }
@@ -480,7 +432,7 @@ private final class SegmentReader {
         guard status == noErr else {
             finished = true
             readFailure = "cannot copy decoded audio (OSStatus \(status))"
-            Self.logger.error("Microphone segment \(self.index): cannot copy decoded audio (OSStatus \(status)); silence after it")
+            Self.logger.error("Audio segment \(self.file, privacy: .public): cannot copy decoded audio (OSStatus \(status)); silence after it")
             return
         }
         if sourceChannels == channels {

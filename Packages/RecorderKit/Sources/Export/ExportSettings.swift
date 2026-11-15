@@ -37,8 +37,8 @@ public enum ExportError: Error, Equatable {
 
 /// What a finished export left out, for the app to tell the user.
 public struct ExportSummary: Sendable, Equatable {
-    /// Spans of the video where recorded microphone audio could not be used, in time order: they are
-    /// silent in the MP4.
+    /// Spans of the video where recorded audio, of the microphone or of system audio, could not be used, in time
+    /// order, each with its track: that track is silent there in the MP4.
     public var missingAudio: [MissingAudio]
     /// Spans of the video where the screen or the camera could not be decoded, in time order, each with its track:
     /// they show the frame before them (`FrameRenderer.missingVideo`).
@@ -50,7 +50,8 @@ public struct ExportSummary: Sendable, Equatable {
     }
 }
 
-/// A span of an export where a microphone segment's audio could not be used, so the MP4 is silent there.
+/// A span of an export where the audio of a segment of a microphone or system audio track could not be used, so that
+/// track is silent there in the MP4.
 public struct MissingAudio: Sendable, Equatable {
     public enum Reason: Sendable, Equatable {
         /// The segment holds no samples: crash recovery marked it `SegmentEndReason.empty`, or its file has 0
@@ -66,6 +67,8 @@ public struct MissingAudio: Sendable, Equatable {
         case readFailed(String)
     }
 
+    /// The track the segment belongs to (`TrackRecord.id`): a microphone or system audio.
+    public var track: String
     /// The segment's file, relative to the package root (`SegmentRecord.file`).
     public var file: String
     /// Output seconds where the silent span starts, within the export.
@@ -75,7 +78,8 @@ public struct MissingAudio: Sendable, Equatable {
     public var end: Double
     public var reason: Reason
 
-    public init(file: String, start: Double, end: Double, reason: Reason) {
+    public init(track: String, file: String, start: Double, end: Double, reason: Reason) {
+        self.track = track
         self.file = file
         self.start = start
         self.end = end

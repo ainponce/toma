@@ -433,6 +433,176 @@ func summaryListsMicrophoneAudioThatCouldNotBeUsed() async throws {
     }
 }
 
+// MARK: - Microphone and system audio
+
+/// A mono microphone at 440 Hz and stereo system audio at 1000 Hz: the MP4 has one stereo AAC track that carries both.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func microphoneAndSystemAudioAreMixed() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(
+            id: systemAudioID, kind: .systemAudio, source: systemAudioSource,
+            segments: [AudioSegmentSpec(start: base, seconds: 3, channels: 2, frequency: 1000)])
+        let project = try builder.write()
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: project, settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        #expect(summary == ExportSummary())
+
+        let tracks = try await AVURLAsset(url: destination).loadTracks(withMediaType: .audio)
+        try #require(tracks.count == 1)
+        let format = try #require(try await tracks[0].load(.formatDescriptions).first)
+        #expect(CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee.mChannelsPerFrame == 2)
+        let (start, samples) = try await decodedAudio(of: destination)
+        func level(_ frequency: Double) -> Double {
+            toneAmplitude(samples, start: start, frequency: frequency, from: 0.5, to: 2.5)
+        }
+        let microphone = level(440), systemAudio = level(1000), between = level(700)
+        for (name, tone) in [("440 Hz", microphone), ("1000 Hz", systemAudio)] {
+            #expect(20 * log10(tone / between) > 20, "\(name): \(tone), 700 Hz: \(between)")
+            #expect(abs(tone - 0.25) < 0.02, "\(name) at unity gain: \(tone)")
+        }
+    }
+}
+
+/// 30 s of a microphone whose clock runs 2000 ppm fast and of system audio whose clock runs 1500 ppm slow, written
+/// with their anchors. A white flash in the video and a burst in each audio track, 440 Hz in the microphone and
+/// 1000 Hz in system audio, are at the same host time, 28 s in: at 24 fps the flash (frame 673, 28.04 s) falls
+/// halfway between two frames of the 60 fps export. In the MP4 each burst, found by its own frequency, must be
+/// within 17 ms of the flash (about one frame at 60 fps); placed at the nominal rate, the microphone's would be 56 ms
+/// early and system audio's 42 ms late, and system audio placed by the microphone's anchors 98 ms late.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(3)))
+func eachAudioTrackIsPlacedByItsOwnAnchors() async throws {
+    try await withTemporaryDirectory { dir in
+        let fps = 24, flashFrame = 673
+        let flash = base.adding(seconds: Double(flashFrame) / Double(fps))
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 30, framesPerSecond: fps) { frame, sample in
+                (flashFrame..<flashFrame + fps / 2).contains(frame)
+                    ? whiteVideoSample(width: 640, height: 360, pts: sample.presentationTimeStamp) : sample
+            },
+        ])
+        let micSkew = 2000.0, systemSkew = -1500.0
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [
+            AudioSegmentSpec(
+                start: base, seconds: 30, amplitude: 0, clockSkewPPM: micSkew,
+                transform: toneBurst(at: flash, start: base, skewPPM: micSkew, frequency: 440, channels: 1)),
+        ])
+        try await builder.addAudioTrack(id: systemAudioID, kind: .systemAudio, source: systemAudioSource, segments: [
+            AudioSegmentSpec(
+                start: base, seconds: 30, channels: 2, amplitude: 0, clockSkewPPM: systemSkew,
+                transform: toneBurst(at: flash, start: base, skewPPM: systemSkew, frequency: 1000, channels: 2)),
+        ])
+        let project = try builder.write()
+        for track in [micID, systemAudioID] {
+            let anchors = project.events.filter { if case .audioClock(track, _) = $0.kind { true } else { false } }
+            #expect(anchors.count >= 5, "\(track) has its own anchors")
+        }
+        let destination = dir.appending(path: "sync.mp4")
+        try await MP4Exporter(project: project, settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 60))
+            .export(to: destination) { _ in }
+
+        let flashSeconds = try await flashTime(in: destination)
+        #expect(abs(flashSeconds - flash.seconds(since: base)) <= 1.0 / 60 + 0.001, "the flash is the frame at 28.05 s")
+        for (track, frequency) in [(micID, 440.0), (systemAudioID, 1000.0)] {
+            let onset = try await toneOnset(in: destination, frequency: frequency, near: flashSeconds)
+            let offset = onset - flashSeconds
+            print("\(track): \(frequency) Hz burst \(String(format: "%.2f", offset * 1000)) ms from the flash (\(onset) s, flash \(flashSeconds) s)")
+            #expect(abs(offset) <= 0.017, "\(track): burst at \(onset) s, flash at \(flashSeconds) s")
+        }
+    }
+}
+
+/// System audio that starts 2 s into the screen, without a microphone: silence before it, its sine after. The AAC's
+/// pre-echo of about 21 ms is why the spans keep 0.1 s from the change, as in the phase 0 tests.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func systemAudioStartingLateIsSilentBefore() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(
+            id: systemAudioID, kind: .systemAudio, source: systemAudioSource,
+            segments: [AudioSegmentSpec(start: base.adding(seconds: 2), seconds: 1, channels: 2)])
+        let project = try builder.write()
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: project, settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        #expect(summary == ExportSummary())
+        let (start, samples) = try await decodedAudio(of: destination)
+        #expect(rms(samples, start: start, from: 0.1, to: 1.9) < 0.01)
+        #expect(abs(rms(samples, start: start, from: 2.1, to: 2.9) - sineRMS) < 0.02)
+    }
+}
+
+/// Two tracks with the same sine at 0.9 of full scale add up to 1.8: the mix, read before the encoder (a decoded
+/// AAC goes past 1 by itself), is clipped to [−1, 1] instead of wrapping around, so it keeps the sine's sign.
+@Test func mixedAudioClipsInsteadOfWrapping() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 1, amplitude: 0.9)])
+        try await builder.addAudioTrack(
+            id: systemAudioID, kind: .systemAudio, source: systemAudioSource,
+            segments: [AudioSegmentSpec(start: base, seconds: 1, amplitude: 0.9)])
+        let project = try builder.write()
+        let totalFrames: Int64 = 48_000
+        var timelines: [AudioTrackTimeline] = []
+        for track in project.take.tracks {
+            timelines.append(try await AudioTrackTimeline.load(project, track: track, timelineStart: base, totalFrames: totalFrames, channels: 1))
+        }
+        let mix = try AudioMix(timelines: timelines, channels: 1, totalFrames: totalFrames)
+        #expect(mix.channels == 1)
+        var mixed: [Float] = []
+        while let block = try mix.nextBlock() {
+            let data = try #require(CMSampleBufferGetDataBuffer(block))
+            var values = [Float](repeating: 0, count: CMBlockBufferGetDataLength(data) / MemoryLayout<Float>.size)
+            _ = values.withUnsafeMutableBytes { CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: $0.count, destination: $0.baseAddress!) }
+            mixed += values
+        }
+        try #require(mixed.count == Int(totalFrames))
+        #expect(mixed.allSatisfy { abs($0) <= 1 })
+        // `SampleFactory`'s sine, whose phase comes from the host time: frame n is at base + n / 48 kHz.
+        let first = Double(base.nanoseconds) / 1_000_000_000
+        var compared = 0
+        for (n, x) in mixed.enumerated() {
+            let cycles = 440 * (first + Double(n) / 48_000)
+            let sine = 0.9 * sin(2 * Double.pi * (cycles - cycles.rounded(.down)))
+            guard abs(sine) > 0.5 else { continue }
+            compared += 1
+            #expect((x > 0) == (sine > 0), "frame \(n): \(x) for a sine of \(sine)")
+            if (x > 0) != (sine > 0) { break }
+        }
+        #expect(compared > 20_000)
+    }
+}
+
+/// A system audio segment that holds nothing is listed with its track; the microphone's audio is all there.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func summaryNamesTheTrackOfMissingAudio() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 3)])
+        try await builder.addAudioTrack(id: systemAudioID, kind: .systemAudio, source: systemAudioSource, segments: [])
+        try builder.addEmptySegment(
+            track: systemAudioID, index: 1, start: base, end: base.adding(seconds: 3), endReason: .stopped, file: .zeroBytes)
+        let project = try builder.write()
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: project, settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        try #require(summary.missingAudio.count == 1, "\(summary.missingAudio)")
+        let missing = summary.missingAudio[0]
+        #expect(missing.track == systemAudioID)
+        #expect(missing.file == "takes/take-001/system-audio/seg-0001.mov")
+        #expect(abs(missing.start - 0) < 1e-6 && abs(missing.end - 3) < 1e-6, "\(missing)")
+        #expect(missing.reason == .empty)
+        let (start, samples) = try await decodedAudio(of: destination)
+        #expect(abs(rms(samples, start: start, from: 0.5, to: 2.5) - sineRMS) < 0.02)
+    }
+}
+
 /// `summary.missingAudio` is exactly `expected` (file, start, end, reason), times within 1 µs.
 private func expectMissing(_ summary: ExportSummary, _ expected: [(String, Double, Double, MissingAudio.Reason)]) throws {
     try #require(summary.missingAudio.count == expected.count, "\(summary.missingAudio)")

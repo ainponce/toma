@@ -37,15 +37,18 @@ public struct VideoSegmentSpec: Sendable {
     }
 }
 
-/// An audio segment `TakeBuilder` writes: `seconds` of the `SampleFactory` sine from `start` in 10 ms blocks
-/// (`sampleRate / 100` frames, 480 at 48 kHz, as `SyntheticAudioSource` delivers them). Block *k* is presented
-/// at `start + k · frames / sampleRate × (1 + clockSkewPPM / 1e6)`, the rule of
-/// `SyntheticAudioSource(clockSkewPPM:)`, and the file is finished where the next block would start.
+/// An audio segment `TakeBuilder` writes: `seconds` of the `SampleFactory` sine (`frequency` Hz at `amplitude`, 440 Hz
+/// at 1/4 of full scale by default) from `start` in 10 ms blocks (`sampleRate / 100` frames, 480 at 48 kHz, as
+/// `SyntheticAudioSource` delivers them). Block *k* is presented at
+/// `start + k · frames / sampleRate × (1 + clockSkewPPM / 1e6)`, the rule of `SyntheticAudioSource(clockSkewPPM:)`,
+/// and the file is finished where the next block would start.
 public struct AudioSegmentSpec: Sendable {
     public var start: HostTime
     public var seconds: Double
     public var sampleRate: Double = 48_000
     public var channels: Int = 1
+    public var frequency: Double = 440
+    public var amplitude: Float = 0.25
     public var clockSkewPPM: Double = 0
     /// Logs the `audioClock` anchors the pipeline would; without them the export assumes the nominal rate.
     public var logsAudioClock: Bool = true
@@ -57,14 +60,17 @@ public struct AudioSegmentSpec: Sendable {
     public var transform: (@Sendable (_ blockIndex: Int, CMSampleBuffer) -> CMSampleBuffer)? = nil
 
     public init(
-        start: HostTime, seconds: Double, sampleRate: Double = 48_000, channels: Int = 1, clockSkewPPM: Double = 0,
-        logsAudioClock: Bool = true, endReason: SegmentEndReason? = .stopped, leaveOpen: Bool = false,
+        start: HostTime, seconds: Double, sampleRate: Double = 48_000, channels: Int = 1, frequency: Double = 440,
+        amplitude: Float = 0.25, clockSkewPPM: Double = 0, logsAudioClock: Bool = true,
+        endReason: SegmentEndReason? = .stopped, leaveOpen: Bool = false,
         transform: (@Sendable (_ blockIndex: Int, CMSampleBuffer) -> CMSampleBuffer)? = nil
     ) {
         self.start = start
         self.seconds = seconds
         self.sampleRate = sampleRate
         self.channels = channels
+        self.frequency = frequency
+        self.amplitude = amplitude
         self.clockSkewPPM = clockSkewPPM
         self.logsAudioClock = logsAudioClock
         self.endReason = endReason
@@ -155,7 +161,8 @@ public final class TakeBuilder {
             var anchors = AudioClockAnchors(segmentStart: spec.start)
             for k in 0..<blocks {
                 let sample = SampleFactory.audioSample(
-                    pts: pts(ofBlock: k), frames: frames, sampleRate: spec.sampleRate, channels: spec.channels)
+                    pts: pts(ofBlock: k), frames: frames, sampleRate: spec.sampleRate, channels: spec.channels,
+                    amplitude: spec.amplitude, frequency: spec.frequency)
                 try writer.append(spec.transform?(k, sample) ?? sample)
                 guard spec.logsAudioClock, let written = writer.lastWrittenAudio,
                       let anchor = anchors.anchor(for: written)

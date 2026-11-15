@@ -9,12 +9,14 @@ import Render
 import Synchronization
 import os
 
-/// Exports a take as an MP4: H.264 High video tagged Rec.709 and the microphone as AAC.
+/// Exports a take as an MP4: H.264 High video tagged Rec.709 and, as one AAC track, the microphone mixed with system
+/// audio.
 ///
 /// Frame `i` is the frame `FrameRenderer` draws at output time `i / framesPerSecond`, the same drawing
-/// the preview shows; the video lasts the renderer's timeline (`FrameEvaluator`: the screen, or the microphone
-/// when it was recorded longer), rounded to whole frames. The microphone is placed
-/// by host time on the same timeline (`AudioTrackTimeline`); a take without one exports without audio.
+/// the preview shows; the video lasts the renderer's timeline (`FrameEvaluator`: the screen, or an audio track
+/// when it was recorded longer), rounded to whole frames. Every microphone and system audio track is placed by host
+/// time on the same timeline, each by its own clock (`AudioTrackTimeline`), and they are added together (`AudioMix`);
+/// a take without any exports without audio.
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
@@ -37,8 +39,8 @@ public final class MP4Exporter: Sendable {
     }
 
     /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete,
-    /// and returns what it had to leave out: microphone audio that could not be read is silence, and screen or
-    /// camera video that could not be decoded shows the frame before it.
+    /// and returns what it had to leave out: microphone or system audio that could not be read is silence, and
+    /// screen or camera video that could not be decoded shows the frame before it.
     ///
     /// Rendering and encoding run on a queue of their own, never on the caller's thread or the main thread.
     /// `progress` is called one call at a time, in order, never on the main thread (hop to the main actor
@@ -67,7 +69,7 @@ public final class MP4Exporter: Sendable {
             take: project.take, events: project.events, style: StyleV0(), outputSize: settings.outputSize
         ).timelineStart
         let audioFrames = Int64((Double(frameCount) / Double(fps) * AudioTrackTimeline.sampleRate).rounded())
-        let microphone = try await AudioTrackTimeline.load(project, timelineStart: timelineStart, totalFrames: audioFrames)
+        let audio = try await Self.audioMix(of: project, timelineStart: timelineStart, totalFrames: audioFrames)
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
@@ -75,7 +77,7 @@ public final class MP4Exporter: Sendable {
         let summary: ExportSummary
         do {
             let session = try ExportSession(
-                url: partial, settings: settings, renderer: renderer, frameCount: frameCount, microphone: microphone)
+                url: partial, settings: settings, renderer: renderer, frameCount: frameCount, audio: audio)
             try await withTaskCancellationHandler {
                 try await session.run(progress: progress)
             } onCancel: {
@@ -85,7 +87,7 @@ public final class MP4Exporter: Sendable {
             guard !Task.isCancelled else { throw ExportError.cancelled }
             try Self.move(partial, to: destination)
             summary = ExportSummary(
-                missingAudio: session.missingAudio.sorted { ($0.start, $0.end) < ($1.start, $1.end) },
+                missingAudio: session.missingAudio.sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) },
                 missingVideo: renderer.missingVideo)
         } catch {
             if unlink(partial.path) != 0 {
@@ -104,6 +106,21 @@ public final class MP4Exporter: Sendable {
         }
         progress(1)
         return summary
+    }
+
+    /// The mix of every microphone and system audio track of `project` (in 1a, at most one of each), mono if they all
+    /// are, stereo otherwise; `nil` for a take without any.
+    private static func audioMix(of project: LoadedProject, timelineStart: HostTime, totalFrames: Int64) async throws -> AudioMix? {
+        let tracks = project.take.tracks.filter { !$0.kind.isVideo }
+        guard !tracks.isEmpty else { return nil }
+        var channels = 1
+        for track in tracks { channels = max(channels, await AudioTrackTimeline.channelCount(of: track, in: project)) }
+        var timelines: [AudioTrackTimeline] = []
+        for track in tracks {
+            timelines.append(try await AudioTrackTimeline.load(
+                project, track: track, timelineStart: timelineStart, totalFrames: totalFrames, channels: channels))
+        }
+        return try AudioMix(timelines: timelines, channels: channels, totalFrames: totalFrames)
     }
 
     // MARK: - Destination
@@ -209,7 +226,7 @@ private final class ExportSession: @unchecked Sendable {
     private let videoInput: AVAssetWriterInput
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private let audioInput: AVAssetWriterInput?
-    private let microphone: AudioTrackTimeline?
+    private let audio: AudioMix?
     private let renderer: FrameRenderer
     private let settings: ExportSettings
     private let frameCount: Int
@@ -217,7 +234,7 @@ private final class ExportSession: @unchecked Sendable {
     private let cancelled = Atomic(false)
 
     /// Creates the writer of `url` (the file appears when writing starts) and its inputs.
-    init(url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, microphone: AudioTrackTimeline?) throws {
+    init(url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, audio: AudioMix?) throws {
         let writer: AVAssetWriter
         do {
             writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -241,20 +258,20 @@ private final class ExportSession: @unchecked Sendable {
             kCVPixelBufferMetalCompatibilityKey as String: true,
         ])
 
-        if let microphone {
-            let audio: [String: Any] = [
+        if let audio {
+            let aac: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
                 AVSampleRateKey: AudioTrackTimeline.sampleRate,
-                AVNumberOfChannelsKey: microphone.channels,
-                AVChannelLayoutKey: AudioTrackTimeline.channelLayoutData(channels: microphone.channels),
+                AVNumberOfChannelsKey: audio.channels,
+                AVChannelLayoutKey: AudioMix.channelLayoutData(channels: audio.channels),
                 AVEncoderBitRateKey: MP4Exporter.audioBitRate,
                 // Constant: the default strategy spends far less than asked on a quiet or simple signal.
                 AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Constant,
             ]
-            guard writer.canApply(outputSettings: audio, forMediaType: .audio) else {
-                throw ExportError.writerFailed("AAC cannot encode \(microphone.channels) channel(s) at 48 kHz, 160 kbps")
+            guard writer.canApply(outputSettings: aac, forMediaType: .audio) else {
+                throw ExportError.writerFailed("AAC cannot encode \(audio.channels) channel(s) at 48 kHz, 160 kbps")
             }
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: audio, sourceFormatHint: microphone.formatDescription)
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: aac, sourceFormatHint: audio.formatDescription)
             input.expectsMediaDataInRealTime = false
             guard writer.canAdd(input) else { throw ExportError.writerFailed("the writer takes no audio input") }
             writer.add(input)
@@ -264,7 +281,7 @@ private final class ExportSession: @unchecked Sendable {
         }
         self.writer = writer
         self.videoInput = videoInput
-        self.microphone = microphone
+        self.audio = audio
         self.renderer = renderer
         self.settings = settings
         self.frameCount = frameCount
@@ -293,8 +310,8 @@ private final class ExportSession: @unchecked Sendable {
         cancelled.store(true, ordering: .relaxed)
     }
 
-    /// The microphone spans left silent; read once `run` has returned.
-    var missingAudio: [MissingAudio] { microphone?.missingAudio ?? [] }
+    /// The audio spans left silent; read once `run` has returned.
+    var missingAudio: [MissingAudio] { audio?.missingAudio ?? [] }
 
     /// Encodes every frame and the audio, then finishes the file. On failure or cancellation the writer is
     /// cancelled (this is the export's own partial file, never recorded data) and the error rethrown.
@@ -346,8 +363,8 @@ private final class ExportSession: @unchecked Sendable {
                 }
                 fed = true
             }
-            if !audioDone, let audioInput, let microphone, audioInput.isReadyForMoreMediaData {
-                if let block = try microphone.nextBlock() {
+            if !audioDone, let audioInput, let audio, audioInput.isReadyForMoreMediaData {
+                if let block = try audio.nextBlock() {
                     try waitUntilReady(audioInput)
                     guard audioInput.append(block) else { throw failure() }
                 } else {

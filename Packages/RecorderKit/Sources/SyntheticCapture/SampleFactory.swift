@@ -58,17 +58,17 @@ public enum SampleFactory {
         }
     }
 
-    /// Interleaved Float32 LPCM: a 440 Hz sine at `amplitude` of full scale (1/4 by default; 0 is
-    /// silence) on every channel. The phase comes from the absolute time, so consecutive blocks join
-    /// without clicks.
+    /// Interleaved Float32 LPCM: a `frequency` Hz sine (440 by default) at `amplitude` of full scale (1/4 by
+    /// default; 0 is silence) on every channel. The phase comes from the absolute time, so consecutive blocks
+    /// join without clicks.
     public static func audioSample(
-        pts: HostTime, frames: Int, sampleRate: Double, channels: Int, amplitude: Float = 0.25
+        pts: HostTime, frames: Int, sampleRate: Double, channels: Int, amplitude: Float = 0.25, frequency: Double = 440
     ) -> CMSampleBuffer {
         precondition(frames > 0 && channels > 0 && sampleRate > 0, "SampleFactory: empty audio block")
         let start = Double(pts.nanoseconds) / 1_000_000_000
         var samples = [Float](repeating: 0, count: frames * channels)
         for n in 0..<frames {
-            let cycles = 440 * (start + Double(n) / sampleRate)
+            let cycles = frequency * (start + Double(n) / sampleRate)
             let value = Float(Double(amplitude) * sin(2 * Double.pi * (cycles - cycles.rounded(.down))))
             for c in 0..<channels { samples[n * channels + c] = value }
         }

@@ -16,15 +16,81 @@ let takeID = "take-001"
 let displayID = "display-1"
 let micID = "mic"
 
+let systemAudioID = "system-audio"
+
 let displaySource = TrackSource(
     name: "Synthetic Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), pixelScale: 1)
 let micSource = TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic")
+let systemAudioSource = TrackSource(name: "System Audio", excludedBundleIDs: [])
 
 /// Root mean square of `samples[from ..< to]`, with `from` and `to` in seconds of a stream that starts at
 /// `start` seconds, 48 kHz.
 func rms(_ samples: [Float], start: Double, from: Double, to: Double) -> Double {
     let slice = samples[Int(((from - start) * 48_000).rounded())..<Int(((to - start) * 48_000).rounded())]
     return sqrt(slice.reduce(0) { $0 + Double($1) * Double($1) } / Double(slice.count))
+}
+
+/// Amplitude of the `frequency` Hz component of `samples[from ..< to]` (seconds of a 48 kHz stream that starts at
+/// `start`): the Goertzel algorithm over a Hann window, scaled so that a sine of amplitude A there gives A.
+func toneAmplitude(_ samples: [Float], start: Double, frequency: Double, from: Double, to: Double) -> Double {
+    let first = Int(((from - start) * 48_000).rounded()), count = Int(((to - start) * 48_000).rounded()) - first
+    precondition(first >= 0 && count > 1 && first + count <= samples.count, "toneAmplitude: \(from) ..< \(to) s is outside the audio")
+    let coefficient = 2 * cos(2 * Double.pi * frequency / 48_000)
+    var previous = 0.0, beforePrevious = 0.0, windowSum = 0.0
+    for n in 0..<count {
+        let window = 0.5 - 0.5 * cos(2 * Double.pi * Double(n) / Double(count - 1))
+        windowSum += window
+        let s = Double(samples[first + n]) * window + coefficient * previous - beforePrevious
+        beforePrevious = previous
+        previous = s
+    }
+    let power = previous * previous + beforePrevious * beforePrevious - coefficient * previous * beforePrevious
+    return 2 * max(power, 0).squareRoot() / windowSum
+}
+
+/// When a burst of `frequency` Hz begins within `window` seconds of `time` in the first audio track of `url`: the
+/// first time, in steps of 0.25 ms, where the tone's amplitude over 20 ms centred on it (`toneAmplitude`) reaches
+/// half of its largest there. A window centred on the burst's start holds half of it, so it is the start, other
+/// frequencies left out.
+func toneOnset(in url: URL, frequency: Double, near time: Double, window: Double = 0.3) async throws -> Double {
+    let (start, samples) = try await decodedAudio(of: url)
+    let half = 0.010, step = 0.000_25
+    let times = stride(from: time - window, through: time + window, by: step).filter {
+        $0 - half >= start && $0 + half <= start + Double(samples.count) / 48_000
+    }
+    let amplitudes = times.map { toneAmplitude(samples, start: start, frequency: frequency, from: $0 - half, to: $0 + half) }
+    let peak = try #require(amplitudes.max(), "no audio near \(time) s")
+    #expect(peak > 0.3, "the \(frequency) Hz burst stands out")
+    let onset = try #require(amplitudes.firstIndex { $0 >= peak / 2 })
+    return times[onset]
+}
+
+/// Writes a burst of `seconds` of a `frequency` Hz sine at `amplitude`, on every one of `channels`, into the 10 ms
+/// blocks of a 48 kHz audio segment from `start` (an `AudioSegmentSpec.transform`), at host time `time`: given that
+/// its frames are `(1 + skewPPM / 1e6) / 48 kHz` seconds of host time apart, as `TakeBuilder` stamps them.
+func toneBurst(
+    at time: HostTime, start: HostTime, skewPPM: Double, frequency: Double, channels: Int, amplitude: Float = 0.5,
+    seconds: Double = 0.05
+) -> @Sendable (Int, CMSampleBuffer) -> CMSampleBuffer {
+    let firstFrame = Int((time.seconds(since: start) * 48_000 / (1 + skewPPM / 1_000_000)).rounded())
+    let length = Int(seconds * 48_000)
+    return { block, sample in
+        let frames = CMSampleBufferGetNumSamples(sample), blockStart = block * frames
+        let from = max(firstFrame, blockStart), to = min(firstFrame + length, blockStart + frames)
+        guard from < to, let data = CMSampleBufferGetDataBuffer(sample) else { return sample }
+        var burst = [Float]()
+        for frame in from..<to {
+            let value = amplitude * Float(sin(2 * Double.pi * frequency * Double(frame - firstFrame) / 48_000))
+            burst.append(contentsOf: repeatElement(value, count: channels))
+        }
+        let status = burst.withUnsafeBytes {
+            CMBlockBufferReplaceDataBytes(
+                with: $0.baseAddress!, blockBuffer: data,
+                offsetIntoDestination: (from - blockStart) * channels * MemoryLayout<Float>.size, dataLength: $0.count)
+        }
+        precondition(status == noErr, "tone burst: \(status)")
+        return sample
+    }
 }
 
 /// Every regular file under `directory` with its bytes, by path relative to it.

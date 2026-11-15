@@ -527,16 +527,16 @@ struct Verify: AsyncParsableCommand {
 struct ExportMP4: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "export",
-        abstract: "Exports a package's last take as an MP4: H.264 tagged Rec.709, and the microphone as AAC.",
+        abstract: "Exports a package's last take as an MP4: H.264 tagged Rec.709, and the microphone mixed with system audio as AAC.",
         discussion: """
             Draws every frame as the editor preview does. Writes <out.mp4>.partial.mp4 next to the \
             destination and moves it into place once it is complete, replacing a file already there in one \
             step; if the export fails or is killed, the destination is left as it was (a partial file left by \
             a kill is removed by the next export). Never writes into a .toma package. Prints the progress \
-            every 10 % as "progress: <n> %", then "exported: <path>", then a "warning: no audio …" line for \
-            each span where recorded microphone audio could not be read and the MP4 is silent, and a \
-            "warning: no video of <track> …" line for each span where the screen or the camera could not be \
-            decoded and the MP4 shows the frame before it.
+            every 10 % as "progress: <n> %", then "exported: <path>", then a "warning: no audio of <track> …" \
+            line for each span where recorded microphone or system audio could not be read and that track is \
+            silent in the MP4, and a "warning: no video of <track> …" line for each span where the screen or the \
+            camera could not be decoded and the MP4 shows the frame before it.
             """
     )
 
@@ -582,7 +582,7 @@ struct ExportMP4: AsyncParsableCommand {
         }
         print("exported: \(destination.path)")
         for missing in summary.missingAudio {
-            print("warning: no audio from \(missing.file) from \(String(format: "%.2f", missing.start)) s to "
+            print("warning: no audio of \(missing.track) from \(missing.file) from \(String(format: "%.2f", missing.start)) s to "
                 + "\(String(format: "%.2f", missing.end)) s: \(missing.reason)")
         }
         for missing in summary.missingVideo {

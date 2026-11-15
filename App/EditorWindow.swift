@@ -267,8 +267,14 @@ final class EditorModel {
                 let summary = try await exporter.export(to: destination, progress: progress)
                 exportState = .finished(destination)
                 var leftOut: [String] = []
-                if !summary.missingAudio.isEmpty {
-                    leftOut.append(String(localized: "The video was exported, but \(summary.missingAudio.count) parts have no sound: their microphone audio couldn't be read."))
+                let systemAudio = Set(project.take.tracks.filter { $0.kind == .systemAudio }.map(\.id))
+                let systemAudioGaps = summary.missingAudio.filter { systemAudio.contains($0.track) }.count
+                let microphoneGaps = summary.missingAudio.count - systemAudioGaps
+                if microphoneGaps > 0 {
+                    leftOut.append(String(localized: "The video was exported, but \(microphoneGaps) parts have no sound: their microphone audio couldn't be read."))
+                }
+                if systemAudioGaps > 0 {
+                    leftOut.append(String(localized: "The video was exported, but \(systemAudioGaps) parts have no system audio: it couldn't be read."))
                 }
                 let cameras = Set(project.take.tracks.filter { $0.kind == .camera }.map(\.id))
                 let cameraGaps = summary.missingVideo.filter { cameras.contains($0.track) }.count
