@@ -35,7 +35,8 @@ final class PermissionsModel {
     /// Mac has was never asked for.
     static func needsAttention(probe: any PermissionProbe) -> Bool {
         let hasMicrophone = AVCaptureDevice.default(for: .audio) != nil
-        let preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: hasMicrophone)
+        let preflight = RecordingPreflight.evaluate(
+            probe: probe, wanted: hasMicrophone ? [.screenRecording, .microphone] : [.screenRecording])
         return !preflight.canRecord || (hasMicrophone && probe.state(of: .microphone) == .notDetermined)
     }
 

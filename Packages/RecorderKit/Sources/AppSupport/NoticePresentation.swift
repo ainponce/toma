@@ -18,9 +18,9 @@ extension TakeNotice {
             .stopped
         case .streamResumed:
             .confirmation
-        case .noMicrophone, .microphoneAccessOff, .microphoneFailedToStart, .cameraNotRecordedYet, .streamInterrupted, .trackLost,
-            .screenPaused, .trackPaused, .writerFailed, .samplesDropped, .manifestWriteFailed, .diskLow, .diskSpaceUnknown,
-            .couldNotMoveToTrash, .microphoneSilent:
+        case .noMicrophone, .microphoneAccessOff, .microphoneFailedToStart, .cameraNotRecordedYet, .cameraAccessOff,
+            .streamInterrupted, .trackLost, .screenPaused, .trackPaused, .writerFailed, .samplesDropped, .manifestWriteFailed,
+            .diskLow, .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent:
             .attention
         }
     }

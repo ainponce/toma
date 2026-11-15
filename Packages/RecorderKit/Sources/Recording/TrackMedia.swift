@@ -2,7 +2,7 @@
 
 /// What a track carries, which decides how its segments are encoded.
 public enum TrackMedia: Sendable, Equatable {
-    /// Screen video, encoded HEVC at `framesPerSecond` (the capture rate).
+    /// Screen or camera video, encoded HEVC at `framesPerSecond` (the capture rate).
     case video(framesPerSecond: Int)
     /// Microphone audio, encoded lossless.
     case audio

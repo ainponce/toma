@@ -180,7 +180,8 @@ public final class RecordingController {
     public func startRecording(selection: CaptureSelection, settings: QuickSettings) {
         guard phase == .idle else { return }
         let request = TakeRequest(selection: selection, settings: settings)
-        guard RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone(request)).canRecord else {
+        let wanted = wantedPermissions(usesMicrophone: usesMicrophone(request))
+        guard RecordingPreflight.evaluate(probe: probe, wanted: wanted).canRecord else {
             openOnboarding()
             return
         }
@@ -205,6 +206,12 @@ public final class RecordingController {
     /// Chosen, and the Mac has one.
     private func usesMicrophone(_ request: TakeRequest) -> Bool {
         request.selection.microphone != .off && environment.hasMicrophone()
+    }
+
+    /// What the preflight asks about: screen recording, and the microphone when the take uses one. The camera is
+    /// not recorded yet (`TakeNotice.cameraNotRecordedYet`).
+    private func wantedPermissions(usesMicrophone: Bool) -> Set<PermissionKind> {
+        usesMicrophone ? [.screenRecording, .microphone] : [.screenRecording]
     }
 
     /// The notices of the take start as `carried`, which stay whether or not it starts.
@@ -235,7 +242,7 @@ public final class RecordingController {
             onConfirmation(.countdownCancelled)
             return
         }
-        let preflight = RecordingPreflight.evaluate(probe: probe, wantsMicrophone: usesMicrophone)
+        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(usesMicrophone: usesMicrophone))
         guard preflight.canRecord, !startCancelled else {
             setPhase(.idle)
             // Screen recording was turned off meanwhile.
@@ -254,11 +261,9 @@ public final class RecordingController {
         // The camera is only a preview in this version: the take goes on without it.
         if request.selection.camera != .off { addNotice(.cameraNotRecordedYet) }
 
-        var granted: Set<PermissionKind> = [.screenRecording]
-        if preflight.recordMicrophone { granted.insert(.microphone) }
         var request = request
         while true {
-            switch await attempt(request, granted: granted) {
+            switch await attempt(request, granted: preflight.granted) {
             case .started, .handedToStop:
                 return
             case .cancelled:

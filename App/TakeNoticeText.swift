@@ -16,6 +16,8 @@ extension TakeNotice {
             String(localized: "The microphone couldn't start. Recording the screen without audio.")
         case .cameraNotRecordedYet:
             String(localized: "In this version the camera is only a preview: this recording doesn't include it.")
+        case .cameraAccessOff:
+            String(localized: "Camera access is off. Recording without the camera.")
         case .streamInterrupted(let kind):
             switch kind {
             case .display: String(localized: "Screen capture was interrupted. Trying again…")

@@ -223,26 +223,12 @@ public final class MicrophoneCaptureSource: NSObject, CaptureSource, AVCaptureAu
             state.run.flatMap { ObjectIdentifier($0.capture.output) == outputID && $0.failure == nil ? $0 : nil }
         }
         guard let run else { return }
-        let hostClock = CMClockGetHostTimeClock()
-        let sessionClock = run.capture.session.synchronizationClock ?? hostClock
         do {
-            let retimed = try Self.retimed(sampleBuffer) { CMSyncConvertTime($0, from: sessionClock, to: hostClock) }
+            let retimed = try CaptureClock.retimed(sampleBuffer, from: run.capture.session.synchronizationClock)
             run.sink.source(trackID, didOutput: retimed)
         } catch {
             // Already on the run's queue: end the run now, so no later sample goes out before the error.
             failOnQueue(runID: run.id, error: error)
         }
-    }
-
-    /// A copy of `sample` whose presentation (and decode, if any) timestamps go through `convert`.
-    static func retimed(_ sample: CMSampleBuffer, _ convert: (CMTime) -> CMTime) throws -> CMSampleBuffer {
-        var timings = try sample.sampleTimingInfos()
-        for i in timings.indices {
-            timings[i].presentationTimeStamp = convert(timings[i].presentationTimeStamp)
-            if timings[i].decodeTimeStamp.isValid {
-                timings[i].decodeTimeStamp = convert(timings[i].decodeTimeStamp)
-            }
-        }
-        return try CMSampleBuffer(copying: sample, withNewTiming: timings)
     }
 }

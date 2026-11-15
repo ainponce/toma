@@ -59,7 +59,7 @@ import Testing
 
     @Test func microphoneRetimingMovesOnlyTheTimestamps() throws {
         let original = SampleFactory.audioSample(pts: HostTime(nanoseconds: 1_000_000_000), frames: 480, sampleRate: 48_000, channels: 2)
-        let retimed = try MicrophoneCaptureSource.retimed(original) { $0 + CMTime(value: 1, timescale: 1) }
+        let retimed = try CaptureClock.retimed(original) { $0 + CMTime(value: 1, timescale: 1) }
         #expect(retimed.presentationTimeStamp == CMTime(value: 2_000_000_000, timescale: 1_000_000_000))
         #expect(retimed.numSamples == 480)
         let originalFormat = try #require(original.formatDescription)

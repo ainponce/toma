@@ -54,4 +54,30 @@ import Testing
         #expect(sink.failures.isEmpty)
         #expect(source.activeDeviceUniqueID == nil)
     }
+
+    /// Needs Camera permission and a camera (the built-in one, an iPhone by Continuity Camera or a USB one).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RECORDER_INTEGRATION"] == "1"))
+    func capturesDefaultCameraForTwoSeconds() async throws {
+        let queue = DispatchSerialQueue(label: "test.capture.camera")
+        let sink = RecordingSink(queue: queue)
+        let host = CameraSessionHost()
+        let source = CameraCaptureSource(host: host, preferredDeviceUniqueID: nil)
+        #expect(source.trackID == "camera")
+
+        try await source.start(on: queue, sink: sink)
+        let device = try #require(source.activeDeviceUniqueID)
+        #expect(source.sourceInfo.deviceUniqueID == device)
+        #expect(host.activeDeviceUniqueID == device)
+        try await Task.sleep(for: .seconds(2))
+        await source.stop()
+
+        let samples = sink.samples
+        #expect(samples.count >= 1)
+        #expect(samples.allSatisfy { abs($0.lag) < 1 && $0.trackID == "camera" && $0.width != nil })
+        #expect(zip(samples, samples.dropFirst()).allSatisfy { $0.pts < $1.pts })
+        #expect(sink.failures.isEmpty)
+        #expect(source.activeDeviceUniqueID == nil)
+        // The run's lease was the only one: the session stopped with it.
+        #expect(await eventually { host.activeDeviceUniqueID == nil })
+    }
 }

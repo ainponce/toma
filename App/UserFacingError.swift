@@ -58,9 +58,17 @@ private func description(of error: CaptureSourceError) -> String {
     case .microphoneNotFound:
         String(localized: "No microphone found.")
     case .sessionConfigurationFailed:
-        String(localized: "The microphone couldn't be set up.")
+        String(localized: "The capture device couldn't be set up.")
     case .sessionDidNotStart:
-        String(localized: "The microphone didn't start.")
+        String(localized: "The capture device didn't start.")
+    case .cameraNotFound:
+        String(localized: "No camera was found.")
+    case .cameraFormatUnavailable:
+        String(localized: "The camera can't record at the chosen quality.")
+    case .cameraDisconnected:
+        String(localized: "The camera was disconnected.")
+    case .cameraInterrupted:
+        String(localized: "The camera stopped: another app is using it, or the lid is closed.")
     }
 }
 

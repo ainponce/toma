@@ -12,7 +12,7 @@ import Testing
         #expect(TakeNotice.streamResumed(.microphone).presentation == .confirmation)
         // Everything else asks for attention: amber.
         let attention: [TakeNotice] = [
-            .noMicrophone, .microphoneAccessOff, .microphoneFailedToStart, .cameraNotRecordedYet,
+            .noMicrophone, .microphoneAccessOff, .microphoneFailedToStart, .cameraNotRecordedYet, .cameraAccessOff,
             .streamInterrupted(.display), .trackLost(.microphone), .screenPaused, .trackPaused(.microphone),
             .writerFailed(.display), .samplesDropped(.microphone), .manifestWriteFailed, .diskLow(availableBytes: 1),
             .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent,

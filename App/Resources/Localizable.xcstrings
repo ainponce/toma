@@ -227,6 +227,16 @@
         }
       }
     },
+    "Camera access is off. Recording without the camera." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El acceso a la cámara está desactivado. Se graba sin la cámara."
+          }
+        }
+      }
+    },
     "Camera capture resumed." : {
       "localizations" : {
         "es" : {
@@ -868,6 +878,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sin señal"
+          }
+        }
+      }
+    },
+    "No camera was found." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró ninguna cámara."
           }
         }
       }
@@ -1850,6 +1870,16 @@
         }
       }
     },
+    "The camera can't record at the chosen quality." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara no puede grabar con la calidad elegida."
+          }
+        }
+      }
+    },
     "The camera stopped recording. Still trying to bring it back." : {
       "localizations" : {
         "es" : {
@@ -1866,6 +1896,46 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La cámara dejó de grabar. La grabación sigue sin ella."
+          }
+        }
+      }
+    },
+    "The camera stopped: another app is using it, or the lid is closed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara se detuvo: otra app la está usando o la tapa está cerrada."
+          }
+        }
+      }
+    },
+    "The camera was disconnected." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se desconectó la cámara."
+          }
+        }
+      }
+    },
+    "The capture device couldn't be set up." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo configurar el dispositivo de captura."
+          }
+        }
+      }
+    },
+    "The capture device didn't start." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El dispositivo de captura no se inició."
           }
         }
       }
@@ -1920,32 +1990,12 @@
         }
       }
     },
-    "The microphone couldn't be set up." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No se pudo configurar el micrófono."
-          }
-        }
-      }
-    },
     "The microphone couldn't start. Recording the screen without audio." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo iniciar el micrófono. Se graba la pantalla sin audio."
-          }
-        }
-      }
-    },
-    "The microphone didn't start." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "El micrófono no se inició."
           }
         }
       }

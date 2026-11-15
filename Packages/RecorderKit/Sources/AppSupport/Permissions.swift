@@ -175,32 +175,35 @@ public enum PermissionSettings {
 
 /// Whether a take can start, and with which sources.
 public struct PreflightResult: Equatable, Sendable {
-    /// The permissions wanted that are not granted, in the order screen recording, microphone.
+    /// The permissions wanted that are not granted, in the order of `PermissionKind.allCases`.
     public var missing: [PermissionKind]
-    /// Whether to record the microphone: wanted and granted.
-    public var recordMicrophone: Bool
+    /// The permissions wanted that are granted: the sources the take can record.
+    public var granted: Set<PermissionKind>
     /// Whether screen recording is granted.
     public var canRecord: Bool
 
-    public init(missing: [PermissionKind], recordMicrophone: Bool, canRecord: Bool) {
+    public init(missing: [PermissionKind], granted: Set<PermissionKind>, canRecord: Bool) {
         self.missing = missing
-        self.recordMicrophone = recordMicrophone
+        self.granted = granted
         self.canRecord = canRecord
     }
+
+    /// Whether to record the microphone: wanted and granted.
+    public var recordMicrophone: Bool { granted.contains(.microphone) }
 }
 
-/// The check before every take: screen recording is required, the microphone is optional. The other
-/// permissions (the camera, Accessibility) are not asked about here: the camera is asked for when it is
-/// turned on in the island, and a take never needs Accessibility.
+/// The check before every take: screen recording is required, every other permission is optional (the take is
+/// recorded without that source). Only the permissions wanted are asked about: a take never needs
+/// Accessibility, and a microphone or a camera that is off is neither missing nor recorded.
 public enum RecordingPreflight {
-    /// `wantsMicrophone` is false when the take should not record audio (for example, the Mac has no
-    /// microphone): the microphone is then neither missing nor recorded.
-    public static func evaluate(probe: any PermissionProbe, wantsMicrophone: Bool) -> PreflightResult {
-        let wanted: [PermissionKind] = [.screenRecording] + (wantsMicrophone ? [.microphone] : [])
-        let states = Dictionary(uniqueKeysWithValues: wanted.map { ($0, probe.state(of: $0)) })
+    /// `wanted` holds screen recording, plus the microphone and the camera when the take would record them (for
+    /// example, not when the Mac has no microphone).
+    public static func evaluate(probe: any PermissionProbe, wanted: Set<PermissionKind>) -> PreflightResult {
+        let kinds = PermissionKind.allCases.filter(wanted.contains)
+        let granted = Set(kinds.filter { probe.state(of: $0) == .granted })
         return PreflightResult(
-            missing: wanted.filter { states[$0] != .granted },
-            recordMicrophone: states[.microphone] == .granted,
-            canRecord: states[.screenRecording] == .granted)
+            missing: kinds.filter { !granted.contains($0) },
+            granted: granted,
+            canRecord: granted.contains(.screenRecording))
     }
 }

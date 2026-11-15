@@ -29,37 +29,58 @@ struct FakeProbe: PermissionProbe {
 // MARK: - Preflight
 
 @Test func cannotRecordWithoutScreenPermission() {
-    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .denied, mic: .granted), wantsMicrophone: true)
+    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .denied, mic: .granted), wanted: [.screenRecording, .microphone])
     #expect(r.canRecord == false && r.missing == [.screenRecording])
 }
 
 @Test func recordsWithoutMicWhenMicDenied() {
-    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .granted, mic: .denied), wantsMicrophone: true)
+    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .granted, mic: .denied), wanted: [.screenRecording, .microphone])
     #expect(r.canRecord && r.recordMicrophone == false && r.missing == [.microphone])
 }
 
 @Test func recordsScreenAndMicWhenBothAreGranted() {
-    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .granted, mic: .granted), wantsMicrophone: true)
-    #expect(r == PreflightResult(missing: [], recordMicrophone: true, canRecord: true))
+    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .granted, mic: .granted), wanted: [.screenRecording, .microphone])
+    #expect(r == PreflightResult(missing: [], granted: [.screenRecording, .microphone], canRecord: true))
+    #expect(r.recordMicrophone)
 }
 
 @Test func missingListsEveryPermissionNotGrantedYetInOrder() {
-    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .notDetermined, mic: .notDetermined), wantsMicrophone: true)
-    #expect(r == PreflightResult(missing: [.screenRecording, .microphone], recordMicrophone: false, canRecord: false))
+    let r = RecordingPreflight.evaluate(
+        probe: FakeProbe(screen: .notDetermined, mic: .notDetermined), wanted: [.screenRecording, .microphone])
+    #expect(r == PreflightResult(missing: [.screenRecording, .microphone], granted: [], canRecord: false))
+    #expect(!r.recordMicrophone)
 }
 
 @Test func microphoneNotWantedIsNeitherMissingNorRecorded() {
-    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .granted, mic: .denied), wantsMicrophone: false)
-    #expect(r == PreflightResult(missing: [], recordMicrophone: false, canRecord: true))
+    let r = RecordingPreflight.evaluate(probe: FakeProbe(screen: .granted, mic: .denied), wanted: [.screenRecording])
+    #expect(r == PreflightResult(missing: [], granted: [.screenRecording], canRecord: true))
+    #expect(!r.recordMicrophone)
 }
 
 @Test func optionalPermissionsAreNeverMissing() {
     for (accessibility, camera) in [(PermissionState.notDetermined, PermissionState.notDetermined), (.denied, .denied)] {
         let probe = FakeProbe(screen: .granted, mic: .granted, accessibility: accessibility, camera: camera)
-        #expect(RecordingPreflight.evaluate(probe: probe, wantsMicrophone: true) == PreflightResult(missing: [], recordMicrophone: true, canRecord: true))
+        #expect(RecordingPreflight.evaluate(probe: probe, wanted: [.screenRecording, .microphone])
+            == PreflightResult(missing: [], granted: [.screenRecording, .microphone], canRecord: true))
         let missing = FakeProbe(screen: .denied, mic: .notDetermined, accessibility: accessibility, camera: camera)
-        #expect(RecordingPreflight.evaluate(probe: missing, wantsMicrophone: true).missing == [.screenRecording, .microphone])
+        #expect(RecordingPreflight.evaluate(probe: missing, wanted: [.screenRecording, .microphone]).missing == [.screenRecording, .microphone])
     }
+}
+
+@Test func cameraDeniedRecordsWithoutCamera() {
+    let probe = FakeProbe(screen: .granted, mic: .granted, camera: .denied)
+    let r = RecordingPreflight.evaluate(probe: probe, wanted: [.screenRecording, .camera])
+    #expect(r.canRecord && r.missing == [.camera] && r.granted == [.screenRecording])
+    #expect(!r.recordMicrophone)
+}
+
+@Test func missingFollowsThePermissionOrderWhateverTheWantedOrder() {
+    let probe = FakeProbe(screen: .notDetermined, mic: .denied, camera: .notDetermined)
+    let r = RecordingPreflight.evaluate(probe: probe, wanted: [.camera, .microphone, .screenRecording])
+    #expect(r == PreflightResult(missing: [.screenRecording, .microphone, .camera], granted: [], canRecord: false))
+    let granted = FakeProbe(screen: .granted, mic: .granted, camera: .granted)
+    #expect(RecordingPreflight.evaluate(probe: granted, wanted: [.camera, .screenRecording, .microphone])
+        == PreflightResult(missing: [], granted: [.screenRecording, .microphone, .camera], canRecord: true))
 }
 
 // MARK: - System Settings

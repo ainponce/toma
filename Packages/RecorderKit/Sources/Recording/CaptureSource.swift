@@ -17,7 +17,7 @@ public protocol CaptureSink: AnyObject, Sendable {
     func source(_ trackID: String, didStopWithError error: any Error)
 }
 
-/// A live producer of one track: a display or a microphone.
+/// A live producer of one track: a display, a camera or a microphone.
 public protocol CaptureSource: AnyObject, Sendable {
     var trackID: String { get }
     var kind: TrackKind { get }
@@ -47,10 +47,19 @@ public enum CaptureSourceError: Error, Equatable {
     case displayNotFound(displayID: UInt32)
     /// No audio input device is available.
     case microphoneNotFound
-    /// The capture session refused the device input or the audio output.
+    /// The capture session refused the device input or its output (a microphone's or a camera's).
     case sessionConfigurationFailed
-    /// `startRunning()` returned without the session running.
+    /// `startRunning()` returned without the session running (a microphone's or a camera's).
     case sessionDidNotStart
+    /// No camera is connected (or every one is suspended: a closed lid, a closed privacy iris).
+    case cameraNotFound
+    /// No format of the camera gives the frame rate asked for.
+    case cameraFormatUnavailable
+    /// The camera being recorded was disconnected.
+    case cameraDisconnected
+    /// The camera stopped delivering: another app took it, the session stopped, or the camera was suspended
+    /// (the lid was closed).
+    case cameraInterrupted
 }
 
 extension DispatchSerialQueue {

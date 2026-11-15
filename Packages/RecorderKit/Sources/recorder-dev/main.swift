@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
 import ArgumentParser
 import CoreGraphics
 import Darwin
@@ -16,7 +17,7 @@ struct RecorderDev: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "recorder-dev",
         abstract: "Records, recovers, verifies and exports Toma takes from the command line.",
-        subcommands: [SynthRecord.self, Record.self, Recover.self, Verify.self, ExportMP4.self]
+        subcommands: [SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self]
     )
 }
 
@@ -113,11 +114,19 @@ struct SynthRecord: AsyncParsableCommand {
 
 struct Record: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Records the main display and the default microphone.",
+        abstract: "Records the main display, a camera (--camera) and the default microphone.",
         discussion: """
-            Needs Screen Recording and Microphone permission for the terminal that runs it. Creates \
-            <directory>/record-<date>-<time>.toma and prints its absolute path as the first line once \
-            recording has started, like synth-record. Sleep and screen lock pause the take, as in the app.
+            Needs Screen Recording and Microphone permission for the terminal that runs it, and Camera \
+            permission with --camera. Creates <directory>/record-<date>-<time>.toma and prints its absolute \
+            path as the first line once recording has started, like synth-record. Sleep and screen lock pause \
+            the take, as in the app.
+
+            The tracks, in this order: the main display at 60 fps, camera at 1080p and 30 fps (--camera), and \
+            mic. --camera default records the system's preferred camera; --camera <uniqueID> (from \
+            list-sources) that camera, or the system's preferred one while it is not connected. A camera that \
+            is disconnected, taken by another app or suspended (a closed lid) is restarted as in the app, on \
+            the system's preferred camera while it is gone: "warning:" lines say so, and the take's \
+            events.jsonl logs a deviceChanged event when another camera takes over.
 
             The cursor is sampled at 120 Hz, but clicks may be missing: a command-line tool has no \
             NSApplication, and the mouse-button monitors may not deliver there.
@@ -130,17 +139,81 @@ struct Record: AsyncParsableCommand {
     @Option(help: "Seconds to record.")
     var duration: Double
 
+    @Option(help: "Also record a camera: default, or a camera's uniqueID from list-sources.")
+    var camera: String?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
+        if let camera, camera.isEmpty { throw ValidationError("--camera takes default or a camera's uniqueID.") }
     }
 
     func run() async throws {
         // On the main thread the display gets its user-visible name.
         let display = await MainActor.run { DisplayCaptureSource(displayID: CGMainDisplayID(), framesPerSecond: 60) }
+        var sources: [any CaptureSource] = [display]
+        if let camera {
+            sources.append(CameraCaptureSource(host: CameraSessionHost(), preferredDeviceUniqueID: camera == "default" ? nil : camera))
+        }
+        sources.append(MicrophoneCaptureSource(preferredDeviceUniqueID: nil))
         try await recordTake(
             in: directory, prefix: "record", duration: duration,
-            sources: [display, MicrophoneCaptureSource(preferredDeviceUniqueID: nil)], input: CursorRecorder(),
+            sources: sources, input: CursorRecorder(),
             systemActivity: SystemActivityMonitor.live())
+    }
+}
+
+struct ListSources: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "list-sources",
+        abstract: "Lists the displays, cameras and microphones that can be recorded, with their IDs.",
+        discussion: """
+            One line per source: "display <CGDirectDisplayID>: <name>, <width>×<height> pt at (<x>, <y>), \
+            <scale>x", "camera <uniqueID>: <name>" and "microphone <uniqueID>: <name>", followed by "main", \
+            "asleep" (it records nothing until it wakes), "system preferred", "Continuity Camera" or \
+            "default" where they apply. The IDs are what record takes (--camera). Needs no permission.
+            """
+    )
+
+    func run() async throws {
+        let main = CGMainDisplayID()
+        for displayID in onlineDisplayIDs() {
+            // On the main thread the display gets its user-visible name.
+            let info = await MainActor.run { DisplayCaptureSource(displayID: displayID).sourceInfo }
+            var line = "display \(displayID): \(info.name)"
+            if let frame = info.globalFrame {
+                line += ", \(format(frame.width))×\(format(frame.height)) pt at (\(format(frame.x)), \(format(frame.y)))"
+            }
+            if let scale = info.pixelScale { line += ", \(format(scale))x" }
+            if displayID == main { line += ", main" }
+            if CGDisplayIsAsleep(displayID) != 0 { line += ", asleep" }
+            print(line)
+        }
+        for camera in CameraCatalog.devices() {
+            var line = "camera \(camera.uniqueID): \(camera.name)"
+            if camera.isSystemPreferred { line += ", system preferred" }
+            if camera.isContinuity { line += ", Continuity Camera" }
+            print(line)
+        }
+        let defaultMicrophone = AVCaptureDevice.default(for: .audio)?.uniqueID
+        let microphones = AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified).devices
+        for microphone in microphones {
+            let marker = microphone.uniqueID == defaultMicrophone ? ", default" : ""
+            print("microphone \(microphone.uniqueID): \(microphone.localizedName)\(marker)")
+        }
+    }
+
+    /// Asleep ones included: the active list leaves them out, and with the only display asleep it is empty.
+    private func onlineDisplayIDs() -> [CGDirectDisplayID] {
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+        var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+        guard CGGetOnlineDisplayList(count, &ids, &count) == .success else { return [] }
+        return Array(ids.prefix(Int(count)))
+    }
+
+    /// A whole number without decimals, anything else with two.
+    private func format(_ value: Double) -> String {
+        value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
     }
 }
 
