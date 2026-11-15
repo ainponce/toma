@@ -11,13 +11,12 @@ import SwiftUI
 final class SystemAudioSetting {
     /// As it was last read.
     private(set) var permission: PermissionState
-    /// The request is running: the system's prompt may show meanwhile, and stay after it.
-    private(set) var isAsking = false
 
-    /// The system's prompt may be about to show (`true`, with the island open) or the request is over (`false`):
-    /// the island makes room for the prompt.
+    /// The system's prompt may be about to show (`true`, with the island open) or the request is over (`false`, the
+    /// prompt may stay): the island makes room for the prompt.
     @ObservationIgnored var askingChanged: (Bool) -> Void = { _ in }
     @ObservationIgnored private let probe: any PermissionProbe
+    @ObservationIgnored private var isAsking = false
 
     init(probe: any PermissionProbe) {
         self.probe = probe

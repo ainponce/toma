@@ -165,12 +165,15 @@ final class OpenPanelModel {
         selection.displayIDs = displays.map(\.id).filter(chosen.contains)
     }
 
-    /// The quick settings a take records with: the frame rates the settings show for its displays.
+    /// The quick settings a take records with: the frame rates the settings show, for its displays, the window and
+    /// the camera.
     var recordedQuick: QuickSettings {
         var quick = quick
         for display in recordedDisplays {
             quick.framesPerSecondByDisplay[display.id] = framesPerSecond(for: display)
         }
+        quick.windowFramesPerSecond = Self.offered(quick.windowFramesPerSecond)
+        quick.cameraFramesPerSecond = Self.offered(quick.cameraFramesPerSecond)
         return quick
     }
 
@@ -390,16 +393,12 @@ struct IslandOpenPanel: View {
             }
             GlassSegmented(
                 items: CameraShape.allCases.map { shape in
-                    .init(value: shape, title: Self.title(of: shape), icon: Self.symbol(of: shape), iconOnly: true)
+                    .init(value: shape, title: Text(shape.title), icon: shape.symbol, iconOnly: true)
                 },
                 selection: Binding(get: { panel.camera.style.shape }, set: { shape in panel.camera.update { $0.shape = shape } }),
                 compact: true)
             GlassSegmented(
-                items: [
-                    .init(value: CameraStyle.small, title: Text("Small", comment: "The camera bubble's size")),
-                    .init(value: CameraStyle.medium, title: Text("Medium", comment: "The camera bubble's size")),
-                    .init(value: CameraStyle.large, title: Text("Large", comment: "The camera bubble's size")),
-                ],
+                items: CameraStyle.sizes.map { size in .init(value: size.size, title: Text(size.title)) },
                 selection: Binding(get: { panel.camera.style.size }, set: { size in panel.camera.update { $0.size = size } }),
                 compact: true)
             Text("Drag the bubble to place it. This is how the video starts; you can change it in the editor.")
@@ -411,24 +410,6 @@ struct IslandOpenPanel: View {
         .opacity(panel.isCameraOn ? 1 : 0.32)
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: panel.isCameraOn)
         Spacer(minLength: 0)
-    }
-
-    private static func title(of shape: CameraShape) -> Text {
-        switch shape {
-        case .circle: Text("Circle", comment: "The camera bubble's shape")
-        case .roundedSquare: Text("Rounded Square", comment: "The camera bubble's shape")
-        case .portrait: Text("Vertical", comment: "The camera bubble's shape: a 3:4 box")
-        case .landscape: Text("Horizontal", comment: "The camera bubble's shape: a 16:9 box")
-        }
-    }
-
-    private static func symbol(of shape: CameraShape) -> String {
-        switch shape {
-        case .circle: "circle.fill"
-        case .roundedSquare: "square.fill"
-        case .portrait: "rectangle.portrait.fill"
-        case .landscape: "rectangle.fill"
-        }
     }
 
     /// The connected cameras, and the chosen one if it is not connected now (by its ID).

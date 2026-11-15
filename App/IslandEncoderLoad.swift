@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import AppSupport
-import ProjectFormat
 import Recording
 import SwiftUI
 
@@ -21,15 +20,10 @@ extension OpenPanelModel {
             items, mainDisplayID: infos.first(where: \.isMain)?.id, budget: EncoderLoad.budget(defaults: .standard))
     }
 
-    /// The chosen window in pixels at the scale the take records: its display's pixels per point at Native, one at
-    /// Points.
+    /// The chosen window in pixels at the scale the take records, in Window mode.
     private var windowPixelSize: CGSize? {
-        guard selection.mode == .window, let frame = chosenWindow?.frame else { return nil }
-        let center = CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
-        let infos = displays.map(\.info)
-        let display = infos.first { CursorGeometry.contains(center, $0.frame) } ?? infos.first(where: \.isMain)
-        let scale = quick.displayScale == .points ? 1 : display?.scale ?? 1
-        return CGSize(width: frame.width * scale, height: frame.height * scale)
+        guard selection.mode == .window, let window = chosenWindow else { return nil }
+        return pixelSize(ofWindow: window)
     }
 
     /// Makes the changes `suggestions` say.

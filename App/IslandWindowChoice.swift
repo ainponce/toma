@@ -83,19 +83,29 @@ extension OpenPanelModel {
         otherDesktopWindows = groups
     }
 
-    /// The pixels a window records at, as "1440 × 900": its display's pixels per point at Native, one at Points.
-    func pixelSize(of window: WindowCandidate) -> String {
+    /// The pixels a window records at: its frame by its display's pixels per point (the display with its center, or
+    /// the main one) at Native, by one at Points. The encoder's load counts it too.
+    func pixelSize(ofWindow window: WindowCandidate) -> CGSize {
         let center = CGPoint(x: window.frame.x + window.frame.width / 2, y: window.frame.y + window.frame.height / 2)
         let display = displays.first { CursorGeometry.contains(center, $0.info.frame) } ?? displays.first { $0.info.isMain }
         let scale = quick.displayScale == .points ? 1 : display?.info.scale ?? 1
-        return formattedSize(width: window.frame.width * scale, height: window.frame.height * scale)
+        return CGSize(width: window.frame.width * scale, height: window.frame.height * scale)
+    }
+
+    /// `pixelSize(ofWindow:)`, as "1440 × 900".
+    func pixelSize(of window: WindowCandidate) -> String {
+        let size = pixelSize(ofWindow: window)
+        return formattedSize(width: Double(size.width), height: Double(size.height))
     }
 }
 
-/// "Safari — Start", or the app alone when the window has no title.
+/// "Safari — Start", or the app alone when the window has no title: a window to record, or a desktop of an app in
+/// full screen.
 func windowName(app: String, title: String?) -> String {
     guard let title else { return app }
-    return String(format: String(localized: "%1$@ — %2$@", comment: "A window to record: its app, and its title"), app, title)
+    let format = String(
+        localized: "%1$@ — %2$@", comment: "An app and its window's title: a desktop of an app in full screen, or a window to record")
+    return String(format: format, app, title)
 }
 
 /// The icon of the app that runs `pid`.

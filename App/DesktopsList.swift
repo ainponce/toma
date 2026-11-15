@@ -223,12 +223,8 @@ struct DesktopsList: View {
             Text("Desktop \(number)", comment: "A desktop (Space) among several: its number, as Mission Control names it")
         case .desktop(nil):
             Text("Desktop", comment: "A display's only desktop (Space), and the open island's section of desktops")
-        case .fullScreen(let app, nil):
-            Text(verbatim: app)
-        case .fullScreen(let app, let title?):
-            Text(verbatim: String(
-                format: String(localized: "%1$@ — %2$@", comment: "A desktop of an app in full screen: the app, and its window's title"),
-                app, title))
+        case .fullScreen(let app, let title):
+            Text(verbatim: windowName(app: app, title: title))
         case .splitView(let apps):
             Text(verbatim: ListFormatter.localizedString(byJoining: apps))
         }

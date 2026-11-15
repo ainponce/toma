@@ -60,11 +60,10 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private let bubble: CameraBubblePanel
     /// The camera prompt is up.
     private var isAskingForCamera = false
-    /// System audio was asked for with the island open. macOS shows its prompt and never says when it is
-    /// answered (the request is over in a second, the prompt may stay): the island stays under it, and open
-    /// while the keyboard is the prompt's, until it leaves the open state; once the request is over it takes the
-    /// keyboard back when the pointer comes over it.
-    private var isMakingRoomForSystemAudio = false
+    /// System audio was asked for with the island open: macOS shows its prompt and never says when it is
+    /// answered (the request is over in a second, the prompt may stay). The island stays under it, and open while
+    /// the prompt has the keyboard, until the request is over and the island is back (`SystemPromptRoom`).
+    private var systemAudioPrompt = SystemPromptRoom()
     private var machine = IslandMachine()
     private var presence = PointerPresence()
     private var width: SpringValue
@@ -146,7 +145,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         desktops.send = { [weak self] event in self?.send(event) }
         root.onEnter = { [weak self] in
             self?.pointer(entered: .island)
-            self?.keyboardBackAfterSystemAudioPrompt()
+            self?.islandIsBackAfterSystemAudioRequest()
         }
         root.onExit = { [weak self] in self?.pointer(exited: .island) }
         let link = root.displayLink(target: self, selector: #selector(frameTick(_:)))
@@ -247,14 +246,19 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     private func updateYield() {
-        let yields = recording.isAskingPermission || isAskingForCamera || isMakingRoomForSystemAudio
+        let yields = recording.isAskingPermission || isAskingForCamera || systemAudioPrompt.isMakingRoom
         if yieldsToSystemPrompt != yields { yieldsToSystemPrompt = yields }
     }
 
-    /// System audio is being asked for: the island makes room for the prompt from now until it is no longer open.
+    /// System audio is being asked for (with the island open, the island makes room for the prompt), or the
+    /// request is over (the prompt may still be up: the island waits until it is back).
     private func systemAudioRequested(_ asking: Bool) {
-        guard asking, machine.state == .open else { return }
-        isMakingRoomForSystemAudio = true
+        if asking {
+            guard machine.state == .open else { return }
+            systemAudioPrompt.requestStarted()
+        } else {
+            systemAudioPrompt.requestEnded()
+        }
         updateYield()
     }
 
@@ -368,17 +372,22 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         send(.endedChoosing)
     }
 
-    /// The pointer came over the open island after system audio was asked for: the prompt, which had the keyboard,
-    /// was most likely answered, so the island takes it back (Esc, and a click elsewhere closing it). If the
-    /// prompt is still up it stays over the island, and a click on it leaves the island open.
-    private func keyboardBackAfterSystemAudioPrompt() {
-        guard isMakingRoomForSystemAudio, !systemAudio.isAsking, !panel.isKeyWindow else { return }
-        _ = takeKeyboardBack()
+    /// The open island is back after system audio was asked for (the pointer came over it, or it is key again) and
+    /// the request is over: the prompt is taken as answered, and everything comes back at once — the island's
+    /// level, the keyboard (Esc), and closing with a click elsewhere.
+    private func islandIsBackAfterSystemAudioRequest() {
+        guard systemAudioPrompt.islandIsBack() else { return }
+        updateYield()
+        if !panel.isKeyWindow { _ = takeKeyboardBack() }
     }
 
     private func chose(window: WindowCandidate) {
         model.panel?.choose(window: window)
         send(.endedChoosing)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        islandIsBackAfterSystemAudioRequest()
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -393,9 +402,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         guard machine.state == .open else { return }
         // Once the new key window is known.
         Task { @MainActor [weak self] in
-            guard let self, machine.state == .open, !panel.isKeyWindow, !isAskingForCamera, !isMakingRoomForSystemAudio else {
-                return
-            }
+            guard let self, machine.state == .open, !panel.isKeyWindow, !isAskingForCamera, !systemAudioPrompt.isMakingRoom
+            else { return }
             if let key = NSApp.keyWindow, !key.styleMask.contains(.titled) { return }
             if desktops.keyboardLostToADesktopChange() {
                 _ = takeKeyboardBack()
@@ -427,8 +435,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             break
         }
         if state != .recordingOpen { model.isConfirmingRestart = false }
-        if state != .open, isMakingRoomForSystemAudio {
-            isMakingRoomForSystemAudio = false
+        if state != .open, systemAudioPrompt.isMakingRoom {
+            systemAudioPrompt.islandLeftOpen()
             updateYield()
         }
         withAnimation(.island(IslandGeometry.spring(to: state), reduceMotion: model.reduceMotion)) { model.state = state }
