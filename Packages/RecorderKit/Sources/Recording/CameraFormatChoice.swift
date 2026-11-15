@@ -86,4 +86,53 @@ public enum CameraFormatChoice {
         let ends = ranges.flatMap { [(rate: $0.maxRate, duration: $0.minDuration), (rate: $0.minRate, duration: $0.maxDuration)] }
         return ends.min { abs($0.rate - rate) < abs($1.rate - rate) }?.duration
     }
+
+    /// The format and frame duration a camera records a preset at.
+    struct Target: Equatable {
+        /// Index in the camera's formats.
+        var format: Int
+        var frameDuration: CMTime
+    }
+
+    /// The format `best` picks among `formats`, at the frame duration `frameDuration` gives for its ranges
+    /// (`rateRanges[i]` are those of `formats[i]`). `nil` when no format gives the rate.
+    static func target(
+        formats: [CameraFormatInfo], rateRanges: [[RateRange]], preset: CameraPreset, framesPerSecond: Int
+    ) -> Target? {
+        guard let format = best(among: formats, preset: preset, framesPerSecond: framesPerSecond),
+            let duration = frameDuration(framesPerSecond: framesPerSecond, ranges: rateRanges[format])
+        else { return nil }
+        return Target(format: format, frameDuration: duration)
+    }
+
+    /// What a camera has now, as the camera track cares about it.
+    struct DeviceSettings: Equatable {
+        /// The index of its active format in its formats; `nil` if it is not among them.
+        var formatIndex: Int?
+        var minFrameDuration: CMTime
+        var maxFrameDuration: CMTime
+        /// The camera lowers its rate by itself in low light (`AVCaptureDevice.isAutoVideoFrameRateEnabled`).
+        var autoFrameRateEnabled: Bool
+    }
+
+    /// A change to make to a camera, in the order given.
+    enum DeviceStep: Equatable {
+        case setFormat(Int)
+        case disableAutoFrameRate
+        /// Both the minimum and the maximum frame duration: a steady rate, like the screen's.
+        case setFrameDuration(CMTime)
+    }
+
+    /// What to change so that a camera with `current` records `format` at `frameDuration`; nothing when it does
+    /// already. A new format turns the automatic frame rate off by itself, and the rate is set again after it; with
+    /// the same format, the automatic frame rate is turned off first, since setting a frame duration while it is
+    /// on raises an Objective-C exception, which Swift cannot catch.
+    static func steps(from current: DeviceSettings, format: Int, frameDuration: CMTime) -> [DeviceStep] {
+        if current.formatIndex != format { return [.setFormat(format), .setFrameDuration(frameDuration)] }
+        if current.autoFrameRateEnabled { return [.disableAutoFrameRate, .setFrameDuration(frameDuration)] }
+        if current.minFrameDuration != frameDuration || current.maxFrameDuration != frameDuration {
+            return [.setFrameDuration(frameDuration)]
+        }
+        return []
+    }
 }

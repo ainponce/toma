@@ -121,8 +121,11 @@ struct Record: AsyncParsableCommand {
             path as the first line once recording has started, like synth-record. Sleep and screen lock pause \
             the take, as in the app.
 
-            The tracks, in this order: the main display at 60 fps, camera at 1080p and 30 fps (--camera), and \
-            mic. --camera default records the system's preferred camera; --camera <uniqueID> (from \
+            The tracks, in this order: the main display at 60 fps, camera at 30 fps (--camera), at 1080p unless \
+            --camera-preset says otherwise, and mic. The camera records in the smallest of its formats that \
+            covers the preset at 30 fps, or its largest at 30 fps if none does; the macOS log (subsystem \
+            dev.toma.Toma, category CameraSessionHost) says when the session changed that format or rate and \
+            it was set again. --camera default records the system's preferred camera; --camera <uniqueID> (from \
             list-sources) that camera, or the system's preferred one while it is not connected. A camera that \
             is disconnected, taken by another app or suspended (a closed lid) is restarted as in the app, on \
             the system's preferred camera while it is gone: "warning:" lines say so, and the take's \
@@ -142,9 +145,13 @@ struct Record: AsyncParsableCommand {
     @Option(help: "Also record a camera: default, or a camera's uniqueID from list-sources.")
     var camera: String?
 
+    @Option(help: "The camera's quality: p720 (1280×720), p1080 (1920×1080, when left out) or p2160 (3840×2160).")
+    var cameraPreset: CameraPreset?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         if let camera, camera.isEmpty { throw ValidationError("--camera takes default or a camera's uniqueID.") }
+        if cameraPreset != nil, camera == nil { throw ValidationError("--camera-preset needs --camera.") }
     }
 
     func run() async throws {
@@ -152,7 +159,9 @@ struct Record: AsyncParsableCommand {
         let display = await MainActor.run { DisplayCaptureSource(displayID: CGMainDisplayID(), framesPerSecond: 60) }
         var sources: [any CaptureSource] = [display]
         if let camera {
-            sources.append(CameraCaptureSource(host: CameraSessionHost(), preferredDeviceUniqueID: camera == "default" ? nil : camera))
+            sources.append(CameraCaptureSource(
+                host: CameraSessionHost(), preferredDeviceUniqueID: camera == "default" ? nil : camera,
+                preset: cameraPreset ?? .p1080))
         }
         sources.append(MicrophoneCaptureSource(preferredDeviceUniqueID: nil))
         try await recordTake(
@@ -216,6 +225,8 @@ struct ListSources: AsyncParsableCommand {
         value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
     }
 }
+
+extension CameraPreset: ExpressibleByArgument {}
 
 /// Creates a package in `directory` and records one take into it for `duration` seconds, or until the
 /// take stops by itself because the disk is full. Prints the package's absolute path as the first line

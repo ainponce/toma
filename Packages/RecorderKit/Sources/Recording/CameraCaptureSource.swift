@@ -111,10 +111,9 @@ public final class CameraCaptureSource: NSObject, CaptureSource, AVCaptureVideoD
         if let active = state.withLock({ $0.activeDeviceUniqueID }) {
             return TrackSource(name: AVCaptureDevice(uniqueID: active)?.localizedName ?? "Camera", deviceUniqueID: active)
         }
-        let usable = CameraCatalog.usable().map(\.info)
-        guard let uniqueID = CameraCatalog.pick(preferred: preferredDeviceUniqueID, among: usable),
-            let camera = usable.first(where: { $0.uniqueID == uniqueID })
-        else { return TrackSource(name: "Camera") }
+        guard let camera = try? CameraCatalog.resolve(preferred: preferredDeviceUniqueID).info else {
+            return TrackSource(name: "Camera")
+        }
         return TrackSource(name: camera.name, deviceUniqueID: camera.uniqueID)
     }
 
@@ -130,9 +129,12 @@ public final class CameraCaptureSource: NSObject, CaptureSource, AVCaptureVideoD
         await host.drain()
         await lastQueue?.drain()
 
+        // Asked on the host's queue right before the lease is given: a `stop` or `start` that came meanwhile (during
+        // the waits above, say) has the last word, and the camera is not turned on for nothing.
         let lease = try await host.lease(
             preferredDeviceUniqueID: preferredDeviceUniqueID, preset: preset, framesPerSecond: framesPerSecond,
-            forRecording: true, delivery: CameraSessionHost.SampleDelivery(delegate: self, queue: queue))
+            forRecording: true, delivery: CameraSessionHost.SampleDelivery(delegate: self, queue: queue),
+            isWanted: { [weak self] in self?.state.withLock { $0.generation == id } ?? false })
         let device = lease.device
         let suspension = device.observe(\.isSuspended, options: [.new]) { [weak self] device, _ in
             if device.isSuspended { self?.end(runID: id, cause: .suspended) }
@@ -182,9 +184,11 @@ public final class CameraCaptureSource: NSObject, CaptureSource, AVCaptureVideoD
             return (state.run, state.lastQueue)
         }
         run?.capture.tearDown()
-        // The lease has ended and the output has no delegate (a `start` in progress has its lease by then, and
-        // throws `CancellationError` once it sees this stop), and deliveries already queued, an error included,
-        // have finished.
+        // The run's lease has ended and the output has no delegate, and deliveries already queued, an error
+        // included, have finished. A `start` in progress whose lease the host has not given yet gets none (the
+        // host asks it, on its queue, whether it is still wanted); one whose lease was already given ends it as
+        // soon as it sees this stop, which may be after this returns: it then throws `CancellationError`, and none
+        // of its frames reaches a sink.
         await host.drain()
         await lastQueue?.drain()
     }

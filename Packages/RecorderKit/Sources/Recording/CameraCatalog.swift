@@ -37,10 +37,25 @@ public enum CameraCatalog {
         return (available.first(where: \.isSystemPreferred) ?? available.first)?.uniqueID
     }
 
-    /// The cameras of `discover()` that can capture now: a suspended one (a MacBook's with the lid closed, or one
-    /// with its privacy iris closed) gives no frames, so another one is picked while it is.
-    static func usable() -> [(info: CameraDeviceInfo, device: AVCaptureDevice)] {
-        discover().filter { !$0.device.isSuspended }
+    /// `pick` among the cameras of `available` that are not `suspended` (a MacBook's with the lid closed, or one
+    /// with its privacy iris closed: it gives no frames, so another one is picked while it is). Throws
+    /// `CaptureSourceError.cameraNotFound` without cameras, and `.cameraInterrupted` when every camera is
+    /// suspended: unlike a Mac without cameras, it can come back (the lid opens).
+    static func pick(preferred: String?, among available: [CameraDeviceInfo], suspended: Set<String>) throws(CaptureSourceError) -> String {
+        guard !available.isEmpty else { throw .cameraNotFound }
+        guard let uniqueID = pick(preferred: preferred, among: available.filter { !suspended.contains($0.uniqueID) }) else {
+            throw .cameraInterrupted
+        }
+        return uniqueID
+    }
+
+    /// The camera to use now (`pick(preferred:among:suspended:)` over the connected cameras), with its device.
+    static func resolve(preferred: String?) throws(CaptureSourceError) -> (info: CameraDeviceInfo, device: AVCaptureDevice) {
+        let listed = discover()
+        let suspended = Set(listed.filter(\.device.isSuspended).map(\.info.uniqueID))
+        let uniqueID = try pick(preferred: preferred, among: listed.map(\.info), suspended: suspended)
+        guard let camera = listed.first(where: { $0.info.uniqueID == uniqueID }) else { throw .cameraNotFound }
+        return camera
     }
 
     /// The cameras of `devices()`, in its order, with their devices.
