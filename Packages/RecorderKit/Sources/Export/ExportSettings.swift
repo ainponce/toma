@@ -28,7 +28,8 @@ public enum ExportError: Error, Equatable {
     case cancelled
     /// Writing the MP4 failed (`AVAssetWriter`'s error, or the file system's when moving it into place).
     case writerFailed(String)
-    /// The take has no display track with a segment: there is no screen to export.
+    /// The screen the take shows (`ScreenChoice`: a display or a window) recorded no segment, or the take has none:
+    /// there is no screen to export.
     case noDisplayTrack
     /// The destination is a folder, or inside a project package (`*.toma`), which an export never writes into.
     case destinationNotAllowed
@@ -39,8 +40,8 @@ public struct ExportSummary: Sendable, Equatable {
     /// Spans of the video where recorded microphone audio could not be used, in time order: they are
     /// silent in the MP4.
     public var missingAudio: [MissingAudio]
-    /// Spans of the video where the screen could not be decoded, in time order: they show the frame before
-    /// them (`FrameRenderer.missingVideo`).
+    /// Spans of the video where the screen or the camera could not be decoded, in time order, each with its track:
+    /// they show the frame before them (`FrameRenderer.missingVideo`).
     public var missingVideo: [MissingVideo]
 
     public init(missingAudio: [MissingAudio] = [], missingVideo: [MissingVideo] = []) {

@@ -2233,6 +2233,46 @@
         }
       }
     },
+    "The video was exported, but %lld parts of the camera couldn't be read: they show the frame before them." : {
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld part of the camera couldn't be read: it shows the frame before it."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "The video was exported, but %lld parts of the camera couldn't be read: they show the frame before them."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero no se pudo leer %lld parte de la cámara: muestra el cuadro anterior."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "El video se exportó, pero no se pudieron leer %lld partes de la cámara: muestran el cuadro anterior."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "The video was exported, but %lld parts of the screen couldn't be read: they show the frame before them." : {
       "localizations" : {
         "en" : {

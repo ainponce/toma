@@ -26,12 +26,13 @@ public enum RenderError: Error, Equatable {
 /// Renders frames of a take: the one drawing path behind the editor preview and the MP4 export.
 ///
 /// A frame is a function of the project and the output time alone (`FrameEvaluator`), drawn by
-/// `Compositor` over the screen frame `TrackFrameReader` decodes for that time. Every way to draw —
-/// `render(at:into:)`, `renderBytes(at:)` and `PreviewRenderer` — goes through `encode(at:into:commandBuffer:)`.
+/// `Compositor` over the screen and camera frames that a `TrackFrameReader` of each track decodes for that time.
+/// Every way to draw — `render(at:into:)`, `renderBytes(at:)` and `PreviewRenderer` — goes through
+/// `encode(at:into:commandBuffer:)`.
 ///
 /// Use one renderer per consumer: the preview and an export each make their own. A renderer keeps one
-/// decoder position for its screen track, so two consumers reading different times would keep sending
-/// it back and forth, reopening a reader for nearly every frame.
+/// decoder position per track it reads, so two consumers reading different times would keep sending
+/// them back and forth, reopening a reader for nearly every frame.
 ///
 /// Decoding is synchronous, on the caller's thread: the first frame read from each segment loads its
 /// track and decodes from the keyframe before it, and so does every scrub (a step back, or a jump of
@@ -45,6 +46,7 @@ public final class FrameRenderer: @unchecked Sendable {
     let commandQueue: any MTLCommandQueue
     private let evaluator: FrameEvaluator
     private let reader: TrackFrameReader?
+    private let cameraReader: TrackFrameReader?
     private let compositor: Compositor
     private let cursorTexture: any MTLTexture
     private let textureCache: CVMetalTextureCache
@@ -53,19 +55,23 @@ public final class FrameRenderer: @unchecked Sendable {
     /// Output seconds the take lasts.
     public var duration: Double { evaluator.duration }
 
-    /// The spans of the screen shown with the frame before them so far, because a segment could not be
-    /// decoded there (`TrackFrameReader`), in output seconds clamped to `[0, duration]`, in time order. After
-    /// drawing every frame of the timeline in order (an export), it lists every such span of the output.
+    /// The spans of the screen and of the camera shown with the frame before them so far, because a segment could
+    /// not be decoded there (`TrackFrameReader`), in output seconds clamped to `[0, duration]`, in time order (by
+    /// start, end and track). After drawing every frame of the timeline in order (an export), it lists every such
+    /// span of the output.
     public var missingVideo: [MissingVideo] {
         let start = evaluator.timelineStart, duration = evaluator.duration
-        return (reader?.gaps ?? [])
-            .compactMap { gap -> MissingVideo? in
+        let read = [reader, cameraReader].compactMap { $0 }
+        return read
+            .flatMap { reader in reader.gaps.map { (reader.trackID, $0) } }
+            .compactMap { track, gap -> MissingVideo? in
                 let from = gap.start.seconds(since: start), to = gap.end.seconds(since: start)
                 guard to >= 0, from <= duration else { return nil }
                 let clamped = min(max(from, 0), duration)
-                return MissingVideo(file: gap.file, start: clamped, end: max(clamped, min(to, duration)), reason: gap.reason)
+                return MissingVideo(
+                    track: track, file: gap.file, start: clamped, end: max(clamped, min(to, duration)), reason: gap.reason)
             }
-            .sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+            .sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
     }
 
     /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps.
@@ -96,6 +102,9 @@ public final class FrameRenderer: @unchecked Sendable {
         reader = evaluator.screenTrackID
             .flatMap { project.take.track($0) }
             .map { TrackFrameReader(package: project.package, track: $0) }
+        cameraReader = evaluator.cameraTrackID
+            .flatMap { project.take.track($0) }
+            .map { TrackFrameReader(package: project.package, track: $0) }
     }
 
     /// Encodes the frame at `outputTime` into `target`, which must be `.bgra8Unorm` and `outputSize` big
@@ -107,13 +116,9 @@ public final class FrameRenderer: @unchecked Sendable {
         try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
             let frame = evaluator.frame(at: outputTime)
-            var screen: (any MTLTexture)?
-            if let layer = frame.screen, let pixelBuffer = reader?.pixelBuffer(at: layer.sourceTime) {
-                let texture = try metalTexture(for: pixelBuffer)
-                screen = texture.texture
-                commandBuffer.addCompletedHandler { _ in withExtendedLifetime(texture) {} }
-            }
-            compositor.encode(frame, screen: screen, cursor: cursorTexture, into: target, commandBuffer: commandBuffer)
+            let screen = try frame.screen.flatMap { try texture(of: reader, at: $0.sourceTime, until: commandBuffer) }
+            let camera = try frame.camera.flatMap { try texture(of: cameraReader, at: $0.sourceTime, until: commandBuffer) }
+            compositor.encode(frame, screen: screen, camera: camera, cursor: cursorTexture, into: target, commandBuffer: commandBuffer)
         }
     }
 
@@ -172,6 +177,17 @@ public final class FrameRenderer: @unchecked Sendable {
         guard commandBuffer.status == .completed else {
             throw RenderError.gpuFailed(commandBuffer.error.map { String(describing: $0) } ?? "status \(commandBuffer.status.rawValue)")
         }
+    }
+
+    /// The frame `reader` decodes for `time` as a texture kept alive until `commandBuffer` completes; `nil` without a
+    /// reader or before the track's first readable frame. Call with `lock` held.
+    private func texture(
+        of reader: TrackFrameReader?, at time: HostTime, until commandBuffer: any MTLCommandBuffer
+    ) throws -> (any MTLTexture)? {
+        guard let pixelBuffer = reader?.pixelBuffer(at: time) else { return nil }
+        let texture = try metalTexture(for: pixelBuffer)
+        commandBuffer.addCompletedHandler { _ in withExtendedLifetime(texture) {} }
+        return texture.texture
     }
 
     /// `pixelBuffer` as a `.bgra8Unorm` texture sharing its memory, through the texture cache. The

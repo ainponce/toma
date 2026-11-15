@@ -32,9 +32,33 @@ func unreadableAndMissingScreenSegmentsAreListed() async throws {
             .export(to: dir.appending(path: "out.mp4")) { _ in }
         #expect(summary.missingAudio.isEmpty)
         #expect(summary.missingVideo == [
-            MissingVideo(file: "takes/take-001/display-1/seg-0002.mov", start: 1, end: 2, reason: .unreadable),
-            MissingVideo(file: "takes/take-001/display-1/seg-0003.mov", start: 2, end: 3, reason: .fileMissing),
+            MissingVideo(track: displayID, file: "takes/take-001/display-1/seg-0002.mov", start: 1, end: 2, reason: .unreadable),
+            MissingVideo(track: displayID, file: "takes/take-001/display-1/seg-0003.mov", start: 2, end: 3, reason: .fileMissing),
         ])
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func cameraVideoThatCannotBeReadIsListedWithItsTrack() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 2)])
+        let camera = TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera")
+        try await builder.addVideoTrack(id: "camera", kind: .camera, source: camera, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try builder.addEmptySegment(
+            track: "camera", index: 2, start: base.adding(seconds: 1), end: base.adding(seconds: 2), endReason: .stopped,
+            file: .garbage(bytes: 4096))
+        let package = try builder.write().package
+        let summary = try await MP4Exporter(project: try LoadedProject.load(package.url), settings: settings)
+            .export(to: dir.appending(path: "out.mp4")) { _ in }
+        try #require(summary.missingVideo.count == 1, "\(summary.missingVideo)")
+        let missing = summary.missingVideo[0]
+        #expect(missing.track == "camera" && missing.file == "takes/take-001/camera/seg-0002.mov")
+        #expect(missing.start == 1 && missing.end == 2)
+        guard case .cannotOpen = missing.reason else {
+            Issue.record("expected cannotOpen, got \(missing.reason)")
+            return
+        }
     }
 }
 
@@ -52,7 +76,8 @@ func screenSegmentThatCannotBeOpenedIsListed() async throws {
             .export(to: dir.appending(path: "out.mp4")) { _ in }
         try #require(summary.missingVideo.count == 1, "\(summary.missingVideo)")
         let missing = summary.missingVideo[0]
-        #expect(missing.file == "takes/take-001/display-1/seg-0002.mov" && missing.start == 1 && missing.end == 2)
+        #expect(missing.track == displayID && missing.file == "takes/take-001/display-1/seg-0002.mov")
+        #expect(missing.start == 1 && missing.end == 2)
         guard case .cannotOpen = missing.reason else {
             Issue.record("expected cannotOpen, got \(missing.reason)")
             return

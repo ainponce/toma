@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// A span of the output where a screen segment's video could not be decoded, so the frame before it is
-/// shown instead (or the background, before the first readable frame).
+/// A span of the output where a segment's video, of the screen or of the camera, could not be decoded, so the
+/// frame before it is shown instead (or nothing of that track, before its first readable frame).
 public struct MissingVideo: Sendable, Equatable {
     public enum Reason: Sendable, Equatable {
         /// The segment holds no samples: crash recovery marked it `SegmentEndReason.empty`, or its file has 0
@@ -21,6 +21,8 @@ public struct MissingVideo: Sendable, Equatable {
         case loadTimedOut
     }
 
+    /// The track the segment belongs to (`TrackRecord.id`): the screen shown or the camera.
+    public var track: String
     /// The segment's file, relative to the package root (`SegmentRecord.file`).
     public var file: String
     /// Output seconds where the span starts, within the output's timeline.
@@ -31,7 +33,8 @@ public struct MissingVideo: Sendable, Equatable {
     public var end: Double
     public var reason: Reason
 
-    public init(file: String, start: Double, end: Double, reason: Reason) {
+    public init(track: String, file: String, start: Double, end: Double, reason: Reason) {
+        self.track = track
         self.file = file
         self.start = start
         self.end = end

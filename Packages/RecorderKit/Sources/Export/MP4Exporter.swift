@@ -37,8 +37,8 @@ public final class MP4Exporter: Sendable {
     }
 
     /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete,
-    /// and returns what it had to leave out: microphone audio that could not be read is silence, and screen
-    /// video that could not be decoded shows the frame before it.
+    /// and returns what it had to leave out: microphone audio that could not be read is silence, and screen or
+    /// camera video that could not be decoded shows the frame before it.
     ///
     /// Rendering and encoding run on a queue of their own, never on the caller's thread or the main thread.
     /// `progress` is called one call at a time, in order, never on the main thread (hop to the main actor
@@ -55,7 +55,7 @@ public final class MP4Exporter: Sendable {
         guard let destination = Self.canonicalDestination(destination, project: project.package) else {
             throw ExportError.destinationNotAllowed
         }
-        guard let screen = project.take.tracks.first(where: { $0.kind == .display }), !screen.segments.isEmpty else {
+        guard ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false else {
             throw ExportError.noDisplayTrack
         }
         let fps = settings.framesPerSecond

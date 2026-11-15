@@ -10,8 +10,10 @@ public struct RenderFrame: Equatable, Sendable {
     public var gradientAngleDegrees: Float
     /// `nil` when the take has no display track.
     public var screen: ScreenLayer?
-    /// `nil` when the cursor's position is unknown or off the recorded display.
+    /// `nil` when the cursor's position is unknown or off what is shown of the screen.
     public var cursor: CursorLayer?
+    /// `nil` when the take has no camera, and before its first frame.
+    public var camera: CameraLayer?
 
     public init(
         outputSize: SIMD2<Int>,
@@ -19,7 +21,8 @@ public struct RenderFrame: Equatable, Sendable {
         gradientEnd: SIMD4<Float>,
         gradientAngleDegrees: Float,
         screen: ScreenLayer? = nil,
-        cursor: CursorLayer? = nil
+        cursor: CursorLayer? = nil,
+        camera: CameraLayer? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -27,16 +30,42 @@ public struct RenderFrame: Equatable, Sendable {
         self.gradientAngleDegrees = gradientAngleDegrees
         self.screen = screen
         self.cursor = cursor
+        self.camera = camera
     }
 }
 
-/// The recorded screen: the frame of track `trackID` shown at host time `sourceTime`, drawn into `rect`.
+/// The recorded screen: the `crop` of the frame of track `trackID` shown at host time `sourceTime`, drawn into
+/// `rect`.
 public struct ScreenLayer: Equatable, Sendable {
     public var trackID: String
     public var sourceTime: HostTime
     /// In output pixels, origin at the top left.
     public var rect: Rect
     /// In output pixels.
+    public var cornerRadius: Double
+    /// The part of the frame shown, as fractions of it (0, 0 is its top-left corner, 1, 1 the bottom-right one):
+    /// the area recorded in Area mode, the whole frame otherwise.
+    public var crop: Rect
+
+    public init(
+        trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double, crop: Rect = Rect(x: 0, y: 0, width: 1, height: 1)
+    ) {
+        self.trackID = trackID
+        self.sourceTime = sourceTime
+        self.rect = rect
+        self.cornerRadius = cornerRadius
+        self.crop = crop
+    }
+}
+
+/// The camera: the frame of track `trackID` shown at host time `sourceTime`, filling `rect` (cropped to its shape,
+/// centred) with corners of `cornerRadius`.
+public struct CameraLayer: Equatable, Sendable {
+    public var trackID: String
+    public var sourceTime: HostTime
+    /// In output pixels, origin at the top left.
+    public var rect: Rect
+    /// In output pixels: half the side for a circle.
     public var cornerRadius: Double
 
     public init(trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double) {

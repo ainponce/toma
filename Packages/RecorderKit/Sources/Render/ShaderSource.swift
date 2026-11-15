@@ -43,6 +43,8 @@ public enum ShaderSource {
         float2 size;            // size of the quad drawn
         float2 contentOrigin;   // top-left corner of the image in it
         float2 contentSize;     // size of the image
+        float2 uvOrigin;        // texture coordinates at the image's top-left corner
+        float2 uvSize;          // texture coordinates across the image
         float radius;           // corner radius of the image
         float padding;
     };
@@ -50,7 +52,7 @@ public enum ShaderSource {
     struct QuadOut {
         float4 position [[position]];
         float2 p;    // output pixels
-        float2 uv;   // 0...1 across the image
+        float2 uv;   // texture coordinates: uvOrigin...uvOrigin + uvSize across the image
     };
 
     // A triangle strip of four corners: (0, 0), (1, 0), (0, 1), (1, 1).
@@ -60,7 +62,7 @@ public enum ShaderSource {
         QuadOut out;
         out.position = float4(p.x / u.viewport.x * 2.0 - 1.0, 1.0 - p.y / u.viewport.y * 2.0, 0.0, 1.0);
         out.p = p;
-        out.uv = (p - u.contentOrigin) / u.contentSize;
+        out.uv = u.uvOrigin + (p - u.contentOrigin) / u.contentSize * u.uvSize;
         return out;
     }
 
@@ -70,7 +72,7 @@ public enum ShaderSource {
         return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     }
 
-    // The screen: bilinear, opaque, with antialiased rounded corners.
+    // The screen and the camera: bilinear, opaque, with antialiased rounded corners.
     fragment float4 screenFragment(QuadOut in [[stage_in]],
                                    constant QuadUniforms &u [[buffer(0)]],
                                    texture2d<float> source [[texture(0)]],

@@ -235,3 +235,59 @@ func readerRetriesASegmentWhoseTrackLoadTimedOut(backoff: Double) async throws {
             reason: .cannotOpen("injected"))])
     }
 }
+
+/// The camera is read by a reader of its own, which holds its last frame across a gap like the screen's.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func cameraHoldsLastFrameAcrossAGap() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addVideoTrack(
+            id: trackID, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
+        // The frames of the second segment are numbered from 30, after the first one's.
+        try await builder.addVideoTrack(id: cameraID, kind: .camera, source: cameraSource, segments: [
+            VideoSegmentSpec(start: base, seconds: 1, endReason: .paused),
+            VideoSegmentSpec(start: base.adding(seconds: 2), seconds: 1),
+        ])
+        let project = try builder.write()
+        let size = SIMD2(640, 360)
+        let renderer = try FrameRenderer(project: project, outputSize: size)
+        let evaluator = FrameEvaluator(take: project.take, events: [], style: StyleV0(), outputSize: size)
+        func indices(at t: Double) throws -> (screen: Int, camera: Int) {
+            let frame = evaluator.frame(at: t)
+            let screen = try #require(frame.screen?.rect), camera = try #require(frame.camera?.rect)
+            let bytes = try renderer.renderBytes(at: t)
+            func index(_ x: Double, _ y: Double) -> Int {
+                SampleFactory.frameIndex(nearestTo: pixel(bytes, width: size.x, x: Int(x), y: Int(y)))
+            }
+            return (index(screen.x + screen.width / 4, screen.y + screen.height * 0.75),
+                    index(camera.x + camera.width / 2, camera.y + camera.height / 2))
+        }
+        #expect(try indices(at: 0.5) == (15, 15))
+        #expect(try indices(at: 1.5) == (45, 29))
+        #expect(try indices(at: 2.5) == (75 % 64, 45))
+        #expect(renderer.missingVideo.isEmpty)  // a gap between segments is not missing video
+    }
+}
+
+/// What could not be read of the screen and of the camera is listed together, each span with its track.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func rendererListsWhatItMissesOfEachTrack() throws {
+    try withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Gaps", app: AppInfo(name: "Tests", version: "0"), now: Date())
+        let take = makeTake(tracks: [
+            displayTrack(globalFrame: screenFrame, segments: [
+                segment(index: 1, start: base, end: base.adding(seconds: 2), reason: .empty),
+                segment(index: 2, start: base.adding(seconds: 2), end: base.adding(seconds: 4)),
+            ]),
+            displayTrack(id: cameraID, kind: .camera, globalFrame: nil, segments: [
+                segment(track: cameraID, index: 1, start: base.adding(seconds: 1), end: base.adding(seconds: 3), reason: .unreadable(bytes: 10)),
+            ]),
+        ])
+        let renderer = try FrameRenderer(project: makeProject(package, take: take), outputSize: [320, 180])
+        #expect(renderer.missingVideo == [
+            MissingVideo(track: trackID, file: "takes/\(takeID)/\(trackID)/seg-0001.mov", start: 0, end: 2, reason: .empty),
+            MissingVideo(track: cameraID, file: "takes/\(takeID)/\(cameraID)/seg-0001.mov", start: 1, end: 3, reason: .unreadable),
+            MissingVideo(track: trackID, file: "takes/\(takeID)/\(trackID)/seg-0002.mov", start: 2, end: 4, reason: .fileMissing),
+        ])
+    }
+}

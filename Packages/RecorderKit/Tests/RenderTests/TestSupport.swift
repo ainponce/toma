@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import CoreMedia
 import CoreVideo
 import Foundation
 import ProjectFormat
@@ -9,19 +10,29 @@ let base = HostTime(nanoseconds: 5_000_000_000_000)
 
 let takeID = "take-001"
 let trackID = "display-1"
+let cameraID = "camera"
+let cameraSource = TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera")
 
 func displaySource(globalFrame: Rect?, pixelScale: Double = 1) -> TrackSource {
     TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: globalFrame, pixelScale: pixelScale)
 }
 
-func displayTrack(globalFrame: Rect?, pixelScale: Double = 1, segments: [SegmentRecord]) -> TrackRecord {
-    TrackRecord(
-        id: trackID, kind: .display, source: displaySource(globalFrame: globalFrame, pixelScale: pixelScale),
-        segments: segments)
+/// A track without files, for tests that only look at the manifest: display 1 by default, or a track `id` of
+/// another `kind` (a window, a camera) with the same `globalFrame` and `pixelScale` and no `displayID`.
+func displayTrack(
+    id: String = trackID, kind: TrackKind = .display, displayID: UInt32 = 1, globalFrame: Rect?, pixelScale: Double = 1,
+    captureArea: Rect? = nil, segments: [SegmentRecord]
+) -> TrackRecord {
+    var source = displaySource(globalFrame: globalFrame, pixelScale: pixelScale)
+    source.displayID = kind == .display ? displayID : nil
+    source.captureArea = captureArea
+    return TrackRecord(id: id, kind: kind, source: source, segments: segments)
 }
 
-func makeTake(tracks: [TrackRecord]) -> TakeRecord {
-    TakeRecord(id: takeID, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks)
+func makeTake(tracks: [TrackRecord], cameraStyle: CameraStyle? = nil) -> TakeRecord {
+    TakeRecord(
+        id: takeID, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks,
+        cameraStyle: cameraStyle)
 }
 
 func makeProject(_ package: ProjectPackage, take: TakeRecord, events: [InputEvent] = []) -> LoadedProject {
@@ -31,10 +42,12 @@ func makeProject(_ package: ProjectPackage, take: TakeRecord, events: [InputEven
     return LoadedProject(package: package, manifest: manifest, take: take, events: events)
 }
 
-/// A segment record without a file, for tests that only look at the manifest.
-func segment(index: Int = 1, start: HostTime, end: HostTime?, reason: SegmentEndReason? = .stopped) -> SegmentRecord {
+/// A segment record of track `track` without a file, for tests that only look at the manifest.
+func segment(
+    track: String = trackID, index: Int = 1, start: HostTime, end: HostTime?, reason: SegmentEndReason? = .stopped
+) -> SegmentRecord {
     SegmentRecord(
-        index: index, file: "takes/\(takeID)/\(trackID)/seg-\(String(format: "%04d", index)).mov",
+        index: index, file: "takes/\(takeID)/\(track)/seg-\(String(format: "%04d", index)).mov",
         startHostTime: start, endHostTime: end, endReason: reason, droppedFrames: 0, heartbeatFrames: 0)
 }
 
@@ -97,4 +110,20 @@ func cursorEvents(from start: HostTime, seconds: Double, across frame: Rect) -> 
             t: start.adding(seconds: Double(i) / 120),
             kind: .cursor(x: frame.x + frame.width * (0.2 + 0.6 * f), y: frame.y + frame.height * (0.3 + 0.4 * f)))
     }
+}
+
+/// `sample` with the bottom-right quarter of its frame painted green (a `VideoSegmentSpec.transform`), so where the
+/// frame's corners land in the output can be seen whatever its size.
+@Sendable func paintingTheBottomRightQuarterGreen(_ frameIndex: Int, _ sample: CMSampleBuffer) -> CMSampleBuffer {
+    let pixelBuffer = CMSampleBufferGetImageBuffer(sample)!
+    CVPixelBufferLockBaseAddress(pixelBuffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+    let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer)
+    let base = CVPixelBufferGetBaseAddress(pixelBuffer)!
+    for y in height / 2..<height {
+        base.advanced(by: y * CVPixelBufferGetBytesPerRow(pixelBuffer) + width / 2 * 4)
+            .assumingMemoryBound(to: UInt32.self)
+            .update(repeating: 0xFF00_FF00, count: width - width / 2)  // BGRA (0, 255, 0, 255)
+    }
+    return sample
 }

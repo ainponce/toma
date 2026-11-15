@@ -5,20 +5,44 @@ import RecorderKitTestSupport
 import Render
 import Testing
 
-/// A `.bgra8Unorm` texture of one colour, given as BGRA bytes.
-private func solidTexture(_ device: any MTLDevice, width: Int, height: Int, bgra: SIMD4<UInt8>) throws -> any MTLTexture {
+/// A `.bgra8Unorm` texture whose pixel at (`x`, `y`) is `bgra(x, y)`.
+private func texture(
+    _ device: any MTLDevice, width: Int, height: Int, bgra: (_ x: Int, _ y: Int) -> SIMD4<UInt8>
+) throws -> any MTLTexture {
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(
         pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
     descriptor.usage = .shaderRead
     descriptor.storageMode = .shared
     let texture = try #require(device.makeTexture(descriptor: descriptor))
-    let bytes = [UInt8](repeating: 0, count: width * height * 4).enumerated().map { i, _ in bgra[i % 4] }
+    var bytes: [UInt8] = []
+    bytes.reserveCapacity(width * height * 4)
+    for y in 0..<height {
+        for x in 0..<width {
+            let pixel = bgra(x, y)
+            bytes += [pixel.x, pixel.y, pixel.z, pixel.w]
+        }
+    }
     texture.replace(
         region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: bytes, bytesPerRow: width * 4)
     return texture
 }
 
-private func draw(_ frame: RenderFrame, screen: (any MTLTexture)?, device: any MTLDevice) throws -> [UInt8] {
+/// A `.bgra8Unorm` texture of one colour, given as BGRA bytes.
+private func solidTexture(_ device: any MTLDevice, width: Int, height: Int, bgra: SIMD4<UInt8>) throws -> any MTLTexture {
+    try texture(device, width: width, height: height) { _, _ in bgra }
+}
+
+private let red: SIMD4<UInt8> = [0, 0, 255, 255]
+private let green: SIMD4<UInt8> = [0, 255, 0, 255]
+private let blue: SIMD4<UInt8> = [255, 0, 0, 255]
+
+private func float(_ pixel: SIMD4<UInt8>) -> SIMD4<Float> {
+    SIMD4(Float(pixel.x), Float(pixel.y), Float(pixel.z), Float(pixel.w))
+}
+
+private func draw(
+    _ frame: RenderFrame, screen: (any MTLTexture)?, camera: (any MTLTexture)? = nil, device: any MTLDevice
+) throws -> [UInt8] {
     let compositor = try Compositor(device: device)
     let cursor = try CursorSprite.makeTexture(device: device)
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(
@@ -28,7 +52,7 @@ private func draw(_ frame: RenderFrame, screen: (any MTLTexture)?, device: any M
     let target = try #require(device.makeTexture(descriptor: descriptor))
     let queue = try #require(device.makeCommandQueue())
     let commandBuffer = try #require(queue.makeCommandBuffer())
-    compositor.encode(frame, screen: screen, cursor: cursor, into: target, commandBuffer: commandBuffer)
+    compositor.encode(frame, screen: screen, camera: camera, cursor: cursor, into: target, commandBuffer: commandBuffer)
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
     #expect(commandBuffer.status == .completed)
@@ -51,8 +75,8 @@ func compositorDrawsBackgroundScreenAndCursor() throws {
         gradientAngleDegrees: style.gradientAngleDegrees,
         screen: ScreenLayer(trackID: trackID, sourceTime: base, rect: rect, cornerRadius: 12),
         cursor: cursor)
-    let red = try solidTexture(device, width: 64, height: 36, bgra: [0, 0, 255, 255])
-    let bytes = try draw(frame, screen: red, device: device)
+    let screen = try solidTexture(device, width: 64, height: 36, bgra: red)
+    let bytes = try draw(frame, screen: screen, device: device)
     func at(_ x: Int, _ y: Int) -> SIMD4<UInt8> { pixel(bytes, width: size.x, x: x, y: y) }
     func background(_ x: Int, _ y: Int) -> SIMD4<Float> {
         expectedBackground(
@@ -119,4 +143,74 @@ func cursorSpriteIsAPremultipliedArrowWithItsTipAtTheOrigin() throws {
     #expect(pixel(bytes, width: 96, x: 6, y: 8).w == 255)
     #expect(pixel(bytes, width: 96, x: 95, y: 0).w == 0)
     #expect(pixel(bytes, width: 96, x: 95, y: 127).w == 0)
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func compositorDrawsOnlyTheCropOfTheScreen() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let style = StyleV0()
+    let size = SIMD2(320, 180)
+    let rect = Rect(x: 40, y: 30, width: 240, height: 120)
+    // 100×100: red on the left half, blue on the right half, and green in the bottom row.
+    let screen = try texture(device, width: 100, height: 100) { x, y in y == 99 ? green : x < 50 ? red : blue }
+    let frame = RenderFrame(
+        outputSize: size, gradientStart: style.gradientStart, gradientEnd: style.gradientEnd,
+        gradientAngleDegrees: style.gradientAngleDegrees,
+        screen: ScreenLayer(
+            trackID: trackID, sourceTime: base, rect: rect, cornerRadius: 0, crop: Rect(x: 0.5, y: 0, width: 0.5, height: 0.5)))
+    let bytes = try draw(frame, screen: screen, device: device)
+    // The top-right quarter of the frame fills the whole rect: blue, without the green row below it, and the red
+    // half on its left only blends into its first texel (4.8 px).
+    #expect(pixel(bytes, width: size.x, x: 40, y: 90).z > 0)
+    for y in 31..<149 {
+        for x in 45..<279 {
+            #expect(isClose(pixel(bytes, width: size.x, x: x, y: y), float(blue)), "at (\(x), \(y))")
+        }
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func compositorDrawsTheCameraAspectFilledInACircle() throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let style = StyleV0()
+    let size = SIMD2(320, 180)
+    let rect = Rect(x: 160, y: 40, width: 120, height: 120)
+    let centre = SIMD2(220.0, 100.0)
+    var below = RenderFrame(
+        outputSize: size, gradientStart: style.gradientStart, gradientEnd: style.gradientEnd,
+        gradientAngleDegrees: style.gradientAngleDegrees,
+        screen: ScreenLayer(trackID: trackID, sourceTime: base, rect: Rect(x: 20, y: 20, width: 280, height: 140), cornerRadius: 0),
+        cursor: CursorLayer(hotspot: [200, 70], height: 40))
+    var frame = below
+    frame.camera = CameraLayer(trackID: cameraID, sourceTime: base, rect: rect, cornerRadius: 60)
+    below.camera = nil
+    let screen = try solidTexture(device, width: 64, height: 36, bgra: red)
+    // 400×300, 4:3: green stripes of 50 px on the left and on the right, blue between them. Filling a square, the
+    // middle 300 px show.
+    let camera = try texture(device, width: 400, height: 300) { x, _ in x < 50 || x >= 350 ? green : blue }
+    let bytes = try draw(frame, screen: screen, camera: camera, device: device)
+    let under = try draw(below, screen: screen, device: device)
+    func at(_ x: Int, _ y: Int) -> SIMD4<UInt8> { pixel(bytes, width: size.x, x: x, y: y) }
+
+    #expect(isClose(at(220, 100), float(blue)))
+    var inside = 0
+    for y in 40..<160 {
+        for x in 160..<280 {
+            let distance = ((SIMD2(Double(x), Double(y)) + 0.5 - centre) * (SIMD2(Double(x), Double(y)) + 0.5 - centre)).sum().squareRoot()
+            guard distance <= 59 else { continue }
+            inside += 1
+            let p = at(x, y)
+            #expect(p.y < 128, "green at (\(x), \(y)): \(p)")
+            #expect(isClose(p, float(blue)), "at (\(x), \(y)): \(p)")
+        }
+    }
+    #expect(inside > 10_000)
+    // The camera is over the cursor, which it hides (the arrow's body is inside the circle)…
+    let body = pixel(under, width: size.x, x: 206, y: 88)
+    #expect(body.x < 40 && body.y < 40 && body.z < 40)
+    #expect(isClose(at(206, 88), float(blue)))
+    // …and outside the circle, in the corners of its rect and around it, what is below shows unchanged.
+    for (x, y) in [(161, 41), (278, 41), (161, 158), (278, 158), (159, 100), (281, 100), (220, 38), (220, 162)] {
+        #expect(at(x, y) == pixel(under, width: size.x, x: x, y: y), "at (\(x), \(y))")
+    }
 }

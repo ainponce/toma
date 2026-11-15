@@ -270,8 +270,14 @@ final class EditorModel {
                 if !summary.missingAudio.isEmpty {
                     leftOut.append(String(localized: "The video was exported, but \(summary.missingAudio.count) parts have no sound: their microphone audio couldn't be read."))
                 }
-                if !summary.missingVideo.isEmpty {
-                    leftOut.append(String(localized: "The video was exported, but \(summary.missingVideo.count) parts of the screen couldn't be read: they show the frame before them."))
+                let cameras = Set(project.take.tracks.filter { $0.kind == .camera }.map(\.id))
+                let cameraGaps = summary.missingVideo.filter { cameras.contains($0.track) }.count
+                let screenGaps = summary.missingVideo.count - cameraGaps
+                if screenGaps > 0 {
+                    leftOut.append(String(localized: "The video was exported, but \(screenGaps) parts of the screen couldn't be read: they show the frame before them."))
+                }
+                if cameraGaps > 0 {
+                    leftOut.append(String(localized: "The video was exported, but \(cameraGaps) parts of the camera couldn't be read: they show the frame before them."))
                 }
                 if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
             } catch let error where Self.isCancellation(error) {

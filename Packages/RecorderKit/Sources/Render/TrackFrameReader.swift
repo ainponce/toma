@@ -6,8 +6,8 @@ import Foundation
 import ProjectFormat
 import os
 
-/// Decoded frames of one display track at any host time, across all its segments: the frame with the
-/// latest presentation time at or before the time asked for.
+/// Decoded frames of one video track (the screen or the camera) at any host time, across all its segments: the
+/// frame with the latest presentation time at or before the time asked for.
 ///
 /// Segments that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a file of 0 bytes or
 /// none) and files AVFoundation cannot open or read are gaps: the last frame before them is held. Reading
@@ -103,7 +103,8 @@ public final class TrackFrameReader: @unchecked Sendable {
     }
 
     private let lock = NSLock()
-    private let trackID: String
+    /// The track read (`TrackRecord.id`).
+    let trackID: String
     private var segments: [Segment]
     private var open: OpenReader?
     private var openedReaders = 0

@@ -484,6 +484,24 @@ func takeWithoutMicrophoneExportsWithoutAudio() async throws {
     }
 }
 
+/// A window is a screen too: a take of a window and the microphone exports.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func takeOfAWindowExports() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        let window = TrackSource(
+            name: "Synthetic Window", globalFrame: Rect(x: 100, y: 100, width: 640, height: 360), pixelScale: 1, windowID: 7)
+        try await builder.addVideoTrack(id: "window-7", kind: .window, source: window, segments: [VideoSegmentSpec(start: base, seconds: 1)])
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 1)])
+        let project = try builder.write()
+        let destination = dir.appending(path: "out.mp4")
+        let summary = try await MP4Exporter(project: project, settings: ExportSettings(outputSize: [640, 360], framesPerSecond: 30))
+            .export(to: destination) { _ in }
+        #expect(summary == ExportSummary())
+        #expect(try await AVURLAsset(url: destination).loadTracks(withMediaType: .video).count == 1)
+    }
+}
+
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func takeWithoutScreenIsRefused() async throws {
     try await withTemporaryDirectory { dir in
