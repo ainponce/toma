@@ -32,8 +32,8 @@ extension OpenPanelModel {
 
 /// The settings card (notch design §5.2): on the left, what the take records at — the frame rate of each display
 /// it records (or of the window), one resolution for all, and the camera's quality and frame rate while it is on;
-/// on the right, the countdown, what a stop does, and what is coming; at the bottom the encoder's load, with what
-/// would lighten it.
+/// on the right, the countdown, what a stop does, Do Not Disturb and what is coming; at the bottom the encoder's load,
+/// with what would lighten it.
 struct SettingsCard: View {
     @Bindable var panel: OpenPanelModel
 
@@ -138,7 +138,7 @@ struct SettingsCard: View {
                 .controlSize(.small)
                 .fixedSize()
             }
-            SettingsToggle(title: Text("Do Not Disturb"), icon: "moon.fill").upcoming(.doNotDisturb)
+            FocusShortcutToggle(setting: panel.focusShortcut)
             SettingsToggle(title: Text("Hide Desktop Icons"), icon: "eye.slash").upcoming(.hideDesktopIcons)
         }
     }
@@ -158,6 +158,66 @@ private struct SettingsRow<Control: View>: View {
             title.opacity(0.75).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
             control
+        }
+    }
+}
+
+/// Do Not Disturb (`FocusShortcutSetting`): on while a shortcut of the user's turns it on around each take. Turning it
+/// on lists the user's shortcuts, the settings window's list, to choose one; turning it off forgets the one chosen.
+private struct FocusShortcutToggle: View {
+    let setting: FocusShortcutSetting
+    /// Turned on, and no shortcut chosen yet.
+    @State private var isChoosing = false
+
+    /// Rows shown at once; more scroll.
+    private static let visibleRows = 4.0
+    private static let rowHeight = 30.0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Toggle(isOn: Binding(get: { setting.identifier != nil || isChoosing }, set: turn)) {
+                Label { Text("Do Not Disturb") } icon: { Image(systemName: "moon.fill").symbolRenderingMode(.hierarchical) }
+            }
+            .toggleStyle(.switch)
+            .controlSize(.mini)
+            if isChoosing { choices }
+        }
+    }
+
+    private func turn(on: Bool) {
+        isChoosing = on
+        if on {
+            setting.refreshShortcuts()
+        } else {
+            setting.set(nil)
+        }
+    }
+
+    @ViewBuilder
+    private var choices: some View {
+        if let shortcuts = setting.shortcuts {
+            if shortcuts.isEmpty {
+                Text("No shortcuts found.")
+                    .font(.system(size: 11))
+                    .opacity(0.62)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                ScrollView {
+                    VStack(spacing: 0) {
+                        ForEach(shortcuts, id: \.identifier) { shortcut in
+                            ChoiceRow(
+                                title: Text(verbatim: shortcut.name), isChosen: false,
+                                choose: {
+                                    setting.set(shortcut.identifier)
+                                    isChoosing = false
+                                })
+                        }
+                    }
+                }
+                .frame(height: min(Double(shortcuts.count), Self.visibleRows) * Self.rowHeight)
+            }
+        } else {
+            ProgressView().controlSize(.mini)
         }
     }
 }

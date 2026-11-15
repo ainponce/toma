@@ -4,9 +4,11 @@ import AppSupport
 import Carbon
 import Observation
 import SwiftUI
+import os
 
-/// The app's settings: the countdown before a take, what a stop does and the global shortcuts. A titled
-/// window like the permissions one, so while it is open (and no take records) the app is in the Dock.
+/// The app's settings: the countdown before a take, what a stop does, the shortcut that turns Do Not Disturb on
+/// and the global shortcuts. A titled window like the permissions one, so while it is open (and no take records)
+/// the app is in the Dock.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
@@ -14,10 +16,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        onClose: @escaping () -> Void
+        focusShortcut: FocusShortcutSetting, onClose: @escaping () -> Void
     ) {
         self.onClose = onClose
-        model = SettingsModel(store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop)
+        model = SettingsModel(
+            store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered,
             defer: false)
@@ -103,6 +106,57 @@ final class AfterStopSetting {
     }
 }
 
+/// The shortcut of the user's that turns Do Not Disturb on around each take (`RecorderSettings.focusShortcutIdentifier`):
+/// the one place it is read and saved for the settings window and the island's settings card, which both show it as it
+/// is now, with the user's shortcuts to choose it from (`ShortcutsCLI.list()`). The take's hooks read the saved value at
+/// every start.
+@MainActor @Observable
+final class FocusShortcutSetting {
+    private(set) var identifier: String?
+    /// The user's shortcuts as Shortcuts last listed them; `nil` until it has (none if it could not).
+    private(set) var shortcuts: [ShortcutInfo]?
+
+    @ObservationIgnored private let store: SettingsStore
+    @ObservationIgnored private let runner: any ShortcutRunning
+    @ObservationIgnored private var listing: Task<Void, Never>?
+
+    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Focus")
+
+    init(store: SettingsStore, runner: any ShortcutRunning) {
+        self.store = store
+        self.runner = runner
+        identifier = store.settings.focusShortcutIdentifier
+    }
+
+    /// `nil`: no shortcut, Do Not Disturb is left as it is.
+    func set(_ identifier: String?) {
+        self.identifier = identifier
+        var settings = store.settings
+        settings.focusShortcutIdentifier = identifier
+        store.settings = settings
+    }
+
+    /// Lists the user's shortcuts again, unless they are being listed: a shortcut made meanwhile shows.
+    func refreshShortcuts() {
+        guard listing == nil else { return }
+        listing = Task {
+            do {
+                shortcuts = try await runner.list()
+            } catch {
+                Self.logger.error("Cannot list the shortcuts: \(String(describing: error), privacy: .public)")
+                shortcuts = []
+            }
+            listing = nil
+        }
+    }
+
+    /// The chosen shortcut is among the ones listed: it may have been deleted since it was chosen.
+    var isChosenListed: Bool {
+        guard let identifier, let shortcuts else { return false }
+        return shortcuts.contains { $0.identifier == identifier }
+    }
+}
+
 /// What the settings window shows and changes; every change is saved at once.
 @MainActor @Observable
 final class SettingsModel {
@@ -120,14 +174,19 @@ final class SettingsModel {
     @ObservationIgnored let hotKeys: HotKeyCenter
     @ObservationIgnored let countdown: CountdownSetting
     @ObservationIgnored let afterStop: AfterStopSetting
+    @ObservationIgnored let focusShortcut: FocusShortcutSetting
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private var monitor: Any?
 
-    init(store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting) {
+    init(
+        store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
+        focusShortcut: FocusShortcutSetting
+    ) {
         self.store = store
         self.hotKeys = hotKeys
         self.countdown = countdown
         self.afterStop = afterStop
+        self.focusShortcut = focusShortcut
     }
 
     var bindings: HotKeyBindings { hotKeys.bindings }
@@ -221,6 +280,16 @@ private struct SettingsView: View {
                 Text("When Recording Stops")
             }
             Section {
+                FocusShortcutPicker(setting: model.focusShortcut)
+            } footer: {
+                Text(
+                    "Before the countdown, Toma runs the shortcut with the text “on”. If it answers “changed”, Toma runs it with “off” when the recording ends. The project's README says how to make it.",
+                    comment: "Under the Do Not Disturb shortcut in Settings; “on”, “off” and “changed” stay as they are")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section {
                 ForEach(HotKeyAction.allCases, id: \.self) { action in
                     ShortcutRow(model: model, action: action)
                 }
@@ -231,6 +300,28 @@ private struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 460)
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// The shortcut that turns Do Not Disturb on, among the user's shortcuts (listed again each time it shows), or none.
+/// One chosen that Shortcuts no longer lists says so.
+private struct FocusShortcutPicker: View {
+    let setting: FocusShortcutSetting
+
+    var body: some View {
+        Picker(selection: Binding(get: { setting.identifier }, set: { setting.set($0) })) {
+            Text("No Shortcut").tag(String?.none)
+            ForEach(setting.shortcuts ?? [], id: \.identifier) { shortcut in
+                Text(verbatim: shortcut.name).tag(Optional(shortcut.identifier))
+            }
+            if let identifier = setting.identifier, !setting.isChosenListed {
+                // While they are listed, and once listed if it is not among them.
+                (setting.shortcuts == nil ? Text("Loading…") : Text("Shortcut Not Found")).tag(Optional(identifier))
+            }
+        } label: {
+            Text("Turn on Do Not Disturb with a shortcut")
+        }
+        .onAppear { setting.refreshShortcuts() }
     }
 }
 

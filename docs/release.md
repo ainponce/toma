@@ -333,6 +333,15 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
   - [ ] **El menú de la burbuja:** clic secundario (o Control-clic) sobre la burbuja: las cuatro formas y los tres tamaños de la columna Cámara, con los actuales marcados; antes de grabar, elegir otro cambia la burbuja con su resorte y la columna Cámara lo muestra. Grabar 30 s, cambiarle la forma desde ese menú a los 10 s y el tamaño a los 20 s, y exportar desde el editor: el video sigue los dos cambios en esos momentos, cada uno con el resorte de forma y tamaño. El menú no sale en el video.
   - [ ] **Carga del encoder:** con dos pantallas 5K a 60 fps (o la combinación más pesada que haya), el punto del pie de la isla pasa a ámbar con "Esta combinación puede ser demasiado para el codificador."; un clic abre Ajustes, donde "Grabar las pantallas secundarias a 30 fps" (y, con la cámara a 4K o a 60 fps, "Grabar la cámara en 1080p" o "Grabar la cámara a 30 fps") hace el cambio y el punto vuelve a verde con "Carga del codificador N %". Ajustes muestra los fps de la ventana en modo Ventana y la calidad y los fps de la cámara con la cámara prendida.
   - [ ] **Nada pendiente:** ningún control de la isla dice "Llega en esta versión." salvo No Molestar y Ocultar íconos (Tasks 17a y 17b); con Reducir transparencia la barra del área y las medidas son sólidas, y con Reducir movimiento todo es un fundido. Nada de esto (resaltado, área, barra, cápsula, menú de la burbuja) sale en el video.
+- [ ] Task 17a (No Molestar con un atajo de Atajos), con `make build` y `build/Build/Products/Debug/Toma.app`, con el atajo del README ("No Molestar durante las grabaciones") creado, corrido una vez a mano y elegido en Ajustes; anotar la versión exacta de macOS:
+  - [ ] **Antes de la cuenta y al detener:** grabar 10 s con No Molestar apagado: se activa antes de que la cuenta regresiva empiece a bajar y se apaga al detener.
+  - [ ] **Ya activado a mano:** con No Molestar activado a mano antes de grabar, grabar y detener: sigue activado al terminar.
+  - [ ] **Cuenta cancelada:** cancelar la cuenta regresiva con Esc: No Molestar se apaga.
+  - [ ] **Cierre de golpe:** grabando, `kill -9 $(pgrep -x Toma)` y volver a abrir Toma: No Molestar se apaga al abrir.
+  - [ ] **Notificaciones durante la toma:** `osascript -e 'display notification "x" sound name "Glass"'` a los 5 s de una toma: ni se ve ni se oye. Con ningún atajo elegido (el Focus apagado), la misma notificación se ve y se oye en la Mac, pero ni aparece en el video ni suena en la pista de audio del sistema (la exclusión está siempre activa).
+  - [ ] **Atajo que falla:** elegir un atajo que tarde más de 5 s (por ejemplo, uno que solo espere 10 s): la toma arranca igual, la isla dice "No se pudo correr el atajo de No Molestar. Puede que suenen notificaciones durante la grabación." y, al detener, el atajo no se vuelve a correr.
+  - [ ] **Reiniciar toma:** con el atajo elegido, reiniciar la toma: No Molestar sigue activado durante la toma nueva y se apaga una sola vez, al detenerla.
+  - [ ] **Ajustes y Permisos:** prender el interruptor No Molestar en los Ajustes de la isla muestra la lista de atajos (la misma de Ajustes); elegir uno lo deja prendido y Ajustes lo muestra elegido; apagarlo lo borra en los dos lugares. En Permisos, la fila opcional "No Molestar" abre Ajustes. Ningún control de la isla dice "Llega en esta versión." salvo Ocultar íconos (Task 17b).
 
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
@@ -355,6 +364,7 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
 | 14. Burbuja y pista con la misma cámara: al grabar, USB desenchufada; cámara sin permiso y sin pedir; audio del sistema sin pedir; ventana minimizada; escala 1 a Puntos | pendiente | pendiente | pendiente |
 | 13/14. Export real con micrófono y audio del sistema: los dos se oyen y van con el video | pendiente | pendiente | pendiente |
 | 15. La isla completa: decisión 1, audio del sistema por primera vez, ventana con un clic, otros escritorios, área 16:9 guardada, dos pantallas, burbuja sobre ventana y área, cambios de la burbuja en el video (soltarla, y forma y tamaño desde su menú), carga del encoder, nada pendiente | pendiente | pendiente | pendiente |
+| 17a. No Molestar con un atajo: antes de la cuenta y al detener, ya activado a mano, cuenta cancelada, `kill -9`, notificaciones, atajo que falla, reiniciar, Ajustes y Permisos | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

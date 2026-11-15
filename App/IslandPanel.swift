@@ -36,6 +36,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private let recording: RecordingController
     private let countdown: CountdownSetting
     private let afterStop: AfterStopSetting
+    private let focusShortcut: FocusShortcutSetting
     private let store = SettingsStore()
     private let panel: FloatingPanel
     private let root: TrackingView
@@ -101,11 +102,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// another desktop; the bubble shows the camera of `cameraHost`, the session the take records.
     init(
         recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        probe: any PermissionProbe, cameraHost: CameraSessionHost
+        focusShortcut: FocusShortcutSetting, probe: any PermissionProbe, cameraHost: CameraSessionHost
     ) {
         self.recording = recording
         self.countdown = countdown
         self.afterStop = afterStop
+        self.focusShortcut = focusShortcut
         phase = recording.phase
         notices = recording.notices
         saved = recording.lastSaved
@@ -476,9 +478,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     private func makePanelModel() -> OpenPanelModel {
         let panelModel = OpenPanelModel(
-            recording: recording, store: store, countdown: countdown, afterStop: afterStop, teleprompter: teleprompterSetting,
-            camera: camera, systemAudio: systemAudio, audioApplications: audioApplications, microphones: microphones,
-            cameras: cameras, displays: displayChoices(), islandDisplayID: displayID)
+            recording: recording, store: store, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut,
+            teleprompter: teleprompterSetting, camera: camera, systemAudio: systemAudio, audioApplications: audioApplications,
+            microphones: microphones, cameras: cameras, displays: displayChoices(), islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)

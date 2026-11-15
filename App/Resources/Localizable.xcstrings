@@ -217,6 +217,17 @@
         }
       }
     },
+    "Before the countdown, Toma runs the shortcut with the text “on”. If it answers “changed”, Toma runs it with “off” when the recording ends. The project's README says how to make it." : {
+      "comment" : "Under the Do Not Disturb shortcut in Settings; “on”, “off” and “changed” stay as they are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Antes de la cuenta regresiva, Toma corre el atajo con el texto “on”. Si responde “changed”, Toma lo corre con “off” al terminar la grabación. El README del proyecto explica cómo crearlo."
+          }
+        }
+      }
+    },
     "By App" : {
       "localizations" : {
         "es" : {
@@ -1045,6 +1056,16 @@
         }
       }
     },
+    "No shortcuts found." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontraron atajos."
+          }
+        }
+      }
+    },
     "No window is chosen to record." : {
       "localizations" : {
         "es" : {
@@ -1188,6 +1209,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrir el editor"
+          }
+        }
+      }
+    },
+    "Optional: a shortcut you make in Shortcuts turns it on while recording, so notifications don't sound. They never appear in the video." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opcional: un atajo creado en Atajos lo activa mientras se graba, así no suenan las notificaciones. Nunca salen en el video."
           }
         }
       }
@@ -1774,6 +1805,16 @@
         }
       }
     },
+    "Shortcut Not Found" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atajo no encontrado"
+          }
+        }
+      }
+    },
     "Shortcuts" : {
       "localizations" : {
         "es" : {
@@ -2053,6 +2094,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tamaño de letra"
+          }
+        }
+      }
+    },
+    "The Do Not Disturb shortcut didn't run. Notifications may sound during the recording." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo correr el atajo de No Molestar. Puede que suenen notificaciones durante la grabación."
           }
         }
       }
@@ -2726,6 +2777,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Para cambiar de escritorio desde acá, activar “Mover un espacio a la izquierda” y “Mover un espacio a la derecha” en Ajustes del Sistema › Teclado › Atajos de teclado › Mission Control."
+          }
+        }
+      }
+    },
+    "Turn on Do Not Disturb with a shortcut" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activar No Molestar con un atajo"
           }
         }
       }

@@ -34,6 +34,16 @@ Una copia compilada desde el código se actualiza compilando de nuevo: `git pull
 
 En la fase 0 las actualizaciones apuntan a un servidor de prueba local; el feed público llega con el primer release público. Ver [docs/release.md](docs/release.md).
 
+## No Molestar durante las grabaciones
+
+Las notificaciones nunca salen en el video, y sus sonidos tampoco en el audio del sistema. Para que además no aparezcan ni suenen mientras se graba, Toma puede activar No Molestar con un atajo propio de la app Atajos (Shortcuts): lo corre con el texto `on` antes de la cuenta regresiva y, solo si el atajo lo activó, con `off` al terminar la grabación (también si se cancela la cuenta). Si Toma se cierra de golpe en medio de una toma, lo corre con `off` al volver a abrirse. Toma no trae un atajo hecho; se crea una sola vez:
+
+1. En Atajos, crear un atajo nuevo (por ejemplo, "No Molestar para Toma") que reciba texto.
+2. Si el texto es `on`: si "Obtener el Focus actual" no da ninguno, activar No Molestar y devolver el texto `changed`. Si ya había un Focus activo, no devolver nada: así Toma lo deja como estaba al terminar.
+3. Si el texto es `off`: desactivar No Molestar.
+4. Correrlo una vez a mano desde Atajos para dar sus permisos: un diálogo de permiso en la primera corrida desde Toma vencería el plazo de 5 s, y la grabación seguiría sin No Molestar (la isla lo avisa).
+5. Elegirlo en Ajustes de Toma, en "Activar No Molestar con un atajo", o con el interruptor No Molestar de los Ajustes de la isla. Toma guarda el identificador del atajo, que no cambia si se le cambia el nombre.
+
 ## Desarrollo / Development
 
 Ver [CONTRIBUTING.md](CONTRIBUTING.md). `make test` corre las pruebas.

@@ -91,13 +91,14 @@ final class PermissionsModel {
     }
 }
 
-/// The permissions window, one at a time.
+/// The permissions window, one at a time. `openSettings` opens the settings window, where the Do Not Disturb shortcut
+/// is chosen.
 @MainActor
 final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
     private let model: PermissionsModel
     private let onClose: () -> Void
 
-    init(probe: any PermissionProbe, onClose: @escaping () -> Void) {
+    init(probe: any PermissionProbe, openSettings: @escaping () -> Void, onClose: @escaping () -> Void) {
         model = PermissionsModel(probe: probe)
         self.onClose = onClose
         let window = NSWindow(
@@ -105,7 +106,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = String(localized: "Permissions")
         window.isReleasedWhenClosed = false
-        window.contentViewController = NSHostingController(rootView: OnboardingView(model: model))
+        window.contentViewController = NSHostingController(rootView: OnboardingView(model: model, openSettings: openSettings))
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -125,6 +126,7 @@ final class OnboardingWindowController: NSWindowController, NSWindowDelegate {
 
 struct OnboardingView: View {
     let model: PermissionsModel
+    let openSettings: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -133,6 +135,7 @@ struct OnboardingView: View {
             ForEach(PermissionKind.allCases, id: \.self) { kind in
                 PermissionRow(kind: kind, state: model.state(of: kind), model: model)
             }
+            FocusShortcutRow(openSettings: openSettings)
             if model.suggestsReopening {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("If screen recording is already allowed in System Settings, macOS applies it after reopening the app.")
@@ -148,6 +151,30 @@ struct OnboardingView: View {
         }
         .padding(20)
         .frame(width: 480)
+    }
+}
+
+/// Do Not Disturb, optional and not a permission: a shortcut of the user's turns it on around each take, chosen in
+/// Settings ("Turn on Do Not Disturb with a shortcut").
+private struct FocusShortcutRow: View {
+    let openSettings: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "moon")
+                .font(.title2)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Do Not Disturb")
+                    .font(.headline)
+                Text("Optional: a shortcut you make in Shortcuts turns it on while recording, so notifications don't sound. They never appear in the video.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            Button { openSettings() } label: { Text("Settings…") }
+        }
     }
 }
 

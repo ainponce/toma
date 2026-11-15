@@ -6,8 +6,9 @@ import Recording
 import os
 
 /// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
-/// launch, the permissions, settings and licenses windows, the global shortcuts, editors (also for projects
-/// opened from Finder), the Dock icon, and what a quit waits for (`QuitSequencer`).
+/// launch (and Do Not Disturb turned off if a take left it on), the permissions, settings and licenses windows,
+/// the global shortcuts, editors (also for projects opened from Finder), the Dock icon, and what a quit waits for
+/// (`QuitSequencer`).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recording: RecordingController
@@ -22,6 +23,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let countdown: CountdownSetting
     /// What a stop does once the take is saved, shared by the island's settings card and the settings window.
     private let afterStop: AfterStopSetting
+    /// Turns Do Not Disturb on and off around each take with the user's shortcut.
+    private let focus = FocusGuard(runner: ShortcutsCLI())
+    /// The shortcut it runs, shared by the island's settings card and the settings window.
+    private let focusShortcut: FocusShortcutSetting
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
@@ -49,12 +54,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The controller hears whether the window it records can be seen; it is made with the environment that tells.
         weak var controller: RecordingController?
         let environment = LiveTakeEnvironment.make(cameraHost: cameraHost) { controller?.windowVisibilityChanged($0) }
-        recording = RecordingController(probe: probe, environment: environment)
+        recording = RecordingController(probe: probe, environment: environment, hooks: LiveTakeHooks(focus: focus, store: store))
         controller = recording
         updater = UpdaterController(recording: recording, exportGate: exportGate)
         hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
         countdown = CountdownSetting(store: store)
         afterStop = AfterStopSetting(store: store)
+        focusShortcut = FocusShortcutSetting(store: store, runner: ShortcutsCLI())
         super.init()
         hotKeys.perform = { [weak self] action in self?.perform(action) }
         exportGate.busyChanged = { [weak self] in self?.updater.exportStateChanged() }
@@ -75,8 +81,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A take that turned Do Not Disturb on and never ended (the app was killed): turned off now. A take started
+        // meanwhile runs its shortcut after this one.
+        Task { await focus.recoverAfterLaunch() }
         let island = IslandPanel(
-            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, probe: probe, cameraHost: cameraHost)
+            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut,
+            probe: probe, cameraHost: cameraHost)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
@@ -142,7 +152,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showOnboarding() {
         if onboarding == nil {
-            onboarding = OnboardingWindowController(probe: probe) { [weak self] in
+            onboarding = OnboardingWindowController(
+                probe: probe, openSettings: { [weak self] in self?.showSettings() }
+            ) { [weak self] in
                 guard let self, onboarding?.window?.isVisible != true else { return }  // shown again meanwhile
                 onboarding = nil
                 updateActivationPolicy()
@@ -153,7 +165,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         if settings == nil {
-            settings = SettingsWindowController(store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop) { [weak self] in
+            settings = SettingsWindowController(
+                store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, focusShortcut: focusShortcut
+            ) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil
                 updateActivationPolicy()

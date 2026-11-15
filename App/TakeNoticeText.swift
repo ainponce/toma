@@ -91,6 +91,8 @@ extension TakeNotice {
             String(localized: "The take couldn't be moved to the trash. It stays in your projects folder.")
         case .microphoneSilent:
             String(localized: "The microphone isn't picking up any sound.")
+        case .focusShortcutFailed:
+            String(localized: "The Do Not Disturb shortcut didn't run. Notifications may sound during the recording.")
         }
     }
 }
