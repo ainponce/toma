@@ -124,6 +124,22 @@ public struct SystemPermissionProbe: PermissionProbe {
     }
 }
 
+/// What asking for a permission does, by its state (plan decision 27): the system's prompt the first time,
+/// which already offers to open System Settings; System Settings once it was asked for (macOS prompts only
+/// once); never both. Nothing once it is granted.
+public enum PermissionAction: Equatable, Sendable {
+    case prompt
+    case openSettings
+
+    public init?(for state: PermissionState) {
+        switch state {
+        case .granted: return nil
+        case .notDetermined: self = .prompt
+        case .denied: self = .openSettings
+        }
+    }
+}
+
 /// Where System Settings lets the user change a permission.
 public enum PermissionSettings {
     public static func url(for kind: PermissionKind) -> URL {

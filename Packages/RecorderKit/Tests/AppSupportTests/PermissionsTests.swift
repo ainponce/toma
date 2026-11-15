@@ -62,6 +62,12 @@ struct FakeProbe: PermissionProbe {
 
 // MARK: - System Settings
 
+@Test func askingPromptsFirstThenOpensSettings() {
+    #expect(PermissionAction(for: .notDetermined) == .prompt)
+    #expect(PermissionAction(for: .denied) == .openSettings)
+    #expect(PermissionAction(for: .granted) == nil)
+}
+
 @Test func settingsOpenThePrivacyPaneOfEachPermission() {
     #expect(PermissionSettings.url(for: .screenRecording).absoluteString
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")

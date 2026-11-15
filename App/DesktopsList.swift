@@ -5,7 +5,9 @@ import Observation
 import SwiftUI
 
 /// The desktops of the island's display while a list shows them (notch design §5.5): read when one appears
-/// and whenever the desktop in front changes, jumped to with ⌃← ⌃→, and why a jump posted nothing.
+/// and whenever the desktop in front changes, jumped to with ⌃← ⌃→, and why a jump posted nothing. It also
+/// tells the island when losing the keyboard is the desktop changing (`SpaceSwitchGrace`), so a jump from
+/// the open island leaves it open.
 @MainActor @Observable
 final class DesktopsModel {
     /// Why the last jump posted nothing; the island says how to fix it until the next jump or the list goes.
@@ -28,13 +30,23 @@ final class DesktopsModel {
     @ObservationIgnored private let jumper = SpaceJumper.live()
     /// How many lists show now: two overlap while the island's content changes.
     @ObservationIgnored private var viewers = 0
+    /// For the life of the app.
     @ObservationIgnored private var spaceChange: (any NSObjectProtocol)?
     /// A jump is posting its presses: another one would start from a desktop that is no longer in front.
     @ObservationIgnored private var isJumping = false
+    @ObservationIgnored private var switchGrace = SpaceSwitchGrace()
+    @ObservationIgnored private let origin = ContinuousClock.now
 
     init(displayID: UInt32, probe: any PermissionProbe) {
         self.displayID = displayID
         self.probe = probe
+        // Every change, also from the keyboard: the open island stays open through it. Only NSWorkspace's own
+        // center posts it.
+        spaceChange = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.spaceChanged() }
+        }
     }
 
     /// A list appeared: the desktops are read now, and again whenever the desktop in front changes, while
@@ -44,20 +56,18 @@ final class DesktopsModel {
         guard viewers == 1 else { return }
         problem = nil
         reload()
-        // Only NSWorkspace's own center posts it.
-        spaceChange = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.reload() }
-        }
     }
 
     func disappeared() {
         viewers = max(0, viewers - 1)
         guard viewers == 0 else { return }
-        if let spaceChange { NSWorkspace.shared.notificationCenter.removeObserver(spaceChange) }
-        spaceChange = nil
         problem = nil
+    }
+
+    /// The open island lost the keyboard: whether that is the desktop changing under it (a jump, or ⌃← ⌃→),
+    /// and not a click elsewhere. Only the first loss of each change is.
+    func keyboardLostToADesktopChange() -> Bool {
+        switchGrace.keyboardLost(at: now)
     }
 
     /// Jumps to the desktop with `id`, from the one in front as the system says now.
@@ -78,14 +88,14 @@ final class DesktopsModel {
     /// "Give Permission…": the system's prompt the first time (it already offers to open System Settings),
     /// System Settings after that; never both (plan decision 27). The island gets out of the way of either.
     func givePermission() {
-        switch probe.state(of: .accessibility) {
-        case .granted:
+        switch PermissionAction(for: probe.state(of: .accessibility)) {
+        case nil:
             // Allowed meanwhile: the next jump posts.
             problem = nil
-        case .notDetermined:
+        case .prompt:
             send(.systemUIOpened)
             Task { _ = await probe.request(.accessibility) }
-        case .denied:
+        case .openSettings:
             send(.systemUIOpened)
             NSWorkspace.shared.open(PermissionSettings.url(for: .accessibility))
         }
@@ -99,6 +109,7 @@ final class DesktopsModel {
 
     private func perform(_ jump: @escaping @MainActor (SpaceJumper) async -> SpaceJumper.Outcome) {
         isJumping = true
+        switchGrace.jumpBegan()
         Task {
             let outcome = await jump(jumper)
             isJumping = false
@@ -108,8 +119,20 @@ final class DesktopsModel {
                 case .needsAccessibility: .needsAccessibility
                 case .shortcutsOff: .shortcutsOff
                 }
+            if case .jumped = outcome {
+                switchGrace.jumpEnded(posted: true, at: now)
+            } else {
+                switchGrace.jumpEnded(posted: false, at: now)
+            }
             if self.problem != problem { self.problem = problem }
         }
+    }
+
+    private var now: Duration { ContinuousClock.now - origin }
+
+    private func spaceChanged() {
+        switchGrace.spaceChanged(at: now)
+        if viewers > 0 { reload() }
     }
 
     private func reload() {

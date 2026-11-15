@@ -316,13 +316,18 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// The island or the teleprompter lost the keyboard: a click elsewhere closes the open island, unless the
     /// keyboard went to another of Toma's floating windows (the on-screen selection, the bubble, the
-    /// teleprompter, a menu).
+    /// teleprompter, a menu), or the desktop changed under it (a jump from the island, or ⌃← ⌃→: macOS makes
+    /// a window of that desktop key). Then the island stays open and takes the keyboard back.
     private func keyboardLeft() {
         guard machine.state == .open else { return }
         // Once the new key window is known.
         Task { @MainActor [weak self] in
             guard let self, machine.state == .open, !panel.isKeyWindow else { return }
             if let key = NSApp.keyWindow, !key.styleMask.contains(.titled) { return }
+            if desktops.keyboardLostToADesktopChange() {
+                _ = takeKeyboardBack()
+                return
+            }
             send(.dismiss)
         }
     }

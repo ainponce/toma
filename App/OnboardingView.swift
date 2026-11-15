@@ -174,22 +174,24 @@ private struct PermissionRow: View {
                 status
             }
             Spacer()
-            switch (kind, state) {
-            case (_, .granted):
-                EmptyView()
-            case (.accessibility, _):
-                Button("Give Permission…") {
-                    if state == .notDetermined {
-                        Task { await model.request(kind) }
-                    } else {
-                        model.openSettings(for: kind)
-                    }
-                }
-            case (_, .notDetermined):
-                Button("Allow…") { Task { await model.request(kind) } }
-            case (_, .denied):
-                Button("Open System Settings") { model.openSettings(for: kind) }
+            if let action = PermissionAction(for: state) {
+                Button { perform(action) } label: { buttonTitle(action) }
             }
+        }
+    }
+
+    private func perform(_ action: PermissionAction) {
+        switch action {
+        case .prompt: Task { await model.request(kind) }
+        case .openSettings: model.openSettings(for: kind)
+        }
+    }
+
+    private func buttonTitle(_ action: PermissionAction) -> Text {
+        switch (kind, action) {
+        case (.accessibility, _): Text("Give Permission…")
+        case (_, .prompt): Text("Allow…")
+        case (_, .openSettings): Text("Open System Settings")
         }
     }
 

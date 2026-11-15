@@ -16,14 +16,14 @@ private func desktop(_ id: Int) -> [String: Any] {
 
 /// An app in full screen, or several side by side (Split View): one tile each, in order.
 private func fullScreen(_ id: Int, _ tiles: [(app: String, name: String)]) -> [String: Any] {
-    let size: [String: Any] = ["Width": 1512.0, "Height": 982.0]
+    let size: [String: Any] = ["Width": 1000.0, "Height": 600.0]
     let tileSpaces: [[String: Any]] = tiles.enumerated().map { index, tile in
         let tileID = id * 10 + index
         return [
             "ManagedSpaceID": tileID, "id64": tileID, "type": 5, "uuid": uuid(tileID), "pid": 400 + tileID, "fs_wid": 700 + tileID,
             "appName": tile.app, "name": tile.name, "TileType": "window", "TileWindowID": 700 + tileID,
             "TileLimitedClipping": false, "com.apple.appkit.disablemcexit": false, "fromSpace": uuid(1),
-            "TileRect": ["X": 0.0, "Y": 0.0, "Width": 1512.0, "Height": 982.0],
+            "TileRect": ["X": 0.0, "Y": 0.0, "Width": 1000.0, "Height": 600.0],
             "SizeConstraints": ["Max": size, "Min": size, "Preferred": size],
         ]
     }
@@ -31,7 +31,7 @@ private func fullScreen(_ id: Int, _ tiles: [(app: String, name: String)]) -> [S
         "ManagedSpaceID": id, "id64": id, "type": 4, "uuid": uuid(id), "pid": 400 + id, "fs_wid": 700 + id,
         "TileLayoutManager": [
             "Age": 1.0, "ConfigAge": 1.0, "Inter-Tile Spacing": ["Width": 0.0, "Height": 0.0],
-            "Layout Rect": ["X": 0.0, "Y": 0.0, "Width": 1512.0, "Height": 982.0], "Max Tile Config": size,
+            "Layout Rect": ["X": 0.0, "Y": 0.0, "Width": 1000.0, "Height": 600.0], "Max Tile Config": size,
             "PreferredLayout": [["DisplaySize": size, "FirstTileSize": size]],
             "ReservedArea": ["Top": 0.0, "Bottom": 0.0, "Left": 0.0, "Right": 0.0],
             "TileSpaces": tileSpaces,
@@ -97,6 +97,11 @@ private func typeName(_ value: Any) -> String {
     case is [String: Any]: "Dictionary"
     default: "\(type(of: value))"
     }
+}
+
+/// Whether each loss of the keyboard, at `times` in order, is the desktop's.
+private func losses(_ grace: inout SpaceSwitchGrace, at times: Duration...) -> [Bool] {
+    times.map { grace.keyboardLost(at: $0) }
 }
 
 @Suite struct DesktopSpacesTests {
@@ -302,20 +307,99 @@ private func typeName(_ value: Any) -> String {
         #expect(log.all == [.post(.right)])
     }
 
-    @Test func controlArrowsAreOnOnlyAsMacOSShipsThem() {
-        func hotKey(_ code: Int, _ modifiers: Int, enabled: Bool = true) -> [String: Any] {
-            ["kHISymbolicHotKeyCode": code, "kHISymbolicHotKeyModifiers": modifiers, "kHISymbolicHotKeyEnabled": enabled]
+    @Test func shortcutsFollowTheSystemPreferences() {
+        /// An entry of `AppleSymbolicHotKeys` as macOS writes it: only `enabled` once switched without new keys.
+        func entry(enabled: Bool, key: Int? = nil, modifiers: Int = 0x84_0000) -> [String: Any] {
+            guard let key else { return ["enabled": enabled] }
+            return ["enabled": enabled, "value": ["parameters": [65535, key, modifiers], "type": "standard"]]
         }
-        let control = 0x1000, fn = 0x20000, option = 0x800, shift = 0x200
-        let others = [hotKey(126, control | fn), hotKey(123, control | shift | fn)]
-        #expect(SpaceJumper.controlArrowsAreOn(in: others + [hotKey(123, control | fn), hotKey(124, control | fn)]))
-        // Without fn, as some versions list them.
-        #expect(SpaceJumper.controlArrowsAreOn(in: [hotKey(123, control), hotKey(124, control)]))
-        // One of them off, missing or changed to another combination.
-        #expect(!SpaceJumper.controlArrowsAreOn(in: others + [hotKey(123, control | fn, enabled: false), hotKey(124, control | fn)]))
-        #expect(!SpaceJumper.controlArrowsAreOn(in: others + [hotKey(124, control | fn)]))
-        #expect(!SpaceJumper.controlArrowsAreOn(in: others + [hotKey(123, control | option | fn), hotKey(124, control | fn)]))
-        #expect(!SpaceJumper.controlArrowsAreOn(in: [hotKey(123, fn), hotKey(124, fn)]))
-        #expect(!SpaceJumper.controlArrowsAreOn(in: []))
+        let control = 0x4_0000, option = 0x8_0000, command = 0x10_0000, fn = 0x80_0000
+        // Never changed: macOS's defaults, on.
+        #expect(SpaceJumper.shortcutsState(in: [String: Any]()) == .on)
+        // Other ⌃fn-arrow shortcuts (window tiling, the shifted variants) do not matter.
+        let others: [String: Any] = [
+            "80": entry(enabled: true, key: 123, modifiers: 0xA4_0000), "82": entry(enabled: true, key: 124, modifiers: 0xA4_0000),
+            "248": entry(enabled: true, key: 123, modifiers: control | fn), "249": entry(enabled: false, key: 124, modifiers: control | fn),
+            "16": ["enabled": false],
+        ]
+        #expect(SpaceJumper.shortcutsState(in: others) == .on)
+        // On, without their keys (as on macOS 26.6.2), or with them, with or without fn.
+        #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: true), "81": entry(enabled: true)]) == .on)
+        #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: true, key: 123), "81": entry(enabled: true, key: 124)]) == .on)
+        #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: true, key: 123, modifiers: control)]) == .on)
+        // "Move left a space" off; "Move right a space" moved to another key; the modifiers changed.
+        var off = others
+        off["79"] = entry(enabled: false)
+        #expect(SpaceJumper.shortcutsState(in: off) == .off)
+        #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: false, key: 123)]) == .off)
+        #expect(SpaceJumper.shortcutsState(in: ["81": entry(enabled: true, key: 125)]) == .off)
+        #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: true, key: 123, modifiers: control | option | fn)]) == .off)
+        #expect(SpaceJumper.shortcutsState(in: ["81": entry(enabled: true, key: 124, modifiers: command | fn)]) == .off)
+        // What cannot be read, or has another shape: unknown, and nothing is posted either.
+        #expect(SpaceJumper.shortcutsState(in: nil) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["79", "81"]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["79": 1]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["79": ["value": ["parameters": [65535, 123, control]]]]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["79": ["enabled": "yes"]]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["81": ["enabled": true, "value": [65535, 124, control]]]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["81": ["enabled": true, "value": ["parameters": [65535, 124]]]]) == .unknown)
+        #expect(SpaceJumper.shortcutsState(in: ["81": ["enabled": true, "value": ["parameters": ["a", "b", "c"]]]]) == .unknown)
+        // Unknown wins over off: either way nothing is posted.
+        #expect(SpaceJumper.shortcutsState(in: ["79": entry(enabled: false), "81": 1]) == .unknown)
+    }
+
+    /// Reads macOS's shortcuts preferences on this Mac (no permission needed). Prints only the state.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["RECORDER_INTEGRATION"] == "1"))
+    func liveShortcutsAreReadOnThisMac() {
+        let state = SpaceJumper.readShortcuts()
+        print("Move left / right a space: \(state)")
+        #expect(state != .unknown)
+    }
+
+    // MARK: - The desktop changing under the open island
+
+    @Test func aJumpKeepsTheOpenIslandOnceAsItsDesktopComes() {
+        #expect(SpaceSwitchGrace.grace == .milliseconds(500) && SpaceSwitchGrace.switchWait == .seconds(1))
+        // Nothing switching: losing the keyboard is a click elsewhere.
+        var idle = SpaceSwitchGrace()
+        #expect(losses(&idle, at: .seconds(10)) == [false])
+
+        // While a jump posts, and until 1 s after its last press: the first loss is the desktop's, the next a click.
+        var jump = SpaceSwitchGrace()
+        jump.jumpBegan()
+        #expect(losses(&jump, at: .seconds(10), .seconds(10)) == [true, false])
+        var landing = SpaceSwitchGrace()
+        landing.jumpBegan()
+        landing.jumpEnded(posted: true, at: .seconds(10))
+        #expect(losses(&landing, at: .milliseconds(10_999), .milliseconds(10_999)) == [true, false])
+        var late = SpaceSwitchGrace()
+        late.jumpBegan()
+        late.jumpEnded(posted: true, at: .seconds(10))
+        #expect(losses(&late, at: .seconds(11)) == [false])
+        // A jump that posted nothing (no permission, shortcuts off, already there) switches nothing.
+        var nothing = SpaceSwitchGrace()
+        nothing.jumpBegan()
+        nothing.jumpEnded(posted: false, at: .seconds(10))
+        #expect(losses(&nothing, at: .milliseconds(10_100)) == [false])
+    }
+
+    @Test func aDesktopChangeKeepsTheOpenIslandFor500ms() {
+        // ⌃→ from the keyboard, or each desktop a jump goes through: one loss forgiven per change.
+        var change = SpaceSwitchGrace()
+        change.spaceChanged(at: .seconds(5))
+        #expect(losses(&change, at: .milliseconds(5_400), .milliseconds(5_450)) == [true, false])
+        change.spaceChanged(at: .seconds(6))
+        #expect(losses(&change, at: .milliseconds(6_499)) == [true])
+        var over = SpaceSwitchGrace()
+        over.spaceChanged(at: .seconds(5))
+        #expect(losses(&over, at: .milliseconds(5_500)) == [false])
+        // A jump of several desktops: a loss forgiven for each desktop it lands on, and for its last press.
+        var steps = SpaceSwitchGrace()
+        steps.jumpBegan()
+        steps.spaceChanged(at: .seconds(1))
+        #expect(losses(&steps, at: .milliseconds(1_100)) == [true])
+        steps.spaceChanged(at: .milliseconds(1_150))
+        steps.jumpEnded(posted: true, at: .milliseconds(1_300))
+        #expect(losses(&steps, at: .milliseconds(1_400), .milliseconds(1_450)) == [true, false])
     }
 }
