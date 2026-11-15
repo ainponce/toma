@@ -18,6 +18,10 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var teleprompter: TeleprompterSettings = .init()
     /// How the camera bubble looks, and how the camera starts in the video: the last one chosen.
     public var cameraStyle: CameraStyle = .default
+    /// The areas saved in Area mode ("Save Area").
+    public var savedAreas: SavedAreas = .init()
+    /// The proportion an area is drawn with: the last one chosen.
+    public var aspectLock: AspectLock = .free
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -25,7 +29,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public init(
         selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
         hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
-        cameraStyle: CameraStyle = .default
+        cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free
     ) {
         self.selection = selection
         self.quick = quick
@@ -34,6 +38,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.afterStop = afterStop
         self.teleprompter = teleprompter
         self.cameraStyle = cameraStyle
+        self.savedAreas = savedAreas
+        self.aspectLock = aspectLock
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -48,6 +54,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         afterStop = (try? container.decodeIfPresent(AfterStop.self, forKey: .afterStop)) ?? defaults.afterStop
         teleprompter = (try? container.decodeIfPresent(TeleprompterSettings.self, forKey: .teleprompter)) ?? defaults.teleprompter
         cameraStyle = (try? container.decodeIfPresent(CameraStyle.self, forKey: .cameraStyle)) ?? defaults.cameraStyle
+        savedAreas = (try? container.decodeIfPresent(SavedAreas.self, forKey: .savedAreas)) ?? defaults.savedAreas
+        aspectLock = (try? container.decodeIfPresent(AspectLock.self, forKey: .aspectLock)) ?? defaults.aspectLock
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

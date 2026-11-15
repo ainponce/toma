@@ -162,6 +162,29 @@ import Testing
         }
     }
 
+    @Test func settingsRememberTheSavedAreasAndTheProportion() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            #expect(store.settings.savedAreas == SavedAreas() && store.settings.aspectLock == .free)
+
+            var settings = store.settings
+            settings.savedAreas.remember(AreaChoice(displayID: 2, rect: Rect(x: -1920, y: 0, width: 1280, height: 720)))
+            settings.aspectLock = .tall9x16
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings == settings)
+            #expect(SettingsStore(defaults: defaults).settings.savedAreas.areas.map(\.displayID) == [2])
+
+            // Saved by a version without them.
+            defaults.set(Data(#"{"countdownSeconds":5}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.savedAreas == SavedAreas() && store.settings.aspectLock == .free)
+            // A proportion from another version: free, and the rest is kept.
+            var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(settings)) as? [String: Any])
+            json["aspectLock"] = "golden"
+            defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.key)
+            #expect(store.settings.aspectLock == .free && store.settings.savedAreas == settings.savedAreas)
+        }
+    }
+
     /// Saves `settings` in `defaults` as another version could have: with `change` made to the object at `key`.
     private func save(
         _ settings: RecorderSettings, in defaults: UserDefaults, changing key: String, _ change: (inout [String: Any]) -> Void
