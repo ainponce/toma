@@ -23,7 +23,7 @@ import os
 /// AVFoundation's own downmix gives silence for a discrete layout (`kAudioChannelLayoutTag_DiscreteInOrder`).
 ///
 /// Not thread-safe: one owner reads it, from one thread at a time.
-final class MicrophoneTimeline {
+final class AudioTrackTimeline {
     static let sampleRate = 48_000.0
     /// The longest gap between two segments that is closed instead of filled with silence.
     static let maxClosedGap = 0.020
@@ -73,7 +73,7 @@ final class MicrophoneTimeline {
     /// long; `nil` if the take has no microphone track. Loads every segment's track, so the stream can then
     /// be read without waiting.
     /// - Throws: `ExportError.writerFailed` if the block format cannot be made.
-    static func load(_ project: LoadedProject, timelineStart: HostTime, totalFrames: Int64) async throws -> MicrophoneTimeline? {
+    static func load(_ project: LoadedProject, timelineStart: HostTime, totalFrames: Int64) async throws -> AudioTrackTimeline? {
         guard let track = project.take.tracks.first(where: { $0.kind == .microphone }) else { return nil }
         let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
         let duration = Double(max(0, totalFrames)) / sampleRate
@@ -143,7 +143,7 @@ final class MicrophoneTimeline {
         if rejectedAnchors > 0 {
             logger.error("Microphone track \(track.id, privacy: .public): \(rejectedAnchors) audio clock anchor(s) out of order or off by more than 5000 ppm; not used")
         }
-        return try MicrophoneTimeline(segments: segments, missingAudio: missing, channels: min(maxChannels, 2), totalFrames: totalFrames)
+        return try AudioTrackTimeline(segments: segments, missingAudio: missing, channels: min(maxChannels, 2), totalFrames: totalFrames)
     }
 
     /// `MissingAudio` for output seconds `start ..< end` clamped to the export (`0 ... duration`); `nil` when
@@ -374,7 +374,7 @@ struct ClockMap {
 /// Reads one segment's frames in order, decoded to interleaved Float32 at the output rate and mixed to the
 /// stream's channels, and resamples them onto output frames through its clock map (linear interpolation).
 private final class SegmentReader {
-    let segment: MicrophoneTimeline.Segment
+    let segment: AudioTrackTimeline.Segment
     let firstOutputFrame: Int64
     /// Why reading stopped before the end of the file, if it did.
     private(set) var readFailure: String?
@@ -395,7 +395,7 @@ private final class SegmentReader {
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
-    init(_ segment: MicrophoneTimeline.Segment, channels: Int) throws {
+    init(_ segment: AudioTrackTimeline.Segment, channels: Int) throws {
         self.segment = segment
         index = segment.index
         map = segment.map
@@ -405,7 +405,7 @@ private final class SegmentReader {
         reader = try AVAssetReader(asset: segment.asset)
         output = AVAssetReaderTrackOutput(track: segment.track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
-            AVSampleRateKey: MicrophoneTimeline.sampleRate,
+            AVSampleRateKey: AudioTrackTimeline.sampleRate,
             AVNumberOfChannelsKey: segment.channels,
             AVLinearPCMBitDepthKey: 32,
             AVLinearPCMIsFloatKey: true,

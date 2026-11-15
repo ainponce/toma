@@ -25,12 +25,12 @@ private func expected(_ pairs: [(Int, HostTime)]) -> [[UInt64]] {
         InputEvent(t: first.adding(seconds: 6), kind: .cursor(x: 1, y: 2)),
         clock(240_000, at: second.adding(seconds: 5)),
     ]
-    let one = MicrophoneTimeline.clockAnchors(of: "mic", from: first, before: second, sourceRate: 48_000, in: events)
+    let one = AudioTrackTimeline.clockAnchors(of: "mic", from: first, before: second, sourceRate: 48_000, in: events)
     #expect(anchors(one) == expected([(240_000, first.adding(seconds: 5)), (480_000, first.adding(seconds: 10))]))
     #expect(one.rejected == 0)
-    let two = MicrophoneTimeline.clockAnchors(of: "mic", from: second, before: nil, sourceRate: 48_000, in: events)
+    let two = AudioTrackTimeline.clockAnchors(of: "mic", from: second, before: nil, sourceRate: 48_000, in: events)
     #expect(anchors(two) == expected([(240_000, second.adding(seconds: 5))]))
-    #expect(MicrophoneTimeline.clockAnchors(of: "mic", from: base.adding(seconds: 40), before: nil, sourceRate: 48_000, in: events).kept.isEmpty)
+    #expect(AudioTrackTimeline.clockAnchors(of: "mic", from: base.adding(seconds: 40), before: nil, sourceRate: 48_000, in: events).kept.isEmpty)
 }
 
 @Test func clockAnchorsLeaveOutOnesThatDoNotMoveForward() {
@@ -39,7 +39,7 @@ private func expected(_ pairs: [(Int, HostTime)]) -> [[UInt64]] {
         clock(300_000, at: base.adding(seconds: 5.01)),  // not after the last one kept
         clock(200_000, at: base.adding(seconds: 6)),  // backwards in frames
     ]
-    let result = MicrophoneTimeline.clockAnchors(of: "mic", from: base, before: nil, sourceRate: 48_000, in: events)
+    let result = AudioTrackTimeline.clockAnchors(of: "mic", from: base, before: nil, sourceRate: 48_000, in: events)
     #expect(anchors(result) == expected([(240_000, base.adding(seconds: 5.01))]))
     #expect(result.rejected == 2)
 }
@@ -52,15 +52,15 @@ private func expected(_ pairs: [(Int, HostTime)]) -> [[UInt64]] {
         clock(480_000, at: base.adding(seconds: 10.12)),
         clock(720_000, at: base.adding(seconds: 15.13)),
     ]
-    let result = MicrophoneTimeline.clockAnchors(of: "mic", from: base, before: nil, sourceRate: 48_000, in: events)
+    let result = AudioTrackTimeline.clockAnchors(of: "mic", from: base, before: nil, sourceRate: 48_000, in: events)
     #expect(anchors(result) == expected([(240_000, base.adding(seconds: 5.01)), (720_000, base.adding(seconds: 15.13))]))
     #expect(result.rejected == 1)
     // 6000 ppm from the segment's start: the first one goes too.
-    let far = MicrophoneTimeline.clockAnchors(
+    let far = AudioTrackTimeline.clockAnchors(
         of: "mic", from: base, before: nil, sourceRate: 48_000, in: [clock(240_000, at: base.adding(seconds: 5.03))])
     #expect(far.kept.isEmpty && far.rejected == 1)
     // 44.1 kHz: 220 500 frames in 5 s is the nominal rate.
-    let other = MicrophoneTimeline.clockAnchors(
+    let other = AudioTrackTimeline.clockAnchors(
         of: "mic", from: base, before: nil, sourceRate: 44_100, in: [clock(220_500, at: base.adding(seconds: 5))])
     #expect(other.kept.count == 1 && other.rejected == 0)
 }

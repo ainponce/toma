@@ -14,7 +14,7 @@ import os
 /// Frame `i` is the frame `FrameRenderer` draws at output time `i / framesPerSecond`, the same drawing
 /// the preview shows; the video lasts the renderer's timeline (`FrameEvaluator`: the screen, or the microphone
 /// when it was recorded longer), rounded to whole frames. The microphone is placed
-/// by host time on the same timeline (`MicrophoneTimeline`); a take without one exports without audio.
+/// by host time on the same timeline (`AudioTrackTimeline`); a take without one exports without audio.
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
@@ -66,8 +66,8 @@ public final class MP4Exporter: Sendable {
         let timelineStart = FrameEvaluator(
             take: project.take, events: project.events, style: StyleV0(), outputSize: settings.outputSize
         ).timelineStart
-        let audioFrames = Int64((Double(frameCount) / Double(fps) * MicrophoneTimeline.sampleRate).rounded())
-        let microphone = try await MicrophoneTimeline.load(project, timelineStart: timelineStart, totalFrames: audioFrames)
+        let audioFrames = Int64((Double(frameCount) / Double(fps) * AudioTrackTimeline.sampleRate).rounded())
+        let microphone = try await AudioTrackTimeline.load(project, timelineStart: timelineStart, totalFrames: audioFrames)
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
@@ -209,7 +209,7 @@ private final class ExportSession: @unchecked Sendable {
     private let videoInput: AVAssetWriterInput
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private let audioInput: AVAssetWriterInput?
-    private let microphone: MicrophoneTimeline?
+    private let microphone: AudioTrackTimeline?
     private let renderer: FrameRenderer
     private let settings: ExportSettings
     private let frameCount: Int
@@ -217,7 +217,7 @@ private final class ExportSession: @unchecked Sendable {
     private let cancelled = Atomic(false)
 
     /// Creates the writer of `url` (the file appears when writing starts) and its inputs.
-    init(url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, microphone: MicrophoneTimeline?) throws {
+    init(url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, microphone: AudioTrackTimeline?) throws {
         let writer: AVAssetWriter
         do {
             writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -244,9 +244,9 @@ private final class ExportSession: @unchecked Sendable {
         if let microphone {
             let audio: [String: Any] = [
                 AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: MicrophoneTimeline.sampleRate,
+                AVSampleRateKey: AudioTrackTimeline.sampleRate,
                 AVNumberOfChannelsKey: microphone.channels,
-                AVChannelLayoutKey: MicrophoneTimeline.channelLayoutData(channels: microphone.channels),
+                AVChannelLayoutKey: AudioTrackTimeline.channelLayoutData(channels: microphone.channels),
                 AVEncoderBitRateKey: MP4Exporter.audioBitRate,
                 // Constant: the default strategy spends far less than asked on a quiet or simple signal.
                 AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Constant,
