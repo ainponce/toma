@@ -114,22 +114,28 @@ struct SynthRecord: AsyncParsableCommand {
 
 struct Record: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        abstract: "Records the main display, a camera (--camera) and the default microphone.",
+        abstract: "Records the main display, a camera (--camera), the default microphone and system audio (--system-audio).",
         discussion: """
-            Needs Screen Recording and Microphone permission for the terminal that runs it, and Camera \
-            permission with --camera. Creates <directory>/record-<date>-<time>.toma and prints its absolute \
-            path as the first line once recording has started, like synth-record. Sleep and screen lock pause \
-            the take, as in the app.
+            Needs Screen Recording and Microphone permission for the terminal that runs it, Camera permission \
+            with --camera, and System Audio Recording with --system-audio. Creates \
+            <directory>/record-<date>-<time>.toma and prints its absolute path as the first line once recording \
+            has started, like synth-record. Sleep and screen lock pause the take, as in the app.
 
             The tracks, in this order: the main display at 60 fps, camera at 30 fps (--camera), at 1080p unless \
-            --camera-preset says otherwise, and mic. The camera records in the smallest of its formats that \
-            covers the preset at 30 fps, or its largest at 30 fps if none does; the macOS log (subsystem \
-            dev.toma.Toma, category CameraSessionHost) says when the session changed that format or rate and \
-            it was set again. --camera default records the system's preferred camera; --camera <uniqueID> (from \
-            list-sources) that camera, or the system's preferred one while it is not connected. A camera that \
-            is disconnected, taken by another app or suspended (a closed lid) is restarted as in the app, on \
-            the system's preferred camera while it is gone: "warning:" lines say so, and the take's \
-            events.jsonl logs a deviceChanged event when another camera takes over.
+            --camera-preset says otherwise, mic, and system-audio (--system-audio). The camera records in the \
+            smallest of its formats that covers the preset at 30 fps, or its largest at 30 fps if none does; the \
+            macOS log (subsystem dev.toma.Toma, category CameraSessionHost) says when the session changed that \
+            format or rate and it was set again. --camera default records the system's preferred camera; \
+            --camera <uniqueID> (from list-sources) that camera, or the system's preferred one while it is not \
+            connected. A camera that is disconnected, taken by another app or suspended (a closed lid) is \
+            restarted as in the app, on the system's preferred camera while it is gone: "warning:" lines say so, \
+            and the take's events.jsonl logs a deviceChanged event when another camera takes over.
+
+            --system-audio all records every app but this tool and the notification and alert sounds; \
+            --system-audio <bundleID,…> (from list-sources) only those apps and their helpers, silence while \
+            none of them runs, and an app opened during the take from then on. The track is stereo, mixed from \
+            the apps' sound. macOS does not say whether System Audio Recording was allowed: if it was refused, \
+            the track is silent.
 
             The cursor is sampled at 120 Hz, but clicks may be missing: a command-line tool has no \
             NSApplication, and the mouse-button monitors may not deliver there.
@@ -148,10 +154,23 @@ struct Record: AsyncParsableCommand {
     @Option(help: "The camera's quality: p720 (1280×720), p1080 (1920×1080, when left out) or p2160 (3840×2160).")
     var cameraPreset: CameraPreset?
 
+    @Option(help: "Also record system audio: all, or the bundle IDs of the apps to record, separated by commas.")
+    var systemAudio: String?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         if let camera, camera.isEmpty { throw ValidationError("--camera takes default or a camera's uniqueID.") }
         if cameraPreset != nil, camera == nil { throw ValidationError("--camera-preset needs --camera.") }
+        if let systemAudio, Self.scope(systemAudio) == nil {
+            throw ValidationError("--system-audio takes all or bundle IDs separated by commas.")
+        }
+    }
+
+    /// `all`, or the bundle IDs of a comma-separated list; `nil` if it names none.
+    static func scope(_ argument: String) -> SystemAudioScope? {
+        if argument == "all" { return .all }
+        let bundleIDs = argument.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        return bundleIDs.isEmpty ? nil : .applications(bundleIDs)
     }
 
     func run() async throws {
@@ -164,6 +183,9 @@ struct Record: AsyncParsableCommand {
                 preset: cameraPreset ?? .p1080))
         }
         sources.append(MicrophoneCaptureSource(preferredDeviceUniqueID: nil))
+        if let scope = systemAudio.flatMap(Self.scope) {
+            sources.append(ProcessTapSource(scope: scope))
+        }
         try await recordTake(
             in: directory, prefix: "record", duration: duration,
             sources: sources, input: CursorRecorder(),
@@ -174,12 +196,16 @@ struct Record: AsyncParsableCommand {
 struct ListSources: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "list-sources",
-        abstract: "Lists the displays, cameras and microphones that can be recorded, with their IDs.",
+        abstract: "Lists the displays, cameras, microphones and audio processes that can be recorded, with their IDs.",
         discussion: """
             One line per source: "display <CGDirectDisplayID>: <name>, <width>×<height> pt at (<x>, <y>), \
             <scale>x", "camera <uniqueID>: <name>" and "microphone <uniqueID>: <name>", followed by "main", \
             "asleep" (it records nothing until it wakes), "system preferred", "Continuity Camera" or \
-            "default" where they apply. The IDs are what record takes (--camera). Needs no permission.
+            "default" where they apply. Then one line per process connected to the audio system: "audio \
+            process <pid>: bundle <bundle ID or none>, path <executable or unknown>", followed by "playing" \
+            while it plays audio and "excluded" when system audio never records it (notification and alert \
+            sounds). The camera uniqueIDs and the bundle IDs are what record takes (--camera, --system-audio). \
+            Needs no permission.
             """
     )
 
@@ -208,6 +234,16 @@ struct ListSources: AsyncParsableCommand {
         for microphone in microphones {
             let marker = microphone.uniqueID == defaultMicrophone ? ", default" : ""
             print("microphone \(microphone.uniqueID): \(microphone.localizedName)\(marker)")
+        }
+        do {
+            for process in try AudioProcessCatalog.processes().sorted(by: { $0.pid < $1.pid }) {
+                var line = "audio process \(process.pid): bundle \(process.bundleIdentifier ?? "none"), path \(process.executablePath ?? "unknown")"
+                if process.isPlayingAudio { line += ", playing" }
+                if SystemAudioExclusions.matches(process) { line += ", excluded" }
+                print(line)
+            }
+        } catch {
+            printError("warning: the audio processes can't be listed: \(error)")
         }
     }
 

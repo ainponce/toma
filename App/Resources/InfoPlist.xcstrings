@@ -13,6 +13,17 @@
         }
       }
     },
+    "NSAudioCaptureUsageDescription" : {
+      "comment" : "Shown by macOS when the app first asks to record system audio. The name of the app is put in when building.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "$(PRODUCT_NAME) graba el audio de las apps elegidas solo cuando se activa el audio del sistema para una grabación."
+          }
+        }
+      }
+    },
     "NSCameraUsageDescription" : {
       "comment" : "Shown by macOS when the app first asks for the camera. The name of the app is put in when building.",
       "localizations" : {

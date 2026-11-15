@@ -3,6 +3,7 @@ import AVFoundation
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import Recording
 
 /// A system permission the app asks for.
 public enum PermissionKind: String, CaseIterable, Sendable {
@@ -13,6 +14,9 @@ public enum PermissionKind: String, CaseIterable, Sendable {
     /// Optional: without it there is no camera bubble (and, once the camera is recorded, no camera track).
     /// Asked for when the camera is turned on in the island.
     case camera
+    /// Optional: without it the system audio track is silent. macOS never says whether it was allowed, so once it
+    /// was asked for it reads as granted, meaning requested (`SystemPermissionProbe`).
+    case systemAudio
     /// Optional, and never needed to record: only to switch desktops from the island, by posting ⌃← and ⌃→
     /// (`SpaceJumper`). Asked for only when the user asks to (plan decision 27).
     case accessibility
@@ -41,6 +45,9 @@ public protocol PermissionProbe: Sendable {
 /// authorization status for audio and video.
 /// Accessibility also only answers yes or no (`AXIsProcessTrusted`), and is remembered the same way: so
 /// the second "Give Permission…" opens System Settings instead of the prompt again.
+/// System audio cannot be read at all without private API: it is `notDetermined` until it has been requested
+/// once (remembered in `defaults`), and `granted` after that, which here means requested. Requesting runs a tap of
+/// every app for 1 s, which makes macOS show its prompt the first time; a refused tap records silence.
 public struct SystemPermissionProbe: PermissionProbe {
     /// `UserDefaults` is documented as thread-safe, but not annotated `Sendable`.
     private struct Defaults: @unchecked Sendable {
@@ -54,6 +61,7 @@ public struct SystemPermissionProbe: PermissionProbe {
     private let microphoneRequest: @Sendable () async -> Bool
     private let cameraStatus: @Sendable () -> AVAuthorizationStatus
     private let cameraRequest: @Sendable () async -> Bool
+    private let systemAudioRequest: @Sendable () async -> Void
     private let accessibilityTrusted: @Sendable () -> Bool
     private let accessibilityPrompt: @Sendable () -> Void
 
@@ -66,6 +74,7 @@ public struct SystemPermissionProbe: PermissionProbe {
             microphoneRequest: { await AVCaptureDevice.requestAccess(for: .audio) },
             cameraStatus: { AVCaptureDevice.authorizationStatus(for: .video) },
             cameraRequest: { await AVCaptureDevice.requestAccess(for: .video) },
+            systemAudioRequest: { await Self.tapEveryAppBriefly() },
             accessibilityTrusted: { AXIsProcessTrusted() },
             accessibilityPrompt: {
                 // The key as text, its documented value: `kAXTrustedCheckOptionPrompt` is a global C `var`, which
@@ -84,6 +93,7 @@ public struct SystemPermissionProbe: PermissionProbe {
         microphoneRequest: @escaping @Sendable () async -> Bool,
         cameraStatus: @escaping @Sendable () -> AVAuthorizationStatus,
         cameraRequest: @escaping @Sendable () async -> Bool,
+        systemAudioRequest: @escaping @Sendable () async -> Void,
         accessibilityTrusted: @escaping @Sendable () -> Bool,
         accessibilityPrompt: @escaping @Sendable () -> Void
     ) {
@@ -94,6 +104,7 @@ public struct SystemPermissionProbe: PermissionProbe {
         self.microphoneRequest = microphoneRequest
         self.cameraStatus = cameraStatus
         self.cameraRequest = cameraRequest
+        self.systemAudioRequest = systemAudioRequest
         self.accessibilityTrusted = accessibilityTrusted
         self.accessibilityPrompt = accessibilityPrompt
     }
@@ -107,6 +118,8 @@ public struct SystemPermissionProbe: PermissionProbe {
             return Self.state(microphoneStatus())
         case .camera:
             return Self.state(cameraStatus())
+        case .systemAudio:
+            return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .granted : .notDetermined
         case .accessibility:
             if accessibilityTrusted() { return .granted }
             return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .denied : .notDetermined
@@ -122,6 +135,10 @@ public struct SystemPermissionProbe: PermissionProbe {
             return await microphoneRequest() ? .granted : .denied
         case .camera:
             return await cameraRequest() ? .granted : .denied
+        case .systemAudio:
+            defaults.value.set(true, forKey: Self.requestedKey(kind))
+            await systemAudioRequest()
+            return state(of: kind)
         case .accessibility:
             defaults.value.set(true, forKey: Self.requestedKey(kind))
             accessibilityPrompt()
@@ -142,6 +159,25 @@ public struct SystemPermissionProbe: PermissionProbe {
     static func requestedKey(_ kind: PermissionKind) -> String {
         "permissionRequested.\(kind.rawValue)"
     }
+
+    /// Taps every app for 1 s and throws the sound away: the first tap makes macOS ask for the permission. Returns
+    /// once the tap is torn down, also when it could not start.
+    private static func tapEveryAppBriefly() async {
+        let tap = ProcessTapSource(scope: .all)
+        do {
+            try await tap.start(on: DispatchSerialQueue(label: "dev.toma.SystemPermissionProbe.systemAudio"), sink: DiscardingSink())
+            try await Task.sleep(for: .seconds(1))
+        } catch {
+            // Refused, or the tap could not be made: there is nothing more to ask.
+        }
+        await tap.stop()
+    }
+}
+
+/// Throws away what a source delivers.
+private final class DiscardingSink: CaptureSink {
+    func source(_ trackID: String, didOutput sample: CMSampleBuffer) {}
+    func source(_ trackID: String, didStopWithError error: any Error) {}
 }
 
 /// What asking for a permission does, by its state (plan decision 27): the system's prompt the first time,
@@ -167,6 +203,9 @@ public enum PermissionSettings {
         case .screenRecording: "Privacy_ScreenCapture"
         case .microphone: "Privacy_Microphone"
         case .camera: "Privacy_Camera"
+        // "Screen & System Audio Recording": an app that only records audio is listed there, under "System Audio
+        // Recording Only".
+        case .systemAudio: "Privacy_ScreenCapture"
         case .accessibility: "Privacy_Accessibility"
         }
         return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!
@@ -194,10 +233,10 @@ public struct PreflightResult: Equatable, Sendable {
 
 /// The check before every take: screen recording is required, every other permission is optional (the take is
 /// recorded without that source). Only the permissions wanted are asked about: a take never needs
-/// Accessibility, and a microphone or a camera that is off is neither missing nor recorded.
+/// Accessibility, and a microphone, a camera or system audio that is off is neither missing nor recorded.
 public enum RecordingPreflight {
-    /// `wanted` holds screen recording, plus the microphone and the camera when the take would record them (for
-    /// example, not when the Mac has no microphone).
+    /// `wanted` holds screen recording, plus the microphone, the camera and system audio when the take would
+    /// record them (for example, not when the Mac has no microphone).
     public static func evaluate(probe: any PermissionProbe, wanted: Set<PermissionKind>) -> PreflightResult {
         let kinds = PermissionKind.allCases.filter(wanted.contains)
         let granted = Set(kinds.filter { probe.state(of: $0) == .granted })

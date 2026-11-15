@@ -674,6 +674,17 @@
         }
       }
     },
+    "If you denied it, the system audio track will be silent. You can change it in System Settings → Privacy & Security → Screen & System Audio Recording." : {
+      "comment" : "Under the system audio permission once it was asked for: macOS doesn't say whether it was allowed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si se negó, la pista de audio del sistema quedará en silencio. Se puede cambiar en Ajustes del Sistema → Privacidad y seguridad → Grabación de pantalla y audio del sistema."
+          }
+        }
+      }
+    },
     "In this version the camera is only a preview: this recording doesn't include it." : {
       "localizations" : {
         "es" : {
@@ -1405,6 +1416,17 @@
         }
       }
     },
+    "Requested" : {
+      "comment" : "The state of the system audio permission once it was asked for",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pedido"
+          }
+        }
+      }
+    },
     "Restart" : {
       "localizations" : {
         "es" : {
@@ -1795,6 +1817,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Predeterminado del sistema"
+          }
+        }
+      }
+    },
+    "System audio can't be recorded (error %d)." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede grabar el audio del sistema (error %d)."
           }
         }
       }

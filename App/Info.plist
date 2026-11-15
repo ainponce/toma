@@ -39,6 +39,8 @@
 	<string>15.0</string>
 	<key>LSUIElement</key>
 	<true/>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>$(PRODUCT_NAME) records audio from the apps you choose only when you turn on system audio for a recording.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>$(PRODUCT_NAME) shows and records your camera only when you turn it on for a recording.</string>
 	<key>NSCameraUseContinuityCameraDeviceType</key>

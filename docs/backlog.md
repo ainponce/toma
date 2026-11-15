@@ -8,6 +8,7 @@ Lo que la revisión final de la fase 0 decidió no corregir todavía, con el mot
 - **Cambio rápido de usuario** (`sessionDidResignActive`): pausar la toma como con el bloqueo. *Por qué después:* hace falta un cambio de usuario real para ver qué notificaciones llegan. *Cuándo:* después de una comprobación del dueño.
 - **Borrar un `.reserve` huérfano** de una carpeta de toma cuyo lock está libre, la liste o no el manifiesto. *Por qué después:* la ventana de crash entre crear la reserva y agregar la toma es de microsegundos, y que falle un `unlink` es muy improbable; desde la revisión final esas carpetas, si tienen un segmento o un lock, aparecen como *para reparar*.
 - **Variantes Int16 e Int24 intercaladas en `SampleFactory`** para las pruebas de canales del escritor. *Por qué después:* la capa de dispositivo entrega Float32 en la práctica; la revisión final agregó los casos baratos de 3 y 6 canales.
+- **Quitar el marcador del audio del sistema por app.** Mientras ninguna app elegida está abierta, `SystemAudioSelection.targets` nombra el proceso propio (`.only([ownObjectID])`) y `ProcessTapSource` graba silencio. *Por qué después:* no se sabe si Core Audio acepta un tap sin procesos (`.only([])`). *Cuándo:* si la comprobación del dueño de la Task 10 ("Lista vacía", `docs/release.md`) muestra que funciona.
 
 ## Editor y export
 

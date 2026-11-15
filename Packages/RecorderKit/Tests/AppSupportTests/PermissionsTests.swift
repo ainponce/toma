@@ -11,12 +11,14 @@ struct FakeProbe: PermissionProbe {
     var mic: PermissionState
     var accessibility: PermissionState = .notDetermined
     var camera: PermissionState = .notDetermined
+    var systemAudio: PermissionState = .notDetermined
 
     func state(of kind: PermissionKind) -> PermissionState {
         switch kind {
         case .screenRecording: screen
         case .microphone: mic
         case .camera: camera
+        case .systemAudio: systemAudio
         case .accessibility: accessibility
         }
     }
@@ -59,12 +61,24 @@ struct FakeProbe: PermissionProbe {
 
 @Test func optionalPermissionsAreNeverMissing() {
     for (accessibility, camera) in [(PermissionState.notDetermined, PermissionState.notDetermined), (.denied, .denied)] {
-        let probe = FakeProbe(screen: .granted, mic: .granted, accessibility: accessibility, camera: camera)
+        let probe = FakeProbe(screen: .granted, mic: .granted, accessibility: accessibility, camera: camera, systemAudio: camera)
         #expect(RecordingPreflight.evaluate(probe: probe, wanted: [.screenRecording, .microphone])
             == PreflightResult(missing: [], granted: [.screenRecording, .microphone], canRecord: true))
-        let missing = FakeProbe(screen: .denied, mic: .notDetermined, accessibility: accessibility, camera: camera)
+        let missing = FakeProbe(screen: .denied, mic: .notDetermined, accessibility: accessibility, camera: camera, systemAudio: camera)
         #expect(RecordingPreflight.evaluate(probe: missing, wanted: [.screenRecording, .microphone]).missing == [.screenRecording, .microphone])
     }
+}
+
+@Test func systemAudioCountsOnlyWhenWantedAndNeverBlocks() {
+    let unasked = FakeProbe(screen: .granted, mic: .granted, systemAudio: .notDetermined)
+    #expect(RecordingPreflight.evaluate(probe: unasked, wanted: [.screenRecording, .systemAudio])
+        == PreflightResult(missing: [.systemAudio], granted: [.screenRecording], canRecord: true))
+    let requested = FakeProbe(screen: .granted, mic: .granted, systemAudio: .granted)
+    #expect(RecordingPreflight.evaluate(probe: requested, wanted: [.systemAudio, .microphone, .screenRecording])
+        == PreflightResult(missing: [], granted: [.screenRecording, .microphone, .systemAudio], canRecord: true))
+    // Without screen recording nothing records, system audio or not.
+    let noScreen = FakeProbe(screen: .denied, mic: .granted, systemAudio: .granted)
+    #expect(!RecordingPreflight.evaluate(probe: noScreen, wanted: [.screenRecording, .systemAudio]).canRecord)
 }
 
 @Test func cameraDeniedRecordsWithoutCamera() {
@@ -100,6 +114,9 @@ struct FakeProbe: PermissionProbe {
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
     #expect(PermissionSettings.url(for: .camera).absoluteString
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+    // System audio is in the same pane as screen recording ("Screen & System Audio Recording").
+    #expect(PermissionSettings.url(for: .systemAudio).absoluteString
+        == "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 }
 
 // MARK: - System probe
@@ -121,6 +138,7 @@ final class FakeSystem: Sendable {
     let camera = Mutex(AVAuthorizationStatus.notDetermined)
     let cameraAnswer = Atomic(false)
     let cameraRequests = Atomic(0)
+    let systemAudioRequests = Atomic(0)
     let accessibilityTrusted = Atomic(false)
     let accessibilityPrompts = Atomic(0)
 
@@ -139,6 +157,7 @@ final class FakeSystem: Sendable {
                 self.cameraRequests.add(1, ordering: .relaxed)
                 return self.cameraAnswer.load(ordering: .relaxed)
             },
+            systemAudioRequest: { self.systemAudioRequests.add(1, ordering: .relaxed) },
             accessibilityTrusted: { self.accessibilityTrusted.load(ordering: .relaxed) },
             accessibilityPrompt: { self.accessibilityPrompts.add(1, ordering: .relaxed) })
     }
@@ -220,6 +239,24 @@ func cameraRequestGivesTheAnswer(answer: Bool, expected: PermissionState) async 
         #expect(system.cameraRequests.load(ordering: .relaxed) == 1)
         // Asking about the camera leaves the others alone.
         #expect(probe.state(of: .microphone) == .notDetermined && probe.state(of: .screenRecording) == .notDetermined)
+    }
+}
+
+@Test func systemAudioPermissionIsUnknownUntilRequested() async {
+    await withDefaults { defaults in
+        let system = FakeSystem()
+        let probe = system.probe(defaults)
+        #expect(probe.state(of: .systemAudio) == .notDetermined)
+        #expect(system.systemAudioRequests.load(ordering: .relaxed) == 0)
+        // macOS never says whether it was allowed: once asked, it is "granted", meaning requested.
+        #expect(await probe.request(.systemAudio) == .granted)
+        #expect(system.systemAudioRequests.load(ordering: .relaxed) == 1)
+        #expect(probe.state(of: .systemAudio) == .granted)
+        #expect(defaults.bool(forKey: "permissionRequested.systemAudio"))
+        // Remembered in the defaults; the other permissions are left alone.
+        #expect(system.probe(defaults).state(of: .systemAudio) == .granted)
+        #expect(probe.state(of: .screenRecording) == .notDetermined && probe.state(of: .accessibility) == .notDetermined)
+        #expect(system.screenRequests.load(ordering: .relaxed) == 0 && system.accessibilityPrompts.load(ordering: .relaxed) == 0)
     }
 }
 

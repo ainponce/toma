@@ -152,8 +152,10 @@ struct OnboardingView: View {
 }
 
 /// A permission with its state and what to do about it. The microphone and the camera are optional (the camera
-/// is also asked for when it is turned on in the island). Accessibility is optional, with a note: its button
-/// is the island's "Give Permission…", the prompt the first time and System Settings after (plan decision 27).
+/// is also asked for when it is turned on in the island). System audio is optional, and macOS never says whether
+/// it was allowed: once asked for it reads "Requested", with a note on where to change it. Accessibility is
+/// optional, with a note: its button is the island's "Give Permission…", the prompt the first time and System
+/// Settings after (plan decision 27).
 private struct PermissionRow: View {
     let kind: PermissionKind
     let state: PermissionState
@@ -174,6 +176,14 @@ private struct PermissionRow: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 status
+                if kind == .systemAudio, state == .granted {
+                    Text(
+                        "If you denied it, the system audio track will be silent. You can change it in System Settings → Privacy & Security → Screen & System Audio Recording.",
+                        comment: "Under the system audio permission once it was asked for: macOS doesn't say whether it was allowed")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
             if let action = PermissionAction(for: state) {
@@ -202,6 +212,7 @@ private struct PermissionRow: View {
         case .screenRecording: "display"
         case .microphone: "mic"
         case .camera: "video"
+        case .systemAudio: "speaker.wave.2"
         case .accessibility: "accessibility"
         }
     }
@@ -211,6 +222,7 @@ private struct PermissionRow: View {
         case .screenRecording: Text("Screen Recording")
         case .microphone: Text("Microphone")
         case .camera: Text("Camera")
+        case .systemAudio: Text("System Audio")
         case .accessibility: Text("Accessibility")
         }
     }
@@ -218,6 +230,14 @@ private struct PermissionRow: View {
     @ViewBuilder
     private var status: some View {
         switch state {
+        case .granted where kind == .systemAudio:
+            // "Granted" would claim more than macOS says: only that it was asked for.
+            Label {
+                Text("Requested", comment: "The state of the system audio permission once it was asked for")
+            } icon: {
+                Image(systemName: "checkmark.circle")
+            }
+            .foregroundStyle(.secondary)
         case .granted:
             Label {
                 Text("Allowed", comment: "The state of a permission")

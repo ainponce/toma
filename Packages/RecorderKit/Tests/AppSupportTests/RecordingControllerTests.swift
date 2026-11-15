@@ -1307,7 +1307,7 @@ private final class GatedProbe: PermissionProbe {
         switch kind {
         case .screenRecording: screenRecording.withLock { $0 }
         case .microphone: microphone.withLock { $0 }
-        case .camera, .accessibility: .notDetermined
+        case .camera, .systemAudio, .accessibility: .notDetermined
         }
     }
 

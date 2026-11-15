@@ -17,7 +17,7 @@ public protocol CaptureSink: AnyObject, Sendable {
     func source(_ trackID: String, didStopWithError error: any Error)
 }
 
-/// A live producer of one track: a display, a camera or a microphone.
+/// A live producer of one track: a display, a window, a camera, a microphone or system audio.
 public protocol CaptureSource: AnyObject, Sendable {
     var trackID: String { get }
     var kind: TrackKind { get }
@@ -60,6 +60,9 @@ public enum CaptureSourceError: Error, Equatable {
     /// The camera stopped delivering: another app took it, the session stopped, or the camera was suspended
     /// (the lid was closed).
     case cameraInterrupted
+    /// Core Audio refused a step of system audio capture (listing processes, the tap, its aggregate device or
+    /// its IOProc) with `status`, or the tap's format changed (`kAudioDeviceUnsupportedFormatError`).
+    case systemAudioUnavailable(status: Int32)
 }
 
 extension DispatchSerialQueue {

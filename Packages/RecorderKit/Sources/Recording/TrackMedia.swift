@@ -4,7 +4,7 @@
 public enum TrackMedia: Sendable, Equatable {
     /// Screen or camera video, encoded HEVC at `framesPerSecond` (the capture rate).
     case video(framesPerSecond: Int)
-    /// Microphone audio, encoded lossless.
+    /// Microphone or system audio, encoded lossless.
     case audio
 }
 

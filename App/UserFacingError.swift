@@ -69,6 +69,8 @@ private func description(of error: CaptureSourceError) -> String {
         String(localized: "The camera was disconnected.")
     case .cameraInterrupted:
         String(localized: "The camera stopped: another app is using it, or the lid is closed.")
+    case .systemAudioUnavailable(let status):
+        String(localized: "System audio can't be recorded (error \(status)).")
     }
 }
 

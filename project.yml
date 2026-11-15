@@ -59,6 +59,7 @@ targets:
         LSMinimumSystemVersion: "15.0"
         NSMicrophoneUsageDescription: $(PRODUCT_NAME) records your microphone only when you enable it for a recording.
         NSCameraUsageDescription: $(PRODUCT_NAME) shows and records your camera only when you turn it on for a recording.
+        NSAudioCaptureUsageDescription: $(PRODUCT_NAME) records audio from the apps you choose only when you turn on system audio for a recording.
         # An iPhone nearby can be the camera (Continuity Camera), and is listed with the others.
         NSCameraUseContinuityCameraDeviceType: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
