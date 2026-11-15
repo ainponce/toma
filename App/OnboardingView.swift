@@ -150,7 +150,8 @@ struct OnboardingView: View {
     }
 }
 
-/// A permission with its state and what to do about it. Accessibility is optional, with a note: its button
+/// A permission with its state and what to do about it. The microphone and the camera are optional (the camera
+/// is also asked for when it is turned on in the island). Accessibility is optional, with a note: its button
 /// is the island's "Give Permission…", the prompt the first time and System Settings after (plan decision 27).
 private struct PermissionRow: View {
     let kind: PermissionKind
@@ -199,6 +200,7 @@ private struct PermissionRow: View {
         switch kind {
         case .screenRecording: "display"
         case .microphone: "mic"
+        case .camera: "video"
         case .accessibility: "accessibility"
         }
     }
@@ -207,6 +209,7 @@ private struct PermissionRow: View {
         switch kind {
         case .screenRecording: Text("Screen Recording")
         case .microphone: Text("Microphone")
+        case .camera: Text("Camera")
         case .accessibility: Text("Accessibility")
         }
     }

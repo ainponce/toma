@@ -26,6 +26,8 @@ struct GlassSegmented<Value: Hashable>: View {
         var icon: String?
         /// Drawn disabled, with this help.
         var disabledHelp: String?
+        /// Only the icon is drawn; the title is its help and what VoiceOver reads.
+        var iconOnly = false
     }
 
     let items: [Item]
@@ -52,12 +54,21 @@ struct GlassSegmented<Value: Hashable>: View {
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: selection)
     }
 
+    @ViewBuilder
     private func segment(_ item: Item) -> some View {
+        if item.iconOnly {
+            button(item).help(item.title).accessibilityLabel(item.title)
+        } else {
+            button(item)
+        }
+    }
+
+    private func button(_ item: Item) -> some View {
         let isOn = selection == item.value
         return Button { selection = item.value } label: {
             HStack(spacing: 6) {
                 if let icon = item.icon { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
-                item.title
+                if !item.iconOnly { item.title }
             }
             .font(.system(size: compact ? 12 : 13))
             .lineLimit(1)

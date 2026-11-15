@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import ProjectFormat
 import os
 
 /// What the recorder remembers between takes.
@@ -15,13 +16,16 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var afterStop: AfterStop = .openEditor
     /// The teleprompter: whether it shows, its script and how it reads it.
     public var teleprompter: TeleprompterSettings = .init()
+    /// How the camera bubble looks, and how the camera starts in the video: the last one chosen.
+    public var cameraStyle: CameraStyle = .default
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
 
     public init(
         selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
-        hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init()
+        hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
+        cameraStyle: CameraStyle = .default
     ) {
         self.selection = selection
         self.quick = quick
@@ -29,6 +33,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.hotKeys = hotKeys
         self.afterStop = afterStop
         self.teleprompter = teleprompter
+        self.cameraStyle = cameraStyle
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -42,6 +47,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         hotKeys = (try? container.decodeIfPresent(HotKeyBindings.self, forKey: .hotKeys)) ?? defaults.hotKeys
         afterStop = (try? container.decodeIfPresent(AfterStop.self, forKey: .afterStop)) ?? defaults.afterStop
         teleprompter = (try? container.decodeIfPresent(TeleprompterSettings.self, forKey: .teleprompter)) ?? defaults.teleprompter
+        cameraStyle = (try? container.decodeIfPresent(CameraStyle.self, forKey: .cameraStyle)) ?? defaults.cameraStyle
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

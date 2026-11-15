@@ -114,6 +114,27 @@ import Testing
         }
     }
 
+    @Test func settingsRememberTheCameraStyle() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            #expect(store.settings.cameraStyle == .default)
+
+            var settings = store.settings
+            settings.cameraStyle = CameraStyle(shape: .landscape, size: CameraStyle.small, anchor: .top)
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings.cameraStyle == CameraStyle(shape: .landscape, size: 0.17, anchor: .top))
+            #expect(SettingsStore(defaults: defaults).settings == settings)
+
+            // Saved by a version without the camera style.
+            defaults.set(Data(#"{"countdownSeconds":5}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.cameraStyle == .default && store.settings.countdownSeconds == 5)
+
+            // A shape from another version: the default style, and the rest is kept.
+            try save(settings, in: defaults, changing: "cameraStyle") { $0["shape"] = "hexagon" }
+            #expect(store.settings.cameraStyle == .default && store.settings.countdownSeconds == settings.countdownSeconds)
+        }
+    }
+
     /// Saves `settings` in `defaults` as another version could have: with `change` made to the object at `key`.
     private func save(
         _ settings: RecorderSettings, in defaults: UserDefaults, changing key: String, _ change: (inout [String: Any]) -> Void

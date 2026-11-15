@@ -36,6 +36,8 @@ final class OpenPanelModel {
     let afterStop: AfterStopSetting
     /// Whether the teleprompter shows, as its switch in the open recording island shows it too.
     let teleprompter: TeleprompterSetting
+    /// The camera's look and permission, as the bubble shows them too.
+    let camera: CameraSetting
     /// The chosen microphone's level, while the panel shows it.
     let levelPreview = MicrophoneLevelPreview()
 
@@ -43,19 +45,24 @@ final class OpenPanelModel {
     @ObservationIgnored var highlight: (UInt32?) -> Void = { _ in }
     @ObservationIgnored private let recording: RecordingController
     @ObservationIgnored private let store: SettingsStore
-    @ObservationIgnored private let microphoneList: MicrophoneList
+    @ObservationIgnored private let microphoneList: CaptureDeviceList
+    @ObservationIgnored private let cameraList: CaptureDeviceList
 
-    /// The saved selection if its displays are still connected; otherwise the display the island is on.
+    /// The saved selection if its displays are still connected; otherwise the display the island is on. The
+    /// camera is on only if it is allowed: what the panel shows is what is recorded.
     init(
         recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        teleprompter: TeleprompterSetting, microphones: MicrophoneList, displays: [DisplayChoice], islandDisplayID: UInt32
+        teleprompter: TeleprompterSetting, camera: CameraSetting, microphones: CaptureDeviceList, cameras: CaptureDeviceList,
+        displays: [DisplayChoice], islandDisplayID: UInt32
     ) {
         self.recording = recording
         self.store = store
         self.countdown = countdown
         self.afterStop = afterStop
         self.teleprompter = teleprompter
+        self.camera = camera
         microphoneList = microphones
+        cameraList = cameras
         self.displays = displays
         let saved = store.settings
         quick = saved.quick
@@ -65,6 +72,8 @@ final class OpenPanelModel {
         } else {
             selection = .mainDisplay(islandDisplayID)
         }
+        camera.refreshPermission()
+        if camera.permission != .granted { selection.camera = .off }
     }
 
     /// Displays were connected or disconnected.
@@ -72,8 +81,32 @@ final class OpenPanelModel {
         self.displays = displays
     }
 
-    /// The connected microphones, kept up to date by `MicrophoneList`.
-    var microphones: [Microphone] { microphoneList.devices }
+    /// The connected microphones and cameras, kept up to date by their `CaptureDeviceList`.
+    var microphones: [CaptureDevice] { microphoneList.devices }
+    var cameras: [CaptureDevice] { cameraList.devices }
+
+    var isCameraOn: Bool { selection.camera != .off }
+
+    /// Off at once. On, if the camera is allowed; the first time, once the system's prompt says it is (the
+    /// island makes room for the prompt meanwhile). Once it was refused, the camera column says so and offers
+    /// System Settings instead.
+    func setCamera(on: Bool) {
+        guard on else {
+            selection.camera = .off
+            return
+        }
+        switch PermissionAction(for: camera.permission) {
+        case nil:
+            if selection.camera == .off { selection.camera = .systemDefault }
+        case .prompt:
+            Task {
+                guard await camera.requestAccess(), selection.camera == .off else { return }
+                selection.camera = .systemDefault
+            }
+        case .openSettings:
+            break
+        }
+    }
 
     /// Why Record is disabled, if it is: what keeps the selection from being recorded, or a take already
     /// in progress.
@@ -302,22 +335,115 @@ struct IslandOpenPanel: View {
 
     // MARK: - Camera
 
+    private enum CameraTag: Hashable {
+        case systemDefault
+        case device(String)
+    }
+
+    /// The switch; which camera, the bubble's shape and size, and how to place it, dimmed while the camera is
+    /// off. Once camera access was refused, the switch stays off and the column says how to allow it.
     @ViewBuilder
     private var camera: some View {
         HStack {
             ColumnTitle(text: Text("Camera"), icon: "video.fill")
             Spacer()
-            Toggle(isOn: Binding(
-                get: { panel.selection.camera != .off },
-                set: { panel.selection.camera = $0 ? .systemDefault : .off }
-            )) { Text("Camera") }
-            .toggleStyle(.switch)
-            .labelsHidden()
-            .controlSize(.mini)
-            .upcoming(.camera)
+            Toggle(isOn: Binding(get: { panel.isCameraOn }, set: { panel.setCamera(on: $0) })) { Text("Camera") }
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
+                .disabled(panel.camera.permission == .denied || panel.camera.isAsking)
         }
-        // Task 16e: the device, shape, size and where the bubble goes.
+        if panel.camera.permission == .denied {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Camera access is off.")
+                    .font(.system(size: 12))
+                    .opacity(0.75)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button { panel.camera.openSettings() } label: {
+                    Text("Open Settings", comment: "Opens the camera's privacy settings in System Settings")
+                }
+                .buttonStyle(GlassButtonStyle(compact: true))
+            }
+        }
+        VStack(alignment: .leading, spacing: 8) {
+            // In its place, without access, how to allow it.
+            if panel.camera.permission != .denied {
+                Picker(selection: cameraDevice) {
+                    Text("System Default").tag(CameraTag.systemDefault)
+                    ForEach(cameraRows) { row in
+                        Text(verbatim: row.name).tag(CameraTag.device(row.id))
+                    }
+                } label: {
+                    Text("Camera")
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+            }
+            GlassSegmented(
+                items: CameraShape.allCases.map { shape in
+                    .init(value: shape, title: Self.title(of: shape), icon: Self.symbol(of: shape), iconOnly: true)
+                },
+                selection: Binding(get: { panel.camera.style.shape }, set: { shape in panel.camera.update { $0.shape = shape } }),
+                compact: true)
+            GlassSegmented(
+                items: [
+                    .init(value: CameraStyle.small, title: Text("Small", comment: "The camera bubble's size")),
+                    .init(value: CameraStyle.medium, title: Text("Medium", comment: "The camera bubble's size")),
+                    .init(value: CameraStyle.large, title: Text("Large", comment: "The camera bubble's size")),
+                ],
+                selection: Binding(get: { panel.camera.style.size }, set: { size in panel.camera.update { $0.size = size } }),
+                compact: true)
+            Text("Drag the bubble to place it. This is how the video starts; you can change it in the editor.")
+                .font(.system(size: 11))
+                .opacity(0.62)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .disabled(!panel.isCameraOn)
+        .opacity(panel.isCameraOn ? 1 : 0.32)
+        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: panel.isCameraOn)
         Spacer(minLength: 0)
+    }
+
+    private static func title(of shape: CameraShape) -> Text {
+        switch shape {
+        case .circle: Text("Circle", comment: "The camera bubble's shape")
+        case .roundedSquare: Text("Rounded Square", comment: "The camera bubble's shape")
+        case .portrait: Text("Vertical", comment: "The camera bubble's shape: a 3:4 box")
+        case .landscape: Text("Horizontal", comment: "The camera bubble's shape: a 16:9 box")
+        }
+    }
+
+    private static func symbol(of shape: CameraShape) -> String {
+        switch shape {
+        case .circle: "circle.fill"
+        case .roundedSquare: "square.fill"
+        case .portrait: "rectangle.portrait.fill"
+        case .landscape: "rectangle.fill"
+        }
+    }
+
+    /// The connected cameras, and the chosen one if it is not connected now (by its ID).
+    private var cameraRows: [CaptureDevice] {
+        var rows = panel.cameras
+        if case .device(let id) = panel.selection.camera, !rows.contains(where: { $0.id == id }) {
+            rows.append(CaptureDevice(id: id, name: id))
+        }
+        return rows
+    }
+
+    private var cameraDevice: Binding<CameraTag> {
+        Binding(
+            get: {
+                if case .device(let id) = panel.selection.camera { .device(id) } else { .systemDefault }
+            },
+            set: { tag in
+                guard panel.isCameraOn else { return }
+                switch tag {
+                case .systemDefault: panel.selection.camera = .systemDefault
+                case .device(let id): panel.selection.camera = .device(uniqueID: id)
+                }
+            })
     }
 
     // MARK: - Audio and script
@@ -385,10 +511,10 @@ struct IslandOpenPanel: View {
     }
 
     /// The connected microphones, and the chosen one if it is not connected now (by its ID).
-    private var microphoneRows: [Microphone] {
+    private var microphoneRows: [CaptureDevice] {
         var rows = panel.microphones
         if case .device(let id) = panel.selection.microphone, !rows.contains(where: { $0.id == id }) {
-            rows.append(Microphone(id: id, name: id))
+            rows.append(CaptureDevice(id: id, name: id))
         }
         return rows
     }
@@ -662,10 +788,10 @@ private struct DisplayRow: View {
 // MARK: - Coming later
 
 /// What the island draws but this version does not do yet (decision 21). Each later task deletes its
-/// cases: 16e `camera`; 15 the five of the selection and `systemAudio`; 17a `doNotDisturb`; 17b
-/// `hideDesktopIcons` and the type.
+/// cases: 15 the five of the selection and `systemAudio`; 17a `doNotDisturb`; 17b `hideDesktopIcons` and the
+/// type.
 enum UpcomingControl: CaseIterable {
-    case windowChoice, otherDesktopWindows, areaChoice, severalDisplays, camera, systemAudio, doNotDisturb, hideDesktopIcons
+    case windowChoice, otherDesktopWindows, areaChoice, severalDisplays, systemAudio, doNotDisturb, hideDesktopIcons
 }
 
 extension View {

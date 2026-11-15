@@ -13,6 +13,17 @@
         }
       }
     },
+    "NSCameraUsageDescription" : {
+      "comment" : "Shown by macOS when the app first asks for the camera. The name of the app is put in when building.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "$(PRODUCT_NAME) muestra y graba la cámara solo cuando se activa para una grabación."
+          }
+        }
+      }
+    },
     "NSHumanReadableCopyright" : {
       "comment" : "The copyright line in Finder's Get Info and the About panel. The name of the app is put in when building.",
       "localizations" : {

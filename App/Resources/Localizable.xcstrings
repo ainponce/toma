@@ -217,6 +217,16 @@
         }
       }
     },
+    "Camera access is off." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El acceso a la cámara está desactivado."
+          }
+        }
+      }
+    },
     "Can't check the free disk space." : {
       "localizations" : {
         "es" : {
@@ -253,6 +263,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Elegir en la pantalla"
+          }
+        }
+      }
+    },
+    "Circle" : {
+      "comment" : "The camera bubble's shape",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Círculo"
           }
         }
       }
@@ -481,6 +502,16 @@
         }
       }
     },
+    "Drag the bubble to place it. This is how the video starts; you can change it in the editor." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar la burbuja para ubicarla. Así arranca el video; en el editor se puede cambiar."
+          }
+        }
+      }
+    },
     "Draw on Screen" : {
       "localizations" : {
         "es" : {
@@ -582,6 +613,17 @@
         }
       }
     },
+    "Horizontal" : {
+      "comment" : "The camera bubble's shape: a 16:9 box",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Horizontal"
+          }
+        }
+      }
+    },
     "If it isn't being recorded now, click Recover. Nothing recorded is deleted." : {
       "localizations" : {
         "es" : {
@@ -608,6 +650,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "En esta versión la cámara es solo una vista previa: esta grabación no la incluye."
+          }
+        }
+      }
+    },
+    "Large" : {
+      "comment" : "The camera bubble's size",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grande"
           }
         }
       }
@@ -660,6 +713,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marcador puesto."
+          }
+        }
+      }
+    },
+    "Medium" : {
+      "comment" : "The camera bubble's size",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mediana"
           }
         }
       }
@@ -910,6 +974,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrir último proyecto"
+          }
+        }
+      }
+    },
+    "Open Settings" : {
+      "comment" : "Opens the camera's privacy settings in System Settings",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir Ajustes"
           }
         }
       }
@@ -1321,6 +1396,17 @@
         }
       }
     },
+    "Rounded Square" : {
+      "comment" : "The camera bubble's shape",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadrado redondeado"
+          }
+        }
+      }
+    },
     "Saved Areas" : {
       "localizations" : {
         "es" : {
@@ -1477,6 +1563,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar en Finder"
+          }
+        }
+      }
+    },
+    "Small" : {
+      "comment" : "The camera bubble's size",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chica"
           }
         }
       }
@@ -2113,6 +2210,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Las actualizaciones se buscan al terminar la grabación."
+          }
+        }
+      }
+    },
+    "Vertical" : {
+      "comment" : "The camera bubble's shape: a 3:4 box",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vertical"
           }
         }
       }

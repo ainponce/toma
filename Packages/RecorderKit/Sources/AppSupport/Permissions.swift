@@ -10,6 +10,9 @@ public enum PermissionKind: String, CaseIterable, Sendable {
     case screenRecording
     /// Optional: without it the take is recorded without audio.
     case microphone
+    /// Optional: without it there is no camera bubble (and, once the camera is recorded, no camera track).
+    /// Asked for when the camera is turned on in the island.
+    case camera
     /// Optional, and never needed to record: only to switch desktops from the island, by posting ⌃← and ⌃→
     /// (`SpaceJumper`). Asked for only when the user asks to (plan decision 27).
     case accessibility
@@ -34,7 +37,8 @@ public protocol PermissionProbe: Sendable {
 /// Screen recording only answers yes or no (`CGPreflightScreenCaptureAccess`), so a "no" is
 /// `notDetermined` until it has been requested once, and `denied` after that; the first request is
 /// remembered in `defaults`. macOS may only report a screen recording permission given in System
-/// Settings after the app is opened again. The microphone follows `AVCaptureDevice`'s authorization status.
+/// Settings after the app is opened again. The microphone and the camera follow `AVCaptureDevice`'s
+/// authorization status for audio and video.
 /// Accessibility also only answers yes or no (`AXIsProcessTrusted`), and is remembered the same way: so
 /// the second "Give Permission…" opens System Settings instead of the prompt again.
 public struct SystemPermissionProbe: PermissionProbe {
@@ -48,6 +52,8 @@ public struct SystemPermissionProbe: PermissionProbe {
     private let screenRequest: @Sendable () -> Bool
     private let microphoneStatus: @Sendable () -> AVAuthorizationStatus
     private let microphoneRequest: @Sendable () async -> Bool
+    private let cameraStatus: @Sendable () -> AVAuthorizationStatus
+    private let cameraRequest: @Sendable () async -> Bool
     private let accessibilityTrusted: @Sendable () -> Bool
     private let accessibilityPrompt: @Sendable () -> Void
 
@@ -58,6 +64,8 @@ public struct SystemPermissionProbe: PermissionProbe {
             screenRequest: { CGRequestScreenCaptureAccess() },
             microphoneStatus: { AVCaptureDevice.authorizationStatus(for: .audio) },
             microphoneRequest: { await AVCaptureDevice.requestAccess(for: .audio) },
+            cameraStatus: { AVCaptureDevice.authorizationStatus(for: .video) },
+            cameraRequest: { await AVCaptureDevice.requestAccess(for: .video) },
             accessibilityTrusted: { AXIsProcessTrusted() },
             accessibilityPrompt: {
                 // The key as text, its documented value: `kAXTrustedCheckOptionPrompt` is a global C `var`, which
@@ -74,6 +82,8 @@ public struct SystemPermissionProbe: PermissionProbe {
         screenRequest: @escaping @Sendable () -> Bool,
         microphoneStatus: @escaping @Sendable () -> AVAuthorizationStatus,
         microphoneRequest: @escaping @Sendable () async -> Bool,
+        cameraStatus: @escaping @Sendable () -> AVAuthorizationStatus,
+        cameraRequest: @escaping @Sendable () async -> Bool,
         accessibilityTrusted: @escaping @Sendable () -> Bool,
         accessibilityPrompt: @escaping @Sendable () -> Void
     ) {
@@ -82,6 +92,8 @@ public struct SystemPermissionProbe: PermissionProbe {
         self.screenRequest = screenRequest
         self.microphoneStatus = microphoneStatus
         self.microphoneRequest = microphoneRequest
+        self.cameraStatus = cameraStatus
+        self.cameraRequest = cameraRequest
         self.accessibilityTrusted = accessibilityTrusted
         self.accessibilityPrompt = accessibilityPrompt
     }
@@ -92,12 +104,9 @@ public struct SystemPermissionProbe: PermissionProbe {
             if screenPreflight() { return .granted }
             return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .denied : .notDetermined
         case .microphone:
-            switch microphoneStatus() {
-            case .authorized: return .granted
-            case .notDetermined: return .notDetermined
-            case .denied, .restricted: return .denied
-            @unknown default: return .denied
-            }
+            return Self.state(microphoneStatus())
+        case .camera:
+            return Self.state(cameraStatus())
         case .accessibility:
             if accessibilityTrusted() { return .granted }
             return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .denied : .notDetermined
@@ -111,10 +120,21 @@ public struct SystemPermissionProbe: PermissionProbe {
             return screenRequest() ? .granted : .denied
         case .microphone:
             return await microphoneRequest() ? .granted : .denied
+        case .camera:
+            return await cameraRequest() ? .granted : .denied
         case .accessibility:
             defaults.value.set(true, forKey: Self.requestedKey(kind))
             accessibilityPrompt()
             return state(of: kind)
+        }
+    }
+
+    private static func state(_ status: AVAuthorizationStatus) -> PermissionState {
+        switch status {
+        case .authorized: .granted
+        case .notDetermined: .notDetermined
+        case .denied, .restricted: .denied
+        @unknown default: .denied
         }
     }
 
@@ -146,6 +166,7 @@ public enum PermissionSettings {
         let pane = switch kind {
         case .screenRecording: "Privacy_ScreenCapture"
         case .microphone: "Privacy_Microphone"
+        case .camera: "Privacy_Camera"
         case .accessibility: "Privacy_Accessibility"
         }
         return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!
@@ -169,7 +190,8 @@ public struct PreflightResult: Equatable, Sendable {
 }
 
 /// The check before every take: screen recording is required, the microphone is optional. The other
-/// permissions (Accessibility) are never asked about: a take never needs them.
+/// permissions (the camera, Accessibility) are not asked about here: the camera is asked for when it is
+/// turned on in the island, and a take never needs Accessibility.
 public enum RecordingPreflight {
     /// `wantsMicrophone` is false when the take should not record audio (for example, the Mac has no
     /// microphone): the microphone is then neither missing nor recorded.

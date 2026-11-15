@@ -10,11 +10,13 @@ struct FakeProbe: PermissionProbe {
     var screen: PermissionState
     var mic: PermissionState
     var accessibility: PermissionState = .notDetermined
+    var camera: PermissionState = .notDetermined
 
     func state(of kind: PermissionKind) -> PermissionState {
         switch kind {
         case .screenRecording: screen
         case .microphone: mic
+        case .camera: camera
         case .accessibility: accessibility
         }
     }
@@ -52,10 +54,10 @@ struct FakeProbe: PermissionProbe {
 }
 
 @Test func optionalPermissionsAreNeverMissing() {
-    for accessibility in [PermissionState.notDetermined, .denied] {
-        let probe = FakeProbe(screen: .granted, mic: .granted, accessibility: accessibility)
+    for (accessibility, camera) in [(PermissionState.notDetermined, PermissionState.notDetermined), (.denied, .denied)] {
+        let probe = FakeProbe(screen: .granted, mic: .granted, accessibility: accessibility, camera: camera)
         #expect(RecordingPreflight.evaluate(probe: probe, wantsMicrophone: true) == PreflightResult(missing: [], recordMicrophone: true, canRecord: true))
-        let missing = FakeProbe(screen: .denied, mic: .notDetermined, accessibility: accessibility)
+        let missing = FakeProbe(screen: .denied, mic: .notDetermined, accessibility: accessibility, camera: camera)
         #expect(RecordingPreflight.evaluate(probe: missing, wantsMicrophone: true).missing == [.screenRecording, .microphone])
     }
 }
@@ -75,6 +77,8 @@ struct FakeProbe: PermissionProbe {
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     #expect(PermissionSettings.url(for: .accessibility).absoluteString
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+    #expect(PermissionSettings.url(for: .camera).absoluteString
+        == "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
 }
 
 // MARK: - System probe
@@ -93,6 +97,9 @@ final class FakeSystem: Sendable {
     let screenRequests = Atomic(0)
     let microphone = Mutex(AVAuthorizationStatus.notDetermined)
     let microphoneAnswer = Atomic(false)
+    let camera = Mutex(AVAuthorizationStatus.notDetermined)
+    let cameraAnswer = Atomic(false)
+    let cameraRequests = Atomic(0)
     let accessibilityTrusted = Atomic(false)
     let accessibilityPrompts = Atomic(0)
 
@@ -106,6 +113,11 @@ final class FakeSystem: Sendable {
             },
             microphoneStatus: { self.microphone.withLock { $0 } },
             microphoneRequest: { self.microphoneAnswer.load(ordering: .relaxed) },
+            cameraStatus: { self.camera.withLock { $0 } },
+            cameraRequest: {
+                self.cameraRequests.add(1, ordering: .relaxed)
+                return self.cameraAnswer.load(ordering: .relaxed)
+            },
             accessibilityTrusted: { self.accessibilityTrusted.load(ordering: .relaxed) },
             accessibilityPrompt: { self.accessibilityPrompts.add(1, ordering: .relaxed) })
     }
@@ -158,6 +170,35 @@ func microphoneRequestGivesTheAnswer(answer: Bool, expected: PermissionState) as
         #expect(await probe.request(.microphone) == expected)
         // Asking about the microphone leaves the screen recording state alone.
         #expect(probe.state(of: .screenRecording) == .notDetermined)
+    }
+}
+
+@Test(arguments: [
+    (AVAuthorizationStatus.notDetermined, PermissionState.notDetermined),
+    (.authorized, .granted),
+    (.denied, .denied),
+    (.restricted, .denied),
+])
+func cameraFollowsTheAuthorizationStatus(status: AVAuthorizationStatus, expected: PermissionState) async {
+    await withDefaults { defaults in
+        let system = FakeSystem()
+        system.camera.withLock { $0 = status }
+        // Its own status: the microphone's says nothing about it.
+        system.microphone.withLock { $0 = .authorized }
+        #expect(system.probe(defaults).state(of: .camera) == expected)
+    }
+}
+
+@Test(arguments: [(true, PermissionState.granted), (false, .denied)])
+func cameraRequestGivesTheAnswer(answer: Bool, expected: PermissionState) async {
+    await withDefaults { defaults in
+        let system = FakeSystem()
+        system.cameraAnswer.store(answer, ordering: .relaxed)
+        let probe = system.probe(defaults)
+        #expect(await probe.request(.camera) == expected)
+        #expect(system.cameraRequests.load(ordering: .relaxed) == 1)
+        // Asking about the camera leaves the others alone.
+        #expect(probe.state(of: .microphone) == .notDetermined && probe.state(of: .screenRecording) == .notDetermined)
     }
 }
 

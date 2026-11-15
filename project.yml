@@ -58,6 +58,9 @@ targets:
         LSApplicationCategoryType: public.app-category.video
         LSMinimumSystemVersion: "15.0"
         NSMicrophoneUsageDescription: $(PRODUCT_NAME) records your microphone only when you enable it for a recording.
+        NSCameraUsageDescription: $(PRODUCT_NAME) shows and records your camera only when you turn it on for a recording.
+        # An iPhone nearby can be the camera (Continuity Camera), and is listed with the others.
+        NSCameraUseContinuityCameraDeviceType: true
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         SUFeedURL: $(SPARKLE_FEED_URL)

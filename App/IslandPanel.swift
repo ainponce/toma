@@ -8,9 +8,9 @@ import SwiftUI
 /// its visible outline (it never covers clicks outside it). Its width, height and radius are springs
 /// stepped at the display's rate; its content is `IslandView`. It runs `IslandMachine` on what the
 /// pointer, clicks, keys and the take (its phase, its notices, the take saved) do, and owns the hover
-/// zones, the on-screen selection, and what hangs under it: the teleprompter, and the confirmation capsule
-/// (under the teleprompter while it shows, so they never cover each other). While a take records it follows
-/// the pointer from screen to screen.
+/// zones, the on-screen selection, the camera bubble, and what hangs under it: the teleprompter, and the
+/// confirmation capsule (under the teleprompter while it shows, so they never cover each other). While a take
+/// records it follows the pointer from screen to screen.
 @MainActor
 final class IslandPanel: NSObject, NSWindowDelegate {
     /// Open or choosing what to record: the app stays out of the Dock meanwhile.
@@ -25,7 +25,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     var selectingChanged: () -> Void = {}
 
     /// While a system permission prompt (drawn by another process, at the top center) is up, the island
-    /// goes down to `.normal` so it is never over it (Tasks 16a and 16e).
+    /// goes down to `.normal` so it is never over it (Tasks 16a and 16e): the microphone's, which a take's
+    /// start waits for, and the camera's, which turning the camera on waits for.
     var yieldsToSystemPrompt = false {
         didSet { panel.level = yieldsToSystemPrompt ? .normal : FloatingPanel.islandLevel }
     }
@@ -45,8 +46,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private let teleprompter: TeleprompterPanel
     /// The desktops of the display the island is on, for the open island and the open recording island.
     private let desktops: DesktopsModel
-    /// Kept up to date from launch, so opening the panel never waits for it.
-    private let microphones = MicrophoneList()
+    /// Kept up to date from launch, so opening the panel never waits for them.
+    private let microphones = CaptureDeviceList(listing: { DeviceLists.microphones() })
+    private let cameras = CaptureDeviceList(listing: { DeviceLists.cameras() })
+    /// The camera's look and permission, for the bubble and the open island's camera column.
+    private let camera: CameraSetting
+    private let bubble: CameraBubblePanel
+    /// The camera prompt is up.
+    private var isAskingForCamera = false
     private var machine = IslandMachine()
     private var presence = PointerPresence()
     private var width: SpringValue
@@ -101,6 +108,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         teleprompterSetting = TeleprompterSetting(store: store)
         teleprompter = TeleprompterPanel(setting: teleprompterSetting, recording: recording)
         desktops = DesktopsModel(displayID: displayID, probe: probe)
+        camera = CameraSetting(store: store, probe: probe)
+        bubble = CameraBubblePanel(setting: camera, preview: CameraPreviewHost())
         model = IslandModel(
             recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, desktops: desktops, top: top,
             reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
@@ -145,6 +154,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         teleprompter.visibilityChanged = { [weak self] in self?.placeHanging() }
         teleprompter.resignedKey = { [weak self] in self?.keyboardLeft() }
         teleprompter.islandTakesKeyboard = { [weak self] in self?.takeKeyboardBack() ?? false }
+        bubble.reduceMotion = model.reduceMotion
+        camera.askingChanged = { [weak self] asking in self?.cameraPromptChanged(asking) }
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { $0.screensChanged() }
         observe(workspace.notificationCenter, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { $0.displayOptionsChanged() }
@@ -154,7 +165,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         updateZones()
         showOrHide()
         teleprompter.update(island: machine.state)
+        bubble.update(island: machine.state)
+        bubble.follow { [weak self] in self?.recordedSelection }
         observeRecording()
+    }
+
+    /// What the bubble shows: the take's selection from its countdown on, otherwise what the open island chooses.
+    private var recordedSelection: CaptureSelection? {
+        recording.currentRequest?.selection ?? model.panel?.selection
     }
 
     /// "New Recording" in the menu: the island opens on the screen with the pointer.
@@ -204,8 +222,21 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     private func recordingChanged() {
         observeRecording()
-        if yieldsToSystemPrompt != recording.isAskingPermission { yieldsToSystemPrompt = recording.isAskingPermission }
+        updateYield()
         syncTake()
+    }
+
+    private func updateYield() {
+        let yields = recording.isAskingPermission || isAskingForCamera
+        if yieldsToSystemPrompt != yields { yieldsToSystemPrompt = yields }
+    }
+
+    /// The camera prompt came up, or was answered: the island makes room for it meanwhile, and then takes the
+    /// keyboard back if it is open (the prompt had it).
+    private func cameraPromptChanged(_ asking: Bool) {
+        isAskingForCamera = asking
+        updateYield()
+        if !asking { _ = takeKeyboardBack() }
     }
 
     /// Tells the machine what changed in the take since it was last told: its phase first (a restart's
@@ -315,14 +346,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     /// The island or the teleprompter lost the keyboard: a click elsewhere closes the open island, unless the
-    /// keyboard went to another of Toma's floating windows (the on-screen selection, the bubble, the
-    /// teleprompter, a menu), or the desktop changed under it (a jump from the island, or ⌃← ⌃→: macOS makes
+    /// keyboard went to another of Toma's floating windows (the on-screen selection, the teleprompter, a menu)
+    /// or to the camera prompt, or the desktop changed under it (a jump from the island, or ⌃← ⌃→: macOS makes
     /// a window of that desktop key). Then the island stays open and takes the keyboard back.
     private func keyboardLeft() {
         guard machine.state == .open else { return }
         // Once the new key window is known.
         Task { @MainActor [weak self] in
-            guard let self, machine.state == .open, !panel.isKeyWindow else { return }
+            guard let self, machine.state == .open, !panel.isKeyWindow, !isAskingForCamera else { return }
             if let key = NSApp.keyWindow, !key.styleMask.contains(.titled) { return }
             if desktops.keyboardLostToADesktopChange() {
                 _ = takeKeyboardBack()
@@ -376,6 +407,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         updateZones()
         watchPointer(state == .recording)
         teleprompter.update(island: state)
+        bubble.update(island: state)
         selectingChanged()
     }
 
@@ -389,7 +421,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private func makePanelModel() -> OpenPanelModel {
         let panelModel = OpenPanelModel(
             recording: recording, store: store, countdown: countdown, afterStop: afterStop, teleprompter: teleprompterSetting,
-            microphones: microphones, displays: displayChoices(), islandDisplayID: displayID)
+            camera: camera, microphones: microphones, cameras: cameras, displays: displayChoices(), islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)
@@ -568,6 +600,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         updateZones()
         if machine.state == .choosing { send(.endedChoosing) }
         model.panel?.update(displays: displayChoices())
+        bubble.screensChanged()
         retargetOutline()
         showOrHide()
     }
@@ -581,6 +614,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         capsule.reduceTransparency = model.reduceTransparency
         teleprompter.reduceMotion = model.reduceMotion
         teleprompter.reduceTransparency = model.reduceTransparency
+        bubble.reduceMotion = model.reduceMotion
     }
 
     // MARK: - Outline
