@@ -34,6 +34,8 @@ final class OpenPanelModel {
     let countdown: CountdownSetting
     /// What a stop does once the take is saved, as the settings window shows it too.
     let afterStop: AfterStopSetting
+    /// Whether the teleprompter shows, as its switch in the open recording island shows it too.
+    let teleprompter: TeleprompterSetting
     /// The chosen microphone's level, while the panel shows it.
     let levelPreview = MicrophoneLevelPreview()
 
@@ -46,12 +48,13 @@ final class OpenPanelModel {
     /// The saved selection if its displays are still connected; otherwise the display the island is on.
     init(
         recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        microphones: MicrophoneList, displays: [DisplayChoice], islandDisplayID: UInt32
+        teleprompter: TeleprompterSetting, microphones: MicrophoneList, displays: [DisplayChoice], islandDisplayID: UInt32
     ) {
         self.recording = recording
         self.store = store
         self.countdown = countdown
         self.afterStop = afterStop
+        self.teleprompter = teleprompter
         microphoneList = microphones
         self.displays = displays
         let saved = store.settings
@@ -120,9 +123,9 @@ final class OpenPanelModel {
     }
 }
 
-/// The open island (700 × 400, notch design §5.2): the mode, what to record, the camera, audio, the
-/// settings and Record, and above Record why the last take could not start. Window, Area and what this
-/// version does not record yet are drawn, disabled.
+/// The open island (700 × 400, notch design §5.2): the mode, what to record, the camera, audio and the
+/// teleprompter's switch, the settings and Record, and above Record why the last take could not start.
+/// Window, Area and what this version does not record yet are drawn, disabled.
 struct IslandOpenPanel: View {
     @Bindable var panel: OpenPanelModel
     /// Under the notch, the black band at the top.
@@ -358,7 +361,14 @@ struct IslandOpenPanel: View {
                 }),
             compact: true)
         .upcoming(.systemAudio)
-        // Task 16c: the teleprompter switch goes here.
+        HStack {
+            ColumnSubtitle(text: Text("Teleprompter"), icon: "text.alignleft")
+            Spacer()
+            Toggle(isOn: panel.teleprompter.isOn) { Text("Teleprompter") }
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
+        }
         Spacer(minLength: 0)
     }
 

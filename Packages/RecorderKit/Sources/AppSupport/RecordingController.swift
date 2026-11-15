@@ -48,6 +48,9 @@ public final class RecordingController {
     public private(set) var currentRequest: TakeRequest?
     /// The start waits for the answer to a system permission prompt: the island makes room for it.
     public private(set) var isAskingPermission = false
+    /// Goes up by one each time a take starts recording, also the new take of each restart: the teleprompter
+    /// goes back to the top of the script when it changes.
+    public private(set) var takeSerial = 0
 
     /// From the moment a take is asked for (its countdown included) until it is closed.
     public var isRecording: Bool { phase != .idle }
@@ -354,6 +357,7 @@ public final class RecordingController {
             let since = environment.now()
             recordedTime.began(at: since)
             if isPaused { recordedTime.paused(at: since) }
+            takeSerial += 1
             setPhase(.recording(since: since))
             if let meter = prepared.microphoneMeter { watchForSilence(of: meter, in: recording) }
             return .started

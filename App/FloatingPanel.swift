@@ -2,10 +2,11 @@
 import AppKit
 import SwiftUI
 
-/// Every floating window of the app (the island, its hover zones, the on-screen selection): borderless and
-/// non-activating, on every desktop and over other apps' full-screen windows, never activating the app or
-/// changing the app in front. It takes the keyboard only while `wantsKey` (a non-activating panel is key
-/// without activating the app, and while key it gets the keyboard even with another app in front).
+/// Every floating window of the app (the island, its hover zones, the on-screen selection, the
+/// teleprompter): borderless and non-activating, on every desktop and over other apps' full-screen windows,
+/// never activating the app or changing the app in front. It takes the keyboard only while `wantsKey` (a
+/// non-activating panel is key without activating the app, and while key it gets the keyboard even with
+/// another app in front).
 @MainActor
 final class FloatingPanel: NSPanel {
     /// The on-screen selection: over the menu bar and the Dock.
@@ -70,18 +71,45 @@ final class FloatingPanel: NSPanel {
     }
 
     /// While the panel is key the keyboard is the panel's, even with another app in front: ⌘W closes what it
-    /// shows, and ⌘Q never quits Toma by surprise. Other shortcuts go to the panel's views as usual.
+    /// shows, and ⌘Q never quits Toma by surprise. While a text is edited (the teleprompter's script), the
+    /// editing shortcuts (⌘X, ⌘C, ⌘V, ⌘A, ⌘Z, ⇧⌘Z) go straight to it, as the app's Edit menu would send them,
+    /// also while Toma is not the active app (a floating panel never activates it). Other shortcuts go to the
+    /// panel's views as usual.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask).subtracting([.capsLock, .numericPad, .function])
-        guard isKeyWindow, modifiers == .command else { return super.performKeyEquivalent(with: event) }
-        switch event.charactersIgnoringModifiers?.lowercased() {
-        case "w":
-            onClose?()
-            return true
-        case "q":
-            return true
-        default:
+        guard isKeyWindow, modifiers == .command || modifiers == [.command, .shift] else {
             return super.performKeyEquivalent(with: event)
+        }
+        let key = event.charactersIgnoringModifiers?.lowercased()
+        if modifiers == .command {
+            switch key {
+            case "w":
+                onClose?()
+                return true
+            case "q":
+                return true
+            default:
+                break
+            }
+        }
+        if firstResponder is NSText, let action = Self.editAction(key: key, shift: modifiers.contains(.shift)),
+            NSApp.sendAction(action, to: nil, from: self)
+        {
+            return true
+        }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    /// The editing action of ⌘`key` (with ⇧ if `shift`), if it is one.
+    private static func editAction(key: String?, shift: Bool) -> Selector? {
+        switch (key, shift) {
+        case ("x", false): #selector(NSText.cut(_:))
+        case ("c", false): #selector(NSText.copy(_:))
+        case ("v", false): #selector(NSText.paste(_:))
+        case ("a", false): #selector(NSText.selectAll(_:))
+        case ("z", false): Selector(("undo:"))
+        case ("z", true): Selector(("redo:"))
+        default: nil
         }
     }
 

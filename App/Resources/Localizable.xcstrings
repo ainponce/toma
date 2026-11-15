@@ -448,6 +448,17 @@
         }
       }
     },
+    "Edit" : {
+      "comment" : "The teleprompter: edit its script",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar"
+          }
+        }
+      }
+    },
     "Esc to cancel" : {
       "localizations" : {
         "es" : {
@@ -756,6 +767,17 @@
         }
       }
     },
+    "Not in the video" : {
+      "comment" : "The teleprompter: it is never recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No sale en el video"
+          }
+        }
+      }
+    },
     "Not requested yet" : {
       "comment" : "The state of a permission that was never asked for",
       "localizations" : {
@@ -794,6 +816,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apagado"
+          }
+        }
+      }
+    },
+    "Opacity" : {
+      "comment" : "The teleprompter: how opaque its background and script are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opacidad"
           }
         }
       }
@@ -1385,6 +1418,17 @@
         }
       }
     },
+    "Speed" : {
+      "comment" : "The teleprompter: how fast its script goes up",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Velocidad"
+          }
+        }
+      }
+    },
     "Starting recording…" : {
       "localizations" : {
         "es" : {
@@ -1451,6 +1495,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Toma guardada"
+          }
+        }
+      }
+    },
+    "Teleprompter" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teleprompter"
+          }
+        }
+      }
+    },
+    "Text Size" : {
+      "comment" : "The teleprompter: the size of its script",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño de letra"
           }
         }
       }
@@ -1995,6 +2060,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ventana"
+          }
+        }
+      }
+    },
+    "Write your script…" : {
+      "comment" : "The teleprompter without a script",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribir el guion…"
           }
         }
       }

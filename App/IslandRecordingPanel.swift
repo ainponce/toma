@@ -54,8 +54,9 @@ struct RecordingWings: View {
 
 /// The open island while a take records (640 × 226, notch design §5.1): the time, large, whether it is
 /// recording or paused and the microphone's level; pause or resume, marker, restart (asking first) and
-/// stop; below them, the take's notices that ask for attention, until they are resolved. Task 16d adds the
-/// desktops and Mission Control after the buttons, and Task 16c the teleprompter switch.
+/// stop, and the teleprompter's switch; below them, the take's notices that ask for attention, until they
+/// are resolved. Task 16d adds the desktops and Mission Control between the take's buttons and the
+/// teleprompter.
 struct IslandRecordingPanel: View {
     let recording: RecordingController
     let model: IslandModel
@@ -128,8 +129,12 @@ struct IslandRecordingPanel: View {
             RoundControl(symbol: "flag.fill", title: String(localized: "Marker"), isEnabled: !isPaused) { recording.addMarker() }
             RoundControl(symbol: "arrow.counterclockwise", title: String(localized: "Restart")) { confirm(true) }
             RoundControl(symbol: "stop.fill", title: String(localized: "Stop"), isStop: true) { recording.stopRecording() }
-            // Task 16d: a separator, the desktops by name and Mission Control go here; Task 16c: the
-            // teleprompter switch.
+            // Task 16d: a separator, the desktops by name and Mission Control go here.
+            ControlSeparator()
+            let teleprompter = model.teleprompter
+            RoundControl(symbol: "text.alignleft", title: String(localized: "Teleprompter"), isOn: teleprompter.value.isOn) {
+                teleprompter.update { $0.isOn.toggle() }
+            }
         }
     }
 
@@ -160,12 +165,13 @@ struct IslandRecordingPanel: View {
     }
 }
 
-/// A round glass button with a symbol, its title as help and for VoiceOver.
+/// A round glass button with a symbol, its title as help and for VoiceOver; lit while `isOn`, for a switch.
 private struct RoundControl: View {
     let symbol: String
     let title: String
     var isStop = false
     var isEnabled = true
+    var isOn = false
     let action: () -> Void
 
     var body: some View {
@@ -177,12 +183,24 @@ private struct RoundControl: View {
                     .symbolRenderingMode(.hierarchical)
                     .frame(width: 38, height: 38)
             }
-            .buttonStyle(isStop ? AnyButtonStyle(StopButtonStyle()) : AnyButtonStyle(GlassButtonStyle(shape: .circle)))
+            .buttonStyle(isStop ? AnyButtonStyle(StopButtonStyle()) : AnyButtonStyle(GlassButtonStyle(shape: .circle, isOn: isOn)))
             .disabled(!isEnabled)
             .accessibilityLabel(Text(verbatim: title))
+            .accessibilityAddTraits(isOn ? .isSelected : [])
         }
         .contentShape(Circle())
         .help(title)
+    }
+}
+
+/// Between groups of round controls.
+private struct ControlSeparator: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white.opacity(0.16))
+            .frame(width: 1, height: 26)
+            .padding(.horizontal, 2)
+            .accessibilityHidden(true)
     }
 }
 

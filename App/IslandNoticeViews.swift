@@ -9,11 +9,12 @@ import SwiftUI
 // MARK: - The capsule
 
 /// A short confirmation under the island (notch design §5.1): a glass capsule that hangs 10 pt below it for
-/// `IslandConfirmation.displayDuration`, following it while it grows or shrinks. It is never key and lets
-/// the mouse through; a new one replaces the one showing.
+/// `IslandConfirmation.displayDuration`, following it while it grows or shrinks; while the teleprompter
+/// shows, 10 pt below the teleprompter instead, so neither covers the other. It is never key and lets the
+/// mouse through; a new one replaces the one showing.
 @MainActor
 final class ConfirmationCapsule {
-    /// Between the island's bottom edge and the capsule's top.
+    /// Between the bottom edge of what it hangs from and the capsule's top.
     private static let gap = 10.0
 
     var reduceMotion = false {
@@ -25,8 +26,8 @@ final class ConfirmationCapsule {
 
     private let model = CapsuleModel()
     private let panel: FloatingPanel
-    /// The island's frame as it is now.
-    private var islandFrame = CGRect.zero
+    /// The frame of what it hangs from (the island, or the teleprompter under it) as it is now.
+    private var anchor = CGRect.zero
     /// The capsule showing, or the last one.
     private var size = CGSize.zero
     /// Hides the capsule once its time is up, then takes the panel off the screen.
@@ -53,10 +54,10 @@ final class ConfirmationCapsule {
         }
     }
 
-    /// The island is now at `islandFrame`.
-    func follow(_ islandFrame: CGRect) {
-        guard islandFrame != self.islandFrame else { return }
-        self.islandFrame = islandFrame
+    /// What it hangs from (the island, or the teleprompter under it) is now at `anchor`.
+    func follow(_ anchor: CGRect) {
+        guard anchor != self.anchor else { return }
+        self.anchor = anchor
         if panel.isVisible { place() }
     }
 
@@ -74,10 +75,10 @@ final class ConfirmationCapsule {
         .island(Motion.islandExpand, reduceMotion: reduceMotion)
     }
 
-    /// Centered under the island, `gap` below it.
+    /// Centered under what it hangs from, `gap` below it.
     private func place() {
         let frame = NSRect(
-            x: (islandFrame.midX - size.width / 2).rounded(), y: islandFrame.minY - Self.gap - size.height,
+            x: (anchor.midX - size.width / 2).rounded(), y: anchor.minY - Self.gap - size.height,
             width: size.width, height: size.height)
         panel.setFrame(frame, display: true)
     }

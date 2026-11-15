@@ -87,6 +87,33 @@ import Testing
         }
     }
 
+    @Test func settingsWithoutTeleprompterUseDefaults() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            #expect(store.settings.teleprompter == TeleprompterSettings())
+
+            // Saved by a version without the teleprompter.
+            defaults.set(Data(#"{"countdownSeconds":5}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.teleprompter == TeleprompterSettings() && store.settings.countdownSeconds == 5)
+
+            var settings = store.settings
+            settings.teleprompter = TeleprompterSettings(isOn: true, script: "Hello, this is Toma.", fontSize: 30, speed: 1.5, opacity: 0.4)
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings == settings)
+
+            // Saved by a version whose teleprompter had no opacity: its default, and the rest is kept.
+            try save(settings, in: defaults, changing: "teleprompter") { #expect($0.removeValue(forKey: "opacity") != nil) }
+            #expect(store.settings.teleprompter == TeleprompterSettings(
+                isOn: true, script: "Hello, this is Toma.", fontSize: 30, speed: 1.5, opacity: 0.85))
+            #expect(store.settings.countdownSeconds == 5)
+
+            // A value this version cannot read: its default, and the rest is kept.
+            try save(settings, in: defaults, changing: "teleprompter") { $0["speed"] = "fast" }
+            #expect(store.settings.teleprompter == TeleprompterSettings(
+                isOn: true, script: "Hello, this is Toma.", fontSize: 30, speed: 1, opacity: 0.4))
+        }
+    }
+
     /// Saves `settings` in `defaults` as another version could have: with `change` made to the object at `key`.
     private func save(
         _ settings: RecorderSettings, in defaults: UserDefaults, changing key: String, _ change: (inout [String: Any]) -> Void

@@ -28,12 +28,18 @@ final class IslandModel {
     @ObservationIgnored let recording: RecordingController
     /// The global shortcuts, which the island names.
     @ObservationIgnored let hotKeys: HotKeyCenter
+    /// The teleprompter's settings, for its switch in the open recording island.
+    @ObservationIgnored let teleprompter: TeleprompterSetting
     /// What the content does to the island.
     @ObservationIgnored var send: (IslandEvent) -> Void = { _ in }
 
-    init(recording: RecordingController, hotKeys: HotKeyCenter, top: ScreenTop, reduceMotion: Bool, reduceTransparency: Bool) {
+    init(
+        recording: RecordingController, hotKeys: HotKeyCenter, teleprompter: TeleprompterSetting, top: ScreenTop, reduceMotion: Bool,
+        reduceTransparency: Bool
+    ) {
         self.recording = recording
         self.hotKeys = hotKeys
+        self.teleprompter = teleprompter
         self.top = top
         outline = IslandGeometry.shape(.rest, on: top)
         self.reduceMotion = reduceMotion

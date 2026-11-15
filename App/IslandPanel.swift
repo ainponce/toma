@@ -8,7 +8,8 @@ import SwiftUI
 /// its visible outline (it never covers clicks outside it). Its width, height and radius are springs
 /// stepped at the display's rate; its content is `IslandView`. It runs `IslandMachine` on what the
 /// pointer, clicks, keys and the take (its phase, its notices, the take saved) do, and owns the hover
-/// zones, the on-screen selection and the confirmation capsule under it. While a take records it follows
+/// zones, the on-screen selection, and what hangs under it: the teleprompter, and the confirmation capsule
+/// (under the teleprompter while it shows, so they never cover each other). While a take records it follows
 /// the pointer from screen to screen.
 @MainActor
 final class IslandPanel: NSObject, NSWindowDelegate {
@@ -39,6 +40,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private let zones = IslandHoverZones()
     private let overlay = SelectionOverlay()
     private let capsule = ConfirmationCapsule()
+    /// Shared by the teleprompter and the island's switches.
+    private let teleprompterSetting: TeleprompterSetting
+    private let teleprompter: TeleprompterPanel
     /// Kept up to date from launch, so opening the panel never waits for it.
     private let microphones = MicrophoneList()
     private var machine = IslandMachine()
@@ -86,8 +90,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         displayID = Self.pointerDisplayID() ?? tops.keys.sorted().first ?? CGMainDisplayID()
         let top = tops[displayID] ?? ScreenTop(frame: NSScreen.main?.frame ?? .zero, notch: nil, menuBarHeight: 24)
         let workspace = NSWorkspace.shared
+        teleprompterSetting = TeleprompterSetting(store: store)
+        teleprompter = TeleprompterPanel(setting: teleprompterSetting, recording: recording)
         model = IslandModel(
-            recording: recording, hotKeys: hotKeys, top: top, reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
+            recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, top: top,
+            reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
             reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency)
         let rest = IslandGeometry.shape(.rest, on: top)
         width = SpringValue(value: rest.width, spring: Motion.islandCollapse)
@@ -123,6 +130,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         overlay.reduceMotion = model.reduceMotion
         capsule.reduceMotion = model.reduceMotion
         capsule.reduceTransparency = model.reduceTransparency
+        teleprompter.reduceMotion = model.reduceMotion
+        teleprompter.reduceTransparency = model.reduceTransparency
+        teleprompter.visibilityChanged = { [weak self] in self?.placeHanging() }
+        teleprompter.resignedKey = { [weak self] in self?.keyboardLeft() }
+        teleprompter.islandTakesKeyboard = { [weak self] in self?.takeKeyboardBack() ?? false }
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { $0.screensChanged() }
         observe(workspace.notificationCenter, NSWorkspace.accessibilityDisplayOptionsDidChangeNotification) { $0.displayOptionsChanged() }
@@ -131,6 +143,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         applyOutline()
         updateZones()
         showOrHide()
+        teleprompter.update(island: machine.state)
         observeRecording()
     }
 
@@ -287,9 +300,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         send(.endedChoosing)
     }
 
-    /// A click elsewhere closes the open island, unless the keyboard went to another of Toma's floating
-    /// windows (the on-screen selection, the bubble, the teleprompter, a menu).
     func windowDidResignKey(_ notification: Notification) {
+        keyboardLeft()
+    }
+
+    /// The island or the teleprompter lost the keyboard: a click elsewhere closes the open island, unless the
+    /// keyboard went to another of Toma's floating windows (the on-screen selection, the bubble, the
+    /// teleprompter, a menu).
+    private func keyboardLeft() {
         guard machine.state == .open else { return }
         // Once the new key window is known.
         Task { @MainActor [weak self] in
@@ -342,13 +360,21 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if state == .choosing { overlay.beginChoosing(names: names, pointerDisplayID: Self.pointerDisplayID()) }
         updateZones()
         watchPointer(state == .recording)
+        teleprompter.update(island: state)
         selectingChanged()
+    }
+
+    /// The teleprompter is done with the keyboard: the island takes it back if its state uses it.
+    private func takeKeyboardBack() -> Bool {
+        guard machine.state.needsKeyboard, panel.isVisible else { return false }
+        panel.show(makingKey: true)
+        return true
     }
 
     private func makePanelModel() -> OpenPanelModel {
         let panelModel = OpenPanelModel(
-            recording: recording, store: store, countdown: countdown, afterStop: afterStop, microphones: microphones,
-            displays: displayChoices(), islandDisplayID: displayID)
+            recording: recording, store: store, countdown: countdown, afterStop: afterStop, teleprompter: teleprompterSetting,
+            microphones: microphones, displays: displayChoices(), islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)
@@ -460,6 +486,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         guard id != displayID, tops[id] != nil, !isChangingScreens, panel.isVisible else { return }
         isChangingScreens = true
         let half = Motion.reducedMotionFade.timeInterval / 2
+        teleprompter.fadeWithIsland(leaving: true, duration: half)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = half
             panel.animator().alphaValue = 0
@@ -479,6 +506,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             break
         case .rest, .peek, .open, .choosing, .countdown, .saving, .saved:
             showOrHide()
+            teleprompter.fadeWithIsland(leaving: false, duration: duration)
             return
         }
         if let top = tops[id] {
@@ -496,6 +524,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             context.duration = duration
             panel.animator().alphaValue = 1
         }
+        teleprompter.fadeWithIsland(leaving: false, duration: duration)
     }
 
     /// On the notch screen it is on, the island stands in for that screen's zone, whose panel leaves the
@@ -535,6 +564,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         overlay.reduceMotion = model.reduceMotion
         capsule.reduceMotion = model.reduceMotion
         capsule.reduceTransparency = model.reduceTransparency
+        teleprompter.reduceMotion = model.reduceMotion
+        teleprompter.reduceTransparency = model.reduceTransparency
     }
 
     // MARK: - Outline
@@ -597,7 +628,15 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         model.outline = shape
         let frame = IslandGeometry.frame(shape, on: model.top)
         panel.setFrame(frame, display: true)
-        capsule.follow(frame)
+        placeHanging()
+    }
+
+    /// What hangs under the island goes where the island is now, in the same frame: the teleprompter, and
+    /// the capsule under the teleprompter while it is on the screen (under the island otherwise).
+    private func placeHanging() {
+        let frame = panel.frame
+        teleprompter.follow(frame)
+        capsule.follow(teleprompter.isShown ? teleprompter.frame : frame)
     }
 
     /// The island grew under a pointer that did not move, or shrank away from it: no tracking event says so.

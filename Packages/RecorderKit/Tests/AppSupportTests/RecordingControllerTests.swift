@@ -939,6 +939,38 @@ enum AwaitPoint: CaseIterable {
             await rig.controller.stop(openingEditor: false)
         }
     }
+
+    @Test func takeSerialAdvancesWithEachTakeAndRestart() async throws {
+        try await withRig(countdown: 3) { rig in
+            #expect(rig.controller.takeSerial == 0)
+            // Counting down is not recording yet.
+            rig.sleep.hold(from: 1)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.sleep.heldCall == 1 })
+            #expect(rig.controller.takeSerial == 0)
+            rig.sleep.releaseAll()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.takeSerial == 1)
+
+            // A restart's new take counts, once it records; its countdown does not.
+            rig.sleep.hold(from: 4)
+            rig.controller.restartTake()
+            #expect(await eventually { rig.sleep.heldCall == 4 })
+            #expect(rig.controller.takeSerial == 1)
+            rig.sleep.releaseAll()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.takeSerial == 2)
+
+            // Stopping does not count; the next take does.
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.takeSerial == 2)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.takeSerial == 3)
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.takeSerial == 3)
+        }
+    }
 }
 
 // MARK: - Rig
