@@ -39,38 +39,7 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     /// the samples go to: `AudioDeviceStart` and `AudioDeviceStop` may wait for an IOProc running there, and
     /// `AudioDeviceStart` for the permission prompt.
     private let controlQueue = DispatchSerialQueue(label: "dev.toma.ProcessTapSource.control")
-    private let state = Mutex(State())
-
-    private struct State {
-        /// Bumped by every `start` and `stop`, so a `start` overtaken by a later call gives up.
-        var generation = 0
-        var run: Run?
-        /// Queue of the last run installed. Kept when the run ends, so `start` and `stop` can wait for a delivery
-        /// still running there, such as the error that ended it.
-        var lastQueue: DispatchSerialQueue?
-    }
-
-    /// One `start`, until it is stopped or fails.
-    private struct Run: Sendable {
-        let id: Int
-        let tap: Tap
-        let queue: DispatchSerialQueue
-        let sink: any CaptureSink
-        /// The processes the tap names now.
-        var targets: TapTargets
-        /// The tap names only its placeholder: its buffers are recorded as silence.
-        var silent: Bool
-        /// Set once `AudioDeviceStart` succeeded and `start` is about to return.
-        var started = false
-        /// An error before `started`, which `start` throws instead of delivering.
-        var failure: (any Error)?
-    }
-
-    private enum StartOutcome {
-        case started
-        case failed(any Error)
-        case overtaken
-    }
+    private let runs = CaptureRunLifecycle<Tap>(trackID: "system-audio")
 
     public init(scope: SystemAudioScope) {
         self.scope = scope
@@ -82,15 +51,8 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     public var activeDeviceUniqueID: String? { nil }
 
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
-        let (id, previous, lastQueue) = state.withLock { state in
-            state.generation += 1
-            defer { state.run = nil }
-            return (state.generation, state.run, state.lastQueue)
-        }
-        if let previous {
-            let tap = previous.tap
-            controlQueue.async { tap.tearDown() }
-        }
+        // The previous run, if any, is torn down on the control queue.
+        let (id, lastQueue) = runs.beginStart()
         await lastQueue?.drain()
         // Runs after any teardown already queued, so two taps of this source never overlap.
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
@@ -101,15 +63,7 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     }
 
     public func stop() async {
-        let (run, lastQueue) = state.withLock { state in
-            state.generation += 1
-            defer { state.run = nil }
-            return (state.run, state.lastQueue)
-        }
-        if let run {
-            let tap = run.tap
-            controlQueue.async { tap.tearDown() }
-        }
+        let lastQueue = runs.stop()
         // The tap is torn down (a `start` in progress included, which then throws `CancellationError`), and
         // deliveries already queued, an error included, have finished.
         await controlQueue.drain()
@@ -123,28 +77,13 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
         let processes = try AudioProcessCatalog.processes()
         let ownObjectID = try AudioProcessCatalog.objectID(forPID: ownPID)
         let targets = SystemAudioSelection.targets(scope: scope, processes: processes, ownPID: ownPID, ownObjectID: ownObjectID)
-        let tap = Tap(controlQueue: controlQueue)
+        let tap = Tap(
+            controlQueue: controlQueue, targets: targets, silent: SystemAudioSelection.isPlaceholder(targets, ownObjectID: ownObjectID))
         do {
-            try tap.build(description: description(for: targets), queue: queue) { [weak self] input, time, format in
-                self?.deliver(runID: id, input: input, time: time, format: format)
+            try tap.build(description: description(for: targets), queue: queue) { [weak self] input, time, io in
+                self?.deliver(runID: id, input: input, time: time, io: io)
             }
-        } catch {
-            tap.tearDown()
-            throw error
-        }
-        let installed = state.withLock { state in
-            guard state.generation == id else { return false }
-            state.run = Run(
-                id: id, tap: tap, queue: queue, sink: sink, targets: targets,
-                silent: SystemAudioSelection.isPlaceholder(targets, ownObjectID: ownObjectID))
-            state.lastQueue = queue
-            return true
-        }
-        guard installed else {
-            tap.tearDown()
-            throw CancellationError()
-        }
-        do {
+            // Their calls wait on the control queue until this returns, and find no run if it throws.
             try tap.listen(on: AudioObjectID(kAudioObjectSystemObject), to: kAudioHardwarePropertyProcessObjectList) { [weak self] in
                 self?.refreshTargets(runID: id)
             }
@@ -152,28 +91,17 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
                 self?.checkFormat(runID: id)
             }
         } catch {
-            state.withLock { state in
-                if state.run?.id == id { state.run = nil }
-            }
             tap.tearDown()
             throw error
         }
+        guard runs.install(id: id, resource: tap, queue: queue, sink: sink) else {
+            tap.tearDown()
+            throw CancellationError()
+        }
 
         let status = AudioDeviceStart(tap.aggregateID, tap.procID)
-        let outcome = state.withLock { state -> StartOutcome in
-            guard var run = state.run, run.id == id else { return .overtaken }
-            if let failure = run.failure {
-                state.run = nil
-                return .failed(failure)
-            }
-            guard status == noErr else {
-                state.run = nil
-                return .failed(CaptureSourceError.systemAudioUnavailable(status: status))
-            }
-            run.started = true
-            state.run = run
-            return .started
-        }
+        let outcome = runs.finishStart(
+            id: id, deviceUniqueID: nil, failure: status == noErr ? nil : CaptureSourceError.systemAudioUnavailable(status: status))
         switch outcome {
         case .started:
             // A process that came or went between reading the list and listening to it.
@@ -190,10 +118,7 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     /// The processes changed: takes them again and, if the tap's changed, updates the tap in place. Runs on
     /// `controlQueue`. Silence goes on before the tap may take only this process, and comes off once it takes others.
     private func refreshTargets(runID: Int) {
-        let current = state.withLock { state in
-            state.run.flatMap { $0.id == runID && $0.failure == nil ? ($0.tap, $0.targets) : nil }
-        }
-        guard let (tap, targets) = current else { return }
+        guard let tap = activeTap(runID: runID) else { return }
         let next: TapTargets
         let silent: Bool
         do {
@@ -202,40 +127,33 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
                 scope: scope, processes: try AudioProcessCatalog.processes(), ownPID: ownPID, ownObjectID: ownObjectID)
             silent = SystemAudioSelection.isPlaceholder(next, ownObjectID: ownObjectID)
         } catch {
-            fail(runID: runID, error: error)
+            runs.fail(runID: runID, error: error)
             return
         }
-        guard next != targets else { return }
-        if silent { setSilent(true, runID: runID) }
+        guard next != tap.targets else { return }
+        if silent { tap.io.silent = true }
         do {
             try tap.update(description(for: next))
         } catch {
-            fail(runID: runID, error: error)
+            runs.fail(runID: runID, error: error)
             return
         }
-        state.withLock { state in
-            guard var run = state.run, run.id == runID else { return }
-            run.targets = next
-            run.silent = silent
-            state.run = run
-        }
+        tap.targets = next
+        tap.io.silent = silent
     }
 
     /// The tap said its format changed: ends the run if it did. Runs on `controlQueue`.
     private func checkFormat(runID: Int) {
-        guard let tap = state.withLock({ state in state.run.flatMap { $0.id == runID ? $0.tap : nil } }) else { return }
+        guard let tap = activeTap(runID: runID) else { return }
         guard let initial = tap.initialTapFormat, let now = try? tap.readTapFormat(), Tap.same(initial, now) else {
-            fail(runID: runID, error: CaptureSourceError.systemAudioUnavailable(status: Int32(kAudioDeviceUnsupportedFormatError)))
+            runs.fail(runID: runID, error: CaptureSourceError.systemAudioUnavailable(status: Int32(kAudioDeviceUnsupportedFormatError)))
             return
         }
     }
 
-    private func setSilent(_ silent: Bool, runID: Int) {
-        state.withLock { state in
-            guard var run = state.run, run.id == runID else { return }
-            run.silent = silent
-            state.run = run
-        }
+    /// Run `runID`'s tap, while it is the active run and has not failed.
+    private func activeTap(runID: Int) -> Tap? {
+        runs.activeRun().flatMap { $0.id == runID ? $0.resource : nil }
     }
 
     private func description(for targets: TapTargets) -> CATapDescription {
@@ -252,44 +170,13 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
         return description
     }
 
-    // MARK: - Failures
-
-    /// From any thread: handled on the run's queue, after the samples already queued there.
-    private func fail(runID: Int, error: any Error) {
-        let queue = state.withLock { $0.run?.id == runID ? $0.run?.queue : nil }
-        queue?.async { [self] in failOnQueue(runID: runID, error: error) }
-    }
-
-    /// Runs on the run's queue. Before `start` has succeeded the error is kept for `start` to throw; afterwards the
-    /// run ends: its teardown is queued first, so a restart from inside the sink cannot overlap the old tap, then the
-    /// error is the run's last delivery.
-    private func failOnQueue(runID: Int, error: any Error) {
-        let ended = state.withLock { state -> Run? in
-            guard var run = state.run, run.id == runID, run.failure == nil else { return nil }
-            guard run.started else {
-                run.failure = error
-                state.run = run
-                return nil
-            }
-            state.run = nil
-            return run
-        }
-        guard let ended else { return }
-        let tap = ended.tap
-        controlQueue.async { tap.tearDown() }
-        ended.sink.source(trackID, didStopWithError: error)
-    }
-
     // MARK: - IOProc
 
     /// Called by the IOProc, on the run's queue (the IOProc is dispatched there synchronously).
-    private func deliver(
-        runID: Int, input: UnsafePointer<AudioBufferList>, time: UnsafePointer<AudioTimeStamp>, format: AudioStreamBasicDescription
-    ) {
-        let current = state.withLock { state in
-            state.run.flatMap { $0.id == runID && $0.failure == nil ? ($0.sink, $0.silent) : nil }
-        }
-        guard let (sink, silent) = current, time.pointee.mFlags.contains(.hostTimeValid) else { return }
+    private func deliver(runID: Int, input: UnsafePointer<AudioBufferList>, time: UnsafePointer<AudioTimeStamp>, io: TapIO) {
+        guard let (_, sink) = runs.delivery(forRun: runID), time.pointee.mFlags.contains(.hostTimeValid) else { return }
+        let format = io.format
+        let silent = io.silent
         let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
         guard let first = buffers.first, format.mBytesPerFrame > 0 else { return }
         let frames = first.mDataByteSize / format.mBytesPerFrame
@@ -302,16 +189,34 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
                 : try TapSampleBuffers.make(from: input, frameCount: frames, format: format, hostTime: hostTime)
             sink.source(trackID, didOutput: sample)
         } catch {
-            // Already on the run's queue: end the run now, so no later sample goes out before the error.
-            failOnQueue(runID: runID, error: error)
+            // Already on the run's queue: end the run now (its teardown queued first, so a restart from inside the sink
+            // cannot overlap the old tap), and no later sample goes out before the error.
+            runs.failOnQueue(runID: runID, error: error)
         }
     }
 }
 
-/// The Core Audio objects of one run: the tap, its aggregate device, the IOProc and the property listeners.
-/// `@unchecked Sendable` because they are built, updated and destroyed only on the source's control queue; the
-/// IOProc gets the stream's format as a value.
-private final class Tap: @unchecked Sendable {
+/// What the IOProc reads: the format of the aggregate's input stream, and whether the tap names only its
+/// placeholder, which the control queue changes while the IOProc runs.
+private final class TapIO: Sendable {
+    let format: AudioStreamBasicDescription
+    private let silence: Atomic<Bool>
+
+    init(format: AudioStreamBasicDescription, silent: Bool) {
+        self.format = format
+        silence = Atomic(silent)
+    }
+
+    var silent: Bool {
+        get { silence.load(ordering: .acquiring) }
+        set { silence.store(newValue, ordering: .releasing) }
+    }
+}
+
+/// The Core Audio objects of one run: the tap, its aggregate device, the IOProc and the property listeners, and the
+/// processes the tap names. `@unchecked Sendable` because they are built, updated and destroyed only on the source's
+/// control queue; the IOProc reads only `io`.
+private final class Tap: CaptureRunResource, @unchecked Sendable {
     private struct Listener {
         let object: AudioObjectID
         let address: AudioObjectPropertyAddress
@@ -319,6 +224,11 @@ private final class Tap: @unchecked Sendable {
     }
 
     private let controlQueue: DispatchSerialQueue
+    /// The processes the tap names now.
+    var targets: TapTargets
+    private let initiallySilent: Bool
+    /// Set by `build`.
+    private(set) var io: TapIO!
     private(set) var tapID = AudioObjectID(kAudioObjectUnknown)
     private(set) var aggregateID = AudioObjectID(kAudioObjectUnknown)
     private(set) var procID: AudioDeviceIOProcID?
@@ -327,15 +237,22 @@ private final class Tap: @unchecked Sendable {
     private var tapUUID: UUID?
     private var listeners: [Listener] = []
 
-    init(controlQueue: DispatchSerialQueue) {
+    init(controlQueue: DispatchSerialQueue, targets: TapTargets, silent: Bool) {
         self.controlQueue = controlQueue
+        self.targets = targets
+        initiallySilent = silent
+    }
+
+    /// Tears it down on the control queue, after anything already queued there.
+    func end() {
+        controlQueue.async { self.tearDown() }
     }
 
     /// Creates the tap, a private aggregate device holding only it, and an IOProc on `queue` that calls `deliver`
-    /// with the input buffers, their time and the format of the aggregate's input stream.
+    /// with the input buffers, their time and `io`.
     func build(
         description: CATapDescription, queue: DispatchSerialQueue,
-        deliver: @escaping (UnsafePointer<AudioBufferList>, UnsafePointer<AudioTimeStamp>, AudioStreamBasicDescription) -> Void
+        deliver: @escaping (UnsafePointer<AudioBufferList>, UnsafePointer<AudioTimeStamp>, TapIO) -> Void
     ) throws {
         var tap = AudioObjectID(kAudioObjectUnknown)
         var status = AudioHardwareCreateProcessTap(description, &tap)
@@ -360,10 +277,11 @@ private final class Tap: @unchecked Sendable {
         guard status == noErr, aggregate != kAudioObjectUnknown else { throw CaptureSourceError.systemAudioUnavailable(status: status) }
         aggregateID = aggregate
 
-        let format = try inputFormat()
+        let io = TapIO(format: try inputFormat(), silent: initiallySilent)
+        self.io = io
         var proc: AudioDeviceIOProcID?
         status = AudioDeviceCreateIOProcIDWithBlock(&proc, aggregate, queue) { _, input, inputTime, _, _ in
-            deliver(input, inputTime, format)
+            deliver(input, inputTime, io)
         }
         guard status == noErr, let proc else { throw CaptureSourceError.systemAudioUnavailable(status: status) }
         procID = proc
