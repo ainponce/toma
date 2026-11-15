@@ -30,8 +30,8 @@ final class OpenPanelModel {
     private(set) var displays: [DisplayChoice]
     /// The settings card over the columns.
     var showsSettings = false
-    /// How long the countdown before a take lasts, saved at once.
-    private(set) var countdownSeconds: Int
+    /// How long the countdown before a take lasts, as the settings window shows it too.
+    let countdown: CountdownSetting
     /// The chosen microphone's level, while the panel shows it.
     let levelPreview = MicrophoneLevelPreview()
 
@@ -43,16 +43,16 @@ final class OpenPanelModel {
 
     /// The saved selection if its displays are still connected; otherwise the display the island is on.
     init(
-        recording: RecordingController, store: SettingsStore, microphones: MicrophoneList, displays: [DisplayChoice],
-        islandDisplayID: UInt32
+        recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, microphones: MicrophoneList,
+        displays: [DisplayChoice], islandDisplayID: UInt32
     ) {
         self.recording = recording
         self.store = store
+        self.countdown = countdown
         microphoneList = microphones
         self.displays = displays
         let saved = store.settings
         quick = saved.quick
-        countdownSeconds = saved.countdown
         let connected = Set(displays.map(\.id))
         if let selection = saved.selection, !selection.displayIDs.isEmpty, selection.displayIDs.allSatisfy(connected.contains) {
             self.selection = selection
@@ -99,13 +99,6 @@ final class OpenPanelModel {
 
     func setFramesPerSecond(_ value: Int, for display: DisplayChoice) {
         quick.framesPerSecondByDisplay[display.id] = value
-    }
-
-    func setCountdown(_ seconds: Int) {
-        countdownSeconds = seconds
-        var settings = store.settings
-        settings.countdownSeconds = seconds
-        store.settings = settings
     }
 
     /// Saves the selection and the settings and starts the take, at the frame rates the settings show. The
@@ -447,14 +440,8 @@ private struct SettingsCard: View {
                 Text("Countdown").opacity(0.75)
                 Spacer(minLength: 0)
                 GlassSegmented(
-                    items: RecorderSettings.countdownOptions.map { seconds in
-                        .init(
-                            value: seconds,
-                            title: seconds == 0
-                                ? Text("None", comment: "System audio: record none; the countdown: none")
-                                : Text(verbatim: "\(seconds.formatted()) s"))
-                    },
-                    selection: Binding(get: { panel.countdownSeconds }, set: { panel.setCountdown($0) }),
+                    items: RecorderSettings.countdownOptions.map { .init(value: $0, title: CountdownSetting.label(for: $0)) },
+                    selection: Binding(get: { panel.countdown.seconds }, set: { panel.countdown.set($0) }),
                     compact: true)
             }
             Divider().overlay(Color.white.opacity(0.12))

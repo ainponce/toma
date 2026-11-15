@@ -120,7 +120,7 @@ private struct IslandContent: View {
         case .countdown(let remaining):
             CountdownView(remaining: remaining, topInset: model.notchBand)
         case .recording:
-            RecordingWings(recording: model.recording)
+            RecordingWings(recording: model.recording, notchWidth: model.top.notch.map { Double($0.width) })
         case .recordingOpen:
             IslandRecordingPanel(recording: model.recording, model: model, topInset: model.notchBand, send: model.send)
         }

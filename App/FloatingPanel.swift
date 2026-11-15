@@ -93,10 +93,11 @@ final class FloatingPanel: NSPanel {
         onCancel?()
     }
 
-    /// In front of everything at its level, and key if it wants the keyboard, without activating the app.
-    func show() {
+    /// In front of everything at its level, without activating the app; key too if `makingKey` and it
+    /// wants the keyboard.
+    func show(makingKey: Bool) {
         orderFrontRegardless()
-        if wantsKey { makeKey() }
+        if makingKey, wantsKey { makeKey() }
     }
 }
 

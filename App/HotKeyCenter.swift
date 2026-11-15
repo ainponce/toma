@@ -21,14 +21,12 @@ final class HotKeyCenter {
     /// A registered shortcut was pressed.
     @ObservationIgnored var perform: (HotKeyAction) -> Void = { _ in }
 
-    @ObservationIgnored private var registered: [HotKeyAction: EventHotKeyRef] = [:]
-    @ObservationIgnored private var handler: EventHandlerRef?
+    /// The registrations and the event handler; they go with the center.
+    @ObservationIgnored private let carbon = CarbonHotKeys()
     @ObservationIgnored private var isRecording = false
     /// While a shortcut is being typed in the settings, none is registered, so it reaches the settings.
     @ObservationIgnored private var isSuspended = false
 
-    /// "Toma", in the ID of every shortcut the app registers.
-    private static let signature: OSType = 0x546F_6D61
     /// The modifiers a symbolic hot key is compared by (⌘, ⇧, ⌥, ⌃); its others say which keys are on
     /// the keypad or need fn.
     private static let comparedModifiers: Int = 0x1B00
@@ -37,7 +35,7 @@ final class HotKeyCenter {
 
     init(bindings: HotKeyBindings) {
         self.bindings = bindings
-        installHandler()
+        carbon.pressed = { [weak self] id in self?.pressed(id: id) }
         register()
     }
 
@@ -66,19 +64,13 @@ final class HotKeyCenter {
     /// suspended, so none of Toma's own is in the way.
     func isAvailable(_ combo: KeyCombo) -> Bool {
         guard !Self.isSystemShortcut(combo) else { return false }
-        var reference: EventHotKeyRef?
-        let status = RegisterEventHotKey(
-            combo.keyCode, combo.carbonModifiers, EventHotKeyID(signature: Self.signature, id: 0), GetApplicationEventTarget(),
-            OptionBits(kEventHotKeyExclusive), &reference)
-        if status == noErr, let reference { UnregisterEventHotKey(reference) }
-        return status != eventHotKeyExistsErr
+        return carbon.probe(combo) != eventHotKeyExistsErr
     }
 
     // MARK: - Registering
 
     private func register() {
-        for reference in registered.values { UnregisterEventHotKey(reference) }
-        registered = [:]
+        carbon.unregisterAll()
         var busy: Set<HotKeyAction> = []
         if !isSuspended {
             for action in HotKeyBindings.activeActions(isRecording: isRecording) {
@@ -87,17 +79,11 @@ final class HotKeyCenter {
                     busy.insert(action)
                     continue
                 }
-                var reference: EventHotKeyRef?
-                let status = RegisterEventHotKey(
-                    combo.keyCode, combo.carbonModifiers, EventHotKeyID(signature: Self.signature, id: Self.id(of: action)),
-                    GetApplicationEventTarget(), OptionBits(kEventHotKeyExclusive), &reference)
-                if status == noErr, let reference {
-                    registered[action] = reference
-                } else {
-                    busy.insert(action)
-                    if status != eventHotKeyExistsErr {
-                        Self.logger.error("Cannot register \(combo.displayString, privacy: .public): \(status)")
-                    }
+                let status = carbon.register(combo, id: Self.id(of: action))
+                guard status != noErr else { continue }
+                busy.insert(action)
+                if status != eventHotKeyExistsErr {
+                    Self.logger.error("Cannot register \(combo.displayString, privacy: .public): \(status)")
                 }
             }
         }
@@ -126,9 +112,29 @@ final class HotKeyCenter {
         UInt32((HotKeyAction.allCases.firstIndex(of: action) ?? 0) + 1)
     }
 
-    // MARK: - Pressed
+    private func pressed(id: UInt32) {
+        guard let action = HotKeyAction.allCases.first(where: { Self.id(of: $0) == id }), carbon.isRegistered(id: id) else {
+            return
+        }
+        perform(action)
+    }
+}
 
-    private func installHandler() {
+/// Carbon's side of the shortcuts: the hot keys registered, each by its ID, and the application event
+/// handler that hears them. Both are removed when it goes, so the handler never outlives what it calls.
+private final class CarbonHotKeys {
+    /// A hot key of this app was pressed: its ID. Carbon calls on the main thread, with the app's events.
+    var pressed: @MainActor @Sendable (UInt32) -> Void = { _ in }
+
+    /// "Toma", in the ID of every hot key the app registers.
+    static let signature: OSType = 0x546F_6D61
+
+    private var references: [UInt32: EventHotKeyRef] = [:]
+    private var handler: EventHandlerRef?
+
+    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Shortcuts")
+
+    init() {
         var pressed = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let status = InstallEventHandler(
             GetApplicationEventTarget(),
@@ -138,33 +144,85 @@ final class HotKeyCenter {
                 let status = GetEventParameter(
                     event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
                     MemoryLayout<EventHotKeyID>.size, nil, &id)
-                guard status == noErr, id.signature == HotKeyCenter.signature else { return OSStatus(eventNotHandledErr) }
-                let center = Unmanaged<HotKeyCenter>.fromOpaque(context).takeUnretainedValue()
-                // Carbon delivers hot keys on the main thread, with the app's events.
-                MainActor.assumeIsolated { center.pressed(id: id.id) }
+                guard status == noErr, id.signature == CarbonHotKeys.signature else { return OSStatus(eventNotHandledErr) }
+                let pressed = Unmanaged<CarbonHotKeys>.fromOpaque(context).takeUnretainedValue().pressed
+                MainActor.assumeIsolated { pressed(id.id) }
                 return noErr
             },
             1, &pressed, Unmanaged.passUnretained(self).toOpaque(), &handler)
         if status != noErr { Self.logger.error("Cannot listen to the shortcuts: \(status)") }
     }
 
-    private func pressed(id: UInt32) {
-        guard let action = registered.keys.first(where: { Self.id(of: $0) == id }) else { return }
-        perform(action)
+    deinit {
+        unregisterAll()
+        if let handler { RemoveEventHandler(handler) }
+    }
+
+    /// Registers `combo` exclusively under `id`.
+    func register(_ combo: KeyCombo, id: UInt32) -> OSStatus {
+        var reference: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            combo.keyCode, combo.carbonModifiers, EventHotKeyID(signature: Self.signature, id: id), GetApplicationEventTarget(),
+            OptionBits(kEventHotKeyExclusive), &reference)
+        if status == noErr, let reference { references[id] = reference }
+        return status
+    }
+
+    /// Registers `combo` and lets it go at once: what registering it would answer now.
+    func probe(_ combo: KeyCombo) -> OSStatus {
+        var reference: EventHotKeyRef?
+        let status = RegisterEventHotKey(
+            combo.keyCode, combo.carbonModifiers, EventHotKeyID(signature: Self.signature, id: 0), GetApplicationEventTarget(),
+            OptionBits(kEventHotKeyExclusive), &reference)
+        if status == noErr, let reference { UnregisterEventHotKey(reference) }
+        return status
+    }
+
+    func isRegistered(id: UInt32) -> Bool {
+        references[id] != nil
+    }
+
+    func unregisterAll() {
+        for reference in references.values { UnregisterEventHotKey(reference) }
+        references = [:]
     }
 }
 
 extension KeyCombo {
-    /// The same shortcut for a menu item, which shows it; `nil` for a key a menu cannot name with one character.
+    /// The same shortcut for a menu item, which shows it: the menu's own keys for the special ones (Return,
+    /// the arrows, F1…), the character for the others; `nil` for a key a menu cannot name.
     var menuShortcut: KeyboardShortcut? {
-        guard key.count == 1, let character = key.lowercased().first else { return nil }
+        let equivalent: KeyEquivalent
+        if let special = Self.menuKeys[Int(keyCode)] {
+            equivalent = special
+        } else if let function = Self.functionKeys.firstIndex(of: Int(keyCode)),
+            let scalar = UnicodeScalar(NSF1FunctionKey + function)
+        {
+            equivalent = KeyEquivalent(Character(scalar))
+        } else if key.count == 1, let character = key.lowercased().first {
+            equivalent = KeyEquivalent(character)
+        } else {
+            return nil
+        }
         var flags: SwiftUI.EventModifiers = []
         if modifiers.contains(.command) { flags.insert(.command) }
         if modifiers.contains(.shift) { flags.insert(.shift) }
         if modifiers.contains(.option) { flags.insert(.option) }
         if modifiers.contains(.control) { flags.insert(.control) }
-        return KeyboardShortcut(KeyEquivalent(character), modifiers: flags)
+        return KeyboardShortcut(equivalent, modifiers: flags)
     }
+
+    private static let menuKeys: [Int: KeyEquivalent] = [
+        kVK_Return: .return, kVK_Tab: .tab, kVK_Space: .space, kVK_Delete: .delete, kVK_ForwardDelete: .deleteForward,
+        kVK_Escape: .escape, kVK_LeftArrow: .leftArrow, kVK_RightArrow: .rightArrow, kVK_UpArrow: .upArrow,
+        kVK_DownArrow: .downArrow, kVK_Home: .home, kVK_End: .end, kVK_PageUp: .pageUp, kVK_PageDown: .pageDown,
+    ]
+
+    /// F1 to F20, in order: their menu characters are `NSF1FunctionKey` onward.
+    private static let functionKeys = [
+        kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12, kVK_F13, kVK_F14,
+        kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20,
+    ]
 
     /// The shortcut a key press makes: its key code, its modifiers and the key as the current layout
     /// labels it without modifiers (so ⇧⌘2 is "2", not "@").

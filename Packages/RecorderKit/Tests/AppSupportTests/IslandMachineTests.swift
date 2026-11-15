@@ -175,6 +175,24 @@ import Testing
         return island
     }
 
+    @Test func theIslandTakesTheKeyboardOnEnteringAKeyboardStateOnly() {
+        // Entering a state that uses the keyboard.
+        #expect(IslandState.becomesKey(from: .rest, to: .open))
+        #expect(IslandState.becomesKey(from: .peek, to: .open))
+        #expect(IslandState.becomesKey(from: .choosing, to: .open))  // back from the on-screen selection, which had it
+        #expect(IslandState.becomesKey(from: .open, to: .choosing))
+        #expect(IslandState.becomesKey(from: .open, to: .countdown(remaining: 3)))
+        #expect(IslandState.becomesKey(from: .rest, to: .countdown(remaining: 3)))  // a restart's countdown
+        // Never from one second of the countdown to the next: the user may have clicked into their app.
+        #expect(!IslandState.becomesKey(from: .countdown(remaining: 3), to: .countdown(remaining: 2)))
+        #expect(!IslandState.becomesKey(from: .countdown(remaining: 2), to: .countdown(remaining: 1)))
+        // Nor in the states without the keyboard.
+        #expect(!IslandState.becomesKey(from: .countdown(remaining: 1), to: .recording))
+        #expect(!IslandState.becomesKey(from: .recording, to: .recordingOpen))
+        #expect(!IslandState.becomesKey(from: .open, to: .rest))
+        #expect(!IslandState.becomesKey(from: .rest, to: .peek))
+    }
+
     @Test func pointerInsideTheZoneOrTheIslandCountsAsInside() {
         var presence = PointerPresence()
         #expect(presence.entered(.zone(1)) == .pointerEntered)

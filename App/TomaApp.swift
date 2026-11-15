@@ -27,7 +27,7 @@ private struct MenuBarIcon: View {
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 HStack(spacing: 4) {
                     Image(nsImage: Self.recordingImage)
-                    Text(verbatim: recording.elapsed(at: context.date).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2))))
+                    Text(verbatim: recording.elapsed(at: context.date).recordedTime)
                         .monospacedDigit()
                 }
             }

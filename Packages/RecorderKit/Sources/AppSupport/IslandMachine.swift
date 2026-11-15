@@ -26,6 +26,15 @@ public enum IslandState: Equatable, Sendable {
         case .open, .choosing, .countdown: true
         }
     }
+
+    /// Whether the island takes the keyboard on going from `before` to `after`: on entering a state that
+    /// uses it, but never from one second of the countdown to the next, so a user who clicked into their
+    /// own app meanwhile keeps the keyboard.
+    public static func becomesKey(from before: IslandState, to after: IslandState) -> Bool {
+        guard after.needsKeyboard else { return false }
+        if case .countdown = before, case .countdown = after { return false }
+        return true
+    }
 }
 
 /// What happens to the island.

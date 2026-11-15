@@ -12,9 +12,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
     private let model: SettingsModel
 
-    init(store: SettingsStore, hotKeys: HotKeyCenter, onClose: @escaping () -> Void) {
+    init(store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, onClose: @escaping () -> Void) {
         self.onClose = onClose
-        model = SettingsModel(store: store, hotKeys: hotKeys)
+        model = SettingsModel(store: store, hotKeys: hotKeys, countdown: countdown)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered,
             defer: false)
@@ -43,6 +43,33 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 }
 
+/// How long the countdown before a take lasts: the one place it is read and saved for the settings window
+/// and the island's settings card, which both show it as it is now. The controller reads the saved value
+/// at every start.
+@MainActor @Observable
+final class CountdownSetting {
+    private(set) var seconds: Int
+
+    @ObservationIgnored private let store: SettingsStore
+
+    init(store: SettingsStore) {
+        self.store = store
+        seconds = store.settings.countdown
+    }
+
+    func set(_ seconds: Int) {
+        self.seconds = seconds
+        var settings = store.settings
+        settings.countdownSeconds = seconds
+        store.settings = settings
+    }
+
+    /// `RecorderSettings.countdownOptions`, as the settings name them: None, 3 s, 5 s, 10 s.
+    static func label(for seconds: Int) -> Text {
+        seconds == 0 ? Text("None", comment: "System audio: record none; the countdown: none") : Text(verbatim: "\(seconds.formatted()) s")
+    }
+}
+
 /// What the settings window shows and changes; every change is saved at once.
 @MainActor @Observable
 final class SettingsModel {
@@ -52,30 +79,23 @@ final class SettingsModel {
         case taken
     }
 
-    private(set) var countdownSeconds: Int
     /// The action whose shortcut is being typed.
     private(set) var recording: HotKeyAction?
     /// The last shortcut typed for this action was refused.
     private(set) var refusal: (action: HotKeyAction, reason: Refusal)?
 
     @ObservationIgnored let hotKeys: HotKeyCenter
+    @ObservationIgnored let countdown: CountdownSetting
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private var monitor: Any?
 
-    init(store: SettingsStore, hotKeys: HotKeyCenter) {
+    init(store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting) {
         self.store = store
         self.hotKeys = hotKeys
-        countdownSeconds = store.settings.countdown
+        self.countdown = countdown
     }
 
     var bindings: HotKeyBindings { hotKeys.bindings }
-
-    func setCountdown(_ seconds: Int) {
-        countdownSeconds = seconds
-        var settings = store.settings
-        settings.countdownSeconds = seconds
-        store.settings = settings
-    }
 
     /// The next key press with modifiers is `action`'s shortcut: Esc gives up, Delete leaves it without one.
     func startRecordingShortcut(for action: HotKeyAction) {
@@ -150,13 +170,9 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
-            Picker(selection: Binding(get: { model.countdownSeconds }, set: { model.setCountdown($0) })) {
+            Picker(selection: Binding(get: { model.countdown.seconds }, set: { model.countdown.set($0) })) {
                 ForEach(RecorderSettings.countdownOptions, id: \.self) { seconds in
-                    if seconds == 0 {
-                        Text("None", comment: "System audio: record none; the countdown: none")
-                    } else {
-                        Text(verbatim: "\(seconds.formatted()) s")
-                    }
+                    CountdownSetting.label(for: seconds)
                 }
             } label: {
                 Text("Countdown")

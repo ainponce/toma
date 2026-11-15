@@ -55,6 +55,8 @@ public struct IslandShape: Equatable, Sendable {
 /// `pillTopInset` below the top.
 public enum IslandGeometry {
     public static let pillTopInset = 38.0
+    /// The width of each recording wing beside the notch: the time on the left, the microphone on the right.
+    public static let wingWidth = 84.0
     /// The hover zone at the top center of a screen without a notch.
     public static let hoverZoneSize = CGSize(width: 60, height: 8)
 
@@ -68,7 +70,8 @@ public enum IslandGeometry {
             case .open: (700, 400, 34)
             case .choosing: (560, 48, 24)
             case .countdown: (236, 214, 62)
-            case .recording: (320, top.menuBarHeight, 13)
+            // A wing at each side of the notch, whatever its width.
+            case .recording: (notchWidth + 2 * wingWidth, top.menuBarHeight, 13)
             case .recordingOpen: (640, 226, 34)
             }
         guard top.notch == nil else {

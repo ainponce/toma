@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let hotKeys: HotKeyCenter
     private let probe: any PermissionProbe = SystemPermissionProbe()
     private let store = SettingsStore()
+    /// The countdown before a take, shared by the island's settings card and the settings window.
+    private let countdown: CountdownSetting
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
@@ -43,6 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recording = RecordingController(probe: probe, environment: LiveTakeEnvironment.make())
         updater = UpdaterController(recording: recording, exportGate: exportGate)
         hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
+        countdown = CountdownSetting(store: store)
         super.init()
         hotKeys.perform = { [weak self] action in self?.perform(action) }
         exportGate.busyChanged = { [weak self] in self?.updater.exportStateChanged() }
@@ -61,7 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        let island = IslandPanel(recording: recording, hotKeys: hotKeys)
+        let island = IslandPanel(recording: recording, hotKeys: hotKeys, countdown: countdown)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         self.island = island
@@ -207,7 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func showSettings() {
         if settings == nil {
-            settings = SettingsWindowController(store: store, hotKeys: hotKeys) { [weak self] in
+            settings = SettingsWindowController(store: store, hotKeys: hotKeys, countdown: countdown) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil
                 updateActivationPolicy()

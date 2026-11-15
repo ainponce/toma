@@ -667,6 +667,26 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
+    @Test func screenPermissionLostDuringTheCountdownStartsNothing() async throws {
+        try await withRig(countdown: 3) { rig in
+            rig.sleep.hold(from: 2)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.sleep.heldCall == 2 })
+            #expect(rig.onboardingOpenings == 0)
+            rig.probe.setScreenRecording(.denied)
+            rig.sleep.releaseAll()
+
+            #expect(await eventually { rig.controller.phase == .idle })
+            #expect(rig.onboardingOpenings == 1)  // as a start without the permission: the permissions open
+            #expect(rig.controller.currentRequest == nil)
+            let packages = try rig.packagesOnDisk()
+            #expect(packages.isEmpty && rig.creation.arrivals == 0 && rig.takes.requests.isEmpty)
+            #expect(rig.termination.began == 0 && rig.startFailures.isEmpty)
+            #expect(rig.recordingStateChanges == 2)
+        }
+    }
+
+    // MARK: - Microphone level
     // MARK: - Microphone level
 
     @Test func microphoneSilentNoticeComesAndGoes() async throws {
@@ -710,6 +730,34 @@ enum AwaitPoint: CaseIterable {
             rig.now.set(start + 10)
             try await Task.sleep(for: .milliseconds(600))
             #expect(!rig.controller.notices.contains(.microphoneSilent))
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
+    @Test func recordsMicrophoneFollowsTheTakeNotItsNotices() async throws {
+        try await withRig { rig in
+            #expect(!rig.controller.recordsMicrophone)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.recordsMicrophone)
+            let recording = try #require(rig.takes.recordings.first)
+            // The microphone is lost: from then on the take has none, however many notices come after.
+            recording.inject(.trackLost(track: "mic"))
+            #expect(await eventually { !rig.controller.recordsMicrophone })
+            for index in 0..<8 {
+                recording.inject(index.isMultiple(of: 2) ? .samplesDropped(track: "display-1") : .manifestWriteFailed)
+            }
+            #expect(await eventually { rig.controller.notices.count == 6 && !rig.controller.notices.contains(.trackLost(.microphone)) })
+            #expect(!rig.controller.recordsMicrophone)
+            await rig.controller.stop(openingEditor: false)
+            #expect(!rig.controller.recordsMicrophone)
+
+            // A take without a microphone.
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.microphone = .off
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(!rig.controller.recordsMicrophone)
             await rig.controller.stop(openingEditor: false)
         }
     }
@@ -916,6 +964,8 @@ private final class GatedTakeRecording: TakeRecording {
     private let stopGate: Gate
     private let autoStopGate: Gate
     private let afterClose: WarningLog
+    /// Where `warnings` comes from.
+    private let continuation: AsyncStream<RecordingWarning>.Continuation
     private let autoStopCount = Atomic(0)
 
     /// How many times the auto-stop handler has been called.
@@ -930,6 +980,7 @@ private final class GatedTakeRecording: TakeRecording {
         self.afterClose = afterClose
         let (stream, continuation) = AsyncStream.makeStream(of: RecordingWarning.self)
         warnings = stream
+        self.continuation = continuation
         forwarded = Task {
             for await warning in coordinator.warnings { continuation.yield(warning) }
             let late = afterClose.all
@@ -945,6 +996,11 @@ private final class GatedTakeRecording: TakeRecording {
     /// `warning` comes once the coordinator's warnings have ended, as the take's last.
     func deliverAfterClose(_ warning: RecordingWarning) {
         afterClose.append(warning)
+    }
+
+    /// `warning` comes now, among the coordinator's.
+    func inject(_ warning: RecordingWarning) {
+        continuation.yield(warning)
     }
 
     func setOnAutoStop(_ handler: @escaping @Sendable (TakeRecord, (any Error)?) -> Void) async {
@@ -1035,7 +1091,7 @@ private final class Gate: Sendable {
 /// by `gate`, grants it.
 private final class GatedProbe: PermissionProbe {
     let gate = Gate()
-    private let screenRecording: PermissionState
+    private let screenRecording: Mutex<PermissionState>
     private let microphone: Mutex<PermissionState>
     private let requested = Mutex<[PermissionKind]>([])
 
@@ -1043,13 +1099,18 @@ private final class GatedProbe: PermissionProbe {
     var requests: [PermissionKind] { requested.withLock { $0 } }
 
     init(screenRecording: PermissionState, microphone: PermissionState) {
-        self.screenRecording = screenRecording
+        self.screenRecording = Mutex(screenRecording)
         self.microphone = Mutex(microphone)
+    }
+
+    /// The user changes screen recording in System Settings.
+    func setScreenRecording(_ state: PermissionState) {
+        screenRecording.withLock { $0 = state }
     }
 
     func state(of kind: PermissionKind) -> PermissionState {
         switch kind {
-        case .screenRecording: screenRecording
+        case .screenRecording: screenRecording.withLock { $0 }
         case .microphone: microphone.withLock { $0 }
         }
     }

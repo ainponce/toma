@@ -48,13 +48,9 @@ public final class RecordingController {
     /// From the moment a take is asked for (its countdown included) until it is closed.
     public var isRecording: Bool { phase != .idle }
 
-    /// Whether the take records a microphone: one was chosen, and no notice says it is not recorded (the
-    /// Mac has none, access is off, it did not start or it was lost).
-    public var recordsMicrophone: Bool {
-        guard let currentRequest, currentRequest.selection.microphone != .off else { return false }
-        let without: [TakeNotice] = [.noMicrophone, .microphoneAccessOff, .microphoneFailedToStart, .trackLost(.microphone)]
-        return !notices.contains(where: without.contains)
-    }
+    /// Whether the take records a microphone: from the moment it starts with one (also while it starts,
+    /// once the permissions say it will) until the microphone is lost or the take ends.
+    public private(set) var recordsMicrophone = false
 
     /// The peak of the microphone's last block, in dBFS, while a take records it; `AudioPeak.silence`
     /// otherwise. Read it as often as it is drawn: it is not observed.
@@ -186,7 +182,8 @@ public final class RecordingController {
             _ = await probe.request(.microphone)
             isAskingPermission = false
         }
-        // Task 17a: `takeWillStart` goes here, once the permissions are answered and before the countdown.
+        // Task 17a: `takeWillStart` goes here, once the permissions are answered and before the countdown;
+        // a restart skips it, as it skips the permissions.
 
         // A stop during the countdown cancels this task: the wait in progress ends at once.
         do {
@@ -208,6 +205,8 @@ public final class RecordingController {
             if !startCancelled { openOnboarding() }
             return
         }
+        // What the take is about to record, until its sources say (`attempt`).
+        recordsMicrophone = preflight.recordMicrophone
         setPhase(.starting)
 
         notices = carried
@@ -311,6 +310,7 @@ public final class RecordingController {
         }
         take = Take(
             recording: recording, package: package, starting: starting, warnings: warnings, microphoneMeter: prepared.microphoneMeter)
+        recordsMicrophone = prepared.microphoneMeter != nil
         environment.termination.takeBegan()
 
         Self.logger.notice("Starting a take in \(package.url.path, privacy: .public)")
@@ -429,6 +429,7 @@ public final class RecordingController {
         isUserPaused = false
         acceptedUserPause = false
         pendingPauseRequests = 0
+        recordsMicrophone = false
         autoStopped = false
         userRequests = nil
         silenceWatch?.cancel()
@@ -491,7 +492,10 @@ public final class RecordingController {
         guard self.phase != phase else { return }
         let wasRecording = isRecording
         self.phase = phase
-        if phase == .idle { currentRequest = nil }
+        if phase == .idle {
+            currentRequest = nil
+            recordsMicrophone = false
+        }
         if wasRecording != isRecording { recordingStateChanged() }
     }
 
@@ -510,7 +514,9 @@ public final class RecordingController {
         switch warning {
         case .streamInterrupted(let track): notice = .streamInterrupted(kind(track))
         case .streamRestarted(let track): notice = .streamResumed(kind(track))
-        case .trackLost(let track): notice = .trackLost(kind(track))
+        case .trackLost(let track):
+            notice = .trackLost(kind(track))
+            if kind(track) == .microphone { recordsMicrophone = false }
         case .displayPaused: notice = .screenPaused
         case .trackPaused(let track): notice = .trackPaused(kind(track))
         case .writerFailed(let track): notice = .writerFailed(kind(track))

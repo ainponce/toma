@@ -29,6 +29,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     private let recording: RecordingController
+    private let countdown: CountdownSetting
     private let store = SettingsStore()
     private let panel: FloatingPanel
     private let root: TrackingView
@@ -65,8 +66,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private static let pointerInterval = Duration.milliseconds(250)
 
     /// The island starts at rest on the screen with the pointer.
-    init(recording: RecordingController, hotKeys: HotKeyCenter) {
+    init(recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting) {
         self.recording = recording
+        self.countdown = countdown
         phase = recording.phase
         let screens = Self.readScreens()
         tops = screens.tops
@@ -275,7 +277,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         case .rest, .peek, .countdown, .recording, .recordingOpen: overlay.end()
         case .open, .choosing: break
         }
-        showOrHide()
+        // Key only on entering a keyboard state: never again at each second of the countdown, which would
+        // take the keyboard back from an app the user clicked into meanwhile.
+        showOrHide(makingKey: IslandState.becomesKey(from: before, to: state))
         if state == .choosing { overlay.beginChoosing(names: names, pointerDisplayID: Self.pointerDisplayID()) }
         updateZones()
         watchPointer(state == .recording)
@@ -284,7 +288,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     private func makePanelModel() -> OpenPanelModel {
         let panelModel = OpenPanelModel(
-            recording: recording, store: store, microphones: microphones, displays: displayChoices(), islandDisplayID: displayID)
+            recording: recording, store: store, countdown: countdown, microphones: microphones, displays: displayChoices(),
+            islandDisplayID: displayID)
         panelModel.highlight = { [weak self] id in
             guard let self else { return }
             overlay.highlight(id, names: names)
@@ -312,13 +317,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     // MARK: - Showing and hiding
 
     /// At rest on a screen without a notch nothing is drawn: the island fades out and leaves the screen.
-    /// Everywhere else it is on the screen, and key when its state wants the keyboard.
-    private func showOrHide() {
+    /// Everywhere else it is on the screen, and made key if `makingKey` (it just entered a state that wants
+    /// the keyboard).
+    private func showOrHide(makingKey: Bool = false) {
         let visible = machine.state != .rest || model.top.notch != nil
         if visible {
             isHiding = false
             if !panel.isVisible { panel.alphaValue = 0 }
-            panel.show()
+            panel.show(makingKey: makingKey)
             if panel.alphaValue < 1 { fade(to: 1) }
         } else if panel.isVisible, !isHiding {
             isHiding = true
@@ -403,9 +409,19 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Out of sight: the island is put on `id`'s screen in its outline there, and fades in.
+    /// Out of sight: the island is put on `id`'s screen in its outline there, and fades in. If the take
+    /// ended (or is counting down again) during the fade-out, it stays where it was and is shown or hidden
+    /// as its state says: a pill at rest is not drawn. It still goes, open, when the pointer entered the
+    /// other screen's zone and opened it (`zoneEntered`).
     private func arrive(at id: UInt32, fadingIn duration: TimeInterval) {
         isChangingScreens = false
+        switch machine.state {
+        case .recording, .recordingOpen:
+            break
+        case .rest, .peek, .open, .choosing, .countdown:
+            showOrHide()
+            return
+        }
         if let top = tops[id] {
             displayID = id
             model.top = top

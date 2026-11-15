@@ -2,27 +2,49 @@
 import AppSupport
 import SwiftUI
 
-/// While a take records: the wings at each side of the notch (or in the pill), 320 × the menu bar's
-/// height. On the left the recording dot and the time recorded; on the right the microphone's level, "No
-/// Signal" while it hears nothing, or a crossed-out microphone when the take has none.
+/// While a take records: the wings at each side of the notch, each `IslandGeometry.wingWidth` wide, or
+/// the pill on a screen without one. On the left the recording dot and the time recorded; on the right
+/// the microphone's level, an amber warning while it hears nothing ("No Signal" in the pill, which has
+/// room for it; the open island always says it), or a crossed-out microphone when the take has none.
 struct RecordingWings: View {
     let recording: RecordingController
+    /// The notch's width, which the wings leave free; `nil` on a pill.
+    let notchWidth: Double?
 
     var body: some View {
-        HStack(spacing: 0) {
-            HStack(spacing: 8) {
-                RecordingDot(isPaused: recording.isUserPaused || recording.isPaused)
-                RecordedTimeText(recording: recording)
-                    .font(.system(size: 13, weight: .semibold))
+        Group {
+            if let notchWidth {
+                HStack(spacing: 0) {
+                    time
+                        .padding(.horizontal, 10)
+                        .frame(width: IslandGeometry.wingWidth, alignment: .leading)
+                    Color.clear.frame(width: notchWidth)
+                    MicrophoneStatus(recording: recording, namesSilence: false)
+                        .padding(.horizontal, 10)
+                        .frame(width: IslandGeometry.wingWidth, alignment: .trailing)
+                }
+            } else {
+                HStack(spacing: 0) {
+                    time
+                    Spacer(minLength: 0)
+                    MicrophoneStatus(recording: recording)
+                }
+                .padding(.horizontal, 16)
             }
-            Spacer(minLength: 0)
-            MicrophoneStatus(recording: recording)
-                .font(.system(size: 13, weight: .semibold))
         }
-        .padding(.horizontal, 16)
+        .font(.system(size: 13, weight: .semibold))
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(.white)
         .lineLimit(1)
+    }
+
+    private var time: some View {
+        HStack(spacing: 6) {
+            RecordingDot(isPaused: recording.isUserPaused || recording.isPaused)
+            // 53 pt at mm:ss and 62 pt at h:mm:ss of the 64 the wing has inside; ten hours and more shrink a little.
+            RecordedTimeText(recording: recording, size: 13, hoursSize: 12, weight: .semibold)
+                .minimumScaleFactor(0.85)
+        }
     }
 }
 
@@ -68,8 +90,7 @@ struct IslandRecordingPanel: View {
     private var header: some View {
         HStack(spacing: 10) {
             RecordingDot(isPaused: isPaused)
-            RecordedTimeText(recording: recording)
-                .font(.system(size: 28, weight: .bold))
+            RecordedTimeText(recording: recording, size: 28, hoursSize: 28, weight: .bold)
                 .tracking(-0.56)
             Group {
                 if isPaused {
@@ -221,23 +242,37 @@ struct RecordingDot: View {
     }
 }
 
-/// The time the take has recorded, without its pauses: "04:12".
+/// The time the take has recorded, without its pauses, with tabular digits: "4:12" and "12:34" at `size`,
+/// "1:02:03" at `hoursSize` from the first hour on.
 struct RecordedTimeText: View {
     let recording: RecordingController
+    let size: Double
+    let hoursSize: Double
+    let weight: Font.Weight
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 0.25)) { context in
-            Text(verbatim: recording.elapsed(at: context.date).formatted(.time(pattern: .minuteSecond(padMinuteToLength: 2))))
+            let elapsed = recording.elapsed(at: context.date)
+            Text(verbatim: elapsed.recordedTime)
+                .font(.system(size: elapsed >= .seconds(3600) ? hoursSize : size, weight: weight))
                 .monospacedDigit()
         }
     }
 }
 
-/// The right wing: the microphone's level; "No Signal" while it hears nothing; a crossed-out microphone
-/// when the take records none.
+extension Duration {
+    /// A take's time as the island and the menu bar show it: m:ss, then h:mm:ss from the first hour on.
+    var recordedTime: String {
+        self >= .seconds(3600) ? formatted(.time(pattern: .hourMinuteSecond)) : formatted(.time(pattern: .minuteSecond))
+    }
+}
+
+/// The right wing: the microphone's level; an amber warning, and "No Signal" if `namesSilence`, while it
+/// hears nothing; a crossed-out microphone when the take records none.
 private struct MicrophoneStatus: View {
     let recording: RecordingController
     var bars = 5
+    var namesSilence = true
 
     var body: some View {
         if !recording.recordsMicrophone {
@@ -250,7 +285,8 @@ private struct MicrophoneStatus: View {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.system(size: 13))
                     .symbolRenderingMode(.hierarchical)
-                Text("No Signal")
+                    .accessibilityLabel(Text("No Signal"))
+                if namesSilence { Text("No Signal") }
             }
             .foregroundStyle(Color(red: 1, green: 0.7, blue: 0.25))
         } else {

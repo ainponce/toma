@@ -13,7 +13,7 @@ import os
 /// asked for when Record is clicked, never here). It is the take's own microphone source, metered.
 @MainActor @Observable
 final class MicrophoneLevelPreview {
-    /// Listening to a microphone now.
+    /// Listening to a microphone now: its source has started.
     private(set) var isListening = false
 
     @ObservationIgnored private var choice: DeviceChoice?
@@ -37,15 +37,17 @@ final class MicrophoneLevelPreview {
         let previous = source
         let next = wanted.map { MeteredSource(LiveCaptureSourceFactory().microphone($0)) }
         source = next
-        isListening = next != nil
+        isListening = false
         let before = lastChange
         let queue = queue
-        lastChange = Task {
+        lastChange = Task { [weak self] in
             await before?.value
             await previous?.stop()
             guard let next else { return }
             do {
                 try await next.start(on: queue, sink: DiscardingSink())
+                // Unless another microphone, or none, was asked for meanwhile.
+                if let self, source === next { isListening = true }
             } catch {
                 Self.logger.notice("The microphone level can't be shown: \(String(describing: error), privacy: .public)")
             }

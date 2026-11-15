@@ -50,7 +50,7 @@ import Testing
         let top = Self.notchScreen
         #expect(IslandGeometry.shape(.countdown(remaining: 3), on: top) == IslandShape(width: 236, height: 214, bottomRadius: 62, roundsTopCorners: false))
         #expect(IslandGeometry.shape(.countdown(remaining: 1), on: top) == IslandGeometry.shape(.countdown(remaining: 3), on: top))
-        #expect(IslandGeometry.shape(.recording, on: top) == IslandShape(width: 320, height: 32, bottomRadius: 13, roundsTopCorners: false))
+        #expect(IslandGeometry.shape(.recording, on: top) == IslandShape(width: 356, height: 32, bottomRadius: 13, roundsTopCorners: false))
         #expect(IslandGeometry.shape(.recordingOpen, on: top) == IslandShape(width: 640, height: 226, bottomRadius: 34, roundsTopCorners: false))
 
         let external = Self.externalScreen
@@ -61,6 +61,24 @@ import Testing
         #expect(IslandGeometry.spring(to: .countdown(remaining: 3)) == Motion.islandExpand)
         #expect(IslandGeometry.spring(to: .recordingOpen) == Motion.islandExpand)
         #expect(IslandGeometry.spring(to: .recording) == Motion.islandCollapse)
+    }
+
+    @Test func recordingWingsSitBesideTheNotch() {
+        #expect(IslandGeometry.wingWidth == 84)
+        // A 188 pt notch: a wing of 84 pt on each side of it.
+        let top = Self.notchScreen
+        let wings = IslandGeometry.shape(.recording, on: top)
+        #expect(wings.width == 188 + 2 * 84 && wings.height == top.menuBarHeight)
+        #expect(IslandGeometry.frame(wings, on: top) == CGRect(x: 662 - 84, y: 950, width: 356, height: 32))
+        // A wider notch (a 16-inch MacBook Pro at "More Space"): the wings keep their width.
+        let wider = ScreenTop.make(
+            frame: CGRect(x: 0, y: 0, width: 2056, height: 1329), safeAreaTop: 38,
+            auxiliaryTopLeft: CGRect(x: 0, y: 1291, width: 928, height: 38),
+            auxiliaryTopRight: CGRect(x: 1128, y: 1291, width: 928, height: 38),
+            menuBarHeight: 24)
+        #expect(IslandGeometry.shape(.recording, on: wider) == IslandShape(width: 200 + 168, height: 38, bottomRadius: 13, roundsTopCorners: false))
+        // Without a notch, the pill keeps its own size.
+        #expect(IslandGeometry.shape(.recording, on: Self.externalScreen) == IslandShape(width: 300, height: 36, bottomRadius: 17, roundsTopCorners: true))
     }
 
     @Test func springsFollowTheDesignTable() {
