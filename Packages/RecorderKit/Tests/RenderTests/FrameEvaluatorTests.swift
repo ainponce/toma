@@ -264,7 +264,7 @@ private func twoDisplays(recorded: Set<Int> = [1, 2]) -> TakeRecord {
 
 // MARK: - Area
 
-private func areaTake(display: Rect = builtIn, area: Rect) -> TakeRecord {
+private func areaTake(display: Rect? = builtIn, area: Rect) -> TakeRecord {
     makeTake(tracks: [
         displayTrack(globalFrame: display, captureArea: area, segments: [segment(start: base, end: base.adding(seconds: 10))]),
     ])
@@ -310,10 +310,47 @@ private func areaTake(display: Rect = builtIn, area: Rect) -> TakeRecord {
     #expect(clamped.x == 0 && clamped.y == 0)
     #expect(abs(clamped.width - 300.0 / 1512) < 1e-12 && abs(clamped.height - 250.0 / 982) < 1e-12)
 
-    // An area that is not on the display at all shows the whole display.
-    let off = FrameEvaluator(
-        take: areaTake(area: Rect(x: 2000, y: 100, width: 400, height: 300)), events: [], style: StyleV0(), outputSize: [1920, 1080])
-    #expect(try #require(off.frame(at: 0).screen).crop == Rect(x: 0, y: 0, width: 1, height: 1))
+    // An area that is not on the display at all: nothing of the screen, not even the cursor on it (never what the
+    // user left out of the area), but the camera still, and the timeline as long as the screen's.
+    var offTake = areaTake(area: Rect(x: 2000, y: 100, width: 400, height: 300))
+    offTake.tracks.append(displayTrack(
+        id: cameraID, kind: .camera, globalFrame: nil, segments: [segment(track: cameraID, start: base, end: base.adding(seconds: 10))]))
+    let off = FrameEvaluator(take: offTake, events: [cursor(0, x: 500, y: 300)], style: StyleV0(), outputSize: [1920, 1080])
+    let offFrame = off.frame(at: 0.5)
+    #expect(offFrame.screen == nil && offFrame.cursor == nil && offFrame.camera != nil)
+    #expect(off.duration == 10)
+    // Nor an area that cannot be placed, without the display's frame as the take started.
+    let unplaced = FrameEvaluator(
+        take: areaTake(display: nil, area: Rect(x: 100, y: 100, width: 800, height: 450)),
+        events: [
+            cursor(0, x: 500, y: 300),
+            InputEvent(t: base, kind: .displayGeometry(displayID: 1, frame: builtIn, scale: 2)),
+        ],
+        style: StyleV0(), outputSize: [1920, 1080])
+    #expect(unplaced.frame(at: 0.5).screen == nil && unplaced.frame(at: 0.5).cursor == nil)
+}
+
+@Test func areaStaysWhereItWasOnADisplayThatMoves() throws {
+    // An area of display 2, left of the main display, which is then arranged to its right with the same size.
+    let take = makeTake(tracks: [
+        displayTrack(
+            id: "display-2", displayID: 2, globalFrame: leftDisplay, captureArea: Rect(x: -1820, y: -100, width: 800, height: 450),
+            segments: [segment(track: "display-2", start: base, end: base.adding(seconds: 10))]),
+    ])
+    let events = [
+        cursor(0, x: -1420, y: 125),  // the centre of the area, where the display was
+        InputEvent(t: base.adding(seconds: 2), kind: .displayGeometry(displayID: 2, frame: Rect(x: 1512, y: 0, width: 1920, height: 1080), scale: 2)),
+        cursor(2.5, x: 2012, y: 325),  // the centre of the area, where the display is now
+    ]
+    let e = FrameEvaluator(take: take, events: events, style: StyleV0(), outputSize: [1920, 1080])
+    for t in [1.0, 3.0] {
+        let frame = e.frame(at: t)
+        let screen = try #require(frame.screen, "at \(t) s")
+        #expect(screen.crop == Rect(x: 100.0 / 1920, y: 100.0 / 1080, width: 800.0 / 1920, height: 450.0 / 1080), "at \(t) s")
+        let hotspot = try #require(frame.cursor, "at \(t) s").hotspot
+        #expect(abs(hotspot.x - (screen.rect.x + screen.rect.width / 2)) < 1e-9, "at \(t) s")
+        #expect(abs(hotspot.y - (screen.rect.y + screen.rect.height / 2)) < 1e-9, "at \(t) s")
+    }
 }
 
 @Test func areaCropFollowsDisplayGeometryEvents() throws {
@@ -385,6 +422,31 @@ private func areaTake(display: Rect = builtIn, area: Rect) -> TakeRecord {
     let wide = try #require(e.frame(at: 3.5).screen?.rect)
     #expect(abs(wide.width / wide.height - 2) < 1e-9)
     #expect(e.frame(at: 3.5).cursor != nil)
+}
+
+@Test func windowEventWithoutAFrameStillSaysWhetherItIsOnScreen() throws {
+    let window = "window-7"
+    let take = makeTake(tracks: [
+        displayTrack(
+            id: window, kind: .window, globalFrame: Rect(x: 100, y: 100, width: 800, height: 600),
+            segments: [segment(track: window, start: base, end: base.adding(seconds: 10))]),
+    ])
+    let empty = Rect(x: 0, y: 0, width: 0, height: 0)
+    let events = [
+        cursor(0.5, x: 500, y: 400),
+        InputEvent(t: base.adding(seconds: 1), kind: .windowGeometry(track: window, frame: empty, onScreen: false)),
+        InputEvent(t: base.adding(seconds: 2), kind: .windowGeometry(track: window, frame: empty, onScreen: true)),
+    ]
+    let e = FrameEvaluator(take: take, events: events, style: StyleV0(), outputSize: [1920, 1080])
+    let rect = try #require(e.frame(at: 0.5).screen?.rect)
+    #expect(e.frame(at: 0.5).cursor != nil)
+    // Off screen without a frame: the window stays where it was, without the cursor…
+    #expect(e.frame(at: 1.5).screen?.rect == rect)
+    #expect(e.frame(at: 1.5).cursor == nil)
+    // …and back on screen, the cursor is placed on the frame it kept.
+    #expect(e.frame(at: 2.5).screen?.rect == rect)
+    let hotspot = try #require(e.frame(at: 2.5).cursor).hotspot
+    #expect(abs(hotspot.x - (rect.x + rect.width / 2)) < 1e-9 && abs(hotspot.y - (rect.y + rect.height / 2)) < 1e-9)
 }
 
 // MARK: - Camera

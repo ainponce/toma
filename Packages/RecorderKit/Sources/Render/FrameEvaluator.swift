@@ -13,11 +13,14 @@ import ProjectFormat
 ///
 /// Where the screen is at a time, in global points: for a display, the last `displayGeometry` event of its
 /// `displayID` at or before it; for a window, the last `windowGeometry` event of its track; before the first one,
-/// its `globalFrame` (events with a frame that is not finite and positive are skipped). What is shown of it is the
-/// display's `captureArea` clamped to it (the whole display when no part of the area is on it), or all of it: the
-/// screen's rect has the shape of that, the cursor is placed on it and hidden off it, and hidden while a window is
-/// not on screen. A take of version 1 has one `displayGeometry` per display, at its start and equal to its
-/// `globalFrame`, and no area: it is drawn as in phase 0.
+/// its `globalFrame`. A frame that is not finite and positive is skipped (a window's event still says whether it is
+/// on screen). What is shown of it is the display's `captureArea`, or all of it. The area is kept where it was on
+/// the display when the take started: its offset from the display's corner is measured from `globalFrame`, so it
+/// follows the display when the display moves, and it is clamped to the display's current size. When no part of it
+/// is on the display (or it cannot be placed, without a `globalFrame`), neither the screen nor the cursor is drawn,
+/// never what the user left out of the area. The screen's rect has the shape of what is shown; the cursor is placed
+/// on it, hidden off it, and hidden while a window is not on screen. A take of version 1 has one `displayGeometry`
+/// per display, at its start and equal to its `globalFrame`, and no area: it is drawn as in phase 0.
 ///
 /// The camera is the first camera track with a segment, drawn from the start of its first segment on at the
 /// `CameraStyleTimeline` of the take's `cameraStyle` (`CameraStyle.default` without one) and its `cameraStyle`
@@ -40,8 +43,11 @@ public struct FrameEvaluator: Sendable {
     private let initialPlace: Place
     /// Where the screen is from each geometry event on, in time order.
     private let places: [(t: HostTime, place: Place)]
-    /// The area of the display shown, in global points: `captureArea` in Area mode.
-    private let captureArea: Rect?
+    /// In Area mode, the area in points from the display's top-left corner as the take started: `captureArea` moved
+    /// by the origin of `globalFrame`. `nil` without an area.
+    private let areaOffset: Rect?
+    /// An area was recorded but cannot be placed: it or the display's `globalFrame` is not usable.
+    private let areaUnplaced: Bool
     /// ID of the camera track shown, `nil` if the take has none with a segment.
     let cameraTrackID: String?
     /// Start of the camera's first segment.
@@ -83,19 +89,36 @@ public struct FrameEvaluator: Sendable {
         timelineStart = start
         duration = max(0, end.seconds(since: start))
 
-        initialPlace = Place(frame: screen?.source.globalFrame.flatMap(Self.usable), onScreen: true)
-        places = ordered.compactMap { event -> (t: HostTime, place: Place)? in
-            guard let screen else { return nil }
-            switch event.kind {
-            case let .displayGeometry(displayID, frame, _) where screen.kind == .display && displayID == screen.source.displayID:
-                return Self.usable(frame).map { (event.t, Place(frame: $0, onScreen: true)) }
-            case let .windowGeometry(track, frame, onScreen) where screen.kind == .window && track == screen.id:
-                return Self.usable(frame).map { (event.t, Place(frame: $0, onScreen: onScreen)) }
-            default:
-                return nil
+        let initialPlace = Place(frame: screen?.source.globalFrame.flatMap(Self.usable), onScreen: true)
+        self.initialPlace = initialPlace
+        var places: [(t: HostTime, place: Place)] = []
+        if let screen {
+            var last = initialPlace
+            for event in ordered {
+                switch event.kind {
+                case let .displayGeometry(displayID, frame, _) where screen.kind == .display && displayID == screen.source.displayID:
+                    guard let frame = Self.usable(frame) else { continue }
+                    last = Place(frame: frame, onScreen: true)
+                case let .windowGeometry(track, frame, onScreen) where screen.kind == .window && track == screen.id:
+                    // Without a usable frame, the window stays where it was, but whether it is on screen still counts.
+                    last = Place(frame: Self.usable(frame) ?? last.frame, onScreen: onScreen)
+                default:
+                    continue
+                }
+                places.append((event.t, last))
             }
         }
-        captureArea = screen?.kind == .display ? screen?.source.captureArea.flatMap(Self.usable) : nil
+        self.places = places
+        if screen?.kind == .display, let area = screen?.source.captureArea {
+            let placed = Self.usable(area).flatMap { area in
+                initialPlace.frame.map { Rect(x: area.x - $0.x, y: area.y - $0.y, width: area.width, height: area.height) }
+            }
+            areaOffset = placed
+            areaUnplaced = placed == nil
+        } else {
+            areaOffset = nil
+            areaUnplaced = false
+        }
 
         let camera = take.tracks.first { $0.kind == .camera && !$0.segments.isEmpty }
         cameraTrackID = camera?.id
@@ -114,12 +137,14 @@ public struct FrameEvaluator: Sendable {
             gradientStart: style.gradientStart,
             gradientEnd: style.gradientEnd,
             gradientAngleDegrees: style.gradientAngleDegrees,
-            screen: screenTrackID.map {
-                ScreenLayer(
-                    trackID: $0, sourceTime: host, rect: view.rect,
-                    cornerRadius: style.cornerRadiusFraction * Double(outputSize.x), crop: view.crop)
+            screen: view.flatMap { view in
+                screenTrackID.map {
+                    ScreenLayer(
+                        trackID: $0, sourceTime: host, rect: view.rect,
+                        cornerRadius: style.cornerRadiusFraction * Double(outputSize.x), crop: view.crop)
+                }
             },
-            cursor: cursor(at: host, on: view),
+            cursor: view.flatMap { cursor(at: host, on: $0) },
             camera: camera(at: host)
         )
     }
@@ -140,14 +165,16 @@ public struct FrameEvaluator: Sendable {
     }
 
     /// What is shown of the screen at `host`, and where. Without a frame, the whole area inside the padding and
-    /// no cursor.
-    private func screenView(at host: HostTime) -> ScreenView {
+    /// no cursor. `nil`, nothing of the screen, when its area is not on the display or cannot be placed.
+    private func screenView(at host: HostTime) -> ScreenView? {
+        guard !areaUnplaced else { return nil }
         let place = place(at: host)
         guard let frame = place.frame else {
             return ScreenView(rect: Self.contentRect(aspect: nil, style: style, outputSize: outputSize), crop: Self.wholeFrame, cursorRegion: nil)
         }
         var crop = Self.wholeFrame, region = frame
-        if let captureArea, let area = Self.crop(captureArea, in: frame) {
+        if let areaOffset {
+            guard let area = Self.crop(areaOffset, in: frame) else { return nil }
             crop = area
             region = Rect(
                 x: frame.x + area.x * frame.width, y: frame.y + area.y * frame.height,
@@ -157,11 +184,12 @@ public struct FrameEvaluator: Sendable {
         return ScreenView(rect: rect, crop: crop, cursorRegion: place.onScreen ? region : nil)
     }
 
-    /// `area` as fractions of `frame` (`((area.x − frame.x) / frame.width, …, area.width / frame.width, …)`) clamped
-    /// to `[0, 1]`; `nil` when no part of it is on `frame`.
-    private static func crop(_ area: Rect, in frame: Rect) -> Rect? {
-        var x = (area.x - frame.x) / frame.width, width = area.width / frame.width
-        var y = (area.y - frame.y) / frame.height, height = area.height / frame.height
+    /// The area at `offset` from the display's corner as fractions of the display's current `frame`
+    /// (`(offset.x / frame.width, …, offset.width / frame.width, …)`, where `offset.x` is `area.x − globalFrame.x`)
+    /// clamped to `[0, 1]`; `nil` when no part of it is on the display.
+    private static func crop(_ offset: Rect, in frame: Rect) -> Rect? {
+        var x = offset.x / frame.width, width = offset.width / frame.width
+        var y = offset.y / frame.height, height = offset.height / frame.height
         if x < 0 {
             width += x
             x = 0

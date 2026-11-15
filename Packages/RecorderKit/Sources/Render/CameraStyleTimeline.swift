@@ -46,6 +46,8 @@ public struct CameraStyleTimeline: Equatable, Sendable {
             if changes[mid].t <= host { low = mid + 1 } else { high = mid }
         }
         guard low > 0 else { return initial.frame(in: region) }
+        // Settled: exactly the last style.
+        if host.seconds(since: changes[low - 1].t) >= Self.settleSeconds { return changes[low - 1].style.frame(in: region) }
         // A change made once the one before it had settled starts from that one's style exactly: go back to the
         // first change of the burst that ends at `host`, and play the burst forward from there.
         var first = low - 1

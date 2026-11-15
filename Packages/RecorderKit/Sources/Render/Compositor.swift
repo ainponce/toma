@@ -21,6 +21,7 @@ public final class Compositor: @unchecked Sendable {
     /// Throws the compiler's error if the shaders do not build, and `RenderError` if Metal cannot make a
     /// pipeline or sampler.
     public init(device: any MTLDevice) throws {
+        precondition(MemoryLayout<QuadUniforms>.stride == 64, "QuadUniforms must keep the layout of the shaders' struct: 64 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)

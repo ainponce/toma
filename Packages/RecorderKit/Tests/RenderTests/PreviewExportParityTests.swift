@@ -169,17 +169,28 @@ private func phaseZeroProject(in dir: URL) async throws -> LoadedProject {
     return project
 }
 
-/// A project of version 1 draws the same bytes from one version of the render to the next. With `TOMA_GOLDEN_FILE`
-/// set: the frames at 0, 0.5 and 1.7 s, one after the other, are written to that file when it does not exist, and
-/// must equal it byte for byte when it does.
+/// A project of version 1 draws the same bytes from one version of the render to the next. It runs only with
+/// `TOMA_GOLDEN_FILE` set: the frames at 0, 0.5 and 1.7 s, one after the other, must equal that file byte for byte.
+/// With `TOMA_GOLDEN_RECORD=1` as well, it writes them to that file instead (run it so on the code to compare
+/// against), and never over a file already there. Without the file and without the switch it fails: it never
+/// passes without comparing.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_GOLDEN_FILE"] != nil))
 func goldenFramesMatch() async throws {
-    let url = URL(fileURLWithPath: try #require(ProcessInfo.processInfo.environment["TOMA_GOLDEN_FILE"]))
+    let environment = ProcessInfo.processInfo.environment
+    let url = URL(fileURLWithPath: try #require(environment["TOMA_GOLDEN_FILE"]))
+    let recording = environment["TOMA_GOLDEN_RECORD"] == "1"
+    let exists = FileManager.default.fileExists(atPath: url.path)
+    if recording {
+        try #require(!exists, "\(url.path) is already there: remove it to record the golden frames again")
+    } else {
+        try #require(
+            exists, "No golden frames at \(url.path): record them first, with TOMA_GOLDEN_RECORD=1, on the code to compare against")
+    }
     try await withTemporaryDirectory { dir in
         let renderer = try FrameRenderer(project: try await phaseZeroProject(in: dir), outputSize: [1280, 720])
         var bytes: [UInt8] = []
         for t in [0, 0.5, 1.7] { bytes += try renderer.renderBytes(at: t) }
-        guard FileManager.default.fileExists(atPath: url.path) else {
+        if recording {
             try Data(bytes).write(to: url, options: .withoutOverwriting)
             return
         }
