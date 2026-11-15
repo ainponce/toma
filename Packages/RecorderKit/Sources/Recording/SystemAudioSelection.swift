@@ -62,14 +62,40 @@ public enum SystemAudioSelection {
         }
     }
 
+    /// Whether `a` and `b` name the same processes, in any order: only then does a running tap need no update.
+    public static func sameTargets(_ a: TapTargets, _ b: TapTargets) -> Bool {
+        switch (a, b) {
+        case let (.allExcept(x), .allExcept(y)), let (.only(x), .only(y)): x.sorted() == y.sorted()
+        default: false
+        }
+    }
+
+    /// The bundle IDs a tap names on macOS 26 (`CATapDescription.bundleIDs`), so a process that starts mid-take,
+    /// such as `systemsoundserverd`, is left out or taken from its first buffer. In `all` mode, the ones
+    /// `trackSource` excludes. In `applications` mode, the chosen ones `trackSource` includes, followed by those of
+    /// the processes `targets` takes that are not among them (a chosen app's helpers), in case `bundleIDs` replaces
+    /// the process list instead of adding to it. The placeholder adds nothing: this process is never named.
+    public static func tapBundleIDs(
+        scope: SystemAudioScope, targets: TapTargets, processes: [AudioProcessInfo], ownPID: pid_t, ownBundleIdentifier: String?
+    ) -> [String] {
+        let source = trackSource(scope: scope, ownBundleIdentifier: ownBundleIdentifier)
+        guard case .applications = scope else { return source.excludedBundleIDs ?? [] }
+        var bundleIDs = source.includedBundleIDs ?? []
+        guard case .only(let taken) = targets else { return bundleIDs }
+        for process in processes where taken.contains(process.objectID) && process.pid != ownPID {
+            guard let bundle = process.bundleIdentifier, bundle != ownBundleIdentifier, !bundleIDs.contains(bundle) else { continue }
+            bundleIDs.append(bundle)
+        }
+        return bundleIDs
+    }
+
     /// Whether `targets` is the placeholder of an `applications` scope none of whose apps runs.
     public static func isPlaceholder(_ targets: TapTargets, ownObjectID: AudioObjectID?) -> Bool {
         targets == placeholder(ownObjectID: ownObjectID)
     }
 
     /// What the track records: in `all` mode, every app but this one (when it has a bundle ID) and the exclusions;
-    /// in `applications` mode, the chosen apps that can be recorded (neither this one nor an exclusion). The same
-    /// bundle IDs name the tap's processes on macOS 26 (`CATapDescription.bundleIDs`).
+    /// in `applications` mode, the chosen apps that can be recorded (neither this one nor an exclusion).
     public static func trackSource(scope: SystemAudioScope, ownBundleIdentifier: String?) -> TrackSource {
         switch scope {
         case .all:

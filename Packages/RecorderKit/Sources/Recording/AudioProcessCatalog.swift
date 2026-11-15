@@ -37,7 +37,8 @@ public enum AudioProcessCatalog {
         var objects = [AudioObjectID](repeating: kAudioObjectUnknown, count: Int(size) / MemoryLayout<AudioObjectID>.size)
         status = objects.withUnsafeMutableBytes { bytes in
             size = UInt32(bytes.count)
-            return AudioObjectGetPropertyData(system, &address, 0, nil, &size, bytes.baseAddress!)
+            guard let data = bytes.baseAddress else { return noErr }  // No process: nothing to read.
+            return AudioObjectGetPropertyData(system, &address, 0, nil, &size, data)
         }
         guard status == noErr else { throw CaptureSourceError.systemAudioUnavailable(status: status) }
         return objects.prefix(Int(size) / MemoryLayout<AudioObjectID>.size).compactMap(process)

@@ -78,6 +78,35 @@ import Testing
         #expect(SystemAudioSelection.isPlaceholder(none, ownObjectID: nil))
     }
 
+    @Test func targetsCompareWhateverTheOrder() {
+        #expect(SystemAudioSelection.sameTargets(.only([21, 20]), .only([20, 21])))
+        #expect(SystemAudioSelection.sameTargets(.allExcept([10, 12, 11]), .allExcept([11, 10, 12])))
+        #expect(!SystemAudioSelection.sameTargets(.only([20]), .only([20, 21])))
+        #expect(!SystemAudioSelection.sameTargets(.only([20]), .allExcept([20])))
+    }
+
+    @Test func tapBundleIDsAddTheHelpersOfTheChosenApps() {
+        let (chrome, helper) = (AudioObjectID(20), AudioObjectID(21))
+        let p = [
+            tomaProcess,
+            process(chrome, pid: 700, bundle: "com.google.Chrome", path: nil),
+            process(helper, pid: 701, bundle: "com.google.Chrome.helper", path: nil),
+            process(22, pid: 702, bundle: "com.spotify.client", path: nil),
+        ]
+        let scope = SystemAudioScope.applications(["com.google.Chrome", "dev.toma.Toma"])
+        // So a helper stays in the tap if macOS 26's `bundleIDs` replaces the process list instead of adding to it.
+        #expect(SystemAudioSelection.tapBundleIDs(
+            scope: scope, targets: .only([chrome, helper]), processes: p, ownPID: own, ownBundleIdentifier: "dev.toma.Toma")
+            == ["com.google.Chrome", "com.google.Chrome.helper"])
+        // The placeholder adds nothing: Toma is never named.
+        #expect(SystemAudioSelection.tapBundleIDs(
+            scope: scope, targets: .only([toma]), processes: p, ownPID: own, ownBundleIdentifier: "dev.toma.Toma")
+            == ["com.google.Chrome"])
+        #expect(SystemAudioSelection.tapBundleIDs(
+            scope: .all, targets: .allExcept([toma]), processes: p, ownPID: own, ownBundleIdentifier: "dev.toma.Toma")
+            == ["dev.toma.Toma"] + SystemAudioExclusions.bundleIdentifiers)
+    }
+
     @Test func onlyThePlaceholderRecordsSilence() {
         #expect(!SystemAudioSelection.isPlaceholder(.only([20, 21]), ownObjectID: toma))
         #expect(!SystemAudioSelection.isPlaceholder(.allExcept([toma]), ownObjectID: toma))
@@ -144,7 +173,8 @@ import Testing
         }
         let host = mach_absolute_time()
 
-        let sample = try TapSampleBuffers.make(from: list.unsafePointer, frameCount: UInt32(frames), format: format, hostTime: host)
+        let description = try TapSampleBuffers.formatDescription(for: format)
+        let sample = try TapSampleBuffers.make(from: list.unsafePointer, frameCount: UInt32(frames), format: description, hostTime: host)
         // A copy: the tap's buffers are only valid during its callback.
         memory.update(repeating: 0, count: frames * 2)
 
@@ -158,10 +188,29 @@ import Testing
 
     @Test(arguments: [false, true]) func placeholderBuffersAreSilence(planar: Bool) throws {
         let host = mach_absolute_time()
-        let sample = try TapSampleBuffers.silence(frameCount: 256, format: stereoFloat(planar: planar), hostTime: host)
+        let format = stereoFloat(planar: planar)
+        let sample = try TapSampleBuffers.silence(frameCount: 256, format: TapSampleBuffers.formatDescription(for: format), hostTime: host)
         #expect(sample.numSamples == 256)
+        #expect(sample.formatDescription?.audioStreamBasicDescription?.mFormatFlags == format.mFormatFlags)
         #expect(HostTime(sample.presentationTimeStamp) == HostTime(nanoseconds: AudioConvertHostTimeToNanos(host)))
         #expect(try channels(of: sample) == [[Float](repeating: 0, count: 256), [Float](repeating: 0, count: 256)])
+    }
+
+    @Test func conversionFailuresAreSystemAudioErrors() throws {
+        // A buffer shorter than the frames it claims cannot be copied.
+        let format = stereoFloat(planar: false)
+        let list = AudioBufferList.allocate(maximumBuffers: 1)
+        defer { free(list.unsafeMutablePointer) }
+        let memory = UnsafeMutablePointer<Float>.allocate(capacity: 64)
+        defer { memory.deallocate() }
+        list[0] = AudioBuffer(mNumberChannels: 2, mDataByteSize: 64 * 4, mData: UnsafeMutableRawPointer(memory))
+        let description = try TapSampleBuffers.formatDescription(for: format)
+        #expect {
+            try TapSampleBuffers.make(from: list.unsafePointer, frameCount: 512, format: description, hostTime: mach_absolute_time())
+        } throws: { error in
+            if case CaptureSourceError.systemAudioUnavailable = error { return true }
+            return false
+        }
     }
 
     private func stereoFloat(planar: Bool) -> AudioStreamBasicDescription {
