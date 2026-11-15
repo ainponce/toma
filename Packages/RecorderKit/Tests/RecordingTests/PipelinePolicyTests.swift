@@ -26,7 +26,10 @@ import Testing
         #expect(gives.next() == .giveUp)
     }
 
-    @Test(arguments: [(TrackKind.display, true, true), (.display, false, false), (.microphone, false, true)])
+    @Test(arguments: [
+        (TrackKind.display, true, true), (.display, false, false), (.microphone, false, true), (.camera, false, true),
+        (.systemAudio, false, true), (.window, true, true),
+    ])
     func keepsRetryingByKind(kind: TrackKind, sole: Bool, expected: Bool) {
         #expect(RestartPolicy.keepsRetrying(kind: kind, isSoleScreen: sole) == expected)
     }

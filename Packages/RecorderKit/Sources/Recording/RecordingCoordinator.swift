@@ -10,7 +10,8 @@ public typealias WriterFactory = @Sendable (URL, TrackMedia) throws -> any Track
 
 public struct RecordingConfiguration: Sendable {
     /// Wait before each restart attempt after a stream error; its length is the number of attempts. The
-    /// only display and a microphone then keep trying at the last interval; any other track is lost.
+    /// only screen (display or window), a microphone, a camera and system audio then keep trying at the last
+    /// interval; any other track is lost.
     public var restartBackoff: [Duration]
     /// How often a video track checks for a static screen and repeats its last frame.
     public var heartbeatInterval: Duration
@@ -35,13 +36,15 @@ public enum RecordingWarning: Sendable, Equatable {
     /// The stream of `track` is running again, in a new segment.
     case streamRestarted(track: String)
     /// Restarts of `track` were exhausted: it records nothing more in this take. Never sent for the
-    /// only display or for a microphone, which keep trying (`displayPaused`, `trackPaused`).
+    /// only screen or for a microphone, a camera or system audio, which keep trying (`displayPaused`,
+    /// `trackPaused`).
     case trackLost(track: String)
-    /// The only display could not be restarted with the configured attempts; it keeps trying.
+    /// The only screen of the take, a display or a window, could not be restarted with the configured
+    /// attempts; it keeps trying. `streamRestarted` follows when it comes back.
     case displayPaused(track: String)
-    /// The microphone `track` could not be restarted with the configured attempts: it records nothing
-    /// until it comes back, and keeps trying at the last interval (each restart falls back to the default
-    /// input). `streamRestarted` follows when it does.
+    /// The microphone, camera or system audio `track` could not be restarted with the configured attempts:
+    /// it records nothing until it comes back, and keeps trying at the last interval (a microphone's or a
+    /// camera's restart falls back to the default device). `streamRestarted` follows when it does.
     case trackPaused(track: String)
     /// The writer of `track` failed; its segment was closed and the next sample opens a new one.
     case writerFailed(track: String)
@@ -73,6 +76,9 @@ public enum RecordingError: Error, Equatable {
     case volumeNotAllowed(VolumeEligibility)
     case alreadyStarted
     case notRecording
+    /// The package is of this format version, not `Manifest.currentFormatVersion`: a take is only recorded
+    /// into a package of the current version, so an older one never gets what its version does not define.
+    case notCurrentFormatVersion(Int)
 }
 
 /// Records one take: every source into its own track of segment files, plus the event log, the
@@ -104,6 +110,7 @@ public actor RecordingCoordinator {
     /// What the user asks of a take in progress.
     private enum UserRequest: Sendable {
         case pause, resume
+        case setCameraStyle(CameraStyle)
     }
 
     /// The work of `activityTask`, one at a time: the system's activity and the user's requests, so a
@@ -124,6 +131,11 @@ public actor RecordingCoordinator {
         var diskVerdicts: AsyncStream<DiskSpaceVerdict>.Continuation?
         var activity: (any NSObjectProtocol)?
         var pipelines: [TrackPipeline] = []
+        /// The camera's style as the take has it so far: the initial one, then the last `cameraStyle` event
+        /// written. `nil` in a take without a camera.
+        var cameraStyle: CameraStyle?
+        /// The last style asked for while paused, written when the take resumes.
+        var pendingCameraStyle: CameraStyle?
     }
 
     /// The steps of closing a take that are ordered for durability, in the order `closeTake` takes them.
@@ -160,6 +172,8 @@ public actor RecordingCoordinator {
     private let clock: @Sendable () -> HostTime
     /// The waits of the maintenance and the disk watchdog, and every track's timers and restart waits.
     private let ticks: RecordingTicks
+    /// The camera's style when the take starts, if it has a camera.
+    private let initialCameraStyle: CameraStyle?
     private let commands: AsyncStream<Command>
     private let commandsContinuation: AsyncStream<Command>.Continuation
 
@@ -199,7 +213,8 @@ public actor RecordingCoordinator {
         configuration: RecordingConfiguration = .init(),
         writerFactory: @escaping WriterFactory = { url, media in try FragmentedTrackWriter(url: url, media: media) },
         clock: @escaping @Sendable () -> HostTime = HostTime.now,
-        ticks: RecordingTicks = .live
+        ticks: RecordingTicks = .live,
+        cameraStyle: CameraStyle? = nil
     ) {
         let ids = sources.map(\.trackID)
         precondition(Set(ids).count == ids.count, "RecordingCoordinator: track IDs must be unique, got \(ids)")
@@ -214,6 +229,7 @@ public actor RecordingCoordinator {
         self.writerFactory = writerFactory
         self.clock = clock
         self.ticks = ticks
+        self.initialCameraStyle = sources.contains { $0.kind == .camera } ? cameraStyle ?? .default : nil
     }
 
     /// Called once when the take stops by itself because the disk is full, with the closed take and
@@ -232,13 +248,13 @@ public actor RecordingCoordinator {
 
     /// Starts recording a new take and returns its ID.
     ///
-    /// Throws `volumeNotAllowed` or `notEnoughDiskSpace` before creating anything. The take's record
-    /// must reach the manifest on disk before anything is recorded: if that write fails (after one retry
-    /// with the reserve's room when it ran out of space), the lock and the reserve are released and the
-    /// error is rethrown, leaving at most an empty take folder. If a source fails to start, the sources
-    /// already started are stopped, the take is closed as `complete` with what it has (nothing is
-    /// deleted), the lock is released and the error is rethrown. Either way this coordinator is done: it
-    /// records one take.
+    /// Throws `volumeNotAllowed`, `notEnoughDiskSpace` or `notCurrentFormatVersion` before creating
+    /// anything. The take's record must reach the manifest on disk before anything is recorded: if that
+    /// write fails (after one retry with the reserve's room when it ran out of space), the lock and the
+    /// reserve are released and the error is rethrown, leaving at most an empty take folder. If a source
+    /// fails to start, the sources already started are stopped, the take is closed as `complete` with what
+    /// it has (nothing is deleted), the lock is released and the error is rethrown. Either way this
+    /// coordinator is done: it records one take.
     public func start() async throws -> String {
         guard state == .idle else { throw RecordingError.alreadyStarted }
         state = .starting
@@ -273,6 +289,10 @@ public actor RecordingCoordinator {
         }
 
         let store = try ManifestStore(package: package)
+        let formatVersion = store.manifest.formatVersion
+        guard formatVersion == Manifest.currentFormatVersion else {
+            throw RecordingError.notCurrentFormatVersion(formatVersion)
+        }
         let takeID = package.nextTakeID(existing: store.manifest.takes)
         try FileManager.default.createDirectory(at: package.takeDirectory(takeID), withIntermediateDirectories: false)
         // `RecordingLock.isHeld` probes by taking the lock for a moment: try a few times before giving up.
@@ -287,7 +307,8 @@ public actor RecordingCoordinator {
         let startedAt = Date().roundedToWholeSeconds
         let record = TakeRecord(
             id: takeID, status: .recording, startedAt: startedAt,
-            tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) })
+            tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) },
+            cameraStyle: initialCameraStyle)
         // A take the manifest does not list is invisible to recovery and the editor: nothing is recorded
         // until it is on disk.
         do {
@@ -303,7 +324,8 @@ public actor RecordingCoordinator {
             lock.release()
             throw error
         }
-        take = Take(id: takeID, startedAt: startedAt, store: store, lock: lock, reserve: reserve)
+        take = Take(
+            id: takeID, startedAt: startedAt, store: store, lock: lock, reserve: reserve, cameraStyle: initialCameraStyle)
 
         do {
             for source in sources {
@@ -312,10 +334,19 @@ public actor RecordingCoordinator {
             }
             let log = try EventLogWriter(url: package.eventsURL(take: takeID))
             take?.log = log
-            for source in sources where source.kind == .display {
+            for source in sources {
                 let info = source.sourceInfo
-                guard let displayID = info.displayID, let frame = info.globalFrame, let scale = info.pixelScale else { continue }
-                log.append(InputEvent(t: clock(), kind: .displayGeometry(displayID: displayID, frame: frame, scale: scale)))
+                switch source.kind {
+                case .display:
+                    guard let displayID = info.displayID, let frame = info.globalFrame, let scale = info.pixelScale else { continue }
+                    log.append(InputEvent(t: clock(), kind: .displayGeometry(displayID: displayID, frame: frame, scale: scale)))
+                case .window:
+                    // Where it is as the take starts; the app's window watcher logs every change after this.
+                    guard let frame = info.globalFrame else { continue }
+                    log.append(InputEvent(t: clock(), kind: .windowGeometry(track: source.trackID, frame: frame, onScreen: true)))
+                case .camera, .microphone, .systemAudio:
+                    break
+                }
             }
             await input.start(log: log)
 
@@ -337,10 +368,10 @@ public actor RecordingCoordinator {
                     Task { await self?.diskFilled() }
                 },
                 freeBytes: { [diskMonitor] in diskMonitor.availableBytes() })
-            let displays = sources.filter { $0.kind == .display }.count
+            let screens = sources.filter(\.kind.isScreen).count
             for source in sources {
                 let pipeline = TrackPipeline(
-                    source: source, context: context, isSoleDisplay: source.kind == .display && displays == 1)
+                    source: source, context: context, isSoleScreen: source.kind.isScreen && screens == 1)
                 take?.pipelines.append(pipeline)
                 try await pipeline.start()
             }
@@ -393,6 +424,17 @@ public actor RecordingCoordinator {
         return time
     }
 
+    /// The camera now looks like `style` (the user dropped the bubble somewhere else, or chose another shape
+    /// or size): writes a `cameraStyle` event at `clock()`. While the take is paused, by the user or by the
+    /// system, nothing is written: the last style asked for is written when it resumes, at the time of the
+    /// `resumed` event and right after it. A style equal to the last one written (or to the take's initial
+    /// style) is not written, and neither is anything in a take without a camera. Goes through the same
+    /// serial task as `pause()`, so it is applied in order with the pauses. Throws
+    /// `RecordingError.notRecording` unless the take is recording or paused.
+    public func setCameraStyle(_ style: CameraStyle) async throws {
+        try await send(.setCameraStyle(style))
+    }
+
     /// Queues `request` behind the system's activity and the requests before it, and returns once it is done.
     private func send(_ request: UserRequest) async throws {
         guard state == .recording || state == .paused else { throw RecordingError.notRecording }
@@ -419,6 +461,7 @@ public actor RecordingCoordinator {
             switch request {
             case .pause: await pause(for: .user, reason: Self.userPauseReason)
             case .resume: await resume(clearing: .user)
+            case .setCameraStyle(let style): cameraStyleChanged(to: style)
             }
             continuation.resume()
         }
@@ -580,12 +623,18 @@ public actor RecordingCoordinator {
     }
 
     /// Starts every source and the input recorder again once nothing keeps the take paused, and warns
-    /// `resumed`. Restart attempts start afresh.
+    /// `resumed`. A camera style asked for during the pause is written right after the `resumed` event, at
+    /// its time. Restart attempts start afresh.
     private func resume(clearing cause: PauseCause) async {
         pauseCauses.remove(cause)
         guard state == .paused, pauseCauses.isEmpty, let take else { return }
         state = .recording
-        take.log?.append(InputEvent(t: clock(), kind: .resumed))
+        let time = clock()
+        take.log?.append(InputEvent(t: time, kind: .resumed))
+        if let style = take.pendingCameraStyle {
+            self.take?.pendingCameraStyle = nil
+            writeCameraStyle(style, at: time)
+        }
         warningsContinuation.yield(.resumed)
         await input.resume()
         await withDiscardingTaskGroup { group in
@@ -593,6 +642,25 @@ public actor RecordingCoordinator {
                 group.addTask { await pipeline.resume() }
             }
         }
+    }
+
+    // MARK: - Camera style
+
+    /// Writes `style` now while recording, or keeps it for `resume` while paused.
+    private func cameraStyleChanged(to style: CameraStyle) {
+        guard take?.cameraStyle != nil else { return }  // no camera
+        switch state {
+        case .recording: writeCameraStyle(style, at: clock())
+        case .paused: take?.pendingCameraStyle = style
+        case .idle, .starting, .stopping, .stopped: break
+        }
+    }
+
+    /// Logs `style` at `time` unless the take has it already.
+    private func writeCameraStyle(_ style: CameraStyle, at time: HostTime) {
+        guard let take, let log = take.log, take.cameraStyle != style else { return }
+        log.append(InputEvent(t: time, kind: .cameraStyle(style)))
+        self.take?.cameraStyle = style
     }
 
     // MARK: - Disk space

@@ -217,6 +217,13 @@ private let version1Example = #"""
     }
 }
 
+/// What a version 1 package is rewritten with (recovery closing its take, say) has no key version 2 added.
+@Test func version1ManifestReencodesByteForByte() throws {
+    let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(version1Example.utf8))
+    let reencoded = try ProjectJSON.encoder().encode(manifest)
+    #expect(String(decoding: reencoded, as: UTF8.self) == version1Example)
+}
+
 @Test func newPackagesAreVersion2() throws {
     #expect(Manifest.currentFormatVersion == 2)
     #expect(Manifest.supportedFormatVersions == 1...2)

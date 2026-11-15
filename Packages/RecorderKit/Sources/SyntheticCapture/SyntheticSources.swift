@@ -6,14 +6,42 @@ import ProjectFormat
 import Recording
 import Synchronization
 
-/// A fake display: `SampleFactory` frames at `framesPerSecond`, each timestamped with `clock()`
-/// when it is made. Delivers on the start queue like `DisplayCaptureSource`, and can fail on demand.
+/// A fake display, window or camera: `SampleFactory` frames at `framesPerSecond`, each timestamped with
+/// `clock()` when it is made. Delivers on the start queue like `DisplayCaptureSource`, and can fail on demand.
 public final class SyntheticVideoSource: CaptureSource {
     public let trackID: String
-    public let kind = TrackKind.display
+    public let kind: TrackKind
     public let media: TrackMedia
-    public let sourceInfo: TrackSource
-    public var activeDeviceUniqueID: String? { nil }
+
+    /// By kind: a display (`displayID`) or a window (`windowID` 4242) with its frame at `globalOrigin` in global
+    /// points, as large as its frames are now, or a camera with its `deviceUniqueID`.
+    public var sourceInfo: TrackSource {
+        let (size, device) = state.withLock { ($0.size, $0.deviceUniqueID) }
+        let frame = Rect(x: globalOrigin.x, y: globalOrigin.y, width: Double(size.width), height: Double(size.height))
+        switch kind {
+        case .display:
+            return TrackSource(name: "Synthetic Display", displayID: displayID, globalFrame: frame, pixelScale: 1)
+        case .window:
+            return TrackSource(
+                name: "Synthetic Window", globalFrame: frame, pixelScale: 1, windowID: 4242,
+                bundleIdentifier: "dev.toma.synthetic")
+        case .camera:
+            return TrackSource(name: "Synthetic Camera", deviceUniqueID: device)
+        case .microphone, .systemAudio:
+            preconditionFailure("SyntheticVideoSource: \(kind) is not a video kind")
+        }
+    }
+
+    /// The device a camera's `start` reports as active: `"synthetic-camera"` unless changed. Change it between
+    /// runs to simulate a restart on another camera.
+    public var deviceUniqueID: String {
+        get { state.withLock { $0.deviceUniqueID } }
+        set { state.withLock { $0.deviceUniqueID = newValue } }
+    }
+
+    /// A camera's device, as `CaptureSource` says: set by a successful `start`, kept after an error, cleared by
+    /// `stop`. Always `nil` for a display or a window.
+    public var activeDeviceUniqueID: String? { state.withLock { $0.activeDeviceUniqueID } }
 
     /// Calls to `start`, including the ones that threw.
     public var startCount: Int { runner.startCount }
@@ -23,14 +51,17 @@ public final class SyntheticVideoSource: CaptureSource {
         set { runner.failOnStart = newValue }
     }
 
-    private let width: Int
-    private let height: Int
+    private let displayID: UInt32
+    private let globalOrigin: SIMD2<Double>
     private let framesPerSecond: Int
     private let clock: @Sendable () -> HostTime
     private let runner = SyntheticRunner()
-    private let frames = Mutex(Frames())
+    private let state: Mutex<State>
 
-    private struct Frames {
+    private struct State {
+        var size: (width: Int, height: Int)
+        var deviceUniqueID = "synthetic-camera"
+        var activeDeviceUniqueID: String?
         var paused = false
         var nextIndex = 0
         /// PTS of the last frame emitted, by any run.
@@ -39,36 +70,42 @@ public final class SyntheticVideoSource: CaptureSource {
 
     public init(
         trackID: String = "display-1",
+        kind: TrackKind = .display,
+        displayID: UInt32 = 1,
+        globalOrigin: SIMD2<Double> = .zero,
         width: Int,
         height: Int,
         framesPerSecond: Int,
         clock: @escaping @Sendable () -> HostTime = HostTime.now
     ) {
+        precondition(kind.isVideo, "SyntheticVideoSource: \(kind) is not a video kind")
         precondition(framesPerSecond > 0, "SyntheticVideoSource: framesPerSecond must be positive")
         self.trackID = trackID
+        self.kind = kind
         self.media = .video(framesPerSecond: framesPerSecond)
-        self.sourceInfo = TrackSource(
-            name: "Synthetic Display",
-            displayID: 1,
-            globalFrame: Rect(x: 0, y: 0, width: Double(width), height: Double(height)),
-            pixelScale: 1
-        )
-        self.width = width
-        self.height = height
+        self.displayID = displayID
+        self.globalOrigin = globalOrigin
         self.framesPerSecond = framesPerSecond
         self.clock = clock
+        self.state = Mutex(State(size: (width, height)))
     }
 
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
         try await runner.start(
-            on: queue, sink: sink, interval: .nanoseconds(1_000_000_000 / framesPerSecond)
+            on: queue, sink: sink, interval: .nanoseconds(1_000_000_000 / framesPerSecond),
+            onInstall: { [self] in
+                guard kind == .camera else { return }
+                state.withLock { $0.activeDeviceUniqueID = $0.deviceUniqueID }
+            }
         ) { [weak self] sink in
             self?.emitFrame(to: sink)
         }
     }
 
     public func stop() async {
-        await runner.stop()
+        await runner.stop { [self] in
+            state.withLock { $0.activeDeviceUniqueID = nil }
+        }
     }
 
     /// Delivers `didStopWithError` with `NSError(domain:code:)` on the start queue, after the frames
@@ -79,49 +116,64 @@ public final class SyntheticVideoSource: CaptureSource {
 
     /// While paused, no frames are emitted but the source keeps running (a static screen).
     public func pauseFrames(_ paused: Bool) {
-        frames.withLock { $0.paused = paused }
+        state.withLock { $0.paused = paused }
+    }
+
+    /// The frames emitted from now on are `width` × `height`: a window resized, say.
+    public func resize(width: Int, height: Int) {
+        precondition(width > 0 && height > 0, "SyntheticVideoSource: empty frame \(width)×\(height)")
+        state.withLock { $0.size = (width, height) }
     }
 
     /// The PTS is `clock()`, moved past the previous frame's if needed, so PTS keep increasing across
     /// restarts even with a clock that stalls or goes back.
     private func emitFrame(to sink: any CaptureSink) {
         let now = clock()
-        let frame = frames.withLock { frames -> (index: Int, pts: HostTime)? in
-            guard !frames.paused else { return nil }
-            let pts = frames.lastPTS.map { max(now, HostTime(nanoseconds: $0.nanoseconds + 1)) } ?? now
+        let frame = state.withLock { state -> (index: Int, pts: HostTime, width: Int, height: Int)? in
+            guard !state.paused else { return nil }
+            let pts = state.lastPTS.map { max(now, HostTime(nanoseconds: $0.nanoseconds + 1)) } ?? now
             defer {
-                frames.nextIndex += 1
-                frames.lastPTS = pts
+                state.nextIndex += 1
+                state.lastPTS = pts
             }
-            return (frames.nextIndex, pts)
+            return (state.nextIndex, pts, state.size.width, state.size.height)
         }
         guard let frame else { return }
-        sink.source(
-            trackID,
-            didOutput: SampleFactory.videoSample(width: width, height: height, pts: frame.pts, frameIndex: frame.index))
+        let sample = SampleFactory.videoSample(width: frame.width, height: frame.height, pts: frame.pts, frameIndex: frame.index)
+        sink.source(trackID, didOutput: sample)
     }
 }
 
-/// A fake microphone: 10 ms blocks of `SampleFactory` audio at `amplitude`, paced in real time. The
-/// first block is stamped with `clock()` at `start` (or where the previous run ended, if that is later,
-/// so PTS never go back across a restart); each block moves the next PTS by
+/// A fake microphone or system audio: 10 ms blocks of `SampleFactory` audio at `amplitude`, paced in real
+/// time. The first block is stamped with `clock()` at `start` (or where the previous run ended, if that is
+/// later, so PTS never go back across a restart); each block moves the next PTS by
 /// `frames / sampleRate × (1 + clockSkewPPM / 1e6)`, like a device clock that drifts from the host's.
 /// `sampleRate` must be at least 100 Hz, so a 10 ms block has at least one frame.
 public final class SyntheticAudioSource: CaptureSource {
     public let trackID: String
-    public let kind = TrackKind.microphone
+    public let kind: TrackKind
     public let media = TrackMedia.audio
 
+    /// A microphone with its `deviceUniqueID`, or system audio of every app but Toma.
     public var sourceInfo: TrackSource {
-        TrackSource(name: "Synthetic Microphone", deviceUniqueID: deviceUniqueID)
+        switch kind {
+        case .microphone:
+            TrackSource(name: "Synthetic Microphone", deviceUniqueID: deviceUniqueID)
+        case .systemAudio:
+            TrackSource(name: "Synthetic System Audio", excludedBundleIDs: ["dev.toma.Toma"])
+        case .display, .window, .camera:
+            preconditionFailure("SyntheticAudioSource: \(kind) is not an audio kind")
+        }
     }
 
-    /// The device a `start` reports as active. Change it to simulate a restart on another device.
+    /// The device a microphone's `start` reports as active. Change it to simulate a restart on another device.
     public var deviceUniqueID: String {
         get { audio.withLock { $0.deviceUniqueID } }
         set { audio.withLock { $0.deviceUniqueID = newValue } }
     }
 
+    /// A microphone's device, as `CaptureSource` says: set by a successful `start`, kept after an error,
+    /// cleared by `stop`. Always `nil` for system audio, which has no device.
     public var activeDeviceUniqueID: String? { audio.withLock { $0.activeDeviceUniqueID } }
 
     /// How loud the sine of the blocks is, as a fraction of full scale: 0.25 unless changed; 0 is a
@@ -175,13 +227,16 @@ public final class SyntheticAudioSource: CaptureSource {
 
     public init(
         trackID: String = "mic",
+        kind: TrackKind = .microphone,
         sampleRate: Double = 48_000,
         channels: Int = 1,
         clockSkewPPM: Double = 0,
         clock: @escaping @Sendable () -> HostTime = HostTime.now
     ) {
+        precondition(!kind.isVideo, "SyntheticAudioSource: \(kind) is not an audio kind")
         Self.checkFormat(sampleRate: sampleRate, channels: channels)
         self.trackID = trackID
+        self.kind = kind
         self.clockSkewPPM = clockSkewPPM
         self.clock = clock
         self.audio = Mutex(Audio(sampleRate: sampleRate, channels: channels))
@@ -197,7 +252,7 @@ public final class SyntheticAudioSource: CaptureSource {
                     audio.timeline = Timeline(
                         firstPTS: max(now, previousEnd ?? now),
                         startUptimeNanoseconds: DispatchTime.now().uptimeNanoseconds)
-                    audio.activeDeviceUniqueID = audio.deviceUniqueID
+                    if kind == .microphone { audio.activeDeviceUniqueID = audio.deviceUniqueID }
                 }
             }
         ) { [weak self] sink in

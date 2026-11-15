@@ -25,11 +25,16 @@ struct RecorderDev: AsyncParsableCommand {
 struct SynthRecord: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "synth-record",
-        abstract: "Records a take from a synthetic display and microphone. Needs no permission.",
+        abstract: "Records a take from synthetic displays or a window, microphone, camera and system audio. Needs no permission.",
         discussion: """
             Creates <directory>/synth-<date>-<time>.toma and prints its absolute path as the first line \
             once recording has started. Warnings follow as "warning: …" lines, and a summary of the take \
             once it is closed.
+
+            The tracks, in this order: display-1 at the origin of the global space (or, with --window, \
+            window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
+            at 1280×720 and 30 fps (--camera), mic, and system-audio in stereo at 48 kHz with a clock that \
+            runs 1500 ppm slow (--system-audio).
             """
     )
 
@@ -39,30 +44,60 @@ struct SynthRecord: AsyncParsableCommand {
     @Option(help: "Seconds to record.")
     var duration: Double
 
-    @Option(help: "Frames per second of the synthetic display.")
+    @Option(help: "Frames per second of the synthetic displays or window.")
     var fps = 30
 
-    @Option(help: "Width of the synthetic display, in pixels.")
+    @Option(help: "Width of the synthetic displays or window, in pixels.")
     var width = 640
 
-    @Option(help: "Height of the synthetic display, in pixels.")
+    @Option(help: "Height of the synthetic displays or window, in pixels.")
     var height = 360
 
-    @Option(help: "Seconds after which the synthetic screen stops changing; heartbeats keep its track going.")
+    @Option(help: "Seconds after which the synthetic screens stop changing; heartbeats keep their tracks going.")
     var staticAfter: Double?
+
+    @Option(help: "Synthetic displays to record, each --width × --height; the second and later ones to the left of the first.")
+    var displays = 1
+
+    @Flag(help: "Record a synthetic window, window-4242, instead of the displays.")
+    var window = false
+
+    @Flag(help: "Also record a synthetic camera, 1280×720 at 30 fps.")
+    var camera = false
+
+    @Flag(help: "Also record synthetic system audio, stereo at 48 kHz, with a clock 1500 ppm slow.")
+    var systemAudio = false
 
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         guard fps > 0, width > 0, height > 0 else { throw ValidationError("--fps, --width and --height must be positive.") }
         if let staticAfter, staticAfter < 0 { throw ValidationError("--static-after cannot be negative.") }
+        guard displays > 0 else { throw ValidationError("--displays must be positive.") }
+        if window, displays > 1 { throw ValidationError("--window records no display: leave out --displays.") }
     }
 
     func run() async throws {
-        let display = SyntheticVideoSource(width: width, height: height, framesPerSecond: fps)
+        let screens = window
+            ? [SyntheticVideoSource(
+                trackID: "window-4242", kind: .window, globalOrigin: [100, 80], width: width, height: height,
+                framesPerSecond: fps)]
+            : (1...displays).map { n in
+                SyntheticVideoSource(
+                    trackID: "display-\(n)", displayID: UInt32(n), globalOrigin: [-Double((n - 1) * width), 0],
+                    width: width, height: height, framesPerSecond: fps)
+            }
+        var sources: [any CaptureSource] = screens
+        if camera {
+            sources.append(SyntheticVideoSource(trackID: "camera", kind: .camera, width: 1280, height: 720, framesPerSecond: 30))
+        }
+        sources.append(SyntheticAudioSource())
+        if systemAudio {
+            sources.append(SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500))
+        }
         let staticAfter = staticAfter
         try await recordTake(
             in: directory, prefix: "synth", duration: duration,
-            sources: [display, SyntheticAudioSource()], input: NoInputRecorder(),
+            sources: sources, input: NoInputRecorder(),
             systemActivity: AsyncStream { $0.finish() },
             whileRecording: {
                 guard let staticAfter else { return }
@@ -71,7 +106,7 @@ struct SynthRecord: AsyncParsableCommand {
                 } catch {
                     return  // the take ended first
                 }
-                display.pauseFrames(true)
+                for screen in screens { screen.pauseFrames(true) }
             })
     }
 }

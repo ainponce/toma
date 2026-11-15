@@ -154,6 +154,52 @@ import Testing
         #expect(source.activeDeviceUniqueID == nil)
     }
 
+    @Test func syntheticCameraReportsItsDeviceLikeAMicrophone() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.camera")
+        let sink = RecordingSink(queue: queue)
+        let camera = SyntheticVideoSource(trackID: "camera", kind: .camera, width: 64, height: 36, framesPerSecond: 30)
+        camera.failOnStart = 1
+        await #expect(throws: NSError(domain: "Synthetic", code: -1)) { try await camera.start(on: queue, sink: sink) }
+        #expect(camera.activeDeviceUniqueID == nil)
+        try await camera.start(on: queue, sink: sink)
+        #expect(camera.activeDeviceUniqueID == "synthetic-camera")
+        // Kept after an error; the next start takes the device it has then.
+        camera.failNow(domain: "AVFoundationErrorDomain", code: -11819)
+        #expect(await eventually { !sink.failures.isEmpty })
+        #expect(camera.activeDeviceUniqueID == "synthetic-camera")
+        camera.deviceUniqueID = "usb-camera"
+        try await camera.start(on: queue, sink: sink)
+        #expect(camera.activeDeviceUniqueID == "usb-camera")
+        await camera.stop()
+        #expect(camera.activeDeviceUniqueID == nil)
+
+        // The other video kinds have no device.
+        let display = SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30)
+        let window = SyntheticVideoSource(trackID: "window-4242", kind: .window, width: 64, height: 36, framesPerSecond: 30)
+        for source in [display, window] {
+            try await source.start(on: queue, sink: sink)
+            #expect(source.activeDeviceUniqueID == nil)
+            await source.stop()
+        }
+    }
+
+    @Test func resizeChangesTheNextFrames() async throws {
+        let queue = DispatchSerialQueue(label: "test.synthetic.resize")
+        let sink = RecordingSink(queue: queue)
+        let source = SyntheticVideoSource(trackID: "window-4242", kind: .window, width: 64, height: 36, framesPerSecond: 30)
+        try await source.start(on: queue, sink: sink)
+        #expect(await eventually { sink.samples.count >= 3 })
+        source.resize(width: 80, height: 60)
+        #expect(await eventually { sink.samples.contains { $0.width == 80 } })
+        await source.stop()
+
+        let samples = sink.samples
+        let resized = try #require(samples.firstIndex { $0.width == 80 })
+        #expect(samples[..<resized].allSatisfy { $0.width == 64 && $0.height == 36 })
+        #expect(samples[resized...].allSatisfy { $0.width == 80 && $0.height == 60 })
+        #expect(source.sourceInfo.globalFrame == Rect(x: 0, y: 0, width: 80, height: 60))
+    }
+
     @Test func clockSkewShiftsAudioPTS() async throws {
         async let skewed = ptsAdvanceAfterOneSecond(clockSkewPPM: 2000)
         async let exact = ptsAdvanceAfterOneSecond(clockSkewPPM: 0)

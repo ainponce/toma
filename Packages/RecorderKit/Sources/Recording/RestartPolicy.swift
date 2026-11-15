@@ -39,9 +39,10 @@ struct RestartPolicy: Equatable, Sendable {
         return .wait(delay)
     }
 
-    /// Whether a track keeps retrying once its restart attempts are used up: the only screen of the take,
-    /// or a microphone (a USB or Bluetooth one can take far longer than the backoff to come back).
+    /// Whether a track keeps retrying once its restart attempts are used up: the only screen of the take (its
+    /// one display or window), a microphone or a camera (a USB, Bluetooth or Continuity device can take far
+    /// longer than the backoff to come back, or another app can hold it for a while), or system audio.
     static func keepsRetrying(kind: TrackKind, isSoleScreen: Bool) -> Bool {
-        isSoleScreen || kind == .microphone
+        isSoleScreen || kind == .microphone || kind == .camera || kind == .systemAudio
     }
 }

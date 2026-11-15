@@ -1076,6 +1076,311 @@ extension RealTimeRecordingTests {
             }
         }
 
+        // MARK: Window, camera and system audio
+
+        @Test func cameraAndSystemAudioRecordTheirOwnTracks() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display, .mic, .camera, .systemAudio])
+                let times = MeasuredTake()
+                let id = try await times.start(rig.coordinator)
+                // The first audioClock anchor of a segment comes at 5 s of its audio.
+                try await Task.sleep(for: .seconds(6))
+                let anchored: (InputEvent) -> String? = { event in
+                    guard case .audioClock(let track, _) = event.kind else { return nil }
+                    return track
+                }
+                #expect(await eventually(timeout: .seconds(10)) {
+                    Set((try? rig.events(id))?.compactMap(anchored) ?? []) == ["mic", "system-audio"]
+                })
+                let record = try await times.stop(rig.coordinator)
+
+                let take = try rig.takeOnDisk(id)
+                #expect(record == take)
+                #expect(take.tracks.map(\.id) == ["display-1", "mic", "camera", "system-audio"])
+                #expect(take.tracks.map(\.kind) == [.display, .microphone, .camera, .systemAudio])
+                #expect(take.track("camera")?.source == TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera"))
+                #expect(take.track("system-audio")?.source == TrackSource(
+                    name: "Synthetic System Audio", excludedBundleIDs: ["dev.toma.Toma"]))
+                for track in take.tracks {
+                    try #require(track.segments.count == 1, "\(track.id)")
+                    #expect(track.segments[0].file == "takes/\(id)/\(track.id)/seg-0001.mov")
+                    #expect(track.segments[0].endReason == .stopped, "\(track.id)")
+                }
+                let camera = try #require(take.track("camera")?.segments.first)
+                let span = try #require(camera.endHostTime).seconds(since: camera.startHostTime)
+                times.expectSpansTheTake(span)
+                #expect(span > 5.5, "the camera recorded \(span) s")
+                #expect(abs(try await rig.duration(of: camera) - span) < 0.15)
+                let systemAudio = try #require(take.track("system-audio")?.segments.first)
+                let format = try await rig.audioFormat(of: systemAudio)
+                #expect(format.mSampleRate == 48_000 && format.mChannelsPerFrame == 2)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all.isEmpty)
+            }
+        }
+
+        @Test func cameraLossFallsBackAndLogsDeviceChanged() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(
+                    in: directory, tracks: [.display, .camera], configuration: RecordingConfiguration(restartBackoff: [.milliseconds(10)]))
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(1))
+                // The camera went away: the restart takes another one.
+                rig.camera.deviceUniqueID = "usb-camera"
+                rig.camera.failNow(domain: "AVFoundationErrorDomain", code: -11818)
+                #expect(await eventually { rig.liveTrack(id, "camera")?.segments.count == 2 })
+                try await Task.sleep(for: .milliseconds(500))
+                _ = try await rig.coordinator.stop()
+
+                let take = try rig.takeOnDisk(id)
+                let camera = try #require(take.track("camera"))
+                #expect(camera.segments.map(\.endReason) == [
+                    .streamError(domain: "AVFoundationErrorDomain", code: -11818), .stopped,
+                ])
+                #expect(camera.segments.map(\.index) == [1, 2])
+                #expect(try await rig.duration(of: camera.segments[1]) > 0.3)
+                // The manifest names the camera the take started with; the log, the one it changed to.
+                #expect(camera.source.deviceUniqueID == "synthetic-camera")
+                let changes = try rig.events(id).filter {
+                    if case .deviceChanged = $0.kind { return true }
+                    return false
+                }
+                #expect(changes.map(\.kind) == [.deviceChanged(track: "camera", deviceUniqueID: "usb-camera")])
+                #expect(take.track("display-1")?.segments.map(\.endReason) == [.stopped])
+                #expect(rig.camera.startCount == 2)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.streamInterrupted(track: "camera"), .streamRestarted(track: "camera")])
+            }
+        }
+
+        @Test func cameraKeepsRetryingAfterRestartsAreUsedUp() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(
+                    in: directory, tracks: [.display, .camera], configuration: RecordingConfiguration(restartBackoff: [.milliseconds(10)]))
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(500))
+                rig.camera.failOnStart = 99
+                rig.camera.failNow(domain: "AVFoundationErrorDomain", code: -11819)
+                #expect(await eventually { rig.warnings.all.contains(.trackPaused(track: "camera")) })
+                // It goes on trying at the last interval, well past the one attempt of the backoff.
+                #expect(await eventually { rig.camera.startCount >= 6 })
+                _ = try await rig.coordinator.stop()
+
+                let take = try rig.takeOnDisk(id)
+                #expect(take.track("camera")?.segments.map(\.endReason) == [
+                    .streamError(domain: "AVFoundationErrorDomain", code: -11819),
+                ])
+                // The screen goes on.
+                let display = try #require(take.track("display-1"))
+                #expect(display.segments.map(\.endReason) == [.stopped])
+                #expect(try await rig.duration(of: display.segments[0]) > 0.5)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.streamInterrupted(track: "camera"), .trackPaused(track: "camera")])
+            }
+        }
+
+        @Test func windowResizeOpensNewSegment() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(
+                    in: directory, tracks: [.window, .mic], configuration: RecordingConfiguration(restartBackoff: [.milliseconds(10)]))
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(1))
+                rig.window.resize(width: 800, height: 600)
+                #expect(await eventually { rig.liveTrack(id, "window-4242")?.segments.count == 2 })
+                try await Task.sleep(for: .milliseconds(500))
+                // The window is the take's only screen: once its attempts are used up it keeps trying, like a sole display.
+                rig.window.failOnStart = 3
+                rig.window.failNow(domain: "SCStreamErrorDomain", code: -3815)
+                #expect(await eventually { rig.warnings.all.contains(.streamRestarted(track: "window-4242")) })
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await rig.coordinator.stop()
+
+                let take = try rig.takeOnDisk(id)
+                let window = try #require(take.track("window-4242"))
+                let frame = Rect(x: 100, y: 80, width: 640, height: 360)
+                #expect(window.kind == .window)
+                #expect(window.source == TrackSource(
+                    name: "Synthetic Window", globalFrame: frame, pixelScale: 1, windowID: 4242, bundleIdentifier: "dev.toma.synthetic"))
+                try #require(window.segments.count == 3)
+                #expect(window.segments.map(\.endReason) == [
+                    .formatChanged, .streamError(domain: "SCStreamErrorDomain", code: -3815), .stopped,
+                ])
+                // The new size starts a segment with its first frame: no gap, no wait.
+                let firstEnd = try #require(window.segments[0].endHostTime)
+                #expect(abs(window.segments[1].startHostTime.seconds(since: firstEnd)) < 0.001)
+                #expect(try await rig.videoSize(of: window.segments[0]) == CGSize(width: 640, height: 360))
+                #expect(try await rig.videoSize(of: window.segments[1]) == CGSize(width: 800, height: 600))
+                #expect(take.track("mic")?.segments.map(\.endReason) == [.stopped])
+                #expect(rig.window.startCount == 5)
+
+                // Where the window was, written as the take starts: before any segment.
+                let events = try rig.events(id)
+                let isGeometry: (InputEvent) -> Bool = { event in
+                    switch event.kind {
+                    case .windowGeometry, .displayGeometry: true
+                    default: false
+                    }
+                }
+                #expect(events.filter(isGeometry).map(\.kind) == [.windowGeometry(track: "window-4242", frame: frame, onScreen: true)])
+                let geometry = try #require(events.firstIndex(where: isGeometry))
+                let firstSegment = try #require(events.firstIndex {
+                    if case .segmentStarted = $0.kind { return true }
+                    return false
+                })
+                #expect(geometry < firstSegment)
+                await rig.warningsDone.value
+                // `displayPaused`, which the app shows as the window paused, and its resolution when it comes back.
+                #expect(rig.warnings.all == [
+                    .streamInterrupted(track: "window-4242"), .displayPaused(track: "window-4242"),
+                    .streamRestarted(track: "window-4242"),
+                ])
+            }
+        }
+
+        @Test func takeRecordCarriesTheInitialCameraStyle() async throws {
+            try await withTemporaryDirectory { directory in
+                let chosen = CameraStyle(shape: .portrait, size: CameraStyle.large, anchor: .top)
+                let cases: [(tracks: [Rig.Track], style: CameraStyle?, expected: CameraStyle?)] = [
+                    ([.display, .camera], chosen, chosen),
+                    ([.display, .camera], nil, .default),
+                    // Without a camera the take has no camera style, whatever was asked.
+                    ([.display, .mic], chosen, nil),
+                ]
+                for (n, (tracks, style, expected)) in cases.enumerated() {
+                    let folder = directory.appendingPathComponent("\(n)", isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+                    let rig = try Rig(in: folder, tracks: tracks, cameraStyle: style)
+                    let id = try await rig.coordinator.start()
+                    // In the record the manifest has before anything is recorded.
+                    #expect(rig.liveTake(id)?.cameraStyle == expected, "case \(n)")
+                    try await Task.sleep(for: .milliseconds(200))
+                    let record = try await rig.coordinator.stop()
+                    #expect(record.cameraStyle == expected, "case \(n)")
+                    #expect(try rig.takeOnDisk(id).cameraStyle == expected, "case \(n)")
+                }
+            }
+        }
+
+        @Test func cameraStyleChangesAreLoggedAtTheirTime() async throws {
+            try await withTemporaryDirectory { directory in
+                let clock = PinnedClock()
+                let rig = try Rig(in: directory, tracks: [.display, .camera], clock: clock.now)
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(300))
+                // The style the take started with is no change.
+                try await rig.coordinator.setCameraStyle(.default)
+                let moved = CameraStyle(shape: .circle, size: CameraStyle.medium, anchor: .topLeading)
+                let movedAt = HostTime.now()
+                clock.pin(movedAt)
+                try await rig.coordinator.setCameraStyle(moved)
+                clock.pin(nil)
+                try await rig.coordinator.setCameraStyle(moved)
+                try await Task.sleep(for: .milliseconds(100))
+                let resized = CameraStyle(shape: .landscape, size: CameraStyle.small, anchor: .topLeading)
+                let resizedAt = HostTime.now()
+                clock.pin(resizedAt)
+                try await rig.coordinator.setCameraStyle(resized)
+                clock.pin(nil)
+                try await Task.sleep(for: .milliseconds(100))
+                _ = try await rig.coordinator.stop()
+
+                let styles = try rig.events(id).compactMap { event -> (style: CameraStyle, t: HostTime)? in
+                    guard case .cameraStyle(let style) = event.kind else { return nil }
+                    return (style, event.t)
+                }
+                #expect(styles.map(\.style) == [moved, resized])
+                #expect(styles.map(\.t) == [movedAt, resizedAt])
+            }
+        }
+
+        @Test func cameraStyleChangedWhilePausedIsLoggedAtResume() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display, .camera])
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(1))
+                try await rig.coordinator.pause()
+                let moved = CameraStyle(shape: .circle, size: CameraStyle.medium, anchor: .topLeading)
+                let last = CameraStyle(shape: .roundedSquare, size: CameraStyle.large, anchor: .leading)
+                try await rig.coordinator.setCameraStyle(moved)
+                try await rig.coordinator.setCameraStyle(last)
+                try await Task.sleep(for: .seconds(1))
+                try await rig.coordinator.resume()
+                // A system pause holds a change back too, and one that ends at the style written last is no change.
+                rig.activity.yield(.screenLocked)
+                #expect(await eventually { rig.warnings.all.contains(.paused(reason: "screenLocked")) })
+                try await rig.coordinator.setCameraStyle(moved)
+                try await rig.coordinator.setCameraStyle(last)
+                rig.activity.yield(.screenUnlocked)
+                #expect(await eventually { rig.warnings.all.filter { $0 == .resumed }.count == 2 })
+                try await Task.sleep(for: .milliseconds(300))
+                _ = try await rig.coordinator.stop()
+
+                let events = try rig.events(id)
+                let styles = events.indices.filter {
+                    if case .cameraStyle = events[$0].kind { return true }
+                    return false
+                }
+                try #require(styles.count == 1, "\(styles.map { events[$0] })")
+                let style = styles[0]
+                #expect(events[style].kind == .cameraStyle(last))
+                // Right after the first `resumed`, at its time.
+                let resumed = try #require(events.firstIndex { $0.kind == .resumed })
+                #expect(style == resumed + 1)
+                #expect(events[style].t == events[resumed].t)
+                let paused = try #require(events.first { $0.kind == .paused(reason: "user") })
+                #expect(events[resumed].t.seconds(since: paused.t) > 0.9)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.paused(reason: "user"), .resumed, .paused(reason: "screenLocked"), .resumed])
+            }
+        }
+
+        @Test func cameraStyleOutsideATakeThrows() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display, .camera])
+                let moved = CameraStyle(shape: .circle, size: CameraStyle.medium, anchor: .topLeading)
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.setCameraStyle(moved) }
+                let id = try await rig.coordinator.start()
+                _ = try await rig.coordinator.stop()
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.setCameraStyle(moved) }
+                #expect(!(try rig.events(id)).contains {
+                    if case .cameraStyle = $0.kind { return true }
+                    return false
+                })
+            }
+        }
+
+        @Test func cameraStyleOfATakeWithoutACameraIsNotLogged() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display])
+                let id = try await rig.coordinator.start()
+                try await rig.coordinator.setCameraStyle(CameraStyle(shape: .circle, size: CameraStyle.medium, anchor: .topLeading))
+                _ = try await rig.coordinator.stop()
+                #expect(!(try rig.events(id)).contains {
+                    if case .cameraStyle = $0.kind { return true }
+                    return false
+                })
+            }
+        }
+
+        @Test func startRefusesAPackageOfAnotherFormatVersion() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory)
+                // A version 1 package is never given what only version 2 defines: nothing in it changes.
+                var manifest = try rig.manifestOnDisk()
+                manifest.formatVersion = 1
+                let version1 = try ProjectJSON.encoder().encode(manifest)
+                try version1.write(to: rig.package.manifestURL)
+                await #expect(throws: RecordingError.notCurrentFormatVersion(1)) { try await rig.coordinator.start() }
+
+                #expect(try Data(contentsOf: rig.package.manifestURL) == version1)
+                #expect(try FileManager.default.contentsOfDirectory(atPath: rig.package.takesURL.path).isEmpty)
+                #expect(rig.display.startCount == 0 && rig.mic.startCount == 0)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all.isEmpty)
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.stop() }
+            }
+        }
+
         @Test func stateErrors() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, tracks: [.display])
@@ -1093,11 +1398,16 @@ extension RealTimeRecordingTests {
 /// A take recorded from synthetic sources into a fresh package, with a fake disk and an injected
 /// system-activity stream.
 struct Rig {
-    enum Track { case mic, display }
+    enum Track { case mic, display, camera, systemAudio, window }
 
     let package: ProjectPackage
     let display = SyntheticVideoSource(width: 640, height: 360, framesPerSecond: 30)
     let mic = SyntheticAudioSource()
+    let camera = SyntheticVideoSource(trackID: "camera", kind: .camera, width: 320, height: 180, framesPerSecond: 30)
+    let systemAudio = SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500)
+    /// The window's frame in global points: 640 × 360 at (100, 80).
+    let window = SyntheticVideoSource(
+        trackID: "window-4242", kind: .window, globalOrigin: [100, 80], width: 640, height: 360, framesPerSecond: 30)
     let disk = FakeDisk()
     let activity: AsyncStream<SystemActivity>.Continuation
     let coordinator: RecordingCoordinator
@@ -1114,13 +1424,22 @@ struct Rig {
         configuration: RecordingConfiguration = .init(),
         writerFactory: WriterFactory? = nil,
         clock: @escaping @Sendable () -> HostTime = HostTime.now,
-        ticks: RecordingTicks = .live
+        ticks: RecordingTicks = .live,
+        cameraStyle: CameraStyle? = nil
     ) throws {
         package = try ProjectPackage.create(in: directory, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
         let (stream, continuation) = AsyncStream.makeStream(of: SystemActivity.self)
         activity = continuation
-        let (mic, display) = (mic, display)
-        let sources: [any CaptureSource] = custom ?? tracks.map { $0 == .mic ? mic as any CaptureSource : display }
+        let (mic, display, camera, systemAudio, window) = (mic, display, camera, systemAudio, window)
+        let sources: [any CaptureSource] = custom ?? tracks.map { track -> any CaptureSource in
+            switch track {
+            case .mic: mic
+            case .display: display
+            case .camera: camera
+            case .systemAudio: systemAudio
+            case .window: window
+            }
+        }
         coordinator = RecordingCoordinator(
             package: package,
             sources: sources,
@@ -1130,7 +1449,8 @@ struct Rig {
             configuration: configuration,
             writerFactory: writerFactory ?? { url, media in try FragmentedTrackWriter(url: url, media: media) },
             clock: clock,
-            ticks: ticks
+            ticks: ticks,
+            cameraStyle: cameraStyle
         )
         warningsDone = Task { [warnings, coordinator] in
             for await warning in coordinator.warnings { warnings.append(warning) }
@@ -1176,6 +1496,11 @@ struct Rig {
 
     func duration(of segment: SegmentRecord) async throws -> Double {
         try await AVURLAsset(url: url(of: segment)).load(.duration).seconds
+    }
+
+    func videoSize(of segment: SegmentRecord) async throws -> CGSize {
+        let track = try #require(try await AVURLAsset(url: url(of: segment)).loadTracks(withMediaType: .video).first)
+        return try await track.load(.naturalSize)
     }
 
     func audioFormat(of segment: SegmentRecord) async throws -> AudioStreamBasicDescription {

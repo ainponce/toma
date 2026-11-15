@@ -3,10 +3,12 @@
 #
 # Crash test with synthetic sources (needs no permission): records a 20 s take, kills the recorder
 # with SIGKILL 10 s in, recovers the take and verifies that every track kept at least 8 s, ends with
-# the take and dropped at most 1 % of its frames. Once with a moving screen, once with a screen that
-# stops changing after 2 s (heartbeats). After the first, an MP4 export of the recovered take is
-# killed as soon as it is writing: the package must be unchanged, and the next export must succeed,
-# leave nothing out (no "warning: no …" line: every recovered segment decodes) and last at least 8 s.
+# the take and dropped at most 1 % of its frames. Three times: with a moving screen; with a screen that
+# stops changing after 2 s (heartbeats); and with five tracks, every kind but a window (two displays, a
+# camera, the microphone and system audio), each of which verify must pass. After the first and the
+# third, an MP4 export of the recovered take is killed as soon as it is writing: the package must be
+# unchanged, and the next export must succeed, leave nothing out (no "warning: no …" line: every
+# recovered segment decodes) and last at least 8 s.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -75,8 +77,10 @@ package_hash() {
   (cd "$1" && find . -type f -print0 | sort -z | xargs -0 shasum) | shasum
 }
 
-run_case() {  # $1 = extra flags for synth-record, $2 = "export" to crash an export of the recovered take
-  local TMP PID PKG
+# $1 = extra flags for synth-record, $2 = "export" to crash an export of the recovered take (or ""), $3 = the
+# tracks verify must pass, all of them and only them (optional).
+run_case() {
+  local TMP PID PKG TRACK
   TMP=$(mktemp -d)
   echo "== synth-record --duration 20 $1, kill -9 at 10 s (in $TMP)"
   # shellcheck disable=SC2086  # $1 holds zero or more flags
@@ -99,11 +103,25 @@ run_case() {  # $1 = extra flags for synth-record, $2 = "export" to crash an exp
     echo "FAIL: the take was not marked recovered"
     exit 1
   fi
-  "$BIN" verify "$PKG" --min-duration 8 --max-drop-ratio 0.01
+  "$BIN" verify "$PKG" --min-duration 8 --max-drop-ratio 0.01 | tee "$TMP/verify.out"
+  if [ -n "${3:-}" ]; then
+    for TRACK in $3; do
+      if ! grep -q "^OK: $TRACK " "$TMP/verify.out"; then
+        echo "FAIL: verify did not pass $TRACK"
+        exit 1
+      fi
+    done
+    # shellcheck disable=SC2086  # $3 holds the track names
+    if [ "$(grep -c '^OK: ' "$TMP/verify.out")" -ne "$(set -- $3; echo $#)" ]; then
+      echo "FAIL: verify checked other tracks than $3"
+      exit 1
+    fi
+  fi
   if [ "${2:-}" = export ]; then export_crash "$PKG" "$TMP"; fi
   rm -rf "$TMP"
 }
 
 run_case "" export
 run_case "--static-after 2"
+run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
 echo "crash test passed"

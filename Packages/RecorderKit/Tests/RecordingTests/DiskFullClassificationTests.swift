@@ -65,7 +65,7 @@ import Testing
                     return first ? ScriptedWriter(inner: inner, failAfterAppends: 3, failure: failure) : inner
                 },
                 clock: HostTime.now, ticks: .live, onDiskFull: { diskFullCalls.withLock { $0 += 1 } }, freeBytes: { freeBytes })
-            let pipeline = TrackPipeline(source: source, context: context, isSoleDisplay: true)
+            let pipeline = TrackPipeline(source: source, context: context, isSoleScreen: true)
             try await pipeline.start()
             // Until the failure was handled: the take told about the full disk, or a new segment started.
             let handled = await eventually(timeout: .seconds(30)) {

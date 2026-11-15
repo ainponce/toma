@@ -81,8 +81,9 @@ actor TrackPipeline: CaptureSink {
     private let source: any CaptureSource
     private let media: TrackMedia
     private let context: PipelineContext
-    /// The only display of the take: it keeps retrying instead of being given up.
-    private let isSoleDisplay: Bool
+    /// The only screen of the take (its one display or window): it keeps retrying instead of being given up,
+    /// and warns `displayPaused` once its attempts are used up.
+    private let isSoleScreen: Bool
     /// The track keeps retrying once its restart attempts are used up (`RestartPolicy.keepsRetrying`).
     private let keepsRetrying: Bool
     private let heartbeatTimer: (any RecordingTimer)?
@@ -202,15 +203,15 @@ actor TrackPipeline: CaptureSink {
         case superseded
     }
 
-    init(source: any CaptureSource, context: PipelineContext, isSoleDisplay: Bool) {
+    init(source: any CaptureSource, context: PipelineContext, isSoleScreen: Bool) {
         let queue = DispatchSerialQueue(label: "dev.toma.TrackPipeline.\(source.trackID)", qos: .userInitiated)
         self.queue = queue
         self.trackID = source.trackID
         self.source = source
         self.media = source.media
         self.context = context
-        self.isSoleDisplay = isSoleDisplay
-        self.keepsRetrying = RestartPolicy.keepsRetrying(kind: source.kind, isSoleScreen: isSoleDisplay)
+        self.isSoleScreen = isSoleScreen
+        self.keepsRetrying = RestartPolicy.keepsRetrying(kind: source.kind, isSoleScreen: isSoleScreen)
         self.state = State(writerBackoff: WriterFailureBackoff(backoff: context.configuration.restartBackoff))
         let target = TimerTarget()
         if case .video = source.media {
@@ -309,9 +310,9 @@ actor TrackPipeline: CaptureSink {
     // MARK: - Jobs
 
     /// Brings the source back after a stream error, following a `RestartPolicy` of `restartBackoff`.
-    /// Once the list is used up the sole display and a microphone keep trying at its last interval,
-    /// warning `displayPaused` or `trackPaused` once; any other track is lost. Stops as soon as a pause
-    /// or the close takes over (it cancels this task).
+    /// Once the list is used up the sole screen, a microphone, a camera and system audio keep trying at its
+    /// last interval, warning once `displayPaused` (the sole screen) or `trackPaused` (the others); any other
+    /// track is lost. Stops as soon as a pause or the close takes over (it cancels this task).
     private func restart() async {
         dispatchPrecondition(condition: .onQueue(queue))
         var policy = RestartPolicy(backoff: context.configuration.restartBackoff, keepsRetrying: keepsRetrying)
@@ -321,7 +322,7 @@ actor TrackPipeline: CaptureSink {
             case .wait(let wait):
                 delay = wait
             case .warnPausedThenWait(let wait):
-                context.warnings.yield(isSoleDisplay ? .displayPaused(track: trackID) : .trackPaused(track: trackID))
+                context.warnings.yield(isSoleScreen ? .displayPaused(track: trackID) : .trackPaused(track: trackID))
                 delay = wait
             case .giveUp:
                 if await onQueue({ $0.restartsExhausted() }) {

@@ -46,6 +46,8 @@ private func description(of error: RecordingError) -> String {
         String(localized: "A recording is already in progress.")
     case .notRecording:
         String(localized: "Nothing is being recorded.")
+    case .notCurrentFormatVersion:
+        String(localized: "New recordings can't be added to a project saved by another version.")
     }
 }
 

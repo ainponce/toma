@@ -830,6 +830,16 @@
         }
       }
     },
+    "New recordings can't be added to a project saved by another version." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pueden agregar grabaciones nuevas a un proyecto guardado con otra versión."
+          }
+        }
+      }
+    },
     "Next Desktop" : {
       "localizations" : {
         "es" : {
