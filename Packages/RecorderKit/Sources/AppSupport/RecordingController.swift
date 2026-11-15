@@ -97,7 +97,7 @@ public final class RecordingController {
     /// `stopTask` is a restart closing its take.
     @ObservationIgnored private var isRestarting = false
     /// A stop came while a restart closed its take: the restart ends as that stop, opening the editor if
-    /// it asked to (`nil`: no stop came).
+    /// every stop that came asked to (`nil`: no stop came). Quitting asks for none, and wins.
     @ObservationIgnored private var stopDuringRestart: Bool?
     private var recordedTime = RecordedTime()
 
@@ -234,10 +234,16 @@ public final class RecordingController {
         }
         let recording = prepared.recording
         let kinds = prepared.kinds
-        let starting = Task { [weak self] in
-            await recording.setOnAutoStop { _, _ in
-                Task { @MainActor in await self?.diskStopped(recording) }
+        // Both weakly: the coordinator keeps its handler until the take is closed, and in the app it is the
+        // recording itself.
+        let onAutoStop: @Sendable (TakeRecord, (any Error)?) -> Void = { [weak self, weak recording] _, _ in
+            Task { @MainActor in
+                guard let recording else { return }
+                await self?.diskStopped(recording)
             }
+        }
+        let starting = Task {
+            await recording.setOnAutoStop(onAutoStop)
             return try await recording.start()
         }
         let warnings = Task { [weak self] in
@@ -280,7 +286,7 @@ public final class RecordingController {
     /// any time, also while quitting.
     public func stop(openingEditor: Bool) async {
         if let stopTask {
-            if isRestarting { stopDuringRestart = openingEditor || stopDuringRestart == true }
+            if isRestarting { stopDuringRestart = openingEditor && stopDuringRestart != false }
             await stopTask.value
             return
         }
@@ -424,9 +430,10 @@ public final class RecordingController {
         let endedForDiskSpace = autoStopped
             || closed.record?.tracks.contains { $0.segments.contains { $0.endReason == .diskFull } } == true
         if endedForDiskSpace || stopDuringRestart != nil {
-            // Kept, as a stop would: the stops that came waited for this one, so the editor opens here,
-            // once, for the disk or for a stop that asked for it.
-            finish(take, closed, openingEditor: endedForDiskSpace || stopDuringRestart == true)
+            // Kept, as a stop would: the stops that came waited for this one, so the editor opens here, once,
+            // if they asked for it (the disk's own stop does), or for the disk when none came. Quitting asks
+            // for no editor, also when the disk stopped the take.
+            finish(take, closed, openingEditor: stopDuringRestart ?? endedForDiskSpace)
             return
         }
         // From here to the new start nothing suspends, so a stop either came before or finds the new start.

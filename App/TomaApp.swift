@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import SwiftUI
+import os
 
 @main
 struct TomaApp: App {
@@ -41,6 +42,8 @@ private struct MenuBarIcon: View {
 }
 
 private struct MenuContent: View {
+    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
+
     let app: AppDelegate
     let recording: RecordingController
     let updater: UpdaterController
@@ -97,6 +100,7 @@ private struct MenuContent: View {
         do {
             try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
         } catch {
+            Self.logger.error("Cannot create the trash folder \(trash.path, privacy: .public): \(String(describing: error), privacy: .public)")
             // Opening the projects folder instead still shows where to look.
             NSWorkspace.shared.open(recording.projectsFolder)
             return

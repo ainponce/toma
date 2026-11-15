@@ -377,6 +377,126 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
+    @Test func aTakeLetGoIsFreed() async throws {
+        try await withRig(keepingTakes: false) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            try await Task.sleep(for: .milliseconds(300))
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.made.count == 2 && rig.controller.phase.isRecordingATake })
+            await rig.controller.stop(openingEditor: false)
+
+            // Nothing holds a take, its coordinator or what that holds once the controller lets it go.
+            #expect(await eventually { rig.takes.made.allSatisfy(\.isFreed) })
+        }
+    }
+
+    /// A stop (quitting asks for no editor) while a restart closes the take, alone or with the disk's own
+    /// stop, which then calls back late.
+    @Test(arguments: [false, true], [false, true])
+    func stopDuringARestartKeepsTheTake(openingEditor: Bool, diskFull: Bool) async throws {
+        try await withRig { rig in
+            rig.autoStopGate.close()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            try await Task.sleep(for: .milliseconds(300))
+            if diskFull {
+                rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+                #expect(await eventually { rig.controller.notices.contains(.stoppedForDiskSpace) })
+            }
+            rig.stopGate.close()
+            rig.controller.restartTake()
+            #expect(await eventually { rig.stopGate.arrivals == 1 })  // the restart is closing the take
+            let stopping = Task { await rig.controller.stop(openingEditor: openingEditor) }
+            await settle()
+            rig.stopGate.open()
+            await stopping.value
+
+            #expect(rig.controller.phase == .idle)
+            let package = try #require(rig.takes.packages.first)
+            #expect(rig.takes.packages.count == 1)  // no new take
+            #expect(try rig.packagesOnDisk().map(\.lastPathComponent) == [package.url.lastPathComponent])
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.status == .complete)
+            let reasons = take.tracks.flatMap { $0.segments.map(\.endReason) }
+            #expect(!reasons.isEmpty && reasons.allSatisfy { $0 == (diskFull ? .diskFull : .stopped) })
+            if diskFull {
+                rig.autoStopGate.open()
+                let recording = try #require(rig.takes.recordings.first)
+                #expect(await eventually { recording.autoStops == 1 })
+                try await Task.sleep(for: .milliseconds(100))  // a stop the late handler asked for would have run
+            }
+            #expect(rig.editorOpenings.map(\.package.lastPathComponent) == (openingEditor ? [package.url.lastPathComponent] : []))
+            #expect(rig.controller.lastProjectURL?.lastPathComponent == package.url.lastPathComponent)
+            #expect(rig.termination.began == 1 && rig.termination.ended == 1)
+        }
+    }
+
+    @Test func quitWinsOverTheDiskStopDuringARestart() async throws {
+        try await withRig { rig in
+            rig.autoStopGate.close()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            try await Task.sleep(for: .milliseconds(300))
+            rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+            #expect(await eventually { rig.controller.notices.contains(.stoppedForDiskSpace) })
+            rig.stopGate.close()
+            rig.controller.restartTake()
+            #expect(await eventually { rig.stopGate.arrivals == 1 })  // the restart is closing the take
+            // The disk's own stop asks for the editor; then the app quits, asking for none.
+            rig.autoStopGate.open()
+            let recording = try #require(rig.takes.recordings.first)
+            #expect(await eventually { recording.autoStops == 1 })
+            await settle()
+            let quitting = Task { await rig.controller.stop(openingEditor: false) }
+            await settle()
+            rig.stopGate.open()
+            await quitting.value
+
+            #expect(rig.controller.phase == .idle)
+            #expect(rig.editorOpenings.isEmpty)
+            let package = try #require(rig.takes.packages.first)
+            #expect(rig.takes.packages.count == 1)
+            #expect(try rig.packagesOnDisk().map(\.lastPathComponent) == [package.url.lastPathComponent])
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+        }
+    }
+
+    /// No segment is open when the disk stops a paused take, so none ends as `diskFull`: the take's
+    /// `stoppedForDiskSpace` is what tells the restart.
+    @Test func restartOfAPausedTakeTheDiskStoppedKeepsIt() async throws {
+        try await withRig { rig in
+            rig.autoStopGate.close()  // the restart decides, not the auto-stop's own stop
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            try await Task.sleep(for: .milliseconds(300))
+            rig.controller.togglePause()
+            let package = try #require(rig.takes.packages.first)
+            #expect(await eventually {
+                (try? rig.takesOnDisk(package.url).first?.tracks.allSatisfy { $0.segments.last?.endReason == .paused }) == true
+            })
+            rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+            #expect(await eventually { rig.controller.notices.contains(.stoppedForDiskSpace) })
+            rig.controller.restartTake()
+            #expect(await eventually { rig.controller.phase == .idle })
+            rig.autoStopGate.open()
+            let recording = try #require(rig.takes.recordings.first)
+            #expect(await eventually { recording.autoStops == 1 })
+            try await Task.sleep(for: .milliseconds(100))  // a stop the late handler asked for would have run
+
+            #expect(rig.takes.packages.count == 1)  // no new take
+            #expect(try rig.packagesOnDisk().map(\.lastPathComponent) == [package.url.lastPathComponent])
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.status == .complete)
+            let reasons = take.tracks.flatMap { $0.segments.map(\.endReason) }
+            #expect(!reasons.isEmpty && reasons.allSatisfy { $0 == .paused })
+            #expect(rig.editorOpenings.map(\.package.lastPathComponent) == [package.url.lastPathComponent])
+            #expect(rig.termination.began == 1 && rig.termination.ended == 1)
+        }
+    }
+
     @Test func quitWhileStartingWaitsAndLeavesNoEmptyPackage() async throws {
         try await withRig { rig in
             rig.creation.close()
@@ -438,14 +558,18 @@ extension RecordingController.Phase {
 }
 
 /// A controller whose takes are recorded in a fresh folder with its own defaults, both removed afterwards.
+/// Without `keepingTakes`, the rig holds the takes it makes only weakly (`PreparedTakes.made`).
 @MainActor private func withRig(
-    microphone: PermissionState = .granted, hasMicrophone: Bool = true, _ body: (Rig) async throws -> Void
+    microphone: PermissionState = .granted, hasMicrophone: Bool = true, keepingTakes: Bool = true,
+    _ body: (Rig) async throws -> Void
 ) async throws {
     try await withTemporaryDirectory { directory in
         let suite = "RecordingControllerTests-\(UUID().uuidString)"
         let defaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
         defer { defaults.removePersistentDomain(forName: suite) }
-        try await body(Rig(in: directory, defaults: defaults, microphone: microphone, hasMicrophone: hasMicrophone))
+        try await body(Rig(
+            in: directory, defaults: defaults, microphone: microphone, hasMicrophone: hasMicrophone,
+            keepingTakes: keepingTakes))
     }
 }
 
@@ -477,12 +601,13 @@ extension RecordingController.Phase {
     /// How many times `isRecording` changed.
     private(set) var recordingStateChanges = 0
 
-    init(in directory: URL, defaults: UserDefaults, microphone: PermissionState, hasMicrophone: Bool) {
+    init(in directory: URL, defaults: UserDefaults, microphone: PermissionState, hasMicrophone: Bool, keepingTakes: Bool) {
         let folder = directory.appendingPathComponent("Movies/Toma", isDirectory: true)
         let (creation, startGate, stopGate, autoStopGate) = (Gate(), Gate(), Gate(), Gate())
         let termination = CountingTerminationGuard()
         let disk = FakeDisk()
-        let takes = PreparedTakes(disk: disk, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate)
+        let takes = PreparedTakes(
+            disk: disk, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate, keepingTakes: keepingTakes)
         self.folder = folder
         probe = GatedProbe(microphone: microphone)
         (self.creation, self.startGate, self.stopGate, self.autoStopGate) = (creation, startGate, stopGate, autoStopGate)
@@ -523,6 +648,14 @@ extension RecordingController.Phase {
 /// What `prepareTake` was asked for, and the takes it made: the plan `TakePlanner` makes of the request
 /// with display 1 connected and `factory`'s synthetic sources, recorded by a coordinator behind the rig's gates.
 @MainActor private final class PreparedTakes {
+    /// A take `prepare` made, held weakly: whether it has been freed.
+    struct MadeTake {
+        weak var recording: GatedTakeRecording?
+        weak var coordinator: RecordingCoordinator?
+
+        var isFreed: Bool { recording == nil && coordinator == nil }
+    }
+
     private static let displays = [
         DisplayInfo(id: 1, frame: Rect(x: 0, y: 0, width: 64, height: 36), scale: 1, isMain: true, maximumFramesPerSecond: 60),
     ]
@@ -533,17 +666,22 @@ extension RecordingController.Phase {
     private(set) var grants: [Set<PermissionKind>] = []
     /// The packages of the takes made.
     private(set) var packages: [ProjectPackage] = []
+    /// The takes made, unless they are not kept.
     private(set) var recordings: [GatedTakeRecording] = []
+    /// Every take made.
+    private(set) var made: [MadeTake] = []
     private let disk: FakeDisk
     private let startGate: Gate
     private let stopGate: Gate
     private let autoStopGate: Gate
+    private let keepingTakes: Bool
 
-    init(disk: FakeDisk, startGate: Gate, stopGate: Gate, autoStopGate: Gate) {
+    init(disk: FakeDisk, startGate: Gate, stopGate: Gate, autoStopGate: Gate, keepingTakes: Bool) {
         self.disk = disk
         self.startGate = startGate
         self.stopGate = stopGate
         self.autoStopGate = autoStopGate
+        self.keepingTakes = keepingTakes
     }
 
     func prepare(_ package: ProjectPackage, _ request: TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake {
@@ -557,7 +695,8 @@ extension RecordingController.Phase {
             diskMonitor: disk.monitor(volume: package.url), systemActivity: AsyncStream { $0.finish() })
         let recording = GatedTakeRecording(
             coordinator: coordinator, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate)
-        recordings.append(recording)
+        if keepingTakes { recordings.append(recording) }
+        made.append(MadeTake(recording: recording, coordinator: coordinator))
         return PreparedTake(
             recording: recording, microphone: plan.optional.first,
             kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }))

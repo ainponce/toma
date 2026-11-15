@@ -214,7 +214,7 @@ public actor RecordingCoordinator {
 
     /// Called once when the take stops by itself because the disk is full, with the closed take and
     /// the first failure of closing it (`nil` when it closed cleanly): the same outcome a later
-    /// `stop()` returns or throws.
+    /// `stop()` returns or throws. Let go once the take is closed, however it ended.
     public func setOnAutoStop(_ handler: @escaping @Sendable (TakeRecord, (any Error)?) -> Void) {
         onAutoStop = handler
     }
@@ -464,10 +464,10 @@ public actor RecordingCoordinator {
         let stopTime = clock()
         let task = Task { await self.closeTake(reason: reason, stopTime: stopTime) }
         closeTask = task
-        if automatic {
+        if automatic, let onAutoStop {
             Task {
                 let outcome = await task.value
-                self.onAutoStop?(outcome.record, outcome.error)
+                onAutoStop(outcome.record, outcome.error)
             }
         }
         return task
@@ -537,6 +537,7 @@ public actor RecordingCoordinator {
         }
         state = .stopped
         warningsContinuation.finish()
+        onAutoStop = nil  // whatever it holds is not kept alive by a closed take
 
         let record = take.store.manifest.takes.first { $0.id == takeID }
             ?? TakeRecord(id: takeID, status: .complete, startedAt: take.startedAt, tracks: [])
