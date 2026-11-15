@@ -58,7 +58,10 @@ private struct MenuContent: View {
                     "Recording \(recording.elapsed(at: context.date).formatted(.time(pattern: .hourMinuteSecond)))",
                     comment: "Menu item while recording: the time recorded so far")
             }
-            if recording.isPaused {
+            // The user's pause first: a lock during it changes nothing for the take.
+            if recording.isUserPaused {
+                Text("Paused", comment: "Menu item while the user has paused the take")
+            } else if recording.isPaused {
                 Text("Paused (screen locked or Mac asleep)", comment: "Menu item while a take is paused because the screen is locked or the Mac sleeps")
             }
             Button("Stop Recording") { recording.stopRecording() }
@@ -74,6 +77,9 @@ private struct MenuContent: View {
         Divider()
         Button("Open Last Project") { recording.openLastProject() }
             .disabled(!recording.hasLastProject)
+        if recording.phase == .idle {
+            Button("Show Trash in Finder") { showTrash() }
+        }
         Button("Recover Recordings…") { app.recoverRecordings() }
         Button("Permissions…") { app.showOnboarding() }
         Divider()
@@ -83,5 +89,18 @@ private struct MenuContent: View {
         Divider()
         Button("Quit") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
+    }
+
+    /// Opens the folder restarted takes go to, made empty if none has gone there yet.
+    private func showTrash() {
+        let trash = ProjectTrash.folder(in: recording.projectsFolder)
+        do {
+            try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
+        } catch {
+            // Opening the projects folder instead still shows where to look.
+            NSWorkspace.shared.open(recording.projectsFolder)
+            return
+        }
+        NSWorkspace.shared.open(trash)
     }
 }

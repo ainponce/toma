@@ -188,6 +188,195 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
+    @Test func lateAutoStopOfAPreviousTakeLeavesTheNextTakeRecording() async throws {
+        try await withRig { rig in
+            // The first take's auto-stop handler runs only once the next take is recording.
+            rig.autoStopGate.close()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+            #expect(await eventually { rig.controller.notices.contains(.stoppedForDiskSpace) })
+            await rig.controller.stop(openingEditor: true)
+            #expect(rig.controller.phase == .idle)
+
+            rig.disk.set(importantUsage: 100_000_000_000, available: 100_000_000_000)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.autoStopGate.open()
+            let first = try #require(rig.takes.recordings.first)
+            #expect(await eventually { first.autoStops == 1 })
+            try await Task.sleep(for: .milliseconds(100))  // a stop the late handler asked for would have run
+
+            #expect(rig.controller.phase.isRecordingATake)
+            let second = try #require(rig.takes.packages.last)
+            #expect(try rig.takesOnDisk(second.url).map(\.status) == [.recording])
+            #expect(rig.editorOpenings.count == 1)
+            await rig.controller.stop(openingEditor: true)
+            #expect(rig.editorOpenings.map(\.package.lastPathComponent).last == second.url.lastPathComponent)
+            #expect(rig.termination.began == 2 && rig.termination.ended == 2)
+        }
+    }
+
+    @Test func elapsedExcludesUserPause() async throws {
+        try await withRig { rig in
+            let start = Date(timeIntervalSinceReferenceDate: 800_000_000)
+            rig.now.set(start)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase == .recording(since: start) })
+
+            rig.now.set(start + 10)
+            rig.controller.togglePause()
+            #expect(rig.controller.isUserPaused)
+            // The time stops with the coordinator's `paused`, not with `togglePause`.
+            #expect(await eventually { rig.controller.elapsed(at: start + 100) == .seconds(10) })
+            #expect(!rig.controller.isPaused)  // only the system's pauses
+            rig.now.set(start + 15)
+            rig.controller.togglePause()
+            #expect(!rig.controller.isUserPaused)
+            #expect(await eventually { rig.controller.elapsed(at: start + 18) == .seconds(13) })
+            await rig.controller.stop(openingEditor: false)
+
+            let package = try #require(rig.takes.packages.first)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            let kinds = try EventLogReader.read(package.eventsURL(take: take.id)).events.map(\.kind)
+            let pauses: [InputEvent.Kind] = [.paused(reason: "user"), .resumed]
+            #expect(kinds.filter { pauses.contains($0) } == pauses)
+        }
+    }
+
+    @Test func markersAreWrittenOnlyWhileRecording() async throws {
+        try await withRig { rig in
+            rig.controller.addMarker()  // no take
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.controller.addMarker()
+            rig.controller.togglePause()
+            rig.controller.addMarker()  // paused: nothing is written
+            rig.controller.togglePause()
+            rig.controller.addMarker()
+            let package = try #require(rig.takes.packages.first)
+            let events = package.eventsURL(take: "take-001")
+            #expect(await eventually {
+                (try? EventLogReader.read(events).events.filter { $0.kind == .marker }.count) == 2
+            })
+            await rig.controller.stop(openingEditor: false)
+
+            let watched: [InputEvent.Kind] = [.marker, .paused(reason: "user"), .resumed]
+            let kinds = try EventLogReader.read(events).events.map(\.kind).filter { watched.contains($0) }
+            #expect(kinds == [.marker, .paused(reason: "user"), .resumed, .marker])
+        }
+    }
+
+    @Test func restartMovesTheClosedTakeToTrashAndStartsANewProject() async throws {
+        try await withRig { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let first = try #require(rig.takes.packages.first)
+            try await Task.sleep(for: .seconds(1))
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+
+            let trash = ProjectTrash.folder(in: rig.folder)
+            #expect(try FileManager.default.contentsOfDirectory(atPath: trash.path) == [first.url.lastPathComponent])
+            let trashed = try rig.takesOnDisk(trash.appendingPathComponent(first.url.lastPathComponent, isDirectory: true))
+            #expect(trashed.count == 1 && trashed.first?.status == .complete)
+            let second = try #require(rig.takes.packages.last)
+            #expect(try rig.packagesOnDisk().map(\.lastPathComponent) == [second.url.lastPathComponent])
+            #expect(try rig.takesOnDisk(second.url).map(\.status) == [.recording])
+            let request = TakeRequest(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(rig.takes.requests == [request, request])
+            #expect(rig.editorOpenings.isEmpty)
+            #expect(rig.controller.lastProjectURL == nil)  // never the trash
+            #expect(rig.controller.notices.isEmpty)
+            #expect(rig.recordingStateChanges == 1)  // recording all along: never idle in between
+
+            await rig.controller.stop(openingEditor: true)
+            #expect(rig.editorOpenings.map(\.package.lastPathComponent) == [second.url.lastPathComponent])
+            #expect(rig.controller.lastProjectURL?.lastPathComponent == second.url.lastPathComponent)
+            #expect(rig.termination.began == 2 && rig.termination.ended == 2)
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test func restartRacingDiskAutoStopKeepsTheTake() async throws {
+        try await withRig { rig in
+            // The controller hears of the automatic close only after the restart has closed the take: the
+            // restart, not the auto-stop's own stop, decides what happens to it.
+            rig.autoStopGate.close()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.disk.set(importantUsage: 9_000_000_000, available: 500_000_000)
+            // The disk has won: the take is closing on its own when the user restarts it.
+            #expect(await eventually { rig.controller.notices.contains(.stoppedForDiskSpace) })
+            rig.controller.restartTake()
+            #expect(await eventually { rig.controller.phase == .idle })
+            rig.autoStopGate.open()
+            let recording = try #require(rig.takes.recordings.first)
+            #expect(await eventually { recording.autoStops == 1 })
+            try await Task.sleep(for: .milliseconds(100))  // a stop the automatic one asked for would have run
+
+            let package = try #require(rig.takes.packages.first)
+            #expect(rig.takes.packages.count == 1)  // no new take
+            #expect(try rig.packagesOnDisk().map(\.lastPathComponent) == [package.url.lastPathComponent])
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+            #expect(rig.editorOpenings.map(\.package.lastPathComponent) == [package.url.lastPathComponent])
+            #expect(rig.controller.lastProjectURL?.lastPathComponent == package.url.lastPathComponent)
+            let take = try #require(try rig.takesOnDisk(package.url).first)
+            #expect(take.status == .complete)
+            let reasons = take.tracks.flatMap { $0.segments.map(\.endReason) }
+            #expect(!reasons.isEmpty && reasons.allSatisfy { $0 == .diskFull })
+            #expect(rig.termination.began == 1 && rig.termination.ended == 1)
+        }
+    }
+
+    @Test func restartKeepsTheTakeWhenTheTrashFails() async throws {
+        try await withRig { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let first = try #require(rig.takes.packages.first)
+            // A file where the trash folder goes: it cannot be created.
+            try Data().write(to: ProjectTrash.folder(in: rig.folder))
+            try await Task.sleep(for: .milliseconds(500))
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+
+            #expect(rig.controller.notices == [.couldNotMoveToTrash])
+            let second = try #require(rig.takes.packages.last)
+            let onDisk = try rig.packagesOnDisk().map(\.lastPathComponent).sorted()
+            #expect(onDisk == [first.url.lastPathComponent, second.url.lastPathComponent].sorted())
+            #expect(try rig.takesOnDisk(first.url).map(\.status) == [.complete])
+            #expect(rig.controller.lastProjectURL?.lastPathComponent == first.url.lastPathComponent)
+            #expect(rig.editorOpenings.isEmpty)
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.termination.began == 2 && rig.termination.ended == 2)
+        }
+    }
+
+    @Test func restartAfterAFailedCloseKeepsTheTakeAndStartsANewOne() async throws {
+        try await withRig { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let first = try #require(rig.takes.packages.first)
+            try await Task.sleep(for: .milliseconds(500))
+            // The manifest is replaced through a temporary file in the package folder: closing cannot mark
+            // the take complete.
+            let folder = first.url.path
+            try #require(chmod(folder, 0o555) == 0)
+            defer { chmod(folder, 0o755) }
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            try #require(chmod(folder, 0o755) == 0)
+
+            #expect(rig.controller.notices == [.closedWithError])
+            #expect(rig.controller.lastCloseError != nil)
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+            #expect(try rig.packagesOnDisk().count == 2)
+            #expect(rig.controller.lastProjectURL?.lastPathComponent == first.url.lastPathComponent)
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.termination.began == 2 && rig.termination.ended == 2)
+        }
+    }
+
     @Test func quitWhileStartingWaitsAndLeavesNoEmptyPackage() async throws {
         try await withRig { rig in
             rig.creation.close()
@@ -276,22 +465,27 @@ extension RecordingController.Phase {
     let startGate: Gate
     /// Passed by every take's `stop()` before the coordinator's.
     let stopGate: Gate
+    /// Passed by every take's auto-stop before the controller's handler is called.
+    let autoStopGate: Gate
     let termination: CountingTerminationGuard
     let disk: FakeDisk
+    let now = TestNow()
     let takes: PreparedTakes
     let controller: RecordingController
     private(set) var editorOpenings: [EditorOpening] = []
     private(set) var startFailures: [any Error] = []
+    /// How many times `isRecording` changed.
+    private(set) var recordingStateChanges = 0
 
     init(in directory: URL, defaults: UserDefaults, microphone: PermissionState, hasMicrophone: Bool) {
         let folder = directory.appendingPathComponent("Movies/Toma", isDirectory: true)
-        let (creation, startGate, stopGate) = (Gate(), Gate(), Gate())
+        let (creation, startGate, stopGate, autoStopGate) = (Gate(), Gate(), Gate(), Gate())
         let termination = CountingTerminationGuard()
         let disk = FakeDisk()
-        let takes = PreparedTakes(disk: disk, startGate: startGate, stopGate: stopGate)
+        let takes = PreparedTakes(disk: disk, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate)
         self.folder = folder
         probe = GatedProbe(microphone: microphone)
-        (self.creation, self.startGate, self.stopGate) = (creation, startGate, stopGate)
+        (self.creation, self.startGate, self.stopGate, self.autoStopGate) = (creation, startGate, stopGate, autoStopGate)
         self.termination = termination
         self.disk = disk
         self.takes = takes
@@ -306,10 +500,11 @@ extension RecordingController.Phase {
             },
             prepareTake: { package, request, granted in try takes.prepare(package, request, granted) },
             termination: termination,
-            now: { Date() })
+            now: { [now] in now.date })
         controller = RecordingController(probe: probe, environment: environment, defaults: defaults)
         controller.openEditor = { [weak self] url, take in self?.editorOpenings.append(EditorOpening(package: url, take: take)) }
         controller.showStartFailure = { [weak self] error in self?.startFailures.append(error) }
+        controller.recordingStateChanged = { [weak self] in self?.recordingStateChanges += 1 }
     }
 
     /// The packages in the projects folder; none if it was never created.
@@ -342,11 +537,13 @@ extension RecordingController.Phase {
     private let disk: FakeDisk
     private let startGate: Gate
     private let stopGate: Gate
+    private let autoStopGate: Gate
 
-    init(disk: FakeDisk, startGate: Gate, stopGate: Gate) {
+    init(disk: FakeDisk, startGate: Gate, stopGate: Gate, autoStopGate: Gate) {
         self.disk = disk
         self.startGate = startGate
         self.stopGate = stopGate
+        self.autoStopGate = autoStopGate
     }
 
     func prepare(_ package: ProjectPackage, _ request: TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake {
@@ -358,7 +555,8 @@ extension RecordingController.Phase {
         let coordinator = RecordingCoordinator(
             package: package, sources: plan.sources, input: plan.input,
             diskMonitor: disk.monitor(volume: package.url), systemActivity: AsyncStream { $0.finish() })
-        let recording = GatedTakeRecording(coordinator: coordinator, startGate: startGate, stopGate: stopGate)
+        let recording = GatedTakeRecording(
+            coordinator: coordinator, startGate: startGate, stopGate: stopGate, autoStopGate: autoStopGate)
         recordings.append(recording)
         return PreparedTake(
             recording: recording, microphone: plan.optional.first,
@@ -366,8 +564,9 @@ extension RecordingController.Phase {
     }
 }
 
-/// A coordinator whose `start()` and `stop()` first pass a gate the test holds. Its warnings are the
-/// coordinator's, then the ones `deliverAfterClose` queued, a little after the coordinator's have ended.
+/// A coordinator whose `start()` and `stop()` first pass a gate the test holds, and whose auto-stop
+/// handler is called once a third one lets it through. Its warnings are the coordinator's, then the ones
+/// `deliverAfterClose` queued, a little after the coordinator's have ended.
 private final class GatedTakeRecording: TakeRecording {
     let coordinator: RecordingCoordinator
     let warnings: AsyncStream<RecordingWarning>
@@ -375,16 +574,18 @@ private final class GatedTakeRecording: TakeRecording {
     let forwarded: Task<Void, Never>
     private let startGate: Gate
     private let stopGate: Gate
+    private let autoStopGate: Gate
     private let afterClose: WarningLog
     private let autoStopCount = Atomic(0)
 
-    /// How many times the coordinator has called the auto-stop handler.
+    /// How many times the auto-stop handler has been called.
     var autoStops: Int { autoStopCount.load(ordering: .relaxed) }
 
-    init(coordinator: RecordingCoordinator, startGate: Gate, stopGate: Gate) {
+    init(coordinator: RecordingCoordinator, startGate: Gate, stopGate: Gate, autoStopGate: Gate) {
         self.coordinator = coordinator
         self.startGate = startGate
         self.stopGate = stopGate
+        self.autoStopGate = autoStopGate
         let afterClose = WarningLog()
         self.afterClose = afterClose
         let (stream, continuation) = AsyncStream.makeStream(of: RecordingWarning.self)
@@ -407,9 +608,13 @@ private final class GatedTakeRecording: TakeRecording {
     }
 
     func setOnAutoStop(_ handler: @escaping @Sendable (TakeRecord, (any Error)?) -> Void) async {
+        let gate = autoStopGate
         await coordinator.setOnAutoStop { [weak self] record, error in
-            handler(record, error)
-            self?.autoStopCount.add(1, ordering: .relaxed)
+            Task {
+                await gate.pass()
+                handler(record, error)
+                self?.autoStopCount.add(1, ordering: .relaxed)
+            }
         }
     }
 
@@ -421,6 +626,18 @@ private final class GatedTakeRecording: TakeRecording {
     func stop() async throws -> TakeRecord {
         await stopGate.pass()
         return try await coordinator.stop()
+    }
+
+    func pause() async throws {
+        try await coordinator.pause()
+    }
+
+    func resume() async throws {
+        try await coordinator.resume()
+    }
+
+    func addMarker() async throws -> HostTime {
+        try await coordinator.addMarker()
     }
 }
 
@@ -516,6 +733,17 @@ private final class CountingTerminationGuard: TerminationGuarding {
 
     func takeEnded() {
         counts.withLock { $0.ended += 1 }
+    }
+}
+
+/// The time the controller reads: the real one, or the one the test set.
+private final class TestNow: Sendable {
+    private let fixed = Mutex<Date?>(nil)
+
+    var date: Date { fixed.withLock { $0 } ?? Date() }
+
+    func set(_ date: Date?) {
+        fixed.withLock { $0 = date }
     }
 }
 

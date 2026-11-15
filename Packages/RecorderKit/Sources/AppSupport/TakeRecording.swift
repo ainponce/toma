@@ -12,6 +12,12 @@ public protocol TakeRecording: AnyObject, Sendable {
     func start() async throws -> String
     /// Closes the take, waiting for a `start()` in progress first, and returns it.
     func stop() async throws -> TakeRecord
+    /// The user's pause: returns once nothing is recorded. `RecordingError.notRecording` unless recording or paused.
+    func pause() async throws
+    /// Ends the user's pause. `RecordingError.notRecording` unless recording or paused.
+    func resume() async throws
+    /// Marks this moment of the take and returns it. `RecordingError.notRecording` unless recording (not paused).
+    @discardableResult func addMarker() async throws -> HostTime
 }
 
 extension RecordingCoordinator: TakeRecording {}

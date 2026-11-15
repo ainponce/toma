@@ -34,4 +34,6 @@ public enum TakeNotice: Equatable, Sendable {
     case diskSpaceUnknown
     /// Closing the take failed in part (`RecordingController.lastCloseError` says how); it is closed.
     case closedWithError
+    /// The take that was restarted could not be moved to the trash: it stays in the projects folder.
+    case couldNotMoveToTrash
 }

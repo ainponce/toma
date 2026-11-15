@@ -59,6 +59,8 @@ extension TakeNotice {
             String(localized: "Can't check the free disk space.")
         case .closedWithError:
             String(localized: "The recording closed with an error: \(closeError.map(userFacingDescription(of:)) ?? String(localized: "An unexpected error occurred."))")
+        case .couldNotMoveToTrash:
+            String(localized: "The take couldn't be moved to the trash. It stays in your projects folder.")
         }
     }
 }

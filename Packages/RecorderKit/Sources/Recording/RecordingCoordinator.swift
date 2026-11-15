@@ -60,7 +60,9 @@ public enum RecordingWarning: Sendable, Equatable {
     /// the disk-space stop until it can be read again.
     case diskSpaceUnknown
     /// The take is paused: nothing is recorded until `resumed`. `reason` is the `paused` event's
-    /// (`willSleep`, or `screenLocked` for a lock or for the displays going to sleep).
+    /// (`willSleep`, `screenLocked` for a lock or for the displays going to sleep, or
+    /// `RecordingCoordinator.userPauseReason` for `pause()`): the cause that paused it, not the ones
+    /// that came while it was paused.
     case paused(reason: String)
     /// The take records again after `paused`, in new segments.
     case resumed
@@ -76,11 +78,15 @@ public enum RecordingError: Error, Equatable {
 /// Records one take: every source into its own track of segment files, plus the event log, the
 /// manifest and the recording lock, and closes it cleanly however it ends.
 ///
-/// `idle → starting → recording ⇄ paused → stopping → stopped`. Sleep and screen lock pause every
-/// track (closing their segments as `paused`); wake and unlock resume them in new segments. A stream
+/// `idle → starting → recording ⇄ paused → stopping → stopped`. Sleep, screen lock and the user's
+/// `pause()` pause every track (closing their segments as `paused`); the take resumes, in new segments,
+/// once none of them holds it: wake, unlock and `resume()` each clear only their own cause. A stream
 /// or writer failure closes that track's segment and opens a new one once it recovers. The user's
 /// `stop()` and the stop for disk space share one closing task, so a take is closed exactly once.
 public actor RecordingCoordinator {
+    /// The `reason` of the `paused` event of `pause()`.
+    public static let userPauseReason = "user"
+
     /// What a take asks of the system while it records: no idle sleep of the Mac or of the displays.
     /// A display that sleeps on its idle timer would pause the take as if the screen were locked.
     static let takeActivityOptions: ProcessInfo.ActivityOptions = [
@@ -92,7 +98,19 @@ public actor RecordingCoordinator {
     }
 
     private enum PauseCause: Hashable {
-        case sleep, screenLocked
+        case sleep, screenLocked, user
+    }
+
+    /// What the user asks of a take in progress.
+    private enum UserRequest: Sendable {
+        case pause, resume
+    }
+
+    /// The work of `activityTask`, one at a time: the system's activity and the user's requests, so a
+    /// pause and a lock never interleave. A request names its continuation in `pendingRequests`.
+    private enum Command: Sendable {
+        case system(SystemActivity)
+        case user(UserRequest, id: Int)
     }
 
     /// The resources of the take being recorded.
@@ -140,6 +158,8 @@ public actor RecordingCoordinator {
     private let configuration: RecordingConfiguration
     private let writerFactory: WriterFactory
     private let clock: @Sendable () -> HostTime
+    private let commands: AsyncStream<Command>
+    private let commandsContinuation: AsyncStream<Command>.Continuation
 
     private var state = State.idle
     private var take: Take?
@@ -152,7 +172,13 @@ public actor RecordingCoordinator {
     private var diskFull = false
     /// The first event-log failure a periodic flush heard, for `stop()` to report.
     private var logFailure: (any Error)?
+    /// Runs the `commands`, in order, while recording.
     private var activityTask: Task<Void, Never>?
+    /// Passes the system's activity on to `commands`.
+    private var systemActivityTask: Task<Void, Never>?
+    /// The user's requests not yet answered, by the ID their command carries.
+    private var pendingRequests: [Int: CheckedContinuation<Void, any Error>] = [:]
+    private var nextRequestID = 0
     private var maintenanceTask: Task<Void, Never>?
     private var diskTask: Task<Void, Never>?
     private var diskWatchdog: Task<Void, Never>?
@@ -175,6 +201,7 @@ public actor RecordingCoordinator {
         let ids = sources.map(\.trackID)
         precondition(Set(ids).count == ids.count, "RecordingCoordinator: track IDs must be unique, got \(ids)")
         (warnings, warningsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+        (commands, commandsContinuation) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
         self.package = package
         self.sources = sources
         self.input = input
@@ -321,13 +348,76 @@ public actor RecordingCoordinator {
     }
 
     private func startMonitoring() {
-        activityTask = Task { [systemActivity] in
+        systemActivityTask = Task { [systemActivity, commandsContinuation] in
             for await activity in systemActivity {
-                await self.handle(activity)
+                commandsContinuation.yield(.system(activity))
+            }
+        }
+        activityTask = Task { [commands] in
+            for await command in commands {
+                await self.run(command)
             }
         }
         diskWatchdog = Task { await self.watchDiskVerdicts() }
         maintenanceTask = Task { await self.maintain() }
+    }
+
+    // MARK: - The user's pause and markers
+
+    /// Pauses the take like a lock does, with the `paused` event's `reason` `userPauseReason`: every
+    /// track closes its segment as `paused` and nothing is written (samples, input or markers) until
+    /// `resume()`. Returns once every track is paused. Does nothing if the user has paused it already, and
+    /// only adds the user's cause if something else paused it. Throws `RecordingError.notRecording` unless
+    /// the take is recording or paused, also if it starts closing before the pause is applied.
+    public func pause() async throws {
+        try await send(.pause)
+    }
+
+    /// Ends the user's pause; the take records again, in new segments, once nothing else (sleep, lock)
+    /// holds it. Returns once every track has started again. Does nothing unless the user paused the
+    /// take. Throws like `pause()`.
+    public func resume() async throws {
+        try await send(.resume)
+    }
+
+    /// Writes a `marker` event at `clock()`, and returns that time. Throws `RecordingError.notRecording`
+    /// unless the take is recording: nothing is written while it is paused.
+    @discardableResult public func addMarker() async throws -> HostTime {
+        guard state == .recording, let log = take?.log else { throw RecordingError.notRecording }
+        let time = clock()
+        log.append(InputEvent(t: time, kind: .marker))
+        return time
+    }
+
+    /// Queues `request` behind the system's activity and the requests before it, and returns once it is done.
+    private func send(_ request: UserRequest) async throws {
+        guard state == .recording || state == .paused else { throw RecordingError.notRecording }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            let id = nextRequestID
+            nextRequestID += 1
+            pendingRequests[id] = continuation
+            if case .terminated = commandsContinuation.yield(.user(request, id: id)) {
+                pendingRequests.removeValue(forKey: id)?.resume(throwing: RecordingError.notRecording)
+            }
+        }
+    }
+
+    private func run(_ command: Command) async {
+        switch command {
+        case .system(let activity):
+            await handle(activity)
+        case .user(let request, let id):
+            guard let continuation = pendingRequests.removeValue(forKey: id) else { return }
+            guard state == .recording || state == .paused else {
+                continuation.resume(throwing: RecordingError.notRecording)
+                return
+            }
+            switch request {
+            case .pause: await pause(for: .user, reason: Self.userPauseReason)
+            case .resume: await resume(clearing: .user)
+            }
+            continuation.resume()
+        }
     }
 
     // MARK: - Stop
@@ -399,8 +489,13 @@ public actor RecordingCoordinator {
         maintenanceTask?.cancel()
         diskWatchdog?.cancel()
         diskTask?.cancel()
+        systemActivityTask?.cancel()
         activityTask?.cancel()
         await activityTask?.value  // a pause or resume in progress finishes first
+        // Every request not answered yet gets an answer: none is left waiting.
+        commandsContinuation.finish()
+        for continuation in pendingRequests.values { continuation.resume(throwing: RecordingError.notRecording) }
+        pendingRequests = [:]
         take.diskVerdicts?.finish()
 
         let pipelines = take.pipelines

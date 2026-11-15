@@ -235,6 +235,9 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
   - [ ] **Monitor externo:** sin notch no se dibuja nada en reposo; el puntero arriba al centro (60 × 8 pt) muestra la píldora 38 pt debajo del borde y se llega a ella antes de que se vaya; conectar o desconectar el monitor, cerrar la tapa o cambiar la resolución ("Más espacio") con la app abierta: la zona y la isla quedan donde corresponde; con la isla en el monitor externo, llevar el puntero al notch de la MacBook: se asoma ahí, al sacar el puntero vuelve al reposo después de 300 ms y al volver a entrar se asoma otra vez.
   - [ ] **Movimiento y aspecto:** al crecer se ve la parte de arriba del contenido (no su centro) y las esquinas de abajo con su radio durante todo el movimiento; bajo el notch, la franja negra queda pegada arriba, sin vidrio gris al lado del notch; al achicarse, el contenido no salta cuando termina de irse; abrir y cerrar a mitad de camino no salta, y abrir y cerrar rápido varias veces no da tirones; el contenido aparece con el leve desenfoque poco después de que la isla empieza a crecer y el que se va se desvanece; Liquid Glass en macOS 26: oscuro y legible, deja ver lo que hay detrás y se actualiza al pasar una ventana por debajo (si queda fijo, `NSGlassEffectView` como `contentView` del panel, Task 16e); el vidrio de respaldo en macOS 15, si hay una Mac con 15; "Reducir movimiento" deja fundidos sin rebote ni escala, también dentro del panel (el indicador de los selectores, la marca de la pantalla elegida, la tarjeta de Ajustes, los botones al apretarlos y el nombre de la pantalla resaltada), y "Reducir transparencia", vidrios sólidos, también si se cambian con la isla abierta; sobre una app a pantalla completa en otro escritorio, el reposo, la asomada y el panel funcionan ahí.
   - [ ] **Nada de Toma en el video:** abrir la isla durante una toma y pasar el mouse por las filas de pantallas: ni la isla, ni la zona del notch, ni el borde azul salen en el video.
+- [ ] Task 8 (pausa del usuario, marcadores, reiniciar toma y papelera), desde la isla de la Task 16a (pausar/reanudar, marcador y reiniciar llegan con ella; antes no hay cómo pedirlos desde la app):
+  - [ ] **Pausa:** pausar 10 s con la pantalla cambiando (por ejemplo, un video o un reloj con segundos en pantalla); mientras dura, el menú dice "En pausa" y el tiempo no avanza; al reanudar sigue desde donde quedó. En el editor la toma muestra el hueco y el video no tiene nada de esos 10 s (ni cuadros, ni el cursor, ni clics).
+  - [ ] **Reiniciar toma:** grabar unos segundos y reiniciar: la toma nueva arranca sin abrir el editor; el proyecto viejo aparece en `~/Movies/Toma/Trash` y se abre con doble clic en Finder. "Mostrar la papelera en Finder" del menú (en reposo) abre esa carpeta.
 
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
@@ -243,6 +246,8 @@ Lo que necesita permisos de grabación, hardware real o una persona, de las tare
 | 5a. El tiempo del menú no avanza con la pantalla bloqueada | pendiente | pendiente | pendiente |
 | 14a. Una ventana de Toma abierta durante la toma no sale en el video; el arranque no tarda más | pendiente | pendiente | pendiente |
 | 15a. La isla: notch, teclado, panel, elegir en la pantalla, monitor externo, movimiento y vidrio, fuera del video | pendiente | pendiente | pendiente |
+| 8. Pausa de 10 s: el video no tiene nada de ese tramo y el editor muestra el hueco | pendiente | pendiente | pendiente |
+| 8. Reiniciar toma: el proyecto viejo en `~/Movies/Toma/Trash`, se abre con doble clic | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

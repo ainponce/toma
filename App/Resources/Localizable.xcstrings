@@ -692,6 +692,17 @@
         }
       }
     },
+    "Paused" : {
+      "comment" : "Menu item while the user has paused the take",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En pausa"
+          }
+        }
+      }
+    },
     "Paused (screen locked or Mac asleep)" : {
       "comment" : "Menu item while a take is paused because the screen is locked or the Mac sleeps",
       "localizations" : {
@@ -1007,6 +1018,16 @@
         }
       }
     },
+    "Show Trash in Finder" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar la papelera en Finder"
+          }
+        }
+      }
+    },
     "Show in Finder" : {
       "localizations" : {
         "es" : {
@@ -1263,6 +1284,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The take couldn't be moved to the trash. It stays in your projects folder." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo mover la toma a la papelera. Queda en la carpeta de proyectos."
           }
         }
       }

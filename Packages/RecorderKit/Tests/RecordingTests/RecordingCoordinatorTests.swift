@@ -256,6 +256,187 @@ extension RealTimeRecordingTests {
             }
         }
 
+        @Test func userPauseClosesSegmentsAndLogsUserReason() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory)
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(1))
+                try await rig.coordinator.pause()
+                // `pause()` returns once every track is paused.
+                #expect(rig.liveTake(id)?.tracks.allSatisfy { $0.segments.map(\.endReason) == [.paused] } == true)
+                try await Task.sleep(for: .seconds(1))
+                try await rig.coordinator.resume()
+                #expect(await eventually { rig.liveTake(id)?.tracks.allSatisfy { $0.segments.count == 2 } == true })
+                try await Task.sleep(for: .seconds(1))
+                _ = try await rig.coordinator.stop()
+
+                let take = try rig.takeOnDisk(id)
+                for track in take.tracks {
+                    #expect(track.segments.map(\.endReason) == [.paused, .stopped])
+                    #expect(track.segments.map(\.index) == [1, 2])
+                }
+                let events = try rig.events(id)
+                let paused = try #require(events.firstIndex { $0.kind == .paused(reason: "user") })
+                let resumed = try #require(events.firstIndex { $0.kind == .resumed })
+                #expect(paused < resumed)
+                #expect(events.filter { $0.kind == .paused(reason: "user") || $0.kind == .resumed }.count == 2)
+                #expect(rig.display.startCount == 2 && rig.mic.startCount == 2)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.paused(reason: "user"), .resumed])
+            }
+        }
+
+        @Test func nothingIsWrittenWhileUserPaused() async throws {
+            try await withTemporaryDirectory { directory in
+                let location = MovingLocation()
+                let rig = try Rig(in: directory, input: CursorRecorder(location: { location.next() }))
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(1))
+                try await rig.coordinator.pause()
+                try await Task.sleep(for: .milliseconds(500))
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.addMarker() }
+                try await Task.sleep(for: .milliseconds(500))
+                try await rig.coordinator.resume()
+                #expect(await eventually { rig.liveTake(id)?.tracks.allSatisfy { $0.segments.count == 2 } == true })
+                try await Task.sleep(for: .milliseconds(500))
+                _ = try await rig.coordinator.stop()
+
+                let events = try rig.events(id)
+                let paused = try #require(events.first { $0.kind == .paused(reason: "user") }).t
+                let resumed = try #require(events.first { $0.kind == .resumed }).t
+                #expect(resumed.seconds(since: paused) > 0.9)
+                // A segment ends at the pause, or at a sample captured before its source stopped
+                // (`lockPausesAndUnlockResumes`); the next one starts after the resume.
+                let pauseEnd = paused.adding(seconds: 0.05)
+                for track in try rig.takeOnDisk(id).tracks {
+                    try #require(track.segments.count == 2, "\(track.id)")
+                    let (first, second) = (track.segments[0], track.segments[1])
+                    let end = try #require(first.endHostTime)
+                    #expect(end <= pauseEnd, "\(track.id) ends \(end.seconds(since: paused)) s after the pause")
+                    #expect(second.startHostTime >= resumed, "\(track.id) starts before the resume")
+                    // Its file has nothing past its end either.
+                    #expect(abs(try await rig.duration(of: first) - end.seconds(since: first.startHostTime)) < 0.15)
+                }
+                let isInput: (InputEvent) -> Bool = { event in
+                    switch event.kind {
+                    case .cursor, .mouseDown, .mouseUp: true
+                    default: false
+                    }
+                }
+                #expect(events.contains { isInput($0) && $0.t < paused })
+                #expect(!events.contains { isInput($0) && $0.t > paused && $0.t < resumed })
+                #expect(events.contains { isInput($0) && $0.t > resumed })
+                #expect(!events.contains { $0.kind == .marker })
+            }
+        }
+
+        @Test func userPauseSurvivesUnlock() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display])
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(300))
+                try await rig.coordinator.pause()
+                rig.activity.yield(.screenLocked)
+                rig.activity.yield(.screenUnlocked)
+                // Nothing should happen now; only time can show it.
+                try await Task.sleep(for: .milliseconds(300))
+                #expect(rig.display.startCount == 1)
+                #expect(rig.liveTrack(id, "display-1")?.segments.map(\.endReason) == [.paused])
+                #expect(rig.warnings.all == [.paused(reason: "user")])
+                try await rig.coordinator.resume()
+                #expect(await eventually { rig.liveTrack(id, "display-1")?.segments.count == 2 })
+                _ = try await rig.coordinator.stop()
+
+                let pauses = try rig.events(id).filter {
+                    switch $0.kind {
+                    case .paused, .resumed: true
+                    default: false
+                    }
+                }
+                #expect(pauses.map(\.kind) == [.paused(reason: "user"), .resumed])
+                #expect(rig.display.startCount == 2)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.paused(reason: "user"), .resumed])
+            }
+        }
+
+        @Test func markerIsLoggedAtItsTime() async throws {
+            try await withTemporaryDirectory { directory in
+                let clock = PinnedClock()
+                let rig = try Rig(in: directory, tracks: [.display], clock: clock.now)
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(300))
+                let time = HostTime.now()
+                clock.pin(time)
+                let marked = try await rig.coordinator.addMarker()
+                clock.pin(nil)
+                #expect(marked == time)
+                try await Task.sleep(for: .milliseconds(100))
+                _ = try await rig.coordinator.stop()
+
+                let markers = try rig.events(id).filter { $0.kind == .marker }
+                #expect(markers.map(\.t) == [time])
+            }
+        }
+
+        @Test func pauseWhenNotRecordingThrows() async throws {
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory, tracks: [.display])
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.pause() }
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.resume() }
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.addMarker() }
+                let id = try await rig.coordinator.start()
+                // Resuming what the user did not pause, or pausing twice, does nothing.
+                try await rig.coordinator.resume()
+                try await rig.coordinator.pause()
+                try await rig.coordinator.pause()
+                try await rig.coordinator.resume()
+                _ = try await rig.coordinator.stop()
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.pause() }
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.resume() }
+                await #expect(throws: RecordingError.notRecording) { try await rig.coordinator.addMarker() }
+
+                let kinds = try rig.events(id).map(\.kind)
+                #expect(kinds.filter { $0 == .paused(reason: "user") }.count == 1)
+                #expect(kinds.filter { $0 == .resumed }.count == 1)
+                await rig.warningsDone.value
+                #expect(rig.warnings.all == [.paused(reason: "user"), .resumed])
+            }
+        }
+
+        /// 20 rounds: each is a real take with its own 8 MB reserve, and 50 risk the time limit under `make tsan`.
+        @Test(.timeLimit(.minutes(1))) func pauseRacingStopNeverHangs() async throws {
+            try await withTemporaryDirectory { directory in
+                for round in 0..<20 {
+                    let folder = directory.appendingPathComponent("\(round)", isDirectory: true)
+                    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+                    let rig = try Rig(in: folder, tracks: [.display])
+                    let id = try await rig.coordinator.start()
+                    async let pausing: Void = rig.coordinator.pause()
+                    // From at once to 9.5 ms later: the stop comes before the pause is applied, or while it
+                    // pauses the tracks (finishing their files takes longer than that).
+                    try await Task.sleep(for: .microseconds(500 * round))
+                    async let stopping = rig.coordinator.stop()
+                    let paused: Bool
+                    do {
+                        try await pausing
+                        paused = true
+                    } catch RecordingError.notRecording {
+                        paused = false
+                    }
+                    let record = try await stopping
+
+                    // The pause was applied before the take closed, or it was refused.
+                    let events = try rig.events(id)
+                    #expect(events.contains { $0.kind == .paused(reason: "user") } == paused, "round \(round)")
+                    let reasons = record.tracks.flatMap { $0.segments.map(\.endReason) }
+                    #expect(reasons.allSatisfy { $0 == (paused ? .paused : .stopped) }, "round \(round): \(reasons)")
+                    #expect(rig.lockIsFree(id))
+                    try FileManager.default.removeItem(at: folder)
+                }
+            }
+        }
+
         @Test func micRestartOnOtherDeviceLogsDeviceChanged() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, configuration: RecordingConfiguration(restartBackoff: [.milliseconds(10)]))
@@ -857,7 +1038,8 @@ struct Rig {
         sources custom: [any CaptureSource]? = nil,
         input: any InputRecorder = NoInputRecorder(),
         configuration: RecordingConfiguration = .init(),
-        writerFactory: WriterFactory? = nil
+        writerFactory: WriterFactory? = nil,
+        clock: @escaping @Sendable () -> HostTime = HostTime.now
     ) throws {
         package = try ProjectPackage.create(in: directory, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
         let (stream, continuation) = AsyncStream.makeStream(of: SystemActivity.self)
@@ -871,7 +1053,8 @@ struct Rig {
             diskMonitor: disk.monitor(volume: directory),
             systemActivity: stream,
             configuration: configuration,
-            writerFactory: writerFactory ?? { url, media in try FragmentedTrackWriter(url: url, media: media) }
+            writerFactory: writerFactory ?? { url, media in try FragmentedTrackWriter(url: url, media: media) },
+            clock: clock
         )
         warningsDone = Task { [warnings, coordinator] in
             for await warning in coordinator.warnings { warnings.append(warning) }
@@ -1058,6 +1241,20 @@ private final class CountingSink: CaptureSink {
 
     func source(_ trackID: String, didStopWithError error: any Error) {
         sink.source(trackID, didStopWithError: error)
+    }
+}
+
+/// The host clock, or the time the test pinned while it is pinned.
+final class PinnedClock: Sendable {
+    private let pinned = Mutex<HostTime?>(nil)
+
+    func now() -> HostTime {
+        pinned.withLock { $0 } ?? HostTime.now()
+    }
+
+    /// `now()` returns `time` until it is pinned to `nil`.
+    func pin(_ time: HostTime?) {
+        pinned.withLock { $0 = time }
     }
 }
 
