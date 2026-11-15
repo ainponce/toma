@@ -85,7 +85,8 @@ public struct IslandMachine: Equatable, Sendable {
     public static let noticeDuration: Duration = .seconds(4)
     /// How long a saved take stays with "Stay Where I Am", unless something is chosen (plan decision 30).
     public static let savedStayDuration: Duration = .seconds(8)
-    /// How long a saved take shows while its editor opens.
+    /// How long a saved take shows while its editor opens, unless the take stopped by itself or closed with
+    /// an error: then it stays `savedStayDuration`, so its reason can be read.
     public static let savedWhileEditorOpens: Duration = .milliseconds(1500)
     /// How long the island waits, once the take is closed, for it to be saved: a take that recorded nothing
     /// (a start that failed with a stop waiting for it) or that a quit closed is never saved.
@@ -106,8 +107,9 @@ public struct IslandMachine: Equatable, Sendable {
     private var isConfirming = false
     /// The take's notices, as they were last told.
     private var notices: [TakeNotice] = []
-    /// The new notices that ask for attention and came before the take records (the start's, during the
-    /// countdown or with the panel open): the first shows once it records.
+    /// The new notices that ask for attention and wait for their turn, in the order they came: the start's,
+    /// which came during the countdown or with the panel open, until the take records; the ones that came
+    /// while another showed, until it is over. A notice resolved meanwhile no longer waits.
     private var pending: [TakeNotice] = []
 
     public init() {}
@@ -135,6 +137,8 @@ public struct IslandMachine: Equatable, Sendable {
         }
         switch (state, event) {
         case (.recording, .pointerEntered), (.notice, .pointerEntered):
+            // Its list shows them all.
+            pending = []
             go(to: .recordingOpen)
         case (.recordingOpen, .pointerEntered), (.recordingOpen, .confirmationShown(true)):
             deadline = nil
@@ -170,15 +174,16 @@ public struct IslandMachine: Equatable, Sendable {
         guard let deadline, now >= deadline else { return }
         switch state {
         case .peek, .saving, .saved: go(to: .rest)
-        case .recordingOpen, .notice: go(to: .recording)
+        case .recordingOpen: go(to: .recording)
+        case .notice: showNextOrWings(at: now)
         case .rest, .open, .choosing, .countdown, .recording: self.deadline = nil
         }
     }
 
     /// The take's phase moves the island: the countdown from wherever it is; the wings once the take starts
-    /// (the open recording island and a notice stay), and then the first notice that came before; a take
-    /// being saved while it closes; rest once the take has closed without being saved, or did not start.
-    /// A phase that is not a take's changes nothing at rest, open, choosing or saved.
+    /// (the open recording island and a notice stay), and then the first notice that waited, if none shows;
+    /// a take being saved while it closes; rest once the take has closed without being saved, or did not
+    /// start. A phase that is not a take's changes nothing at rest, open, choosing or saved.
     private mutating func follow(_ phase: RecordingController.Phase, at now: Duration) {
         switch phase {
         case .countingDown(let remaining):
@@ -189,10 +194,19 @@ public struct IslandMachine: Equatable, Sendable {
             if !showsTheTake { go(to: .recording) }
         case .recording:
             if !showsTheTake { go(to: .recording) }
-            let first = pending.first
-            pending = []
-            if state == .recording, let first { show(first, at: now) }
+            switch state {
+            case .recording:
+                if !pending.isEmpty { show(pending.removeFirst(), at: now) }
+            case .recordingOpen:
+                // Its list shows them all.
+                pending = []
+            default:
+                // A notice shows: the ones that waited follow it.
+                break
+            }
         case .stopping:
+            // What waited was about the take that closes.
+            pending = []
             go(to: .saving)
         case .idle:
             pending = []
@@ -212,12 +226,14 @@ public struct IslandMachine: Equatable, Sendable {
         }
     }
 
-    /// A notice that asks for attention and was not in the last list shows by itself over the wings (or
-    /// replaces the one showing), once the take records if it came before; the open recording island
-    /// lists it. A notice that is no longer in the list (it was resolved) stops showing.
+    /// A notice that asks for attention and was not in the last list shows by itself over the wings, or
+    /// waits for its turn: until the take records if it came before, and until the ones before it have
+    /// shown (confirmations are capsules: they never take a turn). The open recording island lists it
+    /// instead. A notice that is no longer in the list (it was resolved) stops showing, or waiting.
     private mutating func noticesChanged(_ notices: [TakeNotice], at now: Duration) {
         let new = notices.filter { $0.presentation != .confirmation && !self.notices.contains($0) }
         self.notices = notices
+        pending.removeAll { !notices.contains($0) }
         attention =
             if notices.contains(where: { $0.presentation == .stopped }) {
                 .stopped
@@ -228,18 +244,22 @@ public struct IslandMachine: Equatable, Sendable {
             }
         switch state {
         case .recording:
-            if let first = new.first { show(first, at: now) }
+            // With nothing waiting, the first shows now; otherwise (the take starts) they wait behind.
+            let waited = !pending.isEmpty
+            wait(new)
+            if !waited, !pending.isEmpty { show(pending.removeFirst(), at: now) }
         case .notice(let shown):
-            if let first = new.first {
-                show(first, at: now)
-            } else if !notices.contains(shown) {
-                go(to: .recording)
-            }
+            wait(new)
+            if !notices.contains(shown) { showNextOrWings(at: now) }
         case .open, .countdown:
-            pending += new.filter { !pending.contains($0) }
+            wait(new)
         case .rest, .peek, .choosing, .recordingOpen, .saving, .saved:
             break
         }
+    }
+
+    private mutating func wait(_ notices: [TakeNotice]) {
+        pending += notices.filter { !pending.contains($0) }
     }
 
     private mutating func show(_ notice: TakeNotice, at now: Duration) {
@@ -247,11 +267,22 @@ public struct IslandMachine: Equatable, Sendable {
         deadline = now + Self.noticeDuration
     }
 
-    /// The take being saved was: it shows while its editor opens, or until something is chosen.
+    /// The notice showing is over: the next one that waited, or the wings.
+    private mutating func showNextOrWings(at now: Duration) {
+        if pending.isEmpty {
+            go(to: .recording)
+        } else {
+            show(pending.removeFirst(), at: now)
+        }
+    }
+
+    /// The take being saved was: it shows while its editor opens, or until something is chosen. A take that
+    /// stopped by itself or closed with an error stays as long with its editor opening, so its reason is read.
     private mutating func saved(_ take: SavedTake, at now: Duration) {
         guard state == .saving else { return }
         go(to: .saved(take))
-        deadline = now + (take.openedEditor ? Self.savedWhileEditorOpens : Self.savedStayDuration)
+        let stopped = notices.contains { $0.presentation == .stopped }
+        deadline = now + (take.openedEditor && !stopped ? Self.savedWhileEditorOpens : Self.savedStayDuration)
     }
 
     private mutating func go(to state: IslandState) {

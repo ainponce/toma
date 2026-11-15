@@ -267,11 +267,80 @@ import Testing
         #expect(island.attention == .attention)
         island.handle(.noticesChanged([low, .stoppedForDiskSpace]), at: .seconds(6))
         #expect(island.attention == .stopped)
-        #expect(island.state == .notice(.stoppedForDiskSpace) && island.deadline == .seconds(10))
-        island.handle(.noticesChanged([.closedWithError]), at: .seconds(7))
+        // It waits for its turn.
+        #expect(island.state == .notice(low) && island.deadline == .seconds(9))
+        island.tick(at: .seconds(9))
+        #expect(island.state == .notice(.stoppedForDiskSpace) && island.deadline == .seconds(13))
+        island.handle(.noticesChanged([.closedWithError]), at: .seconds(10))
         #expect(island.attention == .stopped)
-        island.handle(.noticesChanged([]), at: .seconds(8))
-        #expect(island.attention == nil)
+        island.handle(.noticesChanged([]), at: .seconds(11))
+        #expect(island.attention == nil && island.state == .recording)
+    }
+
+    @Test func noticesThatWaitedShowInTurn() {
+        // A restart that could not move the take to the trash, with the camera on: the carried notice
+        // waits through the countdown, the camera's comes while the take starts, and both show once it
+        // records, in the order they came.
+        var island = recordingWings()
+        island.handle(.phaseChanged(.stopping), at: .seconds(10))
+        island.handle(.phaseChanged(.countingDown(remaining: 3)), at: .seconds(11))
+        island.handle(.noticesChanged([.couldNotMoveToTrash]), at: .seconds(11))
+        island.handle(.phaseChanged(.starting), at: .seconds(14))
+        island.handle(.noticesChanged([.couldNotMoveToTrash, .cameraNotRecordedYet]), at: .seconds(14))
+        #expect(island.state == .recording)
+        island.handle(.phaseChanged(.recording(since: Self.since)), at: .seconds(15))
+        #expect(island.state == .notice(.couldNotMoveToTrash) && island.deadline == .seconds(19))
+        // A confirmation takes no turn and moves no deadline.
+        island.handle(.noticesChanged([.couldNotMoveToTrash, .cameraNotRecordedYet, .streamResumed(.display)]), at: .seconds(16))
+        #expect(island.state == .notice(.couldNotMoveToTrash) && island.deadline == .seconds(19))
+        island.tick(at: .seconds(19))
+        #expect(island.state == .notice(.cameraNotRecordedYet) && island.deadline == .seconds(23))
+        island.tick(at: .seconds(23))
+        #expect(island.state == .recording && island.deadline == nil)
+
+        // No countdown: the carried notice shows as the take starts, a red one that closed the last take
+        // included; the camera's waits for it.
+        var immediate = recordingWings()
+        immediate.handle(.phaseChanged(.stopping), at: .seconds(10))
+        immediate.handle(.phaseChanged(.starting), at: .seconds(11))
+        immediate.handle(.noticesChanged([.closedWithError]), at: .seconds(11))
+        #expect(immediate.state == .notice(.closedWithError) && immediate.deadline == .seconds(15))
+        immediate.handle(.noticesChanged([.closedWithError, .cameraNotRecordedYet]), at: .seconds(12))
+        immediate.handle(.phaseChanged(.recording(since: Self.since)), at: .seconds(13))
+        #expect(immediate.state == .notice(.closedWithError) && immediate.deadline == .seconds(15))
+        immediate.tick(at: .seconds(15))
+        #expect(immediate.state == .notice(.cameraNotRecordedYet) && immediate.deadline == .seconds(19))
+
+        // One that is resolved before its turn no longer waits; the one showing, resolved, makes way.
+        var resolved = recordingWings()
+        resolved.handle(.noticesChanged([.streamInterrupted(.display)]), at: .seconds(5))
+        resolved.handle(.noticesChanged([.streamInterrupted(.display), .streamInterrupted(.microphone)]), at: .seconds(6))
+        resolved.handle(.noticesChanged([.streamInterrupted(.display), .streamResumed(.microphone)]), at: .seconds(7))
+        resolved.tick(at: .seconds(9))
+        #expect(resolved.state == .recording)
+        var makesWay = recordingWings()
+        makesWay.handle(.noticesChanged([.streamInterrupted(.display)]), at: .seconds(5))
+        makesWay.handle(.noticesChanged([.streamInterrupted(.display), .diskSpaceUnknown]), at: .seconds(6))
+        makesWay.handle(.noticesChanged([.diskSpaceUnknown, .streamResumed(.display)]), at: .seconds(7))
+        #expect(makesWay.state == .notice(.diskSpaceUnknown) && makesWay.deadline == .seconds(11))
+
+        // Opening the island shows them all in its list: none waits any more.
+        var opened = recordingWings()
+        opened.handle(.noticesChanged([.diskSpaceUnknown, .manifestWriteFailed]), at: .seconds(5))
+        opened.handle(.pointerEntered, at: .seconds(6))
+        opened.handle(.pointerExited, at: .seconds(7))
+        opened.tick(at: .milliseconds(7_650))
+        #expect(opened.state == .recording)
+        opened.handle(.noticesChanged([.diskSpaceUnknown, .manifestWriteFailed, .samplesDropped(.display)]), at: .seconds(8))
+        #expect(opened.state == .notice(.samplesDropped(.display)))
+        // Nor once the take closes.
+        var closing = recordingWings()
+        closing.handle(.noticesChanged([.diskSpaceUnknown, .manifestWriteFailed]), at: .seconds(5))
+        closing.handle(.phaseChanged(.stopping), at: .seconds(6))
+        closing.handle(.phaseChanged(.countingDown(remaining: 3)), at: .seconds(7))
+        closing.handle(.phaseChanged(.starting), at: .seconds(10))
+        closing.handle(.phaseChanged(.recording(since: Self.since)), at: .seconds(11))
+        #expect(closing.state == .recording)
     }
 
     @Test func startNoticesShowOnceRecordingBegins() {
@@ -387,12 +456,39 @@ import Testing
         #expect(IslandMachine.savedWhileEditorOpens == .milliseconds(1500))
         let take = Self.savedTake(openedEditor: true)
         var island = recordingWings()
+        // A notice that asked for attention does not keep it longer.
+        island.handle(.noticesChanged([.diskLow(availableBytes: 500_000_000)]), at: .seconds(18))
         island.handle(.phaseChanged(.stopping), at: .seconds(19))
         island.handle(.phaseChanged(.idle), at: .seconds(20))
         island.handle(.saved(take), at: .seconds(20))
         #expect(island.state == .saved(take) && island.deadline == .milliseconds(21_500))
         island.tick(at: .milliseconds(21_500))
         #expect(island.state == .rest)
+    }
+
+    @Test func aTakeThatStoppedStaysSavedWhileTheEditorOpens() {
+        // The disk stopped it, or closing it failed: the saved take says why for as long as with "Stay Where
+        // I Am", while its editor opens.
+        let take = Self.savedTake(openedEditor: true)
+        for stopped in [TakeNotice.stoppedForDiskSpace, .closedWithError] {
+            var island = recordingWings()
+            island.handle(.noticesChanged([.diskLow(availableBytes: 1), stopped]), at: .seconds(18))
+            island.handle(.phaseChanged(.stopping), at: .seconds(19))
+            island.handle(.phaseChanged(.idle), at: .seconds(20))
+            island.handle(.saved(take), at: .seconds(20))
+            #expect(island.state == .saved(take) && island.deadline == .seconds(28))
+            island.tick(at: .milliseconds(21_500))
+            #expect(island.state == .saved(take))
+            island.tick(at: .seconds(28))
+            #expect(island.state == .rest)
+        }
+        // Closing it failed, said in the same turn as the take went idle (`finish`).
+        var failed = recordingWings()
+        failed.handle(.phaseChanged(.stopping), at: .seconds(19))
+        failed.handle(.phaseChanged(.idle), at: .seconds(20))
+        failed.handle(.noticesChanged([.closedWithError]), at: .seconds(20))
+        failed.handle(.saved(take), at: .seconds(20))
+        #expect(failed.state == .saved(take) && failed.deadline == .seconds(28))
     }
 
     @Test func startFailureShowsInsideTheOpenIsland() {
