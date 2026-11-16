@@ -23,12 +23,16 @@ public struct EditContext: Sendable {
     public var journalIO: EditJournalIO
     /// The writes and waits of the upgrade of a version 1 or 2 package to version 3.
     public var upgradeIO: PackageUpgradeIO
+    /// The folder of the default style (`DefaultStyleStore.defaultDirectory` in the app), where the image of an image
+    /// background of `defaultStyle` is: a new project copies it into its `assets/`. Without it, a new project with such a
+    /// background gets Toma's.
+    public var styleDirectory: URL?
 
     public init(
         app: AppInfo, cachesRoot: URL, defaultStyle: DefaultStyle, now: @escaping @Sendable () -> Date,
         makeID: @escaping @Sendable (String) -> String,
         compaction: (maxBytes: Int, maxEntries: Int) = (LogCompaction.maxBytes, LogCompaction.maxEntries),
-        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system
+        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system, styleDirectory: URL? = nil
     ) {
         self.app = app
         self.cachesRoot = cachesRoot
@@ -38,6 +42,7 @@ public struct EditContext: Sendable {
         self.compaction = compaction
         self.journalIO = journalIO
         self.upgradeIO = upgradeIO
+        self.styleDirectory = styleDirectory
     }
 }
 
@@ -172,6 +177,8 @@ public final class EditSession {
     private var restartTask: Task<Void, Never>?
     private var isClosed = false
     private var lastKnownURL: URL
+    /// How many times the package was opened again from the disk after another process changed it (Task 12b).
+    private var reopenings = 0
 
     private init(_ opened: Opened, context: EditContext) {
         project = opened.project
@@ -233,7 +240,7 @@ public final class EditSession {
         let files = try EditFiles.read(project.package)
         if let version = files.newerVersion { throw EditDocumentError.newerVersion(version) }
         if let code = files.unsafe { throw POSIXError(code) }
-        return (project, Resolution.of(project, files: files, context: context).document)
+        return (project, Resolution.of(project, files: files, context: context).shown)
     }
 
     /// Where the package is now (`F_GETPATH` of its folder), for what goes by path (importing an asset, the export, the
@@ -272,9 +279,7 @@ public final class EditSession {
         let at = context.now()
         var lines: [EditLogEntry] = []
         // Recorded before the `do`, which it numbers; if the lines are not handed over, the next step writes it again.
-        if var created = pendingCreate {
-            created.logSequence = history.nextSeq
-            let create = EditLogEntry.create(seq: created.logSequence, document: created, app: context.app)
+        if let create = legacyCreate() {
             history.record(create)
             lines.append(create)
         }
@@ -317,6 +322,92 @@ public final class EditSession {
         history.record(line)
         change(to: next, seq: line.seq)
         return outcome
+    }
+
+    /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), for the step that
+    /// names it, which comes after: `.imported(path)` once it is on the drive. The file is decoded first, on the queue of
+    /// files, as the package's asset reader decodes one: `.notAnImage` if it does not, and nothing is written.
+    ///
+    /// A version 1 or 2 package moves to version 3 first, with only the `create` of its legacy document (the upgrade with
+    /// no step), or after the upgrade a step started: nothing is copied into a package that is not at version 3 yet. An
+    /// error that passes, of that upgrade (tried again, as for `perform`) or of the copy (a full disk, `EIO`), is shown as
+    /// `EditNotice.saveFailed`, and the import waits and is tried again every `EditJournal.retryInterval`, as an edit's
+    /// line is; it gives up with `.saveFailed` if the caller's task is cancelled or the session closes meanwhile, and at
+    /// once for an error that never passes (`Opening.lastingRefusal`). A disk's error is never `.notAnImage`.
+    /// `.notEditable` while the project cannot be edited, if another process took `edit.lock` first (read-only then) or
+    /// changed the package (it is opened again), as with `perform`.
+    public func importAsset(_ url: URL) async -> AssetImportOutcome {
+        guard isEditable else { return .notEditable }
+        guard (try? await Self.run(on: files, { AssetImport.decodes(url) })) == true else { return .notAnImage }
+        guard isEditable else { return .notEditable }
+        let reopened = reopenings
+        if journal == nil, upgrade == nil, let manifest = legacyManifest, let legacy = pendingCreate, let create = legacyCreate(),
+            (try? create.jsonLine()) != nil
+        {
+            history.record(create)
+            pendingCreate = nil
+            startUpgrade(manifest, legacy: legacy, first: nil, at: context.now(), lines: [create])
+            change(to: document, seq: create.seq)
+        }
+        // The upgrade through its attempts, the failed ones shown by `finishUpgradeAttempt`.
+        while let upgrade {
+            if Task.isCancelled { return .saveFailed(shownSaveFailure ?? .ECANCELED) }
+            if let attempt = upgrade.attempt {
+                await attempt.value
+            } else if let retry = upgrade.retry {
+                await retry.value
+            } else {
+                // Closed after its last attempt failed.
+                break
+            }
+        }
+        guard reopenings == reopened, isEditable, journal != nil else {
+            return upgrade != nil ? .saveFailed(shownSaveFailure ?? .EIO) : .notEditable
+        }
+        var failing: POSIXErrorCode?
+        defer { if failing != nil { showSaveFailed(journalFailure) } }
+        while true {
+            let package = ProjectPackage(url: packageURL)
+            let placed = (try? await Self.run(on: files) { () -> Result<String, AssetImport.Failure> in
+                Result { () throws(AssetImport.Failure) in try AssetImport.place(url, into: package) }
+            }) ?? .failure(.destination(POSIXError(.EIO)))
+            switch placed {
+            case let .success(path):
+                return .imported(path)
+            case .failure(.unsupported), .failure(.source), .failure(.changed):
+                return .notAnImage
+            case let .failure(.destination(error)):
+                guard Opening.lastingRefusal(error) == nil else { return .saveFailed(error.code) }
+                failing = error.code
+                showSaveFailed(error.code)
+                try? await Task.sleep(for: EditJournal.retryInterval)
+                guard !Task.isCancelled, isEditable else { return .saveFailed(error.code) }
+            }
+        }
+    }
+
+    /// "Apply Default Style" (design §5.9): `StyleCommands.applyDefaultStyle` of `style` for the take, as one step that
+    /// `perform` takes. An image background is brought into the package first from `styleDirectory`, the default style's
+    /// folder (its `<sha>.<ext>`, with `importAsset`); without the folder, or if the image is not there, does not decode
+    /// or cannot be saved, the classic gradient (`Background.tomaClassic`) is applied in its place. `.refused` if the
+    /// project cannot be edited, or has all of it already.
+    public func applyDefaultStyle(_ style: DefaultStyle, styleDirectory: URL?) async -> EditOutcome {
+        guard isEditable else { return .refused }
+        var style = style
+        if case let .image(file) = style.style.background {
+            var background = Background.tomaClassic
+            if let styleDirectory, let name = DefaultStyleStore.assetName(file) {
+                switch await importAsset(styleDirectory.appending(path: name)) {
+                case let .imported(path): background = .image(file: path)
+                case .notEditable: return .refused
+                case .notAnImage, .saveFailed: break
+                }
+            }
+            style.style.background = background
+        }
+        guard let step = StyleCommands.applyDefaultStyle(document, style, take: project.take, events: project.events)
+        else { return .refused }
+        return perform(step)
     }
 
     /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every
@@ -445,6 +536,24 @@ public final class EditSession {
         }
     }
 
+    /// The `create` of the legacy document whose `create` the first edit writes (`pendingCreate`), numbered as the next
+    /// line; `nil` without one.
+    private func legacyCreate() -> EditLogEntry? {
+        guard var created = pendingCreate else { return nil }
+        created.logSequence = history.nextSeq
+        return .create(seq: created.logSequence, document: created, app: context.app)
+    }
+
+    /// The code of the `.saveFailed` shown, if one is.
+    private var shownSaveFailure: POSIXErrorCode? {
+        notices.lazy.compactMap { if case let .saveFailed(code) = $0 { code } else { nil } }.first
+    }
+
+    /// The code of the journal's failure, if it is failing.
+    private var journalFailure: POSIXErrorCode? {
+        if case let .failing(code)? = journal?.state { code } else { nil }
+    }
+
     private func showSaveFailed(_ code: POSIXErrorCode?) {
         var updated = notices.filter { if case .saveFailed = $0 { false } else { true } }
         if let code { updated.append(.saveFailed(code)) }
@@ -532,8 +641,8 @@ public final class EditSession {
         var opened: Manifest
         /// The document as the package has it, which a refused upgrade goes back to.
         var legacy: EditDocument
-        /// The first step and when it was made: the upgrade's clock is that instant.
-        var first: EditStep
+        /// The first step (none for `importAsset`) and when it was made: the upgrade's clock is that instant.
+        var first: EditStep?
         var at: Date
         /// What the upgrade writes: the `create` and the `do` of the first step.
         var written: [EditLogEntry]
@@ -548,9 +657,10 @@ public final class EditSession {
     }
 
     /// Starts moving the package to version 3 with `step`, made at `at`, whose `lines` (`create` and `do`) the upgrade
-    /// writes as `perform` numbered them. Nothing here waits for the lock or the disk.
+    /// writes as `perform` numbered them. Without a step (`importAsset`), only the `create`. Nothing here waits for the
+    /// lock or the disk.
     private func startUpgrade(
-        _ manifest: Manifest, legacy: EditDocument, first step: EditStep, at: Date, lines: [EditLogEntry]
+        _ manifest: Manifest, legacy: EditDocument, first step: EditStep?, at: Date, lines: [EditLogEntry]
     ) {
         assert((try? PackageUpgrade.entries(legacy: legacy, first: step, at: at, app: context.app)) == lines)
         upgrade = PendingUpgrade(opened: manifest, legacy: legacy, first: step, at: at, written: lines)
@@ -581,7 +691,7 @@ public final class EditSession {
     @concurrent
     private nonisolated static func attemptUpgrade(
         _ progress: PackageUpgrade.Progress?, on queue: DispatchQueue, folder: PackageFolder, caches: ProjectCaches,
-        take: String, opened: Manifest, legacy: EditDocument, first: EditStep, upgradeContext: EditContext,
+        take: String, opened: Manifest, legacy: EditDocument, first: EditStep?, upgradeContext: EditContext,
         context: EditContext
     ) async -> UpgradeOutcome {
         let part = try? await run(on: queue) { () -> UpgradeStep in
@@ -689,6 +799,7 @@ public final class EditSession {
         case let .reopened(opened):
             self.upgrade = nil
             adopt(opened)
+            reopenings += 1
             revision += 1
             notices.append(.reopenedAfterOtherApp)
             onChange?()
@@ -890,7 +1001,7 @@ private enum Opening {
             throw error
         }
         let resolution = Resolution.of(project, files: files, context: context)
-        opened.document = resolution.document
+        opened.document = resolution.shown
         if resolution.legacyLook { opened.notices = [.legacyLook] }
         opened.baseSeq = resolution.entries.last?.seq ?? 0
         if let refusal = resolution.refusal {
@@ -912,6 +1023,11 @@ private enum Opening {
         }
         opened.lock = lock
         opened.journal = journal
+        if resolution.isNewDocument {
+            // Its default style's image goes into the package before the `create` that names it.
+            opened.document.style.background = DefaultStyleStore.background(
+                resolution.document.style.background, from: context.styleDirectory, into: ProjectPackage(url: current))
+        }
 
         var entries = resolution.entries
         var history = UndoHistory(entries: entries)
@@ -968,7 +1084,7 @@ private enum Opening {
         var opened = opened
         let files = try EditFiles.read(opened.project.package)
         let resolution = Resolution.of(opened.project, files: files, context: context)
-        opened.document = resolution.document
+        opened.document = resolution.shown
         if resolution.legacyLook { opened.notices = [.legacyLook] }
         opened.baseSeq = resolution.entries.last?.seq ?? 0
         if case let .newerDocument(version)? = resolution.refusal {
@@ -1138,6 +1254,8 @@ private struct Resolution: Sendable {
     var startsLog = false
     /// `document` is the legacy one: the first edit writes its `create`.
     var createsLogAtFirstEdit = false
+    /// `document` is a `NewDocument`, which `startsLog` writes.
+    var isNewDocument = false
     var recoveredUpTo: Date?
     var legacyLook = false
     /// The `logSequence` of `edit.json`, when it names a line the log keeps.
@@ -1186,7 +1304,7 @@ private struct Resolution: Sendable {
             } else {
                 resolution = Resolution(
                     document: NewDocument.make(project: project, defaultStyle: context.defaultStyle, makeID: context.makeID),
-                    startsLog: true)
+                    startsLog: true, isNewDocument: true)
             }
             if damaged {
                 resolution.rewritesLog = true
@@ -1201,6 +1319,15 @@ private struct Resolution: Sendable {
             resolution.refusal = resolution.refusal ?? .unsafeEditFiles
         }
         return resolution
+    }
+
+    /// `document` as it is shown before anything is written: a new document never with the image of its default style,
+    /// which only an editable opening copies into the package.
+    var shown: EditDocument {
+        guard isNewDocument else { return document }
+        var shown = document
+        shown.style.background = DefaultStyleStore.unsavedBackground(document.style.background)
+        return shown
     }
 
     private static func starting(from snapshot: EditDocument) -> Resolution {
