@@ -3,6 +3,7 @@ import AppSupport
 import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
+import Recording
 import Testing
 
 @MainActor @Suite struct SettingsStoreTests {
@@ -216,6 +217,37 @@ import Testing
             json["aspectLock"] = "golden"
             defaults.set(try JSONSerialization.data(withJSONObject: json), forKey: SettingsStore.key)
             #expect(store.settings.aspectLock == .free && store.settings.savedAreas == settings.savedAreas)
+        }
+    }
+
+    @Test func settingOffBuildsNoKeyRecorder() throws {
+        for noteKeyActivity in [false, true] {
+            let factory = LiveCaptureSourceFactory(cameraHost: CameraSessionHost(), noteKeyActivity: noteKeyActivity) { _ in }
+            let input = try #require(factory.input(windowTrack: nil, displayIDs: []) as? CompositeInputRecorder)
+            #expect(input.recorders.count { $0 is KeyActivityRecorder } == (noteKeyActivity ? 1 : 0), "noteKeyActivity \(noteKeyActivity)")
+            // The scroll is recorded either way.
+            #expect(input.recorders.count { $0 is ScrollRecorder } == 1)
+        }
+    }
+
+    @Test func missingSettingIsOn() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            #expect(store.settings.noteKeyActivity)
+
+            // Saved by a version without the setting.
+            defaults.set(Data(#"{"countdownSeconds":5}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.noteKeyActivity && store.settings.countdownSeconds == 5)
+
+            var settings = store.settings
+            settings.noteKeyActivity = false
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings == settings)
+            #expect(!SettingsStore(defaults: defaults).settings.noteKeyActivity)
+
+            // A value this version cannot read: on, and the rest is kept.
+            defaults.set(Data(#"{"countdownSeconds":10,"noteKeyActivity":"sometimes"}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.noteKeyActivity && store.settings.countdownSeconds == 10)
         }
     }
 

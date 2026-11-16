@@ -8,8 +8,9 @@ import Recording
 import os
 
 /// The take environment of the app: projects in `~/Movies/<app>/`, the displays, window or area, camera,
-/// microphone and system audio chosen (`TakePlanner` with `LiveCaptureSourceFactory`), the cursor and the geometry
-/// of what is recorded, the free disk space and the system's sleep and lock.
+/// microphone and system audio chosen (`TakePlanner` with `LiveCaptureSourceFactory`), the cursor, the scroll, when keys
+/// are typed (`RecorderSettings.noteKeyActivity`) and the geometry of what is recorded, the free disk space and the
+/// system's sleep and lock.
 @MainActor
 enum LiveTakeEnvironment {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
@@ -31,7 +32,9 @@ enum LiveTakeEnvironment {
             },
             prepareTake: { package, request, granted in
                 let projectURL = package.url
-                let factory = LiveCaptureSourceFactory(cameraHost: cameraHost) { visibility in
+                // Read at every start: a change applies from the next take or restart.
+                let noteKeyActivity = SettingsStore().settings.noteKeyActivity
+                let factory = LiveCaptureSourceFactory(cameraHost: cameraHost, noteKeyActivity: noteKeyActivity) { visibility in
                     Task { @MainActor in windowVisibilityChanged(visibility, projectURL) }
                 }
                 return try prepareTake(in: package, request, granted: granted, factory: factory, volume: folder)

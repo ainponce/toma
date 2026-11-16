@@ -37,6 +37,10 @@ struct SynthRecord: AsyncParsableCommand {
             window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
             at 1280×720 and 30 fps (--camera), mic, and system-audio in stereo at 48 kHz with a clock that \
             runs 1500 ppm slow (--system-audio).
+
+            The take's events.jsonl gets synthetic input, the same in every take: the cursor going round a circle \
+            about (320, 180), a click every second from 0.5 s, the arrow and from 1 s the I-beam (their images in \
+            the take's cursors/ folder), a scroll at 2 s and key activity from 3 to 4 s.
             """
     )
 
@@ -99,7 +103,7 @@ struct SynthRecord: AsyncParsableCommand {
         let staticAfter = staticAfter
         try await recordTake(
             in: directory, prefix: "synth", duration: duration,
-            sources: sources, input: NoInputRecorder(),
+            sources: sources, input: SyntheticInputRecorder(),
             systemActivity: AsyncStream { $0.finish() },
             whileRecording: {
                 guard let staticAfter else { return }
@@ -150,9 +154,12 @@ struct Record: AsyncParsableCommand {
             the apps' sound. macOS does not say whether System Audio Recording was allowed: if it was refused, \
             the track is silent.
 
-            The cursor is sampled at 120 Hz, but clicks may be missing: a command-line tool does not run \
-            NSApplication's event loop, and the mouse-button monitors may not deliver there. Each new shape of the \
-            cursor is saved in the take's cursors/ folder, as macOS gives it (none if it gives no image). The \
+            The cursor is sampled at 120 Hz, but clicks and the scroll may be missing: a command-line tool does \
+            not run NSApplication's event loop, and the mouse-button and scroll monitors may not deliver there. Each \
+            new shape of the cursor is saved in the take's cursors/ folder, as macOS gives it (none if it gives no \
+            image). When keys are typed is noted in 250 ms windows (never which, and nothing while secure input is \
+            on), unless --no-key-activity says not to; whether Input Monitoring is granted is only asked, without a \
+            prompt, and goes to the macOS log (subsystem dev.toma.Toma, category KeyActivityRecorder). The \
             displays' geometry is logged when it changes, and the window's at 10 Hz.
             """
     )
@@ -186,6 +193,9 @@ struct Record: AsyncParsableCommand {
 
     @Option(help: "Also record system audio: all, or the bundle IDs of the apps to record, separated by commas.")
     var systemAudio: String?
+
+    @Flag(help: "Do not note when keys are typed.")
+    var noKeyActivity = false
 
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
@@ -229,7 +239,8 @@ struct Record: AsyncParsableCommand {
         }
         // Without an NSApplication, AppKit gives no arrow nor I-beam, and the cursor images would never get those kinds.
         await MainActor.run { _ = NSApplication.shared }
-        var input: [any InputRecorder] = [CursorRecorder(), CursorImageRecorder()]
+        var input: [any InputRecorder] = [CursorRecorder(), CursorImageRecorder(), ScrollRecorder()]
+        if !noKeyActivity { input.append(KeyActivityRecorder()) }
         if !displayIDs.isEmpty {
             // The scale the tracks record, as their first displayGeometry says.
             input.append(DisplayGeometryRecorder(displayIDs: displayIDs, query: { displayID in

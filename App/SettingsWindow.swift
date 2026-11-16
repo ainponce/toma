@@ -6,9 +6,9 @@ import Observation
 import SwiftUI
 import os
 
-/// The app's settings: the countdown before a take, what a stop does, hiding the desktop's icons, the shortcut that
-/// turns Do Not Disturb on and the global shortcuts. A titled window like the permissions one, so while it is open
-/// (and no take records) the app is in the Dock.
+/// The app's settings: the countdown before a take, what a stop does, hiding the desktop's icons, noting when keys are
+/// typed, the shortcut that turns Do Not Disturb on and the global shortcuts. A titled window like the permissions one,
+/// so while it is open (and no take records) the app is in the Dock.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
@@ -191,6 +191,8 @@ final class SettingsModel {
 
     /// The action whose shortcut is being typed.
     private(set) var recording: HotKeyAction?
+    /// `RecorderSettings.noteKeyActivity`; the take reads the saved value at every start.
+    private(set) var noteKeyActivity: Bool
     /// The last shortcut typed for this action was refused.
     private(set) var refusal: (action: HotKeyAction, reason: Refusal)?
 
@@ -212,9 +214,17 @@ final class SettingsModel {
         self.afterStop = afterStop
         self.hideDesktopIcons = hideDesktopIcons
         self.focusShortcut = focusShortcut
+        noteKeyActivity = store.settings.noteKeyActivity
     }
 
     var bindings: HotKeyBindings { hotKeys.bindings }
+
+    func setNoteKeyActivity(_ isOn: Bool) {
+        noteKeyActivity = isOn
+        var settings = store.settings
+        settings.noteKeyActivity = isOn
+        store.settings = settings
+    }
 
     /// The next key press with modifiers is `action`'s shortcut: Esc gives up, Delete leaves it without one.
     func startRecordingShortcut(for action: HotKeyAction) {
@@ -306,6 +316,12 @@ private struct SettingsView: View {
             }
             Toggle(isOn: Binding(get: { model.hideDesktopIcons.isOn }, set: { model.hideDesktopIcons.set($0) })) {
                 Text("Hide desktop icons while recording")
+            }
+            Toggle(isOn: Binding(get: { model.noteKeyActivity }, set: { model.setNoteKeyActivity($0) })) {
+                Text("Note When Keys Are Typed (Never Which)", comment: "A setting: a take notes when keys are typed, never which keys")
+                Text(
+                    "For the zoom while typing. Nothing is noted in password fields.",
+                    comment: "Under the setting that notes when keys are typed")
             }
             Section {
                 FocusShortcutPicker(setting: model.focusShortcut)

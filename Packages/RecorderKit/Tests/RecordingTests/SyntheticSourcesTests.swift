@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import ImageIO
 import ProjectFormat
 import RecorderKitTestSupport
 import SyntheticCapture
@@ -7,7 +8,8 @@ import Testing
 
 import Recording
 
-/// What the synthetic sources of every kind say about themselves, and how the synthetic microphone paces itself.
+/// What the synthetic sources of every kind say about themselves, how the synthetic microphone paces itself, and what
+/// the synthetic input of `synth-record` logs.
 @Suite struct SyntheticSourcesTests {
     @Test func syntheticSourcesReportTheirKind() {
         let camera = SyntheticVideoSource(trackID: "camera", kind: .camera, width: 64, height: 36, framesPerSecond: 30)
@@ -64,5 +66,52 @@ import Recording
         }
         await source.stop()
         #expect(after - before == 50)
+    }
+
+    /// `synth-record`'s input in a take of 5 s: the arrow from the start and the I-beam at 1 s with their images, a
+    /// click a second, a scroll at 2 s and the windows from 3 to 4 s with a key.
+    @Test func synthRecordWritesTheNewEvents() async throws {
+        try await withTemporaryDirectory { dir in
+            let package = try ProjectPackage.create(in: dir, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
+            let coordinator = RecordingCoordinator(
+                package: package, sources: [SyntheticVideoSource(width: 64, height: 36, framesPerSecond: 30), SyntheticAudioSource()],
+                input: SyntheticInputRecorder(),
+                diskMonitor: DiskSpaceMonitor(volumeURL: dir, query: { _ in DiskCapacity(importantUsage: 1 << 40, available: 1 << 40) }),
+                systemActivity: AsyncStream { $0.finish() })
+            let take = try await coordinator.start()
+            try await Task.sleep(for: .seconds(5))
+            _ = try await coordinator.stop()
+            let events = try EventLogReader.read(package.eventsURL(take: take)).events
+
+            let images = events.compactMap { event -> (t: HostTime, hash: String, kind: CursorKind?)? in
+                guard case let .cursorImage(hash, _, _, kind) = event.kind else { return nil }
+                return (event.t, hash, kind)
+            }
+            #expect(images.map(\.kind) == [.arrow, .iBeam])
+            #expect(Set(images.map(\.hash)).count == 2)
+            for image in images {
+                let url = package.cursorImageURL(take: take, hash: image.hash)
+                let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil), "\(url.lastPathComponent)")
+                #expect(CGImageSourceCreateImageAtIndex(source, 0, nil) != nil)
+            }
+            let start = try #require(images.first?.t)
+            #expect(try #require(images.last?.t).seconds(since: start) >= 1)
+
+            let scrolls = events.filter { if case .scroll = $0.kind { true } else { false } }
+            #expect(scrolls.count == 1)
+            #expect(scrolls.allSatisfy { abs($0.t.seconds(since: start) - 2) < 0.1 })
+
+            let windows = events.filter { $0.kind == .keyActivity }.map(\.t)
+            #expect(windows.count == 4)
+            #expect(windows.allSatisfy { $0 == KeyActivityRecorder.windowStart(of: $0) })
+            #expect(zip(windows, windows.dropFirst()).allSatisfy { $1.nanoseconds - $0.nanoseconds == KeyActivityRecorder.window })
+            let first = try #require(windows.first).seconds(since: start)
+            #expect(first > 2.9 && first <= 3.25, "the first window starts \(first) s in")
+
+            let downs = events.filter { if case .mouseDown(.left, _, _) = $0.kind { true } else { false } }
+            let ups = events.filter { if case .mouseUp(.left, _, _) = $0.kind { true } else { false } }
+            #expect(downs.count >= 4 && ups.count >= 4)
+            #expect(events.count { if case .cursor = $0.kind { true } else { false } } > 100)
+        }
     }
 }
