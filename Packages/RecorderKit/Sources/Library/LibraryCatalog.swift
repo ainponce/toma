@@ -86,6 +86,8 @@ public struct LibrarySections: Equatable, Sendable {
 ///   from) stays, since a `.summary` of the same identity may follow (a project moved during a walk).
 /// - `.projectsFolderUnreadable` holds until a walk ends without saying it again (`.finished`); a walk started again
 ///   (`walkStarted()`) does not hide it before it ends.
+/// - A place of `library.json` the index lost is shown from what the records know (`keep`), and a summary of Other
+///   places that the scanner tells at its path takes its place.
 public struct LibraryCatalog: Sendable {
     public private(set) var summaries: [PackageIdentity: ProjectSummary] = [:]
     /// There was no index, and the first walk is still finding projects: "Buscando proyectos… N".
@@ -119,6 +121,12 @@ public struct LibraryCatalog: Sendable {
             switch update {
             case .summary(var summary):
                 guard summary.identity.file != 0 else { continue }
+                if summary.place == .elsewhere, !Self.isFromTheRecords(summary.identity) {
+                    // What a place of the records is now, once the scanner looked at it: shown once.
+                    let shownFromTheRecords = summaries.values.filter { Self.isFromTheRecords($0.identity) && $0.path == summary.path }
+                    for stale in shownFromTheRecords { summaries[stale.identity] = nil }
+                    if !shownFromTheRecords.isEmpty { changes.projects = true }
+                }
                 let old = summaries[summary.identity]
                 if summary.thumbnailKey == nil, let old, Self.sameFiles(old, summary) {
                     summary.thumbnailKey = old.thumbnailKey
@@ -169,6 +177,46 @@ public struct LibraryCatalog: Sendable {
         summary.thumbnailKey = key
         summaries[identity] = summary
         return true
+    }
+
+    // MARK: - Other places the index lost
+
+    /// The volume of the identity a place of the records is shown with until the scanner looks at it: no volume's UUID.
+    static let recordsVolume = "library.json"
+
+    /// Shows each of `places` (of `library.json`) that no summary has at its path, from what the records know: its name
+    /// from its path, Other places, seen last when it was added, and an identity of its path that is the same in every
+    /// window (`isFromTheRecords`). Nothing is read (design §6.5: Other places are looked at only on an action of the
+    /// user); one looked at then is told by the scanner, which takes its place. Whether any was added.
+    @discardableResult
+    public mutating func keep(_ places: [OtherPlace]) -> Bool {
+        let paths = Set(summaries.values.map(\.path))
+        var added = false
+        for place in places where !paths.contains(place.path) {
+            let identity = PackageIdentity(volume: Self.recordsVolume, file: Self.stableHash(place.path))
+            guard summaries[identity] == nil else { continue }
+            summaries[identity] = ProjectSummary(
+                identity: identity, path: place.path,
+                name: URL(fileURLWithPath: place.path).deletingPathExtension().lastPathComponent, place: .elsewhere,
+                hasCamera: false, state: .normal, lastSeen: place.added)
+            added = true
+        }
+        return added
+    }
+
+    /// Whether `identity` is that of a place shown from the records (`keep`), not one the scanner found.
+    public static func isFromTheRecords(_ identity: PackageIdentity) -> Bool {
+        identity.volume == recordsVolume
+    }
+
+    /// FNV-1a of `path`'s UTF-8, never 0 (an identity of file 0 is never kept).
+    private static func stableHash(_ path: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in path.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return hash == 0 ? 1 : hash
     }
 
     // MARK: - What an action of the user changed, before the scanner looks again (design §6.3)

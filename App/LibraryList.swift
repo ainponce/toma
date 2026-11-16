@@ -90,7 +90,7 @@ struct LibraryList: View {
             }
             .width(min: 80, ideal: 120)
         }
-        .contextMenu(forSelectionType: PackageIdentity.self) { ids in
+        .contextMenu(forSelectionType: Library.PackageIdentity.self) { ids in
             LibraryMenu(model: model, ids: ids)
         } primaryAction: { ids in
             model.open(ids)

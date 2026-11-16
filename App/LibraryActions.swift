@@ -44,7 +44,7 @@ enum LibraryCommand: Hashable {
 extension LibraryModel {
     /// Every action of the library goes through here (design §6.3), on the cards `ids`: none once a quit began
     /// (`LibraryWork`), and none again on a card whose action is under way.
-    func perform(_ command: LibraryCommand, on ids: Set<PackageIdentity> = []) {
+    func perform(_ command: LibraryCommand, on ids: Set<Library.PackageIdentity> = []) {
         guard !LibraryWork.isStopped else { return }
         actions.perform(command, on: ids)
     }
@@ -145,9 +145,9 @@ final class LibraryActions {
         var paused: Bool
     }
 
-    private(set) var busy: [PackageIdentity: Work] = [:]
+    private(set) var busy: [Library.PackageIdentity: Work] = [:]
     /// The card whose name is being edited.
-    private(set) var renaming: PackageIdentity?
+    private(set) var renaming: Library.PackageIdentity?
     /// What the disk found wrong with the name asked for (taken meanwhile, too long for it), until it is edited.
     private(set) var renameProblem: NameProblem?
     /// The strip: what failed and why, until it is closed or another failure takes its place.
@@ -193,7 +193,7 @@ final class LibraryActions {
     }
 
     /// `LibraryModel.perform(_:on:)`.
-    fileprivate func perform(_ command: LibraryCommand, on ids: Set<PackageIdentity>) {
+    fileprivate func perform(_ command: LibraryCommand, on ids: Set<Library.PackageIdentity>) {
         guard let model else { return }
         let items = model.shown.filter { ids.contains($0.summary.identity) && busy[$0.summary.identity] == nil }
         let one = items.count == 1 ? items.first : nil
@@ -258,7 +258,7 @@ final class LibraryActions {
 
     // MARK: - Renaming
 
-    private func startRenaming(_ id: PackageIdentity) {
+    private func startRenaming(_ id: Library.PackageIdentity) {
         pendingRename?.cancel()
         renameProblem = nil
         renaming = id
@@ -266,7 +266,7 @@ final class LibraryActions {
 
     /// A click on the name of the only card selected: its name is edited once a double click (which opens) can no
     /// longer be under way.
-    func renameAfterClick(_ id: PackageIdentity) {
+    func renameAfterClick(_ id: Library.PackageIdentity) {
         pendingRename?.cancel()
         pendingRename = Task {
             try? await Task.sleep(for: .seconds(NSEvent.doubleClickInterval))
@@ -360,7 +360,7 @@ final class LibraryActions {
         }
     }
 
-    private func copied(_ id: PackageIdentity, _ progress: Double) {
+    private func copied(_ id: Library.PackageIdentity, _ progress: Double) {
         let shown = busy[id]?.progress ?? 0
         guard busy[id] != nil, (shown..<1).contains(progress), progress != shown else { return }
         busy[id] = Work(progress: progress)
@@ -414,7 +414,7 @@ final class LibraryActions {
         record(changed.map { .favorite($0, favorite) })
     }
 
-    private func setFavorites(_ ids: [PackageIdentity], _ favorite: Bool) {
+    private func setFavorites(_ ids: [Library.PackageIdentity], _ favorite: Bool) {
         let keys = ids.map(\.string)
         withAnimation(Self.settling) {
             model?.changeRecords { records in
@@ -829,7 +829,7 @@ final class LibraryActions {
     /// The project `id` (if known) went from `from` to `to`: shown there at once, the cards settling with
     /// `Motion.trackItem` (one that leaves the section shrinks to 90 % and fades, design §9); its entry of Other places
     /// follows it; the scanner looks at both.
-    private func moved(_ id: PackageIdentity?, from: URL, to: URL) {
+    private func moved(_ id: Library.PackageIdentity?, from: URL, to: URL) {
         guard let model else { return }
         let place = place(of: to)
         if let id { withAnimation(Self.settling) { model.showMoved(id, to: to, place: place) } }
@@ -1148,7 +1148,7 @@ extension LibraryActions {
 /// The menu of `ids` (design §6.3): the context menu of a card or of the list's rows.
 struct LibraryMenu: View {
     let model: LibraryModel
-    let ids: Set<PackageIdentity>
+    let ids: Set<Library.PackageIdentity>
 
     var body: some View {
         let items = model.shown.filter { ids.contains($0.summary.identity) }

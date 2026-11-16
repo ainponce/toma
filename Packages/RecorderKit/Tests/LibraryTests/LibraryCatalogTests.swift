@@ -51,6 +51,45 @@ private enum Catalog {
         #expect(catalog.summaries.count == 1)
     }
 
+    /// The places of `library.json` never leave the library with the index (a lost or dropped index): each the index does
+    /// not have is shown from what the records know, without reading anything (design §6.5), until the scanner tells
+    /// what it is now, on an action of the user.
+    @Test func placesOfTheRecordsOutliveTheIndex() {
+        let added = Date(timeIntervalSince1970: 1_794_000_000)
+        let demo = OtherPlace(added: added, bookmark: Data([1]), path: "/Volumes/Trabajo/Demo.toma")
+        let known = Catalog.summary(7, name: "Known", place: .elsewhere)
+        let knownPlace = OtherPlace(added: added, bookmark: Data([2]), path: known.path)
+        var catalog = LibraryCatalog(index: LibraryIndex(projects: [known]))
+        func keep(_ places: [OtherPlace]) -> Bool { catalog.keep(places) }
+        func apply(_ updates: [LibraryUpdate]) -> LibraryChanges { catalog.apply(updates) }
+
+        #expect(keep([demo, knownPlace]))
+        #expect(catalog.summaries.count == 2, "the one the index has is not shown twice")
+        let shown = catalog.summaries.values.first { $0.path == demo.path }
+        #expect(shown?.name == "Demo" && shown?.place == .elsewhere && shown?.lastSeen == added && shown?.state == .normal)
+        let identity = shown?.identity
+        #expect(identity.map(LibraryCatalog.isFromTheRecords) == true)
+        #expect(!LibraryCatalog.isFromTheRecords(known.identity))
+        #expect(!keep([demo]), "kept once")
+        // The same place gives the same identity in every window (and so in the index written from it).
+        var again = LibraryCatalog(index: LibraryIndex())
+        _ = again.keep([demo])
+        #expect(again.summaries.keys.first == identity)
+
+        // A look that finds nothing tells it with the identity it was shown with: "No disponible".
+        if let identity, var unavailable = shown {
+            unavailable.state = .unavailable(.diskNotConnected("Trabajo"))
+            #expect(apply([.summary(unavailable)]).projects)
+            #expect(catalog.summaries[identity]?.state == .unavailable(.diskNotConnected("Trabajo")))
+        }
+        // A look that finds it: what it is now takes its place, once.
+        var real = Catalog.summary(8, name: "Demo", place: .elsewhere)
+        real.path = demo.path
+        #expect(apply([.summary(real)]).projects)
+        #expect(catalog.summaries.values.filter { $0.path == demo.path } == [real])
+        #expect(catalog.summaries.count == 2)
+    }
+
     /// What an action took out (deleted for good, out of the library) comes back on undo, unless something newer of it
     /// came meanwhile.
     @Test func whatAnActionTookOutComesBack() {

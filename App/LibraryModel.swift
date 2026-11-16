@@ -257,6 +257,8 @@ final class LibraryModel {
             actions.start(records: store)
             self.records = records
             catalog = LibraryCatalog(index: index)
+            // Other places the index lost are shown from the records, without looking at them (design §6.5).
+            if catalog.keep(records.places) { scheduleIndexSave() }
             hasLoaded = true
             showStatus()
             refresh()
@@ -265,7 +267,8 @@ final class LibraryModel {
             let made = await context.value
             guard !closed else { return }
             self.context = made
-            startScanning(from: index, context: made)
+            // From what is shown, the places kept from the records too: a look that does not find one says so.
+            startScanning(from: LibraryIndex(projects: Array(catalog.summaries.values)), context: made)
             adopt(volume: await volume.value)
         }
     }
@@ -407,6 +410,7 @@ final class LibraryModel {
             Task {
                 let found = await Task.detached(priority: .userInitiated) { Self.resolve(bookmark) ?? url }.value
                 guard !closed else { return }
+                follow(summary, to: found)
                 look(at: [found])
                 host.open(found)
                 drawOpened(summary, at: found)
@@ -819,7 +823,7 @@ extension LibraryModel {
     }
 
     /// The project known at `url`, if any.
-    func identity(at url: URL) -> PackageIdentity? {
+    func identity(at url: URL) -> Library.PackageIdentity? {
         let path = url.standardizedFileURL.path
         return catalog.summaries.first { $0.value.path == path }?.key
     }
@@ -843,7 +847,25 @@ extension LibraryModel {
         let url = URL(filePath: summary.path, directoryHint: .isDirectory)
         guard summary.place == .elsewhere else { return url }
         let bookmark = records.places.first { $0.path == summary.path }?.bookmark
-        return await Task.detached(priority: .userInitiated) { Self.resolve(bookmark) ?? url }.value
+        let found = await Task.detached(priority: .userInitiated) { Self.resolve(bookmark) ?? url }.value
+        follow(summary, to: found)
+        return found
+    }
+
+    /// One of Other places found at `url` by its bookmark, on an action of the user: if it moved, its card and its entry
+    /// of `places` follow it, so what the scanner tells of it there takes the card's place.
+    func follow(_ summary: ProjectSummary, to url: URL) {
+        let (old, new) = (summary.path, url.standardizedFileURL.path)
+        guard old != new else { return }
+        if records.places.contains(where: { $0.path == old }) {
+            changeRecords { records in
+                for index in records.places.indices where records.places[index].path == old { records.places[index].path = new }
+            }
+        }
+        if catalog.move(summary.identity, to: new, place: .elsewhere, now: Date()) {
+            refresh()
+            scheduleIndexSave()
+        }
     }
 
     /// Changes `library.json`, in memory and on disk, and shows it.
@@ -855,14 +877,14 @@ extension LibraryModel {
 
     /// The project `id` is now at `url`, in `place` (`LibraryCatalog.move`): shown so at once, before the scanner looks
     /// at it again.
-    func showMoved(_ id: PackageIdentity, to url: URL, place: Place) {
+    func showMoved(_ id: Library.PackageIdentity, to url: URL, place: Place) {
         guard catalog.move(id, to: url.standardizedFileURL.path, place: place, now: Date()) else { return }
         refresh()
         scheduleIndexSave()
     }
 
     /// The projects `ids` are gone for good (deleted): no longer shown.
-    func forget(_ ids: [PackageIdentity]) {
+    func forget(_ ids: [Library.PackageIdentity]) {
         guard ids.map({ catalog.remove($0) != nil }).contains(true) else { return }
         refresh()
         scheduleIndexSave()
@@ -870,7 +892,7 @@ extension LibraryModel {
 
     /// Takes the project `id`, one of Other places, out of the library: its summary and its entry of `places`, which are
     /// returned to be put back (`putBack`). Its file stays where it is.
-    func takeOut(_ id: PackageIdentity) -> (summary: ProjectSummary, place: OtherPlace)? {
+    func takeOut(_ id: Library.PackageIdentity) -> (summary: ProjectSummary, place: OtherPlace)? {
         guard let summary = catalog.remove(id) else { return nil }
         let path = summary.path
         let place = records.places.first { $0.path == path } ?? OtherPlace(added: summary.lastSeen, bookmark: Data(), path: path)
