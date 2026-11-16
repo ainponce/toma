@@ -4,7 +4,8 @@ import CoreVideo
 import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
-import Render
+// @testable for `FrameEvaluator.frame(at:)`, which takes every cursor image as readable.
+@testable import Render
 import SyntheticCapture
 import Testing
 

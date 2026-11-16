@@ -5,10 +5,11 @@ import ProjectFormat
 /// Where things of a take are on the stage, in stage units: the stage is 1 tall and `aspect.ratio` wide, origin at
 /// its top left, so a position does not depend on the size the output is drawn at (design §8.1 and §8.6).
 ///
-/// The screen shown at a source instant is the one the render shows (`FrameEvaluator`): the take's track of
-/// `screens.initial`, or of the last `screens.changes` of the take at or before the instant; none without one, or for
-/// a track the take does not have or that is not a screen. What is shown of it, and where, is `ScreenGeometry`; its
-/// rect is `StageLayout.screenRect` inside the document's padding, as the render places it. With a macOS window frame
+/// The screen shown at a source instant is `shownScreen(at:)`, the one rule the render shows it by too
+/// (`FrameEvaluator`): the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before
+/// the instant; none without one, or for a track the take does not have or that is not a screen. What is shown of it,
+/// and where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, as the render
+/// places it (the render places it at the output's own size, and the cursor on it there). With a macOS window frame
 /// around the screen (`style.frame`), the window is `StageLayout.windowRect` as the render places it in an output of the
 /// document's aspect 1080 px on its shorter side (the 1920 × 1080 of the preview), the size the bar's 18 px floor is
 /// measured at: the same in every output where the bar is not at its floor.
@@ -27,6 +28,9 @@ public struct StagePoints: Sendable {
     private let screenChanges: [(t: HostTime, track: String)]
     /// Where each screen track the document names is, by ID: only the take's screen tracks.
     private let screens: [String: ScreenGeometry]
+    /// The screen tracks of `screens`, each once, in the order the document names them: `screens.initial`, then
+    /// `screens.changes` as listed. Those a frame can show.
+    public let screenTrackIDs: [String]
 
     public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
         ratio = document.aspect.ratio
@@ -45,11 +49,14 @@ public struct StagePoints: Sendable {
             .sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
             .map { ($0.element.t, $0.element.track) }
         var screens: [String: ScreenGeometry] = [:]
+        var screenTrackIDs: [String] = []
         for id in [initialScreen].compactMap({ $0 }) + changes.map(\.track) where screens[id] == nil {
             guard let track = take.track(id), track.kind.isScreen else { continue }
             screens[id] = ScreenGeometry(track: track, events: ordered)
+            screenTrackIDs.append(id)
         }
         self.screens = screens
+        self.screenTrackIDs = screenTrackIDs
     }
 
     /// The stage's width and height: `aspect.ratio` and 1.
@@ -60,7 +67,7 @@ public struct StagePoints: Sendable {
     /// as for the drawn cursor), while a window is not on screen, for a screen without a usable frame, and with no screen
     /// shown.
     public func stagePoint(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>? {
-        guard let view = shown(at: host), view.onScreen, let region = view.region else { return nil }
+        guard let view = shownScreen(at: host)?.view, view.onScreen, let region = view.region else { return nil }
         let point = CGPoint(x: global.x, y: global.y)
         guard CursorGeometry.contains(point, region) else { return nil }
         let rect = rects(of: view).screen
@@ -70,18 +77,21 @@ public struct StagePoints: Sendable {
     /// The rect of the screen shown at source instant `host`, in stage units: with a window frame, the whole window, bar
     /// included (the `R` the zoom's camera keeps to, design §7.4). `nil` with no screen shown.
     public func screenRect(at host: HostTime) -> Rect? {
-        shown(at: host).map { rects(of: $0).window }
+        shownScreen(at: host).map { rects(of: $0.view).window }
     }
 
-    /// What is shown of the screen shown at `host`.
-    private func shown(at host: HostTime) -> ShownScreen? {
+    /// The screen shown at source instant `host`, and what is shown of it: the track of the last of the take's
+    /// `screens.changes` at or before `host`, or of `screens.initial`, as `ScreenGeometry` shows it then. `nil` without
+    /// one, for a track the take does not have or that is not a screen, and when nothing of it is shown.
+    public func shownScreen(at host: HostTime) -> (track: String, view: ShownScreen)? {
         var low = 0, high = screenChanges.count
         while low < high {
             let mid = (low + high) / 2
             if screenChanges[mid].t <= host { low = mid + 1 } else { high = mid }
         }
-        guard let track = low > 0 ? screenChanges[low - 1].track : initialScreen else { return nil }
-        return screens[track]?.shown(at: host)
+        guard let track = low > 0 ? screenChanges[low - 1].track : initialScreen, let view = screens[track]?.shown(at: host)
+        else { return nil }
+        return (track, view)
     }
 
     /// The screen's rect for `view`, of the region's aspect (of the whole room inside the padding without a region), and

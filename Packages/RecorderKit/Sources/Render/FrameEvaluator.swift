@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import CoreGraphics
 import ProjectFormat
 
@@ -16,26 +17,31 @@ import ProjectFormat
 ///   first screen shown, as the take started; a window has none. A wallpaper this version does not know, and a desktop
 ///   without a display, draw the classic gradient (`Background.tomaClassic`), as an image does that is missing or
 ///   unreadable (`Compositor`).
-/// - Screen: the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before the
-///   source instant (it jumps); none without one, or for a track the take does not have. What is shown of it, and
-///   where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, with the
-///   document's corners. With a macOS window frame (`style.frame`), the window is `StageLayout.windowRect` there, with
-///   those corners, and the screen fills it under its bar (`WindowFrameLayer`).
-/// - Cursor (Toma's arrow, `cursor.show`): the take's pointer positions (`cursor`, `mouseDown`, `mouseUp`) in output
-///   time. A position in a cut between two clips is dropped; one before the first clip or after the last keeps its
-///   time through that clip's mapping (negative, or past `D`), so a sample the recorder took before the sources
-///   started counts at output 0, as it always did. At an output time the cursor is the last position at or before it,
-///   moved toward the next one if that comes within `maxInterpolationGap`; `scale × 24` points tall in the region the
-///   screen shows; hidden off that region, while a window is not on screen, and without a usable frame.
-/// - Camera (`camera.show`): the first camera track with a segment, from the start of its first segment on, at the
-///   `CameraStyleTimeline` of the take's `camera.initial` and its `camera.changes` in output time: a change in a cut
-///   rules from the first instant kept after it, one before the first clip keeps its time through that clip's mapping
-///   (it is under way at output 0, as it always was), and one after the last never rules.
+/// - Screen: the one the stage shows at the source instant (`StagePoints.shownScreen(at:)`: the take's track of
+///   `screens.initial`, or of the last `screens.changes` of the take at or before it; it jumps); none without one, or
+///   for a track the take does not have. What is shown of it is `ScreenGeometry`; its rect is `StageLayout.screenRect`
+///   inside the document's padding, at the output's own size, with the document's corners. With a macOS window frame
+///   (`style.frame`), the window is `StageLayout.windowRect` there, with those corners, and the screen fills it under
+///   its bar (`WindowFrameLayer`).
+/// - Cursor (`cursor.show`, design §7.5): where the cursor path is at the output time (`CursorPath.sample(atOutput:)`
+///   of the motion paths: with `smoothing` off, phase 0's rule, the last raw position at or before it moved toward the
+///   next one within 50 ms), placed on the screen's rect as it is in the region the screen shows; hidden off that
+///   region, while a window is not on screen, and without a usable frame. Its opacity (hiding when idle) and its press
+///   (only with smoothing) are the path's too. Its image, at the source instant:
+///   - `system`: the last `cursorImage` of the take at or before it; before the first, and when it cannot be read (the
+///     renderer says which can, `frame(at:cursorImageIsReadable:)`) or has no usable size, Toma's arrow.
+///   - `toma`: Toma's cursor of that `cursorImage`'s `kind`; without a `kind`, the recorded image as in `system`;
+///     without images (takes before 1b), the arrow.
+///   It is `scale × its height in points × the screen's rect height / the region's height` tall: in `toma`, 24 pt,
+///   whatever it is drawn with; in `system`, a recorded image's `size.height` (and the arrow's 24 pt).
+/// - Camera (`camera.show`): the camera's bubble (`CameraBubble`, the zoom's rule too): the first camera track with a
+///   segment, from the start of its first segment on, at the `CameraStyleTimeline` of the take's `camera.initial` and
+///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
+///   first clip keeps its time through that clip's mapping (it is under way at output 0, as it always was), and one
+///   after the last never rules.
+///
+/// The motion paths (`MotionPaths`: the screens, the cursor's path) are the document's revision's, given or built.
 public struct FrameEvaluator: Sendable {
-    /// Two cursor samples at most this far apart in output seconds are interpolated; farther apart, the cursor stays
-    /// put until the next one.
-    static let maxInterpolationGap = 0.050
-
     public let document: EditDocument
     public let timeMap: TimeMap
     /// Host time at output time 0: the start of the first clip (host time 0 without clips).
@@ -48,22 +54,19 @@ public struct FrameEvaluator: Sendable {
     private let background: BackgroundLayer
     /// The gradient of a `.gradient` background; the classic one with any other.
     private let gradient: Gradient
-    /// The screen track of the take at its start, and from each of its changes on (in time order).
-    private let initialScreen: String?
-    private let screenChanges: [(t: HostTime, track: String)]
-    /// Where each screen track the plan names is, by ID: only the take's screen tracks.
-    private let screens: [String: ScreenGeometry]
-    /// The video tracks a frame can show: the screens of `screens`, then the camera when it is shown.
+    /// Which screen is shown, and the drawn cursor's path.
+    private let paths: MotionPaths
+    /// The video tracks a frame can show: the screens of `paths.stage`, then the camera when it is shown.
     let videoTrackIDs: [String]
-    /// ID of the take's camera track, the first with a segment; `nil` if it has none.
-    let cameraTrackID: String?
-    /// Start of the camera's first segment.
-    private let cameraStart: HostTime?
-    private let cameraStyle: CameraStyleTimeline
-    /// Cursor, mouse-down and mouse-up positions in global points at their output times, in time order.
-    private let positions: [(t: Int64, point: SIMD2<Double>)]
+    /// `nil` when no camera is drawn.
+    private let bubble: CameraBubble?
+    /// The take's `cursorImage` events, in time order.
+    private let cursorImages: [RecordedCursor]
 
-    public init(take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>) {
+    /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`.
+    public init(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>, paths: MotionPaths? = nil
+    ) {
         let timeMap = TimeMap(sequence: document.sequence)
         self.document = document
         self.timeMap = timeMap
@@ -72,38 +75,13 @@ public struct FrameEvaluator: Sendable {
         takeID = take.id
         self.outputSize = outputSize
         (background, gradient) = Self.background(of: document.style, take: take, outputSize: outputSize, screens: document.screens)
-        let ordered = events.sortedByTime()
-
-        initialScreen = document.screens.initial[take.id]
-        let changes = document.screens.changes.filter { $0.take == take.id }
-        screenChanges = changes.enumerated()
-            .sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
-            .map { ($0.element.t, $0.element.track) }
-        var screens: [String: ScreenGeometry] = [:]
-        var videoTrackIDs: [String] = []
-        for id in [initialScreen].compactMap({ $0 }) + changes.map(\.track) where screens[id] == nil {
-            guard let track = take.track(id), track.kind.isScreen else { continue }
-            screens[id] = ScreenGeometry(track: track, events: ordered)
-            videoTrackIDs.append(id)
-        }
-        self.screens = screens
-
-        let camera = take.tracks.first { $0.kind == .camera && !$0.segments.isEmpty }
-        cameraTrackID = camera?.id
-        cameraStart = camera?.segments.map(\.startHostTime).min()
-        if document.camera.show, let camera { videoTrackIDs.append(camera.id) }
-        self.videoTrackIDs = videoTrackIDs
-        cameraStyle = CameraStyleTimeline(
-            initial: document.camera.initial[take.id] ?? .default,
-            changes: document.camera.changes.filter { $0.take == take.id }.compactMap { change in
-                timeMap.output(ofChangeAt: change.t, take: take.id).map { ($0, change.style) }
-            })
-
-        positions = ordered.compactMap { event in
-            guard let point = event.kind.pointerPosition, let t = timeMap.output(ofSampleAt: event.t, take: take.id) else {
-                return nil
-            }
-            return (t, point)
+        let paths = paths ?? MotionPaths(take: take, events: events, document: document)
+        self.paths = paths
+        bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
+        videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
+        cursorImages = events.sortedByTime().compactMap { event in
+            guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
+            return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
         }
     }
 
@@ -120,7 +98,16 @@ public struct FrameEvaluator: Sendable {
         self.init(take: take, events: events, document: document, outputSize: outputSize)
     }
 
-    public func frame(at outputTime: Double) -> RenderFrame {
+    /// The frame at `outputTime` with every recorded cursor image taken as readable: for tests, which know. Anything that
+    /// draws asks `frame(at:cursorImageIsReadable:)` with the images it can read, or it would draw another image in the
+    /// place, the hotspot and the aspect of one it cannot.
+    func frame(at outputTime: Double) -> RenderFrame {
+        frame(at: outputTime) { _ in true }
+    }
+
+    /// The frame at `outputTime`, with the recorded cursor images `cursorImageIsReadable` says can be read (by hash):
+    /// Toma's arrow is drawn for one it cannot read (the renderer's, `CursorImages`).
+    public func frame(at outputTime: Double, cursorImageIsReadable: (_ hash: String) throws -> Bool) rethrows -> RenderFrame {
         var frame = RenderFrame(
             outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle,
             background: background)
@@ -130,7 +117,7 @@ public struct FrameEvaluator: Sendable {
         // The output time shown, as `source(atOutput:)` clamps it.
         let output = min(max(τ, 0), timeMap.duration - 1)
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
-        if let trackID = screen(at: source), let view = screens[trackID]?.shown(at: source) {
+        if case let (trackID, view)? = paths.stage.shownScreen(at: source) {
             let aspect = view.region.map { $0.width / $0.height }, padding = document.style.padding
             let cornerRadius = document.style.cornerRadius * size.x
             let rect: Rect
@@ -146,7 +133,8 @@ public struct FrameEvaluator: Sendable {
             }
             frame.screen = ScreenLayer(trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: view.crop)
             if document.cursor.show, view.onScreen, let region = view.region {
-                frame.cursor = cursor(at: output, in: region, shownIn: rect)
+                frame.cursor = try cursor(
+                    at: output, source: source, in: region, shownIn: rect, cursorImageIsReadable: cursorImageIsReadable)
             }
         }
         frame.camera = camera(at: source, output: output)
@@ -185,55 +173,71 @@ public struct FrameEvaluator: Sendable {
         }
     }
 
-    /// The screen track shown at `source`: the last change at or before it, or the initial one.
-    private func screen(at source: HostTime) -> String? {
-        var low = 0, high = screenChanges.count
-        while low < high {
-            let mid = (low + high) / 2
-            if screenChanges[mid].t <= source { low = mid + 1 } else { high = mid }
-        }
-        return low > 0 ? screenChanges[low - 1].track : initialScreen
+    /// A `cursorImage` event: from `t` on, macOS showed the image `hash`.
+    private struct RecordedCursor: Sendable {
+        var t: HostTime
+        var hash: String
+        var hotspot: SIMD2<Double>
+        /// In points.
+        var size: SIMD2<Double>
+        var kind: CursorKind?
     }
 
-    /// The cursor at output time `τ`: the last position at or before it, moved toward the next one if that comes
-    /// within `maxInterpolationGap`, placed on `rect` where it is in `region`. `nil` before the first position and off
-    /// `region`.
-    private func cursor(at τ: Int64, in region: Rect, shownIn rect: Rect) -> CursorLayer? {
-        // Index of the first position after `τ`.
-        var low = 0, high = positions.count
-        while low < high {
-            let mid = (low + high) / 2
-            if positions[mid].t <= τ { low = mid + 1 } else { high = mid }
+    /// What a cursor is drawn with: its image, its hotspot and aspect, and its height in points.
+    private struct Look {
+        var image: CursorImageRef
+        var hotspot: SIMD2<Double>
+        var aspect: Double
+        var pointHeight: Double
+
+        /// Toma's cursor of `kind`, 24 pt tall.
+        static func toma(_ kind: CursorKind) -> Look {
+            Look(image: .toma(kind), hotspot: CursorSprite.hotspot(of: kind), aspect: CursorSprite.aspect(of: kind), pointHeight: 24)
         }
-        guard low > 0 else { return nil }
-        let previous = positions[low - 1]
-        var point = previous.point
-        if low < positions.count {
-            let next = positions[low]
-            let gap = Self.seconds(next.t, since: previous.t)
-            if gap <= Self.maxInterpolationGap {
-                point += (next.point - previous.point) * (Self.seconds(τ, since: previous.t) / gap)
-            }
-        }
-        let global = CGPoint(x: point.x, y: point.y)
+    }
+
+    /// The drawn cursor at output time `τ` (one `source(atOutput:)` shows, at source instant `source`): where the cursor
+    /// path is then, placed on `rect` where it is in `region`. `nil` before the path's first position and off `region`.
+    private func cursor(
+        at τ: Int64, source: HostTime, in region: Rect, shownIn rect: Rect, cursorImageIsReadable: (String) throws -> Bool
+    ) rethrows -> CursorLayer? {
+        guard let sample = paths.cursor.sample(atOutput: τ) else { return nil }
+        let global = CGPoint(x: sample.position.x, y: sample.position.y)
         guard CursorGeometry.contains(global, region) else { return nil }
         let normalized = CursorGeometry.normalized(global, in: region)
+        let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
         return CursorLayer(
             hotspot: SIMD2(rect.x, rect.y) + normalized * SIMD2(rect.width, rect.height),
-            height: document.cursor.scale * 24 * rect.height / region.height
-        )
+            height: document.cursor.scale * look.pointHeight * rect.height / region.height,
+            image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect, opacity: sample.opacity,
+            clickScale: sample.clickScale)
+    }
+
+    /// What the cursor is drawn with at source instant `source`, by the document's `cursor.style` (see the type's notes).
+    private func look(at source: HostTime, cursorImageIsReadable: (String) throws -> Bool) rethrows -> Look {
+        // The last image at or before `source`.
+        var low = 0, high = cursorImages.count
+        while low < high {
+            let mid = (low + high) / 2
+            if cursorImages[mid].t <= source { low = mid + 1 } else { high = mid }
+        }
+        guard low > 0 else { return .toma(.arrow) }
+        let recorded = cursorImages[low - 1]
+        if document.cursor.style == .toma, let kind = recorded.kind { return .toma(kind) }
+        let size = recorded.size
+        guard size.x.isFinite, size.y.isFinite, size.x > 0, size.y > 0, recorded.hotspot.x.isFinite,
+              recorded.hotspot.y.isFinite, try cursorImageIsReadable(recorded.hash)
+        else { return .toma(.arrow) }
+        return Look(
+            image: .recorded(hash: recorded.hash), hotspot: recorded.hotspot.clamped(lowerBound: .zero, upperBound: .one),
+            aspect: size.x / size.y, pointHeight: document.cursor.style == .toma ? 24 : size.y)
     }
 
     /// The camera at source instant `source` and output time `output`, from the start of its first segment on.
     private func camera(at source: HostTime, output: Int64) -> CameraLayer? {
-        guard document.camera.show, let cameraTrackID, let cameraStart, source >= cameraStart else { return nil }
-        let frame = cameraStyle.frame(atOutput: output, output: SIMD2(Double(outputSize.x), Double(outputSize.y)))
-        return CameraLayer(trackID: cameraTrackID, sourceTime: source, rect: frame.rect, cornerRadius: frame.cornerRadius)
-    }
-
-    /// Seconds from output time `b` to `a`, counted as `HostTime.seconds(since:)` counts them: with integer
-    /// nanoseconds below 2⁵³, the same `Double` as the difference of the source instants they stand for at 1×.
-    private static func seconds(_ a: Int64, since b: Int64) -> Double {
-        (Double(a) - Double(b)) / 1_000_000_000
+        guard let bubble, let frame = bubble.frame(
+            atOutput: output, host: source, output: SIMD2(Double(outputSize.x), Double(outputSize.y)))
+        else { return nil }
+        return CameraLayer(trackID: bubble.trackID, sourceTime: source, rect: frame.rect, cornerRadius: frame.cornerRadius)
     }
 }
