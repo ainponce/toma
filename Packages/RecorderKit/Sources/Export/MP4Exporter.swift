@@ -14,9 +14,10 @@ import os
 ///
 /// Frame `i` is the frame `FrameRenderer` draws of the edit document at output time `TimeMap.frameTime(i, frameRate:)`,
 /// the same drawing the preview shows; the video lasts the document's output (`TimeMap.frameCount(frameRate:)` frames;
-/// for the legacy document, the screen's timeline, or an audio track's when it was recorded longer). Every microphone
-/// and system audio track is placed by host time on the same timeline from the start of the first clip, each by its own
-/// clock (`AudioTrackTimeline`), and they are added together (`AudioMix`); a take without any exports without audio.
+/// for the legacy document, the screen's timeline, or an audio track's when it was recorded longer). The audio is the
+/// document's mix (`EditedMix`, the one the preview plays), as long as those frames last: every microphone and system
+/// audio track through the clips, each placed by host time by its own clock, at its gain, with the click sounds; a take
+/// without any audio track or click sound exports without audio.
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
@@ -71,9 +72,9 @@ public final class MP4Exporter: Sendable {
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
 
         let renderer = try FrameRenderer(project: project, document: document, outputSize: settings.outputSize)
-        let evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: settings.outputSize)
-        let (frameCount, audioFrames) = Self.length(of: evaluator.timeMap, framesPerSecond: fps)
-        let audio = try await Self.audioMix(of: project, timelineStart: evaluator.timelineStart, totalFrames: audioFrames)
+        let frameCount = TimeMap(sequence: document.sequence).frameCount(frameRate: fps)
+        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps)
+        let audio = mix.hasSound ? try AudioMix(mix: mix) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
@@ -112,57 +113,41 @@ public final class MP4Exporter: Sendable {
         return summary
     }
 
-    /// The mix of every microphone and system audio track of `project` (in 1a, at most one of each), mono if they all
-    /// are, stereo otherwise; `nil` for a take without any.
-    private static func audioMix(of project: LoadedProject, timelineStart: HostTime, totalFrames: Int64) async throws -> AudioMix? {
-        let tracks = project.take.tracks.filter { !$0.kind.isVideo }
-        guard !tracks.isEmpty else { return nil }
-        var channels = 1
-        for track in tracks { channels = max(channels, await AudioTrackTimeline.channelCount(of: track, in: project)) }
-        var timelines: [AudioTrackTimeline] = []
-        for track in tracks {
-            timelines.append(try await AudioTrackTimeline.load(
-                project, track: track, timelineStart: timelineStart, totalFrames: totalFrames, channels: channels))
-        }
-        return try AudioMix(timelines: timelines, channels: channels, totalFrames: totalFrames)
-    }
-
-    /// The frames of video of the output of `timeMap` at `fps` (`TimeMap.frameCount`, at least one), and the frames of
-    /// audio, at 48 kHz, that those frames last.
-    private static func length(of timeMap: TimeMap, framesPerSecond fps: Int) -> (frames: Int, audioFrames: Int64) {
-        let frames = timeMap.frameCount(frameRate: fps)
-        return (frames, Int64((Double(frames) / Double(fps) * AudioTrackTimeline.sampleRate).rounded()))
-    }
-
-    /// The samples the AAC encoder gets when the legacy document of `project` is exported at `framesPerSecond`: every
-    /// block of its mix (`audioMix`), one after the other, interleaved Float32, over the timeline rounded to whole frames
-    /// of video; empty for a take without audio. The golden mix (`goldenMixMatches`) holds them.
-    /// - Throws: what `export` throws before it writes anything (`noDisplayTrack`, `writerFailed` for a frame rate
-    ///   that is not positive), or what loading or mixing the audio throws.
+    /// The samples the AAC encoder gets when the legacy document of `project` is exported at `framesPerSecond`: what
+    /// `mixSamples(of:document:framesPerSecond:)` gives for it. The golden mix (`goldenMixMatches`) holds them.
     static func mixSamples(of project: LoadedProject, framesPerSecond: Int = 60) async throws -> [Float] {
+        try await mixSamples(of: project, document: .legacy(for: project), framesPerSecond: framesPerSecond)
+    }
+
+    /// The samples the AAC encoder gets when `document` of `project` is exported at `framesPerSecond`: every block of its
+    /// mix (`AudioMix`), one after the other, interleaved Float32, over the frames of video rounded to 48 kHz; empty when
+    /// the export has no audio.
+    /// - Throws: what `export` throws before it writes anything (`noDisplayTrack`, `writerFailed` for a frame rate
+    ///   that is not positive), or what reading or mixing the audio throws.
+    static func mixSamples(of project: LoadedProject, document: EditDocument, framesPerSecond: Int) async throws -> [Float] {
         guard ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false else {
             throw ExportError.noDisplayTrack
         }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
-        let evaluator = FrameEvaluator(
-            take: project.take, events: project.events, document: .legacy(for: project), outputSize: ExportSettings().outputSize)
-        let (_, audioFrames) = length(of: evaluator.timeMap, framesPerSecond: framesPerSecond)
-        guard let mix = try await audioMix(of: project, timelineStart: evaluator.timelineStart, totalFrames: audioFrames) else {
-            return []
-        }
-        var samples: [Float] = []
-        samples.reserveCapacity(Int(audioFrames) * mix.channels)
-        while let block = try mix.nextBlock() {
-            guard let data = CMSampleBufferGetDataBuffer(block) else { throw ExportError.writerFailed("an audio block without data") }
-            let byteCount = CMBlockBufferGetDataLength(data)
-            var floats = [Float](repeating: 0, count: byteCount / MemoryLayout<Float>.size)
-            let status = floats.withUnsafeMutableBytes {
-                CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: byteCount, destination: $0.baseAddress!)
+        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond)
+        guard mix.hasSound else { return [] }
+        // Mixing decodes: off the cooperative pool, as the export's own queue does it.
+        return try await offTheCooperativePool {
+            let audio = try AudioMix(mix: mix)
+            var samples: [Float] = []
+            samples.reserveCapacity(Int(audio.totalFrames) * audio.channels)
+            while let block = try audio.nextBlock() {
+                guard let data = CMSampleBufferGetDataBuffer(block) else { throw ExportError.writerFailed("an audio block without data") }
+                let byteCount = CMBlockBufferGetDataLength(data)
+                var floats = [Float](repeating: 0, count: byteCount / MemoryLayout<Float>.size)
+                let status = floats.withUnsafeMutableBytes {
+                    CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: byteCount, destination: $0.baseAddress!)
+                }
+                guard status == noErr else { throw ExportError.writerFailed("cannot read an audio block (OSStatus \(status))") }
+                samples += floats
             }
-            guard status == noErr else { throw ExportError.writerFailed("cannot read an audio block (OSStatus \(status))") }
-            samples += floats
+            return samples
         }
-        return samples
     }
 
     // MARK: - Destination
