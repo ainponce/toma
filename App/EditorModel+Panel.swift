@@ -82,6 +82,104 @@ extension EditorModel {
         prefix + String(format: "%08x", UInt32.random(in: .min ... .max))
     }
 
+    // MARK: - Zoom
+
+    /// "Show Zooms".
+    func setZoomShow(_ show: Bool) {
+        guard let document, let step = ZoomCommands.setShow(document, show) else { return }
+        perform(step)
+    }
+
+    /// The zoom's motion blur, from the bar's integer: a drag is a gesture.
+    func setZoomMotionBlur(slider: Int) {
+        guard let document, let step = ZoomCommands.setMotionBlur(document, PanelValues.motionBlur(slider: slider)) else { return }
+        if isGesturing { updateGesture(step) } else { perform(step) }
+    }
+
+    /// The zoom camera's speed.
+    func setZoomSpeed(_ speed: ZoomSpeed) {
+        setStyle("/zoom/spring", speed.spring, label: .zoomChange)
+    }
+
+    /// The automatic zoom's settings as the panel shows them: those being planned, else the document's.
+    var autoZoomSettings: AutoZoomSettings? { autoZoomPending ?? document?.zoom.auto }
+
+    /// Changes a setting of the automatic zoom: the planner runs again, off the main thread, and the automatic zooms that
+    /// were not touched are replaced, with the setting, in one step (`ZoomCommands.regenerate`). Changes that come while it
+    /// plans are joined: only the last is planned next.
+    func changeAutoZoom(_ edit: (inout AutoZoomSettings) -> Void) {
+        guard canEdit, var settings = autoZoomSettings else { return }
+        edit(&settings)
+        guard settings != autoZoomSettings else { return }
+        planAutoZoom(settings)
+    }
+
+    /// "Regenerate Automatic Zooms": plans again with the settings as they are.
+    func regenerateAutoZoom() {
+        guard canEdit, let settings = autoZoomSettings else { return }
+        planAutoZoom(settings)
+    }
+
+    private func planAutoZoom(_ settings: AutoZoomSettings) {
+        autoZoomPending = settings
+        guard autoZoomTask == nil else { return }
+        autoZoomTask = Task {
+            defer { autoZoomTask = nil }
+            while let wanted = autoZoomPending, let document, let project = overlayProject {
+                let take = project.take, events = project.events
+                let step = await Task.detached { ZoomCommands.regenerate(document, take: take, events: events, settings: wanted) }.value
+                // Asked again, or the document changed, while it planned: plan again from what is there now.
+                guard autoZoomPending == wanted, self.document == document else { continue }
+                perform(step)
+                break
+            }
+            autoZoomPending = nil
+        }
+    }
+
+    /// What the card of the selected zoom changes (`ZoomCommands.change`): `nil` leaves a field alone.
+    func changeZoom(_ id: String, depth: Double?? = nil, focus: ZoomFocus? = nil, instant: Bool? = nil) {
+        guard let document, let step = ZoomCommands.change(document, id: id, depth: depth, focus: focus, instant: instant) else { return }
+        perform(step)
+    }
+
+    /// "Delete Zoom".
+    func deleteZoom(_ id: String) {
+        guard let document, let step = ZoomCommands.delete(document, ids: [id]) else { return }
+        perform(step)
+    }
+
+    // MARK: - Audio
+
+    /// A track's volume (0 to 200 %): a drag is a gesture. A track the document has no entry for yet gets one with its
+    /// parent's `set` (a `set` cannot add a key).
+    func setTrackVolume(_ track: AudioTrackRow, percent: Int) {
+        setTrackGain(track) { $0.gain = PanelValues.trackGain(percent: percent) }
+    }
+
+    /// "Mute".
+    func setTrackMuted(_ track: AudioTrackRow, _ muted: Bool) {
+        setTrackGain(track) { $0.muted = muted }
+    }
+
+    private func setTrackGain(_ track: AudioTrackRow, _ edit: (inout TrackGain) -> Void) {
+        guard let document else { return }
+        var gain = document.audio.tracks[track.id] ?? TrackGain(gain: 1, muted: false)
+        edit(&gain)
+        if document.audio.tracks[track.id] != nil {
+            setStyle(JSONPointer(components: ["audio", "tracks", track.id]).string, gain, label: .volume)
+        } else {
+            var tracks = document.audio.tracks
+            tracks[track.id] = gain
+            setStyle("/audio/tracks", tracks, label: .volume)
+        }
+    }
+
+    /// "Avoid Clipping".
+    func setLimiter(_ on: Bool) {
+        setStyle("/audio/limiter", on, label: .volume)
+    }
+
     // MARK: - Image
 
     /// "Choose Image…": the file is copied into the project (`importAsset`), then it is the background.

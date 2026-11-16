@@ -179,6 +179,17 @@
         }
       }
     },
+    "After the Click" : {
+      "comment" : "The Zoom tab: seconds a zoom lasts after the last click",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen después del clic"
+          }
+        }
+      }
+    },
     "All" : {
       "comment" : "System audio: record all of it",
       "localizations" : {
@@ -237,6 +248,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ángulo"
+          }
+        }
+      }
+    },
+    "Animation" : {
+      "comment" : "The Zoom tab: how the selected zoom moves",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animación"
           }
         }
       }
@@ -357,6 +379,28 @@
         }
       }
     },
+    "Automatic Zoom" : {
+      "comment" : "The Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom automático"
+          }
+        }
+      }
+    },
+    "Avoid Clipping" : {
+      "comment" : "The Audio tab: the limiter",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Evitar la saturación"
+          }
+        }
+      }
+    },
     "Background" : {
       "comment" : "The panel's tab",
       "localizations" : {
@@ -364,6 +408,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fondo"
+          }
+        }
+      }
+    },
+    "Before the Click" : {
+      "comment" : "The Zoom tab: seconds a zoom starts before the first click",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen antes del clic"
           }
         }
       }
@@ -637,6 +692,28 @@
         }
       }
     },
+    "Clicks" : {
+      "comment" : "The Zoom tab: an automatic zoom's trigger",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clics"
+          }
+        }
+      }
+    },
+    "Clicks and Cursor Pauses" : {
+      "comment" : "The Zoom tab: an automatic zoom's trigger",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clics y pausas del cursor"
+          }
+        }
+      }
+    },
     "Close" : {
       "localizations" : {
         "es" : {
@@ -861,6 +938,28 @@
         }
       }
     },
+    "Delete Zoom" : {
+      "comment" : "The Zoom tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el zoom"
+          }
+        }
+      }
+    },
+    "Depth" : {
+      "comment" : "The Zoom tab: how far a zoom goes in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profundidad"
+          }
+        }
+      }
+    },
     "Desktop" : {
       "comment" : "A display's only desktop (Space), and the open island's section of desktops",
       "localizations" : {
@@ -910,6 +1009,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Listo"
+          }
+        }
+      }
+    },
+    "Drag the box in the preview." : {
+      "comment" : "The Zoom tab: how to place a fixed focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar el recuadro en la vista previa."
           }
         }
       }
@@ -1103,6 +1213,50 @@
         }
       }
     },
+    "Fixed Point" : {
+      "comment" : "The Zoom tab: the selected zoom's focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Punto fijo"
+          }
+        }
+      }
+    },
+    "Focus" : {
+      "comment" : "The Zoom tab: where the selected zoom looks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enfoque"
+          }
+        }
+      }
+    },
+    "Follow the Cursor" : {
+      "comment" : "The Zoom tab: the selected zoom's focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir el cursor"
+          }
+        }
+      }
+    },
+    "Follow the Cursor Inside the Zoom" : {
+      "comment" : "The Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir el cursor dentro del zoom"
+          }
+        }
+      }
+    },
     "For the zoom while typing. Nothing is noted in password fields." : {
       "comment" : "Under the setting that notes when keys are typed",
       "localizations" : {
@@ -1229,6 +1383,17 @@
         }
       }
     },
+    "Group Clicks Within" : {
+      "comment" : "The Zoom tab: seconds between clicks that make one zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agrupar clics separados hasta"
+          }
+        }
+      }
+    },
     "Hide Desktop Icons" : {
       "localizations" : {
         "es" : {
@@ -1267,6 +1432,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ocultar los íconos del escritorio al grabar"
+          }
+        }
+      }
+    },
+    "Hold While Typing" : {
+      "comment" : "The Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mantener el zoom al escribir"
           }
         }
       }
@@ -1329,6 +1505,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Imagen"
+          }
+        }
+      }
+    },
+    "Instant" : {
+      "comment" : "The Zoom tab: the selected zoom cuts in and out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instantánea"
           }
         }
       }
@@ -1587,6 +1774,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mover el área o cambiar su tamaño."
+          }
+        }
+      }
+    },
+    "Mute" : {
+      "comment" : "The Audio tab: a track's switch",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Silenciar"
           }
         }
       }
@@ -2326,6 +2524,17 @@
         }
       }
     },
+    "Regenerate Automatic Zooms" : {
+      "comment" : "The Zoom tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regenerar los zooms automáticos"
+          }
+        }
+      }
+    },
     "Remove Image" : {
       "localizations" : {
         "es" : {
@@ -2342,6 +2551,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quitar el atajo"
+          }
+        }
+      }
+    },
+    "Replaces the automatic zooms that weren't changed." : {
+      "comment" : "The Zoom tab: what the button does",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reemplaza los zooms automáticos que no se tocaron."
           }
         }
       }
@@ -2602,6 +2822,17 @@
         }
       }
     },
+    "Selected Zoom" : {
+      "comment" : "The Zoom tab: the card of the selected zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom seleccionado"
+          }
+        }
+      }
+    },
     "Settings" : {
       "localizations" : {
         "es" : {
@@ -2712,6 +2943,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar la papelera en Finder"
+          }
+        }
+      }
+    },
+    "Show Zooms" : {
+      "comment" : "The Zoom tab: turns every zoom off without deleting the blocks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar los zooms"
           }
         }
       }
@@ -3810,6 +4052,17 @@
         }
       }
     },
+    "This recording didn't note when keys were typed." : {
+      "comment" : "The Zoom tab: why Hold While Typing is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no anotó cuándo se escribía."
+          }
+        }
+      }
+    },
     "This recording didn't save the cursor's shape: Toma's arrow is used." : {
       "comment" : "The Cursor tab: a note",
       "localizations" : {
@@ -3817,6 +4070,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta toma no guardó la forma del cursor: se usa la flecha de Toma."
+          }
+        }
+      }
+    },
+    "This recording has no audio." : {
+      "comment" : "The Audio tab: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no tiene audio."
+          }
+        }
+      }
+    },
+    "This recording has no clicks to make zooms from. Zooms can be added by hand on the Zoom track." : {
+      "comment" : "The Zoom tab: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no tiene clics para generar zooms. Se pueden agregar zooms a mano en la pista Zoom."
           }
         }
       }
@@ -4028,6 +4303,17 @@
         }
       }
     },
+    "Use the Project's" : {
+      "comment" : "The Zoom tab: the selected zoom uses the project's depth",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar la del proyecto"
+          }
+        }
+      }
+    },
     "Vertical" : {
       "comment" : "The camera bubble's shape: a 3:4 box",
       "localizations" : {
@@ -4214,6 +4500,17 @@
         }
       }
     },
+    "Zoom On" : {
+      "comment" : "The Zoom tab: what triggers an automatic zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer zoom con"
+          }
+        }
+      }
+    },
     "cursor.none" : {
       "comment" : "The Cursor tab: no click effect or sound (not the generic \"None\")",
       "localizations" : {
@@ -4292,6 +4589,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Medio"
+          }
+        }
+      }
+    },
+    "zoom.speed.fast" : {
+      "comment" : "The Zoom tab: the zoom camera's speed",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fast"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rápida"
+          }
+        }
+      }
+    },
+    "zoom.speed.medium" : {
+      "comment" : "The Zoom tab: the zoom camera's speed",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medium"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Media"
+          }
+        }
+      }
+    },
+    "zoom.speed.slow" : {
+      "comment" : "The Zoom tab: the zoom camera's speed (not a masculine word)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slow"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lenta"
           }
         }
       }

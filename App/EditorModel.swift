@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import Analysis
+import AppSupport
 import Editing
 import Export
 import Observation
@@ -18,6 +19,17 @@ enum EditorSelection: Equatable {
     case zooms(Set<String>)
     case cameraChange(String)
     case screenChange(String)
+}
+
+/// A track of sound of the take, as a row of the Audio tab.
+struct AudioTrackRow: Equatable, Identifiable {
+    var take: String
+    var track: String
+    var isMicrophone: Bool
+    /// The device's visible name.
+    var deviceName: String
+
+    var id: String { AudioPlan.key(take: take, track: track) }
 }
 
 /// The import of a background image, as the panel shows it.
@@ -116,6 +128,15 @@ final class EditorModel {
     private(set) var hasCamera = false
     /// The take saved the shapes of the cursor (`cursorImage` events): macOS's cursor can be drawn.
     private(set) var hasCursorImages = false
+    /// The take has clicks to make zooms from; without them the Zoom tab says so.
+    private(set) var hasClicks = false
+    /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
+    private(set) var canHoldWhileTyping = false
+    /// The take's tracks of sound, as the Audio tab lists them.
+    private(set) var audioTracks: [AudioTrackRow] = []
+    /// The automatic zoom's settings that are being planned again off the main thread: the controls show them meanwhile.
+    var autoZoomPending: AutoZoomSettings?
+    @ObservationIgnored var autoZoomTask: Task<Void, Never>?
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
 
@@ -308,6 +329,10 @@ final class EditorModel {
         self.document = document
         hasCamera = project.take.tracks.contains { $0.kind == .camera && !$0.segments.isEmpty }
         hasCursorImages = project.events.contains { if case .cursorImage = $0.kind { true } else { false } }
+        hasClicks = ZoomPanelRules.hasClicks(events: project.events)
+        canHoldWhileTyping = ZoomPanelRules.canHoldWhileTyping(events: project.events)
+        audioTracks = project.take.tracks.filter { ($0.kind == .microphone || $0.kind == .systemAudio) && !$0.segments.isEmpty }
+            .map { AudioTrackRow(take: project.take.id, track: $0.id, isMicrophone: $0.kind == .microphone, deviceName: $0.source.name) }
         hasDesktopPhoto = false
         Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
         previewAspect = document.aspect

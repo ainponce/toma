@@ -118,3 +118,54 @@ struct PanelTile<Swatch: View>: View {
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
+
+/// A bar over a range of decimals (the automatic zoom's settings, a zoom's depth): its value reads as `format` says and
+/// lands once, when the drag ends (a change of them plans the zooms again, which a drag must not do at every step); an
+/// arrow key is a step of its own.
+struct PanelStepSlider: View {
+    let title: LocalizedStringKey
+    let value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    let format: (Double) -> String
+    let commit: (Double) -> Void
+
+    @State private var dragged: Double?
+    @State private var editing = false
+
+    var body: some View {
+        let shown = dragged ?? value
+        VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Text(title)
+                Spacer()
+                Text(verbatim: format(shown))
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+            Slider(
+                value: Binding(
+                    get: { shown },
+                    set: { new in
+                        let snapped = min(max((new / step).rounded() * step, range.lowerBound), range.upperBound)
+                        if editing {
+                            dragged = snapped
+                        } else if abs(snapped - value) > step / 2 {
+                            commit(snapped)
+                        }
+                    }),
+                in: range, step: step,
+                onEditingChanged: { began in
+                    editing = began
+                    if !began, let last = dragged {
+                        dragged = nil
+                        if abs(last - value) > step / 2 { commit(last) }
+                    }
+                }
+            )
+            .labelsHidden()
+            .accessibilityLabel(Text(title))
+            .accessibilityValue(Text(verbatim: format(shown)))
+        }
+    }
+}
