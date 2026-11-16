@@ -20,9 +20,9 @@ private func mixFrames(of project: LoadedProject) -> Int {
 /// Projects of version 1 and 2 without edits sound the same from one version of the export to the next (plan decision
 /// 3). It runs only with `TOMA_GOLDEN_FILE` set: the samples the AAC encoder gets at 60 fps
 /// (`MP4Exporter.mixSamples(of:)`) of `phaseZero`, `pausedTake` and `twoAudioTracks`, as little-endian Float32, one
-/// case after the other, must equal `<TOMA_GOLDEN_FILE>.mix` bit for bit. With `TOMA_GOLDEN_RECORD=1` as well, it
-/// writes them to that file instead (`make golden-record`), and never over a file already there. Without the file and
-/// without the switch it fails: it never passes without comparing.
+/// case after the other, must equal `<TOMA_GOLDEN_FILE>.mix` bit for bit. With `TOMA_GOLDEN_RECORD=1` as well
+/// (`make golden-record`, only from Task 1's commit), it writes them to that file instead, once every check passed, and
+/// never over a file already there. Without the file and without the switch it fails: it never passes without comparing.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_GOLDEN_FILE"] != nil))
 func goldenMixMatches() async throws {
     let environment = ProcessInfo.processInfo.environment
@@ -30,16 +30,22 @@ func goldenMixMatches() async throws {
     let recording = environment["TOMA_GOLDEN_RECORD"] == "1"
     let exists = FileManager.default.fileExists(atPath: url.path)
     if recording {
-        try #require(!exists, "\(url.path) is already there: remove it to record the golden mix again")
+        try #require(!exists, "\(url.path) is already there: the golden mix is never recorded over another")
     } else {
-        try #require(exists, "No golden mix at \(url.path): record it first, with TOMA_GOLDEN_RECORD=1, on the code to compare against")
+        try #require(
+            exists, """
+                No golden mix at \(url.path): it is recorded with `make golden-record` from Task 1's commit, never from \
+                later code (plan decision 3)
+                """)
     }
     var bytes = Data()
     // Where each case starts in `bytes`, and its channels.
     var spans: [(name: String, start: Int, channels: Int)] = []
+    // Every check is a `#require`: when recording, nothing is written unless they all passed.
     try await withTemporaryDirectory { dir in
         for name in mixedCases {
             let project = try await GoldenProjects.make(name, in: dir)
+            try #require(project.manifest.formatVersion == (name == "phaseZero" ? 1 : 2), "\(name) is a v1 or v2 project")
             let samples = try await MP4Exporter.mixSamples(of: project)
             let frames = mixFrames(of: project)
             try #require(
@@ -63,7 +69,11 @@ func goldenMixMatches() async throws {
     let differing = stride(from: 0, to: bytes.count, by: MemoryLayout<Float>.size).reduce(0) {
         $0 + (golden[$1..<$1 + MemoryLayout<Float>.size] != bytes[$1..<$1 + MemoryLayout<Float>.size] ? 1 : 0)
     }
-    Issue.record("\(differing) samples differ, the first in \(span.name) at \(Double(sample / span.channels) / 48_000) s")
+    Issue.record("""
+        \(differing) samples differ, the first in \(span.name) at \(Double(sample / span.channels) / 48_000) s: the mix of a \
+        v1 or v2 project changed. Never record the golden mix again from this code, only from Task 1's commit when the \
+        system changed (plan decision 3)
+        """)
 }
 
 /// The seam of the golden mix is the whole mix, as the encoder gets it: every block, from the start of the timeline to
@@ -73,6 +83,7 @@ func goldenMixMatches() async throws {
     try await withTemporaryDirectory { dir in
         // A mono microphone: the 440 Hz sine at 1/4 of full scale over the 3 s.
         let phaseZero = try await GoldenProjects.make("phaseZero", in: dir)
+        #expect(phaseZero.manifest.formatVersion == 1)
         let mono = try await MP4Exporter.mixSamples(of: phaseZero)
         #expect(mono.count == 144_000)
         #expect(abs(toneAmplitude(mono, start: 0, frequency: 440, from: 0.5, to: 2.5) - 0.25) < 0.005)
@@ -80,7 +91,9 @@ func goldenMixMatches() async throws {
         #expect(try await MP4Exporter.mixSamples(of: phaseZero, framesPerSecond: 30) == mono)
 
         // Paused from 1 to 2 s: silence there, the tone on both sides.
-        let paused = try await MP4Exporter.mixSamples(of: try await GoldenProjects.make("pausedTake", in: dir))
+        let pausedTake = try await GoldenProjects.make("pausedTake", in: dir)
+        #expect(pausedTake.manifest.formatVersion == 2)
+        let paused = try await MP4Exporter.mixSamples(of: pausedTake)
         #expect(paused.count == 144_000)
         #expect(rms(paused, start: 0, from: 1.05, to: 1.95) == 0)
         for (from, to) in [(0.1, 0.9), (2.1, 2.9)] {
@@ -88,7 +101,9 @@ func goldenMixMatches() async throws {
         }
 
         // The microphone at 0.6 and stereo system audio at 0.7: a stereo mix whose peaks are clipped to full scale.
-        let stereo = try await MP4Exporter.mixSamples(of: try await GoldenProjects.make("twoAudioTracks", in: dir))
+        let twoAudioTracks = try await GoldenProjects.make("twoAudioTracks", in: dir)
+        #expect(twoAudioTracks.manifest.formatVersion == 2)
+        let stereo = try await MP4Exporter.mixSamples(of: twoAudioTracks)
         #expect(stereo.count == 2 * 144_000)
         #expect(stereo.max() == 1 && stereo.min() == -1)
 
