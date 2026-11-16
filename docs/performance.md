@@ -233,5 +233,18 @@ Cómo se llega:
 
 - **Una capa por elemento a la vista, reciclada.** Tramos, bloques, tramos de pantalla, rombos, rayados, mosaicos de miniaturas y etiquetas de la regla salen de un pozo por pista: el elemento que sale de la vista le deja su capa al que entra, que solo cambia de lugar, de texto y de color; nada se crea ni se destruye al desplazar. Los elementos a la vista se encuentran con una búsqueda binaria sobre la lista ordenada (con el fin más lejano hasta cada uno, por si se superponen), así que una hora con 500 tramos no cuesta más que lo que se ve.
 - **El cabezal es una capa aparte.** Reproduciendo, en cada refresco solo cambia su posición (0,03 ms); la página pasa sola cuando llega al borde derecho.
-- **Miniaturas de la salida, no de cada tramo.** Mosaicos del ancho de una miniatura a lo largo de la pista, cada uno con el cuadro de su borde izquierdo redondeado hacia abajo, dentro de su tramo, a un paso que es una potencia de dos de nanosegundos: un pellizco vuelve a pedir pocas, y una edición que corre un tramo no las cambia. Se ven solo dentro de los tramos (una máscara con sus rectángulos). Las hace `ThumbnailCache` fuera del hilo principal, una a la vez; las que salen de la vista antes de hacerse se cancelan.
+- **Miniaturas en la grilla de cada tramo.** Cada tramo tiene sus mosaicos desde su comienzo, a un paso que es una potencia de dos de nanosegundos de salida (de media a una miniatura de ancho), cada uno con el cuadro de su tramo en su borde izquierdo y cortado en el final del tramo (`TimelineLayout.thumbnailTiles`). Mientras la escala cambia dentro de una potencia de dos, los mosaicos conservan su cuadro y se corren con el tramo (al pasar una, la mitad lo conserva), y una edición que corre un tramo no los cambia (`aSmallScaleStepKeepsTheThumbnails`, `aCutBeforeTheViewKeepsTheThumbnailsAfterIt`). Un pedazo de menos de 16 pt no muestra miniatura: con la hora entera ajustada (tramos de menos de 3 pt), ninguna. Se ven solo dentro de los tramos (una máscara con sus rectángulos). Las hace `ThumbnailCache` fuera del hilo principal, una a la vez; las que salen de la vista antes de hacerse se cancelan. (Hasta la revisión de Task 40 los mosaicos seguían una grilla de toda la salida y cambiaban de cuadro con casi cualquier cambio de escala y con cualquier corte anterior; las corridas de la tabla de arriba son de esa versión.)
 - **Formas de onda por columna de un punto.** La de cada pista se reduce una vez, fuera del hilo principal, a mínimos y máximos de cada potencia de dos de sus pares de 10 ms: cada columna lee unos pocos valores, a cualquier escala, y la pista entera es un solo trazado.
+
+Con los arreglos de la revisión (las miniaturas en la grilla de cada tramo; ⇧Z escala alrededor del instante que queda en el mismo lugar, `TimelineLayout.fitAnchor`), el mismo comando, tres corridas con carga 3,60, 3,29 y 4,31 (p50 / p95 / máximo en ms):
+
+| Movimiento | Corrida 1 (3,60) | Corrida 2 (3,29) | Corrida 3 (4,31) | Capas de elementos a la vista |
+|---|---|---|---|---|
+| Ajustada, todo a la vista, cambiando la escala | 3,62 / 3,78 / 13,93 | 3,67 / 3,79 / 13,13 | 3,55 / 3,64 / 13,33 | hasta 904 (ninguna miniatura) |
+| Pellizco de ajustada a 600 pt/s y de vuelta | 2,59 / 3,37 / 4,14 | 2,67 / 3,71 / 7,13 | 2,53 / 3,37 / 4,04 | hasta 904 |
+| Desplazar a 3,9 pt/s | 2,48 / 2,68 / 3,78 | 2,76 / 3,16 / 6,01 | 2,52 / 2,71 / 3,75 | hasta 141 |
+| Desplazar a 60 pt/s | 2,41 / 2,57 / 3,42 | 2,76 / 3,08 / 5,24 | 2,41 / 2,56 / 3,45 | hasta 36 |
+| Desplazar a 600 pt/s | 1,79 / 1,93 / 2,54 | 2,06 / 2,40 / 3,67 | 1,78 / 2,00 / 2,63 | hasta 40 |
+| Solo el cabezal | 0,02 / 0,03 / 0,45 | 0,03 / 0,03 / 0,24 | 0,02 / 0,03 / 0,55 | — |
+
+Con menos carga que la primera vez, todo queda debajo de los 8,33 ms salvo el primer cuadro con la secuencia entera a la vista (13 a 14 ms, una vez). La frecuencia de la pantalla sigue sin medirse (`paced pinch: the display did not refresh`).

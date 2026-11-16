@@ -52,10 +52,9 @@ public struct TimelineLayout: Equatable, Sendable {
     /// (with a camera that recorded something) and one row for each audio track that recorded something, the
     /// microphones before the system audio, each in the take's order.
     public var tracks: [TimelineRow]
-    /// What the output lasts, in nanoseconds (`TimeMap.duration` of the document's sequence).
-    public var duration: Int64
 
-    /// The tracks of `take`, the take of `document`'s sequence, and the output of `document`.
+    /// The tracks of `take`, the take of `document`'s sequence. In 1b they depend on the take alone: what the document
+    /// does with them is drawn in them.
     public init(take: TakeRecord, document: EditDocument) {
         let recorded = take.tracks.filter { !$0.segments.isEmpty }
         var tracks = [TimelineRow(track: .ruler, height: Self.rulerHeight), TimelineRow(track: .video, height: Self.videoHeight)]
@@ -66,7 +65,6 @@ public struct TimelineLayout: Equatable, Sendable {
             tracks += recorded.filter { $0.kind == kind }.map { TimelineRow(track: .audio(id: $0.id), height: Self.audioHeight) }
         }
         self.tracks = tracks
-        duration = TimeMap(sequence: document.sequence).duration
     }
 
     /// The scale that shows `duration` seconds of output in `width` points (the tracks' width, without the headers),
@@ -101,6 +99,81 @@ public struct TimelineLayout: Equatable, Sendable {
         if τ >= Double(Int64.max) { return .max }
         if τ <= Double(Int64.min) { return .min }
         return Int64(τ)
+    }
+
+    /// The output time (nanoseconds) at the same place in the timeline at `scale` scrolled by `offset` and fitted to the
+    /// tracks' `width` (`fitScale`, scrolled by 0), for `duration` seconds of output: scaling around it, ⇧Z goes from the
+    /// view there is to the fitted one without a jump. At area x = τ* × fit both times, so τ* = offset / (scale − fit)
+    /// seconds, never past the end; 0 when the scale is the fitted one or closer than it can be.
+    public static func fitAnchor(scale: Double, offset: Double, duration: Double, width: Double) -> Int64 {
+        let fit = fitScale(duration: duration, width: width)
+        guard scale > fit, offset > 0, scale.isFinite, offset.isFinite else { return 0 }
+        let seconds = min(offset / (scale - fit), max(duration, 0))
+        return Int64((seconds * 1e9).rounded())
+    }
+
+    /// A thumbnail of the Video track (design §5.5): one of the tiles of a clip, each from the clip's start a power of
+    /// two of nanoseconds of output apart.
+    public struct ThumbnailTile: Equatable, Sendable {
+        /// The clip's index in the sequence, and the tile's number in the clip (from 0).
+        public var clip: Int
+        public var index: Int
+        /// Where the tile is in the output, cut at the clip's end.
+        public var output: Int64
+        public var end: Int64
+        /// The source instant at its left edge, whose frame it shows.
+        public var source: HostTime
+
+        public init(clip: Int, index: Int, output: Int64, end: Int64, source: HostTime) {
+            self.clip = clip
+            self.index = index
+            self.output = output
+            self.end = end
+            self.source = source
+        }
+    }
+
+    /// The thumbnail tiles of `sequence` (its time map, `map`) in the output range `visible`, at `scale`, for
+    /// thumbnails `tileWidth` points wide: each clip's own grid, from its output start, a step apart that is the power of
+    /// two of nanoseconds whose width is from half `tileWidth` to `tileWidth`. A tile shows the source instant at its
+    /// left edge, in its own clip, and ends at the clip's end: so a tile keeps its frame while the scale changes within
+    /// a power of two (and half of them across one), and while an edit moves its clip; a cut ahead changes nothing after
+    /// it. A tile less than `minimumWidth` points wide (a clip narrower than that, or its last piece) has none: a sliver
+    /// of a thumbnail shows nothing.
+    public static func thumbnailTiles(
+        sequence: [Clip], map: TimeMap, visible: Range<Int64>, scale: Double, tileWidth: Double, minimumWidth: Double
+    ) -> [ThumbnailTile] {
+        let period = tileWidth / scale * 1e9
+        guard scale > 0, period.isFinite, period >= 1, period < 0x1p62, sequence.count == map.clipOutputStarts.count
+        else { return [] }
+        // The highest power of two at or under the period.
+        let step = Int64(1) << Int64(63 - Int64(period).leadingZeroBitCount)
+        // The last clip that starts at or before the range: the clips are in output order.
+        var (low, high) = (0, sequence.count)
+        while low < high {
+            let middle = low + (high - low) / 2
+            if map.clipOutputStarts[middle] <= visible.lowerBound { low = middle + 1 } else { high = middle }
+        }
+        var tiles: [ThumbnailTile] = []
+        for k in max(low - 1, 0)..<sequence.count {
+            let start = map.clipOutputStarts[k], clip = sequence[k]
+            guard start < visible.upperBound else { break }
+            let end = start + TimeMap.outputDuration(of: clip)
+            guard end > visible.lowerBound, clip.start < clip.end else { continue }
+            let speed = ClipSpeed.clamped(clip.speed)
+            var index = max(visible.lowerBound - start, 0) / step
+            while start + index * step < min(end, visible.upperBound) {
+                let output = start + index * step, tileEnd = min(output + step, end)
+                if Double(tileEnd - output) * scale / 1e9 >= minimumWidth {
+                    let into = UInt64((Double(index * step) * speed).rounded())
+                    let source = min(clip.start.nanoseconds + into, clip.end.nanoseconds - 1)
+                    tiles.append(ThumbnailTile(
+                        clip: k, index: Int(index), output: output, end: tileEnd, source: HostTime(nanoseconds: source)))
+                }
+                index += 1
+            }
+        }
+        return tiles
     }
 
     /// Where the timeline scrolls to while playing, so the playhead stays in sight (design §5.5): page by page. `nil`
