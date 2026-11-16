@@ -19,6 +19,8 @@ public struct DiskImage: Sendable {
 
     /// Where the volume is mounted, inside the folder given to `attach`.
     public let mountPoint: URL
+    /// The image file, next to `mountPoint`.
+    private let image: URL
 
     /// Creates a `sizeMegabytes` MB image of `fileSystem` in `directory` and mounts it (not shown in the
     /// Finder) at a new folder there.
@@ -29,7 +31,12 @@ public struct DiskImage: Sendable {
         try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: false)
         try hdiutil(["create", "-size", "\(sizeMegabytes)m", "-fs", fileSystem.hdiutilName, "-volname", "TomaTest", image.path])
         try hdiutil(["attach", "-nobrowse", "-mountpoint", mountPoint.path, image.path])
-        return DiskImage(mountPoint: mountPoint)
+        return DiskImage(mountPoint: mountPoint, image: image)
+    }
+
+    /// Mounts the volume again at `mountPoint`, after `detach`: as a disk that was pulled out and plugged in again.
+    public func reattach() throws {
+        try hdiutil(["attach", "-nobrowse", "-mountpoint", mountPoint.path, image.path])
     }
 
     /// Unmounts the volume; with `force`, even while files on it are open.
