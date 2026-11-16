@@ -5,9 +5,10 @@ import MetalPerformanceShaders
 import ProjectFormat
 import Synchronization
 
-/// The textures of one renderer's background images (`BackgroundLayer.image`): for each frame, a texture of the output's
-/// size in which the image already covers the stage (aspect fill, centred) and is already blurred, made once per
-/// (background, output size, σ) and reused while the frames ask for the same.
+/// The textures of one renderer's background images (`BackgroundLayer.image`) and blurred wallpapers: for each frame, a
+/// texture of the output's size in which the image already covers the stage (aspect fill, centred), or the wallpaper's
+/// mesh gradient is drawn over it without its grain, already blurred, made once per (background, output size, σ) and
+/// reused while the frames ask for the same.
 ///
 /// - The image is read only through the package's safe readers (`ProjectPackage.asset(_:)`, `wallpaper(take:displayID:)`)
 ///   and taken from the process's cache (`BackgroundImageCache`), where it is decoded once while any renderer holds
@@ -20,7 +21,7 @@ import Synchronization
 /// - The blur is `MPSImageGaussianBlur` with `edgeMode = .clamp`: the default `.zero` brings black in from outside the
 ///   image and, with σ of hundreds of pixels, darkens the stage's whole border. Where Metal Performance Shaders does
 ///   not support the device (`MPSSupportsMTLDevice`: a paravirtualized one in CI), the shaders' own separable Gaussian
-///   (`blurFragment`), sampling with `clamp_to_edge`.
+///   (`blurFragment`), sampling with `clamp_to_edge`, on a reduced copy of the stage past `shaderBlurMaxSigma`.
 ///
 /// Not thread-safe: `FrameRenderer` uses it with its lock held. What it draws runs on a command queue of its own and is
 /// waited for, so the texture it returns is complete for a frame drawn on any queue.
@@ -47,16 +48,29 @@ final class BackgroundImages {
     /// The image last asked for: the cache's entry, held so another renderer of it shares the decoded pixels, and its
     /// texture (`nil` when it is missing or unreadable).
     private var source: (source: BackgroundImage.Source, entry: BackgroundImageCache.Entry, texture: (any MTLTexture)?)?
-    /// The texture last made for a frame.
-    private var prepared: (background: BackgroundImage, outputSize: SIMD2<Int>, texture: any MTLTexture)?
+    /// The texture last made for a frame, and what it is of.
+    private var prepared: (content: Content, outputSize: SIMD2<Int>, texture: any MTLTexture)?
+
+    /// What a texture for frames shows.
+    private enum Content: Equatable {
+        case image(BackgroundImage)
+        case wallpaper(WallpaperPreset, blurSigma: Double)
+    }
 
     private struct Pipelines {
         let cover: any MTLRenderPipelineState
+        let wallpaperMesh: any MTLRenderPipelineState
         /// The shader blur's passes: across, into a half-float texture, then down, into the result.
         let blurAcross: (any MTLRenderPipelineState)?
         let blurDown: (any MTLRenderPipelineState)?
         let mipSampler: any MTLSamplerState
     }
+
+    /// The largest σ, in texels, the shader blur works at. Past it, it blurs a mipmap level of the stage, reduced by the
+    /// smallest power of two that brings σ within it, and scales the result back up: a pass then reads at most
+    /// 2 × ⌈3 × 16⌉ + 1 = 97 taps a pixel, however large σ is, where a 4K stage at σ ≈ 154 would read 925. A blur that
+    /// wide has nothing finer than the reduction to lose (`shaderBlurMatchesPerformanceShaders`).
+    static let shaderBlurMaxSigma = 16.0
 
     /// - Parameters:
     ///   - library: the compiled `ShaderSource` (`Compositor.library`).
@@ -83,11 +97,38 @@ final class BackgroundImages {
     /// missing or cannot be read. Made the first time it is asked for and kept until another background or size is.
     /// - Throws: `RenderError` if Metal cannot make what it needs or the GPU fails.
     func texture(for background: BackgroundImage, outputSize: SIMD2<Int>) throws -> (any MTLTexture)? {
-        if let prepared, prepared.background == background, prepared.outputSize == outputSize { return prepared.texture }
+        let content = Content.image(background)
+        if let prepared, prepared.content == content, prepared.outputSize == outputSize { return prepared.texture }
         guard let image = try sourceTexture(of: background.source) else { return nil }
-        let texture = try cover(image, blurredBy: background.blurSigma, outputSize: outputSize)
-        prepared = (background, outputSize, texture)
-        return texture
+        return try prepare(content, outputSize: outputSize, blurredBy: background.blurSigma) { encoder, pipelines in
+            // The image covers the stage: aspect fill, centred.
+            let stage = Rect(x: 0, y: 0, width: Double(outputSize.x), height: Double(outputSize.y))
+            let fill = Compositor.aspectFill(SIMD2(Double(image.width), Double(image.height)), in: stage)
+            var uniforms = CoverUniforms(targetSize: SIMD2<Float>(outputSize), uvOrigin: fill.origin, uvSize: fill.size, padding: .zero)
+            encoder.setRenderPipelineState(pipelines.cover)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CoverUniforms>.stride, index: 0)
+            encoder.setFragmentTexture(image, index: 0)
+            encoder.setFragmentSamplerState(pipelines.mipSampler, index: 0)
+        }
+    }
+
+    /// The mesh gradient of `preset` over a stage `outputSize` big, without its grain, blurred by `blurSigma` output
+    /// pixels (`.rgba8Unorm`, that size): what `Compositor` adds the grain to for a blurred wallpaper. Made the first time
+    /// it is asked for and kept until another background or size is.
+    /// - Throws: `RenderError` if Metal cannot make what it needs or the GPU fails.
+    func texture(forWallpaper preset: WallpaperPreset, blurSigma: Double, outputSize: SIMD2<Int>) throws -> any MTLTexture {
+        let content = Content.wallpaper(preset, blurSigma: blurSigma)
+        if let prepared, prepared.content == content, prepared.outputSize == outputSize { return prepared.texture }
+        // No image is shown: its memory goes.
+        source = nil
+        return try prepare(content, outputSize: outputSize, blurredBy: blurSigma) { encoder, pipelines in
+            var uniforms = WallpaperUniforms(
+                stageSize: SIMD2<Float>(outputSize), count: UInt32(preset.points.count), padding: 0)
+            encoder.setRenderPipelineState(pipelines.wallpaperMesh)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WallpaperUniforms>.stride, index: 0)
+            preset.points.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
+            preset.colors.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
+        }
     }
 
     /// The texture of the image of `source`, uploaded once while it is the one asked for; `nil` when it is missing or
@@ -127,26 +168,25 @@ final class BackgroundImages {
         return texture
     }
 
-    /// A texture `outputSize` big in which `image` covers it (aspect fill, centred), blurred by `sigma` output pixels
-    /// (none at 0 or a value that is not a number; at most the output's longer side, past which nothing changes).
-    private func cover(_ image: any MTLTexture, blurredBy sigma: Double, outputSize: SIMD2<Int>) throws -> any MTLTexture {
+    /// A texture `outputSize` big that `setUp` fills (it sets a pipeline drawing `gradientVertex`, and its inputs, for one
+    /// triangle over the target), blurred by `sigma` output pixels: none at 0 or a value that is not a number, at most
+    /// the output's longer side, past which nothing changes. It is kept as `prepared`, for `content`.
+    private func prepare(
+        _ content: Content, outputSize: SIMD2<Int>, blurredBy sigma: Double,
+        setUp: (any MTLRenderCommandEncoder, Pipelines) -> Void
+    ) throws -> any MTLTexture {
         let pipelines = try self.pipelines ?? makePipelines()
         self.pipelines = pipelines
         let blurs = sigma.isFinite && sigma > 0
         let longerSide = Double(max(outputSize.x, outputSize.y))
         let sigma = min(sigma, longerSide)
-        let covered = try makeTexture(.rgba8Unorm, size: outputSize, storage: .shared)
+        // The shader blur's mipmap level: 0, the stage itself, up to `shaderBlurMaxSigma`.
+        let level = blurs && blur == .shader ? Self.shaderBlurLevel(sigma: sigma, size: outputSize) : 0
+        let covered = try makeTexture(.rgba8Unorm, size: outputSize, storage: .shared, mipmapped: level > 0)
         let result = blurs ? try makeTexture(.rgba8Unorm, size: outputSize, storage: .shared) : covered
-        let across = blurs && blur == .shader ? try makeTexture(.rgba16Float, size: outputSize, storage: .private) : nil
         try run { commandBuffer in
-            let stage = Rect(x: 0, y: 0, width: Double(outputSize.x), height: Double(outputSize.y))
-            let fill = Compositor.aspectFill(SIMD2(Double(image.width), Double(image.height)), in: stage)
-            var uniforms = CoverUniforms(targetSize: SIMD2<Float>(outputSize), uvOrigin: fill.origin, uvSize: fill.size, padding: .zero)
             let encoder = try renderPass(into: covered, commandBuffer: commandBuffer)
-            encoder.setRenderPipelineState(pipelines.cover)
-            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CoverUniforms>.stride, index: 0)
-            encoder.setFragmentTexture(image, index: 0)
-            encoder.setFragmentSamplerState(pipelines.mipSampler, index: 0)
+            setUp(encoder, pipelines)
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             encoder.endEncoding()
             guard blurs else { return }
@@ -156,16 +196,65 @@ final class BackgroundImages {
                 kernel.edgeMode = .clamp
                 kernel.encode(commandBuffer: commandBuffer, sourceTexture: covered, destinationTexture: result)
             case .shader:
-                guard let across, let blurAcross = pipelines.blurAcross, let blurDown = pipelines.blurDown else {
-                    preconditionFailure("BackgroundImages: the shader blur's textures and pipelines are made with it")
-                }
-                let radius = Int32(min((3 * sigma).rounded(.up), longerSide))
-                try blurPass(covered, into: across, direction: [1, 0], sigma: sigma, radius: radius, pipeline: blurAcross, commandBuffer)
-                try blurPass(across, into: result, direction: [0, 1], sigma: sigma, radius: radius, pipeline: blurDown, commandBuffer)
+                try shaderBlur(covered, into: result, sigma: sigma, level: level, pipelines: pipelines, commandBuffer)
             }
         }
         if blurs { blurCount += 1 }
+        prepared = (content, outputSize, result)
         return result
+    }
+
+    /// The mipmap level of a stage `size` big that the shader blur works on for `sigma` texels of the stage: the first at
+    /// which σ / 2^level is at most `shaderBlurMaxSigma`, never past the stage's last level.
+    static func shaderBlurLevel(sigma: Double, size: SIMD2<Int>) -> Int {
+        let lastLevel = Int(log2(Double(max(size.x, size.y))).rounded(.down))
+        var level = 0
+        while level < lastLevel, sigma / Double(1 << level) > shaderBlurMaxSigma { level += 1 }
+        return level
+    }
+
+    /// The shader blur of `source` (the stage, with mipmaps when `level` > 0) into `target`, the same size: at `level` 0
+    /// in two passes over it; otherwise in two passes over a copy of that mipmap level, with σ reduced as much, whose
+    /// result is scaled back up into `target` (bilinear).
+    private func shaderBlur(
+        _ source: any MTLTexture, into target: any MTLTexture, sigma: Double, level: Int, pipelines: Pipelines,
+        _ commandBuffer: any MTLCommandBuffer
+    ) throws {
+        guard let blurAcross = pipelines.blurAcross, let blurDown = pipelines.blurDown else {
+            preconditionFailure("BackgroundImages: the shader blur's pipelines are made with it")
+        }
+        let size = SIMD2(max(1, source.width >> level), max(1, source.height >> level))
+        let reducedSigma = sigma / Double(1 << level)
+        let radius = Int32(min((3 * reducedSigma).rounded(.up), Double(max(size.x, size.y))))
+        let across = try makeTexture(.rgba16Float, size: size, storage: .private)
+        guard level > 0 else {
+            try blurPass(source, into: across, direction: [1, 0], sigma: reducedSigma, radius: radius, pipeline: blurAcross, commandBuffer)
+            try blurPass(across, into: target, direction: [0, 1], sigma: reducedSigma, radius: radius, pipeline: blurDown, commandBuffer)
+            return
+        }
+        let reduced = try makeTexture(.rgba8Unorm, size: size, storage: .private)
+        let blurred = try makeTexture(.rgba8Unorm, size: size, storage: .private)
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            throw RenderError.metalResourceUnavailable("background blur reduction")
+        }
+        blit.generateMipmaps(for: source)
+        blit.copy(
+            from: source, sourceSlice: 0, sourceLevel: level, sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0),
+            sourceSize: MTLSize(width: size.x, height: size.y, depth: 1), to: reduced, destinationSlice: 0, destinationLevel: 0,
+            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.endEncoding()
+        try blurPass(reduced, into: across, direction: [1, 0], sigma: reducedSigma, radius: radius, pipeline: blurAcross, commandBuffer)
+        try blurPass(across, into: blurred, direction: [0, 1], sigma: reducedSigma, radius: radius, pipeline: blurDown, commandBuffer)
+        // Back up to the stage's size.
+        var uniforms = CoverUniforms(
+            targetSize: SIMD2<Float>(Float(target.width), Float(target.height)), uvOrigin: .zero, uvSize: .one, padding: .zero)
+        let encoder = try renderPass(into: target, commandBuffer: commandBuffer)
+        encoder.setRenderPipelineState(pipelines.cover)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CoverUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(blurred, index: 0)
+        encoder.setFragmentSamplerState(pipelines.mipSampler, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
     }
 
     /// One pass of the shader blur from `source` into `target`, both the same size.
@@ -207,13 +296,16 @@ final class BackgroundImages {
         let shaderBlur = blur == .shader
         return Pipelines(
             cover: try pipeline("coverFragment", format: .rgba8Unorm),
+            wallpaperMesh: try pipeline("wallpaperMeshFragment", format: .rgba8Unorm),
             blurAcross: shaderBlur ? try pipeline("blurFragment", format: .rgba16Float) : nil,
             blurDown: shaderBlur ? try pipeline("blurFragment", format: .rgba8Unorm) : nil,
             mipSampler: mipSampler)
     }
 
-    private func makeTexture(_ format: MTLPixelFormat, size: SIMD2<Int>, storage: MTLStorageMode) throws -> any MTLTexture {
-        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: size.x, height: size.y, mipmapped: false)
+    private func makeTexture(
+        _ format: MTLPixelFormat, size: SIMD2<Int>, storage: MTLStorageMode, mipmapped: Bool = false
+    ) throws -> any MTLTexture {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: size.x, height: size.y, mipmapped: mipmapped)
         descriptor.usage = [.renderTarget, .shaderRead, .shaderWrite]
         descriptor.storageMode = storage
         guard let texture = device.makeTexture(descriptor: descriptor) else {

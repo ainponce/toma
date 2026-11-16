@@ -6,8 +6,10 @@ public enum BackgroundLayer: Equatable, Sendable {
     case gradient
     /// One colour, RGBA 0...1 written to the output as it is: the gradient's pipeline with both ends of that colour.
     case color(SIMD4<Float>)
-    /// One of Toma's procedural wallpapers: its mesh gradient over the stage, with a grain of the output's pixels.
-    case wallpaper(WallpaperPreset)
+    /// One of Toma's procedural wallpapers: its mesh gradient over the stage, blurred by `blurSigma` output pixels (as
+    /// `BackgroundImage.blurSigma`), with a grain of the output's pixels that the blur never softens. At 0 it is drawn
+    /// directly, without a texture.
+    case wallpaper(WallpaperPreset, blurSigma: Double = 0)
     /// An image of the package covering the stage (aspect fill, centred), blurred; the frame's gradient (Toma classic)
     /// when the image is missing or cannot be read.
     case image(BackgroundImage)

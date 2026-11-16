@@ -124,6 +124,39 @@ private func bgra(_ rgb: SIMD3<UInt8>) -> SIMD4<Float> {
     SIMD4(Float(rgb.z), Float(rgb.y), Float(rgb.x), 255)
 }
 
+/// An image black on its left half and white on its right half, the edge between columns `width / 2 − 1` and
+/// `width / 2`.
+private func hardEdge(width: Int, height: Int) throws -> Data {
+    try encodedImage(width: width, height: height) { x, _ in x < width / 2 ? [0, 0, 0] : [255, 255, 255] }
+}
+
+/// The byte a Gaussian blur of σ `sigma` pixels makes at column `x` of a hard edge from black to white at `edge` (in
+/// pixels from the left): 255 × Φ((x + ½ − edge) / σ), at the pixel's centre.
+private func blurredEdge(at x: Int, edge: Double, sigma: Double) -> Double {
+    255 * 0.5 * erfc(-((Double(x) + 0.5 - edge) / sigma) / 2.0.squareRoot())
+}
+
+/// The red bytes of row `y` of tightly packed 4-byte pixels `width` wide.
+private func redRow(_ bytes: [UInt8], width: Int, y: Int) -> [Int] {
+    (0..<width).map { Int(bytes[(y * width + $0) * 4]) }
+}
+
+/// The blurs this device can run: the shader's, and Metal Performance Shaders' where it supports the device.
+private func blurs(on device: any MTLDevice) -> [BackgroundImages.Blur] {
+    MPSSupportsMTLDevice(device) ? [.shader, .performanceShaders] : [.shader]
+}
+
+/// What `BackgroundImages` with `blur` makes of `image` for frames `outputSize` big, as RGBA bytes.
+private func prepared(
+    _ image: BackgroundImage, outputSize: SIMD2<Int>, blur: BackgroundImages.Blur, in package: ProjectPackage, device: any MTLDevice
+) async throws -> [UInt8]? {
+    let library = try Compositor(device: device).library
+    return try await offThePool {
+        let images = try BackgroundImages(device: device, library: library, package: package, blur: blur)
+        return try images.texture(for: image, outputSize: outputSize).map(bytes(of:))
+    }
+}
+
 /// The four corners of an image `size` big.
 private func corners(of size: SIMD2<Int>) -> [(x: Int, y: Int)] {
     [(0, 0), (size.x - 1, 0), (0, size.y - 1), (size.x - 1, size.y - 1)]
@@ -160,6 +193,10 @@ private func corners(of size: SIMD2<Int>) -> [(x: Int, y: Int)] {
         == (classic.gradientStart, classic.gradientEnd, classic.gradientAngleDegrees))
     // A window has no display, so no desktop photo: Toma classic.
     #expect(frame(.desktop, initial: "window-7") == frame(.tomaClassic, initial: "window-7"))
+    // A wallpaper is blurred by the same σ.
+    let lake = try #require(WallpaperPreset.preset(id: "lake-1"))
+    #expect(frame(.wallpaper("lake-1"), blur: 0.5).background == .wallpaper(lake, blurSigma: 6.4))
+    #expect(frame(.wallpaper("lake-1")).background == .wallpaper(lake))
 }
 
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
@@ -343,4 +380,175 @@ func previewAndExportShareTheDecodedImage() async throws {
         #expect(frames.0 == frames.1)
         withExtendedLifetime((preview, export)) {}
     }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func blurFollowsSigmaInOutputPixels() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try backgroundProject(in: dir)
+        let file = "assets/\(hash).png"
+        // The edge at column 320 of 640, so at the middle of the stage at either size, whole texels apart.
+        try put(try hardEdge(width: 640, height: 360), at: file, in: project.package)
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        // Blur 0.5: σ = 0.5 × 0.04 × W, 6.4 output pixels at 320 wide and 12.8 at 640.
+        for outputSize in [SIMD2(320, 180), SIMD2(640, 360)] {
+            let sigma = 0.5 * 0.04 * Double(outputSize.x)
+            let edge = Double(outputSize.x) / 2
+            var rows: [BackgroundImages.Blur: [Int]] = [:]
+            for blur in blurs(on: device) {
+                let drawn = try await prepared(
+                    BackgroundImage(source: .asset(file), blurSigma: sigma), outputSize: outputSize, blur: blur, in: project.package,
+                    device: device)
+                let row = redRow(try #require(drawn), width: outputSize.x, y: outputSize.y / 2)
+                rows[blur] = row
+                // The profile across the edge is the Gaussian's: within ±3 at 0, ±½, ±1, ±2 and ±3 σ.
+                for k in [-3.0, -2, -1, -0.5, 0, 0.5, 1, 2, 3] {
+                    let x = Int((edge + k * sigma).rounded(.down))
+                    let expected = blurredEdge(at: x, edge: edge, sigma: sigma)
+                    #expect(abs(Double(row[x]) - expected) <= 3, "\(blur) at \(outputSize.x) wide, x \(x): \(row[x]) for \(expected)")
+                }
+            }
+            // And the two blurs agree, pixel for pixel, within ±2.
+            if let shader = rows[.shader], let performanceShaders = rows[.performanceShaders] {
+                let largest = zip(shader, performanceShaders).map { abs($0 - $1) }.max() ?? 0
+                #expect(largest <= 2, "at \(outputSize.x) wide: \(largest)")
+            }
+        }
+    }
+}
+
+@Test func shaderBlurIsBounded() {
+    // Up to 16 texels the stage itself is blurred; past it, a level reduced by the smallest power of two that brings σ
+    // within 16, so a pass reads at most 2 × ⌈3 × 16⌉ + 1 taps.
+    #expect(BackgroundImages.shaderBlurLevel(sigma: 16, size: [3840, 2160]) == 0)
+    #expect(BackgroundImages.shaderBlurLevel(sigma: 16.1, size: [3840, 2160]) == 1)
+    #expect(BackgroundImages.shaderBlurLevel(sigma: 51.2, size: [1280, 720]) == 2)
+    // 4K at blur 1: σ ≈ 154 is blurred at level 4, σ 9.6, 59 taps a pass instead of 925.
+    #expect(BackgroundImages.shaderBlurLevel(sigma: 0.04 * 3840, size: [3840, 2160]) == 4)
+    // Never past the last level.
+    #expect(BackgroundImages.shaderBlurLevel(sigma: 10_000, size: [64, 36]) == 6)
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func shaderBlurMatchesPerformanceShaders() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try backgroundProject(in: dir)
+        let file = "assets/\(hash).png"
+        let outputSize = SIMD2(1280, 720)
+        try put(try hardEdge(width: outputSize.x, height: outputSize.y), at: file, in: project.package)
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        // Blur 1 at 1280 wide: σ = 51.2, which the shader blurs at level 2 (σ 12.8).
+        let image = BackgroundImage(source: .asset(file), blurSigma: 0.04 * Double(outputSize.x))
+        #expect(BackgroundImages.shaderBlurLevel(sigma: image.blurSigma, size: outputSize) == 2)
+        var rows: [BackgroundImages.Blur: [Int]] = [:]
+        for blur in blurs(on: device) {
+            let drawn = try #require(try await prepared(image, outputSize: outputSize, blur: blur, in: project.package, device: device))
+            let row = redRow(drawn, width: outputSize.x, y: outputSize.y / 2)
+            rows[blur] = row
+            // The reduction leaves the Gaussian's profile within ±3.
+            for x in stride(from: 0, to: outputSize.x, by: 8) {
+                let expected = blurredEdge(at: x, edge: Double(outputSize.x) / 2, sigma: image.blurSigma)
+                #expect(abs(Double(row[x]) - expected) <= 3, "\(blur) at x \(x): \(row[x]) for \(expected)")
+            }
+        }
+        // The reduced shader blur is within ±2 of Metal Performance Shaders' at every pixel of the row.
+        if let shader = rows[.shader], let performanceShaders = rows[.performanceShaders] {
+            let largest = zip(shader, performanceShaders).map { abs($0 - $1) }.max() ?? 0
+            #expect(largest <= 2, "\(largest)")
+        }
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func wallpaperWithoutBlurIsTheDirectDraw() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try backgroundProject(in: dir)
+        let aurora = try #require(WallpaperPreset.preset(id: "aurora-1"))
+        let sharpRenderer = try FrameRenderer(project: project, document: document(project, .wallpaper("aurora-1")), outputSize: size)
+        let blurredRenderer = try FrameRenderer(
+            project: project, document: document(project, .wallpaper("aurora-1"), blur: 0.5), outputSize: size)
+        let device = sharpRenderer.device
+        let compositor = try Compositor(device: device)
+        let (sharp, sharpBlurs, blurred, blurredBlurs, direct) = try await offThePool {
+            () -> ([UInt8], Int, [[UInt8]], Int, [UInt8]) in
+            let sharp = try sharpRenderer.renderBytes(at: 0.5)
+            let blurred = try [0.1, 0.5, 0.9].map { try blurredRenderer.renderBytes(at: $0) }
+            let direct = try sharpRenderer.renderOffscreen { target, commandBuffer in
+                compositor.encodeWallpaper(aurora, tileSize: nil, into: target, commandBuffer: commandBuffer)
+            }
+            return (sharp, sharpRenderer.backgroundImages.blurCount, blurred, blurredRenderer.backgroundImages.blurCount, direct)
+        }
+        // Blur 0 is today's direct draw, byte for byte, without a texture.
+        #expect(sharp == direct)
+        #expect(sharpBlurs == 0)
+        // With a blur it is another image, blurred once for every frame.
+        #expect(blurred[1] != sharp)
+        #expect(blurred.allSatisfy { $0 == blurred[0] })
+        #expect(blurredBlurs == 1)
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func blurredWallpaperIsSmoothAndKeepsItsGrain() async throws {
+    let device = try #require(MTLCreateSystemDefaultDevice())
+    let compositor = try Compositor(device: device)
+    let library = compositor.library
+    // Black on the left, white on the right, points far off the stage: a mesh edge about 2 px wide at column 160.
+    let edge = WallpaperPreset(id: "test-1", points: [[-2, 0.5], [3, 0.5]], colors: [[0, 0, 0, 1], [1, 1, 1, 1]])
+    let sigma = 1 * 0.04 * Double(size.x)
+    let (sharp, blurred) = try await withTemporaryDirectory { dir in
+        let package = ProjectPackage(url: dir.appendingPathComponent("Demo.toma", isDirectory: true))
+        return try await offThePool { () -> ([UInt8], [UInt8]) in
+            let images = try BackgroundImages(device: device, library: library, package: package)
+            let mesh = try images.texture(forWallpaper: edge, blurSigma: sigma, outputSize: size)
+            let cursor = try CursorSprite.makeTexture(device: device)
+            let style = StyleV0()
+            func frame(_ background: BackgroundLayer) -> RenderFrame {
+                RenderFrame(
+                    outputSize: size, gradientStart: style.gradientStart, gradientEnd: style.gradientEnd,
+                    gradientAngleDegrees: style.gradientAngleDegrees, background: background)
+            }
+            let renderer = { (background: BackgroundLayer, image: (any MTLTexture)?) throws -> [UInt8] in
+                let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                    pixelFormat: .bgra8Unorm, width: size.x, height: size.y, mipmapped: false)
+                descriptor.usage = [.renderTarget, .shaderRead]
+                descriptor.storageMode = .shared
+                let target = device.makeTexture(descriptor: descriptor)!
+                let commandBuffer = device.makeCommandQueue()!.makeCommandBuffer()!
+                compositor.encode(
+                    frame(background), screen: nil, camera: nil, cursor: cursor, backgroundImage: image, into: target,
+                    commandBuffer: commandBuffer)
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+                var bytes = [UInt8](repeating: 0, count: size.x * size.y * 4)
+                target.getBytes(&bytes, bytesPerRow: size.x * 4, from: MTLRegionMake2D(0, 0, size.x, size.y), mipmapLevel: 0)
+                return bytes
+            }
+            return (try renderer(.wallpaper(edge), nil), try renderer(.wallpaper(edge, blurSigma: sigma), mesh))
+        }
+    }
+    // The mean of each column over every row, which averages the grain out.
+    func profile(_ bytes: [UInt8]) -> [Double] {
+        (0..<size.x).map { x in Double((0..<size.y).map { Int(bytes[($0 * size.x + x) * 4]) }.reduce(0, +)) / Double(size.y) }
+    }
+    let sharpProfile = profile(sharp), blurredProfile = profile(blurred)
+    // The sharp edge jumps (its steepest step is 255 / (4 × its 1.9 px logistic scale), about 33); the blurred one is a
+    // smooth band of the Gaussian's width, rising a little at every column (at most 255 / (σ √2π), about 8).
+    let band = 120..<200
+    let steps = band.dropLast().map { blurredProfile[$0 + 1] - blurredProfile[$0] }
+    #expect(steps.allSatisfy { $0 > -1 && $0 <= 9 }, "\(steps)")
+    #expect(band.dropLast().map { sharpProfile[$0 + 1] - sharpProfile[$0] }.max()! > 25)
+    for k in [-1.0, 1] {
+        let x = Int((160 + k * sigma).rounded(.down))
+        let expected = blurredEdge(at: x, edge: 160, sigma: sigma)
+        #expect(abs(blurredProfile[x] - expected) <= 6, "at \(x): \(blurredProfile[x]) for \(expected)")
+        #expect(abs(sharpProfile[x] - expected) > 30, "at \(x)")
+    }
+    // The grain is not blurred: where the mesh is flat, the blurred wallpaper is the sharp one's pixels, grain and all.
+    for y in 0..<size.y {
+        for x in Array(0..<100) + Array(220..<size.x) {
+            #expect(pixel(blurred, width: size.x, x: x, y: y) == pixel(sharp, width: size.x, x: x, y: y), "at (\(x), \(y))")
+        }
+    }
+    #expect((0..<100).map { pixel(blurred, width: size.x, x: $0, y: 90).x }.max()! >= 4)
 }
