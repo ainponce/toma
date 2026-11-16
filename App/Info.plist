@@ -18,6 +18,18 @@
 				<string>$(PROJECT_TYPE_IDENTIFIER)</string>
 			</array>
 		</dict>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>$(PRODUCT_NAME) Style</string>
+			<key>CFBundleTypeRole</key>
+			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>$(STYLE_TYPE_IDENTIFIER)</string>
+			</array>
+		</dict>
 	</array>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
@@ -71,6 +83,23 @@
 				<key>public.filename-extension</key>
 				<array>
 					<string>$(PROJECT_FILE_EXTENSION)</string>
+				</array>
+			</dict>
+		</dict>
+		<dict>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>com.apple.package</string>
+			</array>
+			<key>UTTypeDescription</key>
+			<string>$(PRODUCT_NAME) Style</string>
+			<key>UTTypeIdentifier</key>
+			<string>$(STYLE_TYPE_IDENTIFIER)</string>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>$(STYLE_FILE_EXTENSION)</string>
 				</array>
 			</dict>
 		</dict>

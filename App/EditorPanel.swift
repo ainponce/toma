@@ -42,9 +42,9 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
 }
 
 /// The editor's panel, the content of the system's inspector (`NSSplitViewItem(inspectorWithViewController:)`, decision 31):
-/// the tabs on top, with an indicator that moves by `Motion.selector`, and under them the tab's controls, which change with
-/// `Motion.panelSwap` (a fade with a rise of 6 pt; with "Reduce motion", a fade). It shows what is selected: a zoom, Zoom; a
-/// change of the camera, Camera.
+/// the row Style on top (1c design §8, `StyleRow`), then the tabs, with an indicator that moves by `Motion.selector`, and
+/// under them the tab's controls, which change with `Motion.panelSwap` (a fade with a rise of 6 pt; with "Reduce motion",
+/// a fade). It shows what is selected: a zoom, Zoom; a change of the camera, Camera.
 struct EditorPanel: View {
     let model: EditorModel
 
@@ -58,6 +58,10 @@ struct EditorPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let document = model.document {
+                StyleRow(model: model, document: document)
+                Divider()
+            }
             tabBar
             Divider()
             ScrollView {

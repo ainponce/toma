@@ -42,19 +42,13 @@ enum ImageImportState: Equatable {
     case saveFailed
 }
 
-/// "Use This Style for New Projects" and "Restore Toma's Style", as the panel shows them.
-enum StyleStoreState: Equatable {
-    case idle
-    case working
-    case failed
-}
-
 /// A strip above the preview (design §5.9): one at a time, the most pressing.
 enum EditorBanner: Equatable {
     /// The last change could not be saved yet (amber).
     case saveFailed(POSIXErrorCode)
-    /// "Apply Default Style" waits for room on a full disk to bring its image in (amber): nothing is applied yet.
-    case waitingForSpace
+    /// "Apply Default Style" (`defaultStyle`) or a style of the row Style waits for room on a full disk to bring its image
+    /// in (amber): nothing is applied yet.
+    case waitingForSpace(defaultStyle: Bool)
     /// Nothing can be changed, for this reason (never `.newerDocument` nor `.unreadable`: those show no preview at all).
     case readOnly(ReadOnlyReason)
     /// Another app changed the project before its first edit here: it was opened again.
@@ -117,14 +111,14 @@ final class EditorModel {
     private(set) var exportState = ExportState.idle
     /// "Apply Default Style" is under way.
     private(set) var isApplyingDefaultStyle = false
+    /// A style of the row Style is being applied (`applyStyle`).
+    private(set) var isApplyingStyle = false
     var selection: EditorSelection?
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
     /// The image the background is being imported from (the panel's "Choose Image…").
     var imageImport = ImageImportState.idle
     @ObservationIgnored var importTask: Task<Void, Never>?
-    /// Saving or restoring the style for new projects is under way, or failed.
-    var styleStore = StyleStoreState.idle
     /// The take has a photo of the desktop (`wallpapers/`) the Desktop background can show.
     private(set) var hasDesktopPhoto = false
     /// The take has a camera: the panel's Camera tab exists.
@@ -262,12 +256,13 @@ final class EditorModel {
                 state = .unfinished(takeID: unfinished)
                 return
             }
-            let defaultStyle = await Task.detached { DefaultStyleStore(directory: DefaultStyleStore.defaultDirectory).load() }.value
+            // A new project takes the style of the new projects (1c design §8): its look, its image and its camera.
+            let newProjects = await StyleCatalog.shared.newProjectsStyle()
             let context = EditContext(
                 app: AppInfo(name: AppIdentity.name, version: AppIdentity.version), cachesRoot: ProjectCaches.defaultRoot,
-                defaultStyle: defaultStyle, now: { Date() },
+                defaultStyle: newProjects.style.look, now: { Date() },
                 makeID: { prefix in prefix + String(format: "%08x", UInt32.random(in: .min ... .max)) },
-                styleDirectory: DefaultStyleStore.defaultDirectory)
+                styleDirectory: newProjects.imageDirectory, cameraLook: newProjects.style.camera)
             let session: EditSession
             do {
                 session = try await EditSession.open(url, take: take, context: context)
@@ -563,21 +558,37 @@ final class EditorModel {
         perform(step)
     }
 
-    /// "Apply Default Style" of the earlier version's banner: one edit. Its image background waits for a full disk to
-    /// have room (the amber banner says so) until it is saved, or the window closes and the session with it; it is never
-    /// cancelled midway, which would apply Toma's gradient instead.
+    /// "Apply Default Style" of the earlier version's banner: one edit, with the look of the style of the new projects
+    /// (1c design §8; its camera is left as the project has it). Its image background waits for a full disk to have room
+    /// (the amber banner says so) until it is saved, or the window closes and the session with it; it is never cancelled
+    /// midway, which would apply Toma's gradient instead.
     func applyDefaultStyle() {
         guard let session, canEdit, applyTask == nil else { return }
         isApplyingDefaultStyle = true
         updateBanner()
         applyTask = Task {
-            let directory = DefaultStyleStore.defaultDirectory
-            let style = await Task.detached { DefaultStyleStore(directory: directory).load() }.value
-            if await session.applyDefaultStyle(style, styleDirectory: directory) != .refused { editedHere = true }
+            let newProjects = await StyleCatalog.shared.newProjectsStyle()
+            let outcome = await session.applyDefaultStyle(newProjects.style.look, styleDirectory: newProjects.imageDirectory)
+            if outcome != .refused { editedHere = true }
             isApplyingDefaultStyle = false
             applyTask = nil
             updateBanner()
         }
+    }
+
+    /// "Apply" of the row Style (1c design §8): `EditSession.applyStyle`, one edit, which brings the style's image from
+    /// `imageDirectory` first (waiting for a full disk to have room, as an import does). `(.refused, false)` if the project
+    /// cannot be edited.
+    func applyStyle(_ style: NamedStyle, imageDirectory: URL?) async -> (outcome: EditOutcome, imageMissing: Bool) {
+        guard let session, canEdit, !isApplyingStyle else { return (.refused, false) }
+        // While its image waits for room on a full disk, the banner says so (`.waitingForSpace`).
+        isApplyingStyle = true
+        updateBanner()
+        let result = await session.applyStyle(style, imageDirectory: imageDirectory)
+        isApplyingStyle = false
+        if result.outcome != .refused { editedHere = true }
+        updateBanner()
+        return result
     }
 
     /// Closes the banner shown, if it can be closed: the earlier version's one for good (in the project's caches), the
@@ -829,7 +840,7 @@ final class EditorModel {
         }
         let next = Self.banner(
             access: session.access, notices: session.notices, applyingDefaultStyle: isApplyingDefaultStyle,
-            legacyDismissed: editorState.legacyBannerDismissed || editedHere,
+            applyingStyle: isApplyingStyle, legacyDismissed: editorState.legacyBannerDismissed || editedHere,
             recoveryDismissed: dismissedRecovery, reopenedDismissed: dismissedReopened,
             inGap: missingVideo.contains { $0.contains(currentSeconds) })
         if banner != next { banner = next }
@@ -838,12 +849,13 @@ final class EditorModel {
     /// The most pressing banner: a save that failed, then why the project is read-only, then what opening found, then
     /// the earlier version's look, then a part of the video that could not be read under the playhead.
     private static func banner(
-        access: EditAccess, notices: [EditNotice], applyingDefaultStyle: Bool, legacyDismissed: Bool, recoveryDismissed: Bool,
-        reopenedDismissed: Bool, inGap: Bool
+        access: EditAccess, notices: [EditNotice], applyingDefaultStyle: Bool, applyingStyle: Bool, legacyDismissed: Bool,
+        recoveryDismissed: Bool, reopenedDismissed: Bool, inGap: Bool
     ) -> EditorBanner? {
         for case let .saveFailed(code) in notices {
             // Its image waits for room: nothing of the style is applied yet.
-            return applyingDefaultStyle && (code == .ENOSPC || code == .EDQUOT) ? .waitingForSpace : .saveFailed(code)
+            let waiting = (applyingDefaultStyle || applyingStyle) && (code == .ENOSPC || code == .EDQUOT)
+            return waiting ? .waitingForSpace(defaultStyle: applyingDefaultStyle) : .saveFailed(code)
         }
         if case let .readOnly(reason) = access { return .readOnly(reason) }
         if !reopenedDismissed, notices.contains(.reopenedAfterOtherApp) { return .reopenedAfterOtherApp }

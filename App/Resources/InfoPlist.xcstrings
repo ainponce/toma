@@ -13,6 +13,18 @@
         }
       }
     },
+    "$(PRODUCT_NAME) Style" : {
+      "comment" : "Kind of a named style document (.tomastyle) in Finder. The name of the app is put in when building.",
+      "extractionState" : "manual",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estilo de $(PRODUCT_NAME)"
+          }
+        }
+      }
+    },
     "NSAudioCaptureUsageDescription" : {
       "comment" : "Shown by macOS when the app first asks to record system audio. The name of the app is put in when building.",
       "localizations" : {

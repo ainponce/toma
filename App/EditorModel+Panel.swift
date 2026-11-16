@@ -214,35 +214,4 @@ extension EditorModel {
     func removeImage() {
         setBackground(DefaultStyle.toma.style.background)
     }
-
-    // MARK: - The style for new projects
-
-    /// "Use This Style for New Projects": the stage, the whole cursor and the zoom's settings of this project.
-    func useStyleForNewProjects() {
-        guard let document, let session = panelSession, styleStore != .working else { return }
-        let style = DefaultStyle(
-            style: document.style, cursor: document.cursor, zoomShow: document.zoom.show, zoomAuto: document.zoom.auto,
-            zoomSpring: document.zoom.spring, zoomMotionBlur: document.zoom.motionBlur)
-        let package = ProjectPackage(url: session.packageURL)
-        runStyleStore { try await $0.save(style, from: package) }
-    }
-
-    /// "Restore Toma's Style": the next projects start as Toma's.
-    func restoreTomaStyle() {
-        runStyleStore { try await $0.reset() }
-    }
-
-    private func runStyleStore(_ work: @escaping @Sendable (DefaultStyleStore) async throws -> Void) {
-        guard styleStore != .working else { return }
-        styleStore = .working
-        Task {
-            let store = DefaultStyleStore(directory: DefaultStyleStore.defaultDirectory)
-            do {
-                try await work(store)
-                styleStore = .idle
-            } catch {
-                styleStore = .failed
-            }
-        }
-    }
 }

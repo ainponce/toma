@@ -75,6 +75,12 @@ targets:
             LSHandlerRank: Owner
             LSItemContentTypes:
               - "$(PROJECT_TYPE_IDENTIFIER)"
+          # A named style (1c design §8): opening one imports it into the app's styles.
+          - CFBundleTypeName: "$(PRODUCT_NAME) Style"
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Owner
+            LSItemContentTypes:
+              - "$(STYLE_TYPE_IDENTIFIER)"
         UTExportedTypeDeclarations:
           - UTTypeIdentifier: "$(PROJECT_TYPE_IDENTIFIER)"
             UTTypeDescription: "$(PRODUCT_NAME) Project"
@@ -83,3 +89,10 @@ targets:
             UTTypeTagSpecification:
               public.filename-extension:
                 - "$(PROJECT_FILE_EXTENSION)"
+          - UTTypeIdentifier: "$(STYLE_TYPE_IDENTIFIER)"
+            UTTypeDescription: "$(PRODUCT_NAME) Style"
+            UTTypeConformsTo:
+              - com.apple.package
+            UTTypeTagSpecification:
+              public.filename-extension:
+                - "$(STYLE_FILE_EXTENSION)"

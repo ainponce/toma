@@ -78,7 +78,7 @@ extension RGBA {
 }
 
 /// The Background tab (design §5.4): the type, what the type offers, the blur where it applies, the padding, the corners and
-/// the shadow, and at the foot the project's style for new projects.
+/// the shadow. The style for new projects is the panel's row Style (1c design §8, `StyleRow`).
 struct BackgroundTab: View {
     let model: EditorModel
     let style: StageStyle
@@ -133,17 +133,6 @@ struct BackgroundTab: View {
                     model.setStyle("/style/shadow", PanelValues.shadow(slider: $0), label: .shadow)
                 }
             }
-            Divider()
-            PanelSection {
-                Button("Use This Style for New Projects") { model.useStyleForNewProjects() }
-                Button("Restore Toma's Style") { model.restoreTomaStyle() }
-                if model.styleStore == .failed {
-                    Text("The style couldn't be saved.")
-                        .font(.caption)
-                        .foregroundStyle(.red)
-                }
-            }
-            .disabled(model.styleStore == .working)
         }
         .onChange(of: style.background) { _, new in
             if pendingKind != nil, BackgroundKind(new) == .image { pendingKind = nil }

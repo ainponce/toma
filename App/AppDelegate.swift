@@ -103,6 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A take that turned Do Not Disturb on and never ended (the app was killed): turned off now. A take started
         // meanwhile runs its shortcut after this one.
         Task { await focus.recoverAfterLaunch() }
+        // The named styles: the default style of 1b becomes «My Style» the first time (1c design §8).
+        StyleCatalog.shared.start()
         let island = IslandPanel(
             recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop,
             hideDesktopIcons: hideDesktopIcons, focusShortcut: focusShortcut, probe: probe, cameraHost: cameraHost)
@@ -149,11 +151,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quit.powerOff(isRecording: recording.isRecording || recording.isEndingHooks)
     }
 
-    /// Projects opened from Finder (or dropped on the app) open in the editor.
+    /// Projects opened from Finder (or dropped on the app) open in the editor; styles (`.tomastyle`) are imported.
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls where url.pathExtension.lowercased() == ProjectPackage.fileExtension {
             showEditor(for: url, take: nil)
         }
+        let styles = urls.filter(StyleMenu.isStyleFile)
+        if !styles.isEmpty { StyleCatalog.shared.openFromFinder(styles) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
