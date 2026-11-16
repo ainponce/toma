@@ -44,8 +44,8 @@ public struct CameraFrame: Equatable, Sendable {
 /// The app also remembers it in its settings.
 public struct CameraStyle: Codable, Equatable, Sendable {
     public var shape: CameraShape
-    /// The side of the camera as a fraction of the region's height (and, in the video, of the output's), so it
-    /// does not depend on the display: `small`, `medium` or `large`.
+    /// The side of the camera as a fraction of the region's height (and, in the video, of the output's, or of its shorter
+    /// side with `SizeReference.shortSide`), so it does not depend on the display: `small`, `medium` or `large`.
     public var size: Double
     public var anchor: CameraAnchor
 
@@ -53,7 +53,8 @@ public struct CameraStyle: Codable, Equatable, Sendable {
     public static let small = 0.17
     public static let medium = 0.24
     public static let large = 0.33
-    /// The margin to the region's edges, as a fraction of its height: 24 pt on the reference display.
+    /// The margin to the region's edges, as a fraction of its height (or of the length `frame(in:reference:)` measures
+    /// against): 24 pt on the reference display.
     public static let marginFraction = 0.032
     /// A medium circle at the bottom right.
     public static let `default` = CameraStyle(shape: .circle, size: medium, anchor: .bottomTrailing)
@@ -70,18 +71,34 @@ public struct CameraStyle: Codable, Equatable, Sendable {
     /// for a circle, 26 % of the side for the rounded square, and 20 and 18 pt on the reference display's 750
     /// pt of height for the vertical and horizontal boxes.
     public func frame(in region: Rect) -> CameraFrame {
-        let side = size * region.height
+        frame(in: region, measuredAgainst: region.height)
+    }
+
+    /// The camera in `region` as `frame(in:)` places it, with its side, its margin and the corners of the vertical and
+    /// horizontal boxes measured against `reference` (1c design §5.2): the region's height, which is `frame(in:)` bit for
+    /// bit, or its shorter side, so a Medium bubble looks as big in a tall output as in a wide one. The two are the same
+    /// wherever the region is at least as wide as it is tall.
+    public func frame(in region: Rect, reference: SizeReference) -> CameraFrame {
+        switch reference {
+        case .height: frame(in: region)
+        case .shortSide: frame(in: region, measuredAgainst: min(region.width, region.height))
+        }
+    }
+
+    /// `frame(in:)` with `length` in place of the region's height for the side, the margin and the boxes' corners.
+    private func frame(in region: Rect, measuredAgainst length: Double) -> CameraFrame {
+        let side = size * length
         let root = shape.aspect.squareRoot()
         let width = side * root
         let height = side / root
-        let margin = Self.marginFraction * region.height
+        let margin = Self.marginFraction * length
         let column = Self.position(along: anchor.column, length: width, in: region.width, margin: margin)
         let row = Self.position(along: anchor.row, length: height, in: region.height, margin: margin)
         let radius = switch shape {
         case .circle: min(width, height) / 2
         case .roundedSquare: 0.26 * side
-        case .portrait: 20.0 / 750 * region.height
-        case .landscape: 18.0 / 750 * region.height
+        case .portrait: 20.0 / 750 * length
+        case .landscape: 18.0 / 750 * length
         }
         return CameraFrame(
             rect: Rect(x: region.x + column, y: region.y + row, width: width, height: height), cornerRadius: radius)
