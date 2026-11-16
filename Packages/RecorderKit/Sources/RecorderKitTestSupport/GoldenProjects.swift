@@ -45,10 +45,10 @@ public enum GoldenProjects {
     /// take. `formatVersion` `nil` gives the case's own version (1 for `phaseZero`, 2 for the others); another one is
     /// passed to `TakeBuilder`, for example 3 for `pausedTake` as a version 3 package. `videoEncoder` and
     /// `makeVideoWriter` (when given) are the builder's (`TakeBuilder.videoEncoder`, `TakeBuilder.makeVideoWriter`):
-    /// `goldenFramesEncoder` for frames compared with the golden ones.
+    /// `goldenFramesEncoder` for frames compared with the golden ones, which must be the hardware encoder's even in CI.
     /// - Throws: `TestSupportError.missing` for a name that is not a case, or what writing the take throws.
     public static func make(
-        _ name: String, in dir: URL, formatVersion: Int? = nil, videoEncoder: VideoEncoderChoice = .any,
+        _ name: String, in dir: URL, formatVersion: Int? = nil, videoEncoder: VideoEncoderChoice = TakeBuilder.defaultVideoEncoder,
         makeVideoWriter: TakeBuilder.VideoWriterFactory? = nil
     ) async throws -> LoadedProject {
         func builder(version: Int) throws -> TakeBuilder {
