@@ -35,7 +35,7 @@ MiVideo.toma/
         display-1.png          uno por pantalla (display-<CGDirectDisplayID>.png)
       cursors/                 opcional: las imágenes del cursor de la toma (versión 3)
         3f2a9c0e….png          una por imagen distinta (<hash>.png, ver el evento cursorImage)
-  cache/                       regenerable: transcripciones, sugerencias, miniaturas
+  cache/                       reservada para cachés que convenga llevar con el proyecto (el editor guarda las suyas fuera del paquete)
 ```
 
 - Las tomas se llaman `take-001`, `take-002`, … Un número nunca se reutiliza: la toma nueva recibe el número siguiente al más alto del manifiesto y salta cualquier carpeta que ya exista en `takes/`.
@@ -425,7 +425,9 @@ Opcional (versión 2). `takes/<toma>/wallpapers/display-<CGDirectDisplayID>.png`
 
 Opcional (versión 3). `takes/<toma>/cursors/<hash>.png` es una imagen del cursor que mostró macOS durante la toma, la que nombra un evento `cursorImage`: una por imagen distinta, aunque el cursor vaya y vuelva entre dos formas muchas veces.
 
-- La imagen está dibujada a 4 veces su tamaño en puntos (`size` del evento), así se ve nítida con zoom. `<hash>` son 32 dígitos hexadecimales en minúscula de SHA-256 del ancho, el alto, el `hotspot` y los píxeles RGBA de esa imagen: el nombre es su contenido.
+- La imagen está dibujada a `escala` píxeles por punto de su tamaño (`size` del evento): `escala = min(4, 512 / el lado más largo en puntos)`. Un cursor de hasta 128 pt sale a 4 píxeles por punto, así se ve nítido con zoom; uno más grande (el puntero más grande de Accesibilidad, un pincel grande) sale a menos, para que ningún lado pase de 512 píxeles, que es lo que lee el editor. Quien lee la imagen saca su escala de su ancho en píxeles dividido por el ancho en puntos del evento (≤ 4).
+- **El nombre.** `<hash>` son los primeros 16 bytes, en 32 dígitos hexadecimales en minúscula, de SHA-256 sobre estos bytes, en este orden: el ancho de la imagen en píxeles (`Int32`, little-endian, 4 bytes), su alto en píxeles (`Int32`, little-endian, 4 bytes), la `x` y la `y` del hotspot en puntos desde arriba a la izquierda (cada una un `Float64` IEEE 754 en little-endian, 8 bytes: sus 64 bits tal cual) y los píxeles de la imagen: RGBA de 8 bits con alfa premultiplicado, sRGB, la fila de arriba primero, `ancho × 4` bytes por fila y sin relleno. El `hotspot` del evento es ese mismo punto como fracción del tamaño en puntos. Como el nombre es el contenido, la misma imagen con el mismo hotspot es siempre el mismo archivo.
+- Una imagen cuyo PNG pasa de 1 MiB no se escribe (la app lo anota en su registro, y el evento tampoco).
 - Cada imagen se escribe una sola vez y nunca sobre otra: si ya hay una con ese nombre, se deja.
 - Es una carpeta común y sus imágenes, archivos comunes con un nombre exactamente `<hash>.png`. Un lector las abre sin seguir enlaces simbólicos y trata como ausente la que no cumple.
 - Puede faltar la carpeta, o la imagen de algún evento: en una toma de las versiones 1 o 2, en las de `recorder-dev`, o si macOS no dio la imagen del cursor. Sin ella se dibuja el cursor de Toma; nada depende de ella para leer o exportar una toma.
@@ -463,16 +465,104 @@ Una toma con `status` `recording` cuyo `recording.lock` no tiene nadie quedó ab
 
 ## Interfaz de render (congelada)
 
-La vista previa del editor y el export MP4 dibujan con el mismo código, y desde la fase 0 su interfaz no cambia sin una migración: lo que un proyecto muestra hoy lo vuelve a mostrar igual una versión nueva. **Una toma de la versión 1 da los mismos bytes que en la versión 1**: lo comprueba la prueba dorada `goldenFramesMatch`, en dos pasos: con `TOMA_GOLDEN_RECORD=1` y `TOMA_GOLDEN_FILE` apuntando a un archivo que todavía no existe, la versión de antes de un cambio guarda ahí los cuadros de un paquete v1 (nunca sobre un archivo que ya está); después, solo con `TOMA_GOLDEN_FILE`, la versión nueva tiene que dar esos mismos bytes. Sin el archivo y sin `TOMA_GOLDEN_RECORD` la prueba falla: nunca pasa sin comparar. `make test` no la corre (no hay `TOMA_GOLDEN_FILE`) y el repositorio no tiene un archivo de referencia, porque los bytes dependen de la GPU: hay que hacer los dos pasos, en la misma Mac, en cada cambio del render. Una toma de la versión 2 de una sola pantalla, sin cámara ni área, se dibuja como una de la versión 1 mientras su `displayGeometry` no cambia; si cambia a mitad de la toma, desde ahí se dibuja con la geometría nueva (la fase 0 la habría estirado).
+La vista previa del editor y el export MP4 dibujan con el mismo código, y desde la fase 0 su interfaz no cambia sin una migración: lo que un proyecto muestra hoy lo vuelve a mostrar igual una versión nueva. **Un proyecto de la versión 1 o 2 sin editar da los mismos bytes que en la versión 2** (la última antes del editor), en los cuadros y en la mezcla de audio. Lo comprueban dos pruebas que comparan contra archivos grabados antes del primer cambio de render del hito 1b:
+
+- `goldenFramesMatch` dibuja a 1280 × 720 los cuadros de cada caso de `GoldenProjects` (`phaseZero`, `windowMoving`, `areaOnDisplay`, `cameraWithStyleChanges`, `geometryChange` y `pausedTake`: v1 y v2, con una pantalla, una ventana que se mueve, un área, una cámara con cambios de estilo, un cambio de geometría y una pausa) y exige los mismos bytes; `goldenMixMatches`, lo mismo con las muestras de audio que recibe el codificador AAC a 60 cuadros por segundo, que incluye `twoAudioTracks`, el caso de dos pistas de audio.
+- Los archivos (`frames.bin` y `frames.bin.mix`, con `VERSION`, la huella del sistema en que se grabaron, y `COMMIT`, el commit del que salieron) viven fuera de git, en `build/golden-1b/` del checkout principal, porque los bytes dependen de la GPU, del compilador de Metal del sistema y de VideoToolbox. `make golden` los compara. Nunca se regrababan desde código posterior (`make golden-record` solo sirve desde ese commit): si cambia el sistema, `make golden` lo dice y se vuelven a grabar desde el commit original, no desde el código de ahora. Con la Mac muy cargada de trabajo de GPU de otros procesos, `goldenFramesMatch` puede dar una diferencia que no está en el código: se repite sola.
+- Además: `legacyDocumentDrawsWhatTheOldInitDraws` (el documento legado dibuja lo que dibuja el inicializador de antes), `previewSnapshotEqualsTheExportFrame` (la vista previa en pausa y el cuadro del export son los mismos bytes en la misma Mac) y `nothingCutReachesTheExport` (lo cortado no llega al export, ni imagen ni sonido).
+
+### De dónde sale el cuadro
+
+Un cuadro es una función pura de (paquete, documento de edición, tiempo de salida, tamaño de salida, cuadros por segundo de salida): nada lee un reloj, un número al azar ni estado de interfaz. `FrameRenderer(project:outputSize:)` equivale a `FrameRenderer(project:document: .legacy(for: project), outputSize:)`.
+
+**El documento legado** (`EditDocument.legacy`) es lo que dibujan las fases 0 y 1a: un solo tramo a 1× (`c-00000001`) sobre la línea de tiempo de siempre (con las pausas como cuadro quieto), la pantalla que elige `ScreenChoice` sin cambios, el degradado Toma clásico a 135° con el margen de la fase 0 (0,08) y las esquinas (0,012), sin desenfoque, sombra ni marco, el cursor de Toma de 24 pt interpolado como se grabó, el zoom sin bloques, la cámara tal como la grabó la toma (cada evento `cameraStyle`, un cambio con id `k-0000000N`) y cada pista de audio a ganancia 1 sin limitador. Un v3 con `upgradedFrom` y sin registro se abre con él. No se escribe nunca hasta la primera edición, así que sus ids son fijos.
+
+**Cada valor nuevo tiene un valor legado exacto**: con él, el compositor hace las mismas llamadas de dibujo, en el mismo orden y con los mismos valores que la versión 2.
+
+| Valor del documento | Valor legado (dibuja lo de siempre) |
+|---|---|
+| `style.background` | `gradient` con los colores de Toma clásico |
+| `style.backgroundBlur` | 0 |
+| `style.shadow` | 0 (no se dibuja nada) |
+| `style.frame` | `none` |
+| `style.screenSampling` | `bilinear` |
+| `style.geometryTransition` | `none` (salta) |
+| `cursor.style`, `cursor.scale` | `toma` a escala 1 (24 pt de alto) |
+| `cursor.smoothing` | `off` (la regla de siempre; sin el achique de 0,85 al apretar) |
+| `cursor.hideWhenIdle`, `clickEffect`, `clickSound` | apagados, `none`, `none` |
+| `cursor.motionBlur`, `zoom.motionBlur` | 0 |
+| `zoom.regions` | sin bloques (el zoom en reposo) |
+| `screens` | una sola pantalla, sin cambios |
+| `audio` | ganancias 1, sin silenciar, sin limitador |
+| `sequence` | un solo tramo a 1× |
+
+El video grabado no tiene canal alfa, así que la pantalla se dibuja siempre opaca y el documento no tiene un campo para eso.
+
+### El mapeo de tiempo y los cuadros
+
+`TimeMap` convierte entre el tiempo de salida y el de la fuente (el `HostTime` de la toma) con enteros de nanosegundos, así no se acumula error. Con tramos `k` de fuente `[s_k, e_k)` y velocidad `v_k` (leída con `ClipSpeed.clamped`: de 0,25 a 16, y 1 si no es un número, así un documento editado a mano nunca frena el render):
+
+- La duración de salida de un tramo es `D_k = round((e_k − s_k) / v_k)` ns; el tramo empieza en `O_0 = 0`, `O_{k+1} = O_k + D_k`; la duración total es `D = O_n`. Un tramo cuyo `D_k` da 0 nunca se muestra.
+- **Salida → fuente:** el tiempo `τ` se recorta a `[0, D − 1]` ns; con `k` el tramo con `O_k ≤ τ < O_k + D_k`, la fuente es `s_k + round((τ − O_k) × v_k)` recortada a `[s_k, e_k − 1]`. Una salida de 0 ns solo dibuja el fondo.
+- **Fuente → salida:** si `s_k ≤ x < e_k`, `O_k + round((x − s_k) / v_k)`; si no, `x` está cortado y no tiene salida. Un rango de la fuente `[a, b)` (un zoom) se ve en el rango de salida que va de la imagen del primer instante conservado a la del final del último, así que los cortes de adentro se cierran y un bloque partido por un corte sigue siendo uno.
+- **El cuadro `n`** está en `round(n / fps × 10⁹)` ns, calculado en `Double` como lo cuenta el export desde la fase 0; el export tiene `max(1, round(D / 10⁹ × fps))` cuadros. En el documento legado esto da exactamente `timelineStart.adding(seconds:)` y los mismos cuadros que antes.
+- **Antes del primer tramo.** Una muestra del cursor (`cursor`, `mouseDown`, `mouseUp`) que la grabación tomó antes del `startHostTime` del primer tramo cuenta en su tiempo de salida extrapolado por ese tramo (negativo), no se descarta: el cursor ya estaba ahí en el cuadro 0. Un cambio de la cámara anterior al primer tramo está en marcha en el instante 0 de salida (su transición se mide desde su tiempo extrapolado); uno dentro de un corte rige desde el primer instante conservado después, y uno posterior al último tramo nunca rige. Una muestra del cursor dentro de un corte entre dos tramos se descarta; un cambio (de la cámara o de la pantalla) dentro de un corte rige desde el primer instante conservado después.
+
+### El orden de dibujo
+
+Todo pasa por `FrameRenderer.encode(at:into:commandBuffer:)` y `Compositor.encode`, que dibuja en una textura `.bgra8Unorm` (nunca `_srgb`: la vista previa y el export escriben los mismos bytes) del tamaño de salida, con mezcla premultiplicada "over", siempre en este orden:
+
+1. **Dentro del escenario** (lo que la cámara del zoom transforma), para cada submuestra del desenfoque de movimiento: el fondo, la sombra, el marco de ventana, la pantalla (si se está cambiando de pantalla, primero la que se deja, abajo, y encima la nueva con su opacidad), el cursor y, una sola vez por cuadro, los efectos de clic (el zoom los agranda; nunca se desenfocan).
+2. **En el espacio de salida:** la cámara (la burbuja).
+
+Con una sola submuestra, todo se dibuja directo en el destino, en un solo pase. Con varias, siguen siendo un solo pase: cada submuestra se suma con peso `1/N` en una textura `rgba16Float` que vive en la memoria de los tiles, en orden fijo, y un último dibujo escribe el promedio al destino antes de los efectos de clic y la cámara. Misma GPU, mismos bytes.
+
+### Cada capa
+
+- **Fondo** (`style.background`). `gradient`: el shader de siempre, con sus dos colores y su ángulo (`angle` en grados como en CSS: 0 va hacia arriba, 90 a la derecha, 135 abajo a la derecha). `color`: un degradado de dos colores iguales, escritos tal cual a la salida (valores sRGB de 0 a 1). `wallpaper`: uno de los 12 fondos de Toma, procedurales (`aurora-1`, `dune-1`, `lake-1`, `ember-1`, `mist-1`, `forest-1`, `lavender-1`, `midnight-1`, `coral-1`, `ice-1`, `graphite-1`, `sand-1`; sus colores y posiciones se congelan con su id): una malla de 1 a 6 puntos de color (en fracciones del escenario), donde cada color pesa `exp((d²_mín − d²) / 0,06)` con `d²` la distancia al cuadrado al punto, en unidades del lado más largo del escenario, normalizado por la suma de los pesos; más un **grano** de ±2 % sacado de un hash entero (lowbias32, de Chris Wellons) de las coordenadas del píxel *de salida* (`hash32(x ^ hash32(y))`), no del punto del escenario: el zoom agranda la malla y no el grano, y el desenfoque la suaviza y no el grano, a cualquier tamaño. `image`: la imagen del paquete (`assets/<sha>.<ext>`, ya reducida a 7680 px de lado como mucho y en el sentido de su orientación EXIF) cubriendo el escenario, aspect fill y centrada. `desktop`: la foto del escritorio de la primera pantalla que se ve (`wallpapers/`), igual que una imagen; una ventana no tiene. Un fondo de pantalla que esta versión no conoce, una imagen que falta o no se puede leer, y `desktop` sin foto dibujan el degradado Toma clásico.
+- **Desenfoque del fondo** (`style.backgroundBlur`, 0 a 1): σ = valor × 0,04 × el ancho de salida, en píxeles. Se hace una vez por (fondo, tamaño de salida, σ) y la textura se reusa (el fondo no cambia con el tiempo): un gaussiano separable (`MPSImageGaussianBlur`, y el del shader donde MPS no existe) **con el borde `clamp`**: el valor por defecto, `zero`, traería negro de afuera y, con σ de cientos de píxeles, oscurecería todo el borde del escenario. En un fondo de pantalla se desenfoca la malla sola y el grano se suma después, nítido.
+- **Pantalla y marco.** La pantalla ocupa el rectángulo más grande con la proporción de lo que se muestra, centrado dentro del margen (`style.padding` es una fracción del ancho de salida), con esquinas de `style.cornerRadius × ancho`. Con `style.frame` = `macWindow`, el rectángulo es el de la ventana entera (barra y pantalla): una barra de título arriba de alto `max(0,032 × ancho de la ventana, 18 px)`, clara (#ECECEC) u oscura (#2B2B2E); con `buttons`, tres círculos genéricos (rojo #FF5F57, amarillo #FEBC2E, verde #28C840) de diámetro 0,42 del alto de la barra, con centros a 0,66 de distancia, el primero a 0,6 del borde izquierdo y a la mitad de la barra; y el título, centrado en la ventana, en **la fuente del sistema para títulos de ventana** (CoreText con `CTFontCreateUIFontForLanguage(.windowTitle)`, con el idioma fijado en `en` para que los glifos chinos, japoneses y coreanos no cambien con el idioma del sistema), a 13/28 del alto de la barra, negro (claro) o blanco (oscuro) al 85 %, cortado con «…» donde se acerque a los botones. La textura del título se dibuja con CoreText sin suavizado de fuente ni posicionamiento subpíxel, así no depende de los ajustes del Mac ni de la pantalla; **pero la fuente cambia de un macOS a otro, y sus bytes con ella**: los cuadros con un título cambian de bytes con el sistema (la dorada no tiene marco). Las esquinas de la ventana son las del estilo pero nunca más de 1,3 veces el alto de su barra, para que no corten el primer botón; la pantalla va sin esquinas arriba, bajo la barra. Una captura de ventana trae las esquinas redondeadas de la ventana en negro, con un radio que depende del macOS que grabó y que el formato no guarda: un proyecto nuevo de una toma de ventana empieza con unas esquinas que tapan 26 pt de la ventana (`WindowCornerCover.blackCornerPoints`, provisional hasta medirlas en macOS 15 y 26). Con el marco puesto, alrededor de una ventana grabada las de abajo llevan el radio del estilo y las de arriba de la pantalla, redondas, con la barra detrás.
+- **Sombra** (`style.shadow = s`, de 0 a 1): bajo el rectángulo de la pantalla (o de la ventana entera con marco), con sus esquinas inferiores: opacidad `0,55 · s`, σ `(0,004 + 0,016 · s) × ancho de salida` y un desplazamiento hacia abajo de `0,010 · s × ancho`. Con `s = 0` no se dibuja nada. La sombra de un rectángulo redondeado desenfocado por un gaussiano se calcula en un solo pase, sin texturas, con la fórmula de Evan Wallace («Fast Rounded Rectangle Shadows»): a lo largo de x, exacta, `½ (erf((x + a) k) − erf((x − a) k))` con `k = 0,70710678 / σ` y `a` el semiancho de la caja en esa fila (más angosto en las esquinas redondeadas); a lo largo de y, esa fila integrada contra el gaussiano en **`ShadowMath.ySamples` = 4 muestras** al medio de pasos iguales sobre `[−3σ, 3σ]` recortado a la caja. Como Metal no tiene `erf`, el shader y `ShadowMath` (la referencia en CPU, en `Float` y en el mismo orden) usan la aproximación de Abramowitz y Stegun 7.1.26: `erf(x) = signo(x) · (1 − (a₁t + a₂t² + a₃t³ + a₄t⁴ + a₅t⁵) e^(−x²))` con `t = 1 / (1 + 0,3275911 |x|)`, `a₁ = 0,254829592`, `a₂ = −0,284496736`, `a₃ = 1,421413741`, `a₄ = −1,453152027` y `a₅ = 1,061405429`, a menos de 1,5 × 10⁻⁷ del `erf` exacto.
+- **Muestreo de la pantalla** (`style.screenSampling`). `bilinear`: el de siempre. `mipmapped` (proyectos nuevos): el recorte del cuadro (los píxeles enteros de lo que se muestra, redondeado hacia adentro) se copia en la GPU a una textura con mipmaps, que se generan en cada cuadro, y se muestrea trilineal: el texto de una captura Retina no titila al achicarse. Ni la copia ni ninguno de sus niveles tiene un solo texel de fuera del recorte: nunca se ve lo que un área dejó afuera. El nivel se elige con la velocidad con que cambian las coordenadas antes de recortarlas.
+- **Cursor** (`cursor`). Su lugar sale del camino simulado (abajo), en lo que se muestra de la pantalla; no se dibuja fuera de eso, ni mientras la ventana no está en pantalla. Su imagen, con la del último evento `cursorImage` en o antes del instante de la fuente: en `system`, la imagen grabada (`cursors/<hash>.png`, una textura con mipmaps por imagen), y la flecha de Toma antes del primer evento, si la imagen falta o no se puede leer, o si no tiene un tamaño usable; en `toma`, el cursor de Toma del `kind` grabado (dibujados en código, negros con un contorno blanco, originales, sin arte de Apple: `arrow`, `iBeam`, `pointingHand`, `openHand`, `closedHand`, `crosshair`, `resizeLeftRight`, `resizeUpDown`, `notAllowed`, cada uno una textura de 128 px de alto que equivale a 24 pt), la imagen grabada si el evento no tiene `kind`, y la flecha si la toma no tiene imágenes (v1 y v2). El alto dibujado es `cursor.scale × alto en puntos × alto del rectángulo de la pantalla / alto de lo que se muestra en puntos`: 24 pt en `toma`, el `size.y` del evento en `system`. El hotspot de la imagen cae en la posición simulada. Al apretar un botón (con suavizado distinto de `off`), el cursor se achica hacia 0,85 con un resorte 0,70 · 0,18 s y vuelve igual al soltar.
+- **Efectos de clic** (`cursor.clickEffect`, congelados con su id). `ripple-1`: durante 0,5 s desde cada `mouseDown` conservado, τ segundos después, un anillo de radio `h × (0,25 + 1,35 × easeOutCubic(τ / 0,5))` y `0,08 h` de grosor, blanco con opacidad `0,55 × (1 − τ / 0,5)²` y un contorno de 1 px negro al 25 % que se apaga con el blanco, con `h` el alto del cursor dibujado en el clic. `circle-1`: mientras el botón está apretado, un círculo blanco al 22 % de radio `0,9 h`, que entra escalando de 0,6 a 1 en 0,12 s y sale linealmente en 0,20 s desde que se suelta (un soltar que los eventos perdieron nunca lo sostiene más allá del clic siguiente). Cada efecto queda donde fue el clic, en la pantalla y en el rectángulo que se veían entonces, y no cambia de tamaño si la imagen del cursor cambia; no hay efecto para un clic fuera de lo que se muestra ni con la ventana fuera de pantalla. Un id que esta versión no conoce no dibuja nada.
+- **La cámara de zoom** (`zoom`, diseño §7.4). El escenario mide `W × H` (la salida). El estado de la cámara es `u = ln z` (con `z` la profundidad, 1 en reposo) y el centro `c` del recorte visible, que mide `(W, H) / z`; la transformación es `salida = (escenario − c) × z + (W, H) / 2`. **Acomodo:** el recorte nunca sale del escenario y, en cada eje en que ya cabe en el rectángulo de la pantalla (o de la ventana con marco), tampoco sale de él: con el zoom adentro no se ve fondo de un costado. El camino se simula en unidades del escenario (alto = 1) y la profundidad se acomoda otra vez, al dibujar, sobre el rectángulo de la pantalla en este tamaño (`StageCrop`), porque el camino sitúa la ventana a una referencia de 1080 px que unos píxeles abajo de eso no calza. El enfoque `follow` va con zona muerta: si el cursor suavizado sale de la caja central del recorte (el 60 % en cada eje), el objetivo se corre lo que se salió más el 15 % del recorte, y un cursor que queda debajo de la burbuja de la cámara (su rectángulo agrandado un 8 %) cuenta como salido hacia su lado, para que la burbuja nunca tape el cursor. El resorte de la cámara (`zoom.spring`, 1,0 · 0,70 s por defecto) es el mismo para `u` y para cada eje del centro; un bloque `instant` salta al objetivo con velocidad 0. Sin bloques o con `zoom.show` apagado, la cámara está en reposo y no se dibuja ninguna transformación.
+- **Desenfoque de movimiento** (`zoom.motionBlur` y `cursor.motionBlur`, de 0 a 1: el obturador, como fracción de un cuadro del `frameRate` con que se dibuja). Con `N = clamp(ceil(d / 1,5 px), 1, 16)`, donde `d` es lo que se mueve en píxeles de salida entre `t − σ/2` y `t + σ/2` la esquina del escenario que más se mueve (para el cursor, su hotspot por la profundidad del zoom), las submuestras están en `τ_j = t + (j / (N − 1) − ½) · σ · (duración de un cuadro)`, en tiempo de salida, así que ninguna lee lo que un corte dejó afuera; el contenido de la pantalla, la imagen del cursor y los efectos son los de `t` en todas: se desenfoca el movimiento, no el video. Si solo se mueve el cursor, el escenario se dibuja una vez y el cursor `N` veces. **Se acumula en un solo pase** (ver arriba). Con obturador 0, o `N = 1`, no hay submuestras: un solo dibujo, como sin desenfoque.
+- **La cámara (burbuja).** Como en la versión 2 (ver más abajo), con `camera.show` y el estilo de `camera.initial` y `camera.changes` en tiempo de salida; los cambios se transicionan con el resorte de forma y tamaño de siempre.
+- **Cambios de pantalla y de geometría** (`style.geometryTransition`, diseño §7.6). Con `none`, saltan (legado). Con `spring`, un cambio de pantalla mostrada (`screens.changes`) o de la forma de lo que se muestra (un `displayGeometry` o `windowGeometry` que cambia la proporción a mitad de toma) mueve el rectángulo de la pantalla (y el de la ventana y su barra) del viejo al nuevo por `1 − (1 + ωt) e^(−ωt)` con ω = 2π / 0,30 s (un resorte crítico: el 90 % a los ~0,2 s; 1 desde 1,5 s), y el video llena el rectángulo intermedio sin estirarse (aspect fill: recortado a su forma, y nunca más allá de su recorte, así que un área nunca muestra lo que dejó afuera). Un cambio de pantalla también funde el contenido en 0,25 s: la pantalla que se deja queda abajo, en el mismo instante de la fuente y el mismo rectángulo, y la nueva entra encima con opacidad de 0 a 1. Un cambio que llega mientras otro se mueve parte del rectángulo que se veía. El cursor y los efectos pasan a la pantalla nueva desde el instante del cambio.
+- **La cámara del video** (la burbuja) y **la pantalla** conservan las reglas de la versión 2 (abajo).
+
+### El movimiento: la simulación a 600 Hz
+
+El cursor dibujado y la cámara del zoom se simulan en tiempo de salida, desde el instante 0, con un paso fijo de 1/600 s (Euler semi-implícito, el de `SpringValue`: `a = −ω²(x − objetivo) − 2ζωv`, `v += a·dt`, `x += v·dt`, con ω = 2π / response y ζ = damping). Se elige 600 Hz porque todos los `frameRate` del documento (24, 25, 30, 50 y 60) caen exactos: el paso del cuadro `n` es `n × 600 / frameRate`, en enteros. Cada resorte pasa por `StepGrid.stable` (una respuesta de al menos 0,06 s y un damping de 0 a 2) para que un documento editado a mano nunca diverja.
+
+- **Puntos de control.** Se guarda el estado entero cada 600 pasos (1 s). Evaluar un instante toma el punto de control anterior y simula hasta él (a lo sumo 600 pasos): sobre la grilla da los mismos bits desde cualquier punto de control, que es lo que hace iguales la vista previa y el export. Un tiempo fuera de la grilla mezcla linealmente las muestras de los dos pasos de al lado; pasado el final, el estado queda como en el último paso. Los objetivos se leen en cada paso (lo que cambia entre dos pasos se toma en el siguiente); primero se mueve el cursor y después la cámara, que lo sigue. Se rearman una vez por revisión del documento, fuera del hilo principal, y una revisión que no cambia nada de lo que leen (fondo, sombra, esquinas, desenfoque del fondo, muestreo) se queda con los caminos de la anterior.
+- **`StepGrid.position(ofOutput:)`** dice dónde cae un tiempo de salida `τ` (ns) sobre la grilla, en enteros: con `r = (τ × 600) mod 10⁹`, es el paso exacto `round(τ × 600 / 10⁹)` con fracción 0 si `r ≤ 600` o `r ≥ 10⁹ − 600`, y si no, el paso de abajo con fracción `r / 10⁹`. Como redondear el tiempo de un cuadro a nanosegundos lo mueve a lo sumo 1/3 ns (200 de esas unidades), **todo cuadro de 24 a 60 fps de `TimeMap.frameTime` cae exactamente en su paso** y el export y la vista previa en pausa leen ese paso, no una mezcla de dos.
+- **Cursor.** Con `smoothing` `off`: la regla de siempre en el instante exacto de salida (la última posición cruda en o antes de él, movida hacia la siguiente si llega a menos de 50 ms). Con un resorte: zona muerta de 1,5 pt contra el temblor (el objetivo no se mueve mientras la posición cruda esté a menos de eso); **aterrizar en el clic** (con el próximo `mouseDown` a 0,5 s o menos, el objetivo es el punto del clic y en sus últimos 0,175 s el `response` baja linealmente a 0,06 s: en el paso del clic el cursor está exactamente en el clic, en reposo); con un botón apretado, el objetivo es la posición cruda con 1,0 · 0,06 s, para que un arrastre se vea preciso. Con `hideWhenIdle`, la opacidad baja en 0,30 s (ease in-out) cuando la posición cruda no se mueve más de 3 pt durante `idleDelay` y vuelve en 0,15 s, empezando 0,10 s antes de que se mueva (0,15 s antes de un clic); nunca se oculta a menos de 0,5 s de un clic ni con un botón apretado. Lo cortado no existe: las muestras de un corte se descartan y el resorte sigue desde donde estaba.
+
+### El audio
+
+Una sola función de mezcla (`EditedMix`) a 48 kHz para el export y la vista previa: para cada tramo, cada pista lee el rango de la fuente que el tramo conserva (ubicada por host time con sus propias anclas `audioClock`, como siempre), con su ganancia de `audio.tracks` (de 0 a 2; 0 si está silenciada; 1 para una pista que el plan no nombra); las pistas se suman con los sonidos de clic, pasan por el limitador si `audio.limiter` y se recortan a [−1, 1]. La mezcla es mono si todas las pistas lo son, y estéreo si no.
+
+- **Largo.** El tramo `k` ocupa los cuadros de audio `round(O_k × 48 000 / 10⁹) ..< round(O_{k+1} × 48 000 / 10⁹)`, y la mezcla dura `round(frameCount / fps × 48 000)` cuadros, lo que dura el video: después del contenido, silencio; antes de su final, el contenido se corta.
+- **Bordes de los cortes.** Donde dos tramos se encuentran y el sonido saltaría (un corte, otra toma, otra velocidad), el de antes baja y el de después sube linealmente en 192 cuadros (4 ms). Donde el tramo siguiente sigue la fuente del anterior (una división sin corte, a la misma velocidad) no hay fundido y la mezcla es la del tramo sin dividir. La salida nunca se funde al principio ni al final: el documento legado, de un tramo, mezcla las mismas muestras que siempre.
+- **Velocidad.** Hasta 4× se estira conservando el tono con `AVAudioUnitTimePitch` en render manual sin conexión (`SpeedStretch`), pista por pista y antes de la ganancia, desde el comienzo del tramo (o de la corrida de tramos contiguos de la misma toma a la misma velocidad), hasta el largo exacto de muestras que da el mapeo. **Se compensa la latencia del estirador** (la que informa el efecto, 0 en macOS 26: se descartan sus primeras `round(latencia × 48 000)` muestras y se lo alimenta más allá del final del tramo) y cada bloque se renderiza a la tasa del paso entero que más acerca lo que toma de entrada a `velocidad × salida`, así el sonido queda a menos de 8 cuadros de entrada de donde lo pone el mapeo por largo que sea el tramo. Por encima de 4× el tramo va en silencio. Al estirar solo se alimenta lo que se oye junto con el tramo: nunca lo que se cortó.
+- **Limitador** («Evitar la saturación»): un limitador de picos determinista, con 5 ms de anticipación, una liberación de 50 ms y un techo de −1 dBFS, la misma ganancia en todos los canales. Sin él, el recorte de siempre.
+- **Sonidos de clic** (`cursor.clickSound`, **sintetizados en código**, sin ningún archivo de audio: mono a 48 kHz, de 60 ms como mucho, con picos de a lo sumo 0,5, empiezan y terminan en 0 y su media es 0; el ruido sale de un hash entero del índice de la muestra, nunca de un número al azar). `soft-1`: un golpe suave de 45 ms (ruido por dos filtros pasa-bajos de un polo a 1,8 kHz con un decaimiento de 6 ms, sobre un tono grave de 140 Hz que decae en 11 ms). `mechanical-1`: una tecla de 55 ms (un golpe al bajar y otro más suave 29 ms después al subir, cada uno una ráfaga de ruido diferenciado que resuena a 2,35 y 2,9 kHz sobre el cuerpo de la tecla a 620 Hz). Suena uno por cada `mouseDown` izquierdo o derecho que los tramos conservan, en su cuadro de salida, a `clickSoundGain`, sin estirar; dos a menos de 40 ms suenan una vez.
+
+### Lo que dibuja el documento legado (versiones 1 y 2)
+
+Las reglas de abajo son las de siempre: el documento legado las cumple tal cual y los documentos nuevos las generalizan con los valores de arriba. Una toma de la versión 2 de una sola pantalla, sin cámara ni área, se dibuja como una de la versión 1 mientras su `displayGeometry` no cambia; si cambia a mitad de la toma, desde ahí se dibuja con la geometría nueva (la fase 0 la habría estirado), saltando al marco nuevo.
+Una toma sin segmentos de pantalla sigue fallando con `noDisplayTrack` en el documento legado; en uno editado se exporta el fondo, la cámara y el audio.
 
 - **Pantalla** (`ScreenChoice`). Las candidatas son las pistas de pantalla (`display` o `window`) con al menos un segmento. Con una sola, esa, esté donde esté entre las pistas de la toma: una `display-1` sin segmentos no deja la toma en blanco. Con varias, la que contiene en su `globalFrame` la primera posición del puntero de la toma (el primer evento `cursor`, `mouseDown` o `mouseUp` por `t`); si ninguna la contiene o no hay eventos, la primera candidata. Sin candidatas, la primera pista de pantalla, como en la versión 1, y el export falla con `noDisplayTrack`. Con una sola pantalla grabada (siempre en la versión 1), es la misma que antes.
-- **Línea de tiempo** (`FrameEvaluator`). El tiempo de salida 0 es el `startHostTime` del primer segmento de la pantalla. La línea de tiempo termina en el final más tardío (el inicio, si el segmento sigue abierto) de un segmento de esa pantalla o de cualquiera de las pistas de audio que el export mezcla (todas las `microphone` y `systemAudio`): el audio grabado después del último segmento de la pantalla (una pantalla que no volvió) se exporta sobre el último cuadro de la pantalla. Una toma sin segmentos de pantalla tiene una línea de tiempo de 0 s. Los tiempos de salida se recortan a `[0, duración]`. El cuadro de un tiempo es una función pura de la toma, sus eventos, el estilo y el tamaño de salida.
+- **Línea de tiempo** (`FrameEvaluator`). El tiempo de salida 0 es el `startHostTime` del primer segmento de la pantalla. La línea de tiempo termina en el final más tardío (el inicio, si el segmento sigue abierto) de un segmento de esa pantalla o de cualquiera de las pistas de audio que el export mezcla (todas las `microphone` y `systemAudio`): el audio grabado después del último segmento de la pantalla (una pantalla que no volvió) se exporta sobre el último cuadro de la pantalla. Una toma sin segmentos de pantalla tiene una línea de tiempo de 0 s. Los tiempos de salida se recortan a `[0, duración]`. El cuadro de un tiempo es una función pura de la toma, sus eventos, el documento y el tamaño de salida.
 - **Geometría de la pantalla.** Dónde está la pantalla en un instante, en puntos globales: en una `display`, el último evento `displayGeometry` de su `displayID` con `t` hasta ese instante; en una `window`, el último `windowGeometry` de su pista; antes del primero, su `globalFrame`. Un `displayGeometry` con un `frame` que no es finito y de tamaño positivo se ignora; un `windowGeometry` así deja la ventana donde estaba, pero su `onScreen` cuenta (ver **Cursor**). Una toma v1 tiene un solo `displayGeometry` por pantalla, el del inicio, igual a su `globalFrame`: no cambia nada.
 - **Lo que se muestra de la pantalla.** En una pantalla grabada en modo Área, el `captureArea` como recorte del cuadro (`ScreenLayer.crop`). El área queda donde estaba en la pantalla al empezar la toma: su desplazamiento se mide desde el origen de `globalFrame` (el marco de la pantalla cuando se eligió el área) y su tamaño, contra la geometría de la pantalla en ese instante (`gf`): `((area.x − globalFrame.x) / gf.width, (area.y − globalFrame.y) / gf.height, area.width / gf.width, area.height / gf.height)`, recortado a `[0, 1]`. Así, si la pantalla se mueve (otra disposición, o un modo que corre su origen), el área se mueve con ella. Mientras ninguna parte del área cae en la pantalla, y en toda la toma si el área no se puede ubicar (un `captureArea` con algún valor que no es finito o con un tamaño que no es positivo, igual que un área fuera de la pantalla; o una pantalla sin un `globalFrame` finito y de tamaño positivo), no se dibujan ni la pantalla ni el cursor (el fondo, y la cámara si hay): nunca se muestra lo que el usuario dejó fuera del área. Sin área, el cuadro entero. El rectángulo de la pantalla en la salida es el más grande con la proporción de lo que se muestra (el área recortada, la pantalla o el marco de la ventana) centrado dentro del margen. El cuadro grabado llena ese rectángulo con los píxeles que tenga: los píxeles por punto de cada segmento salen de su propio tamaño, nunca de `pixelScale`, así que una ventana que pasa a una pantalla de otra escala (un segmento con otros píxeles por punto) se sigue dibujando entera.
 - **Cursor.** Se ubica en lo que se muestra (el área recortada en puntos globales, `gf.origin + (area.origin − globalFrame.origin)` con el tamaño del área recortada; la pantalla; o el marco de la ventana) y no se dibuja fuera de eso; su alto es `cursorPointHeight` (24) puntos de eso. Una ventana con `onScreen` en `false` se sigue dibujando, sin cursor; un `windowGeometry` con un `frame` que no se puede usar deja la ventana donde estaba, pero su `onScreen` cuenta.
 - **Cámara.** La primera pista `camera` con segmentos, desde el `startHostTime` de su primer segmento; antes no se dibuja. Su cuadro es el del mismo instante que la pantalla; entre dos segmentos, y después del último, se mantiene el último cuadro. No alarga la línea de tiempo. Su estilo es el `cameraStyle` de la toma o, sin él (siempre en la versión 1), `CameraStyle.default`: un círculo mediano abajo a la derecha. Su lugar es `CameraStyle.frame(in:)` con la salida entera `(0, 0, W, H)` como región: un lado de `size × H`, un ancho de `lado · √proporción` y un alto de `lado / √proporción`, a `0,032 × H` de los bordes de su anclaje y centrada en el otro eje; de radio, la mitad del lado más corto en el círculo, el 26 % del lado en el cuadrado redondeado, y `20 / 750 × H` y `18 / 750 × H` en el vertical 3:4 y el horizontal 16:9. En cada evento `cameraStyle`, x, y, ancho, alto y radio van del valor que se veía en ese instante (con la transición anterior, así una ráfaga de cambios no salta) al del estilo nuevo, por `progress(t − t_evento)` (`CameraStyleTimeline`): la respuesta al escalón del resorte de forma y tamaño, `1 − e^(−ζωt)(cos(ω_d t) + (ζω/ω_d) sin(ω_d t))` con ζ = 0,95 (damping), ω = 2π / 0,5 s (response) y ω_d = ω√(1 − ζ²); 0 hasta 0 s y 1 desde 1,5 s. El cuadro de la cámara llena su rectángulo sin estirarse (se recorta al centro hasta su proporción), con esas esquinas redondeadas; el video no se espeja.
 - **Cuadros de la pantalla y de la cámara** (`TrackFrameReader`, uno por pista). En un tiempo se muestra el último cuadro presentado en ese instante o antes. Un segmento `empty` o `unreadable`, un archivo que falta, uno que no se puede abrir o leer, y lo que no se pudo decodificar son huecos: se mantiene el cuadro anterior (o nada de esa pista, antes de su primer cuadro legible), y cada hueco se informa con su pista (`MissingVideo.track`, en `FrameRenderer.missingVideo` y `ExportSummary.missingVideo`). Si la lectura se corta con un error a mitad de un segmento, se vuelve a abrir justo después del último cuadro y, si se corta en el mismo lugar, cada vez `preroll` (1 s) más adelante, hasta decodificar o llegar al final del segmento.
-- **Dibujo** (`FrameRenderer`, `Compositor`). Todo pasa por `FrameRenderer.encode(at:into:commandBuffer:)`, que dibuja con `Compositor.encode` en una textura `.bgra8Unorm` del tamaño de salida, siempre en este orden: el degradado, la pantalla, el cursor y la cámara. `render(at:into:)` (un `CVPixelBuffer` 32BGRA, para el export) y `renderBytes(at:)` (bytes BGRA sin relleno) lo usan, igual que la vista previa. Mismo proyecto, mismo tiempo y mismo tamaño dan los mismos bytes en la vista previa y en el export.
+- **Dibujo** (`FrameRenderer`, `Compositor`). Todo pasa por `FrameRenderer.encode(at:into:commandBuffer:)`, que dibuja con `Compositor.encode` en una textura `.bgra8Unorm` del tamaño de salida, con el documento legado siempre en este orden: el degradado, la pantalla, el cursor y la cámara (el orden de los documentos nuevos está arriba). `render(at:into:)` (un `CVPixelBuffer` 32BGRA, para el export) y `renderBytes(at:)` (bytes BGRA sin relleno) lo usan, igual que la vista previa. Mismo proyecto, mismo tiempo y mismo tamaño dan los mismos bytes en la vista previa y en el export.
 - **Audio** (`AudioTrackTimeline`, `AudioMix`). El MP4 tiene una sola pista AAC: la mezcla de todas las pistas `microphone` y `systemAudio` de la toma (en la fase 1a, a lo sumo una de cada), o ninguna si la toma no tiene pistas de audio. Cada pista se ubica en la línea de tiempo por host time con sus propias anclas `audioClock` (ver [Tiempos](#tiempos)), así dos relojes que derivan distinto no se corren uno respecto del otro; antes del primer segmento de una pista, entre segmentos y después del último, esa pista es silencio. Las pistas se suman a ganancia 1 y la suma se recorta a [−1, 1], nunca da la vuelta. La mezcla es mono si todos los segmentos que se pueden abrir, de todas las pistas, lo son, y estéreo si no: un segmento mono va a los dos canales, uno estéreo queda como está y uno de más canales se mezcla con todos sus canales a ganancia 1 en cada canal, recortado. La línea de tiempo llega hasta el final de la pista de audio que termina más tarde (ver **Línea de tiempo**). Lo que no se pudo usar queda en silencio en su pista y se informa con ella (`ExportSummary.missingAudio`, `MissingAudio.track`).
 
 ## Cambios de la versión 2
@@ -493,9 +583,11 @@ Compatibilidad:
 
 ## Cambios de la versión 3
 
-La versión 3 llega con el hito 1b, el editor con estilo, cursor y zoom. Los paquetes nuevos se crean con `formatVersion: 3`.
+La versión 3 llega con el hito 1b, el editor con estilo, cursor y zoom. Los paquetes nuevos se crean con `formatVersion: 3`. Un lector de la versión 3 lee las versiones 1, 2 y 3.
 
-- El campo `projectID` del manifiesto: el id estable del proyecto, al azar al crear el paquete. **Id derivado**, el de un paquete sin `projectID` (versiones 1 y 2): los primeros 16 bytes, en 32 dígitos hexadecimales en minúscula, de SHA-256 sobre el UTF-8 de `createdAt` como se escribe en el manifiesto (ISO 8601) seguido de `\n` y, por cada toma en orden, su `id`, `\n`, su `startedAt` en ISO 8601 y `\n`. Por ejemplo, con `createdAt` `2026-11-15T20:00:00Z` y una toma `take-001` de `startedAt` `2026-11-15T20:00:01Z`, SHA-256 de `"2026-11-15T20:00:00Z\ntake-001\n2026-11-15T20:00:01Z\n"`. Ninguno de los dos cambia al renombrar o mover el paquete, y una copia en Finder tiene el mismo id que el original. Las cachés del editor van fuera del paquete, en una carpeta con ese id.
+### Lo que suma el manifiesto y la captura
+
+- El campo `projectID` del manifiesto: el id estable del proyecto, al azar al crear el paquete. **Id derivado**, el de un paquete sin `projectID` (versiones 1 y 2): los primeros 16 bytes, en 32 dígitos hexadecimales en minúscula, de SHA-256 sobre el UTF-8 de `createdAt` como se escribe en el manifiesto (ISO 8601, en segundos) seguido de `\n` y, por cada toma en orden, su `id`, `\n`, su `startedAt` en ISO 8601 y `\n`. Por ejemplo, con `createdAt` `2026-11-15T20:00:00Z` y una toma `take-001` de `startedAt` `2026-11-15T20:00:01Z`, SHA-256 de `"2026-11-15T20:00:00Z\ntake-001\n2026-11-15T20:00:01Z\n"`. Ninguno de los dos cambia al renombrar o mover el paquete, y una copia en Finder tiene el mismo id que el original (comparten la carpeta de cachés, que no daña nada: son cachés de las mismas tomas).
 - El campo `upgradedFrom` del manifiesto: la versión en que se creó un paquete que pasó a la versión 3 con su primera edición.
 - La carpeta opcional `takes/<toma>/cursors/`, con las imágenes del cursor (ver [`cursors/`](#cursors)).
 - Eventos nuevos: `cursorImage`, `scroll` y `keyActivity`. Como los demás, nunca entre un `paused` y su `resumed`, una línea por evento y con las claves en orden alfabético:
@@ -507,13 +599,294 @@ La versión 3 llega con el hito 1b, el editor con estilo, cursor y zoom. Los paq
   ```
 
   Un `kind` de `cursorImage` que el lector no conoce se lee como ausente: se usa la imagen grabada y la línea vale igual.
-- Nombres reservados en la raíz del paquete, para el editor: `edit.json` (el documento de edición), `edit-log.jsonl` (el registro de cambios), `edit.lock` (el lock del editor que escribe) y `assets/` (imágenes propias del fondo). El editor escribe solo esos y el manifiesto, una vez, al pasar un paquete v1 o v2 a la versión 3; en un paquete v1 o v2 sin editar no escribe nada, y nunca toca `takes/`.
+- Nombres reservados en la raíz del paquete, para el editor: `edit.json`, `edit-log.jsonl`, `edit.lock` y `assets/` (abajo). El editor escribe solo esos y el manifiesto, una vez, al pasar un paquete v1 o v2 a la versión 3; **en un paquete v1 o v2 sin editar no escribe nada**, y nunca toca `takes/`. Tampoco escribe ahí el export.
+- La carpeta `cache/` sigue reservada para cachés que convenga llevar con el proyecto; el editor de 1b no escribe en ella.
 
-Compatibilidad:
+### El documento de edición: `edit.json`
 
-- Un lector de la versión 3 lee las versiones 1, 2 y 3 (`Manifest.supportedFormatVersions`, `1...3`) y rechaza cualquier otra antes de decodificar el manifiesto. Un lector de la versión 2 rechaza así los paquetes v3: un paquete v3 es *para reparar* para la app de la versión 2, que no lo toca, así nunca muestra sin sus ediciones lo que el usuario cortó.
+Un documento por proyecto, en la raíz del paquete: la instantánea del estado de la edición (qué se ve, en qué orden y con qué aspecto). JSON con las reglas de escritura del manifiesto (`ProjectJSON.encoder()`: UTF-8, claves en orden alfabético, indentado con dos espacios y `" : "` entre clave y valor, una clave por línea, sin `/` escapadas, opcionales omitidos, nunca `null`), escrito de una vez con `DurableFile.writeAtomically` (temporal, `F_FULLFSYNC`, `rename` y sincronización de la carpeta). Este es el texto exacto que escribe un documento con dos tramos (el segundo a 2×), un cambio de pantalla, un zoom automático, uno manual y uno automático borrado; lo guarda `documentExampleRoundTripsByteForByte`, que lo lee y lo vuelve a escribir byte por byte:
+
+```json
+{
+  "aspect" : "16:9",
+  "audio" : {
+    "limiter" : true,
+    "tracks" : {
+      "take-001/mic" : {
+        "gain" : 1,
+        "muted" : false
+      },
+      "take-001/system-audio" : {
+        "gain" : 0.8,
+        "muted" : false
+      }
+    }
+  },
+  "camera" : {
+    "changes" : [
+      {
+        "id" : "k-1c2d0a9e",
+        "origin" : "recorded",
+        "style" : {
+          "anchor" : "topLeading",
+          "shape" : "circle",
+          "size" : 0.24
+        },
+        "t" : 81290000000000,
+        "take" : "take-001"
+      }
+    ],
+    "initial" : {
+      "take-001" : {
+        "anchor" : "bottomTrailing",
+        "shape" : "circle",
+        "size" : 0.24
+      }
+    },
+    "show" : true
+  },
+  "cursor" : {
+    "clickEffect" : "ripple-1",
+    "clickSound" : "none",
+    "clickSoundGain" : 0.5,
+    "hideWhenIdle" : true,
+    "idleDelay" : 2,
+    "motionBlur" : 0.5,
+    "scale" : 1.5,
+    "show" : true,
+    "smoothing" : {
+      "damping" : 1,
+      "response" : 0.16
+    },
+    "style" : "system"
+  },
+  "documentVersion" : 1,
+  "frameRate" : 60,
+  "logSequence" : 128,
+  "screens" : {
+    "changes" : [
+      {
+        "id" : "p-9a01b2c3",
+        "origin" : "auto",
+        "t" : 81260000000000,
+        "take" : "take-001",
+        "track" : "display-2"
+      }
+    ],
+    "initial" : {
+      "take-001" : "display-1"
+    },
+    "planner" : "screenFollow-1"
+  },
+  "sequence" : [
+    {
+      "end" : 81276901234567,
+      "id" : "c-00a1b2c3",
+      "speed" : 1,
+      "start" : 81234567890123,
+      "take" : "take-001"
+    },
+    {
+      "end" : 81334000000000,
+      "id" : "c-00d4e5f6",
+      "speed" : 2,
+      "start" : 81277458000000,
+      "take" : "take-001"
+    }
+  ],
+  "style" : {
+    "background" : {
+      "type" : "wallpaper",
+      "wallpaper" : "aurora-1"
+    },
+    "backgroundBlur" : 0,
+    "cornerRadius" : 0.012,
+    "frame" : {
+      "type" : "none"
+    },
+    "geometryTransition" : "spring",
+    "padding" : 0.08,
+    "screenSampling" : "mipmapped",
+    "shadow" : 0.6
+  },
+  "zoom" : {
+    "auto" : {
+      "depth" : 2,
+      "enabled" : true,
+      "follow" : true,
+      "groupGap" : 2.5,
+      "holdWhileTyping" : true,
+      "leadIn" : 0.5,
+      "leadOut" : 1,
+      "planner" : "autoZoom-1",
+      "triggers" : "clicks"
+    },
+    "motionBlur" : 0.5,
+    "regions" : [
+      {
+        "end" : 81245000000000,
+        "focus" : {
+          "type" : "follow"
+        },
+        "id" : "z-3fa2b1c0",
+        "instant" : false,
+        "origin" : "auto",
+        "start" : 81241000000000,
+        "take" : "take-001"
+      },
+      {
+        "depth" : 1.6,
+        "end" : 81300000000000,
+        "focus" : {
+          "type" : "fixed",
+          "x" : 0.31,
+          "y" : 0.72
+        },
+        "id" : "z-7e11d0aa",
+        "instant" : false,
+        "origin" : "user",
+        "start" : 81296000000000,
+        "take" : "take-001"
+      }
+    ],
+    "show" : true,
+    "spring" : {
+      "damping" : 1,
+      "response" : 0.7
+    },
+    "suppressed" : [
+      {
+        "end" : 81320000000000,
+        "start" : 81318000000000,
+        "take" : "take-001"
+      }
+    ]
+  }
+}
+```
+
+Las claves de `audio.tracks`, `camera.initial` y `screens.initial` son por toma (`<toma>/<pista>` en el audio), así la fase 3 puede poner varias tomas en una secuencia; en 1b hay una sola.
+
+| Campo | Significado |
+|---|---|
+| `documentVersion` | La versión del documento dentro del formato v3: 1 en 1b. Un lector que conoce hasta la `n` rechaza uno mayor (`EditDocumentError.newerVersion`) antes de leer lo demás, esté donde esté (un archivo propio o el `create` del registro) |
+| `logSequence` | El `seq` de la última línea del registro que esta instantánea ya incluye |
+| `aspect` | `16:9`, `9:16` o `1:1` |
+| `frameRate` | 24, 25, 30, 50 o 60: la grilla de cuadros del editor y los cuadros por segundo por defecto de la hoja de exportar. Exportar a otros no lo toca |
+| `sequence` | Los tramos, en el orden de salida y, en 1b, en el de la fuente, sin superponerse: `id` (`c-` y 8 hex), `take`, `start` y `end` (`HostTime` de la toma, `end` excluido) y `speed` (de 0,25 a 16) |
+| `screens` | Qué pantalla se ve: `initial` por toma (el id de la pista); `changes` (`id` `p-…`, `take`, `t` de la fuente, `track` y `origin`, `auto` o `user`), desde `t` se ve `track`; `planner` si los hizo un planificador (`screenFollow-1`) |
+| `style.background` | `{"type":"gradient","start":[r,g,b,a],"end":[r,g,b,a],"angle":135}`, `{"type":"color","color":[r,g,b,a]}`, `{"type":"wallpaper","wallpaper":"<id>"}`, `{"type":"image","file":"assets/<sha>.<ext>"}` o `{"type":"desktop"}` (la foto del escritorio de la primera pantalla que se ve). Los colores son valores sRGB de 0 a 1 que se escriben tal cual a la salida |
+| `style.backgroundBlur` | 0 a 1 (σ = valor × 0,04 × el ancho de salida) |
+| `style.padding`, `style.cornerRadius` | Fracciones del ancho de salida (0,08 y 0,012 en el estilo de siempre) |
+| `style.shadow` | 0 a 1 |
+| `style.frame` | `{"type":"none"}` o `{"type":"macWindow","appearance":"light"\|"dark","title":"…","buttons":true}` |
+| `style.screenSampling` | `bilinear` (el de las fases 0 y 1a) o `mipmapped` |
+| `style.geometryTransition` | `none` (salta, como siempre) o `spring` |
+| `cursor` | `show`; `style` (`toma` o `system`); `scale` (multiplica el tamaño real; en `toma`, 1 son 24 pt de alto); `smoothing` (`"off"` o `{"damping","response"}`); `hideWhenIdle` e `idleDelay` (s); `clickEffect` (`none`, `ripple-1`, `circle-1`); `clickSound` (`none`, `soft-1`, `mechanical-1`); `clickSoundGain` (0 a 1); `motionBlur` (0 a 1, la fracción de un cuadro que dura el obturador) |
+| `zoom` | `show`; `auto` (los ajustes del planificador: `enabled`, `triggers` `clicks` o `clicksAndPauses`, `holdWhileTyping`, `depth` de 1,25 a 4, `groupGap`, `leadIn`, `leadOut`, `follow`, y su versión en `planner`, `autoZoom-1`); `spring` de la cámara; `motionBlur`; `regions`; `suppressed` |
+| `zoom.regions[]` | `id` (`z-` y 8 hex, o un hash del planificador, la toma, el inicio y el fin en los automáticos), `take`, `start` y `end` (fuente), `origin` (`auto` o `user`), `depth` (opcional en un automático: usa `auto.depth`), `focus` (`{"type":"follow"}` o `{"type":"fixed","x","y"}`, fracciones de lo que se muestra de la pantalla) e `instant` |
+| `zoom.suppressed[]` | Rangos de la fuente (`take`, `start`, `end`) donde el usuario borró un automático: el planificador no vuelve a poner ahí uno que se superponga en un 50 % o más |
+| `camera` | `show`; `initial` por toma (un `CameraStyle`: `shape`, `size` y `anchor`; en el documento, `size` va de 0,10 a 0,45); `changes` (`id` `k-…`, `take`, `t` de la fuente, `style` y `origin`, `recorded` si lo grabó la toma o `user`) |
+| `audio` | `tracks` por `<toma>/<pista>` con `gain` (0 a 2) y `muted`; `limiter` |
+
+Reglas:
+
+- **Todo lo que tiene un aspecto definido en código lleva la versión en su nombre** (`aurora-1`, `ripple-1`, `circle-1`, `soft-1`, `mechanical-1`, `autoZoom-1`, `screenFollow-1`), y el código conserva las versiones viejas. Los resortes y las medidas se guardan como números, no como un nombre («Media»). Así una actualización nunca cambia en silencio un proyecto viejo: retocar las Ondas crea `ripple-2`.
+- Los ids tienen un prefijo por tipo (`c-` tramo, `z-` zoom, `k-` cambio de la cámara, `p-` cambio de pantalla) y 8 hex al azar; los de los zooms automáticos salen de un hash, así regenerar sin cambios da los mismos ids.
+- **Los instantes de la fuente** (`start`, `end`, `t`) son enteros de nanosegundos de `HostTime` y se escriben como enteros, también por encima de 2⁵³ (unos 104 días de arranque), donde un `Double` ya no guardaría cada nanosegundo: un lector tiene que leerlos como enteros de 64 bits sin pasarlos por un número de punto flotante (la prueba `hostTimesAbove2To53RoundTrip` los lee y vuelve a escribir sin cambiarlos, hasta 2⁶⁴ − 1).
+- Un lector que encuentra un valor que ninguna versión puede dibujar lo lee igual y lo acota: una velocidad fuera de 0,25 a 16 se acota a ese rango (una que no es un número, a 1), una profundidad de zoom se lee de 1 a 16, un obturador de 0 a 1 y un resorte con `response` menor de 0,06 s o un `damping` fuera de 0 a 2 se lee dentro de lo estable. Un `frameRate` que no es uno de la lista, o una velocidad fuera de rango, abre el proyecto solo para ver. Una pantalla que el documento nombra y la toma no tiene no se dibuja.
+- Un fondo `wallpaper` cuyo id esta versión no conoce, una imagen que falta o no se puede leer y un `desktop` sin foto se dibujan como Toma clásico.
+
+### El registro: `edit-log.jsonl`
+
+El registro es la verdad ante un crash: una línea por entrada, con las reglas de `events.jsonl` (JSON compacto, claves en orden alfabético, `\n` al final, solo se agrega por el final con `O_APPEND`). Toda entrada tiene `seq` (un entero que crece de línea en línea y puede tener huecos) y `type`. La primera línea es siempre un `create`, y solo ahí.
+
+| `type` | Campos además de `seq` | Significado |
+|---|---|---|
+| `create` | `document`, `app` (`name` y `version`) | El documento inicial entero (el legado, o el de un proyecto nuevo) |
+| `do` | `group`, `label`, `changes`, `at` | Un cambio. `label` nombra la acción para el menú (`split`, `style.padding`…); `group` es el paso de deshacer al que pertenece; `at` es una fecha ISO 8601 en segundos enteros |
+| `undo` | `group` | Deshace todas las entradas `do` de ese grupo, de la última a la primera |
+| `redo` | `group` | Las rehace, en orden |
+| `migrate` | `from`, `to` | El documento pasó de una `documentVersion` a otra. `documentVersion` 1 todavía no tiene migraciones: un `migrate` a una versión mayor que la de la app se rechaza como un documento más nuevo (lo escribió una app más nueva, no es un daño), y uno a una versión que la app sí conoce no existe aún: la reproducción se detiene ahí |
+
+Cada `changes` es una lista de operaciones sobre el documento, todas invertibles porque guardan lo que reemplazan. Una ruta es un puntero JSON (RFC 6901: `~1` para una `/` y `~0` para una `~` dentro de un nombre, así `/audio/tracks/take-001~1mic/gain`):
+
+| `op` | Campos | Inversa |
+|---|---|---|
+| `set` | `path`, `before`, `after` | `set` con `before` y `after` intercambiados. El valor de `path` existe; para sumar o quitar un campo opcional se usan las otras |
+| `insert` | `collection`, `index`, `value` | `remove` |
+| `remove` | `collection`, `index`, `value` (lo que había) | `insert` |
+| `replace` | `collection`, `id`, `before`, `after` (el elemento entero, con el mismo `id`) | `replace` con los dos intercambiados |
+
+Las colecciones son `/sequence`, `/zoom/regions`, `/zoom/suppressed`, `/camera/changes` y `/screens/changes`. Una línea de cada tipo, exactamente como se escribe (la primera, con un documento mínimo):
+
+```
+{"app":{"name":"Toma","version":"0.2.0"},"document":{"aspect":"16:9","audio":{"limiter":false,"tracks":{}},"camera":{"changes":[],"initial":{},"show":true},"cursor":{"clickEffect":"none","clickSound":"none","clickSoundGain":0.5,"hideWhenIdle":false,"idleDelay":2,"motionBlur":0,"scale":1,"show":true,"smoothing":"off","style":"toma"},"documentVersion":1,"frameRate":60,"logSequence":0,"screens":{"changes":[],"initial":{"take-001":"display-1"}},"sequence":[{"end":2000,"id":"c-00000001","speed":1,"start":1000,"take":"take-001"}],"style":{"background":{"type":"wallpaper","wallpaper":"aurora-1"},"backgroundBlur":0,"cornerRadius":0.012,"frame":{"type":"none"},"geometryTransition":"none","padding":0.08,"screenSampling":"bilinear","shadow":0},"zoom":{"auto":{"depth":2,"enabled":false,"follow":true,"groupGap":2.5,"holdWhileTyping":true,"leadIn":0.5,"leadOut":1,"planner":"autoZoom-1","triggers":"clicks"},"motionBlur":0,"regions":[],"show":true,"spring":{"damping":1,"response":0.7},"suppressed":[]}},"seq":1,"type":"create"}
+{"at":"2026-11-15T20:12:03Z","changes":[{"after":0.1,"before":0.08,"op":"set","path":"/style/padding"}],"group":2,"label":"style.padding","seq":2,"type":"do"}
+{"group":2,"seq":3,"type":"undo"}
+{"group":2,"seq":4,"type":"redo"}
+{"from":1,"seq":9,"to":2,"type":"migrate"}
+{"at":"2026-11-15T20:12:03Z","changes":[{"collection":"/zoom/suppressed","index":0,"op":"insert","value":{"end":6,"start":5,"take":"take-001"}}],"group":5,"label":"zoom.delete","seq":7,"type":"do"}
+{"at":"2026-11-15T20:12:03Z","changes":[{"collection":"/zoom/suppressed","index":0,"op":"remove","value":{"end":6,"start":5,"take":"take-001"}}],"group":5,"label":"zoom.delete","seq":7,"type":"do"}
+{"at":"2026-11-15T20:12:03Z","changes":[{"after":{"end":1500,"id":"c-00000001","speed":1,"start":1000,"take":"take-001"},"before":{"end":2000,"id":"c-00000001","speed":1,"start":1000,"take":"take-001"},"collection":"/sequence","id":"c-00000001","op":"replace"}],"group":5,"label":"zoom.delete","seq":7,"type":"do"}
+```
+
+(Las últimas tres, con una operación de cada tipo, repiten `group`, `label` y `seq` del ejemplo de arriba solo para mostrar la forma; en un registro real cada `seq` es nuevo.)
+
+Lo que significa cada una:
+
+- **Qué escribe cada acción.** Dividir un tramo es un `replace` del tramo (que termina en el corte) más un `insert` del nuevo; borrar un rango son hasta dos `replace` y los `remove` de los tramos del medio; recortar y cambiar la velocidad son `replace`; borrar un zoom automático es un `remove` más un `insert` en `suppressed`; regenerar son los `remove` de los automáticos sin tocar, los `insert` de los nuevos y el `set` de los ajustes; cambiar el margen es un `set`.
+- **Grupos.** Un `do` de un grupo nuevo después de un `undo` vacía lo que se podía rehacer (la historia es lineal). Varios `do` seguidos con el mismo `group` son un solo paso de deshacer; el grupo de un `do` es su `seq` si abre uno. Arrastrar (una barra, un recorte, un bloque, la burbuja) escribe un solo `do` al soltar, con el valor del comienzo del gesto como `before`.
+- **Verificación al aplicar.** Cada operación comprueba lo que reemplaza: el `before` de un `set` o de un `replace`, el `value` de un `remove`, y que el `index` de un `insert` sea un lugar libre (de 0 a la cantidad). Si algo no coincide, o si el documento que queda deja de ser uno (o no tiene algo que una línea escribió), el registro dejó de ser coherente en esa línea. La reproducción también se detiene en la primera línea que no sigue a las de antes: un `create` que no es la primera línea, un `do` de un grupo que está deshecho, un `undo` de uno que no está aplicado, un `redo` de uno que no está deshecho, un `seq` que no crece, o cualquier `migrate` (nada anterior a un `migrate` se puede deshacer).
+- **Abrir.** Se lee `edit.json` y se aplican las entradas del registro con `seq` mayor que su `logSequence`; el registro entero se recorre (sin aplicar) para rearmar las pilas de deshacer y rehacer. Sin `edit.json` o con uno ilegible, se reproduce desde el `create`. Con `edit.json` y sin registro, se abre esa instantánea con la historia vacía y se empieza un registro con un `create` de ese estado. Un `create` de un documento más nuevo, o un `edit.json` con una `documentVersion` mayor, no se abre ni se toca: la app dice que el proyecto se editó con una versión más nueva de Toma.
+- **Después de un crash.** Una última línea cortada (sin `\n` y que no es un objeto JSON completo) se trunca y se fuerza a disco antes de seguir escribiendo; truncar el archivo en cualquier byte de la última línea da el estado de antes o el de después, nunca otro (`truncatingTheLastLineAtEveryByteGivesBeforeOrAfter`). Una línea dañada en el medio, o una que no coincide al aplicarse, corta la reproducción ahí: se abre el estado de la última línea buena, el archivo entero se copia a `edit-log.jsonl.damaged-<aaaammdd-hhmmss>` (con `-2`, `-3`… si ya existe; nunca se borra ni se pisa) y el registro se reescribe hasta la última línea buena. Si `edit.json` es más nuevo que toda línea buena (el registro se dañó después de una instantánea válida), no se pierde nada: se abre la instantánea y el registro pasa a ser un solo `create` de ella (se pierde el historial de deshacer anterior, nunca una edición).
+- **Cada cambio es durable al terminar**: la línea se agrega y se fuerza a disco con `F_FULLFSYNC` (con `fsync` si el volumen no lo admite) en una cola propia; si llegan varias mientras tanto, una sola sincronización las cubre. Si una escritura falla (disco lleno), las líneas esperan en memoria, en orden, y se reintenta cada 2 s desde el byte donde quedó.
+- **La instantánea.** `edit.json` se reescribe 2 s después del último cambio, cada 200 entradas y al cerrar, y solo cuando el registro ya confirmó en disco la línea que dice su `logSequence`. Sirve para no reproducir todo el registro: nada depende de que sea reciente.
+- **Compactación.** Cuando el registro pasa de 8 MiB (8 × 1 048 576 bytes) o de 20 000 entradas, al abrir o al cerrar (nunca mientras se edita): primero se escribe la instantánea del estado actual y después el registro equivalente, con los mismos `seq` finales para que la instantánea siga valiendo: el mismo `create`, los grupos de la pila de hechos como un `do` cada uno (los `set` seguidos sobre la misma ruta se funden en uno) y los de la pila de deshechos como sus `do` seguidos de sus `undo` en orden inverso (`do` y `undo` de a uno no se podrían reproducir si hay dos grupos deshechos). Se escribe a un temporal, `F_FULLFSYNC`, `rename(2)` y sincronización de la carpeta, y mientras el diario sigue abierto lo cambia él, así las líneas siguientes no van a un archivo sin nombre. Conserva el mismo estado y las mismas pilas (`compactionKeepsStateAndStacks`).
+
+### El paso a la versión 3
+
+La primera edición de un paquete v1 o v2 lo pasa a la versión 3, **en este orden**, de modo que un crash en cualquier punto deja un paquete que se abre con el aspecto que tenía:
+
+1. El editor toma `edit.lock`. Si no puede, porque otro proceso llegó antes, descarta la edición, pasa a solo para ver y lo dice. Si puede, vuelve a leer el manifiesto (sin seguir enlaces ni trabarse en un FIFO) y, si ya no es el que abrió (otro proceso lo pasó a la versión 3, lo editó y lo soltó, o lo cambió), descarta la edición, suelta el lock y vuelve a abrir el proyecto desde el disco.
+2. El manifiesto se reescribe con `formatVersion: 3`, `upgradedFrom` (la versión de antes) y el `projectID` derivado, y **nada más cambia**: las tomas conservan su contenido v1 o v2, que la versión 3 sabe leer. Así su carpeta de cachés sigue siendo la misma.
+3. Se escribe `edit-log.jsonl` con el `create` del documento legado (`seq` 1) y la primera edición (`seq` y `group` 2).
+
+Un crash entre 2 y 3 deja un v3 con `upgradedFrom` y sin registro, que se abre con el documento legado: nada se ve distinto, y ningún lector viejo puede mostrar una edición, porque las ediciones solo existen después del cambio de versión. **En un paquete v1 o v2 sin editar no se escribe nada**: abrirlo, reproducirlo y exportarlo (con cualquier opción de la hoja de exportar) no crean `edit.lock`, ni cachés, ni estado de interfaz, que van a la carpeta de cachés (abajo); un hash de todos sus archivos es el mismo antes y después (`openingALegacyPackageWritesNothing`, `exportingALegacyPackageWritesNothingInIt`). Un v3 sin editar sí tiene lock mientras está abierto en el editor.
+
+### `edit.lock`
+
+El lock del editor que escribe, con las reglas de [`recording.lock`](#recordinglock): un lock `flock` exclusivo sobre el archivo abierto con `O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW`, que el kernel suelta cuando muere el proceso, con el mismo contenido informativo (`pid`, `startedAt`, `bootSessionUUID`). Se toma al abrir un v3; en un v1 o v2 el editor no lo toma al abrir (no escribe nada): solo pregunta si está tomado, abriéndolo sin crearlo (`O_RDONLY | O_EXLOCK | O_NONBLOCK | O_NOFOLLOW`), y si lo está abre solo para ver; lo toma con la primera edición (arriba). Dentro de la app, abrir dos veces el mismo proyecto trae la ventana que ya está. Un `edit.lock` que es un enlace o un archivo que no es común, o un volumen sin `flock`, abre el proyecto solo para ver. Una futura CLI usará el mismo lock.
+
+### `assets/`
+
+Las imágenes propias del fondo, copiadas al paquete (con un clon de APFS cuando se puede): `assets/<sha>.<ext>`, donde `<sha>` son 32 dígitos hexadecimales en minúscula (los primeros 16 bytes de SHA-256 del archivo) y `<ext>` es `png`, `jpg` o `heic` (la importación solo ofrece esas tres; un nombre `.tiff` es válido, pero no se decodifica). El documento las nombra con `{"type":"image","file":"assets/<sha>.<ext>"}`. No se borran en 1b: deshacer puede volver a necesitarlas. Es una carpeta común y sus archivos, archivos comunes.
+
+### Las cachés, fuera del paquete
+
+Todo lo regenerable va a `~/Library/Caches/dev.toma.Toma/Projects/<projectID>/`, para todas las versiones del formato (el id es el del manifiesto o el derivado): `thumbnails/` (las miniaturas de la línea de tiempo), `waveforms/` (las formas de onda), `suggestions/` (la salida de los planificadores, con su versión y la huella de sus entradas) y `editor-state.json` (el estado de la ventana, la pestaña del panel, el cabezal y la escala de la línea de tiempo). Nunca hace falta para abrir ni para exportar, y macOS puede vaciarla. Como el `projectID` nombra una carpeta, un id que no son exactamente 32 dígitos hexadecimales en minúscula nunca se usa como nombre (el manifiesto que lo trae es inválido; en la carpeta se reemplaza por un hash). La app borra al arrancar las carpetas que no se usan hace 30 días.
+
+### Los lectores seguros
+
+Un paquete puede venir de cualquier lado, así que lo que el editor lee de él no sigue enlaces ni se traba:
+
+- **`edit.json`, `edit-log.jsonl` y el manifiesto que se vuelve a leer al pasar a la versión 3** se abren con `SafeRead.regularFile`: `open` con `O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC` y `fstat` para comprobar que es un archivo común (`S_IFREG`) antes de leer del descriptor; un enlace da `ELOOP` y un FIFO o cualquier otra cosa, `EFTYPE`, al instante. Nunca `Data(contentsOf:)`, que sigue enlaces y se traba en un FIFO. Un `edit.json`, un registro o un `edit.lock` que son enlaces o no son archivos comunes abren el proyecto con lo que se pueda leer sin riesgo, solo para ver.
+- **Las imágenes** (`SafePackageFile`): cada componente de la ruta dentro del paquete se abre con `openat` y `O_NOFOLLOW` desde la carpeta anterior (la ruta del paquete en sí puede pasar por enlaces), el nombre se valida exacto y se comprueba el tipo, el tamaño del archivo y su contenido antes de decodificar con ImageIO. Lo que no cumple se trata como ausente (el cursor de Toma, sin foto del escritorio, la imagen ilegible), nada se sigue y nada falla.
+
+| Qué | Dónde, y el nombre exacto | Límite antes de decodificar | Formatos |
+|---|---|---|---|
+| Imagen del cursor | `takes/<toma>/cursors/<hash>.png`, `[0-9a-f]{32}\.png` | 1 MiB y 512 px por lado | PNG |
+| Foto del escritorio | `takes/<toma>/wallpapers/display-<id>.png`, `display-[0-9]+\.png` | 64 MiB y 16 384 px por lado; se decodifica reducida a 7 680 px de lado como mucho | PNG |
+| Imagen propia | `assets/<sha>.<ext>`, `[0-9a-f]{32}\.(png\|jpg\|heic\|tiff)` | 100 MiB y 16 384 px por lado; se decodifica reducida a 7 680 px de lado como mucho (dos veces el 4K de salida), derecha según su orientación EXIF | PNG, JPEG, HEIC |
+
+Un formato se reconoce por el contenido, no por el nombre (un `.png` que es un BMP no se decodifica), y un PNG cortado, que ImageIO decodificaría con las filas que faltan rellenas, se rechaza. Un JPEG o un HEIC cortados sí se decodifican con la zona que falta rellena: son archivos del propio usuario.
+
+### Compatibilidad
+
+- Un lector de la versión 3 lee las versiones 1, 2 y 3 (`Manifest.supportedFormatVersions`, `1...3`) y rechaza cualquier otra antes de decodificar el manifiesto. Un lector de la versión 2 rechaza así los paquetes v3: un paquete v3 es *para reparar* para la app de la versión 2, que no lo toca, así nunca muestra sin sus ediciones lo que el usuario cortó. La recuperación tampoco toca un manifiesto de una versión que no lee.
 - Un paquete v1 o v2 se lee como siempre: no tiene `projectID` ni `upgradedFrom`, y su id es el derivado.
-- **Un paquete v1 o v2 se queda en su versión hasta que el usuario lo edita.** Abrirlo, reproducirlo y exportarlo no escriben nada en el paquete. La primera edición lo pasa a la versión 3: el manifiesto se reescribe con `formatVersion: 3`, `upgradedFrom` y el `projectID` derivado (así su carpeta de cachés sigue siendo la misma), y nada más cambia: las tomas conservan su contenido v1 o v2, que la versión 3 sabe leer.
+- **Un paquete v1 o v2 se queda en su versión hasta que el usuario lo edita**, con el orden de arriba. Es lo que cambió respecto de la regla de la versión 2 («un paquete v1 se queda en v1»): el espíritu, nunca cambiar nada en silencio, se mantiene, porque lo cambia una acción del usuario.
+- Un `kind` de `cursorImage` desconocido se lee como ausente.
 
 ## Cambios del documento 2
 
@@ -640,4 +1013,4 @@ La sección `camera` de un proyecto nuevo con tres bloques (el segundo fue Burbu
 
 ## Los datos crudos nunca se borran
 
-Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/`, porque todo lo que contiene se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
+Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
