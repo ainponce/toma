@@ -24,10 +24,12 @@ public struct LoadedProject: Sendable {
     /// Throws `LoadedProjectError` for a manifest of a format version outside `Manifest.supportedFormatVersions`
     /// (a newer one, for example), one with a path that could leave the package
     /// (`Manifest.validatePaths()`), a package without takes or an unknown take, and the underlying error if
-    /// the manifest or the event log cannot be read.
+    /// the manifest or the event log cannot be read. Both are read with `SafeRead.regularFile(at:)`: one that is a
+    /// symlink throws `ELOOP` and one that is a FIFO or anything else that is not a regular file `EFTYPE`, at once,
+    /// never followed nor waited on. A take without an event log has no events.
     public static func load(_ url: URL, take: String? = nil) throws -> LoadedProject {
         let package = ProjectPackage(url: url)
-        let data = try Data(contentsOf: package.manifestURL)
+        let data = try SafeRead.regularFile(at: package.manifestURL)
         let version = try Manifest.formatVersion(of: data)
         guard Manifest.supportedFormatVersions.contains(version) else {
             throw LoadedProjectError.unsupportedFormatVersion(version)
@@ -48,8 +50,12 @@ public struct LoadedProject: Sendable {
             guard let last = manifest.takes.last else { throw LoadedProjectError.noTakes }
             record = last
         }
-        let eventsURL = package.eventsURL(take: record.id)
-        let events = FileManager.default.fileExists(atPath: eventsURL.path) ? try EventLogReader.read(eventsURL).events : []
+        let events: [InputEvent]
+        do {
+            events = try EventLogReader.read(package.eventsURL(take: record.id)).events
+        } catch let error as POSIXError where error.code == .ENOENT {
+            events = []
+        }
         return LoadedProject(package: package, manifest: manifest, take: record, events: events)
     }
 }

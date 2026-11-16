@@ -286,9 +286,10 @@ public struct EventLogReadResult: Sendable {
 /// Otherwise it is a write cut short and is dropped. A whole line that is not an event is skipped
 /// and counted, and the lines after it are still read.
 public enum EventLogReader {
-    /// Throws only if the file cannot be read.
+    /// Throws only if the file cannot be read: with `SafeRead.regularFile(at:)`, so a symlink throws `ELOOP` and a FIFO
+    /// or anything else that is not a regular file `EFTYPE`, at once, never followed nor waited on.
     public static func read(_ url: URL) throws -> EventLogReadResult {
-        let data = try Data(contentsOf: url)
+        let data = try SafeRead.regularFile(at: url)
         let decoder = JSONDecoder()
         var result = EventLogReadResult(events: [], droppedTruncatedTail: false, skippedLines: 0)
         // A line that fails to decode is not an error of the file as a whole: it is counted.
