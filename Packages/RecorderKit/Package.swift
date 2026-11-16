@@ -34,6 +34,7 @@ let package = Package(
             name: "recorder-dev",
             dependencies: [
                 "ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Export", "Editing", "Analysis", "Render",
+                "Library",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

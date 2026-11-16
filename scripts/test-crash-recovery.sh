@@ -13,6 +13,9 @@
 # Fifth, the editor (edit_case): the first edit of a version 1 and of a version 2 package killed after each
 # step of its upgrade to version 3, then 100 edit-stress runs on a 3 s take, each killed at a random moment:
 # after every kill, edit-check must find every step the editor reported saved, and the project must open.
+# Sixth, the library (library_case): library-empty of a trash of 30 packages, killed at a random moment 20 times; after
+# every kill, library-empty --finish-only must leave no Trash/.deleting-*, every package left in the trash must be whole
+# and the 3 projects out of the trash must not change.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -282,9 +285,103 @@ edit_case() {
   echo "edit crash case passed (100 runs, 50 with compaction)"
 }
 
+# A moment from 0.05 to 0.5 s, at random.
+library_kill_time() {
+  LC_ALL=C awk -v r="$RANDOM" 'BEGIN { printf "%.3f", 0.05 + 0.45 * r / 32767 }'
+}
+
+# A synthetic package at $1, with $2 written into it: a manifest, a document, a log, 1 MB of "media" and 200 small files
+# of cache, so that deleting it takes a while.
+synthetic_package() {
+  local I
+  mkdir -p "$1/takes/take-001/display-1" "$1/cache/thumbnails"
+  printf '{"formatVersion":3,"name":"%s"}\n' "$2" > "$1/manifest.json"
+  printf '{"documentVersion":2}\n' > "$1/edit.json"
+  printf '{"seq":1}\n' > "$1/edit-log.jsonl"
+  head -c 1048576 /dev/urandom > "$1/takes/take-001/display-1/seg-0001.mov"
+  for I in $(seq 1 200); do printf '%s %s\n' "$2" "$I" > "$1/cache/thumbnails/$I.heic"; done
+}
+
+# One hash of the 3 projects out of the trash of the projects folder $1.
+outside_hash() {
+  local PACKAGE
+  for PACKAGE in "Outside 1.toma" "Outside 2.toma" "Clientes/Outside 3.toma"; do package_hash "$1/$PACKAGE"; done | shasum
+}
+
+# The library (Task 33): a trash of 30 synthetic packages and 3 projects out of it (two in the projects folder, one in a
+# subfolder). Every package of the trash has a link to one of those projects and one to a file of another: deleting must
+# never follow a link. 20 runs of library-empty (LibraryOperations.deleteForever), each killed with SIGKILL at a random
+# moment from 0.05 to 0.5 s (or finished before), the trash filled up to 30 again before each. After every kill, with a
+# link named .deleting-planted to the subfolder put in the trash, library-empty --finish-only (finishPendingDeletions)
+# must leave no Trash/.deleting-* (the link removed, never followed), every package left in the trash must be whole (a
+# package is deleted only once it was renamed away) and the 3 projects out of the trash must not change a byte.
+library_case() {
+  local DIR PROJECTS TRASH TEMPLATE WHOLE OUTSIDE RUN I PID STATUS MID=0 PACKAGE
+  DIR=$(mktemp -d)
+  PROJECTS="$DIR/Projects"
+  TRASH="$PROJECTS/Trash"
+  echo "== library: library-empty of a trash of 30 packages, kill -9 at random, 20 times (in $DIR)"
+  mkdir -p "$TRASH" "$PROJECTS/Clientes"
+  synthetic_package "$PROJECTS/Outside 1.toma" "outside 1"
+  synthetic_package "$PROJECTS/Outside 2.toma" "outside 2"
+  synthetic_package "$PROJECTS/Clientes/Outside 3.toma" "outside 3"
+  OUTSIDE=$(outside_hash "$PROJECTS")
+  TEMPLATE="$DIR/template.toma"
+  synthetic_package "$TEMPLATE" "in the trash"
+  ln -s "$PROJECTS/Outside 1.toma" "$TEMPLATE/link-to-a-project"
+  ln -s "$PROJECTS/Clientes/Outside 3.toma/manifest.json" "$TEMPLATE/takes/take-001/link-to-a-file"
+  WHOLE=$(package_hash "$TEMPLATE")
+  for RUN in $(seq 1 20); do
+    for I in $(seq 1 30); do
+      if [ ! -e "$TRASH/P $I.toma" ]; then cp -cR "$TEMPLATE" "$TRASH/P $I.toma"; fi
+    done
+    STATUS=0
+    "$BIN" library-empty "$PROJECTS" > "$DIR/empty.out" 2> "$DIR/empty.err" &
+    PID=$!
+    sleep "$(library_kill_time)"
+    kill -9 "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || STATUS=$?
+    if [ "$STATUS" -ne 137 ] && [ "$STATUS" -ne 0 ]; then
+      echo "FAIL: library-empty ended with status $STATUS:"
+      cat "$DIR/empty.err"
+      exit 1
+    fi
+    if ls -A "$TRASH" | grep -q '^\.deleting-'; then MID=$((MID + 1)); fi
+    ln -s "$PROJECTS/Clientes" "$TRASH/.deleting-planted"
+    if ! "$BIN" library-empty "$PROJECTS" --finish-only; then
+      echo "FAIL: library-empty --finish-only failed after run $RUN"
+      exit 1
+    fi
+    if ls -A "$TRASH" | grep -q '^\.deleting-'; then
+      echo "FAIL: library-empty --finish-only left in the trash after run $RUN:"
+      ls -A "$TRASH" | grep '^\.deleting-'
+      exit 1
+    fi
+    for PACKAGE in "$TRASH"/*.toma; do
+      [ -e "$PACKAGE" ] || continue
+      if [ "$(package_hash "$PACKAGE")" != "$WHOLE" ]; then
+        echo "FAIL: $PACKAGE was left in the trash in part after run $RUN"
+        exit 1
+      fi
+    done
+    if [ "$(outside_hash "$PROJECTS")" != "$OUTSIDE" ]; then
+      echo "FAIL: the projects out of the trash changed after run $RUN"
+      exit 1
+    fi
+  done
+  if [ "$MID" -eq 0 ]; then
+    echo "FAIL: no run was killed in the middle of a deletion: nothing was checked"
+    exit 1
+  fi
+  echo "$MID of 20 runs killed in the middle of a deletion; $(find "$TRASH" -maxdepth 1 -name '*.toma' | wc -l | tr -d ' ') packages left in the trash, whole"
+  rm -rf "$DIR"
+  echo "library crash case passed (20 runs)"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
 run_case "--window" "" "window-4242 mic"
 edit_case
+library_case
 echo "crash test passed"
