@@ -9,8 +9,8 @@ import RecorderKitTestSupport
 import Render
 import Synchronization
 import Testing
-// @testable for `renders`, how many thumbnails were drawn rather than read from the cache, and `key(of:)` and
-// `size(for:)`, which the tests compare with.
+// @testable for `renders` (how many frames were drawn rather than read from the cache), `waiting(for:)`, `setHooks(_:)`
+// and `size(for:)`.
 @testable import Library
 
 /// What the tests of this file share.
@@ -264,9 +264,10 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             _ = try #require(await small.cached(keys[0]))
             #expect(Thumbs.files(cache) == ["\(keys[0]).heic", "\(keys[1]).heic"].sorted())
 
-            // A third does not fit with both: the least used goes.
+            // A third does not fit with both: the least used goes (once the thumbnail is handed back).
             _ = try #require(await small.render(urls[2], summary: Thumbs.summary(urls[2], in: dir), context: context))
-            #expect(Thumbs.files(cache) == ["\(keys[0]).heic", "\(keys[2]).heic"].sorted())
+            let kept = ["\(keys[0]).heic", "\(keys[2]).heic"].sorted()
+            #expect(await eventually { Thumbs.files(cache) == kept })
             #expect(await small.cached(keys[1]) == nil)
             #expect(await small.cached(keys[0]) != nil)
         }
@@ -275,35 +276,199 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
     func noThumbnailsWhileRecording() async throws {
         try await withTemporaryDirectory { dir in
-            let urls = try await LibraryFixtures.folder(in: dir, kinds: [.v3, .needsRepair, .unfinished])
+            let urls = try await LibraryFixtures.folder(in: dir, kinds: [.v3, .v3, .needsRepair, .unfinished])
             let recording = Mutex(true)
             let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { recording.withLock { $0 } })
             let context = Thumbs.context(dir)
-            let summary = Thumbs.summary(urls[0], in: dir)
+            let drawn = Thumbs.summary(urls[0], in: dir), notDrawn = Thumbs.summary(urls[1], in: dir)
 
-            #expect(await thumbnails.render(urls[0], summary: summary, context: context) == nil)
+            #expect(await thumbnails.render(urls[1], summary: notDrawn, context: context) == nil)
             #expect(await thumbnails.renders == 0)
             #expect(Thumbs.files(Thumbs.cache(dir)).isEmpty)
 
             // Nor of a project that cannot be opened, or is not there.
             recording.withLock { $0 = false }
-            #expect(Thumbs.summary(urls[1], in: dir).state != .normal)
-            #expect(Thumbs.summary(urls[2], in: dir).state == .unfinished)
-            for url in urls.dropFirst() {
+            #expect(Thumbs.summary(urls[2], in: dir).state != .normal)
+            #expect(Thumbs.summary(urls[3], in: dir).state == .unfinished)
+            for url in urls.suffix(2) {
                 #expect(await thumbnails.render(url, summary: Thumbs.summary(url, in: dir), context: context) == nil)
             }
-            var gone = summary
+            var gone = notDrawn
             gone.state = .unavailable(.notFound)
-            #expect(await thumbnails.render(urls[0], summary: gone, context: context) == nil)
-            var newer = summary
+            #expect(await thumbnails.render(urls[1], summary: gone, context: context) == nil)
+            var newer = notDrawn
             newer.state = .newerVersion
-            #expect(await thumbnails.render(urls[0], summary: newer, context: context) == nil)
+            #expect(await thumbnails.render(urls[1], summary: newer, context: context) == nil)
             #expect(await thumbnails.renders == 0)
             #expect(Thumbs.files(Thumbs.cache(dir)).isEmpty)
 
-            // Once the take ends, it is drawn.
-            #expect(await thumbnails.render(urls[0], summary: summary, context: context) != nil)
+            // One drawn before a take…
+            let before = try #require(await thumbnails.render(urls[0], summary: drawn, context: context))
             #expect(await thumbnails.renders == 1)
+
+            // …is still shown while it records, by its key (the index's) or by the project, a light read; only drawing
+            // waits.
+            recording.withLock { $0 = true }
+            let key = try LibraryThumbnails.key(of: urls[0])
+            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(key).heic"])
+            let byKey = try #require(await thumbnails.cached(key))
+            let byProject = try #require(await thumbnails.render(urls[0], summary: drawn, context: context))
+            #expect(try Thumbs.bgra(byKey) == Thumbs.bgra(byProject))
+            #expect(Thumbs.psnr(try Thumbs.bgra(byProject), try Thumbs.bgra(before)) >= 40)
+            #expect(await thumbnails.render(urls[1], summary: notDrawn, context: context) == nil)
+            #expect(await thumbnails.renders == 1)
+            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(key).heic"])
+
+            // Once the take ends, the other is drawn.
+            recording.withLock { $0 = false }
+            #expect(await thumbnails.render(urls[1], summary: notDrawn, context: context) != nil)
+            #expect(await thumbnails.renders == 2)
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func aTakeThatStartsWhileDrawingWritesNothing() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
+            let recording = Mutex(false)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { recording.withLock { $0 } })
+            await thumbnails.setHooks(.init(afterDrawing: { recording.withLock { $0 = true } }))
+            // The frame drawn is handed back; nothing is encoded or written while the take records.
+            #expect(await thumbnails.render(url, summary: Thumbs.summary(url, in: dir), context: Thumbs.context(dir)) != nil)
+            #expect(await thumbnails.renders == 1)
+            #expect(Thumbs.files(Thumbs.cache(dir)).isEmpty)
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func aCardCancelledBeforeItsFrameIsDrawnDrawsAndWritesNothing() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
+            let key = try LibraryThumbnails.key(of: url)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            let gate = DispatchSemaphore(value: 0)
+            await thumbnails.setHooks(.init(beforeDrawing: { _ = gate.wait(timeout: .now() + 10) }))
+            let summary = Thumbs.summary(url, in: dir), context = Thumbs.context(dir)
+
+            let card = Task { await thumbnails.render(url, summary: summary, context: context) }
+            #expect(await eventually { await thumbnails.waiting(for: key) == 1 })
+            // The card scrolls away while its draw waits for its turn.
+            card.cancel()
+            #expect(await eventually { await thumbnails.waiting(for: key) == 0 })
+            gate.signal()
+            #expect(await card.value == nil)
+            #expect(await thumbnails.renders == 0)
+            #expect(Thumbs.files(Thumbs.cache(dir)).isEmpty)
+
+            // Asked for again, it is drawn.
+            await thumbnails.setHooks(.init())
+            #expect(await thumbnails.render(url, summary: summary, context: context) != nil)
+            #expect(await thumbnails.renders == 1)
+            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(key).heic"])
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func theSameKeyAskedForTwiceAtOnceIsDrawnOnce() async throws {
+        try await withTemporaryDirectory { dir in
+            // A project and its unchanged copy, both on screen.
+            let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
+            let copy = dir.appending(path: "copy.toma", directoryHint: .isDirectory)
+            #expect(clonefile(url.path, copy.path, 0) == 0)
+            let key = try LibraryThumbnails.key(of: url)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            let gate = DispatchSemaphore(value: 0)
+            await thumbnails.setHooks(.init(beforeDrawing: { _ = gate.wait(timeout: .now() + 10) }))
+            let context = Thumbs.context(dir)
+            let original = Thumbs.summary(url, in: dir), copied = Thumbs.summary(copy, in: dir)
+
+            async let first = thumbnails.render(url, summary: original, context: context)
+            async let second = thumbnails.render(copy, summary: copied, context: context)
+            #expect(await eventually { await thumbnails.waiting(for: key) == 2 })
+            gate.signal()
+            let images = await [first, second]
+            #expect(images.allSatisfy { $0 != nil })
+            #expect(await thumbnails.renders == 1)
+            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(key).heic"])
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func twoProjectsAreDrawnAtOnce() async throws {
+        try await withTemporaryDirectory { dir in
+            let urls = try await LibraryFixtures.folder(in: dir, kinds: [.v3, .from1b])
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            let context = Thumbs.context(dir)
+            let summaries = urls.map { Thumbs.summary($0, in: dir) }
+            async let first = thumbnails.render(urls[0], summary: summaries[0], context: context)
+            async let second = thumbnails.render(urls[1], summary: summaries[1], context: context)
+            let images = await [first, second]
+            #expect(images.allSatisfy { $0 != nil })
+            #expect(await thumbnails.renders == 2)
+            let keys = try urls.map { "\(try LibraryThumbnails.key(of: $0)).heic" }
+            #expect(Thumbs.files(Thumbs.cache(dir)) == keys.sorted())
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func untouchedProjectsOfBeforeAreTheirLegacyFrame() async throws {
+        try await withTemporaryDirectory { dir in
+            // Packages of format 1 and 2 without edits: what phase 0 and 1a draw, `FrameRenderer(project:outputSize:)`.
+            let urls = try await LibraryFixtures.folder(in: dir, kinds: [.v1, .v2])
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            for url in urls {
+                let summary = Thumbs.summary(url, in: dir)
+                let image = try #require(await thumbnails.render(url, summary: summary, context: Thumbs.context(dir)))
+                let project = try LoadedProject.load(url)
+                let size = LibraryThumbnails.size(for: EditDocument.legacy(for: project).aspect)
+                let renderer = try FrameRenderer(project: project, outputSize: size)
+                let seconds = LibraryThumbnails.time(outputSeconds: renderer.duration)
+                let expected = try await offThePool { try renderer.renderBytes(at: seconds) }
+                #expect(SIMD2(image.width, image.height) == size)
+                #expect(try Thumbs.bgra(image) == expected, "\(url.lastPathComponent)")
+            }
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func leftoverTemporaryFilesGoWhenOld() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
+            let cache = Thumbs.cache(dir)
+            try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true)
+            // What a crash between the write and the rename leaves: one an hour ago, one being written now.
+            let old = ".\(String(repeating: "a", count: 64)).heic.\(UUID().uuidString).tmp"
+            let fresh = ".\(String(repeating: "b", count: 64)).heic.\(UUID().uuidString).tmp"
+            for name in [old, fresh] {
+                try Data(repeating: 7, count: 100).write(to: cache.appending(path: name, directoryHint: .notDirectory))
+            }
+            try Thumbs.setModified(cache.appending(path: old, directoryHint: .notDirectory), to: Date().addingTimeInterval(-3600))
+            let thumbnails = LibraryThumbnails(directory: cache, isRecording: { false })
+            _ = try #require(await thumbnails.render(url, summary: Thumbs.summary(url, in: dir), context: Thumbs.context(dir)))
+            let left = [fresh, "\(try LibraryThumbnails.key(of: url)).heic"].sorted()
+            #expect(await eventually { Thumbs.files(cache) == left })
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func theCacheIsReadOffThePool() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            let summary = Thumbs.summary(url, in: dir), context = Thumbs.context(dir)
+            _ = try #require(await thumbnails.render(url, summary: summary, context: context))
+            // Where each read of the cache (and its HEIC's decoding) runs: the actor's dispatch queue.
+            let queues = Mutex<[String]>([])
+            await thumbnails.setHooks(.init(beforeReading: {
+                let label = String(cString: __dispatch_queue_get_label(nil))
+                queues.withLock { $0.append(label) }
+            }))
+            #expect(await thumbnails.cached(try LibraryThumbnails.key(of: url)) != nil)
+            #expect(await thumbnails.render(url, summary: summary, context: context) != nil)
+            #expect(queues.withLock { $0 } == ["dev.toma.Toma.LibraryThumbnails", "dev.toma.Toma.LibraryThumbnails"])
+            #expect(await thumbnails.renders == 1)
+            // A key that is not one reads nothing.
+            #expect(await thumbnails.cached("../../etc/passwd") == nil)
         }
     }
 
