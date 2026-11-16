@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import CoreMedia
 import Foundation
+import ImageIO
 import ProjectFormat
 import Recording
 import SyntheticCapture
@@ -111,14 +112,24 @@ public final class TakeBuilder {
     private var framesWritten: [String: Int] = [:]
     private var written = false
 
-    /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`: with an older one, the package
-    /// an earlier version of the app would have created, which keeps that version.
-    public init(in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion) throws {
+    /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`. With a version below 3, the
+    /// package an earlier version of the app would have created, which keeps that version: without `projectID` and
+    /// `upgradedFrom`, so its id is the derived one (`upgradedFrom` must be `nil`). From version 3, the `projectID` of
+    /// `ProjectPackage.create` and `upgradedFrom` as given: a package an edit upgraded from that version.
+    public init(
+        in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion,
+        upgradedFrom: Int? = nil
+    ) throws {
+        guard formatVersion >= 3 || upgradedFrom == nil else {
+            throw TestSupportError.failed("a package of version \(formatVersion) has no upgradedFrom")
+        }
         package = try ProjectPackage.create(in: directory, name: name, app: AppInfo(name: "Tests", version: "0"), now: Date())
-        if formatVersion != Manifest.currentFormatVersion {
+        if formatVersion != Manifest.currentFormatVersion || upgradedFrom != nil {
             // Written here: `ManifestStore` keeps the version a package was created with.
             var manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
             manifest.formatVersion = formatVersion
+            manifest.upgradedFrom = upgradedFrom
+            if formatVersion < 3 { manifest.projectID = nil }
             try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
         }
     }
@@ -200,6 +211,28 @@ public final class TakeBuilder {
         }
         events.append(InputEvent(t: start, kind: .segmentStarted(track: track, index: index)))
         try record(index: index, of: track, url: url, start: start, end: end ?? start, endReason: endReason)
+    }
+
+    /// Adds the cursor image `png` as the recorder saves one: written to `cursors/<hash>.png` now (unless that file is
+    /// there), with `hash` the recorder's `CursorImageHash` of the decoded image and this hotspot, and its `cursorImage`
+    /// event at `t`. `hotspot` is a fraction of the image from its top left and `size` is in points, as in the event.
+    /// Returns the hash. Throws if `png` is not an image.
+    @discardableResult
+    public func addCursorImage(
+        _ png: Data, hotspot: SIMD2<Double>, size: SIMD2<Double>, kind: CursorKind? = nil, at t: HostTime
+    ) throws -> String {
+        try checkNotWritten()
+        guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { throw TestSupportError.failed("the cursor image is not an image") }
+        let hash = CursorImageHash.hash(CursorSnapshot(image: image, pointSize: size, hotspot: hotspot * size, fingerprint: 0))
+        let url = package.cursorImageURL(take: takeID, hash: hash)
+        if !FileManager.default.fileExists(atPath: url.path) {
+            try FileManager.default.createDirectory(at: package.cursorsDirectory(take: takeID), withIntermediateDirectories: true)
+            try png.write(to: url, options: .withoutOverwriting)
+        }
+        events.append(InputEvent(t: t, kind: .cursorImage(hash: hash, hotspot: hotspot, size: size, kind: kind)))
+        return hash
     }
 
     /// Adds `events` to `events.jsonl`.

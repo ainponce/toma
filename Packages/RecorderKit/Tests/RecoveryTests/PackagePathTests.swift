@@ -174,6 +174,52 @@ private func expectNeedsRepair(_ results: [ScanResult], _ package: ProjectPackag
     }
 }
 
+/// The project id names the project's cache folder outside the package: one that is not 32 lowercase hex digits
+/// (`..` in it, empty, `.`) could put that folder anywhere, so the manifest is refused like one with a bad take ID.
+@Test func projectIDThatIsNotThirtyTwoHexDigitsIsRefused() async throws {
+    let empty = Manifest(formatVersion: 3, app: AppInfo(name: "Tests", version: "0"), createdAt: Date(timeIntervalSince1970: 0), takes: [])
+    for bad in ["../../x", "", ".", "..", "0123456789ABCDEF0123456789ABCDEF", "0123456789abcdef0123456789abcde", "a/0123456789abcdef0123456789abcd"] {
+        var manifest = empty
+        manifest.projectID = bad
+        #expect(throws: PackagePathError.invalidProjectID(bad)) { try manifest.validatePaths() }
+    }
+    var valid = empty
+    valid.projectID = "0123456789abcdef0123456789abcdef"
+    #expect(throws: Never.self) { try valid.validatePaths() }
+    // Version 1 and 2 have none: their id is the derived one.
+    for version in [1, 2] {
+        var legacy = empty
+        legacy.formatVersion = version
+        #expect(throws: Never.self) { try legacy.validatePaths() }
+    }
+
+    try await withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try addTake(makeTake(tracks: [micTrack([])]), to: package)
+        try ManifestStore(package: package).update { $0.projectID = "../../escape" }
+        let before = try Data(contentsOf: package.manifestURL)
+
+        expectNeedsRepair(RecoveryScanner.scan(directory: dir), package)
+        await #expect(throws: RecoveryError.invalidPath(.invalidProjectID("../../escape"))) {
+            try await TakeRecovery.recover(package: package, takeID: "take-001")
+        }
+        #expect(throws: LoadedProjectError.invalidPath(.invalidProjectID("../../escape"))) {
+            try LoadedProject.load(package.url)
+        }
+        #expect(try Data(contentsOf: package.manifestURL) == before)
+
+        // A package of version 1 or 2 opens without one, and a version 3 one with the id it was created with.
+        for version in [1, 2, 3] {
+            let builder = try TakeBuilder(in: dir, name: "v\(version)", formatVersion: version)
+            try await builder.addAudioTrack(id: "mic", source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 0.1)])
+            let project = try builder.write()
+            #expect(project.manifest.formatVersion == version)
+            #expect((project.manifest.projectID == nil) == (version < 3))
+            #expect(ProjectID.isValid(project.manifest.resolvedProjectID))
+        }
+    }
+}
+
 @Test func takeFolderTheManifestDoesNotListIsReported() async throws {
     try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)

@@ -26,23 +26,38 @@ public struct Rect: Codable, Equatable, Sendable {
 
 /// The contents of `manifest.json`: what was recorded and where it lives in the package.
 public struct Manifest: Codable, Equatable, Sendable {
-    /// The version new packages are created with. A package keeps the version it was created with: nothing
-    /// rewrites it (a version 1 package stays at version 1).
-    public static let currentFormatVersion = 2
+    /// The version new packages are created with. A package keeps the version it was created with until the user
+    /// edits it: recording and recovery never rewrite it (a version 1 package they touch stays at version 1), and the
+    /// first edit of a version 1 or 2 package upgrades it to version 3, with `upgradedFrom`.
+    public static let currentFormatVersion = 3
     /// The versions this version reads. A manifest of any other version is refused before it is decoded.
-    public static let supportedFormatVersions = 1...2
+    public static let supportedFormatVersions = 1...3
 
     public var formatVersion: Int
     public var app: AppInfo
     public var createdAt: Date
     public var takes: [TakeRecord]
+    /// The version (1 or 2) a version 3 package was created at, before its first edit upgraded it. `nil` in a package
+    /// created at version 3, and always in version 1 and 2 packages.
+    public var upgradedFrom: Int?
+    /// The project's stable id (`ProjectID`): random in a package created at version 3, the derived one in an upgraded
+    /// package. `nil` in version 1 and 2 packages, whose id is the derived one (`resolvedProjectID`).
+    public var projectID: String?
 
-    public init(formatVersion: Int, app: AppInfo, createdAt: Date, takes: [TakeRecord]) {
+    public init(
+        formatVersion: Int, app: AppInfo, createdAt: Date, takes: [TakeRecord], upgradedFrom: Int? = nil,
+        projectID: String? = nil
+    ) {
         self.formatVersion = formatVersion
         self.app = app
         self.createdAt = createdAt
         self.takes = takes
+        self.upgradedFrom = upgradedFrom
+        self.projectID = projectID
     }
+
+    /// The project's id: `projectID`, or the one derived from the manifest when it has none (version 1 and 2).
+    public var resolvedProjectID: String { projectID ?? ProjectID.derived(from: self) }
 }
 
 /// One recording session: every track recorded between Record and Stop.

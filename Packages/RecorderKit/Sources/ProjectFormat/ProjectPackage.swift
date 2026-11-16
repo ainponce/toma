@@ -8,10 +8,14 @@ import Foundation
 /// Name.toma/
 ///   manifest.json
 ///   edit.json
+///   edit-log.jsonl
+///   edit.lock
+///   assets/<sha>.<ext>
 ///   takes/<take>/<track>/seg-0001.mov
 ///   takes/<take>/events.jsonl
 ///   takes/<take>/recording.lock
 ///   takes/<take>/wallpapers/display-<id>.png
+///   takes/<take>/cursors/<hash>.png
 ///   cache/
 /// ```
 public struct ProjectPackage: Sendable, Hashable {
@@ -24,7 +28,7 @@ public struct ProjectPackage: Sendable, Hashable {
     }
 
     /// Creates `<directory>/<name>.toma` with `takes/`, `cache/` and an empty manifest of the current format
-    /// version (`Manifest.currentFormatVersion`), which the package keeps.
+    /// version (`Manifest.currentFormatVersion`) with a random `projectID`.
     ///
     /// `directory` must already exist. Throws `CocoaError(.fileWriteFileExists)` if the
     /// package already exists, leaving it untouched.
@@ -45,7 +49,8 @@ public struct ProjectPackage: Sendable, Hashable {
                 formatVersion: Manifest.currentFormatVersion,
                 app: app,
                 createdAt: now.roundedToWholeSeconds,
-                takes: []
+                takes: [],
+                projectID: ProjectID.random()
             )
             try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
             try DurableFile.syncDirectory(directory)
@@ -59,6 +64,12 @@ public struct ProjectPackage: Sendable, Hashable {
 
     public var manifestURL: URL { url.appendingPathComponent("manifest.json", isDirectory: false) }
     public var editURL: URL { url.appendingPathComponent("edit.json", isDirectory: false) }
+    /// `edit-log.jsonl`: the editor's log of changes (version 3).
+    public var editLogURL: URL { url.appendingPathComponent("edit-log.jsonl", isDirectory: false) }
+    /// `edit.lock`: held with `flock` by the editor that writes the package (version 3).
+    public var editLockURL: URL { url.appendingPathComponent("edit.lock", isDirectory: false) }
+    /// `assets/`: the images of the user's own backgrounds, copied into the package (version 3).
+    public var assetsURL: URL { url.appendingPathComponent("assets", isDirectory: true) }
     public var cacheURL: URL { url.appendingPathComponent("cache", isDirectory: true) }
     /// `takes/`, which holds one folder per take.
     public var takesURL: URL { url.appendingPathComponent("takes", isDirectory: true) }
@@ -88,6 +99,17 @@ public struct ProjectPackage: Sendable, Hashable {
     /// was when the take started.
     public func wallpapersDirectory(take: String) -> URL {
         takeDirectory(take).appendingPathComponent("wallpapers", isDirectory: true)
+    }
+
+    /// `takes/<take>/cursors/`: the images of the cursor the take recorded (version 3).
+    public func cursorsDirectory(take: String) -> URL {
+        takeDirectory(take).appendingPathComponent("cursors", isDirectory: true)
+    }
+
+    /// `takes/<take>/cursors/<hash>.png`: the image a `cursorImage` event with this `hash` names. `hash` is used as
+    /// given: whoever reads through it checks the name first.
+    public func cursorImageURL(take: String, hash: String) -> URL {
+        cursorsDirectory(take: take).appendingPathComponent("\(hash).png", isDirectory: false)
     }
 
     /// `takes/<take>/.reserve`: space the recorder holds while recording a take and frees to close it
