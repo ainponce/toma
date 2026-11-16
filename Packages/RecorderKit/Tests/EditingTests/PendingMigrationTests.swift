@@ -483,6 +483,44 @@ private enum Pending {
     }
 }
 
+@MainActor @Test func aLayoutCommandOnA1bProjectWritesTheMigrationWithIt() async throws {
+    try await withTemporaryDirectory { dir in
+        // The camera's layouts arrive with version 2: a 1b project still in version 1 on disk gets them at its first edit.
+        let url = try await DocumentV1Fixture.make(in: dir, steps: 3, snapshotAt: 3)
+        let caches = dir.appending(path: "Caches")
+        let session = try await Pending.open(url, Pending.context(caches: caches))
+        let map = TimeMap(sequence: session.document.sequence)
+        let add = try #require(LayoutCommands.add(session.document, kind: .split, at: 0, timeMap: map, makeID: { $0 + "0000000a" }))
+        #expect(session.perform(add) == .applied)
+        #expect(session.perform(try #require(LayoutCommands.setProjectLayout(session.document, .cameraOnly))) == .applied)
+        #expect(await session.flushed() == 7)
+        let read = try Pending.read(url)
+        #expect(read.createVersion == 1)
+        #expect(read.entries.count == 7)
+        #expect(read.entries.dropFirst(4).first == .migrate(seq: 5, from: 1, to: 2))
+        let labels = read.entries.suffix(2).compactMap { entry -> String? in
+            guard case let .do(_, _, label, _, _) = entry else { return nil }
+            return label
+        }
+        #expect(labels == ["layout.add", "camera.layout"])
+        let edited = session.document
+        await session.close()
+        #expect(try Pending.snapshotVersion(url) == 2)
+
+        // Reopened, from the snapshot and from the log alone: the block and the project's layout are there.
+        let again = try await Pending.open(url, Pending.context(caches: caches))
+        #expect(Pending.state(again.document) == Pending.state(edited))
+        #expect(Pending.state(try Pending.replay(url).document) == Pending.state(edited))
+        let block = try #require(again.document.camera.layouts.first)
+        #expect(again.document.camera.layouts.count == 1)
+        #expect((block.id, block.kind, block.split) == ("l-0000000a", .split, SplitLayout(side: .end)))
+        #expect(map.outputRange(ofSource: block.start..<block.end, take: block.take) == 0..<map.duration)
+        #expect(again.document.camera.layout == CameraLayout(kind: .cameraOnly))
+        #expect(again.undoLabel == .cameraLayout)
+        await again.close()
+    }
+}
+
 @MainActor @Test func undoReachesStepsFromBefore1c() async throws {
     try await withTemporaryDirectory { dir in
         // Three groups of 1b.

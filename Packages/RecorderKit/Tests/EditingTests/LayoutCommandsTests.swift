@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import Foundation
 import Testing
 // Not @testable: the app uses only the public API.
@@ -37,6 +38,13 @@ private enum LayoutFixture {
     static let custom = CameraStyle(shape: .roundedSquare, size: CameraStyle.large, anchor: .top)
 
     static let fullClip = [Clip(id: "c-00000001", take: takeID, start: base, end: at(20), speed: 1)]
+
+    /// The take in three clips, [0 s, 5 s), [5 s, 10 s) and [10 s, 20 s), the middle one `c-00000002`.
+    static let threeClips = [
+        Clip(id: "c-00000001", take: takeID, start: at(0), end: at(5), speed: 1),
+        Clip(id: "c-00000002", take: takeID, start: at(5), end: at(10), speed: 1),
+        Clip(id: "c-00000003", take: takeID, start: at(10), end: at(20), speed: 1),
+    ]
 
     static func document(_ blocks: [LayoutBlock] = [], sequence: [Clip] = fullClip) -> EditDocument {
         var document = EditDocument.legacy(take: take, events: [])
@@ -396,11 +404,7 @@ private enum LayoutFixture {
 }
 
 @Test func aBlockOverACutIsKept() throws {
-    let sequence = [
-        Clip(id: "c-00000001", take: LayoutFixture.takeID, start: LayoutFixture.at(0), end: LayoutFixture.at(5), speed: 1),
-        Clip(id: "c-00000002", take: LayoutFixture.takeID, start: LayoutFixture.at(5), end: LayoutFixture.at(10), speed: 1),
-        Clip(id: "c-00000003", take: LayoutFixture.takeID, start: LayoutFixture.at(10), end: LayoutFixture.at(20), speed: 1),
-    ]
+    let sequence = LayoutFixture.threeClips
     let inside = LayoutFixture.block("l-0000000a", from: 6, to: 8)
     let across = LayoutFixture.block("l-0000000b", from: 9, to: 12)
     let document = LayoutFixture.document([inside, across], sequence: sequence)
@@ -423,6 +427,100 @@ private enum LayoutFixture {
     #expect(LayoutCommands.block(atOutput: LayoutFixture.output(7), in: undone, timeMap: back) == inside)
     #expect(LayoutCommands.block(atOutput: LayoutFixture.output(11), in: undone, timeMap: back) == across)
     #expect(LayoutCommands.block(atOutput: LayoutFixture.output(8), in: undone, timeMap: back) == nil)
+}
+
+@Test func aBlockAcrossAClosedCutHoldsTheOneHiddenInIt() throws {
+    // As on the Zoom track (1c design §5.5), a block hidden whole in a cut takes no room on the track.
+    let hidden = LayoutFixture.block("l-0000000a", from: 6, to: 8, kind: .split, split: SplitLayout(side: .start))
+    let document = LayoutFixture.document([hidden], sequence: LayoutFixture.threeClips)
+    let cut = try SequenceCommands.delete(document, clipIDs: ["c-00000002"]).get()
+    let edited = try document.applying(cut.changes)
+    let step = try #require(LayoutFixture.add(edited, .bubble, from: 4, to: 6))
+    let across = try LayoutFixture.applying(step, to: edited)
+    let added = try LayoutFixture.block(step.target, in: across)
+    // The new block goes across the closed cut, over the source of the hidden one, which stays in the document.
+    #expect(LayoutFixture.spans(across) == [4...11, 6...8])
+    #expect(across.camera.layouts.last == hidden)
+
+    // With the stretch back, both cover [6 s, 8 s): the one that starts first, the new one, rules over all of its own,
+    // in the commands as in the preview, and the hidden one shows nothing until the new one goes.
+    let recovered = try across.applying(cut.changes.reversed().map(\.inverse))
+    #expect(recovered.camera.layouts == [added, hidden])
+    let map = LayoutFixture.timeMap(recovered)
+    for seconds in [4.0, 5.5, 6.0, 7.0, 7.99, 10.99] {
+        #expect(LayoutCommands.block(atOutput: LayoutFixture.output(seconds), in: recovered, timeMap: map) == added, "at \(seconds) s")
+    }
+    #expect(LayoutCommands.block(atOutput: LayoutFixture.output(11), in: recovered, timeMap: map) == nil)
+    let timeline = LayoutTimeline(document: recovered, take: LayoutFixture.take, timeMap: map, cameraReadable: true)
+    #expect(timeline.spans.compactMap(\.blockID) == [added.id])
+    // The recorded change at 3 s, the clips' edges and the new block's: nothing of the hidden one.
+    #expect(EditPoints(document: recovered, timeMap: map, markers: []).all == [0, 3, 4, 5, 10, 11, 20].map(LayoutFixture.output))
+    let alone = try LayoutFixture.applying(try #require(LayoutCommands.delete(recovered, ids: [added.id])), to: recovered)
+    #expect(LayoutCommands.block(atOutput: LayoutFixture.output(7), in: alone, timeMap: map) == hidden)
+}
+
+@Test func atThreeTimesBlocksTouchAndKeepTheirLength() throws {
+    // At 3×, a block's end goes back to the source 1 ns short of where it was placed (plan 1c decision 9): next to
+    // another block or at the end of the output it touches them, as the preview shows it, and a move keeps its length.
+    var document = LayoutFixture.document(sequence: [
+        Clip(id: "c-00000001", take: LayoutFixture.takeID, start: LayoutFixture.base, end: LayoutFixture.at(20), speed: 3)
+    ])
+    let map = LayoutFixture.timeMap(document)
+    let end = map.duration
+    func add(_ step: EditStep?) throws -> LayoutBlock {
+        let step = try #require(step)
+        document = try LayoutFixture.applying(step, to: document)
+        return try LayoutFixture.block(step.target, in: document)
+    }
+    func shown(_ block: LayoutBlock) -> Range<Int64>? { map.outputRange(ofSource: block.start..<block.end, take: block.take) }
+    let a = try add(LayoutFixture.add(document, .cameraFull, from: 1, to: 2))
+    #expect(shown(a) == LayoutFixture.output(1)..<(LayoutFixture.output(2) - 1))
+    let b = try add(LayoutFixture.add(document, .split, from: 2, to: 3))
+    let c = try add(LayoutFixture.add(document, .bubble, at: 6))
+    #expect(shown(c)?.upperBound == end - 1)
+
+    // The last nanosecond of `a` is `a`'s, and that of `c` is `c`'s; `b` ends 1 ns short, where the preview ends it.
+    let timeline = LayoutTimeline(document: document, take: LayoutFixture.take, timeMap: map, cameraReadable: true)
+    let instants = [1, 2, 3].flatMap { [LayoutFixture.output(Double($0)) - 1, LayoutFixture.output(Double($0))] } + [end - 1]
+    for τ in instants {
+        #expect(LayoutCommands.block(atOutput: τ, in: document, timeMap: map)?.id == timeline.span(atOutput: τ).blockID, "at \(τ)")
+    }
+    #expect(LayoutCommands.block(atOutput: LayoutFixture.output(2) - 1, in: document, timeMap: map) == a)
+    #expect(LayoutCommands.block(atOutput: end - 1, in: document, timeMap: map) == c)
+    #expect(LayoutCommands.block(atOutput: LayoutFixture.output(3) - 1, in: document, timeMap: map) == nil)
+    // ↑ and ↓ stop once where two blocks touch, and at the end; the recorded change at 3 s of source is at 1 s.
+    let points = EditPoints(document: document, timeMap: map, markers: []).all
+    #expect(points == [0, LayoutFixture.output(1), LayoutFixture.output(2), LayoutFixture.output(3) - 1, LayoutFixture.output(6), end])
+
+    // Moved again and again, `b` keeps the second it was placed with: 3 s of source, less the 2 ns of decision 9.
+    for seconds in [4.0, 3.5, 2.25] {
+        let current = try LayoutFixture.block(b.id, in: document)
+        let step = try #require(LayoutCommands.move(document, id: b.id, toOutputStart: LayoutFixture.output(seconds), timeMap: map))
+        document = try LayoutFixture.applying(step, to: document)
+        let moved = try LayoutFixture.block(b.id, in: document)
+        #expect(moved.end.nanoseconds - moved.start.nanoseconds == current.end.nanoseconds - current.start.nanoseconds)
+        #expect(moved.end.nanoseconds - moved.start.nanoseconds == 2_999_999_998)
+        #expect(shown(moved) == LayoutFixture.output(seconds)..<(LayoutFixture.output(seconds + 1) - 1))
+    }
+}
+
+@Test func aHiddenBlockBecomingABubbleCopiesTheStyleAtItsSourceStart() throws {
+    // Hidden whole in a cut, a block has no output start: the style is the take's initial one with its changes up to the
+    // block's source start, the design's definition, a change inside the cut too.
+    var document = LayoutFixture.document(
+        [LayoutFixture.block("l-0000000a", from: 6, to: 6.8), LayoutFixture.block("l-0000000b", from: 7.5, to: 9)],
+        sequence: LayoutFixture.threeClips)
+    document.camera.changes.append(
+        CameraChange(id: "k-00000002", take: LayoutFixture.takeID, t: LayoutFixture.at(7), style: LayoutFixture.custom, origin: .user))
+    document = try document.applying(try SequenceCommands.delete(document, clipIDs: ["c-00000002"]).get().changes)
+    let map = LayoutFixture.timeMap(document)
+    #expect(LayoutCommands.block(atOutput: LayoutFixture.output(5), in: document, timeMap: map) == nil)
+    func bubble(_ id: String) throws -> BubbleLayout? {
+        let step = try #require(LayoutCommands.setKind(document, id: id, .bubble, timeMap: map))
+        return try LayoutFixture.block(id, in: try LayoutFixture.applying(step, to: document)).bubble
+    }
+    #expect(try bubble("l-0000000a") == BubbleLayout(style: LayoutFixture.recorded))
+    #expect(try bubble("l-0000000b") == BubbleLayout(style: LayoutFixture.custom))
 }
 
 @Test func layoutLabelsAreTheDesignOnes() {

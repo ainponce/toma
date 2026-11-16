@@ -30,21 +30,20 @@ public enum ZoomCommands {
     /// `makeID("z-")`: at the project's depth (`zoom.auto.depth`), following the cursor, moving with the spring. Over
     /// several free parts, the longest (the first of those as long); `nil` if none lasts `minimumDuration`.
     public static func add(_ doc: EditDocument, output: Range<Int64>, makeID: (String) -> String) -> EditStep? {
-        let track = ZoomTrack(doc)
-        let parts = track.free(output).filter { $0.upperBound - $0.lowerBound >= minimumDuration }
-        guard let part = parts.max(by: { $0.upperBound - $0.lowerBound < $1.upperBound - $1.lowerBound }) else { return nil }
-        return track.insert(part, makeID: makeID)
+        let track = track(doc)
+        guard let part = track.longestFree(in: output, atLeast: minimumDuration) else { return nil }
+        return insert(doc, track, part, makeID: makeID)
     }
 
     /// Makes a block of `defaultDuration` centred on output instant `at`, as `add` does, but only in the free space
     /// around `at`: `nil` on a block, or with less than `minimumDuration` free there.
     public static func addCentered(_ doc: EditDocument, at: Int64, makeID: (String) -> String) -> EditStep? {
-        let track = ZoomTrack(doc)
+        let track = track(doc)
         let half = defaultDuration / 2
         let around = track.free(at.subtractingSaturating(half)..<at.addingSaturating(defaultDuration - half))
         guard let part = around.first(where: { $0.contains(at) }), part.upperBound - part.lowerBound >= minimumDuration
         else { return nil }
-        return track.insert(part, makeID: makeID)
+        return insert(doc, track, part, makeID: makeID)
     }
 
     /// Moves block `id` so its output range starts at `toOutputStart`, as long as it is in the output: it stops at the
@@ -54,12 +53,9 @@ public enum ZoomCommands {
     /// fills that place again, even with other settings or once the moved block is deleted. The step's target is the
     /// block's id after the move. `nil` if it stays where it is, if there is no such block or it shows nothing.
     public static func move(_ doc: EditDocument, id: String, toOutputStart: Int64, makeID: (String) -> String) -> EditStep? {
-        let track = ZoomTrack(doc)
-        guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }), let current = track.outputs[k] else { return nil }
-        let room = track.room(around: k)
-        let length = current.upperBound - current.lowerBound
-        let start = min(max(toOutputStart, room.lowerBound), max(room.upperBound - length, room.lowerBound))
-        guard start != current.lowerBound, let source = track.source(of: start..<(start + length)) else { return nil }
+        guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }),
+            let source = track(doc).moved(k, toOutputStart: toOutputStart)
+        else { return nil }
         let old = doc.zoom.regions[k]
         var region = old
         (region.take, region.start, region.end) = (source.take, source.start, source.end)
@@ -81,25 +77,11 @@ public enum ZoomCommands {
     /// output, and leaves the block at least `minimumDuration` long (a shorter one only grows). The other edge keeps its
     /// source instant. `nil` if the edge stays where it is, if there is no such block or it shows nothing.
     public static func trim(_ doc: EditDocument, id: String, edge: ClipEdge, toOutput: Int64) -> EditStep? {
-        let track = ZoomTrack(doc)
-        guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }), let current = track.outputs[k] else { return nil }
-        let room = track.room(around: k)
+        guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }) else { return nil }
         var region = doc.zoom.regions[k]
-        switch edge {
-        case .start:
-            let latest = max(current.upperBound - minimumDuration, current.lowerBound)
-            let lower = min(max(toOutput, room.lowerBound), latest)
-            guard lower != current.lowerBound, let shown = track.map.source(atOutput: lower),
-                doc.sequence[shown.clip].take == region.take
-            else { return nil }
-            region.start = shown.source
-        case .end:
-            let earliest = min(current.lowerBound + minimumDuration, current.upperBound)
-            let upper = max(min(toOutput, room.upperBound), earliest)
-            guard upper != current.upperBound, let end = track.sourceEnd(of: upper, take: region.take) else { return nil }
-            region.end = end
-        }
-        guard region.start < region.end else { return nil }
+        let range = SourceRange(take: region.take, start: region.start, end: region.end)
+        guard let trimmed = track(doc).trimmed(k, range, edge: edge, toOutput: toOutput, minimum: minimumDuration) else { return nil }
+        (region.start, region.end) = (trimmed.start, trimmed.end)
         return touched(doc, k, region, label: .zoomChange)
     }
 
@@ -220,81 +202,24 @@ public enum ZoomCommands {
         changes.replace(old, with: region, in: .zoomRegions, id: old.id)
         return changes.step(label: label, target: old.id)
     }
-}
 
-/// The blocks of a document on the Zoom track: where the output shows each one.
-private struct ZoomTrack {
-    let doc: EditDocument
-    let map: TimeMap
-    /// The output range of each of `zoom.regions`, in order; `nil` for one that shows nothing.
-    let outputs: [Range<Int64>?]
-
-    init(_ doc: EditDocument) {
-        self.doc = doc
+    /// The blocks of `doc` on the Zoom track: each where the output shows it, with the cuts inside it closed.
+    private static func track(_ doc: EditDocument) -> OutputBlockTrack {
         let map = TimeMap(sequence: doc.sequence)
-        self.map = map
-        outputs = doc.zoom.regions.map { region in
-            guard region.start < region.end, let range = map.outputRange(ofSource: region.start..<region.end, take: region.take),
-                !range.isEmpty
-            else { return nil }
-            return range
-        }
-    }
-
-    /// What is left of `range`, clamped to the output, free of every block, in order.
-    func free(_ range: Range<Int64>) -> [Range<Int64>] {
-        let lower = max(range.lowerBound, 0), upper = min(range.upperBound, map.duration)
-        guard lower < upper else { return [] }
-        var parts = [lower..<upper]
-        for case let taken? in outputs {
-            parts = parts.flatMap { part -> [Range<Int64>] in
-                guard part.overlaps(taken) else { return [part] }
-                return [part.lowerBound..<max(part.lowerBound, taken.lowerBound), min(part.upperBound, taken.upperBound)..<part.upperBound]
-                    .filter { !$0.isEmpty }
-            }
-        }
-        return parts
-    }
-
-    /// Where block `k` can go: from the end of the block before it (or 0) to the start of the one after it (or the end
-    /// of the output). A block over it (in a document edited by hand) is no limit.
-    func room(around k: Int) -> Range<Int64> {
-        guard let current = outputs[k] else { return 0..<map.duration }
-        var (lower, upper) = (Int64(0), map.duration)
-        for (j, other) in outputs.enumerated() where j != k {
-            guard let other else { continue }
-            if other.upperBound <= current.lowerBound { lower = max(lower, other.upperBound) }
-            if other.lowerBound >= current.upperBound { upper = min(upper, other.lowerBound) }
-        }
-        return lower..<max(lower, upper)
-    }
-
-    /// The source range of `output` (plan decision 16), of the take shown at both its ends; `nil` if they are not of one
-    /// take.
-    func source(of output: Range<Int64>) -> (take: String, start: HostTime, end: HostTime)? {
-        guard !output.isEmpty, let first = map.source(atOutput: output.lowerBound) else { return nil }
-        let take = doc.sequence[first.clip].take
-        guard let end = sourceEnd(of: output.upperBound, take: take), first.source < end else { return nil }
-        return (take, first.source, end)
-    }
-
-    /// The source end of a block of `take` whose output ends at `upper`: the source of `upper − 1` and 1 ns, but never past
-    /// the source shown at `upper` in the same clip; `nil` if `upper − 1` is not in a clip of `take`.
-    func sourceEnd(of upper: Int64, take: String) -> HostTime? {
-        guard upper > 0, let last = map.source(atOutput: upper - 1), doc.sequence[last.clip].take == take else { return nil }
-        var end = HostTime(nanoseconds: last.source.nanoseconds + 1)
-        if upper < map.duration, let next = map.source(atOutput: upper), next.clip == last.clip { end = min(end, next.source) }
-        return end
+        let ranges = doc.zoom.regions.map { SourceRange(take: $0.take, start: $0.start, end: $0.end) }
+        return OutputBlockTrack(sequence: doc.sequence, map: map, outputs: OutputBlockTrack.outputs(of: ranges, in: map))
     }
 
     /// The step that makes a block of the user's over `output`.
-    func insert(_ output: Range<Int64>, makeID: (String) -> String) -> EditStep? {
-        guard let source = source(of: output) else { return nil }
+    private static func insert(
+        _ doc: EditDocument, _ track: OutputBlockTrack, _ output: Range<Int64>, makeID: (String) -> String
+    ) -> EditStep? {
+        guard let source = track.source(of: output) else { return nil }
         var ids = Set(doc.zoom.regions.map(\.id))
         let region = ZoomRegion(
             id: DocumentIDs.new("z-", makeID, avoiding: &ids), take: source.take, start: source.start, end: source.end,
-            origin: .user, depth: min(max(doc.zoom.auto.depth, ZoomCommands.depthRange.lowerBound), ZoomCommands.depthRange.upperBound),
-            focus: .follow, instant: false)
+            origin: .user, depth: min(max(doc.zoom.auto.depth, depthRange.lowerBound), depthRange.upperBound), focus: .follow,
+            instant: false)
         let index = doc.zoom.regions.firstIndex { $0.start > region.start } ?? doc.zoom.regions.count
         var changes = DocumentChanges()
         changes.insert(region, into: .zoomRegions, at: index)
