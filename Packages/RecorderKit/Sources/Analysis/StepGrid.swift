@@ -81,6 +81,18 @@ public enum StepGrid {
         return 2 * remainder >= nanosecondsPerSecond ? quotient + 1 : quotient
     }
 
+    /// How many of a path's first checkpoints an edit leaves as they were when it can change what the path reads from
+    /// step `s` on (design §8.6): those on the steps before `s − rate`. A checkpoint is the state on its step, which
+    /// reads the inputs up to that step's output time and the cursor's ahead of it: its landing on a click
+    /// `CursorPath.landingLead` (0.5 s) ahead and its interpolation toward a raw position up to 50 ms ahead. The second
+    /// back leaves room for those and for a clip end's rounding, so a path rebuilt from there starts earlier than it has
+    /// to, never later.
+    static func checkpointsKept(changingFrom s: Int) -> Int {
+        let (first, overflow) = s.subtractingReportingOverflow(rate)
+        guard !overflow, first > 0 else { return 0 }
+        return (first - 1) / checkpointEvery + 1
+    }
+
     /// The first step from 0 on whose `outputTime(ofStep:)` is at or after `τ`.
     static func firstStep(atOrAfter τ: Int64) -> Int {
         guard τ > 0 else { return 0 }

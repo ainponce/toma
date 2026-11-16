@@ -46,11 +46,29 @@ public struct CardZoomPath: Sendable {
 
     /// `nil` when neither the project's layout nor any block is a split.
     public init?(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
-        guard document.camera.layout.kind == .split || document.camera.layouts.contains(where: { $0.kind == .split }) else {
-            return nil
-        }
+        guard Self.hasSplit(document) else { return nil }
         simulation = ZoomSimulation(
             document: document, timeMap: timeMap, cursor: cursor, take: take, viewport: CardViewport(stage: stage))
+    }
+
+    /// The card's camera of the same take after an edit (`MotionPaths.init(take:events:document:after:)`): bit for bit
+    /// `init(document:timeMap:stage:cursor:take:)`'s. With `old`, its checkpoints before the first step the edit can
+    /// change, `changed` (what the camera reads besides its blocks and spring: the time map, the stage and the cursor;
+    /// `nil`, none of them changes; the layouts only decide whether there is a card's camera) or that of its first
+    /// block or spring that differs; without one, simulated from output 0.
+    init?(
+        document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
+        after old: CardZoomPath?, changedFrom changed: Int?
+    ) {
+        guard Self.hasSplit(document) else { return nil }
+        simulation = ZoomSimulation(
+            document: document, timeMap: timeMap, cursor: cursor, take: take, viewport: CardViewport(stage: stage),
+            after: old?.simulation, changedFrom: changed)
+    }
+
+    /// Whether the project's layout or a block is a split.
+    private static func hasSplit(_ document: EditDocument) -> Bool {
+        document.camera.layout.kind == .split || document.camera.layouts.contains(where: { $0.kind == .split })
     }
 
     /// The camera on step `s` of the grid (held to the steps of the output), placed.
@@ -103,6 +121,12 @@ public struct CardZoomPath: Sendable {
     func stateSimulatedFromStart(atStep s: Int) -> CardZoomState {
         CardZoomState(simulation.stateSimulatedFromStart(atStep: s))
     }
+
+    /// The camera on every `StepGrid.checkpointEvery`-th step.
+    var checkpoints: [Camera] { simulation.checkpoints }
+
+    /// The steps simulated to build `checkpoints`.
+    var simulatedSteps: Int { simulation.simulatedSteps }
 }
 
 extension CardZoomState {
