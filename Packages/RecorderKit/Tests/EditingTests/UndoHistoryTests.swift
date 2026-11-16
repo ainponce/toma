@@ -94,6 +94,7 @@ private func perform(_ step: EditStep, after seconds: Double, in history: inout 
 }
 
 @Test func migrateCutsTheHistory() {
+    // A migrate that does not follow (`DocumentMigration.follows`): from 1, after a create of the current version.
     var history = UndoHistory(entries: [
         SmallDocument.create, doLine(2, group: 2), doLine(3, group: 3), .undo(seq: 4, group: 3), .migrate(seq: 5, from: 1, to: 2),
     ])

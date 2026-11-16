@@ -254,15 +254,17 @@ private enum SmallDocument {
         try Data((newer + "\n").utf8).write(to: url)
         #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogReader.read(url) }
 
-        // The same for a `migrate` to a newer documentVersion; one to this app's is a line like any other.
+        // The same for a `migrate` to a newer documentVersion; one to this app's is a line like any other (followed by
+        // one: a `migrate` the entries end with is a first edit cut short, left out).
         let padding = try doLine(2, group: 2, try set("/style/padding", 0.08, 0.1)).jsonLine()
+        let undo = try EditLogEntry.undo(seq: 4, group: 2).jsonLine()
         for (to, refused) in [(3, true), (2, false)] {
             let migrate = try EditLogEntry.migrate(seq: 3, from: 2, to: to).jsonLine()
-            try Data([line, padding, migrate].map { $0 + "\n" }.joined().utf8).write(to: url)
+            try Data([line, padding, migrate, undo].map { $0 + "\n" }.joined().utf8).write(to: url)
             if refused {
                 #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogReader.read(url) }
             } else {
-                #expect(try EditLogReader.read(url).entries.count == 3)
+                #expect(try EditLogReader.read(url).entries.count == 4)
             }
         }
     }
@@ -426,7 +428,7 @@ private enum SmallDocument {
         ("a do of a group that is undone",
          [create, padding, .undo(seq: 3, group: 2), doLine(4, group: 2, try set("/style/shadow", 0.6, 0.1))], at(3, start), 4),
         ("a second create", [create, padding, .create(seq: 3, document: start, app: app)], at(2, padded), 3),
-        // documentVersion 1 has no migrations: every migrate names a version this app does not know.
+        // A migrate that does not follow (`DocumentMigration.follows`): from 1, after a create of version 2.
         ("a migrate", [create, padding, .migrate(seq: 3, from: 1, to: 2)], at(2, padded), 3),
     ]
     for (name, entries, document, mismatch) in cases {
@@ -436,7 +438,7 @@ private enum SmallDocument {
         #expect(replayed.lastAppliedSeq == document.logSequence, "\(name)")
     }
 
-    // Nothing before a migrate can be undone, even from a snapshot taken after it.
+    // Nothing before a migrate that does not follow can be undone, even from a snapshot taken after it.
     let migrated = [create, padding, .migrate(seq: 3, from: 1, to: 1), .undo(seq: 4, group: 2)]
     let afterMigrate = try replay(migrated, from: at(3, padded))
     #expect(afterMigrate.document == at(3, padded))

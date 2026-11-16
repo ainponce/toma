@@ -213,7 +213,7 @@ private func seqsGrow(_ entries: [EditLogEntry]) -> Bool {
          [SmallDocument.create, padding, shadow, doLine(4, group: 2, try set("/style/padding", 0.1, 0.2))]),
         ("a do of a group after its undo",
          [SmallDocument.create, padding, .undo(seq: 3, group: 2), doLine(4, group: 2, try set("/style/padding", 0.08, 0.2))]),
-        ("a migrate", [SmallDocument.create, padding, .migrate(seq: 3, from: 1, to: 1), shadow.renumbered(4)]),
+        ("a migrate that does not follow", [SmallDocument.create, padding, .migrate(seq: 3, from: 1, to: 1), shadow.renumbered(4)]),
         ("a second create", [SmallDocument.create, padding, SmallDocument.create.renumbered(3)]),
     ]
     for (name, entries) in logs {

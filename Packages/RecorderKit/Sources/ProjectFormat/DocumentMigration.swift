@@ -46,13 +46,25 @@ public enum DocumentMigration {
         version == 1
     }
 
-    /// Whether `change`, a line written before the migration from `version`, writes a place the migration adds or one that
-    /// holds one (the whole document, `camera`, or anything under one of `addedCameraFields`): then it does not commute
-    /// with the migration. Always `true` for a migration that is not additive, with which nothing is known to commute.
+    /// Whether a `migrate` line from `from` to `to`, where the document is at `version`, is one the edit log goes through
+    /// (1c design §13.2): to the next version, from the one the document is at, by an additive migration. The replay
+    /// applies it there and goes on, and the undo history and the compaction keep the groups before it, unless a line
+    /// before it `touchesAddedFields`. Any other `migrate` stops the replay and cuts the history, as every one did in 1b:
+    /// one to the version the document is already at (`from: 1, to: 1`), one from a version it is not at (a `create` of
+    /// version 2 followed by a `migrate` from 1) and one this app has no additive migration for.
+    public static func follows(from: Int, to: Int, atVersion version: Int) -> Bool {
+        to == from + 1 && from == version && isAdditive(from: from)
+    }
+
+    /// Whether `change`, a line written before the migration from `version`, writes a place the migration reads or adds,
+    /// or one that holds one (the whole document, `documentVersion`, `camera`, or anything under one of
+    /// `addedCameraFields`): then it does not commute with the migration. Always `true` for a migration that is not
+    /// additive, with which nothing is known to commute.
     public static func touchesAddedFields(_ change: EditChange, from version: Int) -> Bool {
         guard isAdditive(from: version) else { return true }
         let components = change.place.components
         guard let first = components.first else { return true }
+        if first == "documentVersion" { return true }
         guard first == "camera" else { return false }
         return components.count == 1 || addedCameraFields.contains(components[1])
     }
@@ -72,6 +84,47 @@ public enum DocumentMigration {
         document["camera"] = .object(camera)
         document["documentVersion"] = .integer(1)
         return .object(document)
+    }
+}
+
+extension DocumentMigration {
+    /// The `documentVersion` of a document along the lines of its edit log, and what each `migrate` does to the history
+    /// before it (1c design §13.2). The replay, `UndoHistory` and `LogCompaction` all walk a log with it, so a group the
+    /// history keeps across a `migrate` is one the replay can undo there, and one it cuts is one the replay refuses.
+    public struct LogWalk: Equatable, Sendable {
+        /// The version the document is at after the lines walked: the `create`'s, raised by each `migrate` that follows.
+        public private(set) var version: Int
+        /// The `from` of each migration some `do` line walked writes inside of (`touchesAddedFields`).
+        private var touched: Set<Int> = []
+
+        /// A log whose `create` holds a document written in `createVersion`.
+        public init(createVersion: Int) {
+            version = createVersion
+        }
+
+        /// Whether a `migrate` from `from` to `to` follows where the walk is (`follows(from:to:atVersion:)`).
+        public func follows(from: Int, to: Int) -> Bool {
+            DocumentMigration.follows(from: from, to: to, atVersion: version)
+        }
+
+        /// Walks a `do` line, whatever its group: the migrations still ahead of it that one of its `changes` does not
+        /// commute with are noted, for each `migrate` to come.
+        public mutating func walkDo(_ changes: [EditChange]) {
+            for from in stride(from: version, to: EditDocument.currentVersion, by: 1) where !touched.contains(from) {
+                if changes.contains(where: { touchesAddedFields($0, from: from) }) {
+                    touched.insert(from)
+                }
+            }
+        }
+
+        /// Walks a `migrate` line and says whether the groups before it are kept: it follows, and no `do` line before it
+        /// writes inside of what it adds. One that follows takes `version` to `to` either way (the replay migrates there
+        /// and goes on); one that does not leaves it, since the replay stops there.
+        public mutating func walkMigrate(from: Int, to: Int) -> Bool {
+            guard follows(from: from, to: to) else { return false }
+            version = to
+            return !touched.contains(from)
+        }
     }
 }
 
