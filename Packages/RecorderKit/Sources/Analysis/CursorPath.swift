@@ -468,3 +468,66 @@ extension CursorPath.Motion {
         while simulation.step < s { advance(&simulation) }
     }
 }
+
+extension CursorPath {
+    /// The cursor over a short span of output time, from one simulation (the motion blur's subsamples, design §7.5):
+    /// `sample(atOutput:)` with the same bits at every time of the span, without simulating from a checkpoint for each.
+    public struct Span: Sendable {
+        private let path: CursorPath
+        /// The first step kept.
+        private let first: Int
+        /// The state on each step from `first` on; none with `off`, which simulates nothing.
+        private let states: [State?]
+
+        fileprivate init(path: CursorPath, first: Int, states: [State?]) {
+            self.path = path
+            self.first = first
+            self.states = states
+        }
+
+        /// `sample(atOutput: τ)`: from the steps kept for a time of the span, worked out on its own otherwise.
+        public func sample(atOutput τ: Int64) -> CursorSample? {
+            guard let motion = path.motion else { return path.sample(atOutput: τ) }
+            let (step, fraction) = StepGrid.position(ofOutput: τ)
+            guard let firstStep = motion.firstStep, step >= 0, motion.clamped(step) >= firstStep else { return nil }
+            let s = motion.clamped(step), next = motion.clamped(step + 1)
+            guard case let .some(kept) = state(atStep: s), case let .some(following) = state(atStep: next) else {
+                return path.sample(atOutput: τ)
+            }
+            guard let before = kept else { return nil }
+            let a = path.sample(before, atStep: s)
+            guard fraction > 0 else { return a }
+            // Once started, the cursor never stops.
+            let b = path.sample(next > s ? following ?? before : before, atStep: next)
+            return CursorSample(
+                position: a.position + (b.position - a.position) * fraction,
+                opacity: a.opacity + (b.opacity - a.opacity) * fraction,
+                clickScale: a.clickScale + (b.clickScale - a.clickScale) * fraction,
+                pressed: a.pressed)
+        }
+
+        /// The state kept on step `s` (`nil` before the cursor starts); `.none` out of the span.
+        private func state(atStep s: Int) -> State?? {
+            let index = s - first
+            return states.indices.contains(index) ? .some(states[index]) : .none
+        }
+    }
+
+    /// The cursor from the step of `start` to the one after the step of `end` (held to the output's steps), simulated
+    /// once from the checkpoint before them, every step kept: for spans of a few frames. With `off`, nothing is
+    /// simulated.
+    public func span(from start: Int64, through end: Int64) -> Span {
+        guard let motion else { return Span(path: self, first: 0, states: []) }
+        let low = motion.clamped(StepGrid.position(ofOutput: min(start, end)).step)
+        let high = motion.clamped(StepGrid.position(ofOutput: max(start, end)).step + 1)
+        var simulation = motion.simulation(from: low)
+        motion.advance(&simulation, to: low)
+        var states = [simulation.state]
+        states.reserveCapacity(high - low + 1)
+        while simulation.step < high {
+            motion.advance(&simulation, to: simulation.step + 1)
+            states.append(simulation.state)
+        }
+        return Span(path: self, first: low, states: states)
+    }
+}

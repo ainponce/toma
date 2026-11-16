@@ -43,7 +43,10 @@ public enum RenderError: Error, Equatable {
 /// way, once. A window frame's title is drawn by CoreText the first time it is shown (`TitleTexture`), and reused the
 /// same way. So is a cursor's image: each of Toma's cursors is drawn, and each image the take recorded read and uploaded,
 /// the first time a frame shows it (`CursorImages`), and reused. A screen sampled with mipmaps (`ScreenLayer.mipmapped`)
-/// is not: every frame copies the part shown of its decoded frame and makes its mipmaps on the GPU (`Compositor`).
+/// is not: every frame copies the part shown of its decoded frame and makes its mipmaps on the GPU (`Compositor`). A
+/// sharp wallpaper is drawn by its shader, except under the zoom camera's motion blur: there, its mesh gradient is drawn
+/// once into a texture of the output's size (`BackgroundImages`, like a blurred one's) and each subsample reads it,
+/// rather than working it out again up to 16 times over the whole output.
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
@@ -99,11 +102,17 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps.
-    /// - Parameter device: the system default device when `nil`.
+    /// - Parameters:
+    ///   - device: the system default device when `nil`.
+    ///   - frameRate: the frames per second the output is drawn at, whose frame the motion blur's shutters are
+    ///     fractions of (`FrameEvaluator`); the document's when `nil`.
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
     ///   errors of `Compositor.init` and `CursorSprite.makeTexture`. Builds the document's motion paths
     ///   (`MotionPaths`).
-    public init(project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil) throws {
+    public init(
+        project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil,
+        frameRate: Int? = nil
+    ) throws {
         guard outputSize.x > 0, outputSize.y > 0 else { throw RenderError.invalidOutputSize(outputSize) }
         guard let device = device ?? MTLCreateSystemDefaultDevice() else { throw RenderError.noMetalDevice }
         guard let commandQueue = device.makeCommandQueue() else {
@@ -125,7 +134,8 @@ public final class FrameRenderer: @unchecked Sendable {
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
         titleTexture = TitleTexture(device: device)
         cursorImages = try CursorImages(device: device, package: project.package, take: project.take.id)
-        evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: outputSize)
+        evaluator = FrameEvaluator(
+            take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate)
         package = project.package
         take = project.take
     }
@@ -141,20 +151,32 @@ public final class FrameRenderer: @unchecked Sendable {
             let frame = try evaluator.frame(at: outputTime) { try cursorImages.isReadable($0) }
             let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
-            let backgroundImage: (any MTLTexture)?
-            switch frame.background {
-            case let .image(image):
-                backgroundImage = try backgroundImages.texture(for: image, outputSize: outputSize)
-            case let .wallpaper(preset, sigma) where sigma.isFinite && sigma > 0:
-                backgroundImage = try backgroundImages.texture(forWallpaper: preset, blurSigma: sigma, outputSize: outputSize)
-            default:
-                backgroundImage = nil
-            }
+            let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: outputSize)
             let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0) }
-            let cursor = try cursorImages.texture(for: frame.cursor?.image ?? .toma(.arrow))
+            // Every cursor of the frame, blurred or not, is drawn with the image of its time.
+            let image = frame.cursor?.image ?? frame.subframes.lazy.compactMap(\.cursor).first?.image ?? frame.cursorSamples.first?.image
+            let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))
             try compositor.encode(
                 frame, screen: screen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
                 windowTitle: windowTitle, into: target, commandBuffer: commandBuffer)
+        }
+    }
+
+    /// The texture `frame`'s background is drawn with (`Compositor.encode`'s `backgroundImage`), from `images`, for
+    /// frames `outputSize` big: an image's; a blurred wallpaper's mesh gradient, blurred; a sharp wallpaper's mesh
+    /// gradient under the zoom camera's motion blur (`RenderFrame.subframes`), which the subsamples read; none otherwise.
+    static func backgroundTexture(
+        of frame: RenderFrame, images: BackgroundImages, outputSize: SIMD2<Int>
+    ) throws -> (any MTLTexture)? {
+        switch frame.background {
+        case let .image(image):
+            return try images.texture(for: image, outputSize: outputSize)
+        case let .wallpaper(preset, sigma) where sigma.isFinite && sigma > 0:
+            return try images.texture(forWallpaper: preset, blurSigma: sigma, outputSize: outputSize)
+        case let .wallpaper(preset, _) where !frame.subframes.isEmpty:
+            return try images.texture(forWallpaper: preset, blurSigma: 0, outputSize: outputSize)
+        default:
+            return nil
         }
     }
 

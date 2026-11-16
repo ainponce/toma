@@ -398,3 +398,57 @@ public struct ZoomCameraPath: Sendable {
         return moved
     }
 }
+
+extension ZoomCameraPath {
+    /// The camera over a short span of output time, from one simulation (the motion blur's subsamples, design §7.4):
+    /// `state(atOutput:)` with the same bits at every time of the span, without simulating from a checkpoint for each.
+    public struct Span: Sendable {
+        private let path: ZoomCameraPath
+        /// The first step kept.
+        private let first: Int
+        /// The camera on each step from `first` on.
+        private let cameras: [Camera]
+
+        fileprivate init(path: ZoomCameraPath, first: Int, cameras: [Camera]) {
+            self.path = path
+            self.first = first
+            self.cameras = cameras
+        }
+
+        /// `state(atOutput: τ)`: from the steps kept for a time of the span, simulated on its own otherwise.
+        public func state(atOutput τ: Int64) -> ZoomCameraState {
+            let (s, fraction) = StepGrid.position(ofOutput: τ)
+            guard fraction > 0, s >= 0, s < path.lastStep else {
+                let step = path.clamped(s)
+                guard let camera = camera(atStep: step) else { return path.state(atOutput: τ) }
+                return path.placed(logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step))
+            }
+            guard let a = camera(atStep: s), let b = camera(atStep: s + 1) else { return path.state(atOutput: τ) }
+            return path.placed(
+                logDepth: a.logDepth + (b.logDepth - a.logDepth) * fraction, center: a.center + (b.center - a.center) * fraction,
+                atOutput: τ)
+        }
+
+        /// The camera kept on step `s`; `nil` out of the span.
+        private func camera(atStep s: Int) -> Camera? {
+            let index = s - first
+            return cameras.indices.contains(index) ? cameras[index] : nil
+        }
+    }
+
+    /// The camera from the step of `start` to the one after the step of `end` (held to the output's steps), simulated
+    /// once from the checkpoint before them, every step kept: for spans of a few frames.
+    public func span(from start: Int64, through end: Int64) -> Span {
+        let low = clamped(StepGrid.position(ofOutput: min(start, end)).step)
+        let high = clamped(StepGrid.position(ofOutput: max(start, end)).step + 1)
+        var simulation = simulation(toward: low)
+        while simulation.step < low { advance(&simulation) }
+        var cameras = [simulation.camera]
+        cameras.reserveCapacity(high - low + 1)
+        while simulation.step < high {
+            advance(&simulation)
+            cameras.append(simulation.camera)
+        }
+        return Span(path: self, first: low, cameras: cameras)
+    }
+}

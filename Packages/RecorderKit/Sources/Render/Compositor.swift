@@ -4,29 +4,39 @@ import Metal
 import ProjectFormat
 import Synchronization
 
-/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the shadow, the window frame, the screen, the
-/// cursor, the click effects and the camera, in that order, in one render pass that starts by clearing the target,
-/// blended premultiplied "over"; before it, for a screen sampled with mipmaps, a blit pass that makes them.
+/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the stage (the background, the shadow, the window frame, the screen
+/// and the cursor), the click effects and the camera, in that order, blended premultiplied "over"; before it, for a
+/// screen sampled with mipmaps, a blit pass that makes them.
+///
+/// - Without a motion blur, in one render pass that starts by clearing the target: the stage through the frame's zoom
+///   camera (`RenderFrame.stage`), exactly as without a zoom when it has none or is at rest.
+/// - With one (`RenderFrame.subframes` or `cursorSamples`, design §7.2), in one render pass too, whose subsample and sum
+///   stay in tile memory (`memoryless`), so nothing goes to memory between the subsamples: each subframe draws the stage
+///   through its own transform into attachment 0 over the one before (its background is opaque and covers the target,
+///   so nothing needs clearing), and a drawing over the whole target adds it, times 1/N, to the sum in `rgba16Float`
+///   (attachment 1) by programmable blending, in their order. With cursor samples instead, the stage is drawn once and
+///   each sample is added to the sum. A last drawing writes the average (or the cursor's average over the stage) to the
+///   target, attachment 2. The click effects, once through the stage at the frame's time and never blurred (plan
+///   decision 26), and the camera are drawn over it in the same pass.
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
 public final class Compositor: @unchecked Sendable {
     /// The only target format: preview and export must write the same bytes, so never an `_srgb` format.
     public static let pixelFormat = MTLPixelFormat.bgra8Unorm
+    /// The format of the motion blur's sum of its subsamples.
+    static let sumFormat = MTLPixelFormat.rgba16Float
 
     /// The compiled shaders (`ShaderSource`), for what draws into textures of its own (`BackgroundImages`).
     let library: any MTLLibrary
-    private let gradientPipeline: any MTLRenderPipelineState
-    private let wallpaperPipeline: any MTLRenderPipelineState
-    private let backgroundImagePipeline: any MTLRenderPipelineState
-    private let blurredWallpaperPipeline: any MTLRenderPipelineState
-    private let screenPipeline: any MTLRenderPipelineState
-    private let mipmappedScreenPipeline: any MTLRenderPipelineState
-    private let shadowPipeline: any MTLRenderPipelineState
-    private let spritePipeline: any MTLRenderPipelineState
-    private let cursorPipeline: any MTLRenderPipelineState
-    private let windowBarPipeline: any MTLRenderPipelineState
+    private let device: any MTLDevice
+    /// What draws the stage straight into the target.
+    private let direct: StagePipelines
+    /// What draws the stage into a subsample of the motion blur's pass.
+    private let subsample: StagePipelines
     private let clickEffectPipeline: any MTLRenderPipelineState
+    /// The rest of the motion blur's pass.
+    private let blur: BlurPipelines
     private let screenSampler: any MTLSamplerState
     /// Linear between the texels and between the mipmap levels: the cursor, the title and a screen with mipmaps.
     private let trilinearSampler: any MTLSamplerState
@@ -41,6 +51,7 @@ public final class Compositor: @unchecked Sendable {
         precondition(
             MemoryLayout<ClickEffectUniforms>.stride == 32, "ClickEffectUniforms must keep the layout of the shaders' struct: 32 bytes")
         precondition(MemoryLayout<ShadowUniforms>.stride == 32, "ShadowUniforms must keep the layout of the shaders' struct: 32 bytes")
+        precondition(MemoryLayout<StageMapping>.stride == 16, "StageMapping must keep the layout of the shaders' struct: 16 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)
@@ -48,35 +59,69 @@ public final class Compositor: @unchecked Sendable {
             guard let function = library.makeFunction(name: name) else { throw RenderError.missingShaderFunction(name) }
             return function
         }
-        func pipeline(vertex: String, fragment: String, blended: Bool) throws -> any MTLRenderPipelineState {
+        func pipeline(
+            vertex: String, fragment: String, blending: Blending, into attachments: Attachments = .target
+        ) throws -> any MTLRenderPipelineState {
             let descriptor = MTLRenderPipelineDescriptor()
             descriptor.vertexFunction = try function(vertex)
             descriptor.fragmentFunction = try function(fragment)
-            let color = descriptor.colorAttachments[0]!
-            color.pixelFormat = Self.pixelFormat
-            if blended {
+            let written: Int
+            switch attachments {
+            case .target:
+                descriptor.colorAttachments[0].pixelFormat = Self.pixelFormat
+                written = 0
+            case let .blurPass(index):
+                for (i, format) in [Self.pixelFormat, Self.sumFormat, Self.pixelFormat].enumerated() {
+                    descriptor.colorAttachments[i].pixelFormat = format
+                    if i != index { descriptor.colorAttachments[i].writeMask = [] }
+                }
+                written = index
+            }
+            let color = descriptor.colorAttachments[written]!
+            switch blending {
+            case .none:
+                break
+            case .over, .add:
                 color.isBlendingEnabled = true
                 color.rgbBlendOperation = .add
                 color.alphaBlendOperation = .add
                 color.sourceRGBBlendFactor = .one
                 color.sourceAlphaBlendFactor = .one
-                color.destinationRGBBlendFactor = .oneMinusSourceAlpha
-                color.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                color.destinationRGBBlendFactor = blending == .over ? .oneMinusSourceAlpha : .one
+                color.destinationAlphaBlendFactor = blending == .over ? .oneMinusSourceAlpha : .one
             }
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
+        func stagePipelines(into attachments: Attachments) throws -> StagePipelines {
+            try StagePipelines(
+                gradient: pipeline(vertex: "gradientVertex", fragment: "gradientFragment", blending: .none, into: attachments),
+                stageGradient: pipeline(vertex: "gradientVertex", fragment: "stageGradientFragment", blending: .none, into: attachments),
+                wallpaper: pipeline(vertex: "quadVertex", fragment: "wallpaperFragment", blending: .none, into: attachments),
+                backgroundImage: pipeline(
+                    vertex: "gradientVertex", fragment: "backgroundImageFragment", blending: .none, into: attachments),
+                blurredWallpaper: pipeline(
+                    vertex: "gradientVertex", fragment: "blurredWallpaperFragment", blending: .none, into: attachments),
+                screen: pipeline(vertex: "quadVertex", fragment: "screenFragment", blending: .over, into: attachments),
+                mipmappedScreen: pipeline(vertex: "quadVertex", fragment: "mipmappedScreenFragment", blending: .over, into: attachments),
+                shadow: pipeline(vertex: "quadVertex", fragment: "shadowFragment", blending: .over, into: attachments),
+                sprite: pipeline(vertex: "quadVertex", fragment: "spriteFragment", blending: .over, into: attachments),
+                cursor: pipeline(vertex: "quadVertex", fragment: "cursorFragment", blending: .over, into: attachments),
+                windowBar: pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blending: .over, into: attachments))
+        }
         self.library = library
-        gradientPipeline = try pipeline(vertex: "gradientVertex", fragment: "gradientFragment", blended: false)
-        wallpaperPipeline = try pipeline(vertex: "quadVertex", fragment: "wallpaperFragment", blended: false)
-        backgroundImagePipeline = try pipeline(vertex: "gradientVertex", fragment: "backgroundImageFragment", blended: false)
-        blurredWallpaperPipeline = try pipeline(vertex: "gradientVertex", fragment: "blurredWallpaperFragment", blended: false)
-        screenPipeline = try pipeline(vertex: "quadVertex", fragment: "screenFragment", blended: true)
-        mipmappedScreenPipeline = try pipeline(vertex: "quadVertex", fragment: "mipmappedScreenFragment", blended: true)
-        shadowPipeline = try pipeline(vertex: "quadVertex", fragment: "shadowFragment", blended: true)
-        spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
-        cursorPipeline = try pipeline(vertex: "quadVertex", fragment: "cursorFragment", blended: true)
-        windowBarPipeline = try pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blended: true)
-        clickEffectPipeline = try pipeline(vertex: "quadVertex", fragment: "clickEffectFragment", blended: true)
+        self.device = device
+        direct = try stagePipelines(into: .target)
+        subsample = try stagePipelines(into: .blurPass(writing: 0))
+        clickEffectPipeline = try pipeline(vertex: "quadVertex", fragment: "clickEffectFragment", blending: .over)
+        blur = try BlurPipelines(
+            accumulate: pipeline(vertex: "gradientVertex", fragment: "accumulateFragment", blending: .none, into: .blurPass(writing: 1)),
+            cursorSample: pipeline(vertex: "quadVertex", fragment: "cursorSampleFragment", blending: .add, into: .blurPass(writing: 1)),
+            resolve: pipeline(vertex: "gradientVertex", fragment: "resolveFragment", blending: .none, into: .blurPass(writing: 2)),
+            resolveCursor: pipeline(
+                vertex: "gradientVertex", fragment: "resolveCursorFragment", blending: .none, into: .blurPass(writing: 2)),
+            clickEffect: pipeline(
+                vertex: "quadVertex", fragment: "clickEffectTargetFragment", blending: .over, into: .blurPass(writing: 2)),
+            camera: pipeline(vertex: "quadVertex", fragment: "cameraTargetFragment", blending: .over, into: .blurPass(writing: 2)))
 
         let sampler = MTLSamplerDescriptor()
         sampler.minFilter = .linear
@@ -96,21 +141,23 @@ public final class Compositor: @unchecked Sendable {
     }
 
     /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame`
-    /// map onto the whole target (they are in pixels of `frame.outputSize`). The screen is drawn only when
-    /// `frame.screen` is set and `screen` is given, its `crop` filling its rect: with `mipmapped`, trilinear from a copy
-    /// with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even its mipmaps hold
+    /// map onto the whole target (they are in pixels of `frame.outputSize`; a background that is not a gradient is read
+    /// at the stage point under each of the target's pixels, its grain of the target's pixels). The screen is drawn only
+    /// when `frame.screen` is set and `screen` is given, its `crop` filling its rect: with `mipmapped`, trilinear from a
+    /// copy with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even its mipmaps hold
     /// anything outside an Area; nothing for a crop that is not finite. The shadow (`frame.shadow`) only with it, under it
-    /// and the window frame. Throws `RenderError.metalResourceUnavailable`, having encoded nothing, when Metal cannot make
-    /// that copy: a frame is never drawn some other way. The cursor only when `frame.cursor`
-    /// is set, shown (opacity above 0) and of some size, with `cursor` the texture of its image (`CursorImages`); the
-    /// click effects over it (`frame.clickEffects`); the camera only when `frame.camera` is set and `camera` is given,
-    /// filling its rect without stretching (cropped, centred, to the rect's shape). An `.image` background is
-    /// `backgroundImage`, the texture
-    /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn directly
-    /// without `backgroundImage`; with one, its blurred mesh gradient (`BackgroundImages.texture(forWallpaper:…)`), the
-    /// grain is added to it. A window frame's title is `windowTitle`, the texture `TitleTexture` made of it, drawn at the
-    /// bar's pixels (`barPixels`); none without one. `screen`, `camera`, `cursor`, `backgroundImage` and `windowTitle`
-    /// must stay alive until `commandBuffer` completes.
+    /// and the window frame. The cursor only when `frame.cursor` is set, shown (opacity above 0) and of some size, with
+    /// `cursor` the texture of its image (`CursorImages`), which every cursor of the frame (its subframes', its samples)
+    /// is drawn with; the click effects over it (`frame.clickEffects`); the camera only when `frame.camera` is set and
+    /// `camera` is given, filling its rect without stretching (cropped, centred, to the rect's shape). An `.image`
+    /// background is `backgroundImage`, the texture `BackgroundImages` made of it for this size, or the frame's gradient
+    /// without one. A `.wallpaper` is drawn directly without `backgroundImage`; with one, its mesh gradient, blurred or
+    /// not (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A window frame's title is
+    /// `windowTitle`, the texture `TitleTexture` made of it, drawn at the bar's pixels (`barPixels`) through the stage;
+    /// none without one. The stage is drawn through `frame.stage`, and blurred with `frame.subframes` or
+    /// `frame.cursorSamples` (see the type's notes). Throws `RenderError.metalResourceUnavailable`, having encoded
+    /// nothing, when Metal cannot make the screen's copy or the blur's tile memory: a frame is never drawn some other way.
+    /// `screen`, `camera`, `cursor`, `backgroundImage` and `windowTitle` must stay alive until `commandBuffer` completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
@@ -121,89 +168,77 @@ public final class Compositor: @unchecked Sendable {
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer
     ) throws {
-        // What the screen is sampled from, its copy with mipmaps made before the render pass.
+        var counts = DrawCounts()
+        try encode(
+            frame, screen: screen, camera: camera, cursor: cursor, backgroundImage: backgroundImage, windowTitle: windowTitle,
+            into: target, commandBuffer: commandBuffer, counts: &counts)
+    }
+
+    /// `encode(_:screen:camera:cursor:backgroundImage:windowTitle:into:commandBuffer:)`, counting what it draws in
+    /// `counts`: for tests.
+    func encode(
+        _ frame: RenderFrame,
+        screen: (any MTLTexture)?,
+        camera: (any MTLTexture)?,
+        cursor: any MTLTexture,
+        backgroundImage: (any MTLTexture)? = nil,
+        windowTitle: (any MTLTexture)? = nil,
+        into target: any MTLTexture,
+        commandBuffer: any MTLCommandBuffer,
+        counts: inout DrawCounts
+    ) throws {
+        // The blur's tile memory, then what the screen is sampled from, its copy with mipmaps made before the render pass.
+        let tileMemory = frame.subframes.isEmpty && frame.cursorSamples.isEmpty ? nil : try blurTileMemory(like: target)
         let screenImage = try frame.screen.flatMap { layer in
             try screen.flatMap { try image(of: layer, in: $0, commandBuffer: commandBuffer) }
         }
+        let textures = StageTextures(
+            screen: screenImage, cursor: cursor, backgroundImage: backgroundImage, windowTitle: windowTitle)
+        let targetSize = SIMD2(target.width, target.height)
+        let stage = Self.moving(frame.stage, outputSize: frame.outputSize)
+        if let tileMemory {
+            let encoder = blurPass(into: target, tileMemory: tileMemory, commandBuffer: commandBuffer)
+            counts.renderPasses += 1
+            if !frame.subframes.isEmpty {
+                var weight = Float(1 / Double(frame.subframes.count))
+                for subframe in frame.subframes {
+                    drawStage(
+                        frame, through: Self.moving(subframe.stage, outputSize: frame.outputSize), cursor: subframe.cursor,
+                        textures: textures, pipelines: subsample, culling: true, targetSize: targetSize, encoder: encoder,
+                        counts: &counts)
+                    encoder.setRenderPipelineState(blur.accumulate)
+                    encoder.setFragmentBytes(&weight, length: MemoryLayout<Float>.stride, index: 0)
+                    encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+                    counts.accumulations += 1
+                }
+                encoder.setRenderPipelineState(blur.resolve)
+            } else {
+                drawStage(
+                    frame, through: stage, cursor: nil, textures: textures, pipelines: subsample, culling: true, targetSize: targetSize,
+                    encoder: encoder, counts: &counts)
+                let share = 1 / Double(frame.cursorSamples.count)
+                for layer in frame.cursorSamples {
+                    drawCursor(
+                        layer, through: stage, outputSize: frame.outputSize, weight: share, texture: cursor, pipeline: blur.cursorSample,
+                        encoder: encoder, counts: &counts)
+                }
+                encoder.setRenderPipelineState(blur.resolveCursor)
+            }
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+            drawOverTheStage(
+                frame, through: stage, camera: camera, clickEffect: blur.clickEffect, cameraPipeline: blur.camera, encoder: encoder,
+                counts: &counts)
+            encoder.endEncoding()
+            return
+        }
         let encoder = renderPass(into: target, commandBuffer: commandBuffer)
-        let viewport = SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y))
-        func drawFramesGradient() {
-            let angle = frame.gradientAngleDegrees * .pi / 180
-            drawGradient(start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), encoder: encoder)
-        }
-
-        // 1. Background.
-        switch frame.background {
-        case .gradient:
-            drawFramesGradient()
-        case .image:
-            if let backgroundImage {
-                drawBackgroundImage(backgroundImage, viewport: viewport, encoder: encoder)
-            } else {
-                // The image is missing or cannot be read: the frame carries Toma classic for it.
-                drawFramesGradient()
-            }
-        case let .color(color):
-            // Both ends of that colour: every pixel is `mix(color, color, t)`, the colour itself.
-            drawGradient(start: color, end: color, direction: .zero, encoder: encoder)
-        case let .wallpaper(preset, _):
-            if let backgroundImage {
-                drawBlurredWallpaper(backgroundImage, viewport: viewport, encoder: encoder)
-            } else {
-                drawWallpaper(
-                    preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), viewport: viewport,
-                    encoder: encoder)
-            }
-        }
-
-        // 2. Shadow, under the window or the screen, with the screen drawn.
-        if let shadow = frame.shadow, screenImage != nil {
-            drawShadow(shadow, viewport: viewport, encoder: encoder)
-        }
-
-        // 3. Window frame: its bar and buttons, then its title.
-        if let window = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
-            drawWindowBar(window, viewport: viewport, encoder: encoder)
-            if let windowTitle {
-                let box = window.barPixels
-                drawSprite(
-                    windowTitle, origin: SIMD2<Double>(box.origin), size: SIMD2<Double>(box.size), viewport: viewport, encoder: encoder)
-            }
-        }
-
-        // 4. Screen, cut by the window around it if there is one.
-        if let layer = frame.screen, let screenImage {
-            let window = frame.windowFrame
-            // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
-            drawImage(
-                screenImage.texture, in: layer.rect, cornerRadius: window?.cornerRadius ?? layer.cornerRadius,
-                uvOrigin: screenImage.uvOrigin, uvSize: screenImage.uvSize,
-                clampsToCrop: layer.crop != Rect(x: 0, y: 0, width: 1, height: 1),
-                shape: window.map { ($0.rect, bottomRadius: $0.bottomCornerRadius, imageTopRadius: $0.screenTopCornerRadius) },
-                mipmapped: layer.mipmapped, viewport: viewport, encoder: encoder)
-        }
-
-        // 5. Cursor, its hotspot at the cursor position, pressed smaller about it, at its opacity.
-        if let layer = frame.cursor, layer.opacity > 0 {
-            let height = layer.height * layer.clickScale
-            if height > 0, height.isFinite, layer.aspect > 0, layer.aspect.isFinite {
-                let size = SIMD2(height * layer.aspect, height)
-                drawSprite(
-                    cursor, origin: layer.hotspot - layer.hotspotFraction * size, size: size, opacity: Float(min(layer.opacity, 1)),
-                    viewport: viewport, encoder: encoder)
-            }
-        }
-
-        // 6. Click effects, over the cursor.
-        drawClickEffects(frame.clickEffects, viewport: viewport, encoder: encoder)
-
-        // 7. Camera, over everything.
-        if let layer = frame.camera, let camera {
-            let fill = Self.aspectFill(SIMD2(Double(camera.width), Double(camera.height)), in: layer.rect)
-            drawImage(
-                camera, in: layer.rect, cornerRadius: layer.cornerRadius, uvOrigin: fill.origin, uvSize: fill.size,
-                viewport: viewport, encoder: encoder)
-        }
+        counts.renderPasses += 1
+        drawStage(
+            frame, through: stage, cursor: frame.cursor, textures: textures, pipelines: direct, targetSize: targetSize, encoder: encoder,
+            counts: &counts)
+        drawOverTheStage(
+            frame, through: stage, camera: camera, clickEffect: clickEffectPipeline, cameraPipeline: direct.screen, encoder: encoder,
+            counts: &counts)
         encoder.endEncoding()
     }
 
@@ -213,18 +248,37 @@ public final class Compositor: @unchecked Sendable {
     /// screen, for a crop that is not finite.
     private func image(
         of layer: ScreenLayer, in frame: any MTLTexture, commandBuffer: any MTLCommandBuffer
-    ) throws -> (texture: any MTLTexture, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>)? {
+    ) throws -> ScreenImage? {
         let crop = layer.crop
         guard layer.mipmapped else {
-            return (frame, SIMD2(Float(crop.x), Float(crop.y)), SIMD2(Float(crop.width), Float(crop.height)))
+            return ScreenImage(
+                texture: frame, uvOrigin: SIMD2(Float(crop.x), Float(crop.y)), uvSize: SIMD2(Float(crop.width), Float(crop.height)))
         }
         guard let region = MipmappedCopies.region(of: crop, width: frame.width, height: frame.height) else { return nil }
         let copy = try mipmappedCopies.copy(of: frame, region: region.pixels, commandBuffer: commandBuffer)
-        return (copy, region.uvOrigin, region.uvSize)
+        return ScreenImage(texture: copy, uvOrigin: region.uvOrigin, uvSize: region.uvSize)
     }
 
     /// How many mipmapped copies of the screen were made so far, and how many no frame on the GPU uses: for tests.
     var mipmappedCopiesCount: (made: Int, free: Int) { mipmappedCopies.count }
+
+    /// Draws `frame`'s click effects alone over what `target` holds, through `frame.stage`, as `encode` draws them over
+    /// its stage: for tests.
+    func encodeClickEffects(of frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer) {
+        let pass = MTLRenderPassDescriptor()
+        let attachment = pass.colorAttachments[0]!
+        attachment.texture = target
+        attachment.loadAction = .load
+        attachment.storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+            preconditionFailure("Compositor: the command buffer takes no render pass")
+        }
+        var counts = DrawCounts()
+        drawClickEffects(
+            frame.clickEffects, through: Self.moving(frame.stage, outputSize: frame.outputSize), outputSize: frame.outputSize,
+            pipeline: clickEffectPipeline, encoder: encoder, counts: &counts)
+        encoder.endEncoding()
+    }
 
     /// Draws `preset` alone into all of `target` (`.bgra8Unorm`): in one quad as `encode` draws a frame's wallpaper when
     /// `tileSize` is `nil`, otherwise in one quad per square of `tileSize` pixels (cut at the right and bottom edges). For
@@ -233,15 +287,21 @@ public final class Compositor: @unchecked Sendable {
         let encoder = renderPass(into: target, commandBuffer: commandBuffer)
         let size = SIMD2(target.width, target.height)
         let viewport = SIMD2<Float>(Float(size.x), Float(size.y))
+        let mapping = StageMapping(nil, outputSize: size, targetSize: size)
         let step = tileSize ?? max(size.x, size.y)
         precondition(step > 0, "Tiles of \(step) pixels")
         for y in stride(from: 0, to: size.y, by: step) {
             for x in stride(from: 0, to: size.x, by: step) {
                 let tile = Rect(x: Double(x), y: Double(y), width: Double(min(step, size.x - x)), height: Double(min(step, size.y - y)))
-                drawWallpaper(preset, in: tile, viewport: viewport, encoder: encoder)
+                drawWallpaper(preset, in: tile, mapping: mapping, viewport: viewport, pipelines: direct, encoder: encoder)
             }
         }
         encoder.endEncoding()
+    }
+
+    /// `stage`, or `nil` when it is an identity of an output of `outputSize`: a stage at rest is drawn as it is.
+    private static func moving(_ stage: StageTransform?, outputSize: SIMD2<Int>) -> StageTransform? {
+        stage == .identity(outputSize: outputSize) ? nil : stage
     }
 
     /// A render pass into `target` (`.bgra8Unorm`) that starts by clearing it to opaque black.
@@ -260,55 +320,304 @@ public final class Compositor: @unchecked Sendable {
         return encoder
     }
 
-    /// Fills the whole target with the gradient from `start` to `end` along `direction` (`gradientFragment`).
-    private func drawGradient(start: SIMD4<Float>, end: SIMD4<Float>, direction: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+    /// The motion blur's tile memory for a target like `target`: a subsample (`.bgra8Unorm`) and the sum (`sumFormat`),
+    /// both `memoryless`. Throws `RenderError.metalResourceUnavailable` when Metal cannot make them.
+    private func blurTileMemory(like target: any MTLTexture) throws -> (subsample: any MTLTexture, sum: any MTLTexture) {
+        func make(_ format: MTLPixelFormat) throws -> any MTLTexture {
+            let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+                pixelFormat: format, width: target.width, height: target.height, mipmapped: false)
+            descriptor.usage = .renderTarget
+            descriptor.storageMode = .memoryless
+            guard let texture = device.makeTexture(descriptor: descriptor) else {
+                throw RenderError.metalResourceUnavailable("the motion blur's tile memory")
+            }
+            return texture
+        }
+        return try (make(Self.pixelFormat), make(Self.sumFormat))
+    }
+
+    /// The motion blur's render pass into `target` (`.bgra8Unorm`): attachment 0 the subsample and 1 the sum of
+    /// `tileMemory`, the sum cleared to 0; attachment 2 the target, all of which the pass writes.
+    private func blurPass(
+        into target: any MTLTexture, tileMemory: (subsample: any MTLTexture, sum: any MTLTexture), commandBuffer: any MTLCommandBuffer
+    ) -> any MTLRenderCommandEncoder {
+        precondition(target.pixelFormat == Self.pixelFormat, "Compositor draws into \(Self.pixelFormat) only, not \(target.pixelFormat)")
+        let pass = MTLRenderPassDescriptor()
+        let attachments: [(texture: any MTLTexture, load: MTLLoadAction, store: MTLStoreAction)] = [
+            (tileMemory.subsample, .dontCare, .dontCare), (tileMemory.sum, .clear, .dontCare), (target, .dontCare, .store),
+        ]
+        for (index, attachment) in attachments.enumerated() {
+            let color = pass.colorAttachments[index]!
+            color.texture = attachment.texture
+            color.loadAction = attachment.load
+            color.storeAction = attachment.store
+            color.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        }
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+            preconditionFailure("Compositor: the command buffer takes no render pass (already committed, or another encoder is open)")
+        }
+        encoder.label = "Compositor motion blur"
+        return encoder
+    }
+
+    /// Draws the stage of `frame` with `pipelines`: the background, the shadow, the window frame, the screen and
+    /// `cursorLayer` (design §7.2, steps 1 to 5), through `stage` (as they are when `nil`). With `culling`, the background
+    /// and the shadow are drawn only around where the screen (and its window) covers the target opaquely, clipped by
+    /// scissor rects: every pixel drawn is the one it would be, and an opaque one does not show what is under it (the
+    /// motion blur's subsamples, which draw the stage up to 16 times). The screen is opaque: it is drawn at full opacity.
+    private func drawStage(
+        _ frame: RenderFrame, through stage: StageTransform?, cursor cursorLayer: CursorLayer?, textures: StageTextures,
+        pipelines: StagePipelines, culling: Bool = false, targetSize: SIMD2<Int>, encoder: any MTLRenderCommandEncoder,
+        counts: inout DrawCounts
+    ) {
+        let size = frame.outputSize
+        let viewport = SIMD2<Float>(Float(size.x), Float(size.y))
+
+        // The stage's layers as they are drawn: through the zoom camera, or as they are.
+        let shadow = frame.shadow.map { stage?.drawn($0, outputSize: size) ?? $0 }
+        let window = frame.windowFrame.map { stage?.drawn($0, outputSize: size) ?? $0 }
+        let screenLayer = frame.screen.map { stage?.drawn($0, outputSize: size) ?? $0 }
+        let bands = (culling && textures.screen != nil ? Self.opaqueInterior(screen: screenLayer, window: window) : nil).map {
+            Self.scissorBands(around: $0, outputSize: size, targetSize: targetSize)
+        }
+
+        // 1. Background, and 2. the shadow over it, under the window or the screen, with the screen drawn: with
+        // `culling`, both in each band in turn.
+        counts.backgrounds += 1
+        for band in bands.map({ $0.map(Optional.some) }) ?? [nil] {
+            if let band { encoder.setScissorRect(band) }
+            drawBackground(
+                frame, through: stage, textures: textures, targetSize: targetSize, viewport: viewport, pipelines: pipelines,
+                encoder: encoder)
+            if let shadow, textures.screen != nil {
+                drawShadow(shadow, viewport: viewport, pipelines: pipelines, encoder: encoder)
+            }
+        }
+        if bands != nil { encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: targetSize.x, height: targetSize.y)) }
+
+        // 3. Window frame: its bar and buttons, then its title, made for the bar's pixels as they are (`TitleTexture`).
+        if let window, let unzoomed = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
+            drawWindowBar(window, viewport: viewport, pipelines: pipelines, encoder: encoder)
+            if let windowTitle = textures.windowTitle {
+                let box = unzoomed.barPixels
+                let origin = SIMD2<Double>(box.origin)
+                drawSprite(
+                    windowTitle, origin: stage?.outputPoint(ofStage: origin, outputSize: size) ?? origin,
+                    size: SIMD2<Double>(box.size) * (stage?.depth ?? 1), pipeline: pipelines.sprite, viewport: viewport, encoder: encoder)
+            }
+        }
+
+        // 4. Screen, cut by the window around it if there is one.
+        if let layer = screenLayer, let screenImage = textures.screen {
+            // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
+            drawImage(
+                screenImage.texture, in: layer.rect, cornerRadius: window?.cornerRadius ?? layer.cornerRadius,
+                uvOrigin: screenImage.uvOrigin, uvSize: screenImage.uvSize,
+                clampsToCrop: layer.crop != Rect(x: 0, y: 0, width: 1, height: 1),
+                shape: window.map { ($0.rect, bottomRadius: $0.bottomCornerRadius, imageTopRadius: $0.screenTopCornerRadius) },
+                mipmapped: layer.mipmapped, pipeline: layer.mipmapped ? pipelines.mipmappedScreen : pipelines.screen,
+                viewport: viewport, encoder: encoder)
+            counts.screens += 1
+        }
+
+        // 5. Cursor, its hotspot at the cursor position, pressed smaller about it, at its opacity.
+        if let cursorLayer {
+            drawCursor(
+                cursorLayer, through: stage, outputSize: size, texture: textures.cursor, pipeline: pipelines.cursor, encoder: encoder,
+                counts: &counts)
+        }
+    }
+
+    /// Draws what goes over the stage of `frame`: its click effects through `stage` (design §7.2, step 6), never blurred,
+    /// with `clickEffect`, then the camera in output space (step 7) with `cameraPipeline`.
+    private func drawOverTheStage(
+        _ frame: RenderFrame, through stage: StageTransform?, camera: (any MTLTexture)?, clickEffect: any MTLRenderPipelineState,
+        cameraPipeline: any MTLRenderPipelineState, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
+    ) {
+        // 6. Click effects, over the cursor.
+        drawClickEffects(
+            frame.clickEffects, through: stage, outputSize: frame.outputSize, pipeline: clickEffect, encoder: encoder, counts: &counts)
+
+        // 7. Camera, over everything.
+        if let layer = frame.camera, let camera {
+            let fill = Self.aspectFill(SIMD2(Double(camera.width), Double(camera.height)), in: layer.rect)
+            drawImage(
+                camera, in: layer.rect, cornerRadius: layer.cornerRadius, uvOrigin: fill.origin, uvSize: fill.size,
+                pipeline: cameraPipeline, viewport: SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y)), encoder: encoder)
+        }
+    }
+
+    /// Draws the background of `frame` over the whole target, through `stage`: the gradient as today when it is drawn as
+    /// it is (`gradientFragment`), and everything else at the stage point under each pixel (`StageMapping`).
+    private func drawBackground(
+        _ frame: RenderFrame, through stage: StageTransform?, textures: StageTextures, targetSize: SIMD2<Int>,
+        viewport: SIMD2<Float>, pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
+    ) {
+        let mapping = StageMapping(stage, outputSize: frame.outputSize, targetSize: targetSize)
+        func drawFramesGradient() {
+            let angle = frame.gradientAngleDegrees * .pi / 180
+            drawGradient(
+                start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)),
+                mapping: stage == nil ? nil : mapping, viewport: viewport, pipelines: pipelines, encoder: encoder)
+        }
+        switch frame.background {
+        case .gradient:
+            drawFramesGradient()
+        case .image:
+            if let backgroundImage = textures.backgroundImage {
+                drawBackgroundImage(backgroundImage, mapping: mapping, viewport: viewport, pipelines: pipelines, encoder: encoder)
+            } else {
+                // The image is missing or cannot be read: the frame carries Toma classic for it.
+                drawFramesGradient()
+            }
+        case let .color(color):
+            // Both ends of that colour: every pixel is `mix(color, color, t)`, the colour itself, through any stage.
+            drawGradient(
+                start: color, end: color, direction: .zero, mapping: nil, viewport: viewport, pipelines: pipelines, encoder: encoder)
+        case let .wallpaper(preset, _):
+            if let backgroundImage = textures.backgroundImage {
+                drawBlurredWallpaper(backgroundImage, mapping: mapping, viewport: viewport, pipelines: pipelines, encoder: encoder)
+            } else {
+                drawWallpaper(
+                    preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), mapping: mapping,
+                    viewport: viewport, pipelines: pipelines, encoder: encoder)
+            }
+        }
+    }
+
+    /// Fills the whole target with the gradient from `start` to `end` along `direction` (`gradientFragment`), or at the
+    /// stage point under each pixel with `mapping` (`stageGradientFragment`).
+    private func drawGradient(
+        start: SIMD4<Float>, end: SIMD4<Float>, direction: SIMD2<Float>, mapping: StageMapping?, viewport: SIMD2<Float>,
+        pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
+    ) {
         var gradient = GradientUniforms(start: start, end: end, direction: direction, padding: .zero)
-        encoder.setRenderPipelineState(gradientPipeline)
-        encoder.setFragmentBytes(&gradient, length: MemoryLayout<GradientUniforms>.stride, index: 0)
+        if var mapping {
+            var stageSize = viewport
+            encoder.setRenderPipelineState(pipelines.stageGradient)
+            encoder.setFragmentBytes(&gradient, length: MemoryLayout<GradientUniforms>.stride, index: 0)
+            encoder.setFragmentBytes(&mapping, length: MemoryLayout<StageMapping>.stride, index: 1)
+            encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 2)
+        } else {
+            encoder.setRenderPipelineState(pipelines.gradient)
+            encoder.setFragmentBytes(&gradient, length: MemoryLayout<GradientUniforms>.stride, index: 0)
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
-    /// Fills the whole target with `texture`, a background image made for the stage's size (`backgroundImageFragment`).
-    private func drawBackgroundImage(_ texture: any MTLTexture, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
-        var stageSize = viewport
-        encoder.setRenderPipelineState(backgroundImagePipeline)
+    /// Fills the whole target with `texture`, a background image made for the stage's size, at the stage point under each
+    /// pixel (`backgroundImageFragment`).
+    private func drawBackgroundImage(
+        _ texture: any MTLTexture, mapping: StageMapping, viewport: SIMD2<Float>, pipelines: StagePipelines,
+        encoder: any MTLRenderCommandEncoder
+    ) {
+        var stageSize = viewport, mapping = mapping
+        encoder.setRenderPipelineState(pipelines.backgroundImage)
         encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        encoder.setFragmentBytes(&mapping, length: MemoryLayout<StageMapping>.stride, index: 1)
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentSamplerState(screenSampler, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
-    /// Fills the whole target with `mesh`, a wallpaper's mesh gradient blurred for the stage's size, and the grain of the
-    /// output pixels (`blurredWallpaperFragment`).
-    private func drawBlurredWallpaper(_ mesh: any MTLTexture, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
-        var stageSize = viewport
-        encoder.setRenderPipelineState(blurredWallpaperPipeline)
+    /// Fills the whole target with `mesh`, a wallpaper's mesh gradient (blurred or not) made for the stage's size, at the
+    /// stage point under each pixel, and the grain of the target's pixels (`blurredWallpaperFragment`).
+    private func drawBlurredWallpaper(
+        _ mesh: any MTLTexture, mapping: StageMapping, viewport: SIMD2<Float>, pipelines: StagePipelines,
+        encoder: any MTLRenderCommandEncoder
+    ) {
+        var stageSize = viewport, mapping = mapping
+        encoder.setRenderPipelineState(pipelines.blurredWallpaper)
         encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        encoder.setFragmentBytes(&mapping, length: MemoryLayout<StageMapping>.stride, index: 1)
         encoder.setFragmentTexture(mesh, index: 0)
         encoder.setFragmentSamplerState(screenSampler, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
-    /// Draws the part `rect` (output pixels) of `preset` over a stage of the whole output (`wallpaperFragment`).
-    private func drawWallpaper(_ preset: WallpaperPreset, in rect: Rect, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+    /// The part of the output that the stage's screen, with its window, covers opaquely, drawn as `screen` and `window`
+    /// say: their rounded rect inset by its corners and a pixel, so neither the corners nor the antialiased edges are in
+    /// it. With a window, its bar and the screen under it cover it; `nil` when it is empty, or when the screen does not
+    /// fill the window under its bar (it always does).
+    private static func opaqueInterior(screen: ScreenLayer?, window: WindowFrameLayer?) -> Rect? {
+        guard let screen, screen.rect.width > 0, screen.rect.height > 0 else { return nil }
+        var rect = screen.rect, radius = screen.cornerRadius
+        if let window, window.rect.width > 0, window.rect.height > 0 {
+            let fills = abs(screen.rect.x - window.rect.x) < 1e-3 && abs(screen.rect.width - window.rect.width) < 1e-3
+                && abs(screen.rect.y - (window.rect.y + window.barHeight)) < 1e-3
+                && abs(screen.rect.y + screen.rect.height - (window.rect.y + window.rect.height)) < 1e-3
+            guard fills else { return nil }
+            (rect, radius) = (window.rect, max(window.cornerRadius, window.bottomCornerRadius))
+        }
+        let inset = (radius.isFinite ? max(radius, 0) : 0) + 1
+        guard rect.width > 2 * inset, rect.height > 2 * inset else { return nil }
+        return Rect(x: rect.x + inset, y: rect.y + inset, width: rect.width - 2 * inset, height: rect.height - 2 * inset)
+    }
+
+    /// The target's pixels (`targetSize`) but those wholly inside `hole` (output pixels of a frame of `outputSize`),
+    /// as scissor rects that do not overlap: the bands above and below the hole across the target, and those beside it;
+    /// the whole target when no pixel is.
+    static func scissorBands(around hole: Rect, outputSize: SIMD2<Int>, targetSize: SIMD2<Int>) -> [MTLScissorRect] {
+        let scale = SIMD2<Double>(targetSize) / SIMD2<Double>(outputSize)
+        func pixel(_ value: Double, _ rule: FloatingPointRoundingRule, within limit: Int) -> Int {
+            Int(min(max(value.rounded(rule), 0), Double(limit)))
+        }
+        let width = targetSize.x, height = targetSize.y
+        let left = pixel(hole.x * scale.x, .up, within: width), right = pixel((hole.x + hole.width) * scale.x, .down, within: width)
+        let top = pixel(hole.y * scale.y, .up, within: height), bottom = pixel((hole.y + hole.height) * scale.y, .down, within: height)
+        guard left < right, top < bottom else { return [MTLScissorRect(x: 0, y: 0, width: width, height: height)] }
+        var bands: [MTLScissorRect] = []
+        if top > 0 { bands.append(MTLScissorRect(x: 0, y: 0, width: width, height: top)) }
+        if bottom < height { bands.append(MTLScissorRect(x: 0, y: bottom, width: width, height: height - bottom)) }
+        if left > 0 { bands.append(MTLScissorRect(x: 0, y: top, width: left, height: bottom - top)) }
+        if right < width { bands.append(MTLScissorRect(x: right, y: top, width: width - right, height: bottom - top)) }
+        return bands
+    }
+
+    /// Draws the part `rect` (output pixels) of `preset` over a stage of the whole output, at the stage point under each
+    /// pixel (`wallpaperFragment`).
+    private func drawWallpaper(
+        _ preset: WallpaperPreset, in rect: Rect, mapping: StageMapping, viewport: SIMD2<Float>, pipelines: StagePipelines,
+        encoder: any MTLRenderCommandEncoder
+    ) {
         let origin = SIMD2(Float(rect.x), Float(rect.y)), size = SIMD2(Float(rect.width), Float(rect.height))
         var quad = QuadUniforms(
             viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
             uvSize: .one, radius: 0)
         var wallpaper = WallpaperUniforms(stageSize: viewport, count: UInt32(preset.points.count), padding: 0)
-        encoder.setRenderPipelineState(wallpaperPipeline)
+        var mapping = mapping
+        encoder.setRenderPipelineState(pipelines.wallpaper)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&wallpaper, length: MemoryLayout<WallpaperUniforms>.stride, index: 0)
         preset.points.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
         preset.colors.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
+        encoder.setFragmentBytes(&mapping, length: MemoryLayout<StageMapping>.stride, index: 3)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
-    /// Draws `texture`, premultiplied, into the rect at `origin` of `size` (output pixels), all of it: as it is
-    /// (`spriteFragment`), or at `opacity` (`cursorFragment`).
+    /// Draws the cursor `layer` (stage coordinates) through `stage` with `texture`, its image: its hotspot at its
+    /// position, pressed smaller about it, at its opacity times `weight` (`cursorFragment`, or a sample of the motion
+    /// blur's, `cursorSampleFragment`). Nothing of one hidden or of no size.
+    private func drawCursor(
+        _ layer: CursorLayer, through stage: StageTransform?, outputSize: SIMD2<Int>, weight: Double = 1, texture: any MTLTexture,
+        pipeline: any MTLRenderPipelineState, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
+    ) {
+        let layer = stage?.drawn(layer, outputSize: outputSize) ?? layer
+        guard layer.opacity > 0 else { return }
+        let height = layer.height * layer.clickScale
+        guard height > 0, height.isFinite, layer.aspect > 0, layer.aspect.isFinite else { return }
+        let size = SIMD2(height * layer.aspect, height)
+        drawSprite(
+            texture, origin: layer.hotspot - layer.hotspotFraction * size, size: size, opacity: Float(min(layer.opacity, 1) * weight),
+            pipeline: pipeline, viewport: SIMD2<Float>(Float(outputSize.x), Float(outputSize.y)), encoder: encoder)
+        counts.cursors += 1
+    }
+
+    /// Draws `texture`, premultiplied, into the rect at `origin` of `size` (output pixels), all of it, with `pipeline`:
+    /// as it is (`spriteFragment`), or at `opacity` (`cursorFragment`, `cursorSampleFragment`).
     private func drawSprite(
-        _ texture: any MTLTexture, origin: SIMD2<Double>, size: SIMD2<Double>, opacity: Float? = nil, viewport: SIMD2<Float>,
-        encoder: any MTLRenderCommandEncoder
+        _ texture: any MTLTexture, origin: SIMD2<Double>, size: SIMD2<Double>, opacity: Float? = nil,
+        pipeline: any MTLRenderPipelineState, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
         var quad = QuadUniforms(
             viewport: viewport,
@@ -319,11 +628,9 @@ public final class Compositor: @unchecked Sendable {
             uvOrigin: .zero,
             uvSize: .one,
             radius: 0)
+        encoder.setRenderPipelineState(pipeline)
         if var opacity {
-            encoder.setRenderPipelineState(cursorPipeline)
             encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 0)
-        } else {
-            encoder.setRenderPipelineState(spritePipeline)
         }
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
@@ -331,41 +638,48 @@ public final class Compositor: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
-    /// Draws `layers` in order (`clickEffectFragment`), each over the square around it that holds its outline and its
-    /// antialiased edge; nothing of one at opacity 0 or of no size. Their positions are stage coordinates, which are
-    /// output pixels while the stage is not transformed: with the zoom's camera, they are drawn once, never blurred,
-    /// after the blur's subsamples are resolved, through the stage's transform at the frame's time (plan decision 26).
+    /// Draws `layers` (stage coordinates) through `stage` in order with `pipeline` (`clickEffectFragment`), each over the
+    /// square around it that holds its outline and its antialiased edge, the outline 1 px times the stage's depth;
+    /// nothing of one at opacity 0 or of no size. With the zoom's camera they are drawn once, never blurred, after the
+    /// blur's subsamples are resolved, through the stage's transform at the frame's time (plan decision 26).
     private func drawClickEffects(
-        _ layers: [ClickEffectLayer], viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
+        _ layers: [ClickEffectLayer], through stage: StageTransform?, outputSize: SIMD2<Int>, pipeline: any MTLRenderPipelineState,
+        encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
     ) {
         guard !layers.isEmpty else { return }
-        encoder.setRenderPipelineState(clickEffectPipeline)
+        let viewport = SIMD2<Float>(Float(outputSize.x), Float(outputSize.y))
+        let outlineWidth = Float(stage?.depth ?? 1)
+        encoder.setRenderPipelineState(pipeline)
         for layer in layers {
             guard layer.opacity > 0, layer.opacity.isFinite, layer.radius > 0, layer.radius.isFinite, layer.center.x.isFinite,
                   layer.center.y.isFinite
             else { continue }
-            let ring = layer.kind == .ripple
-            let thickness = ring && layer.thickness.isFinite ? max(layer.thickness, 0) : 0
+            let drawn = stage?.drawn(layer, outputSize: outputSize) ?? layer
+            let ring = drawn.kind == .ripple
+            let thickness = ring && drawn.thickness.isFinite ? max(drawn.thickness, 0) : 0
             // A ring's white, its outline and half a pixel of antialiasing past it; a disc's edge and half a pixel.
-            let reach = layer.radius + thickness / 2 + (ring ? 2 : 1)
-            let origin = SIMD2<Float>(layer.center - reach), size = SIMD2<Float>(repeating: Float(2 * reach))
+            let reach = drawn.radius + thickness / 2 + (ring ? Double(outlineWidth) + 1 : 1)
+            let origin = SIMD2<Float>(drawn.center - reach), size = SIMD2<Float>(repeating: Float(2 * reach))
             var quad = QuadUniforms(
                 viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
                 uvSize: .one, radius: 0)
             var uniforms = ClickEffectUniforms(
-                center: SIMD2<Float>(layer.center), radius: Float(layer.radius), thickness: Float(thickness),
-                opacity: Float(min(layer.opacity, 1)), outline: Float(min(ClickEffects.outlineOpacity(of: layer), 1)),
-                ring: ring ? 1 : 0)
+                center: SIMD2<Float>(drawn.center), radius: Float(drawn.radius), thickness: Float(thickness),
+                opacity: Float(min(drawn.opacity, 1)), outline: Float(min(ClickEffects.outlineOpacity(of: drawn), 1)),
+                ring: ring ? 1 : 0, outlineWidth: outlineWidth)
             encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ClickEffectUniforms>.stride, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            counts.clickEffects += 1
         }
     }
 
     /// Draws `layer` (`shadowFragment`) over a quad of its box and 3σ and a pixel more on every side: past 3σ of its box
     /// the shadow is under 0.35 / 255, which rounds to nothing in every output. Nothing of a layer `ShadowMath.Box`
     /// leaves out.
-    private func drawShadow(_ layer: ShadowLayer, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+    private func drawShadow(
+        _ layer: ShadowLayer, viewport: SIMD2<Float>, pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
+    ) {
         guard let box = ShadowMath.Box(layer) else { return }
         let reach = 3 * box.sigma + 1
         let origin = box.lower - reach, size = box.upper - box.lower + 2 * reach
@@ -373,7 +687,7 @@ public final class Compositor: @unchecked Sendable {
             viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
             uvSize: .one, radius: 0)
         var uniforms = ShadowUniforms(lower: box.lower, upper: box.upper, sigma: box.sigma, corner: box.corner, opacity: box.opacity)
-        encoder.setRenderPipelineState(shadowPipeline)
+        encoder.setRenderPipelineState(pipelines.shadow)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShadowUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -382,7 +696,9 @@ public final class Compositor: @unchecked Sendable {
     /// Draws the title bar of `window` with its buttons (`windowBarFragment`), over a quad one pixel larger than the bar
     /// on every side and one more at the bottom, where the bar goes on one pixel under the screen, and down behind the
     /// screen's round top corners.
-    private func drawWindowBar(_ window: WindowFrameLayer, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+    private func drawWindowBar(
+        _ window: WindowFrameLayer, viewport: SIMD2<Float>, pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
+    ) {
         let rect = window.rect, bar = window.barHeight, below = max(window.screenTopCornerRadius, 0)
         let origin = SIMD2(Float(rect.x - 1), Float(rect.y - 1)), size = SIMD2(Float(rect.width + 2), Float(bar + 3 + below))
         var quad = QuadUniforms(
@@ -396,23 +712,24 @@ public final class Compositor: @unchecked Sendable {
             buttonRadius: window.buttons ? Float(WindowFrameLayer.buttonDiameter / 2 * bar) : 0,
             radius: Float(max(window.cornerRadius, 0)), barBottom: Float(rect.y + bar),
             bottomRadius: Float(max(window.bottomCornerRadius, 0)), below: Float(below))
-        encoder.setRenderPipelineState(windowBarPipeline)
+        encoder.setRenderPipelineState(pipelines.windowBar)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WindowBarUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
-    /// Draws the part `uvOrigin`, `uvSize` of `texture` into `rect` with rounded corners (`screenFragment`), over a
-    /// quad one pixel larger on every side so its antialiased edge is drawn whole; with `clampsToCrop`, nothing of
-    /// `texture` outside that part shows directly, and bilinear only the pixels that part cuts blend in at its edge;
-    /// `mipmapped`, trilinear from `texture`'s mipmaps (`mipmappedScreenFragment`), where only a `texture` made of that
-    /// part's whole pixels alone keeps all of what is outside it out (`image(of:in:commandBuffer:)`). With a `shape`,
-    /// the rounded rect that cuts it is that one (with `cornerRadius` at its top and `bottomRadius` at its bottom), and
-    /// `rect`'s own edges are square but for its top corners of `imageTopRadius`. Nothing for an empty rect.
+    /// Draws the part `uvOrigin`, `uvSize` of `texture` into `rect` with rounded corners with `pipeline`
+    /// (`screenFragment`), over a quad one pixel larger on every side so its antialiased edge is drawn whole; with
+    /// `clampsToCrop`, nothing of `texture` outside that part shows directly, and bilinear only the pixels that part cuts
+    /// blend in at its edge; `mipmapped`, trilinear from `texture`'s mipmaps (`mipmappedScreenFragment`), where only a
+    /// `texture` made of that part's whole pixels alone keeps all of what is outside it out (`image(of:in:commandBuffer:)`).
+    /// With a `shape`, the rounded rect that cuts it is that one (with `cornerRadius` at its top and `bottomRadius` at its
+    /// bottom), and `rect`'s own edges are square but for its top corners of `imageTopRadius`. Nothing for an empty rect.
     private func drawImage(
         _ texture: any MTLTexture, in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>,
         clampsToCrop: Bool = false, shape: (rect: Rect, bottomRadius: Double, imageTopRadius: Double)? = nil,
-        mipmapped: Bool = false, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
+        mipmapped: Bool = false, pipeline: any MTLRenderPipelineState, viewport: SIMD2<Float>,
+        encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
         var quad = QuadUniforms(
@@ -429,7 +746,7 @@ public final class Compositor: @unchecked Sendable {
             shapeSize: shape.map { SIMD2(Float($0.rect.width), Float($0.rect.height)) } ?? .zero,
             shapeBottomRadius: shape.map { Float(max($0.bottomRadius, 0)) } ?? 0,
             topRadius: shape.map { Float(max($0.imageTopRadius, 0)) } ?? 0)
-        encoder.setRenderPipelineState(mipmapped ? mipmappedScreenPipeline : screenPipeline)
+        encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
@@ -448,6 +765,94 @@ public final class Compositor: @unchecked Sendable {
         }
         let height = imageAspect / rectAspect
         return (SIMD2(0, Float((1 - height) / 2)), SIMD2(1, Float(height)))
+    }
+}
+
+/// What `Compositor.encode` drew, for tests: its render passes, and its drawings of each kind (a cursor or a click effect
+/// hidden or of no size is not drawn).
+struct DrawCounts: Equatable, Sendable {
+    var renderPasses = 0
+    var backgrounds = 0
+    var screens = 0
+    var cursors = 0
+    var clickEffects = 0
+    /// Subsamples of the stage added to the motion blur's sum.
+    var accumulations = 0
+}
+
+/// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1
+/// the sum, 2 the target), the others left as they are.
+private enum Attachments {
+    case target
+    case blurPass(writing: Int)
+}
+
+/// How a pipeline blends what it draws: not at all, premultiplied "over", or added.
+private enum Blending {
+    case none, over, add
+}
+
+/// The pipelines that draw the stage into one layout of attachments.
+private struct StagePipelines {
+    let gradient: any MTLRenderPipelineState
+    let stageGradient: any MTLRenderPipelineState
+    let wallpaper: any MTLRenderPipelineState
+    let backgroundImage: any MTLRenderPipelineState
+    let blurredWallpaper: any MTLRenderPipelineState
+    let screen: any MTLRenderPipelineState
+    let mipmappedScreen: any MTLRenderPipelineState
+    let shadow: any MTLRenderPipelineState
+    let sprite: any MTLRenderPipelineState
+    let cursor: any MTLRenderPipelineState
+    let windowBar: any MTLRenderPipelineState
+}
+
+/// The pipelines of the motion blur's pass that do not draw the stage.
+private struct BlurPipelines {
+    /// Adds a subsample to the sum.
+    let accumulate: any MTLRenderPipelineState
+    /// Adds a sample of the cursor to the sum.
+    let cursorSample: any MTLRenderPipelineState
+    /// The sum into the target.
+    let resolve: any MTLRenderPipelineState
+    /// The cursor's sum over the stage into the target.
+    let resolveCursor: any MTLRenderPipelineState
+    let clickEffect: any MTLRenderPipelineState
+    let camera: any MTLRenderPipelineState
+}
+
+/// The screen's frame as it is sampled: its texture and the part of it shown, as fractions of it.
+private struct ScreenImage {
+    var texture: any MTLTexture
+    var uvOrigin: SIMD2<Float>
+    var uvSize: SIMD2<Float>
+}
+
+/// The textures a stage is drawn with.
+private struct StageTextures {
+    var screen: ScreenImage?
+    var cursor: any MTLTexture
+    var backgroundImage: (any MTLTexture)?
+    var windowTitle: (any MTLTexture)?
+}
+
+/// `StageMapping` in `ShaderSource.metal`: 16 bytes. The stage point, in pixels of the frame's output size, under each
+/// pixel of the target: `pixel × scale + offset`.
+private struct StageMapping {
+    var scale: SIMD2<Float>
+    var offset: SIMD2<Float>
+
+    /// For a frame of `outputSize` drawn into a target of `targetSize` through `stage` (as it is when `nil`).
+    init(_ stage: StageTransform?, outputSize: SIMD2<Int>, targetSize: SIMD2<Int>) {
+        let size = SIMD2<Double>(outputSize), toFrame = size / SIMD2<Double>(targetSize)
+        guard let stage else {
+            scale = SIMD2<Float>(toFrame)
+            offset = .zero
+            return
+        }
+        // The frame's pixel `p` shows the stage point `(p − size / 2) / depth + center`.
+        scale = SIMD2<Float>(toFrame / stage.depth)
+        offset = SIMD2<Float>(stage.center - size / 2 / stage.depth)
     }
 }
 
@@ -491,7 +896,7 @@ private struct ClickEffectUniforms {
     var opacity: Float
     var outline: Float
     var ring: Float
-    var padding: Float = 0
+    var outlineWidth: Float
 }
 
 /// `ShadowUniforms` in `ShaderSource.metal`: 32 bytes.

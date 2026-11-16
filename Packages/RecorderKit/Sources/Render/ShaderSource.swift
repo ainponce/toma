@@ -37,6 +37,24 @@ public enum ShaderSource {
         return mix(u.start, u.end, t);
     }
 
+    // How a stage drawn through the zoom camera, or into a target of another size, is read: the stage point under a
+    // target pixel is `pixel × scale + offset`, in pixels of the frame's output size.
+    struct StageMapping {
+        float2 scale;
+        float2 offset;
+    };
+
+    // The gradient at the stage point under the pixel (`StageMapping`), over the whole target: `gradientFragment` through
+    // the zoom camera.
+    fragment float4 stageGradientFragment(GradientOut in [[stage_in]],
+                                          constant GradientUniforms &u [[buffer(0)]],
+                                          constant StageMapping &m [[buffer(1)]],
+                                          constant float2 &stageSize [[buffer(2)]]) {
+        float2 uv = (in.position.xy * m.scale + m.offset) / stageSize;
+        float t = clamp(dot(uv - 0.5, u.direction) + 0.5, 0.0, 1.0);
+        return mix(u.start, u.end, t);
+    }
+
     struct QuadUniforms {
         float2 viewport;        // output size
         float2 origin;          // top-left corner of the quad drawn
@@ -280,14 +298,16 @@ public enum ShaderSource {
         return (float(h >> 8) / 16777216.0 - 0.5) * 0.04;
     }
 
-    // One of Toma's wallpapers, over a quad of any part of the target: its mesh gradient plus its grain. Nothing
-    // interpolated is read: a pixel depends on where it is alone, however the drawing is split.
+    // One of Toma's wallpapers, over a quad of any part of the target: its mesh gradient at the stage point under the
+    // pixel (`StageMapping`) plus the grain of the pixel. Nothing interpolated is read: a pixel depends on where it is
+    // alone, however the drawing is split.
     fragment float4 wallpaperFragment(QuadOut in [[stage_in]],
                                       constant WallpaperUniforms &u [[buffer(0)]],
                                       constant float2 *points [[buffer(1)]],   // fractions of the stage
-                                      constant float4 *colors [[buffer(2)]]) { // opaque
-        float2 pixel = in.position.xy;   // the centre of the output pixel
-        float2 stage = pixel;            // the stage point under it: the same until something transforms the stage
+                                      constant float4 *colors [[buffer(2)]],   // opaque
+                                      constant StageMapping &m [[buffer(3)]]) {
+        float2 pixel = in.position.xy;           // the centre of the target's pixel
+        float2 stage = pixel * m.scale + m.offset;
         return float4(saturate(wallpaperMesh(stage, u, points, colors) + wallpaperGrain(pixel)), 1.0);
     }
 
@@ -301,24 +321,25 @@ public enum ShaderSource {
     }
 
     // A blurred wallpaper over the whole target: its mesh gradient blurred (`BackgroundImages`, the stage's size) at the
-    // stage point under the output pixel, plus the grain of the output pixel, as sharp as without the blur.
+    // stage point under the pixel (`StageMapping`), plus the grain of the target's pixel, as sharp as without the blur.
     fragment float4 blurredWallpaperFragment(GradientOut in [[stage_in]],
                                              constant float2 &stageSize [[buffer(0)]],
+                                             constant StageMapping &m [[buffer(1)]],
                                              texture2d<float> mesh [[texture(0)]],
                                              sampler linearSampler [[sampler(0)]]) {
         float2 pixel = in.position.xy;
-        float2 stage = pixel;
+        float2 stage = pixel * m.scale + m.offset;
         return float4(saturate(mesh.sample(linearSampler, stage / stageSize).rgb + wallpaperGrain(pixel)), 1.0);
     }
 
     // A background image (`BackgroundImages`), over the whole target: its texture is the stage's size, the image
-    // already covering it and blurred, so the output pixel reads the texel of the stage point under it. The stage point
-    // is the output pixel until something transforms the stage.
+    // already covering it and blurred, so the pixel reads the texel of the stage point under it (`StageMapping`).
     fragment float4 backgroundImageFragment(GradientOut in [[stage_in]],
                                             constant float2 &stageSize [[buffer(0)]],
+                                            constant StageMapping &m [[buffer(1)]],
                                             texture2d<float> image [[texture(0)]],
                                             sampler linearSampler [[sampler(0)]]) {
-        float2 stage = in.position.xy;
+        float2 stage = in.position.xy * m.scale + m.offset;
         return float4(image.sample(linearSampler, stage / stageSize).rgb, 1.0);
     }
 
@@ -379,29 +400,101 @@ public enum ShaderSource {
     }
 
     struct ClickEffectUniforms {
-        float2 center;      // output pixels
-        float radius;       // a ring's middle circle, or a disc's edge
-        float thickness;    // a ring's white, across
-        float opacity;      // of the white
-        float outline;      // of a ring's 1 px black outline, along both edges of its white
-        float ring;         // 1: a ring (a ripple), 0: a filled disc (a circle)
-        float padding;
+        float2 center;          // output pixels
+        float radius;           // a ring's middle circle, or a disc's edge
+        float thickness;        // a ring's white, across
+        float opacity;          // of the white
+        float outline;          // of a ring's black outline, along both edges of its white
+        float ring;             // 1: a ring (a ripple), 0: a filled disc (a circle)
+        float outlineWidth;     // the outline's: 1 px, times the zoom camera's depth
     };
 
-    // A click effect (`ClickEffectLayer`), over a quad around it: a white ring with its outline, or a white disc, with
-    // antialiased edges. Premultiplied: the white and the black cover parts of the pixel that do not overlap.
-    fragment float4 clickEffectFragment(QuadOut in [[stage_in]],
-                                        constant ClickEffectUniforms &u [[buffer(0)]]) {
-        float r = length(in.p - u.center);
+    // A click effect (`ClickEffectLayer`) at p: a white ring with its outline, or a white disc, with antialiased edges.
+    // Premultiplied: the white and the black cover parts of the pixel that do not overlap.
+    static float4 clickEffect(float2 p, constant ClickEffectUniforms &u) {
+        float r = length(p - u.center);
         if (u.ring == 0.0) {
             return float4(u.opacity * clamp(u.radius + 0.5 - r, 0.0, 1.0));
         }
         float d = abs(r - u.radius);
         float halfWidth = u.thickness * 0.5;
+        float outer = u.outlineWidth + 0.5;
         float white = clamp(halfWidth + 0.5 - d, 0.0, 1.0);
-        float outlined = clamp(halfWidth + 1.5 - d, 0.0, 1.0);
+        float outlined = clamp(halfWidth + outer - d, 0.0, 1.0);
         float w = u.opacity * white;
         return float4(w, w, w, w + u.outline * (outlined - white));
+    }
+
+    // A click effect over a quad around it.
+    fragment float4 clickEffectFragment(QuadOut in [[stage_in]],
+                                        constant ClickEffectUniforms &u [[buffer(0)]]) {
+        return clickEffect(in.p, u);
+    }
+
+    // The motion blur's render pass (`Compositor`): attachment 0 is a subsample of the stage, drawn there by the stage's
+    // shaders as into a target; 1 is the sum of the subsamples (rgba16Float); 2 is the target. 0 and 1 stay in tile
+    // memory (memoryless): the subsamples are summed by programmable blending, reading them where they are drawn.
+    struct SumOut {
+        float4 sum [[color(1)]];
+    };
+
+    struct TargetOut {
+        float4 color [[color(2)]];
+    };
+
+    // Adds the subsample just drawn, times its weight (1/N), to the sum, over the whole target.
+    fragment SumOut accumulateFragment(float4 stage [[color(0)]],
+                                       float4 sum [[color(1)]],
+                                       constant float &weight [[buffer(0)]]) {
+        SumOut out;
+        out.sum = sum + stage * weight;
+        return out;
+    }
+
+    // One of the cursor's samples (`cursorFragment`), at its opacity times its weight (1/N), added to the sum by the
+    // pipeline's blending.
+    fragment SumOut cursorSampleFragment(QuadOut in [[stage_in]],
+                                         constant float &weight [[buffer(0)]],
+                                         texture2d<float> sprite [[texture(0)]],
+                                         sampler mipSampler [[sampler(0)]]) {
+        SumOut out;
+        out.sum = sprite.sample(mipSampler, in.uv) * weight;
+        return out;
+    }
+
+    // The average of the subsamples of the stage, into the target.
+    fragment TargetOut resolveFragment(float4 sum [[color(1)]]) {
+        TargetOut out;
+        out.color = sum;
+        return out;
+    }
+
+    // The average of the cursor's samples (premultiplied, in the sum) over the stage drawn once, into the target.
+    fragment TargetOut resolveCursorFragment(float4 stage [[color(0)]],
+                                             float4 cursor [[color(1)]]) {
+        TargetOut out;
+        out.color = cursor + stage * (1.0 - cursor.a);
+        return out;
+    }
+
+    // A click effect into the target of the motion blur's pass.
+    fragment TargetOut clickEffectTargetFragment(QuadOut in [[stage_in]],
+                                                 constant ClickEffectUniforms &u [[buffer(0)]]) {
+        TargetOut out;
+        out.color = clickEffect(in.p, u);
+        return out;
+    }
+
+    // The camera (`screenFragment`) into the target of the motion blur's pass.
+    fragment TargetOut cameraTargetFragment(QuadOut in [[stage_in]],
+                                            constant QuadUniforms &u [[buffer(0)]],
+                                            texture2d<float> source [[texture(0)]],
+                                            sampler linearSampler [[sampler(0)]]) {
+        float coverage = imageCoverage(in.p, u);
+        float3 color = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
+        TargetOut out;
+        out.color = float4(color, 1.0) * coverage;
+        return out;
     }
     """#
 }

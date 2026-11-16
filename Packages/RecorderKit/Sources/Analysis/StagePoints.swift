@@ -12,7 +12,11 @@ import ProjectFormat
 /// places it (the render places it at the output's own size, and the cursor on it there). With a macOS window frame
 /// around the screen (`style.frame`), the window is `StageLayout.windowRect` as the render places it in an output of the
 /// document's aspect 1080 px on its shorter side (the 1920 × 1080 of the preview), the size the bar's 18 px floor is
-/// measured at: the same in every output where the bar is not at its floor.
+/// measured at. Stage units cannot hold a floor in pixels, so that is the render's window only in outputs where the bar
+/// is at its floor in both or in neither: a smaller output with a wide padding, whose bar is at its floor and the
+/// reference's is not (720 × 720 with a padding past about 0.11), has its window a few pixels off this one. The zoom
+/// camera keeps to this rect (`ZoomCameraPath`), and the render places its crop again over the window's exact rect at
+/// its own size (`FrameEvaluator`), so even a deep zoom shows no strip of background beside it.
 public struct StagePoints: Sendable {
     /// The output the window frame is placed in: the document's aspect, 1080 px on its shorter side.
     private static let windowFrameShortSide = 1080
