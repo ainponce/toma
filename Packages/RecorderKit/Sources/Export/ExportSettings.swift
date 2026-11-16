@@ -1,25 +1,74 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import ProjectFormat
 import Render
 
-/// What an MP4 export produces: frame size and rate. The video bitrate follows from them.
+/// The resolutions of the export sheet (design §5.6), by the output's shorter side: 4K is 3840 × 2160 in 16:9.
+public enum ExportResolution: Int, CaseIterable, Sendable {
+    case p720 = 720, p1080 = 1080, p1440 = 1440, p2160 = 2160
+}
+
+/// How many bits the H.264 encoder may spend on a pixel of a frame (design §5.6).
+public enum ExportQuality: CaseIterable, Sendable {
+    /// 0.08 bits per pixel and frame, the bitrate of phase 0 and 1a.
+    case standard
+    /// 0.14.
+    case high
+
+    public var bitsPerPixel: Double {
+        switch self {
+        case .standard: 0.08
+        case .high: 0.14
+        }
+    }
+}
+
+/// What an MP4 export produces: frame size and rate, and the quality its video bitrate follows from.
+///
+/// The export sheet's options are parameters of an export, never edits (design §5.6): they are not in the document.
 public struct ExportSettings: Sendable, Equatable {
-    /// H.264 bits per pixel per frame: `averageBitRate` = width × height × fps × `bitsPerPixel`.
-    public static let bitsPerPixel = 0.08
+    /// H.264 bits per pixel per frame at `.standard` quality: `averageBitRate` = width × height × fps × the quality's
+    /// `bitsPerPixel`.
+    public static let bitsPerPixel = ExportQuality.standard.bitsPerPixel
 
     /// Width and height of the video, in pixels.
     public var outputSize: SIMD2<Int> = [1920, 1080]
     public var framesPerSecond: Int = 60
+    public var quality: ExportQuality = .standard
     /// For tests: the export fails, as if the writer had, once this many frames are encoded.
     internal var failAfterFrames: Int? = nil
+    /// How many frames are drawn at once, on the GPU or waiting for their decoded frames, while the writer takes the
+    /// ones before them. 1 draws each frame and waits for it before the next (`FrameRenderer.render(at:into:)`), as
+    /// before milestone 1b: for tests, which compare the two.
+    internal var framesInFlight = 3
 
     /// Average H.264 bitrate, in bits per second.
     public var averageBitRate: Int {
-        Int((Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond) * Self.bitsPerPixel).rounded())
+        Int((Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond) * quality.bitsPerPixel).rounded())
     }
 
-    public init(outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60) {
+    public init(outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60, quality: ExportQuality = .standard) {
         self.outputSize = outputSize
         self.framesPerSecond = framesPerSecond
+        self.quality = quality
+    }
+
+    /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even).
+    public init(aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality) {
+        self.init(
+            outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue), framesPerSecond: framesPerSecond,
+            quality: quality)
+    }
+
+    /// About how many bytes an export of `durationSeconds` takes: the video's and the audio's bitrates over that time
+    /// (the export sheet's estimate, design §5.6).
+    public func estimatedBytes(durationSeconds: Double) -> Int64 {
+        Int64((Double(averageBitRate + MP4Exporter.audioBitRate) * durationSeconds / 8).rounded())
+    }
+
+    /// Whether `resolution` is more than what was recorded: its shorter side longer than the recorded screen's
+    /// (`recordedShortSide`, in pixels). The sheet says "More than the recording" beside it.
+    public static func exceedsRecording(_ resolution: ExportResolution, recordedShortSide: Int) -> Bool {
+        resolution.rawValue > recordedShortSide
     }
 }
 
@@ -34,6 +83,9 @@ public enum ExportError: Error, Equatable {
     case noDisplayTrack
     /// The destination is a folder, or inside a project package (`*.toma`), which an export never writes into.
     case destinationNotAllowed
+    /// The document's clips last no time, as those of a take that recorded nothing (no segment of a screen, an audio
+    /// track or the camera) do: there is nothing to export, and nothing is written.
+    case nothingToExport
 }
 
 /// What a finished export left out, for the app to tell the user.

@@ -183,11 +183,15 @@ public enum CameraLayoutGeometry {
         Rect(x: area.x + (area.width - size.x) / 2, y: area.y + (area.height - size.y) / 2, width: size.x, height: size.y)
     }
 
-    private static func hidden(_ screen: ScreenCard) -> ScreenCard {
+    /// `screen` not shown: at `hiddenScale` of its size around its centre, its corners too, with opacity 0. The layouts'
+    /// timeline places what a layout hides with it too.
+    static func hidden(_ screen: ScreenCard) -> ScreenCard {
         ScreenCard(rect: shrunk(screen.rect), cornerRadius: screen.cornerRadius * hiddenScale, opacity: 0)
     }
 
-    private static func hidden(_ camera: CameraCard) -> CameraCard {
+    /// `camera` not shown: at `hiddenScale` of its size around its centre, its corners too, with opacity 0 and its border
+    /// and shadow weights.
+    static func hidden(_ camera: CameraCard) -> CameraCard {
         CameraCard(
             rect: shrunk(camera.rect), cornerRadius: camera.cornerRadius * hiddenScale, opacity: 0,
             borderWeight: camera.borderWeight, shadowWeight: camera.shadowWeight)

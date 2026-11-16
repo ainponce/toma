@@ -3,9 +3,12 @@ import AVFoundation
 import AppKit
 import ArgumentParser
 import CoreGraphics
+import CryptoKit
 import Darwin
+import Editing
 import Export
 import Foundation
+import ImageIO
 import ProjectFormat
 import Recording
 import Recovery
@@ -19,8 +22,8 @@ struct RecorderDev: AsyncParsableCommand {
         commandName: "recorder-dev",
         abstract: "Records, recovers, verifies, exports and stresses the editing of Toma takes from the command line.",
         subcommands: [
-            SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, EditStress.self,
-            EditCheck.self,
+            SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, BenchExport.self,
+            EditStress.self, EditCheck.self,
         ]
     )
 }
@@ -546,8 +549,11 @@ struct Verify: AsyncParsableCommand {
 struct ExportMP4: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "export",
-        abstract: "Exports a package's last take as an MP4: H.264 tagged Rec.709, and the microphone mixed with system audio as AAC.",
+        abstract: "Exports a package's last take as an MP4, with its edit: H.264 tagged Rec.709, and the audio mixed as AAC.",
         discussion: """
+            Exports the edit the editor shows (EditSession.readDocument): a package of version 3 without an edit gets \
+            the document a new project starts with, in memory, and nothing is written into the package. --raw \
+            exports the take without its edit (the legacy document: what phase 0 and 1a export), for debugging. \
             Draws every frame as the editor preview does. Writes <out.mp4>.partial.mp4 next to the \
             destination and moves it into place once it is complete, replacing a file already there in one \
             step; if the export fails or is killed, the destination is left as it was (a partial file left by \
@@ -574,16 +580,20 @@ struct ExportMP4: AsyncParsableCommand {
     @Option(help: "Frames per second of the video.")
     var fps = 60
 
+    @Flag(help: "Export the take without its edit (the legacy document), for debugging.")
+    var raw = false
+
     func validate() throws {
         guard width > 0, height > 0, fps > 0 else { throw ValidationError("--width, --height and --fps must be positive.") }
     }
 
     func run() async throws {
-        let project = try LoadedProject.load(URL(fileURLWithPath: package, isDirectory: true))
+        let (project, document) = try readProject(package, raw: raw)
         // As given, made absolute by hand: a relative file URL drops `..` lexically, while the exporter
         // resolves it (after a symlink included) the way the kernel does, as the shell would.
         let destination = URL(fileURLWithPath: output.hasPrefix("/") ? output : FileManager.default.currentDirectoryPath + "/" + output)
-        let exporter = MP4Exporter(project: project, settings: ExportSettings(outputSize: [width, height], framesPerSecond: fps))
+        let exporter = MP4Exporter(
+            project: project, document: document, settings: ExportSettings(outputSize: [width, height], framesPerSecond: fps))
         let printed = Mutex(-1)  // tenths of the export last printed
         let summary: ExportSummary
         do {
@@ -608,6 +618,219 @@ struct ExportMP4: AsyncParsableCommand {
             print("warning: no video of \(missing.track) from \(missing.file) from \(String(format: "%.2f", missing.start)) s to "
                 + "\(String(format: "%.2f", missing.end)) s: \(missing.reason)")
         }
+    }
+}
+
+/// The last take of the package at `path` and the document it is exported with: its edit, as the editor shows it
+/// (`EditSession.readDocument`, which writes nothing), or with `raw` the legacy document.
+private func readProject(_ path: String, raw: Bool) throws -> (LoadedProject, EditDocument) {
+    let url = URL(fileURLWithPath: path, isDirectory: true)
+    if raw {
+        let project = try LoadedProject.load(url)
+        return (project, .legacy(for: project))
+    }
+    let context = EditContext(
+        app: AppInfo(name: "recorder-dev", version: "dev"), cachesRoot: FileManager.default.temporaryDirectory, defaultStyle: .toma,
+        now: { Date() }, makeID: { prefix in prefix + String(format: "%08x", UInt32.random(in: .min ... .max)) })
+    return try EditSession.readDocument(url, take: nil, context: context)
+}
+
+// MARK: - Benchmarks
+
+struct BenchExport: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "bench-export",
+        abstract: "Exports a package, or a synthetic take with everything on, and prints the speed and the peak memory.",
+        discussion: """
+            Exports the package's last take with its edit (as export does), or with --all-on with the benchmark's \
+            document, into a temporary folder, and prints "speed: <x>× real time" (seconds of video over seconds \
+            of the export) and "peak memory: <n> MB", the largest physical footprint of the process (what Activity \
+            Monitor shows as its memory, the GPU's and the decoders' included). The MP4 is removed.
+
+            --synthetic records a synthetic take of 10 s at --width × --height and --fps (3840 × 2160 at 60 fps by \
+            default) with a camera, as synth-record --width <w> --height <h> --fps <f> --camera does, in a temporary \
+            folder, and exports it with --all-on in a process of its own (so the recording's memory is not counted), \
+            then removes the folder. The benchmark's document has everything on: the aurora-1 wallpaper (or, with \
+            --background-image, a 7680 × 4320 image, the largest an asset is decoded to), a shadow, the macOS window \
+            frame with a title, mipmapped sampling, a zoom camera that never rests (blocks of 0.25 s, 3 deep, \
+            between two far points) with a motion blur of a whole frame, the smoothed cursor with a motion blur of a \
+            whole frame, and the camera.
+            """
+    )
+
+    @Argument(help: "The .toma package; leave it out with --synthetic.")
+    var package: String?
+
+    @Flag(help: "Record a synthetic take with a camera in a temporary folder and export it with --all-on.")
+    var synthetic = false
+
+    @Flag(help: "Export with the benchmark's document, everything on, instead of the package's edit.")
+    var allOn = false
+
+    @Flag(help: "With --all-on, a 7680 × 4320 image as the background instead of the wallpaper; it is written into the package's assets/, so use it with --synthetic, whose take is temporary.")
+    var backgroundImage = false
+
+    @Option(help: "Width of the video (and of the synthetic take), in pixels.")
+    var width = 3840
+
+    @Option(help: "Height of the video (and of the synthetic take), in pixels.")
+    var height = 2160
+
+    @Option(help: "Frames per second of the video (and of the synthetic take).")
+    var fps = 60
+
+    func validate() throws {
+        guard width > 0, height > 0, fps > 0 else { throw ValidationError("--width, --height and --fps must be positive.") }
+        guard synthetic != (package != nil) else { throw ValidationError("Give a package or --synthetic, not both.") }
+        if backgroundImage, !(allOn || synthetic) { throw ValidationError("--background-image goes with --all-on or --synthetic.") }
+    }
+
+    func run() async throws {
+        if synthetic {
+            try runSynthetic()
+            return
+        }
+        guard let package else { return }
+        let (project, edit) = try readProject(package, raw: false)
+        let document = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: backgroundImage) : edit
+        let folder = FileManager.default.temporaryDirectory.appending(path: "bench-export-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let settings = ExportSettings(outputSize: [width, height], framesPerSecond: fps)
+        let exporter = MP4Exporter(project: project, document: document, settings: settings)
+        let started = Date()
+        do {
+            _ = try await exporter.export(to: folder.appending(path: "bench.mp4")) { _ in }
+        } catch {
+            printError("error: the export failed: \(error)")
+            throw ExitCode.failure
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        let seconds = Double(TimeMap(sequence: document.sequence).frameCount(frameRate: fps)) / Double(fps)
+        print(String(format: "exported: %.2f s of video, %d × %d at %d fps, in %.2f s", seconds, width, height, fps, elapsed))
+        print(String(format: "speed: %.2f× real time", seconds / elapsed))
+        print("peak memory: \(peakFootprint().map { "\($0 >> 20) MB" } ?? "unknown")")
+    }
+
+    /// Records the synthetic take with `synth-record` and benchmarks its export with `--all-on`, each in a process of
+    /// its own, then removes the take.
+    private func runSynthetic() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "bench-export-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        print("recording a synthetic take of \(Int(BenchDocument.seconds)) s, \(width) × \(height) at \(fps) fps, with a camera")
+        let recorded = try runThisTool([
+            "synth-record", folder.path, "--duration", String(BenchDocument.seconds), "--width", String(width), "--height",
+            String(height), "--fps", String(fps), "--camera",
+        ])
+        guard let take = recorded.split(separator: "\n").first.map(String.init), take.hasSuffix(".toma") else {
+            printError("error: synth-record printed no package")
+            throw ExitCode.failure
+        }
+        var arguments = ["bench-export", take, "--all-on", "--width", String(width), "--height", String(height), "--fps", String(fps)]
+        if backgroundImage { arguments.append("--background-image") }
+        print(try runThisTool(arguments), terminator: "")
+    }
+}
+
+/// Runs this tool with `arguments`, waits for it and returns what it printed; throws `ExitCode.failure` if it fails.
+private func runThisTool(_ arguments: [String]) throws -> String {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
+    process.arguments = arguments
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    try process.run()
+    let output = pipe.fileHandleForReading.readDataToEndOfFile()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        printError("error: recorder-dev \(arguments.first ?? "") exited with \(process.terminationStatus)")
+        throw ExitCode.failure
+    }
+    return String(decoding: output, as: UTF8.self)
+}
+
+/// The largest physical footprint of this process so far, in bytes (`ledger_phys_footprint_peak` of `TASK_VM_INFO`).
+private func peakFootprint() -> UInt64? {
+    var info = task_vm_info_data_t()
+    var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
+    let status = withUnsafeMutablePointer(to: &info) {
+        $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+            task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
+        }
+    }
+    return status == KERN_SUCCESS ? UInt64(max(info.ledger_phys_footprint_peak, 0)) : nil
+}
+
+/// The benchmarks' document, everything on (design §7.9), and their synthetic take's length: what `bench-export
+/// --synthetic` exports and `bench-preview --synthetic` plays.
+enum BenchDocument {
+    /// Seconds of the synthetic take.
+    static let seconds = 10.0
+
+    /// `edit` (the take's clips and screens) with everything on: see `BenchExport`'s discussion. With `backgroundImage`,
+    /// a 7680 × 4320 PNG is written into the package's `assets/` (once) and is the background.
+    static func make(for project: LoadedProject, from edit: EditDocument, backgroundImage: Bool) throws -> EditDocument {
+        var document = edit
+        document.style.background = backgroundImage
+            ? .image(file: try writeBackgroundImage(into: project.package)) : .wallpaper("aurora-1")
+        document.style.backgroundBlur = 0
+        document.style.shadow = 0.6
+        document.style.frame = .macWindow(appearance: .dark, title: "Toma — benchmark", buttons: true)
+        document.style.screenSampling = .mipmapped
+        document.cursor.show = true
+        document.cursor.smoothing = .spring(SpringSpec(damping: 1, response: 0.16))
+        document.cursor.hideWhenIdle = false
+        document.cursor.motionBlur = 1
+        document.zoom.show = true
+        document.zoom.motionBlur = 1
+        // A camera that never rests: blocks of 0.25 s, 3 deep, between two far points, over every clip.
+        document.zoom.regions = document.sequence.flatMap { clip in
+            stride(from: 0.0, to: clip.end.seconds(since: clip.start) - 0.25, by: 0.25).enumerated().map { k, offset in
+                ZoomRegion(
+                    id: String(format: "z-%08x", k + 1), take: clip.take, start: clip.start.adding(seconds: offset),
+                    end: clip.start.adding(seconds: offset + 0.25), origin: .user, depth: 3,
+                    focus: k % 2 == 0 ? .fixed(x: 0.2, y: 0.25) : .fixed(x: 0.8, y: 0.75), instant: false)
+            }
+        }
+        document.camera.show = true
+        return document
+    }
+
+    /// Writes a 7680 × 4320 PNG (a smooth gradient with a grid, so it stays small) into `package`'s `assets/`, named by
+    /// its hash as an imported image is, unless it is there; returns its path in the package.
+    private static func writeBackgroundImage(into package: ProjectPackage) throws -> String {
+        let width = 7680, height = 4320
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let gradient = CGGradient(
+                colorsSpace: space,
+                colors: [CGColor(red: 0.95, green: 0.55, blue: 0.2, alpha: 1), CGColor(red: 0.1, green: 0.2, blue: 0.6, alpha: 1)] as CFArray,
+                locations: [0, 1])
+        else { throw ValidationError("cannot draw the background image") }
+        context.drawLinearGradient(gradient, start: .zero, end: CGPoint(x: width, y: height), options: [])
+        context.setStrokeColor(CGColor(red: 1, green: 1, blue: 1, alpha: 0.5))
+        context.setLineWidth(4)
+        for x in stride(from: 0, through: width, by: 240) {
+            context.strokeLineSegments(between: [CGPoint(x: x, y: 0), CGPoint(x: x, y: height)])
+        }
+        for y in stride(from: 0, through: height, by: 240) {
+            context.strokeLineSegments(between: [CGPoint(x: 0, y: y), CGPoint(x: width, y: y)])
+        }
+        let png = NSMutableData()
+        guard let image = context.makeImage(),
+              let destination = CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil)
+        else { throw ValidationError("cannot encode the background image") }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw ValidationError("cannot encode the background image") }
+        let name = SHA256.hash(data: png as Data).prefix(16).map { String(format: "%02x", $0) }.joined() + ".png"
+        let folder = package.url.appending(path: "assets", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appending(path: name)
+        if !FileManager.default.fileExists(atPath: url.path) { try (png as Data).write(to: url) }
+        return "assets/" + name
     }
 }
 
