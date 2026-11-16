@@ -123,7 +123,8 @@ struct Record: AsyncParsableCommand {
             has started, like synth-record. Sleep and screen lock pause the take, as in the app.
 
             The tracks, in this order: each --display in the order given (the main display when there is neither \
-            --display nor --window), the --window, both at --fps (60 by default), camera at 30 fps (--camera), at \
+            --display nor --window), or the --window (a take records displays or one window, never both), at \
+            --fps (60 by default), camera at 30 fps (--camera), at \
             1080p unless --camera-preset says otherwise, mic, and system-audio (--system-audio). The display and \
             window IDs are the ones list-sources prints. --area x,y,w,h (global points) marks the area of an Area \
             take on its one --display: the track still records the whole display, and the manifest keeps the area. \
@@ -189,6 +190,7 @@ struct Record: AsyncParsableCommand {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         guard fps > 0 else { throw ValidationError("--fps must be positive.") }
         guard Set(displays).count == displays.count else { throw ValidationError("Each --display can be given once.") }
+        if window != nil, !displays.isEmpty { throw ValidationError("--window records no display: leave out --display.") }
         if let area {
             guard Self.rect(area) != nil else { throw ValidationError("--area takes x,y,w,h in points, with w and h positive.") }
             guard displays.count == 1 else { throw ValidationError("--area needs exactly one --display.") }
