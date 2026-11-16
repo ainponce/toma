@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import Analysis
+import AppSupport
 import Editing
 import Export
 import Observation
@@ -19,6 +20,33 @@ enum EditorSelection: Equatable {
     case zooms(Set<String>)
     case cameraChange(String)
     case screenChange(String)
+}
+
+/// A track of sound of the take, as a row of the Audio tab.
+struct AudioTrackRow: Equatable, Identifiable {
+    var take: String
+    var track: String
+    var isMicrophone: Bool
+    /// The device's visible name.
+    var deviceName: String
+
+    var id: String { AudioPlan.key(take: take, track: track) }
+}
+
+/// The import of a background image, as the panel shows it.
+enum ImageImportState: Equatable {
+    case idle
+    /// Copying it into the project; a full disk makes it wait (the amber banner says so) until it is cancelled.
+    case importing
+    case notAnImage
+    case saveFailed
+}
+
+/// "Use This Style for New Projects" and "Restore Toma's Style", as the panel shows them.
+enum StyleStoreState: Equatable {
+    case idle
+    case working
+    case failed
 }
 
 /// A strip above the preview (design §5.9): one at a time, the most pressing.
@@ -92,6 +120,28 @@ final class EditorModel {
     var selection: EditorSelection?
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
+    /// The image the background is being imported from (the panel's "Choose Image…").
+    var imageImport = ImageImportState.idle
+    @ObservationIgnored var importTask: Task<Void, Never>?
+    /// Saving or restoring the style for new projects is under way, or failed.
+    var styleStore = StyleStoreState.idle
+    /// The take has a photo of the desktop (`wallpapers/`) the Desktop background can show.
+    private(set) var hasDesktopPhoto = false
+    /// The take has a camera: the panel's Camera tab exists.
+    private(set) var hasCamera = false
+    /// The take saved the shapes of the cursor (`cursorImage` events): macOS's cursor can be drawn.
+    private(set) var hasCursorImages = false
+    /// The take has clicks to make zooms from; without them the Zoom tab says so.
+    private(set) var hasClicks = false
+    /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
+    private(set) var canHoldWhileTyping = false
+    /// The take's tracks of sound, as the Audio tab lists them.
+    private(set) var audioTracks: [AudioTrackRow] = []
+    /// The automatic zoom's settings that are being planned again off the main thread: the controls show them meanwhile.
+    var autoZoomPending: AutoZoomSettings?
+    @ObservationIgnored var autoZoomTask: Task<Void, Never>?
+    /// The edit session, for what the panel does with it (`EditorModel+Panel`).
+    var panelSession: EditSession? { session }
 
     /// Whether the session can change the project, as it last said.
     private(set) var access = EditAccess.readOnly(.openElsewhere)
@@ -281,6 +331,14 @@ final class EditorModel {
         shownRevision = revision
         timeline = Timeline(document, revision: revision)
         self.document = document
+        hasCamera = project.take.tracks.contains { $0.kind == .camera && !$0.segments.isEmpty }
+        hasCursorImages = project.events.contains { if case .cursorImage = $0.kind { true } else { false } }
+        hasClicks = ZoomPanelRules.hasClicks(events: project.events)
+        canHoldWhileTyping = ZoomPanelRules.canHoldWhileTyping(events: project.events)
+        audioTracks = project.take.tracks.filter { ($0.kind == .microphone || $0.kind == .systemAudio) && !$0.segments.isEmpty }
+            .map { AudioTrackRow(take: project.take.id, track: $0.id, isMicrophone: $0.kind == .microphone, deviceName: $0.source.name) }
+        hasDesktopPhoto = false
+        Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
         previewAspect = document.aspect
         durationSeconds = timeline?.map.durationSeconds ?? 0
         state = .ready
@@ -312,6 +370,16 @@ final class EditorModel {
             } else if isPlaying {
                 startClock(at: clockSeconds())
             }
+        }
+    }
+
+    /// Whether the take has a photo of the desktop of the first screen shown, read off the main thread.
+    private static func findDesktopPhoto(in project: LoadedProject, document: EditDocument, found: @escaping @MainActor (Bool) -> Void) {
+        let take = project.take, package = project.package
+        let display = document.screens.initial[take.id].flatMap(take.track).flatMap { $0.kind.isScreen ? $0.source.displayID : nil }
+        Task {
+            let has = await Task.detached { display.map { package.wallpaper(take: take.id, displayID: $0) != nil } ?? false }.value
+            found(has)
         }
     }
 
@@ -409,6 +477,74 @@ final class EditorModel {
         }
         return outcome
     }
+
+    // MARK: - Gestures
+
+    /// A drag on the preview or on a bar of the panel is one gesture (design decision 22): while it lasts, the preview shows
+    /// the document with the step applied, never logged; on its end, one `perform`.
+    private(set) var isGesturing = false
+    @ObservationIgnored private var gestureStep: EditStep?
+    /// What the gesture shows of the document besides its step (the zoom's box shows the frame without zoom).
+    @ObservationIgnored private var gestureLook: (EditDocument) -> EditDocument = { $0 }
+    @ObservationIgnored private var gestureBuilds = 0
+
+    /// Starts a gesture. `look` changes what the preview shows while it lasts (never what is logged).
+    func beginGesture(look: @escaping (EditDocument) -> EditDocument = { $0 }) {
+        guard canEdit, !isGesturing else { return }
+        isGesturing = true
+        gestureStep = nil
+        gestureLook = look
+        showGesture()
+    }
+
+    /// The step the gesture has now: the preview shows the document with its changes applied; if they do not apply, the
+    /// document without them.
+    func updateGesture(_ step: EditStep) {
+        guard isGesturing else { return }
+        gestureStep = step
+        showGesture()
+    }
+
+    /// Ends the gesture with one `perform` of its last step (none if it never had one).
+    func endGesture() {
+        guard isGesturing else { return }
+        isGesturing = false
+        let step = gestureStep
+        gestureStep = nil
+        gestureLook = { $0 }
+        if let step, perform(step) != .refused { return }
+        showSessionRevision()
+    }
+
+    /// Ends the gesture without a change: the preview goes back to the document.
+    func cancelGesture() {
+        guard isGesturing else { return }
+        isGesturing = false
+        gestureStep = nil
+        gestureLook = { $0 }
+        showSessionRevision()
+    }
+
+    private func showGesture() {
+        guard let document, let builder else { return }
+        var shown = document
+        if let step = gestureStep, let applied: EditDocument = try? document.applying(step.changes) { shown = applied }
+        shown = gestureLook(shown)
+        // Negative revisions are the gestures': no session's revision is one.
+        gestureBuilds += 1
+        builder.build(revision: -gestureBuilds, document: shown, outputSize: Self.exportSize(of: shown), mix: baseMix)
+    }
+
+    /// The preview shows the session's document again.
+    private func showSessionRevision() {
+        guard let session, let builder else { return }
+        builder.build(revision: session.revision, document: session.document, outputSize: Self.exportSize(of: session.document), mix: baseMix)
+    }
+
+    /// The project as the session has it, for what the overlays place.
+    var overlayProject: LoadedProject? { session.map(currentProject(of:)) }
+    /// The playhead in output nanoseconds.
+    var playheadNanoseconds: Int64 { timeline.map { Int64(TimeMap.frameTime(playheadFrame, frameRate: $0.frameRate)) } ?? 0 }
 
     func undo() {
         _ = session?.undo()

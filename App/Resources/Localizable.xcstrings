@@ -147,12 +147,45 @@
         }
       }
     },
+    "Add Change at Playhead" : {
+      "comment" : "The Camera tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar un cambio en el cabezal"
+          }
+        }
+      }
+    },
     "Adjust Area" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ajustar el área"
+          }
+        }
+      }
+    },
+    "After %@ s" : {
+      "comment" : "The Cursor tab: seconds without moving before the cursor hides",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Después de %@ s"
+          }
+        }
+      }
+    },
+    "After the Click" : {
+      "comment" : "The Zoom tab: seconds a zoom lasts after the last click",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen después del clic"
           }
         }
       }
@@ -209,6 +242,27 @@
         }
       }
     },
+    "Angle" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ángulo"
+          }
+        }
+      }
+    },
+    "Animation" : {
+      "comment" : "The Zoom tab: how the selected zoom moves",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Animación"
+          }
+        }
+      }
+    },
     "Another app changed this project, and this version of Toma can't open it now." : {
       "comment" : "Why a project couldn't be opened: another process changed it into one this version can't read",
       "localizations" : {
@@ -252,6 +306,16 @@
         }
       }
     },
+    "Appearance" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apariencia"
+          }
+        }
+      }
+    },
     "Apply Default Style" : {
       "comment" : "The banner of a project of an earlier version",
       "localizations" : {
@@ -284,12 +348,77 @@
         }
       }
     },
+    "Audio" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio"
+          }
+        }
+      }
+    },
     "Audio and Script" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Audio y guion"
+          }
+        }
+      }
+    },
+    "Aurora" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aurora"
+          }
+        }
+      }
+    },
+    "Automatic Zoom" : {
+      "comment" : "The Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom automático"
+          }
+        }
+      }
+    },
+    "Avoid Clipping" : {
+      "comment" : "The Audio tab: the limiter",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Evitar la saturación"
+          }
+        }
+      }
+    },
+    "Background" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondo"
+          }
+        }
+      }
+    },
+    "Before the Click" : {
+      "comment" : "The Zoom tab: seconds a zoom starts before the first click",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen antes del clic"
           }
         }
       }
@@ -301,6 +430,59 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Antes de la cuenta regresiva, Toma corre el atajo con el texto “on”. Si responde “changed”, Toma lo corre con “off” al terminar la grabación. El README del proyecto explica cómo crearlo."
+          }
+        }
+      }
+    },
+    "Berry" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mora"
+          }
+        }
+      }
+    },
+    "Blur" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfoque"
+          }
+        }
+      }
+    },
+    "Bottom" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo"
+          }
+        }
+      }
+    },
+    "Bottom Left" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo a la izquierda"
+          }
+        }
+      }
+    },
+    "Bottom Right" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo a la derecha"
           }
         }
       }
@@ -396,6 +578,17 @@
         }
       }
     },
+    "Changes During the Recording" : {
+      "comment" : "The Camera tab: the list of changes of the camera's style",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambios durante la toma"
+          }
+        }
+      }
+    },
     "Check for Updates…" : {
       "localizations" : {
         "es" : {
@@ -412,6 +605,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Elegir apps…"
+          }
+        }
+      }
+    },
+    "Choose Image…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir imagen…"
           }
         }
       }
@@ -437,6 +640,38 @@
         }
       }
     },
+    "Citrus" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cítrico"
+          }
+        }
+      }
+    },
+    "Click Effect" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Efecto de clic"
+          }
+        }
+      }
+    },
+    "Click Sound" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonido de clic"
+          }
+        }
+      }
+    },
     "Click a display to record it." : {
       "localizations" : {
         "es" : {
@@ -453,6 +688,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hacer clic en una ventana para grabarla."
+          }
+        }
+      }
+    },
+    "Clicks" : {
+      "comment" : "The Zoom tab: an automatic zoom's trigger",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clics"
+          }
+        }
+      }
+    },
+    "Clicks and Cursor Pauses" : {
+      "comment" : "The Zoom tab: an automatic zoom's trigger",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clics y pausas del cursor"
           }
         }
       }
@@ -477,6 +734,17 @@
         }
       }
     },
+    "Color" : {
+      "comment" : "A background type, and a colour swatch",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color"
+          }
+        }
+      }
+    },
     "Coming in phase 2." : {
       "localizations" : {
         "es" : {
@@ -487,12 +755,42 @@
         }
       }
     },
+    "Coral" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coral"
+          }
+        }
+      }
+    },
+    "Corners" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esquinas"
+          }
+        }
+      }
+    },
     "Couldn't export the video" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't open the image." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo abrir la imagen."
           }
         }
       }
@@ -598,6 +896,70 @@
         }
       }
     },
+    "Cursor" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cursor"
+          }
+        }
+      }
+    },
+    "Custom" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personalizado"
+          }
+        }
+      }
+    },
+    "Dark" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oscura"
+          }
+        }
+      }
+    },
+    "Delete Change" : {
+      "comment" : "The Camera tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el cambio"
+          }
+        }
+      }
+    },
+    "Delete Zoom" : {
+      "comment" : "The Zoom tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el zoom"
+          }
+        }
+      }
+    },
+    "Depth" : {
+      "comment" : "The Zoom tab: how far a zoom goes in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Profundidad"
+          }
+        }
+      }
+    },
     "Desktop" : {
       "comment" : "A display's only desktop (Space), and the open island's section of desktops",
       "localizations" : {
@@ -651,6 +1013,28 @@
         }
       }
     },
+    "Drag the box in the preview." : {
+      "comment" : "The Zoom tab: how to place a fixed focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar el recuadro en la vista previa."
+          }
+        }
+      }
+    },
+    "Drag the bubble in the preview to place it." : {
+      "comment" : "The Camera tab: how to place the bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar la burbuja en la vista previa para ubicarla."
+          }
+        }
+      }
+    },
     "Drag the bubble to place it. This is how the video starts; you can change it in the editor." : {
       "localizations" : {
         "es" : {
@@ -681,6 +1065,26 @@
         }
       }
     },
+    "Dune" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duna"
+          }
+        }
+      }
+    },
+    "Dusk" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crepúsculo"
+          }
+        }
+      }
+    },
     "Edit" : {
       "comment" : "The teleprompter: edit its script",
       "localizations" : {
@@ -692,6 +1096,38 @@
         }
       }
     },
+    "Editing: the change at %@" : {
+      "comment" : "The Camera tab: what the controls edit at the playhead; a time like 0:42",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se edita: el cambio de %@"
+          }
+        }
+      }
+    },
+    "Editing: the initial style" : {
+      "comment" : "The Camera tab: what the controls edit at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se edita: el estilo inicial"
+          }
+        }
+      }
+    },
+    "Ember" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brasa"
+          }
+        }
+      }
+    },
     "Encoder load %@" : {
       "comment" : "How much of the encoder's budget the take would use, as 42 %",
       "localizations" : {
@@ -699,6 +1135,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Carga del codificador %@"
+          }
+        }
+      }
+    },
+    "End Color" : {
+      "comment" : "A custom gradient's second colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color final"
           }
         }
       }
@@ -755,6 +1202,61 @@
         }
       }
     },
+    "Fast" : {
+      "comment" : "The Cursor tab: smoothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rápido"
+          }
+        }
+      }
+    },
+    "Fixed Point" : {
+      "comment" : "The Zoom tab: the selected zoom's focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Punto fijo"
+          }
+        }
+      }
+    },
+    "Focus" : {
+      "comment" : "The Zoom tab: where the selected zoom looks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Enfoque"
+          }
+        }
+      }
+    },
+    "Follow the Cursor" : {
+      "comment" : "The Zoom tab: the selected zoom's focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir el cursor"
+          }
+        }
+      }
+    },
+    "Follow the Cursor Inside the Zoom" : {
+      "comment" : "The Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir el cursor dentro del zoom"
+          }
+        }
+      }
+    },
     "For the zoom while typing. Nothing is noted in password fields." : {
       "comment" : "Under the setting that notes when keys are typed",
       "localizations" : {
@@ -766,6 +1268,16 @@
         }
       }
     },
+    "Forest" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bosque"
+          }
+        }
+      }
+    },
     "Format" : {
       "comment" : "The editor's format selector: the project's aspect",
       "localizations" : {
@@ -773,6 +1285,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Formato"
+          }
+        }
+      }
+    },
+    "Frame" : {
+      "comment" : "The panel's tab and the frame selector",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marco"
           }
         }
       }
@@ -830,12 +1353,43 @@
         }
       }
     },
+    "Gradient" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Degradado"
+          }
+        }
+      }
+    },
+    "Graphite" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grafito"
+          }
+        }
+      }
+    },
     "Grid" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grilla"
+          }
+        }
+      }
+    },
+    "Group Clicks Within" : {
+      "comment" : "The Zoom tab: seconds between clicks that make one zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agrupar clics separados hasta"
           }
         }
       }
@@ -861,12 +1415,34 @@
         }
       }
     },
+    "Hide When Still" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar cuando no se mueve"
+          }
+        }
+      }
+    },
     "Hide desktop icons while recording" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ocultar los íconos del escritorio al grabar"
+          }
+        }
+      }
+    },
+    "Hold While Typing" : {
+      "comment" : "The Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mantener el zoom al escribir"
           }
         }
       }
@@ -878,6 +1454,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Horizontal"
+          }
+        }
+      }
+    },
+    "Ice" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hielo"
           }
         }
       }
@@ -913,6 +1499,27 @@
         }
       }
     },
+    "Image" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagen"
+          }
+        }
+      }
+    },
+    "Instant" : {
+      "comment" : "The Zoom tab: the selected zoom cuts in and out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instantánea"
+          }
+        }
+      }
+    },
     "Key %lld" : {
       "comment" : "A key the keyboard layout has no character for, named by its key code, in a keyboard shortcut",
       "localizations" : {
@@ -920,6 +1527,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tecla %lld"
+          }
+        }
+      }
+    },
+    "Lake" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lago"
           }
         }
       }
@@ -942,6 +1559,37 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Más tarde"
+          }
+        }
+      }
+    },
+    "Lavender" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lavanda"
+          }
+        }
+      }
+    },
+    "Left" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Izquierda"
+          }
+        }
+      }
+    },
+    "Light" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clara"
           }
         }
       }
@@ -983,6 +1631,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marcador puesto."
+          }
+        }
+      }
+    },
+    "Meadow" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prado"
+          }
+        }
+      }
+    },
+    "Mechanical" : {
+      "comment" : "The Cursor tab: a click sound",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mecánico"
           }
         }
       }
@@ -1048,6 +1717,26 @@
         }
       }
     },
+    "Midnight" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medianoche"
+          }
+        }
+      }
+    },
+    "Mint" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menta"
+          }
+        }
+      }
+    },
     "Mission Control" : {
       "localizations" : {
         "es" : {
@@ -1058,12 +1747,44 @@
         }
       }
     },
+    "Mist" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Niebla"
+          }
+        }
+      }
+    },
+    "Motion Blur" : {
+      "comment" : "The Cursor tab and the Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfoque de movimiento"
+          }
+        }
+      }
+    },
     "Move the area or change its size." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mover el área o cambiar su tamaño."
+          }
+        }
+      }
+    },
+    "Mute" : {
+      "comment" : "The Audio tab: a track's switch",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Silenciar"
           }
         }
       }
@@ -1297,6 +2018,16 @@
         }
       }
     },
+    "Ocean" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Océano"
+          }
+        }
+      }
+    },
     "Off" : {
       "comment" : "Microphone: none",
       "localizations" : {
@@ -1401,6 +2132,27 @@
         }
       }
     },
+    "Padding" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen"
+          }
+        }
+      }
+    },
+    "Panel" : {
+      "comment" : "The editor's panel (VoiceOver)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Panel"
+          }
+        }
+      }
+    },
     "Part of the recording couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -1465,6 +2217,16 @@
         }
       }
     },
+    "Peach" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Durazno"
+          }
+        }
+      }
+    },
     "Permissions" : {
       "localizations" : {
         "es" : {
@@ -1502,6 +2264,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Puntos"
+          }
+        }
+      }
+    },
+    "Position" : {
+      "comment" : "The camera's place: the grid of 8 places",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posición"
           }
         }
       }
@@ -1751,12 +2524,44 @@
         }
       }
     },
+    "Regenerate Automatic Zooms" : {
+      "comment" : "The Zoom tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regenerar los zooms automáticos"
+          }
+        }
+      }
+    },
+    "Remove Image" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar la imagen"
+          }
+        }
+      }
+    },
     "Remove Shortcut" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quitar el atajo"
+          }
+        }
+      }
+    },
+    "Replaces the automatic zooms that weren't changed." : {
+      "comment" : "The Zoom tab: what the button does",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reemplaza los zooms automáticos que no se tocaron."
           }
         }
       }
@@ -1803,12 +2608,44 @@
         }
       }
     },
+    "Restore Toma's Style" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volver al estilo de Toma"
+          }
+        }
+      }
+    },
     "Resume" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Reanudar"
+          }
+        }
+      }
+    },
+    "Right" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derecha"
+          }
+        }
+      }
+    },
+    "Ripple" : {
+      "comment" : "The Cursor tab: a click effect",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ondas"
           }
         }
       }
@@ -1820,6 +2657,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuadrado redondeado"
+          }
+        }
+      }
+    },
+    "Sand" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arena"
           }
         }
       }
@@ -1870,6 +2717,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Falló el guardado de la cámara. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
+    "Saving the image…" : {
+      "comment" : "A background image being copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardando la imagen…"
           }
         }
       }
@@ -1964,6 +2822,17 @@
         }
       }
     },
+    "Selected Zoom" : {
+      "comment" : "The Zoom tab: the card of the selected zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom seleccionado"
+          }
+        }
+      }
+    },
     "Settings" : {
       "localizations" : {
         "es" : {
@@ -1980,6 +2849,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ajustes…"
+          }
+        }
+      }
+    },
+    "Shadow" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sombra"
+          }
+        }
+      }
+    },
+    "Shape" : {
+      "comment" : "The camera bubble's shape",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forma"
           }
         }
       }
@@ -2014,6 +2904,28 @@
         }
       }
     },
+    "Show Camera" : {
+      "comment" : "The Camera tab: whether the camera shows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar la cámara"
+          }
+        }
+      }
+    },
+    "Show Cursor" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar el cursor"
+          }
+        }
+      }
+    },
     "Show Panel" : {
       "comment" : "The editor's bar and the View menu: shows the panel",
       "localizations" : {
@@ -2035,12 +2947,34 @@
         }
       }
     },
+    "Show Zooms" : {
+      "comment" : "The Zoom tab: turns every zoom off without deleting the blocks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar los zooms"
+          }
+        }
+      }
+    },
     "Show in Finder" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar en Finder"
+          }
+        }
+      }
+    },
+    "Size" : {
+      "comment" : "The camera's size, or the cursor's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño"
           }
         }
       }
@@ -2052,6 +2986,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chica"
+          }
+        }
+      }
+    },
+    "Smooth" : {
+      "comment" : "The Cursor tab: smoothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suave"
+          }
+        }
+      }
+    },
+    "Smoothing" : {
+      "comment" : "The Cursor tab: how the cursor follows the recorded one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suavizado"
+          }
+        }
+      }
+    },
+    "Soft" : {
+      "comment" : "The Cursor tab: a click sound",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suave"
           }
         }
       }
@@ -2148,6 +3115,28 @@
         }
       }
     },
+    "Square" : {
+      "comment" : "The camera bubble's shape: a square with rounded corners",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadrado"
+          }
+        }
+      }
+    },
+    "Start Color" : {
+      "comment" : "A custom gradient's first colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color inicial"
+          }
+        }
+      }
+    },
     "Starting recording…" : {
       "localizations" : {
         "es" : {
@@ -2168,6 +3157,16 @@
         }
       }
     },
+    "Steel" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acero"
+          }
+        }
+      }
+    },
     "Stop" : {
       "localizations" : {
         "es" : {
@@ -2184,6 +3183,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Detener grabación"
+          }
+        }
+      }
+    },
+    "Style" : {
+      "comment" : "The Cursor tab: the cursor's look",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estilo"
+          }
+        }
+      }
+    },
+    "Sunset" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atardecer"
           }
         }
       }
@@ -2440,6 +3460,17 @@
         }
       }
     },
+    "The image couldn't be saved." : {
+      "comment" : "A background image that could not be copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar la imagen."
+          }
+        }
+      }
+    },
     "The last change couldn't be saved yet. Saving it is tried again every few seconds." : {
       "comment" : "Editor banner (amber): an edit waits in memory after an error other than a full disk",
       "localizations" : {
@@ -2588,6 +3619,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The style couldn't be saved." : {
+      "comment" : "The style for new projects could not be saved",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar el estilo."
           }
         }
       }
@@ -3010,6 +4052,60 @@
         }
       }
     },
+    "This recording didn't note when keys were typed." : {
+      "comment" : "The Zoom tab: why Hold While Typing is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no anotó cuándo se escribía."
+          }
+        }
+      }
+    },
+    "This recording didn't save the cursor's shape: Toma's arrow is used." : {
+      "comment" : "The Cursor tab: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no guardó la forma del cursor: se usa la flecha de Toma."
+          }
+        }
+      }
+    },
+    "This recording has no audio." : {
+      "comment" : "The Audio tab: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no tiene audio."
+          }
+        }
+      }
+    },
+    "This recording has no clicks to make zooms from. Zooms can be added by hand on the Zoom track." : {
+      "comment" : "The Zoom tab: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no tiene clics para generar zooms. Se pueden agregar zooms a mano en la pista Zoom."
+          }
+        }
+      }
+    },
+    "This recording has no photo of the desktop." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no tiene una foto del escritorio."
+          }
+        }
+      }
+    },
     "This recording has no screen to export." : {
       "localizations" : {
         "es" : {
@@ -3060,6 +4156,16 @@
         }
       }
     },
+    "Title" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título"
+          }
+        }
+      }
+    },
     "To record system audio, first turn it on in the recording control to give permission. Recording without it." : {
       "localizations" : {
         "es" : {
@@ -3091,12 +4197,77 @@
         }
       }
     },
+    "Toma" : {
+      "comment" : "The Cursor tab: Toma's own arrow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma"
+          }
+        }
+      }
+    },
+    "Toma Classic" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma clásico"
+          }
+        }
+      }
+    },
+    "Top" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arriba"
+          }
+        }
+      }
+    },
+    "Top Left" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arriba a la izquierda"
+          }
+        }
+      }
+    },
+    "Top Right" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arriba a la derecha"
+          }
+        }
+      }
+    },
     "Turn on Do Not Disturb with a shortcut" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Activar No Molestar con un atajo"
+          }
+        }
+      }
+    },
+    "Type" : {
+      "comment" : "The background's type selector",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tipo"
           }
         }
       }
@@ -3122,6 +4293,27 @@
         }
       }
     },
+    "Use This Style for New Projects" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar este estilo en los proyectos nuevos"
+          }
+        }
+      }
+    },
+    "Use the Project's" : {
+      "comment" : "The Zoom tab: the selected zoom uses the project's depth",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar la del proyecto"
+          }
+        }
+      }
+    },
     "Vertical" : {
       "comment" : "The camera bubble's shape: a 3:4 box",
       "localizations" : {
@@ -3140,6 +4332,27 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esperando espacio en el disco para aplicar el estilo por defecto…"
+          }
+        }
+      }
+    },
+    "Volume" : {
+      "comment" : "The Cursor tab: the click sound's volume; the Audio tab: a track's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen"
+          }
+        }
+      }
+    },
+    "Wallpaper" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondo de pantalla"
           }
         }
       }
@@ -3215,6 +4428,16 @@
         }
       }
     },
+    "Window Buttons" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Botones de la ventana"
+          }
+        }
+      }
+    },
     "Window capture is paused. Still trying to restart it." : {
       "localizations" : {
         "es" : {
@@ -3266,12 +4489,157 @@
         }
       }
     },
+    "Zoom" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom"
+          }
+        }
+      }
+    },
+    "Zoom On" : {
+      "comment" : "The Zoom tab: what triggers an automatic zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hacer zoom con"
+          }
+        }
+      }
+    },
+    "cursor.none" : {
+      "comment" : "The Cursor tab: no click effect or sound (not the generic \"None\")",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "frame.none" : {
+      "comment" : "The panel's frame selector: no frame (not the generic \"None\")",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "macOS (as recorded)" : {
+      "comment" : "The Cursor tab: the cursor the take recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS (el de la grabación)"
+          }
+        }
+      }
+    },
+    "macOS Window" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ventana de macOS"
+          }
+        }
+      }
+    },
     "macOS may ask you again every month to allow screen recording. That's normal." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    },
+    "smoothing.medium" : {
+      "comment" : "The Cursor tab: the middle smoothing (not the camera's \"Medium\")",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medium"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medio"
+          }
+        }
+      }
+    },
+    "zoom.speed.fast" : {
+      "comment" : "The Zoom tab: the zoom camera's speed",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fast"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rápida"
+          }
+        }
+      }
+    },
+    "zoom.speed.medium" : {
+      "comment" : "The Zoom tab: the zoom camera's speed",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medium"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Media"
+          }
+        }
+      }
+    },
+    "zoom.speed.slow" : {
+      "comment" : "The Zoom tab: the zoom camera's speed (not a masculine word)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Slow"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lenta"
           }
         }
       }

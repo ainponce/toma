@@ -16,7 +16,7 @@ final class ExportGate {
 
 /// The editor's window of one project (design §5.1): a unified toolbar with the bar (`EditorToolbar`) and, as content,
 /// a vertical split whose top is a horizontal split of the preview (`PreviewArea`) and the panel's place (Task 37 adds
-/// the system's inspector, `NSSplitViewItem(inspectorWithViewController:)`), and whose bottom is the timeline's place
+/// the system's inspector, `NSSplitViewItem(inspectorWithViewController:)`, `EditorPanel`), and whose bottom is the timeline's place
 /// (Task 40, its divider between `EditorLayout.timelineHeightRange`). Each part is SwiftUI in an `NSHostingController`
 /// whose view has the part's identifier (`preview`, `inspector`, `timeline`); the preview's bridges its `.toolbar` and
 /// title to the window (`sceneBridgingOptions`), without which the bar would not appear.
@@ -24,6 +24,9 @@ final class ExportGate {
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
     private let model: EditorModel
+    /// The panel's width and what it can be resized to.
+    private static let panelWidth: CGFloat = 300
+    private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
     private let onClose: () -> Void
     /// Top to bottom: `horizontalSplit`, then the timeline.
     private let verticalSplit = NSSplitViewController()
@@ -60,6 +63,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         preview.view.identifier = NSUserInterfaceItemIdentifier("preview")
         horizontalSplit.splitView.isVertical = true
         horizontalSplit.addSplitViewItem(NSSplitViewItem(viewController: preview))
+        // The panel is the system's inspector (decision 31): 300 pt, between 260 and 380.
+        let panel = NSHostingController(rootView: EditorPanel(model: model))
+        panel.sizingOptions = []
+        panel.preferredContentSize = NSSize(width: Self.panelWidth, height: 0)
+        panel.view.identifier = NSUserInterfaceItemIdentifier("inspector")
+        let inspector = NSSplitViewItem(inspectorWithViewController: panel)
+        inspector.minimumThickness = Self.panelWidthRange.lowerBound
+        inspector.maximumThickness = Self.panelWidthRange.upperBound
+        inspector.canCollapse = true
+        inspector.isCollapsed = !model.panelVisible
+        horizontalSplit.addSplitViewItem(inspector)
         verticalSplit.splitView.isVertical = false
         verticalSplit.addSplitViewItem(NSSplitViewItem(viewController: horizontalSplit))
         window.contentViewController = verticalSplit
