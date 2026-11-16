@@ -5,6 +5,7 @@ import ProjectFormat
 /// output pixels with the origin at the top left.
 public struct RenderFrame: Equatable, Sendable {
     public var outputSize: SIMD2<Int>
+    /// `gradientStart`, `gradientEnd` and `gradientAngleDegrees`: the gradient that a `.gradient` `background` draws.
     public var gradientStart: SIMD4<Float>
     public var gradientEnd: SIMD4<Float>
     public var gradientAngleDegrees: Float
@@ -16,6 +17,8 @@ public struct RenderFrame: Equatable, Sendable {
     public var cursor: CursorLayer?
     /// `nil` when the take has no camera, and before its first frame.
     public var camera: CameraLayer?
+    /// What is drawn behind everything: the gradient above (today's), a colour or a wallpaper.
+    public var background: BackgroundLayer
 
     public init(
         outputSize: SIMD2<Int>,
@@ -24,7 +27,8 @@ public struct RenderFrame: Equatable, Sendable {
         gradientAngleDegrees: Float,
         screen: ScreenLayer? = nil,
         cursor: CursorLayer? = nil,
-        camera: CameraLayer? = nil
+        camera: CameraLayer? = nil,
+        background: BackgroundLayer = .gradient
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -33,6 +37,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.screen = screen
         self.cursor = cursor
         self.camera = camera
+        self.background = background
     }
 }
 
