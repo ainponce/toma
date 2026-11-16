@@ -25,9 +25,15 @@ import os
 ///
 /// A range is read from near where it starts: the segments are ALAC or Float32 LPCM (`FragmentedTrackWriter`), whose
 /// packets decode on their own, so a reader that starts its file `seekPreroll` frames before the range (an
-/// `AVAssetReader.timeRange`) decodes the same samples a reader from the file's start does. It does so only for a
-/// segment whose decoded frames are its own, at 48 kHz, and whose timestamps `load` saw run on exactly with them (a
-/// resampled one starts its resampler from another phase); any other is decoded from its start.
+/// `AVAssetReader.timeRange`) decodes the same samples a reader from the file's start does. A segment recorded at
+/// another rate (a microphone at 44.1 kHz, or a Bluetooth one at 16 or 24 kHz) is resampled to 48 kHz as it is decoded:
+/// started where one of its samples and a decoded frame fall at the same time (`seekGrid`: every 160 frames at
+/// 44.1 kHz), the resampler runs at the phase it has there when read from the start, and after taking in a few frames
+/// (at most 185, at 8 kHz, on macOS 26) gives the same samples; started anywhere else it never does. So a reader starts
+/// it at the last such point at least `seekPreroll` frames before the range, if `load` saw that starting one in the
+/// middle gives the frames of a reader from the start (`startsExactly`); such a reader can end up to 4 frames before
+/// that one, and `load` keeps the last frames for it. A segment whose timestamps do not run on exactly with its decoded
+/// frames, or that fails the check, is decoded from its start.
 ///
 /// The stream has the `channels` it was loaded with, 1 or 2 (`channelCount(of:in:)` says how many the track needs):
 /// a segment with that many goes as it is, a mono one goes to both channels, and any other is mixed down with every
@@ -84,15 +90,72 @@ final class AudioTrackTimeline: Sendable {
         var segment: Segment
         var start: Int64
         var end: Int64
-        /// The presentation time of decoded frame 0, when a reader can start the file at any frame (see the type).
+        /// The presentation time of decoded frame 0, when a reader can start the file at any point of its
+        /// `seekGrid` (see the type).
         var seekOrigin: CMTime?
+        /// The frames a reader from the file's start decodes, which a reader started in the middle never goes past.
+        var decodedFrames: Int64
+        /// The last of those frames (up to `tailFrames`, interleaved), for a reader started in the middle that ends a
+        /// few frames earlier (see the type).
+        var tail: [Float]
     }
 
-    /// How many frames before the first one it needs a reader starts its file, when it can start it anywhere: one ALAC
-    /// packet.
+    /// How many frames before the first one it needs a reader starts its file, at least, when it can start it in the
+    /// middle: one ALAC packet, and far more than the resampler takes in before it gives the frames it gives from the
+    /// start (at most 185 frames, at 8 kHz, on macOS 26).
     static let seekPreroll: Int64 = 4_096
     /// How far ahead of what it holds a reader reads on, rather than starting the file again near the frame asked for.
     static let readAhead: Int64 = 48_000
+    /// The decoded frames after `seekPreroll` that `load` compares, for a segment it resamples, to see whether starting
+    /// it in the middle gives the frames of a reader from its start.
+    static let seekCheckFrames: Int64 = 8_192
+    /// The last decoded frames of a segment that `load` keeps: a resampled file started in the middle can end up to 4
+    /// frames before one read from its start (at 8 kHz, on macOS 26), with the same frames up to there.
+    static let tailFrames: Int64 = 256
+
+    /// Where a reader can start a file at `sourceRate` and decode the frames a reader from its start does: the decoded
+    /// frames (at `sampleRate`) where one of the file's samples falls too, every `decoded` frames, which are `source`
+    /// samples of the file. Every frame at 48 kHz; every 160 frames, 147 samples, at 44.1 kHz; every 3 frames, 1 sample,
+    /// at 16 kHz. `nil` for a rate that is not a whole number of hertz.
+    static func seekGrid(sourceRate: Double) -> (decoded: Int64, source: Int64)? {
+        guard sourceRate >= 1, sourceRate <= 1_000_000, sourceRate.rounded() == sourceRate else { return nil }
+        let rate = Int64(sourceRate), output = Int64(sampleRate)
+        var (a, b) = (rate, output)
+        while b != 0 { (a, b) = (b, a % b) }
+        return (output / a, rate / a)
+    }
+
+    /// The decoded frames `startsExactly` compares for a reader started at decoded frame `start`.
+    static func seekCheck(at start: Int64) -> Range<Int64> {
+        (start + seekPreroll)..<(start + seekPreroll + seekCheckFrames)
+    }
+
+    /// The presentation time of decoded frame `frame` of a file at `sourceRate` whose decoded frame 0 is at `origin`:
+    /// counted in the file's own samples when the frame is on its `seekGrid`, in decoded frames otherwise.
+    static func time(ofDecoded frame: Int64, origin: CMTime, sourceRate: Double) -> CMTime {
+        if let grid = seekGrid(sourceRate: sourceRate), frame % grid.decoded == 0 {
+            return CMTimeAdd(origin, CMTime(value: frame / grid.decoded * grid.source, timescale: CMTimeScale(sourceRate)))
+        }
+        return CMTimeAdd(origin, CMTime(value: frame, timescale: CMTimeScale(sampleRate)))
+    }
+
+    /// Whether a reader that starts `segment`'s file at decoded frame `start` (its decoded frame 0 at `origin`) gives,
+    /// from `seekPreroll` frames on and for `seekCheckFrames`, the bits a reader from the file's start gives there: its
+    /// first frames come at the time asked for, and then the same frames. For a segment the reader resamples, which
+    /// gives them only from a point of its `seekGrid` and only if its resampler forgets where it started (as macOS's
+    /// does, after taking in a few frames), so `load` checks it instead of taking it for granted. `reference` is those
+    /// frames from a reader from the start, when they are at hand; if not, they are decoded.
+    /// - Throws: what opening the file throws.
+    static func startsExactly(
+        _ segment: Segment, channels: Int, origin: CMTime, at start: Int64, reference: [Float]? = nil
+    ) throws -> Bool {
+        let compared = seekCheck(at: start)
+        let reference = try reference ?? SegmentDecoder(segment, channels: channels).frames(compared, decodedFrom: 0)
+        let time = time(ofDecoded: start, origin: origin, sourceRate: segment.sourceRate)
+        let fromMiddle = try SegmentDecoder(segment, channels: channels, from: time)
+        guard let given = fromMiddle.frames(compared, decodedFrom: start, at: time) else { return false }
+        return reference.map { $0.map(\.bitPattern) } == given.map(\.bitPattern)
+    }
 
     /// Source host times `start ..< end` (to the end of the take when `end` is `nil`) of the track left silent.
     struct MissingSpan: Sendable {
@@ -168,7 +231,7 @@ final class AudioTrackTimeline: Sendable {
                 if abs(gap) <= maxClosedGap * sampleRate { segment.map.shift(by: -gap) }
             }
             if let frames = segment.frames, segment.map.output(atDecoded: frames) <= Double(reading) { continue }
-            let decoded: (frames: Int64, failure: String?, seekOrigin: CMTime?)
+            let decoded: (frames: Int64, failure: String?, seekOrigin: CMTime?, tail: [Float])
             do {
                 decoded = try SegmentDecoder.length(of: segment, channels: channels, cancelled: cancelled)
             } catch ExportError.cancelled {
@@ -180,7 +243,9 @@ final class AudioTrackTimeline: Sendable {
             }
             let start = max(reading, Int64(segment.map.output(atDecoded: 0).rounded(.up)))
             let end = audioEnd(of: segment.map, decodedFrames: decoded.frames, from: start)
-            placed.append(Placed(segment: segment, start: start, end: end, seekOrigin: decoded.seekOrigin))
+            placed.append(Placed(
+                segment: segment, start: start, end: end, seekOrigin: decoded.seekOrigin, decodedFrames: decoded.frames,
+                tail: decoded.seekOrigin == nil ? [] : decoded.tail))
             if let failure = decoded.failure {
                 missing.append(MissingSpan(
                     file: segment.file, start: origin.adding(seconds: Double(end) / sampleRate), end: segment.end,
@@ -484,26 +549,71 @@ private final class SegmentDecoder {
         reader.cancelReading()
     }
 
-    /// The decoded frames of `segment`, as a reader gets them, and why reading stopped early if it did; and the
-    /// presentation time of decoded frame 0 when a reader can start the file at any frame: the file is at 48 kHz (not
-    /// resampled) and every block's timestamp is the first one's plus the frames before it.
+    /// The decoded frames of `segment`, as a reader gets them, and why reading stopped early if it did; the
+    /// presentation time of decoded frame 0 when a reader can start the file at any point of its `seekGrid`: every
+    /// block's timestamp is the first one's plus the frames before it, and the file is at 48 kHz, or, resampled, a
+    /// reader started on the grid in its middle gives what this one does there (`AudioTrackTimeline.startsExactly`);
+    /// and the last `tailFrames` frames.
     /// - Throws: what opening the file throws, or `ExportError.cancelled` once `cancelled` is set.
     static func length(
         of segment: AudioTrackTimeline.Segment, channels: Int, cancelled: CancellationFlag
-    ) throws -> (frames: Int64, failure: String?, seekOrigin: CMTime?) {
+    ) throws -> (frames: Int64, failure: String?, seekOrigin: CMTime?, tail: [Float]) {
         let decoder = try SegmentDecoder(segment, channels: channels)
         let rate = CMTimeScale(AudioTrackTimeline.sampleRate)
+        let grid = AudioTrackTimeline.seekGrid(sourceRate: segment.sourceRate)
+        let resampled = segment.sourceRate != AudioTrackTimeline.sampleRate
+        // For a resampled file, where in its middle a reader is started to compare, and what this one decodes there.
+        var check: (start: Int64, frames: Range<Int64>)?
+        if resampled, let grid, let length = segment.frames, length.isFinite, length < 1e15 {
+            let start = Int64(length / 2) / grid.decoded * grid.decoded
+            if start > 0 { check = (start, AudioTrackTimeline.seekCheck(at: start)) }
+        }
+        var reference: [Float] = []
+        var tail: [Float] = []
+        let tailSamples = Int(AudioTrackTimeline.tailFrames) * channels
         var frames: Int64 = 0
         var origin: CMTime?
-        var onTime = segment.sourceRate == AudioTrackTimeline.sampleRate
+        var onTime = grid != nil && (!resampled || check != nil)
         while let block = decoder.next() {
             if cancelled.isCancelled { throw ExportError.cancelled }
             let first = origin ?? decoder.time
             origin = first
             onTime = onTime && first.isNumeric && CMTimeCompare(decoder.time, CMTimeAdd(first, CMTime(value: frames, timescale: rate))) == 0
-            frames += Int64(block.count / channels)
+            let count = Int64(block.count / channels)
+            if let compared = check?.frames {
+                let kept = (frames..<(frames + count)).clamped(to: compared)
+                if !kept.isEmpty { reference += block[(Int(kept.lowerBound - frames) * channels)..<(Int(kept.upperBound - frames) * channels)] }
+            }
+            frames += count
+            tail += block
+            if tail.count > 2 * tailSamples { tail.removeFirst(tail.count - tailSamples) }
         }
-        return (frames, decoder.failure, onTime ? origin : nil)
+        if tail.count > tailSamples { tail.removeFirst(tail.count - tailSamples) }
+        if onTime, let check, let first = origin {
+            onTime = Int64(reference.count / channels) == Int64(check.frames.count)
+                && (try? AudioTrackTimeline.startsExactly(segment, channels: channels, origin: first, at: check.start, reference: reference)) == true
+        }
+        return (frames, decoder.failure, onTime ? origin : nil, tail)
+    }
+
+    /// Decoded frames `range`, interleaved, of a decoder whose first frame is decoded frame `first`, decoding on to them
+    /// from where it is; `nil` if the file ends or reading stops before their end, or if `time` is given and its first
+    /// frames do not come at it.
+    func frames(_ range: Range<Int64>, decodedFrom first: Int64, at time: CMTime? = nil) -> [Float]? {
+        var frames: [Float] = []
+        var position = first
+        var checked = time == nil
+        while position < range.upperBound, let block = next() {
+            if !checked {
+                guard let time, CMTimeCompare(self.time, time) == 0 else { return nil }
+                checked = true
+            }
+            let count = Int64(block.count / channels)
+            let kept = (position..<(position + count)).clamped(to: range)
+            if !kept.isEmpty { frames += block[(Int(kept.lowerBound - position) * channels)..<(Int(kept.upperBound - position) * channels)] }
+            position += count
+        }
+        return position >= range.upperBound ? frames : nil
     }
 
     /// The next decoded frames, interleaved with the stream's channels; `nil` once the file is read to its end or
@@ -550,7 +660,8 @@ private final class SegmentDecoder {
 /// Reads one segment's frames forward, decoded by a `SegmentDecoder`, and resamples them onto timeline frames through
 /// its clock map (linear interpolation).
 private final class SegmentReader {
-    /// The decoded frame the file was started at: 0, or `seekPreroll` before the one first needed.
+    /// The decoded frame the file was started at: 0, or the point of its `seekGrid` at least `seekPreroll` before the
+    /// one first needed.
     let opening: Int64
 
     private let decoder: SegmentDecoder
@@ -560,31 +671,39 @@ private final class SegmentReader {
     /// Channels of the stream: what `buffer` holds.
     private let channels: Int
     /// Decoded frames held, interleaved, from decoded frame `bufferStart`.
-    private var buffer: [Float]
+    private var buffer: [Float] = []
     private var bufferStart: Int64
+    /// The frames a reader from the file's start decodes: none is held past them.
+    private let decodedFrames: Int64
+    /// The last of those frames, interleaved, from decoded frame `tailStart`.
+    private let tail: [Float]
+    private let tailStart: Int64
     /// The last timeline frame read: the reader only goes forward from it.
     private var lastFrame = Int64.min
 
-    /// A reader of `placed` whose first frame read needs decoded frame `needed`: it starts the file `seekPreroll`
-    /// frames before it when `placed.seekOrigin` lets it and the first frames come at the time asked for, from its start
-    /// otherwise.
+    /// A reader of `placed` whose first frame read needs decoded frame `needed`: it starts the file at the last point
+    /// of its `seekGrid` at least `seekPreroll` frames before it when `placed.seekOrigin` lets it and the first frames
+    /// come at the time asked for, from its start otherwise.
     init(_ placed: AudioTrackTimeline.Placed, channels: Int, near needed: Int64) throws {
         map = placed.segment.map
         self.channels = channels
-        let start = needed - AudioTrackTimeline.seekPreroll
+        decodedFrames = placed.decodedFrames
+        tail = placed.tail
+        tailStart = placed.decodedFrames - Int64(placed.tail.count / channels)
+        let step = AudioTrackTimeline.seekGrid(sourceRate: placed.segment.sourceRate)?.decoded ?? 1
+        let start = max(0, needed - AudioTrackTimeline.seekPreroll) / step * step
         if let origin = placed.seekOrigin, start > 0 {
-            let time = CMTimeAdd(origin, CMTime(value: start, timescale: CMTimeScale(AudioTrackTimeline.sampleRate)))
+            let time = AudioTrackTimeline.time(ofDecoded: start, origin: origin, sourceRate: placed.segment.sourceRate)
             let decoder = try SegmentDecoder(placed.segment, channels: channels, from: time)
             if let first = decoder.next(), CMTimeCompare(decoder.time, time) == 0 {
                 self.decoder = decoder
-                buffer = first
                 bufferStart = start
                 opening = start
+                hold(first)
                 return
             }
         }
         decoder = try SegmentDecoder(placed.segment, channels: channels)
-        buffer = []
         bufferStart = 0
         opening = 0
     }
@@ -623,12 +742,22 @@ private final class SegmentReader {
 
     /// Whether decoded frame `frame` is held, decoding up to it if needed. Frames before `keep` may be let go.
     private func hasFrame(_ frame: Int64, keeping keep: Int64) -> Bool {
-        while frame >= bufferEnd {
+        while frame >= bufferEnd, bufferEnd < decodedFrames {
             discard(before: keep)
-            guard let decoded = decoder.next() else { break }
-            buffer.append(contentsOf: decoded)
+            guard let decoded = decoder.next() else {
+                // Started in the middle, a resampled file can end a few frames early: the rest as from the start.
+                if bufferEnd >= tailStart { buffer += tail[(Int(bufferEnd - tailStart) * channels)...] }
+                break
+            }
+            hold(decoded)
         }
         return frame >= bufferStart && frame < bufferEnd
+    }
+
+    /// Holds `decoded`, the frames from `bufferEnd` on, up to `decodedFrames`.
+    private func hold(_ decoded: [Float]) {
+        let room = Int(max(0, decodedFrames - bufferEnd)) * channels
+        buffer += decoded.count > room ? decoded[..<room] : decoded[...]
     }
 
     /// Drops the held frames before `frame` once there are many of them.
