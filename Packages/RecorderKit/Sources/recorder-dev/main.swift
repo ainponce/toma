@@ -814,11 +814,16 @@ struct BenchPreview: AsyncParsableCommand {
         let (project, edit) = try readProject(package, raw: false)
         let document = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: false) : edit
         print(String(format: "load average: %.2f", loadAverage()))
+        // What the source is, when its first segment can be read: one that cannot shows in the bench as missing video,
+        // and must not end it.
         if let screen = project.take.tracks.first(where: { $0.kind.isScreen }), let file = screen.segments.first?.file,
-           let track = try await AVURLAsset(url: project.package.fileURL(file)).loadTracks(withMediaType: .video).first
+           let track = try? await AVURLAsset(url: project.package.fileURL(file)).loadTracks(withMediaType: .video).first,
+           let loaded = try? await track.load(.naturalSize, .nominalFrameRate)
         {
-            let (size, rate) = try await track.load(.naturalSize, .nominalFrameRate)
+            let (size, rate) = loaded
             print(String(format: "source: %d × %d at %.2f fps (%@)", Int(size.width), Int(size.height), rate, screen.id))
+        } else {
+            print("source: the first segment of the screen cannot be read")
         }
 
         // The motion paths: of the take, and of an hour.
