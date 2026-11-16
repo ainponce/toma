@@ -268,6 +268,25 @@ private let twoClips = TimeMap(sequence: [
     #expect(duration(at: .nan) == 1_600)
 }
 
+@Test func oneSpeedRuleForEveryReader() {
+    #expect(ClipSpeed.range == 0.25...16)
+    #expect(ClipSpeed.clamped(1.5) == 1.5)
+    #expect(ClipSpeed.clamped(32) == 16)
+    #expect(ClipSpeed.clamped(.infinity) == 16)
+    #expect(ClipSpeed.clamped(0.1) == 0.25)
+    #expect(ClipSpeed.clamped(-.infinity) == 0.25)
+    #expect(ClipSpeed.clamped(.nan) == 1)
+    // A clip's duration on its own is the one the mapping gives it, at the clamped speed.
+    let speeds: [Double] = [1, 3, 0.1, 100, .nan]
+    for speed in speeds {
+        let one = clip("c-00000001", 0, 1_600, speed: speed)
+        #expect(TimeMap.outputDuration(of: one) == TimeMap(sequence: [one]).duration, "at \(speed)×")
+    }
+    #expect(TimeMap.outputDuration(of: clip("c-00000001", 0, 1_600, speed: 3)) == 533)
+    // An end before the start is no source at all.
+    #expect(TimeMap.outputDuration(of: clip("c-00000001", 1_600, 0)) == 0)
+}
+
 @Test func framesAreOnTheRoundedGrid() {
     #expect(TimeMap.frameTime(0, frameRate: 60) == 0)
     #expect(TimeMap.frameTime(1, frameRate: 60) == 16_666_667)

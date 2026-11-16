@@ -20,6 +20,9 @@ public struct RenderFrame: Equatable, Sendable {
     /// What is drawn behind everything: the gradient above (today's), a colour, a wallpaper or an image (with the
     /// gradient above, Toma classic, when it cannot be read).
     public var background: BackgroundLayer
+    /// The macOS window around the screen, its bar above `screen`'s rect; `nil` without a frame, and when no screen is
+    /// shown.
+    public var windowFrame: WindowFrameLayer?
 
     public init(
         outputSize: SIMD2<Int>,
@@ -29,7 +32,8 @@ public struct RenderFrame: Equatable, Sendable {
         screen: ScreenLayer? = nil,
         cursor: CursorLayer? = nil,
         camera: CameraLayer? = nil,
-        background: BackgroundLayer = .gradient
+        background: BackgroundLayer = .gradient,
+        windowFrame: WindowFrameLayer? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -39,17 +43,19 @@ public struct RenderFrame: Equatable, Sendable {
         self.cursor = cursor
         self.camera = camera
         self.background = background
+        self.windowFrame = windowFrame
     }
 }
 
 /// The recorded screen: the `crop` of the frame of track `trackID` shown at host time `sourceTime`, drawn into
-/// `rect`.
+/// `rect`. Inside a window frame (`RenderFrame.windowFrame`), the window's rounded rect cuts it, square along its top
+/// edge, under the bar.
 public struct ScreenLayer: Equatable, Sendable {
     public var trackID: String
     public var sourceTime: HostTime
     /// In output pixels, origin at the top left.
     public var rect: Rect
-    /// In output pixels.
+    /// In output pixels: inside a window frame, the window's.
     public var cornerRadius: Double
     /// The part of the frame shown, as fractions of it (0, 0 is its top-left corner, 1, 1 the bottom-right one):
     /// the area recorded in Area mode, the whole frame otherwise.
