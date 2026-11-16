@@ -82,8 +82,10 @@ struct EditorBanners: View {
             String(localized: "The last change couldn't be saved: the disk is full. Changes are saved as soon as there is space.")
         case .saveFailed:
             String(localized: "The last change couldn't be saved yet. Saving it is tried again every few seconds.")
-        case .waitingForSpace:
+        case .waitingForSpace(defaultStyle: true):
             String(localized: "Waiting for space on the disk to apply the default style…")
+        case .waitingForSpace(defaultStyle: false):
+            String(localized: "Waiting for space on the disk to apply the style…", comment: "Editor banner (amber): applying a style of the row Style waits for room on a full disk to bring its image in")
         case let .readOnly(reason):
             text(reason)
         case .reopenedAfterOtherApp:

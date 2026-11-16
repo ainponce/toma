@@ -46,8 +46,9 @@ enum ImageImportState: Equatable {
 enum EditorBanner: Equatable {
     /// The last change could not be saved yet (amber).
     case saveFailed(POSIXErrorCode)
-    /// "Apply Default Style" waits for room on a full disk to bring its image in (amber): nothing is applied yet.
-    case waitingForSpace
+    /// "Apply Default Style" (`defaultStyle`) or a style of the row Style waits for room on a full disk to bring its image
+    /// in (amber): nothing is applied yet.
+    case waitingForSpace(defaultStyle: Bool)
     /// Nothing can be changed, for this reason (never `.newerDocument` nor `.unreadable`: those show no preview at all).
     case readOnly(ReadOnlyReason)
     /// Another app changed the project before its first edit here: it was opened again.
@@ -110,6 +111,8 @@ final class EditorModel {
     private(set) var exportState = ExportState.idle
     /// "Apply Default Style" is under way.
     private(set) var isApplyingDefaultStyle = false
+    /// A style of the row Style is being applied (`applyStyle`).
+    private(set) var isApplyingStyle = false
     var selection: EditorSelection?
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
@@ -577,12 +580,14 @@ final class EditorModel {
     /// `imageDirectory` first (waiting for a full disk to have room, as an import does). `(.refused, false)` if the project
     /// cannot be edited.
     func applyStyle(_ style: NamedStyle, imageDirectory: URL?) async -> (outcome: EditOutcome, imageMissing: Bool) {
-        guard let session, canEdit else { return (.refused, false) }
+        guard let session, canEdit, !isApplyingStyle else { return (.refused, false) }
+        // While its image waits for room on a full disk, the banner says so (`.waitingForSpace`).
+        isApplyingStyle = true
+        updateBanner()
         let result = await session.applyStyle(style, imageDirectory: imageDirectory)
-        if result.outcome != .refused, !editedHere {
-            editedHere = true
-            updateBanner()
-        }
+        isApplyingStyle = false
+        if result.outcome != .refused { editedHere = true }
+        updateBanner()
         return result
     }
 
@@ -835,7 +840,7 @@ final class EditorModel {
         }
         let next = Self.banner(
             access: session.access, notices: session.notices, applyingDefaultStyle: isApplyingDefaultStyle,
-            legacyDismissed: editorState.legacyBannerDismissed || editedHere,
+            applyingStyle: isApplyingStyle, legacyDismissed: editorState.legacyBannerDismissed || editedHere,
             recoveryDismissed: dismissedRecovery, reopenedDismissed: dismissedReopened,
             inGap: missingVideo.contains { $0.contains(currentSeconds) })
         if banner != next { banner = next }
@@ -844,12 +849,13 @@ final class EditorModel {
     /// The most pressing banner: a save that failed, then why the project is read-only, then what opening found, then
     /// the earlier version's look, then a part of the video that could not be read under the playhead.
     private static func banner(
-        access: EditAccess, notices: [EditNotice], applyingDefaultStyle: Bool, legacyDismissed: Bool, recoveryDismissed: Bool,
-        reopenedDismissed: Bool, inGap: Bool
+        access: EditAccess, notices: [EditNotice], applyingDefaultStyle: Bool, applyingStyle: Bool, legacyDismissed: Bool,
+        recoveryDismissed: Bool, reopenedDismissed: Bool, inGap: Bool
     ) -> EditorBanner? {
         for case let .saveFailed(code) in notices {
             // Its image waits for room: nothing of the style is applied yet.
-            return applyingDefaultStyle && (code == .ENOSPC || code == .EDQUOT) ? .waitingForSpace : .saveFailed(code)
+            let waiting = (applyingDefaultStyle || applyingStyle) && (code == .ENOSPC || code == .EDQUOT)
+            return waiting ? .waitingForSpace(defaultStyle: applyingDefaultStyle) : .saveFailed(code)
         }
         if case let .readOnly(reason) = access { return .readOnly(reason) }
         if !reopenedDismissed, notices.contains(.reopenedAfterOtherApp) { return .reopenedAfterOtherApp }

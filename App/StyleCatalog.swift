@@ -8,17 +8,6 @@ import ProjectFormat
 import UniformTypeIdentifiers
 import os
 
-/// How importing a `.tomastyle` went.
-enum StyleImportOutcome: Equatable {
-    case added(NamedStyle)
-    /// It is a package of the library already (opened from "Show in Finder"): nothing is copied.
-    case alreadyInLibrary
-    /// `StyleLibraryError.damaged`: it cannot be read as a style.
-    case damaged
-    /// The disk failed: nothing was added.
-    case failed
-}
-
 /// The user's named styles as the app shows them (1c design §8), one for the whole app: the library's styles, read off the
 /// main thread, and the style of the new projects (`RecorderSettings.newProjectsStyleID`). Every change goes through it,
 /// and it reads the library again after each, so the row Style of every editor and the sheet "Manage Styles…" show the
@@ -82,21 +71,23 @@ final class StyleCatalog {
 
     // MARK: - Reading
 
-    /// Reads the library again, off the main thread.
-    func reload() async {
+    /// Reads the library again, off the main thread; the styles it read, which are shown unless a later reading began
+    /// meanwhile.
+    @discardableResult
+    func reload() async -> [NamedStyle] {
         readings += 1
         let reading = readings, library = library
         let styles = await Task.detached(priority: .userInitiated) { library.list() }.value
-        guard reading == readings else { return }
-        self.styles = styles
+        if reading == readings { self.styles = styles }
+        return styles
     }
 
     /// The style new projects take, and the folder of its image (`EditContext.defaultStyle`, `styleDirectory` and
-    /// `cameraLook`): once the launch's migration is done, from the library as it is now; Toma's style if the one chosen
-    /// is not there any more.
+    /// `cameraLook`): once the launch's migration is done, from the library as this reads it now; Toma's style if the one
+    /// chosen is not there any more.
     func newProjectsStyle() async -> (style: NamedStyle, imageDirectory: URL?) {
         await launched.value
-        await reload()
+        let styles = await reload()
         guard let style = StyleMenu.newProjectsStyle(id: newProjectsStyleID, among: styles) else { return (Self.toma, nil) }
         return (style, library.imageDirectory(of: style))
     }
@@ -161,11 +152,15 @@ final class StyleCatalog {
         }
     }
 
-    /// Copies the `.tomastyle` at `url` into the library, unless it is one of its packages.
-    func importStyle(_ url: URL) async -> StyleImportOutcome {
+    /// Copies the `.tomastyle` at `url` into the library, unless it is one of its packages: then that style, or
+    /// `.damaged` if the library cannot read it.
+    func importStyle(_ url: URL) async -> StyleImportResult {
         await launched.value
         let directory = library.directory
-        if await Task.detached(operation: { StyleMenu.isInLibrary(url, directory: directory) }).value { return .alreadyInLibrary }
+        if await Task.detached(operation: { StyleMenu.isInLibrary(url, directory: directory) }).value {
+            let id = url.standardizedFileURL.deletingPathExtension().lastPathComponent
+            return await reload().first { $0.id == id }.map { .alreadyInLibrary($0) } ?? .damaged
+        }
         do {
             let style = try await library.importPackage(url)
             await reload()
@@ -178,28 +173,45 @@ final class StyleCatalog {
         }
     }
 
-    /// `.tomastyle` packages opened from Finder: each is imported, and an alert says how it went.
+    /// Imports each of `urls` in turn; what to say of them (`StyleMenu.importNotices`).
+    func importStyles(_ urls: [URL]) async -> [StyleImportNotice] {
+        var results: [(file: String, result: StyleImportResult)] = []
+        for url in urls {
+            results.append((url.standardizedFileURL.lastPathComponent, await importStyle(url)))
+        }
+        return StyleMenu.importNotices(results)
+    }
+
+    /// `.tomastyle` packages opened from Finder: each is imported, and one alert says how every one went, the failures
+    /// first.
     func openFromFinder(_ urls: [URL]) {
         Task {
-            for url in urls {
-                let outcome = await importStyle(url)
-                guard let text = Self.text(outcome) else { continue }
-                let alert = NSAlert()
-                alert.messageText = text
-                if case .added = outcome {} else { alert.alertStyle = .warning }
-                NSApp.activate()
-                alert.runModal()
-            }
+            let notices = await importStyles(urls)
+            guard let first = notices.first else { return }
+            let alert = NSAlert()
+            alert.messageText = Self.text(first)
+            alert.informativeText = notices.dropFirst().map(Self.text).joined(separator: "\n")
+            if first.isFailure { alert.alertStyle = .warning }
+            NSApp.activate()
+            alert.runModal()
         }
     }
 
-    /// What the app says of an import; nothing for a package of the library.
-    static func text(_ outcome: StyleImportOutcome) -> String? {
-        switch outcome {
-        case let .added(style): String(localized: "Style “\(style.name)” was added.", comment: "A .tomastyle was imported")
-        case .damaged: String(localized: "Couldn't import the style: the file is damaged.")
-        case .failed: String(localized: "Couldn't import the style.", comment: "Importing a .tomastyle failed on the disk")
-        case .alreadyInLibrary: nil
+    /// What the app says of one imported file (design §8 and §10).
+    static func text(_ notice: StyleImportNotice) -> String {
+        switch (notice.result, notice.file) {
+        case let (.added(style), _):
+            String(localized: "Style “\(style.name)” was added.", comment: "A .tomastyle was imported")
+        case let (.alreadyInLibrary(style), _):
+            String(localized: "“\(style.name)” is already in your styles.", comment: "A .tomastyle of the app's own styles folder was opened: nothing was copied")
+        case (.damaged, nil):
+            String(localized: "Couldn't import the style: the file is damaged.")
+        case let (.damaged, file?):
+            String(localized: "Couldn't import “\(file)”: the file is damaged.", comment: "One of several .tomastyle files imported at once can't be read as a style")
+        case (.failed, nil):
+            String(localized: "Couldn't import the style.", comment: "Importing a .tomastyle failed on the disk")
+        case let (.failed, file?):
+            String(localized: "Couldn't import “\(file)”.", comment: "One of several .tomastyle files imported at once failed on the disk")
         }
     }
 }

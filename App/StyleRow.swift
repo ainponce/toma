@@ -22,7 +22,8 @@ struct StyleRow: View {
     let model: EditorModel
     let document: EditDocument
 
-    /// The last saved style the project had exactly in this window: what "Update" saves over once it changed.
+    /// The last saved style the project had exactly in this window: what "Update" saves over once it changed. A project
+    /// that never had one here offers none.
     @State private var lastNamedID: String?
     @State private var notice: StyleRowNotice?
     @State private var working = false
@@ -103,7 +104,7 @@ struct StyleRow: View {
             newName = ""
             naming = true
         }
-        if let target = StyleMenu.updateTarget(match, lastNamedID: lastNamedID, newProjectsStyleID: newProjects, among: styles) {
+        if let target = StyleMenu.updateTarget(match, lastNamedID: lastNamedID, among: styles) {
             Button("Update “\(target.style.name)” with This Project") { update(target.style) }
                 .disabled(!target.changesIt)
         }

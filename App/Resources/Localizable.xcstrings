@@ -927,6 +927,28 @@
         }
       }
     },
+    "Couldn't import “%@”." : {
+      "comment" : "One of several .tomastyle files imported at once failed on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo importar «%@»."
+          }
+        }
+      }
+    },
+    "Couldn't import “%@”: the file is damaged." : {
+      "comment" : "One of several .tomastyle files imported at once can't be read as a style",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo importar «%@»: el archivo está dañado."
+          }
+        }
+      }
+    },
     "Couldn't open the image." : {
       "localizations" : {
         "es" : {
@@ -1120,17 +1142,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "¿Borrar el estilo «%@»?"
-          }
-        }
-      }
-    },
-    "Delete…" : {
-      "comment" : "Manage Styles: a style's menu item, which asks first",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Borrar…"
           }
         }
       }
@@ -2061,13 +2072,24 @@
         }
       }
     },
-    "Move to Trash" : {
-      "comment" : "A destructive button or menu item: to the trash",
+    "Move to the Trash" : {
+      "comment" : "Manage Styles: the alert's button; the style goes to the macOS Trash",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Mover a la papelera"
+            "value" : "Mover a la Papelera"
+          }
+        }
+      }
+    },
+    "Move to the Trash…" : {
+      "comment" : "Manage Styles: a style's menu item, which asks first; the style goes to the macOS Trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a la Papelera…"
           }
         }
       }
@@ -4784,6 +4806,17 @@
         }
       }
     },
+    "Waiting for space on the disk to apply the style…" : {
+      "comment" : "Editor banner (amber): applying a style of the row Style waits for room on a full disk to bring its image in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando espacio en el disco para aplicar el estilo…"
+          }
+        }
+      }
+    },
     "Wallpaper" : {
       "localizations" : {
         "es" : {
@@ -5077,6 +5110,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lenta"
+          }
+        }
+      }
+    },
+    "“%@” is already in your styles." : {
+      "comment" : "A .tomastyle of the app's own styles folder was opened: nothing was copied",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» ya está en los estilos."
           }
         }
       }

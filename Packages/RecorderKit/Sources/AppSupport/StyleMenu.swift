@@ -39,6 +39,38 @@ public struct StyleUpdateTarget: Equatable, Sendable {
     }
 }
 
+/// How importing one `.tomastyle` went (1c design §8 and §10).
+public enum StyleImportResult: Equatable, Sendable {
+    case added(NamedStyle)
+    /// It is a package of the library already (opened after "Show in Finder"): nothing was copied.
+    case alreadyInLibrary(NamedStyle)
+    /// It cannot be read as a style (`StyleLibraryError.damaged`).
+    case damaged
+    /// The disk failed: nothing was added.
+    case failed
+}
+
+/// One line of what the app says after an import.
+public struct StyleImportNotice: Equatable, Sendable {
+    public var result: StyleImportResult
+    /// The name of the file that failed, when several were imported at once: which one. `nil` for a single file, which
+    /// the sentence of design §12 says without its name, and for a style, which its own name tells.
+    public var file: String?
+
+    public init(result: StyleImportResult, file: String? = nil) {
+        self.result = result
+        self.file = file
+    }
+
+    /// Whether the line says that a file was not imported.
+    public var isFailure: Bool {
+        switch result {
+        case .damaged, .failed: true
+        case .added, .alreadyInLibrary: false
+        }
+    }
+}
+
 /// The rules of the named styles in the app (1c design §8): the row Style of the panel, its menu and the sheet "Manage
 /// Styles…", as functions of the library's styles (`StyleLibrary.list()`), the project's match
 /// (`StyleCommands.matchingStyle`) and the style of the new projects (`RecorderSettings.newProjectsStyleID`, `nil` for
@@ -86,14 +118,13 @@ public enum StyleMenu {
     }
 
     /// The style "Update “X” with This Project" names: the one the project has exactly, else the last one it had in this
-    /// window (`lastNamedID`), else the one it started from, the style of the new projects; the first of those still in
-    /// `styles`. `nil` if none is: Toma's style is never updated.
-    public static func updateTarget(
-        _ match: StyleMatch, lastNamedID: String?, newProjectsStyleID: String?, among styles: [NamedStyle]
-    ) -> StyleUpdateTarget? {
+    /// window (`lastNamedID`); the first of those still in `styles`. `nil` if none is: a project that never had a saved
+    /// style here (one of 1b, or one made before the style of the new projects changed) is never offered to write over
+    /// one, and Toma's style is never updated.
+    public static func updateTarget(_ match: StyleMatch, lastNamedID: String?, among styles: [NamedStyle]) -> StyleUpdateTarget? {
         var matched: String?
         if case let .named(id) = match { matched = id }
-        for id in [matched, lastNamedID, newProjectsStyleID].compactMap({ $0 }) {
+        for id in [matched, lastNamedID].compactMap({ $0 }) {
             if let style = styles.first(where: { $0.id == id }) { return StyleUpdateTarget(style: style, changesIt: id != matched) }
         }
         return nil
@@ -161,6 +192,24 @@ public enum StyleMenu {
         // The folder's links, not the package's: a package that is a link is not one (`StyleLibrary` never follows it).
         let folder = url.standardizedFileURL.deletingLastPathComponent().resolvingSymlinksInPath()
         return folder.path == directory.standardizedFileURL.resolvingSymlinksInPath().path
+    }
+
+    /// What the app says after importing `results`, each file's name and how it went, in the order chosen: every failure
+    /// first, then the styles that were in the library already, then those added, so a failure is never hidden behind a
+    /// later success. A failure names its file when several were imported at once.
+    public static func importNotices(_ results: [(file: String, result: StyleImportResult)]) -> [StyleImportNotice] {
+        let several = results.count > 1
+        let failures = results.compactMap { file, result -> StyleImportNotice? in
+            let notice = StyleImportNotice(result: result, file: several ? file : nil)
+            return notice.isFailure ? notice : nil
+        }
+        let already = results.compactMap { _, result -> StyleImportNotice? in
+            if case .alreadyInLibrary = result { StyleImportNotice(result: result) } else { nil }
+        }
+        let added = results.compactMap { _, result -> StyleImportNotice? in
+            if case .added = result { StyleImportNotice(result: result) } else { nil }
+        }
+        return failures + already + added
     }
 
     /// The style of the new projects once the style of 1b was migrated (`StyleLibrary.migrateLegacyDefault`): the one

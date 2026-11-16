@@ -80,25 +80,52 @@ import Editing
         #expect(!gone.canChangeFile)
     }
 
-    @Test func updateTargetIsTheStyleTheProjectCameFrom() {
+    @Test func updateTargetIsTheStyleTheProjectHad() {
         // The project has the style exactly: updating it changes nothing.
-        let same = StyleMenu.updateTarget(.named(Self.demos.id), lastNamedID: Self.tutorials.id, newProjectsStyleID: nil, among: Self.styles)
+        let same = StyleMenu.updateTarget(.named(Self.demos.id), lastNamedID: Self.tutorials.id, among: Self.styles)
         #expect(same == StyleUpdateTarget(style: Self.demos, changesIt: false))
-        // Changed since it last had one: that one.
-        let changed = StyleMenu.updateTarget(.custom, lastNamedID: Self.tutorials.id, newProjectsStyleID: Self.demos.id, among: Self.styles)
+        // Changed since it last had one in this window: that one.
+        let changed = StyleMenu.updateTarget(.custom, lastNamedID: Self.tutorials.id, among: Self.styles)
         #expect(changed == StyleUpdateTarget(style: Self.tutorials, changesIt: true))
         #expect(
-            StyleMenu.updateTarget(.toma, lastNamedID: Self.tutorials.id, newProjectsStyleID: nil, among: Self.styles)
+            StyleMenu.updateTarget(.toma, lastNamedID: Self.tutorials.id, among: Self.styles)
                 == StyleUpdateTarget(style: Self.tutorials, changesIt: true))
-        // Never had one here: the style it started from, the one of the new projects.
-        let fresh = StyleMenu.updateTarget(.custom, lastNamedID: nil, newProjectsStyleID: Self.demos.id, among: Self.styles)
-        #expect(fresh == StyleUpdateTarget(style: Self.demos, changesIt: true))
+        // Never had one here (a project of 1b, or one made before the style of the new projects changed): no style is
+        // offered to be written over, not even the one of the new projects.
+        #expect(StyleMenu.updateTarget(.custom, lastNamedID: nil, among: Self.styles) == nil)
+        #expect(StyleMenu.updateTarget(.toma, lastNamedID: nil, among: Self.styles) == nil)
         // The last one went from the library.
-        let gone = StyleMenu.updateTarget(.custom, lastNamedID: "ffffffff", newProjectsStyleID: Self.demos.id, among: Self.styles)
-        #expect(gone == StyleUpdateTarget(style: Self.demos, changesIt: true))
-        // None: Toma's style is never updated.
-        #expect(StyleMenu.updateTarget(.custom, lastNamedID: nil, newProjectsStyleID: nil, among: Self.styles) == nil)
-        #expect(StyleMenu.updateTarget(.toma, lastNamedID: "ffffffff", newProjectsStyleID: "eeeeeeee", among: Self.styles) == nil)
+        #expect(StyleMenu.updateTarget(.custom, lastNamedID: "ffffffff", among: Self.styles) == nil)
+        // A match that went from the library meanwhile falls back to the last one.
+        #expect(
+            StyleMenu.updateTarget(.named("eeeeeeee"), lastNamedID: Self.demos.id, among: Self.styles)
+                == StyleUpdateTarget(style: Self.demos, changesIt: true))
+    }
+
+    @Test func importNoticesNeverHideAFailure() {
+        let added = StyleImportResult.added(Self.tutorials)
+        // One file: the sentence of design §12, without its name.
+        #expect(StyleMenu.importNotices([("Tutoriales.tomastyle", added)]) == [StyleImportNotice(result: added)])
+        #expect(
+            StyleMenu.importNotices([("Roto.tomastyle", .damaged)]) == [StyleImportNotice(result: .damaged)])
+        #expect(StyleMenu.importNotices([("Roto.tomastyle", .failed)]) == [StyleImportNotice(result: .failed)])
+        // A damaged file and then a good one: the failure is said, first, with its file's name, and so is the style
+        // added.
+        #expect(
+            StyleMenu.importNotices([("Roto.tomastyle", .damaged), ("Tutoriales.tomastyle", added)])
+                == [StyleImportNotice(result: .damaged, file: "Roto.tomastyle"), StyleImportNotice(result: added)])
+        // Every failure in the order chosen, then the styles that were there already, then those added.
+        let notices = StyleMenu.importNotices([
+            ("Tutoriales.tomastyle", added), ("Lleno.tomastyle", .failed), ("a1b2c3d4.tomastyle", .alreadyInLibrary(Self.demos)),
+            ("Roto.tomastyle", .damaged),
+        ])
+        #expect(
+            notices == [
+                StyleImportNotice(result: .failed, file: "Lleno.tomastyle"), StyleImportNotice(result: .damaged, file: "Roto.tomastyle"),
+                StyleImportNotice(result: .alreadyInLibrary(Self.demos)), StyleImportNotice(result: added),
+            ])
+        #expect(notices.map(\.isFailure) == [true, true, false, false])
+        #expect(StyleMenu.importNotices([]).isEmpty)
     }
 
     @Test func styleOfADocumentIsWhatApplyCopies() {
