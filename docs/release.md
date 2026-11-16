@@ -492,6 +492,12 @@ Un proyecto nuevo cambia de pantalla, y de forma, con un resorte: el rectángulo
 - Grabar la pantalla completa y, a mitad de la toma, cambiar su resolución a una de otra forma (Ajustes del Sistema ▸ Pantallas, por ejemplo de 16:10 a 4:3, o girar un monitor externo). En el editor, el cambio se anima: el rectángulo pasa suave de una forma a la otra, el video lo llena recortado, sin estirarse, y después queda con la forma nueva entera.
 - En las dos, grabar un Área en lugar de la pantalla completa: durante el movimiento nunca se ve nada de fuera del Área, ni un borde.
 
+**El export** (30)
+
+El export dibuja los cuadros de la vista previa, con la edición, al tamaño, los cuadros por segundo y la calidad que se le piden, varios cuadros a la vez en la GPU. Hasta que la hoja de exportar llegue al editor, se exporta con `recorder-dev`, compilado en Release desde una copia de esta rama: `swift build --package-path Packages/RecorderKit -c release --product recorder-dev` deja el binario en `Packages/RecorderKit/.build/release/recorder-dev`. `recorder-dev export <paquete> <salida.mp4>` exporta la edición que muestra el editor y no escribe nada en el paquete.
+- Con una toma real editada en el editor (un corte, un tramo a 2×, un zoom, el fondo de pantalla, el marco y la cámara), exportarla en 16:9 a 1080p60 y a 4K (`--width 1920 --height 1080` y `--width 3840 --height 2160`), en 9:16 (`--width 1080 --height 1920` y `--width 2160 --height 3840`) y en 1:1 (`--width 1080 --height 1080` y `--width 2160 --height 2160`), siempre con `--fps 60`. Cada MP4 se abre en QuickTime, se reproduce sin saltos, con el sonido en sincronía, sin nada de lo cortado, y se ve como la vista previa del editor en el mismo instante (el 9:16 y el 1:1, con el formato del proyecto cambiado a ese en el editor). Que cada uno de esos tamaños se codifica ya lo prueba `everyExportSizeEncodes` en la Mac del agente.
+- En la Mac M1 de piso, con la copia en Release: `recorder-dev bench-export --synthetic --width 1920 --height 1080` exporta una toma sintética de 10 s a 1080p60 con todo prendido. Anotar la línea `speed:` (la meta es ≥ 1× el tiempo real, diseño §7.9) y la de `peak memory:` en la tabla y en `docs/performance.md`, sección "El export (Task 30)".
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
@@ -501,6 +507,7 @@ Un proyecto nuevo cambia de pantalla, y de forma, con un resorte: el rectángulo
 | 2. Micrófonos a 44,1, 24 y 16 kHz en macOS 15: empezar en el medio | pendiente | pendiente | pendiente |
 | 2. Esquinas de las tomas de ventana: ninguna negra con el estilo por defecto; radio de las negras en píxeles y en puntos (macOS 26 y 15) | pendiente | pendiente | pendiente |
 | 2. Dos pantallas y cambios de forma: el cambio de pantalla y el de resolución se animan sin saltos ni estirar; nada fuera del Área | pendiente | pendiente | pendiente |
+| 2. El export: 16:9, 9:16 y 1:1 a 1080p60 y a 4K se abren en QuickTime y se ven como la vista previa; en la M1, 1080p60 con todo ≥ 1× (velocidad y memoria) | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

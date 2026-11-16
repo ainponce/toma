@@ -13,7 +13,8 @@ import os
 /// audio.
 ///
 /// Frame `i` is the frame `FrameRenderer` draws of the edit document at output time `TimeMap.frameTime(i, frameRate:)`,
-/// the same drawing the preview shows; the video lasts the document's output (`TimeMap.frameCount(frameRate:)` frames;
+/// the same drawing the preview shows (the renderer's motion blur in frames of the export's rate); the video lasts the
+/// document's output (`TimeMap.frameCount(frameRate:)` frames;
 /// for the legacy document, the screen's timeline, or an audio track's when it was recorded longer). The audio is the
 /// document's mix (`EditedMix`, the one the preview plays), as long as those frames last: every microphone and system
 /// audio track through the clips, each placed by host time by its own clock, at its gain, with the click sounds; a take
@@ -23,6 +24,13 @@ import os
 /// document's sequence lasts (design §7.6), unless the document is the legacy one (`EditDocument.legacy(for:)`), which
 /// refuses it as phase 0 and 1a do (`ExportError.noDisplayTrack`).
 ///
+/// It exports the document it was given, a copy: what is edited while it runs changes nothing in it (design §5.6).
+///
+/// The frames go through a pipeline (design §7.9): up to `ExportSettings.framesInFlight` of them drawn at once
+/// (`FrameRenderer.render(at:into:completion:)`, which decodes ahead along the export's frame grid), while the writer
+/// encodes the ones before them. Each is appended to the writer on the export's queue, in frame order, once the GPU
+/// finished it: the same bytes as drawing one frame at a time.
+///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
 /// existing file in one step. If it fails or is cancelled, the partial file is removed and the
@@ -30,6 +38,8 @@ import os
 public final class MP4Exporter: Sendable {
     /// AAC bitrate, in bits per second.
     static let audioBitRate = 160_000
+    /// The label of the export's queue: it queues the frames to be drawn and feeds the writer.
+    static let queueLabel = "dev.toma.MP4Exporter"
     /// An export whose writer takes no data for this long fails instead of waiting forever.
     static let stallTimeout = 30.0
 
@@ -38,11 +48,21 @@ public final class MP4Exporter: Sendable {
     public let project: LoadedProject
     public let document: EditDocument
     public let settings: ExportSettings
+    /// For tests: sees each frame's pixel buffer on the export's queue, in frame order, right before it is appended.
+    let frameSink: FrameSink?
 
-    public init(project: LoadedProject, document: EditDocument, settings: ExportSettings) {
+    /// What a test's `frameSink` is given: the frame's index and the pixel buffer drawn for it.
+    typealias FrameSink = @Sendable (_ frame: Int, _ pixelBuffer: CVPixelBuffer) -> Void
+
+    public convenience init(project: LoadedProject, document: EditDocument, settings: ExportSettings) {
+        self.init(project: project, document: document, settings: settings, frameSink: nil)
+    }
+
+    init(project: LoadedProject, document: EditDocument, settings: ExportSettings, frameSink: FrameSink?) {
         self.project = project
         self.document = document
         self.settings = settings
+        self.frameSink = frameSink
     }
 
     /// The export of the legacy document (`EditDocument.legacy(for:)`): what phase 0 and 1a export.
@@ -60,9 +80,9 @@ public final class MP4Exporter: Sendable {
     /// go down and stay below 1, then once more with exactly 1 from the task running the export, once the
     /// file is in place. Cancel that task to stop: the export ends between two frames and throws
     /// `ExportError.cancelled`. One export at a time per destination: they would share the partial file.
-    /// - Throws: `ExportError` (`destinationNotAllowed` before anything is written, `noDisplayTrack` for the legacy
-    ///   document of a take without screen segments, `writerFailed`, `cancelled`), or the `RenderError` of a frame that
-    ///   could not be drawn.
+    /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, `nothingToExport` for a document
+    ///   that lasts no time, `noDisplayTrack` for the legacy document of a take without screen segments; then
+    ///   `writerFailed`, `cancelled`), or the `RenderError` of a frame that could not be drawn.
     @concurrent @discardableResult
     public func export(to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> ExportSummary {
         guard !Task.isCancelled else { throw ExportError.cancelled }
@@ -70,11 +90,11 @@ public final class MP4Exporter: Sendable {
         guard let destination = Self.canonicalDestination(destination, project: project.package) else {
             throw ExportError.destinationNotAllowed
         }
-        guard Self.exports(document, of: project) else { throw ExportError.noDisplayTrack }
+        if let refusal = Self.refusal(of: document, of: project) { throw refusal }
         let fps = settings.framesPerSecond
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
 
-        let renderer = try FrameRenderer(project: project, document: document, outputSize: settings.outputSize)
+        let renderer = try FrameRenderer(project: project, document: document, outputSize: settings.outputSize, frameRate: fps)
         let frameCount = TimeMap(sequence: document.sequence).frameCount(frameRate: fps)
         let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps)
         let audio = mix.hasSound ? try AudioMix(mix: mix) : nil
@@ -85,7 +105,7 @@ public final class MP4Exporter: Sendable {
         let summary: ExportSummary
         do {
             let session = try ExportSession(
-                url: partial, settings: settings, renderer: renderer, frameCount: frameCount, audio: audio)
+                url: partial, settings: settings, renderer: renderer, frameCount: frameCount, audio: audio, frameSink: frameSink)
             try await withTaskCancellationHandler {
                 try await session.run(progress: progress)
             } onCancel: {
@@ -125,10 +145,10 @@ public final class MP4Exporter: Sendable {
     /// The samples the AAC encoder gets when `document` of `project` is exported at `framesPerSecond`: every block of its
     /// mix (`AudioMix`), one after the other, interleaved Float32, over the frames of video rounded to 48 kHz; empty when
     /// the export has no audio.
-    /// - Throws: what `export` throws before it writes anything (`noDisplayTrack`, `writerFailed` for a frame rate
-    ///   that is not positive), or what reading or mixing the audio throws.
+    /// - Throws: what `export` throws before it writes anything (`nothingToExport`, `noDisplayTrack`, `writerFailed`
+    ///   for a frame rate that is not positive), or what reading or mixing the audio throws.
     static func mixSamples(of project: LoadedProject, document: EditDocument, framesPerSecond: Int) async throws -> [Float] {
-        guard exports(document, of: project) else { throw ExportError.noDisplayTrack }
+        if let refusal = refusal(of: document, of: project) { throw refusal }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
         let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond)
         guard mix.hasSound else { return [] }
@@ -151,11 +171,35 @@ public final class MP4Exporter: Sendable {
         }
     }
 
-    /// Whether `document` of `project` can be exported: when the screen the take shows (`ScreenChoice`) recorded a
-    /// segment, and without one for any document but the legacy one, which refuses it as phase 0 and 1a do.
-    private static func exports(_ document: EditDocument, of project: LoadedProject) -> Bool {
-        ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false
-            || document != .legacy(for: project)
+    /// Why `document` of `project` cannot be exported, or `nil` when it can: `nothingToExport` when its clips last no
+    /// time (a take that recorded nothing at all falls back to an empty span); otherwise, when the screen the take shows
+    /// (`ScreenChoice`) recorded a segment, and without one for any document but the legacy one, which refuses it as phase
+    /// 0 and 1a do (`noDisplayTrack`).
+    private static func refusal(of document: EditDocument, of project: LoadedProject) -> ExportError? {
+        guard TimeMap(sequence: document.sequence).duration > 0 else { return .nothingToExport }
+        let screenRecorded = ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false
+        return screenRecorded || document != .legacy(for: project) ? nil : .noDisplayTrack
+    }
+
+    /// The H.264 settings of the video of `settings`: High profile, CABAC, tagged Rec.709, at `averageBitRate`. Whichever
+    /// encoder VideoToolbox picks: the hardware one is not required, so every size of the export sheet encodes.
+    static func videoSettings(_ settings: ExportSettings) -> [String: Any] {
+        [
+            AVVideoCodecKey: AVVideoCodecType.h264,
+            AVVideoWidthKey: settings.outputSize.x,
+            AVVideoHeightKey: settings.outputSize.y,
+            AVVideoColorPropertiesKey: [
+                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+            ],
+            AVVideoCompressionPropertiesKey: [
+                AVVideoAverageBitRateKey: settings.averageBitRate,
+                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
+                AVVideoH264EntropyModeKey: AVVideoH264EntropyModeCABAC,
+                AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
+            ],
+        ]
     }
 
     // MARK: - Destination
@@ -265,11 +309,17 @@ private final class ExportSession: @unchecked Sendable {
     private let renderer: FrameRenderer
     private let settings: ExportSettings
     private let frameCount: Int
-    private let queue = DispatchQueue(label: "dev.toma.MP4Exporter", qos: .userInitiated)
+    private let frameSink: MP4Exporter.FrameSink?
+    private let queue = DispatchQueue(label: MP4Exporter.queueLabel, qos: .userInitiated)
     private let cancelled = Atomic(false)
+    /// Signalled each time a frame drawn ahead is done, to wake the loop.
+    private let frameDrawn = DispatchSemaphore(value: 0)
 
     /// Creates the writer of `url` (the file appears when writing starts) and its inputs.
-    init(url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, audio: AudioMix?) throws {
+    init(
+        url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, audio: AudioMix?,
+        frameSink: MP4Exporter.FrameSink?
+    ) throws {
         let writer: AVAssetWriter
         do {
             writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
@@ -277,7 +327,7 @@ private final class ExportSession: @unchecked Sendable {
             throw ExportError.writerFailed("cannot create the writer: \(error)")
         }
 
-        let video = Self.videoSettings(settings)
+        let video = MP4Exporter.videoSettings(settings)
         guard writer.canApply(outputSettings: video, forMediaType: .video) else {
             throw ExportError.writerFailed("H.264 cannot encode \(settings.outputSize.x)×\(settings.outputSize.y) at \(settings.framesPerSecond) fps")
         }
@@ -320,25 +370,7 @@ private final class ExportSession: @unchecked Sendable {
         self.renderer = renderer
         self.settings = settings
         self.frameCount = frameCount
-    }
-
-    static func videoSettings(_ settings: ExportSettings) -> [String: Any] {
-        [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: settings.outputSize.x,
-            AVVideoHeightKey: settings.outputSize.y,
-            AVVideoColorPropertiesKey: [
-                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-            ],
-            AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: settings.averageBitRate,
-                AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
-                AVVideoH264EntropyModeKey: AVVideoH264EntropyModeCABAC,
-                AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
-            ],
-        ]
+        self.frameSink = frameSink
     }
 
     func cancel() {
@@ -371,32 +403,65 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// The loop: feeds whichever input takes data, polling while neither does. The writer interleaves the
-    /// two tracks by holding back the input that is ahead (`isReadyForMoreMediaData`), so an input that
-    /// takes data is always fed: holding one back here too could leave both waiting for each other.
+    /// The loop: feeds whichever input takes data, polling while neither does (woken early when a frame is drawn). The
+    /// writer interleaves the two tracks by holding back the input that is ahead (`isReadyForMoreMediaData`), so an input
+    /// that takes data is always fed: holding one back here too could leave both waiting for each other.
+    ///
+    /// Video: up to `framesInFlight` frames are queued to be drawn (`FrameRenderer.render(at:into:completion:)`), and the
+    /// oldest goes to the writer once it is drawn; drawing one fails the export. With `framesInFlight` 1, each frame is
+    /// drawn and waited for in turn.
     private func encode(progress: @Sendable (Double) -> Void) throws {
         guard writer.startWriting() else { throw failure() }
         writer.startSession(atSourceTime: .zero)
         guard let pool = adaptor.pixelBufferPool else { throw ExportError.writerFailed("the writer has no pixel buffer pool") }
-        var frame = 0
+        var queued = 0  // frames queued to be drawn
+        var appended = 0
+        var drawing: [DrawnFrame] = []  // queued and not appended yet, in frame order
         var videoDone = false
         var audioDone = audioInput == nil
         var idleSince: HostTime?
         while !(videoDone && audioDone) {
             if cancelled.load(ordering: .relaxed) { throw ExportError.cancelled }
             var fed = false
-            if !videoDone, videoInput.isReadyForMoreMediaData {
-                if let limit = settings.failAfterFrames, frame >= limit {
-                    throw ExportError.writerFailed("failing after \(limit) frames, as the settings ask")
+            let appendedBefore = appended
+            if !videoDone, settings.framesInFlight <= 1 {
+                if videoInput.isReadyForMoreMediaData {
+                    let pixelBuffer = try makePixelBuffer(from: pool)
+                    try failIfAsked(appended)
+                    try renderer.render(at: time(ofFrame: appended), into: pixelBuffer)
+                    try append(pixelBuffer, frame: appended)
+                    appended += 1
+                    fed = true
                 }
-                try append(frame: frame, from: pool)
-                frame += 1
-                progress(Double(frame) / Double(frameCount + 1))
-                if frame == frameCount {
+            } else if !videoDone {
+                if let oldest = drawing.first, let drawn = oldest.result {
+                    try drawn.get()
+                    if videoInput.isReadyForMoreMediaData {
+                        try failIfAsked(appended)
+                        try append(oldest.pixelBuffer, frame: oldest.index)
+                        drawing.removeFirst()
+                        appended += 1
+                        fed = true
+                    }
+                }
+                while queued < frameCount, drawing.count < settings.framesInFlight {
+                    let frame = DrawnFrame(index: queued, pixelBuffer: try makePixelBuffer(from: pool))
+                    // The handler only notes it: the frame is appended from this queue.
+                    renderer.render(at: time(ofFrame: queued), into: frame.pixelBuffer) { [frameDrawn] error in
+                        frame.finish(error)
+                        frameDrawn.signal()
+                    }
+                    drawing.append(frame)
+                    queued += 1
+                    fed = true
+                }
+            }
+            if appended > appendedBefore {
+                progress(Double(appended) / Double(frameCount + 1))
+                if appended == frameCount {
                     videoInput.markAsFinished()
                     videoDone = true
                 }
-                fed = true
             }
             if !audioDone, let audioInput, let audio, audioInput.isReadyForMoreMediaData {
                 if let block = try audio.nextBlock() {
@@ -418,29 +483,43 @@ private final class ExportSession: @unchecked Sendable {
                 throw ExportError.writerFailed("the writer took no data for \(Int(MP4Exporter.stallTimeout)) s")
             }
             idleSince = idleSince ?? now
-            usleep(1_000)
+            _ = frameDrawn.wait(timeout: .now() + .milliseconds(1))
         }
     }
 
-    /// Draws frame `frame` into a buffer of the writer's pool and appends it at `frame / fps`.
-    /// The renderer draws it at `TimeMap.frameTime(frame, frameRate: fps)`: in seconds, which the renderer rounds back to
+    /// The output seconds of frame `frame`: `TimeMap.frameTime(frame, frameRate: fps)`, which the renderer rounds back to
     /// those nanoseconds exactly (they are far below 2⁵¹).
-    private func append(frame: Int, from pool: CVPixelBufferPool) throws {
+    private func time(ofFrame frame: Int) -> Double {
+        Double(TimeMap.frameTime(frame, frameRate: settings.framesPerSecond)) / 1e9
+    }
+
+    /// A buffer of the writer's pool for a frame, tagged as what the file says: the frame's values are encoded as they
+    /// are, nothing converts them.
+    private func makePixelBuffer(from pool: CVPixelBufferPool) throws -> CVPixelBuffer {
         var created: CVPixelBuffer?
         let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &created)
         guard status == kCVReturnSuccess, let pixelBuffer = created else {
             throw ExportError.writerFailed("no pixel buffer from the pool (CVReturn \(status))")
         }
-        // The frame's values are encoded as they are: tagged as what the file says, nothing converts them.
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
-        let fps = settings.framesPerSecond
-        try renderer.render(at: Double(TimeMap.frameTime(frame, frameRate: fps)) / 1e9, into: pixelBuffer)
-        try waitUntilReady(videoInput)  // drawing took time: the writer may have failed meanwhile
-        guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps))) else {
-            throw failure()
+        return pixelBuffer
+    }
+
+    /// Throws as the writer would once `appended` frames are encoded, if the settings ask for it (`failAfterFrames`).
+    private func failIfAsked(_ appended: Int) throws {
+        if let limit = settings.failAfterFrames, appended >= limit {
+            throw ExportError.writerFailed("failing after \(limit) frames, as the settings ask")
         }
+    }
+
+    /// Appends `pixelBuffer`, drawn, as frame `frame` at `frame / fps`, once the writer takes it.
+    private func append(_ pixelBuffer: CVPixelBuffer, frame: Int) throws {
+        try waitUntilReady(videoInput)  // drawing took time: the writer may have failed meanwhile
+        frameSink?(frame, pixelBuffer)
+        let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(settings.framesPerSecond))
+        guard adaptor.append(pixelBuffer, withPresentationTime: time) else { throw failure() }
     }
 
     /// Returns once `input` takes data, checked right before an append: appending to an input that is not
@@ -462,5 +541,26 @@ private final class ExportSession: @unchecked Sendable {
     /// The writer's error as `writerFailed`.
     private func failure() -> ExportError {
         .writerFailed(writer.error.map { String(describing: $0) } ?? "the writer stopped (status \(writer.status.rawValue))")
+    }
+}
+
+/// A frame queued to be drawn ahead into a buffer of the writer's pool: how drawing it ended, once it did, is set from
+/// the renderer's completion, on another thread.
+private final class DrawnFrame: @unchecked Sendable {
+    let index: Int
+    let pixelBuffer: CVPixelBuffer
+    private let lock = NSLock()
+    private var outcome: Result<Void, any Error>?
+
+    init(index: Int, pixelBuffer: CVPixelBuffer) {
+        self.index = index
+        self.pixelBuffer = pixelBuffer
+    }
+
+    /// `nil` while it is being drawn; then whether it was.
+    var result: Result<Void, any Error>? { lock.withLock { outcome } }
+
+    func finish(_ error: (any Error)?) {
+        lock.withLock { outcome = error.map { .failure($0) } ?? .success(()) }
     }
 }

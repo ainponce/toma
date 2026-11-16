@@ -140,6 +140,8 @@ private func description(of error: ExportError) -> String {
         String(localized: "This recording has no screen to export.")
     case .destinationNotAllowed:
         String(localized: "The video can't be saved there. Choose a folder outside the project.")
+    case .nothingToExport:
+        String(localized: "This recording has nothing to export.")
     }
 }
 
