@@ -60,13 +60,13 @@ public struct RenderFrame: Equatable, Sendable {
 
 /// The recorded screen: the `crop` of the frame of track `trackID` shown at host time `sourceTime`, drawn into
 /// `rect`. Inside a window frame (`RenderFrame.windowFrame`), the window's rounded rect cuts it, square along its top
-/// edge, under the bar.
+/// edge, under the bar (but for a recorded window's, `WindowFrameLayer.screenTopCornerRadius`).
 public struct ScreenLayer: Equatable, Sendable {
     public var trackID: String
     public var sourceTime: HostTime
     /// In output pixels, origin at the top left.
     public var rect: Rect
-    /// In output pixels: inside a window frame, the window's.
+    /// In output pixels: inside a window frame, the window's bottom ones.
     public var cornerRadius: Double
     /// The part of the frame shown, as fractions of it (0, 0 is its top-left corner, 1, 1 the bottom-right one):
     /// the area recorded in Area mode, the whole frame otherwise.

@@ -22,11 +22,13 @@ import ProjectFormat
 ///   for a track the take does not have. What is shown of it is `ScreenGeometry`; its rect is `StageLayout.screenRect`
 ///   inside the document's padding, at the output's own size, with the document's corners. With a macOS window frame
 ///   (`style.frame`), the window is `StageLayout.windowRect` there, with those corners but never more than 1.3 times
-///   its bar's height (`windowCornerBars`), so they never cut its first button, and the screen fills it under its bar
-///   (`WindowFrameLayer`). It is sampled with mipmaps with `style.screenSampling` `mipmapped`.
+///   its bar's height (`windowCornerBars`), so they never cut its first button, and the screen fills it under its bar,
+///   square there (`WindowFrameLayer`). Around a window the take recorded, the bar does not limit the window's bottom
+///   corners, and the screen's top ones under it are as round, the bar behind them: the capture's black corners are
+///   covered there too. It is sampled with mipmaps with `style.screenSampling` `mipmapped`.
 /// - Shadow (`style.shadow`, `s` clamped to 0...1, design §7.3): under the screen's rect, or the whole window with a
-///   frame, with its corners: opacity `0.55·s`, σ `(0.004 + 0.016·s) ×` the output width, `0.010·s ×` the width down.
-///   None at 0, and none without a screen.
+///   frame, with its (bottom) corners: opacity `0.55·s`, σ `(0.004 + 0.016·s) ×` the output width, `0.010·s ×` the
+///   width down. None at 0, and none without a screen.
 /// - Cursor (`cursor.show`, design §7.5): where the cursor path is at the output time (`CursorPath.sample(atOutput:)`
 ///   of the motion paths: with `smoothing` off, phase 0's rule, the last raw position at or before it moved toward the
 ///   next one within 50 ms), placed on the screen's rect as it is in the region the screen shows; hidden off that
@@ -70,6 +72,8 @@ public struct FrameEvaluator: Sendable {
     private let paths: MotionPaths
     /// The video tracks a frame can show: the screens of `paths.stage`, then the camera when it is shown.
     let videoTrackIDs: [String]
+    /// The take's tracks that recorded a window.
+    private let windowTrackIDs: Set<String>
     /// `nil` when no camera is drawn.
     private let bubble: CameraBubble?
     /// The take's `cursorImage` events, in time order.
@@ -94,6 +98,7 @@ public struct FrameEvaluator: Sendable {
         self.paths = paths
         bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
+        windowTrackIDs = Set(take.tracks.filter { $0.kind == .window }.map(\.id))
         cursorImages = events.sortedByTime().compactMap { event in
             guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
             return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
@@ -146,10 +151,14 @@ public struct FrameEvaluator: Sendable {
             case let .macWindow(appearance, title, buttons):
                 let window = StageLayout.windowRect(contentAspect: aspect, padding: style.padding, outputSize: size)
                 rect = window.screen
-                cornerRadius = min(cornerRadius, Self.windowCornerBars * window.barHeight)
+                let top = min(cornerRadius, Self.windowCornerBars * window.barHeight)
+                // A recorded window keeps the style's corners where there are no buttons: the window's bottom ones, and
+                // its screen's top ones under the bar.
+                let recordedWindow = windowTrackIDs.contains(trackID)
+                if !recordedWindow { cornerRadius = top }
                 frame.windowFrame = WindowFrameLayer(
                     rect: window.window, barHeight: window.barHeight, appearance: appearance, title: title, buttons: buttons,
-                    cornerRadius: cornerRadius)
+                    cornerRadius: top, bottomCornerRadius: cornerRadius, screenTopCornerRadius: recordedWindow ? cornerRadius : 0)
             }
             frame.screen = ScreenLayer(
                 trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: view.crop,

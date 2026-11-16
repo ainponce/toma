@@ -276,3 +276,85 @@ func largeCornersNeverCutTheButtons() async throws {
         }
     }
 }
+
+/// `sample` painted blue with the black rounded corners of a window's capture, 34 px in radius.
+@Sendable private func paintingAWindowsCapture(_ frameIndex: Int, _ sample: CMSampleBuffer) -> CMSampleBuffer {
+    let pixelBuffer = CMSampleBufferGetImageBuffer(sample)!
+    CVPixelBufferLockBaseAddress(pixelBuffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
+    let width = CVPixelBufferGetWidth(pixelBuffer), height = CVPixelBufferGetHeight(pixelBuffer), radius = 34.0
+    let base = CVPixelBufferGetBaseAddress(pixelBuffer)!
+    for y in 0..<height {
+        let row = base.advanced(by: y * CVPixelBufferGetBytesPerRow(pixelBuffer)).assumingMemoryBound(to: UInt32.self)
+        for x in 0..<width {
+            // Past the arc of the nearest corner, for a pixel in a corner's square.
+            let p = SIMD2(Double(x) + 0.5, Double(y) + 0.5)
+            let centre = p.clamped(lowerBound: SIMD2(radius, radius), upperBound: SIMD2(Double(width) - radius, Double(height) - radius))
+            let outside = ((p - centre) * (p - centre)).sum().squareRoot() > radius
+            row[x] = outside ? 0xFF00_0000 : 0xFF00_00FF  // BGRA black, or (255, 0, 0, 255)
+        }
+    }
+    return sample
+}
+
+/// A take of one second of a window (or, with `kind: .display`, a display) whose capture has black corners.
+private func capturedWindowProject(in dir: URL, kind: TrackKind) async throws -> LoadedProject {
+    let builder = try TakeBuilder(in: dir, name: "\(kind)")
+    let source = kind == .window
+        ? TrackSource(name: "Synthetic Window", globalFrame: screenFrame, pixelScale: 1, windowID: 7)
+        : displaySource(globalFrame: screenFrame)
+    try await builder.addVideoTrack(
+        id: kind == .window ? "window-1" : trackID, kind: kind, source: source,
+        segments: [VideoSegmentSpec(start: base, seconds: 1, transform: paintingAWindowsCapture)])
+    return try builder.write()
+}
+
+@Test func recordedWindowsKeepTheirCornersUnderTheFrame() throws {
+    let window = TrackRecord(
+        id: "window-1", kind: .window, source: TrackSource(name: "Synthetic Window", globalFrame: screenFrame, pixelScale: 1, windowID: 7),
+        segments: [segment(track: "window-1", start: base, end: base.adding(seconds: 1))])
+    let take = makeTake(tracks: [window])
+    var document = EditDocument.legacy(take: take, events: [])
+    #expect(document.screens.initial == [takeID: "window-1"])
+    document.style.frame = .macWindow(appearance: .light, title: "", buttons: true)
+    document.style.cornerRadius = 0.04
+    document.style.shadow = 0.5
+    let frame = FrameEvaluator(take: take, events: [], document: document, outputSize: size).frame(at: 0.5)
+    let layer = try #require(frame.windowFrame)
+    let radius = 0.04 * 1280
+    #expect(radius > 1.3 * layer.barHeight)
+    // The buttons limit the window's top corners only; the screen's top ones, under the bar, and the window's bottom ones
+    // are the style's: they cover the capture's black corners.
+    #expect(layer.cornerRadius == 1.3 * layer.barHeight)
+    #expect(layer.bottomCornerRadius == radius && layer.screenTopCornerRadius == radius)
+    #expect(frame.screen?.cornerRadius == radius && frame.shadow?.cornerRadius == radius)
+    // A display's window is as before: its corners all limited, its screen square under the bar.
+    let display = makeTake(tracks: [displayTrack(globalFrame: screenFrame, segments: [segment(start: base, end: base.adding(seconds: 1))])])
+    var displayDocument = EditDocument.legacy(take: display, events: [])
+    displayDocument.style = document.style
+    let displayLayer = try #require(
+        FrameEvaluator(take: display, events: [], document: displayDocument, outputSize: size).frame(at: 0.5).windowFrame)
+    #expect(displayLayer.bottomCornerRadius == displayLayer.cornerRadius && displayLayer.screenTopCornerRadius == 0)
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func framedWindowTakesShowNoBlackCorners() async throws {
+    try await withTemporaryDirectory { dir in
+        // Corners of 0.04 of the width (51 px) cover the capture's black ones (34 px of the frame, 46 px drawn), more
+        // than the 1.3 bars (36 px) the buttons allow at the top.
+        func blackPixels(_ kind: TrackKind) async throws -> Int {
+            let project = try await capturedWindowProject(in: dir, kind: kind)
+            var document = framed(project)
+            document.style.cornerRadius = 0.04
+            let layer = try windowLayer(project, document)
+            #expect(46 > 1.3 * layer.barHeight && 0.04 * 1280 > 46)
+            let bytes = try await render(project, document)
+            return stride(from: 0, to: bytes.count, by: 4).count { max(bytes[$0], bytes[$0 + 1], bytes[$0 + 2]) < 60 }
+        }
+        let window = try await blackPixels(.window)
+        #expect(window == 0)
+        // The same capture as a display's: its screen is square under the bar, so its black corners show there.
+        let display = try await blackPixels(.display)
+        #expect(display > 100)
+    }
+}

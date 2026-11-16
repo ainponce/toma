@@ -53,7 +53,7 @@ private func solidTexture(_ device: any MTLDevice, width: Int, height: Int, bgra
     let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
     descriptor.usage = .shaderRead
     descriptor.storageMode = .shared
-    let texture = try #require(device.makeTexture(descriptor: descriptor))
+    guard let texture = device.makeTexture(descriptor: descriptor) else { throw TestSupportError.missing("texture") }
     let bytes = [UInt8]((0..<width * height).flatMap { _ in [bgra.x, bgra.y, bgra.z, bgra.w] })
     texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: bytes, bytesPerRow: width * 4)
     return texture
@@ -65,7 +65,8 @@ private func touches(_ x: Int, _ y: Int, _ rect: Rect) -> Bool {
     return left + 1 > rect.x && left < rect.x + rect.width && top + 1 > rect.y && top < rect.y + rect.height
 }
 
-/// `frame` drawn by a compositor of its own over `screen`, as BGRA bytes.
+/// `frame` drawn by a compositor of its own over `screen`, as BGRA bytes; throws if the GPU does not complete it. It
+/// checks nothing itself: it runs off the cooperative pool, away from the test's task.
 private func draw(_ frame: RenderFrame, screen: (any MTLTexture)?, device: any MTLDevice) throws -> [UInt8] {
     let compositor = try Compositor(device: device)
     let cursor = try CursorSprite.makeTexture(device: device)
@@ -73,13 +74,13 @@ private func draw(_ frame: RenderFrame, screen: (any MTLTexture)?, device: any M
         pixelFormat: .bgra8Unorm, width: frame.outputSize.x, height: frame.outputSize.y, mipmapped: false)
     descriptor.usage = [.renderTarget, .shaderRead]
     descriptor.storageMode = .shared
-    let target = try #require(device.makeTexture(descriptor: descriptor))
-    let queue = try #require(device.makeCommandQueue())
-    let commandBuffer = try #require(queue.makeCommandBuffer())
-    compositor.encode(frame, screen: screen, camera: nil, cursor: cursor, into: target, commandBuffer: commandBuffer)
+    guard let target = device.makeTexture(descriptor: descriptor), let queue = device.makeCommandQueue(),
+          let commandBuffer = queue.makeCommandBuffer()
+    else { throw TestSupportError.missing("Metal objects") }
+    try compositor.encode(frame, screen: screen, camera: nil, cursor: cursor, into: target, commandBuffer: commandBuffer)
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
-    #expect(commandBuffer.status == .completed)
+    guard commandBuffer.status == .completed else { throw TestSupportError.failed("GPU status \(commandBuffer.status.rawValue)") }
     var bytes = [UInt8](repeating: 0, count: frame.outputSize.x * frame.outputSize.y * 4)
     target.getBytes(
         &bytes, bytesPerRow: frame.outputSize.x * 4, from: MTLRegionMake2D(0, 0, frame.outputSize.x, frame.outputSize.y), mipmapLevel: 0)
@@ -167,8 +168,7 @@ func shadowZeroDrawsNothing() async throws {
 }
 
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
-func shadowMatchesItsCPUFormula() throws {
-    let device = try #require(MTLCreateSystemDefaultDevice())
+func shadowMatchesItsCPUFormula() async throws {
     let size = SIMD2(320, 180)
     let rect = Rect(x: 70.3, y: 40.6, width: 180, height: 90)
     // s = 1 at 320 px: σ 6.4, 3.2 down, 0.55.
@@ -176,7 +176,10 @@ func shadowMatchesItsCPUFormula() throws {
     let frame = RenderFrame(
         outputSize: size, gradientStart: .one, gradientEnd: .one, gradientAngleDegrees: 0,
         screen: ScreenLayer(trackID: trackID, sourceTime: base, rect: rect, cornerRadius: 14), background: .color(.one), shadow: layer)
-    let bytes = try draw(frame, screen: try solidTexture(device, width: 64, height: 32, bgra: [255, 0, 0, 255]), device: device)
+    let bytes = try await offThePool {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw TestSupportError.missing("Metal device") }
+        return try draw(frame, screen: try solidTexture(device, width: 64, height: 32, bgra: [255, 0, 0, 255]), device: device)
+    }
 
     // Over white, a pixel is 255 × (1 − α) in every channel: its alpha is what it lost. The pixels of the shadow's reach
     // outside the screen and its antialiased edge, 200 of them spread evenly.

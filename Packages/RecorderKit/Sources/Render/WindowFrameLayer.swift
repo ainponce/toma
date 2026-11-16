@@ -6,7 +6,9 @@ import ProjectFormat
 /// window, so the screen's top corners are square. The bar is light (#ECECEC) or dark (#2B2B2E); with `buttons`, it has
 /// three generic circles (#FF5F57, #FEBC2E, #28C840) 0.42 of the bar across, their centres 0.66 of it apart and the
 /// first's 0.6 of it from the window's left edge, at the bar's middle; and its title, centred (`TitleTexture`), none when
-/// empty. A shadow goes under the whole window.
+/// empty. A shadow goes under the whole window. Around a window the take recorded, whose capture has black rounded
+/// corners, the screen's top corners are round too (`screenTopCornerRadius`), the bar filling them, and the window's
+/// bottom corners may be rounder than its top ones (`bottomCornerRadius`), which the buttons keep small.
 public struct WindowFrameLayer: Equatable, Sendable {
     /// The whole window, bar and screen, in output pixels, origin at the top left.
     public var rect: Rect
@@ -15,16 +17,26 @@ public struct WindowFrameLayer: Equatable, Sendable {
     public var appearance: FrameAppearance
     public var title: String
     public var buttons: Bool
-    /// In output pixels.
+    /// The window's corners, in output pixels: its top ones, and its bottom ones too unless `bottomCornerRadius` says
+    /// otherwise.
     public var cornerRadius: Double
+    /// The window's bottom corners, in output pixels: `cornerRadius` unless given.
+    public var bottomCornerRadius: Double
+    /// The screen's top corners under the bar, in output pixels, where the bar shows: 0, square, unless given.
+    public var screenTopCornerRadius: Double
 
-    public init(rect: Rect, barHeight: Double, appearance: FrameAppearance, title: String, buttons: Bool, cornerRadius: Double) {
+    public init(
+        rect: Rect, barHeight: Double, appearance: FrameAppearance, title: String, buttons: Bool, cornerRadius: Double,
+        bottomCornerRadius: Double? = nil, screenTopCornerRadius: Double = 0
+    ) {
         self.rect = rect
         self.barHeight = barHeight
         self.appearance = appearance
         self.title = title
         self.buttons = buttons
         self.cornerRadius = cornerRadius
+        self.bottomCornerRadius = bottomCornerRadius ?? cornerRadius
+        self.screenTopCornerRadius = screenTopCornerRadius
     }
 }
 
