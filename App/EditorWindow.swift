@@ -28,6 +28,18 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let model: EditorModel
     /// The window's keys.
     let keyboard: EditorKeyboard
+    /// The project was edited here; set by the app delegate.
+    var onEdited: () -> Void {
+        get { model.onEdited }
+        set { model.onEdited = newValue }
+    }
+    /// Whether another app has the project open for editing, so this editor shows it for viewing only.
+    var isOpenElsewhere: Bool { model.isOpenElsewhere }
+    /// `isOpenElsewhere` may have changed; set by the app delegate.
+    var onAccessChanged: () -> Void {
+        get { model.onAccessChanged }
+        set { model.onAccessChanged = newValue }
+    }
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380

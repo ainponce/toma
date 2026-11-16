@@ -2615,6 +2615,17 @@
         }
       }
     },
+    "Library…" : {
+      "comment" : "The menu bar icon's item that opens the library window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Biblioteca…"
+          }
+        }
+      }
+    },
     "Light" : {
       "localizations" : {
         "es" : {
@@ -4473,16 +4484,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar el panel"
-          }
-        }
-      }
-    },
-    "Show Trash in Finder" : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Mostrar la papelera en Finder"
           }
         }
       }

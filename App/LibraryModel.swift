@@ -160,6 +160,8 @@ final class LibraryModel {
     @ObservationIgnored private var records = LibraryRecords()
     @ObservationIgnored private var recordsStore: LibraryRecordsStore?
     @ObservationIgnored private var scanner: LibraryScanner?
+    /// What the app said to look at before the scanner was there.
+    @ObservationIgnored private var pendingLooks: [URL] = []
     @ObservationIgnored private var watcher: LibraryWatcher?
     @ObservationIgnored private var thumbnails: LibraryThumbnails?
     @ObservationIgnored private var context: EditContext?
@@ -171,7 +173,7 @@ final class LibraryModel {
     @ObservationIgnored private var queueIsReady = false
     @ObservationIgnored private let fileSystem = SystemFileSystem()
     @ObservationIgnored private var started = false
-    @ObservationIgnored private var closed = false
+    @ObservationIgnored private(set) var closed = false
 
     /// What the scanner, the watcher and the thumbnails share with the model from their own threads.
     @ObservationIgnored private let shared = Shared()
@@ -332,7 +334,12 @@ final class LibraryModel {
 
     /// Something the app did, or an action of the user, changed these packages: they are looked at now.
     func look(at urls: [URL]) {
-        scanner?.look(at: urls)
+        guard let scanner else {
+            // The window is still being made: looked at once the scanner is there.
+            if !closed { pendingLooks += urls }
+            return
+        }
+        scanner.look(at: urls)
     }
 
     // MARK: - What the user does
@@ -485,6 +492,10 @@ final class LibraryModel {
         self.watcher = watcher
         scanner.reconcile(from: index)
         watcher.start()
+        if !pendingLooks.isEmpty {
+            scanner.look(at: pendingLooks)
+            pendingLooks = []
+        }
         makeTheQueueReady()
     }
 

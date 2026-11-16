@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import AppSupport
+import Library
 import QuartzCore
 import Recording
 import SwiftUI
@@ -24,6 +25,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// `isSelecting` may have changed.
     var selectingChanged: () -> Void = {}
+
+    /// Opens the library window, on a section if one is given; set by the app delegate.
+    var openLibrary: (LibrarySection?) -> Void = { _ in }
 
     /// While a system permission prompt (drawn by another process, at the top center) is up, the island
     /// goes down to `.normal` so it is never over it (Tasks 16a, 16e and 15): the microphone's, which a take's
@@ -226,7 +230,10 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// The capsule under the island confirms what the user just did.
     func showConfirmation(_ confirmation: IslandConfirmation) {
-        capsule.show(confirmation.capsule)
+        var item = confirmation.capsule
+        // "The take went to the trash." opens the trash (design §6.1).
+        if confirmation == .movedToTrash { item.action = { [weak self] in self?.openLibrary(.trash) } }
+        capsule.show(item)
     }
 
     // MARK: - The take
@@ -490,6 +497,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             overlay.highlight(id, names: names)
         }
         panelModel.confirm = { [weak self] confirmation in self?.showConfirmation(confirmation) }
+        panelModel.openLibrary = { [weak self] in
+            guard let self else { return }
+            // The island closes: it is the library that is in front now.
+            send(.dismiss)
+            openLibrary(nil)
+        }
         return panelModel
     }
 

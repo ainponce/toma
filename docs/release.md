@@ -749,6 +749,16 @@ Con 1 000 proyectos de prueba, en una copia de esta rama armada con `make build`
 - Reducir movimiento (Ajustes del Sistema ▸ Accesibilidad ▸ Pantalla): las miniaturas aparecen con un fundido simple, sin subir.
 - Con la app entera (después de las tareas 37 y 38, que abren la biblioteca desde la app y le avisan lo que graba): una tarjeta de una toma en curso dice "● Grabando", con el punto latiendo cada 1,8 s y quieto con Reducir movimiento, y no se abre ("Se está grabando."); las demás tarjetas conservan su miniatura durante la toma. Cerrar la biblioteca y volver a abrirla: vuelve al mismo lugar y tamaño, con la misma vista, orden y sección.
 
+**Abrir la biblioteca** (38)
+
+- Cada entrada abre la misma ventana, una sola: el menú del ícono de la barra de menús ("Biblioteca…", ⇧⌘L; reemplaza a "Mostrar la papelera en Finder"), el botón "Biblioteca" del panel abierto de la isla (junto a Ajustes; la isla se cierra), Ventana ▸ Biblioteca con un editor adelante, y reabrir Toma. Una segunda vez trae la ventana adelante sin hacer otra.
+- ⇧⌘L con la app activa (con un editor o la biblioteca adelante) abre la biblioteca; con otra app activa no hace nada (no es un atajo global).
+- Reabrir desde el Launchpad (o Finder o Spotlight) con la app abierta y ninguna ventana: abre la biblioteca. Con un editor abierto, no abre otra ventana. Cerrar el último editor no abre la biblioteca: la app vuelve a la barra de menús y el ícono del Dock se va.
+- Grabar con la biblioteca abierta: al empezar la toma la app sale del Dock y de Cmd-Tab y la ventana sigue abierta; la tarjeta del proyecto que se graba dice "Grabando" y su miniatura no se redibuja; al terminar la toma el ícono vuelve al Dock y la tarjeta muestra la toma terminada.
+- Reiniciar una toma (⇧⌘2 con la isla, "Reiniciar toma"): el aviso "La toma fue a la papelera." de la isla se puede tocar y abre la biblioteca en la Papelera, con la toma ahí. Con la biblioteca abierta, la toma reiniciada aparece en la Papelera sin reabrirla.
+- Abrir con doble clic en Finder un `.toma` que está fuera de la carpeta de proyectos: abre el editor y, en la biblioteca (abierta antes o después), está en "Otros lugares". Un proyecto abierto en otra app aparece como abierto en otra app.
+- Editar un proyecto en un editor con la biblioteca abierta: su tarjeta cambia (duración, estado) un segundo después de dejar de editar. La biblioteca marca "Abierto" el proyecto que un editor de Toma tiene abierto.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
