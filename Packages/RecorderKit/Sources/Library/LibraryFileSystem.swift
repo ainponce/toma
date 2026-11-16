@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import ProjectFormat
+import Synchronization
 
 /// The volume an item is on, as the library needs it to decide what it may look at by itself (design §6.5, §6.8).
 public struct VolumeInfo: Equatable, Sendable {
@@ -68,8 +69,8 @@ public struct FileStat: Equatable, Sendable {
 public protocol LibraryFileSystem: Sendable {
     /// The items in `directory`, hidden ones included, in no particular order.
     func list(_ directory: URL) throws -> [URL]
-    /// The item at `url` itself.
-    func stat(_ url: URL) throws -> FileStat
+    /// The item at `url` itself; its `addedToDirectory` only `withAddedDate`, which asks the disk once more.
+    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat
     /// The volume `url` is on.
     func volume(of url: URL) throws -> VolumeInfo
     /// The bytes of the regular file at `url`, which must not be larger than `maxBytes`.
@@ -78,12 +79,20 @@ public protocol LibraryFileSystem: Sendable {
     func allocatedSize(of package: URL) throws -> Int64
 }
 
+extension LibraryFileSystem {
+    /// The item at `url` itself, with the date it arrived in its folder.
+    public func stat(_ url: URL) throws -> FileStat {
+        try stat(url, withAddedDate: true)
+    }
+}
+
 /// The disk itself. Failures are thrown as `POSIXError`s, except `volume(of:)`'s, which are Foundation's.
 public struct SystemFileSystem: LibraryFileSystem {
     public init() {}
 
     /// `ENOTDIR` if `directory` is not a folder, a link to one included: it is opened with `O_DIRECTORY | O_NOFOLLOW`
-    /// and read with `readdir`, so nothing is followed even if the item changes in between.
+    /// and read with `readdir`, so nothing is followed even if the item changes in between. A folder's URL says it is
+    /// one (`hasDirectoryPath`), as the URLs 1b builds for packages do, so the two are equal.
     public func list(_ directory: URL) throws -> [URL] {
         let fd = try retryingInterrupts { open(directory.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) }
         guard let stream = fdopendir(fd) else {
@@ -100,17 +109,22 @@ public struct SystemFileSystem: LibraryFileSystem {
                 return urls
             }
             let length = Int(entry.pointee.d_namlen)
-            let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
-                FileManager.default.string(
-                    withFileSystemRepresentation: bytes.baseAddress!.assumingMemoryBound(to: CChar.self), length: length)
+            let type = entry.pointee.d_type
+            let (name, hint) = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
+                let cName = bytes.baseAddress!.assumingMemoryBound(to: CChar.self)
+                return (
+                    FileManager.default.string(withFileSystemRepresentation: cName, length: length),
+                    Self.directoryHint(type: type, name: cName, in: dirfd(stream))
+                )
             }
             if name == "." || name == ".." { continue }
-            urls.append(directory.appending(path: name, directoryHint: .inferFromPath))
+            urls.append(directory.appending(path: name, directoryHint: hint))
         }
     }
 
-    /// With `lstat`, and `getattrlist` with `FSOPT_NOFOLLOW` for the date the item arrived in its folder.
-    public func stat(_ url: URL) throws -> FileStat {
+    /// With `lstat`, and, only `withAddedDate`, `getattrlist` with `FSOPT_NOFOLLOW` for the date the item arrived in
+    /// its folder.
+    public func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat {
         let info = try lstatInfo(url)
         let kind: FileKind =
             switch info.st_mode & S_IFMT {
@@ -122,13 +136,13 @@ public struct SystemFileSystem: LibraryFileSystem {
         let modified = Int64(info.st_mtimespec.tv_sec) * 1_000_000_000 + Int64(info.st_mtimespec.tv_nsec)
         return FileStat(
             size: Int64(info.st_size), modified: modified, kind: kind, fileID: UInt64(info.st_ino),
-            addedToDirectory: Self.addedToDirectory(url))
+            addedToDirectory: withAddedDate ? Self.addedToDirectory(url) : nil)
     }
 
     /// With `URLResourceValues`, read again on every call. Synced: an item iCloud or a file provider syncs
-    /// (`isUbiquitousItemKey`) or one in `~/Library/Mobile Documents` or `~/Library/CloudStorage`, the folders 1b
-    /// refuses to record into for the same reason. Free space: the larger of the space for important usage, which counts
-    /// what the system would purge, and the space free right now (a disk image gives 0 for the first).
+    /// (`isUbiquitousItemKey`) or one in `SyncedFolders`, the folders 1b refuses to record into for the same reason.
+    /// Free space: the larger of the space for important usage, which counts what the system would purge, and the space
+    /// free right now (a disk image gives 0 for the first).
     public func volume(of url: URL) throws -> VolumeInfo {
         var url = url
         url.removeAllCachedResourceValues()
@@ -144,7 +158,7 @@ public struct SystemFileSystem: LibraryFileSystem {
             isInternal: values.volumeIsInternal == true,
             isRemovable: values.volumeIsRemovable == true || values.volumeIsEjectable == true,
             isNetwork: values.volumeIsLocal != true,
-            isSynced: values.isUbiquitousItem == true || Self.isInSyncedFolder(url),
+            isSynced: values.isUbiquitousItem == true || SyncedFolders.contains(url),
             availableBytes: max(values.volumeAvailableCapacityForImportantUsage ?? 0, Int64(values.volumeAvailableCapacity ?? 0)),
             isReadOnly: values.volumeIsReadOnly == true)
     }
@@ -158,7 +172,8 @@ public struct SystemFileSystem: LibraryFileSystem {
 
     /// The sum of `totalFileAllocatedSizeKey` over everything inside `package`; a link counts as itself and is never
     /// followed, and an item that goes away meanwhile counts as nothing. `ELOOP` if `package` is a link and `ENOTDIR` if
-    /// it is not a folder.
+    /// it is not a folder. Anything else that cannot be read (a folder without permission, a disk that fails) stops
+    /// the sum and is thrown, as a `POSIXError` when Foundation's error carries one: never a size that leaves it out.
     public func allocatedSize(of package: URL) throws -> Int64 {
         switch try lstatInfo(package).st_mode & S_IFMT {
         case S_IFDIR: break
@@ -166,15 +181,50 @@ public struct SystemFileSystem: LibraryFileSystem {
         default: throw POSIXError(.ENOTDIR)
         }
         let keys: Set<URLResourceKey> = [.totalFileAllocatedSizeKey]
+        let failure = Mutex<(any Error)?>(nil)
         guard
             let items = FileManager.default.enumerator(
-                at: package, includingPropertiesForKeys: Array(keys), options: [], errorHandler: { _, _ in true })
+                at: package, includingPropertiesForKeys: Array(keys), options: [],
+                errorHandler: { _, error in
+                    if Self.isGone(error) { return true }
+                    failure.withLock { $0 = error }
+                    return false
+                })
         else { throw POSIXError(.EIO) }
         var total: Int64 = 0
         for case let item as URL in items {
-            total += Int64((try? item.resourceValues(forKeys: keys))?.totalFileAllocatedSize ?? 0)
+            do {
+                total += Int64(try item.resourceValues(forKeys: keys).totalFileAllocatedSize ?? 0)
+            } catch where Self.isGone(error) {
+                continue
+            } catch {
+                throw Self.posix(error)
+            }
         }
+        if let error = failure.withLock({ $0 }) { throw Self.posix(error) }
         return total
+    }
+
+    /// Whether `error` says the item is no longer there.
+    private static func isGone(_ error: any Error) -> Bool {
+        let error = error as NSError
+        if error.domain == NSCocoaErrorDomain,
+            [CocoaError.fileNoSuchFile.rawValue, CocoaError.fileReadNoSuchFile.rawValue].contains(error.code)
+        {
+            return true
+        }
+        return posixCode(of: error) == .ENOENT
+    }
+
+    /// `error` as the `POSIXError` it carries, itself or as Foundation's underlying error; as it is if none.
+    private static func posix(_ error: any Error) -> any Error {
+        posixCode(of: error).map { POSIXError($0) } ?? error
+    }
+
+    private static func posixCode(of error: any Error) -> POSIXErrorCode? {
+        let error = error as NSError
+        if error.domain == NSPOSIXErrorDomain { return POSIXErrorCode(rawValue: Int32(error.code)) }
+        return (error.userInfo[NSUnderlyingErrorKey] as? NSError).flatMap { posixCode(of: $0) }
     }
 
     private func lstatInfo(_ url: URL) throws -> Darwin.stat {
@@ -205,14 +255,18 @@ public struct SystemFileSystem: LibraryFileSystem {
         }
     }
 
-    /// Whether `url` is in `~/Library/Mobile Documents` or `~/Library/CloudStorage`, links resolved and case ignored.
-    private static func isInSyncedFolder(_ url: URL) -> Bool {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let path = url.resolvingSymlinksInPath().standardizedFileURL.path.lowercased()
-        return ["Library/Mobile Documents", "Library/CloudStorage"].contains { folder in
-            let synced = home.appending(path: folder, directoryHint: .isDirectory).resolvingSymlinksInPath().standardizedFileURL
-                .path.lowercased()
-            return path == synced || path.hasPrefix(synced + "/")
+    /// Whether an entry `readdir` gave is a folder: from its `d_type`, or, where the volume does not say, from
+    /// `fstatat` on the item itself (`AT_SYMLINK_NOFOLLOW`).
+    private static func directoryHint(type: UInt8, name: UnsafePointer<CChar>, in folder: Int32) -> URL.DirectoryHint {
+        switch Int32(type) {
+        case DT_DIR:
+            return .isDirectory
+        case DT_UNKNOWN:
+            var info = Darwin.stat()
+            guard fstatat(folder, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return .inferFromPath }
+            return info.st_mode & S_IFMT == S_IFDIR ? .isDirectory : .notDirectory
+        default:
+            return .notDirectory
         }
     }
 

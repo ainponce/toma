@@ -4,6 +4,7 @@ import Foundation
 import Library
 import ProjectFormat
 import RecorderKitTestSupport
+import Synchronization
 import Testing
 
 private let app = AppInfo(name: "Tests", version: "0")
@@ -54,6 +55,13 @@ private let app = AppInfo(name: "Tests", version: "0")
     #expect(String(decoding: encoded, as: UTF8.self) == #"["8C2F6A1E-0B3D-4E0F-9A51-0C1D2E3F4A5B:5130042"]"#)
     #expect(try JSONDecoder().decode([PackageIdentity].self, from: encoded) == [identity])
     #expect(throws: DecodingError.self) { try JSONDecoder().decode([PackageIdentity].self, from: Data(#"["V:x"]"#.utf8)) }
+
+    // As a dictionary key it is the key of an object, as `lastOpened` and `trashOrigins` are in library.json.
+    let byIdentity = [identity: 7]
+    let object = try JSONEncoder().encode(byIdentity)
+    #expect(String(decoding: object, as: UTF8.self) == #"{"8C2F6A1E-0B3D-4E0F-9A51-0C1D2E3F4A5B:5130042":7}"#)
+    #expect(try JSONDecoder().decode([PackageIdentity: Int].self, from: object) == byIdentity)
+    #expect(throws: DecodingError.self) { try JSONDecoder().decode([PackageIdentity: Int].self, from: Data(#"{"V:x":7}"#.utf8)) }
 }
 
 @Test func identityIsReadThroughTheFileSystemItIsGiven() throws {
@@ -101,6 +109,11 @@ private let app = AppInfo(name: "Tests", version: "0")
         #expect(try fileSystem.stat(fileLink).kind == .symlink)
         #expect(try fileSystem.stat(fifo).kind == .other)
         #expect(throws: POSIXError(.ENOENT)) { try fileSystem.stat(folder.appending(path: "missing")) }
+        // Without the date it arrived in its folder, the rest is the same.
+        var withoutDate = fileStat
+        withoutDate.addedToDirectory = nil
+        #expect(fileStat.addedToDirectory != nil)
+        #expect(try fileSystem.stat(file, withAddedDate: false) == withoutDate)
 
         // A file's modification date in nanoseconds: one written later is later.
         try await Task.sleep(for: .milliseconds(20))
@@ -148,6 +161,13 @@ private let app = AppInfo(name: "Tests", version: "0")
         let parents = Set(try fileSystem.list(folder).map { $0.deletingLastPathComponent().standardizedFileURL })
         #expect(parents == [folder.standardizedFileURL])
 
+        // A folder's URL says it is one, as the URLs 1b builds do (`ProjectPackage.create`): they are equal.
+        let package = try ProjectPackage.create(in: folder, name: "Café demo", app: app, now: Date())
+        let listed = try fileSystem.list(folder)
+        #expect(listed.contains(package.url))
+        #expect(listed.contains(folder.appendingPathComponent("b.json", isDirectory: false)))
+        #expect(listed.filter(\.hasDirectoryPath).map(\.lastPathComponent) == ["Café demo.toma"])
+
         let manifest = folder.appending(path: "manifest.json")
         try Data(repeating: 7, count: 1_000).write(to: manifest)
         #expect(try fileSystem.read(manifest, maxBytes: 1_000) == Data(repeating: 7, count: 1_000))
@@ -173,6 +193,48 @@ private let app = AppInfo(name: "Tests", version: "0")
         let size = try fileSystem.allocatedSize(of: package.url)
         #expect(size >= empty + 100_000)
         #expect(size < empty + 1_000_000)
+    }
+}
+
+@Test func allocatedSizeThrowsWhatItCannotRead() throws {
+    try withTemporaryDirectory { folder in
+        let package = try ProjectPackage.create(in: folder, name: "Demo", app: app, now: Date())
+        let take = package.url.appending(path: "takes/take-001", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: take, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 1_000_000).write(to: take.appending(path: "screen.mov"))
+        #expect(chmod(package.takesURL.path, 0) == 0)
+        defer { chmod(package.takesURL.path, 0o755) }
+        // Never a size that leaves out what it could not read: the caller keeps it unknown.
+        #expect(throws: POSIXError(.EACCES)) { try SystemFileSystem().allocatedSize(of: package.url) }
+    }
+}
+
+@Test func itemsThatGoAwayWhileMeasuredCountAsNothing() throws {
+    try withTemporaryDirectory { folder in
+        let fileSystem = SystemFileSystem()
+        let package = try ProjectPackage.create(in: folder, name: "Demo", app: app, now: Date())
+        let base = try fileSystem.allocatedSize(of: package.url)
+        // Folders with a file in each come and go in the package while it is measured, as the cache does.
+        let stop = Mutex(false)
+        let churn = Thread {
+            let cache = package.cacheURL
+            while !stop.withLock({ $0 }) {
+                let folders = (0..<40).map { cache.appending(path: "f\($0)", directoryHint: .isDirectory) }
+                for item in folders {
+                    try? FileManager.default.createDirectory(at: item, withIntermediateDirectories: false)
+                    try? Data(repeating: 3, count: 10_000).write(to: item.appending(path: "x"))
+                }
+                for item in folders { try? FileManager.default.removeItem(at: item) }
+            }
+        }
+        churn.start()
+        defer {
+            stop.withLock { $0 = true }
+            while !churn.isFinished { Thread.sleep(forTimeInterval: 0.001) }
+        }
+        for _ in 0..<300 {
+            #expect(try fileSystem.allocatedSize(of: package.url) >= base)
+        }
     }
 }
 

@@ -309,6 +309,8 @@ private enum SmallDocument {
         try bytes.write(to: url)
         #expect(try SafeRead.regularFile(at: url, maxBytes: 300_000) == bytes)
         #expect(try SafeRead.regularFile(at: url, maxBytes: 1_000_000) == bytes)
+        // `Int.max` means no limit, without overflowing the one byte past it.
+        #expect(try SafeRead.regularFile(at: url, maxBytes: .max) == bytes)
         #expect(throws: POSIXError(.EFBIG)) { try SafeRead.regularFile(at: url, maxBytes: 299_999) }
         try Data().write(to: url)
         #expect(try SafeRead.regularFile(at: url, maxBytes: 0).isEmpty)

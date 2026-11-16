@@ -53,6 +53,16 @@ import Testing
             == "Demo copia 3")
     // A copy name taken in another case or normalization is taken too.
     #expect(ProjectNames.copyName("Café", existing: ["cafe\u{301} COPIA"], copy: "copia", numbered: numbered) == "Café copia 2")
+    // A copy of a copy is named from the original, as in Finder: never «Demo copia copia».
+    #expect(ProjectNames.copyName("Demo copia", existing: ["Demo", "Demo copia"], copy: "copia", numbered: numbered) == "Demo copia 2")
+    #expect(
+        ProjectNames.copyName("Demo copia 2", existing: ["Demo", "Demo copia", "Demo copia 2"], copy: "copia", numbered: numbered)
+            == "Demo copia 3")
+    #expect(ProjectNames.copyName("Demo copia 12", existing: ["Demo copia 12"], copy: "copia", numbered: numbered) == "Demo copia")
+    // Only the whole word after a space: these are originals.
+    #expect(ProjectNames.copyName("Fotocopia", existing: ["Fotocopia"], copy: "copia", numbered: numbered) == "Fotocopia copia")
+    #expect(ProjectNames.copyName("copia", existing: ["copia"], copy: "copia", numbered: numbered) == "copia copia")
+    #expect(ProjectNames.copyName("Demo copia 1", existing: ["Demo copia 1"], copy: "copia", numbered: numbered) == "Demo copia 1 copia")
     // The words are the app's: English counts the same way.
     #expect(ProjectNames.copyName("Demo", existing: ["Demo copy"], copy: "copy", numbered: { "copy \($0)" }) == "Demo copy 2")
 }

@@ -5,8 +5,9 @@ import Foundation
 /// on that volume (`volumeUUIDStringKey` and `fileIdentifierKey`). It survives renaming the package and moving it within
 /// its disk; a copy, a clone included, is another. Never the manifest's `projectID`, which a copy shares.
 ///
-/// It is written as its `string`, `"<volume UUID>:<file identifier>"`, in the index and in `library.json` (design §13.4).
-public struct PackageIdentity: Hashable, Codable, Sendable {
+/// It is written as its `string`, `"<volume UUID>:<file identifier>"`, in the index and in `library.json` (design §13.4),
+/// also as the key of an object (`lastOpened`, `trashOrigins`).
+public struct PackageIdentity: Hashable, Codable, CodingKeyRepresentable, Sendable {
     public var volume: String
     public var file: UInt64
 
@@ -47,5 +48,25 @@ public struct PackageIdentity: Hashable, Codable, Sendable {
     public func encode(to encoder: any Encoder) throws {
         var container = encoder.singleValueContainer()
         try container.encode(string)
+    }
+
+    public var codingKey: any CodingKey { Key(stringValue: string) }
+
+    public init?<T: CodingKey>(codingKey: T) {
+        self.init(string: codingKey.stringValue)
+    }
+
+    /// The key of an object that a `PackageIdentity` is: its `string`.
+    private struct Key: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+
+        init(stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(intValue: Int) {
+            nil
+        }
     }
 }

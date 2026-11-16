@@ -41,9 +41,25 @@ public enum ProjectNames {
     }
 
     /// The name of a copy of `base` in a folder whose projects are named `existing`: `"<base> <copy>"` («Demo copia»)
-    /// or, while that is taken, `"<base> <numbered(n)>"` for n = 2, 3, … («Demo copia 2»).
+    /// or, while that is taken, `"<base> <numbered(n)>"` for n = 2, 3, … («Demo copia 2»). A copy of a copy is named
+    /// from the original, as in Finder: a `base` that ends in « <copy>» or « <numbered(n)>», n ≥ 2, is a copy of what
+    /// comes before, so «Demo copia» gives «Demo copia 2», never «Demo copia copia».
     public static func copyName(_ base: String, existing: [String], copy: String, numbered: (Int) -> String) -> String {
-        firstFree("\(base) \(copy)", existing: existing) { "\(base) \(numbered($0))" }
+        let original = original(ofCopy: base, copy: copy, numbered: numbered) ?? base
+        return firstFree("\(original) \(copy)", existing: existing) { "\(original) \(numbered($0))" }
+    }
+
+    /// What `name` is a copy of, if it is one: what comes before a final « <copy>» or « <numbered(n)>» for one of the
+    /// numbers n ≥ 2 written in it, when something does.
+    private static func original(ofCopy name: String, copy: String, numbered: (Int) -> String) -> String? {
+        let numbers = name.split { !($0.isASCII && $0.isNumber) }.compactMap { Int($0) }.filter { $0 >= 2 }
+        for word in [copy] + numbers.map(numbered) {
+            let suffix = " \(word)"
+            if name.count > suffix.count, name.hasSuffix(suffix) {
+                return String(name.dropLast(suffix.count))
+            }
+        }
+        return nil
     }
 
     /// The name of a copy of `base` in another format: `"<base> <suffix>"` («Demo vertical») or, while that is taken,

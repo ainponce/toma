@@ -41,9 +41,9 @@ final class CountingFileSystem: LibraryFileSystem {
         return try base.list(directory)
     }
 
-    func stat(_ url: URL) throws -> FileStat {
+    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat {
         note(.stat, url)
-        return try base.stat(url)
+        return try base.stat(url, withAddedDate: withAddedDate)
     }
 
     func volume(of url: URL) throws -> VolumeInfo {
@@ -107,9 +107,9 @@ final class DelayingFileSystem: LibraryFileSystem {
         return try base.list(directory)
     }
 
-    func stat(_ url: URL) throws -> FileStat {
+    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat {
         wait(for: url)
-        return try base.stat(url)
+        return try base.stat(url, withAddedDate: withAddedDate)
     }
 
     func volume(of url: URL) throws -> VolumeInfo {

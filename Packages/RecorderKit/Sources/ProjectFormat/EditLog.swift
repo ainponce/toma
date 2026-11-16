@@ -238,12 +238,16 @@ public enum SafeRead {
     }
 
     /// Everything from `fd` to its end; with a `limit`, `EFBIG` once more than `limit` bytes were read.
-    private static func readToEnd(_ fd: Int32, capacity: Int, limit: Int?) throws -> Data {
+    static func readToEnd(_ fd: Int32, capacity: Int, limit: Int?) throws -> Data {
         var data = Data(capacity: capacity)
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            // With a limit, at most one byte past it: the byte that tells a file that grew past it from one that ends there.
-            let wanted = limit.map { min(buffer.count, $0 + 1 - data.count) } ?? buffer.count
+            // With a limit, at most one byte past it: the byte that tells a file that grew past it from one that ends
+            // there. `data` never holds more than `limit`, so what is left is never negative; `limit` may be `Int.max`.
+            let wanted = limit.map { limit in
+                let left = limit - data.count
+                return left >= buffer.count ? buffer.count : left + 1
+            } ?? buffer.count
             let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, wanted) }
             if count < 0 {
                 if errno == EINTR { continue }
