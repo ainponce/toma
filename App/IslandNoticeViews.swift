@@ -11,7 +11,8 @@ import SwiftUI
 /// A short confirmation under the island (notch design §5.1): a glass capsule that hangs 10 pt below it for
 /// `IslandConfirmation.displayDuration`, following it while it grows or shrinks; while the teleprompter
 /// shows, 10 pt below the teleprompter instead, so neither covers the other. It is never key and lets the
-/// mouse through; a new one replaces the one showing.
+/// mouse through, unless it has an action (the trash's notice opens the library's trash); a new one replaces the one
+/// showing.
 @MainActor
 final class ConfirmationCapsule {
     /// Between the bottom edge of what it hangs from and the capsule's top.
@@ -48,6 +49,7 @@ final class ConfirmationCapsule {
         size = CapsuleLabel.size(of: item)
         place()
         if !panel.isVisible { panel.orderFrontRegardless() }
+        panel.ignoresMouseEvents = item.action == nil
         withAnimation(animation) { model.item = item }
         timer?.cancel()
         timer = Task { [weak self] in
@@ -93,6 +95,8 @@ struct CapsuleItem: Identifiable {
     let symbol: String
     let text: String
     var tint = Color.white
+    /// What a click on the capsule does; `nil`: the capsule lets the mouse through.
+    var action: (() -> Void)?
 }
 
 extension IslandConfirmation {
@@ -129,6 +133,9 @@ private struct CapsuleView: View {
         ZStack {
             if let item = model.item {
                 CapsuleLabel(item: item, reduceTransparency: model.reduceTransparency)
+                    .contentShape(Rectangle())
+                    .onTapGesture { item.action?() }
+                    .accessibilityAddTraits(item.action == nil ? [] : .isButton)
                     .id(item.id)
                     .transition(model.reduceMotion ? .islandFade : .islandContent)
             }

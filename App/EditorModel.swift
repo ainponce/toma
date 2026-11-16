@@ -155,6 +155,19 @@ final class EditorModel {
     @ObservationIgnored weak var window: NSWindow?
     /// Called with the project once it was recovered from this editor; set by the app delegate.
     @ObservationIgnored var onRecovered: (URL) -> Void = { _ in }
+    /// The document changed (an edit, an undo or a redo) or the session saved it; set by the app delegate, which tells
+    /// the library.
+    @ObservationIgnored var onEdited: () -> Void = {}
+    /// Whether the project is open for viewing only because another app has it (`access` changed); set by the app
+    /// delegate, which tells the library.
+    @ObservationIgnored var onAccessChanged: () -> Void = {}
+    /// Another app holds the project's `edit.lock`.
+    var isOpenElsewhere: Bool {
+        switch access {
+        case .readOnly(.openElsewhere), .readOnly(.otherAppStartedEditing): true
+        default: false
+        }
+    }
 
     @ObservationIgnored private let exportGate: ExportGate
     @ObservationIgnored private var session: EditSession?
@@ -288,6 +301,7 @@ final class EditorModel {
     private func adopt(_ session: EditSession) async {
         self.session = session
         access = session.access
+        onAccessChanged()
         session.onChange = { [weak self] in self?.sessionChanged() }
         name = session.packageURL.deletingPathExtension().lastPathComponent
         if let shown = Self.unshowable(session.access) {
@@ -597,7 +611,10 @@ final class EditorModel {
     /// The session's document, access or notices changed.
     private func sessionChanged() {
         guard let session, !closed else { return }
-        if access != session.access { access = session.access }
+        if access != session.access {
+            access = session.access
+            onAccessChanged()
+        }
         if let shown = Self.unshowable(session.access) {
             show(shown)
             return
@@ -606,6 +623,7 @@ final class EditorModel {
         name = session.packageURL.deletingPathExtension().lastPathComponent
         if session.revision != shownRevision {
             shownRevision = session.revision
+            onEdited()
             let next = session.document
             document = next
             durationSeconds = TimeMap(sequence: next.sequence).durationSeconds

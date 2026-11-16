@@ -74,6 +74,9 @@ public final class RecordingController {
         lastProjectURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
     }
 
+    /// The package the open take records into, from the moment it has one until it is closed.
+    public var takePackageURL: URL? { take?.package.url }
+
     /// The folder new projects go to, and recovery looks in.
     public var projectsFolder: URL { environment.projectsFolder }
 
@@ -81,6 +84,9 @@ public final class RecordingController {
     @ObservationIgnored public var openEditor: (URL, String?) -> Void = { _, _ in }
     @ObservationIgnored public var openOnboarding: () -> Void = {}
     @ObservationIgnored public var recordingStateChanged: () -> Void = {}
+    /// The take's package changed: a take opened its project (a restart's new take included) or was closed. Read
+    /// `takePackageURL`.
+    @ObservationIgnored public var takePackageChanged: () -> Void = {}
     /// A take could not start, and nobody stopped it: says why.
     @ObservationIgnored public var showStartFailure: (any Error) -> Void = { _ in }
     /// Confirms what the user just did: a marker written, a pause on, a restarted take in the trash, a
@@ -457,6 +463,7 @@ public final class RecordingController {
             trackKinds: kinds.sorted { $0.key < $1.key }.map(\.value))
         recordsMicrophone = prepared.microphoneMeter != nil
         environment.termination.takeBegan()
+        takePackageChanged()
 
         Self.logger.notice("Starting a take in \(package.url.path, privacy: .public)")
         do {
@@ -620,6 +627,7 @@ public final class RecordingController {
         recordedTime = RecordedTime()
         take = nil
         environment.termination.takeEnded()
+        takePackageChanged()
     }
 
     /// Removes a project of a start that recorded nothing in it.

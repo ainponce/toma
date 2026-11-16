@@ -63,6 +63,8 @@ final class OpenPanelModel {
     @ObservationIgnored var highlight: (UInt32?) -> Void = { _ in }
     /// The capsule under the island confirms what the user just did.
     @ObservationIgnored var confirm: (IslandConfirmation) -> Void = { _ in }
+    /// The "Library" button: the island closes and the library opens.
+    @ObservationIgnored var openLibrary: () -> Void = {}
     @ObservationIgnored private let recording: RecordingController
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private let microphoneList: CaptureDeviceList
@@ -518,6 +520,10 @@ struct IslandOpenPanel: View {
                 Label("Settings", systemImage: "slider.horizontal.3")
             }
             .buttonStyle(GlassButtonStyle(isOn: panel.showsSettings))
+            Button { panel.openLibrary() } label: {
+                Label("Library", systemImage: "square.grid.2x2")
+            }
+            .buttonStyle(GlassButtonStyle(isOn: false))
             LoadIndicator(verdict: panel.load) { panel.showsSettings = true }
             Spacer()
             let problem = panel.recordProblem

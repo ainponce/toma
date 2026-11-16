@@ -977,7 +977,21 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
-    // MARK: - Microphone level
+    @Test func theTakesPackageIsToldWhenItOpensAndWhenItCloses() async throws {
+        try await withRig { rig in
+            #expect(rig.controller.takePackageURL == nil)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let package = try #require(rig.takes.packages.first?.url)
+            #expect(rig.controller.takePackageURL == package)
+            #expect(rig.takePackageChanges == [package])
+
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.takePackageURL == nil)
+            #expect(rig.takePackageChanges == [package, nil])
+        }
+    }
+
     // MARK: - Microphone level
 
     @Test func microphoneSilentNoticeComesAndGoes() async throws {
@@ -1738,6 +1752,8 @@ extension FakeFactory {
     private(set) var confirmations: [IslandConfirmation] = []
     /// How many times `isRecording` changed.
     private(set) var recordingStateChanges = 0
+    /// What `takePackageURL` was at each `takePackageChanged`.
+    private(set) var takePackageChanges: [URL?] = []
     private(set) var onboardingOpenings = 0
 
     init(
@@ -1775,6 +1791,10 @@ extension FakeFactory {
         controller.showStartFailure = { [weak self] error in self?.startFailures.append(error) }
         controller.onConfirmation = { [weak self] confirmation in self?.confirmations.append(confirmation) }
         controller.recordingStateChanged = { [weak self] in self?.recordingStateChanges += 1 }
+        controller.takePackageChanged = { [weak self] in
+            guard let self else { return }
+            takePackageChanges.append(controller.takePackageURL)
+        }
         controller.openOnboarding = { [weak self] in self?.onboardingOpenings += 1 }
     }
 

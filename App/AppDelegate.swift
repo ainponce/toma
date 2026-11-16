@@ -39,6 +39,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var onboarding: OnboardingWindowController?
     private var notices: ThirdPartyNoticesWindowController?
     private var settings: SettingsWindowController?
+    /// The library's one window, while it is open (design §6.1).
+    private var library: LibraryWindowController?
+    /// Whether a take is recorded, for the finishing of deletions at launch (`finishPendingDeletions`).
+    private let launchState = LaunchLibraryState()
+    /// The package the take records into, as the library was last told, and whether it was told a take recorded.
+    private var libraryTakePackage: URL?
+    private var libraryWasRecording = false
+    /// The last package a take recorded into, which the library looks at once the take ends.
+    private var libraryLastTake: URL?
+    /// The packages opened from outside the projects folder this session: Other Places, once the library is open.
+    private var openedElsewhere: Set<URL> = []
+    /// The packages edited here, looked at by the library once the edits pause.
+    private var editedPackages: Set<URL> = []
+    private var editedLook: Task<Void, Never>?
+    /// How long edits are gathered before the library looks at the packages they changed.
+    private static let editedLookDelay = Duration.seconds(1)
     /// The recording control at the notch; made once the app has launched.
     private var island: IslandPanel?
     private var powerOffObserver: (any NSObjectProtocol)?
@@ -76,8 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recording.openEditor = { [weak self] url, take in self?.showEditor(for: url, take: take) }
         recording.openOnboarding = { [weak self] in self?.showOnboarding() }
         recording.showStartFailure = { [weak self] error in self?.showStartFailure(error) }
+        recording.takePackageChanged = { [weak self] in self?.takePackageChanged() }
         recording.recordingStateChanged = { [weak self] in
             guard let self else { return }
+            tellLibraryTake()
             // Never activated by the take ending: the editor activates the app when it opens, and with "Stay
             // Where I Am" nothing does.
             updateActivationPolicy(activatingIfRegular: false)
@@ -109,6 +127,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if editors.isEmpty {
             Task.detached(priority: .utility) { ProjectCaches.removeUnused(root: ProjectCaches.defaultRoot, now: Date()) }
         }
+        // What a crash left half done in the trash and the projects folder (design §6.4): off the main thread, after the
+        // library's own work (it is paused while a take is recorded).
+        let projectsFolder = recording.projectsFolder, launchState = launchState
+        Task.detached(priority: .utility) {
+            let operations = LibraryOperations(
+                projectsFolder: projectsFolder, fileSystem: SystemFileSystem(),
+                records: LibraryRecordsStore(url: LibraryRecords.defaultURL), app: launchState)
+            await operations.finishPendingDeletions()
+        }
         // A take that turned Do Not Disturb on and never ended (the app was killed): turned off now. A take started
         // meanwhile runs its shortcut after this one.
         Task { await focus.recoverAfterLaunch() }
@@ -117,6 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hideDesktopIcons: hideDesktopIcons, focusShortcut: focusShortcut, probe: probe, cameraHost: cameraHost)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
+        island.openLibrary = { [weak self] in self?.showLibrary(section: $0) }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
         self.island = island
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -165,6 +193,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Opening Toma again (from Finder, Spotlight or the Launchpad) while no window of it is open opens the library; closing
+    /// the last editor never does (design §6.1). The island's panels are not windows here.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !hasOpenWindow { showLibrary() }
+        return true
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -191,6 +226,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         present(onboarding)
+    }
+
+    /// Opens the library, or brings it forward, on `section` if one is given.
+    func showLibrary(section: LibrarySection? = nil) {
+        // A window that closed and is not yet let go of: its model is done.
+        if let current = library, current.model.closed { library = nil }
+        let controller: LibraryWindowController
+        if let current = library {
+            controller = current
+        } else {
+            let model = LibraryModel(
+                paths: .standard(projectsFolder: recording.projectsFolder),
+                host: LibraryHost(
+                    open: { [weak self] url in self?.showEditor(for: url, take: nil) },
+                    record: { [weak self] in self?.island?.invoke() },
+                    recordShortcut: { [weak self] in self?.hotKeys.bindings.combos[.islandOrStop]?.displayString ?? "" }),
+                preferences: store.settings.library
+            ) { [weak self] in self?.store.settings.library = $0 }
+            controller = LibraryWindowController(model: model) { [weak self] in
+                // Another window was made meanwhile.
+                guard let self, library?.model === model else { return }
+                library = nil
+                updateActivationPolicy()
+            }
+            library = controller
+            libraryTakePackage = nil
+            libraryWasRecording = false
+            libraryLastTake = nil
+            tellLibraryTake()
+            tellLibraryEditors()
+            if !openedElsewhere.isEmpty { model.look(at: Array(openedElsewhere)) }
+        }
+        if let section { controller.model.section = section }
+        if controller.window?.isVisible == true {
+            present(controller)
+        } else {
+            updateActivationPolicy(activatingIfRegular: false)
+            controller.showWhenLoaded { [weak self, weak controller] in
+                guard let self, let controller, library === controller else { return }
+                present(controller)
+            }
+        }
     }
 
     func showSettings() {
@@ -364,9 +441,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard let self, editors[key]?.window?.isVisible != true else { return }  // shown again meanwhile
             editors[key] = nil
             updateActivationPolicy()
+            // What the editor wrote as it closed.
+            tellLibraryEditors()
+            library?.model.look(at: [key])
         }
+        editor.onEdited = { [weak self] in self?.edited(key) }
+        editor.onAccessChanged = { [weak self] in self?.tellLibraryEditors() }
         editors[key] = editor
+        if !Self.isInProjectsFolder(key, projectsFolder: recording.projectsFolder) {
+            // A project of another folder is one of Other Places (design §6.5).
+            openedElsewhere.insert(key)
+            library?.model.look(at: [key])
+        }
+        tellLibraryEditors()
         present(editor)
+    }
+
+    // MARK: - The library's view of the app
+
+    private static func isInProjectsFolder(_ url: URL, projectsFolder: URL) -> Bool {
+        url.standardizedFileURL.pathComponents.starts(with: projectsFolder.standardizedFileURL.pathComponents)
+    }
+
+    /// The library is told whether a take records and into which package, and looks at the packages a take made, changed
+    /// or finished (design §6.6, §6.8).
+    private func tellLibraryTake() {
+        let isRecording = recording.isRecording
+        launchState.setRecording(isRecording)
+        guard let model = library?.model else { return }
+        let package = recording.takePackageURL
+        model.setTake(isRecording: isRecording, package: package)
+        if libraryWasRecording, !isRecording, let last = libraryLastTake { model.look(at: [last]) }
+        libraryWasRecording = isRecording
+        libraryTakePackage = package
+        if let package { libraryLastTake = package }
+    }
+
+    /// A take opened its project, was restarted into a new one (the old one went to the trash) or was closed.
+    private func takePackageChanged() {
+        let before = libraryTakePackage
+        tellLibraryTake()
+        guard let model = library?.model else { return }
+        let now = recording.takePackageURL
+        var urls = [before, now].compactMap { $0 }
+        // A restart moved the old take to the trash.
+        if before != nil, now != nil, before != now { urls.append(ProjectTrash.folder(in: recording.projectsFolder)) }
+        if !urls.isEmpty { model.look(at: urls) }
+    }
+
+    /// The library is told which packages the editors have open, and which of them another app has too.
+    private func tellLibraryEditors() {
+        guard let model = library?.model else { return }
+        model.setOpenEditors(Set(editors.keys))
+        model.setOpenElsewhere(Set(editors.filter { $0.value.isOpenElsewhere }.keys))
+    }
+
+    /// An editor changed its project: the library looks at it once the edits pause.
+    private func edited(_ url: URL) {
+        guard library != nil else { return }
+        editedPackages.insert(url)
+        guard editedLook == nil else { return }
+        editedLook = Task { [weak self] in
+            try? await Task.sleep(for: Self.editedLookDelay)
+            guard let self else { return }
+            editedLook = nil
+            let urls = Array(editedPackages)
+            editedPackages = []
+            library?.model.look(at: urls)
+        }
+    }
+
+    /// Whether a window of the app is open, minimized ones too.
+    private var hasOpenWindow: Bool {
+        let windows = editors.values.map(\.window) + [onboarding?.window, notices?.window, settings?.window, library?.window]
+        return windows.contains { $0?.isVisible == true || $0?.isMiniaturized == true }
     }
 
     private func present(_ controller: NSWindowController?) {
@@ -380,6 +528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// not open or choosing. The island's own panels are not windows here.
     private func updateActivationPolicy(activatingIfRegular: Bool = true) {
         let openWindows = editors.count + (onboarding == nil ? 0 : 1) + (notices == nil ? 0 : 1) + (settings == nil ? 0 : 1)
+            + (library == nil ? 0 : 1)
         let policy = ActivationPolicyDecision.policy(
             openWindows: openWindows, isRecording: recording.isRecording, isSelecting: island?.isSelecting ?? false)
         guard NSApp.activationPolicy() != policy else { return }

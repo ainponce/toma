@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import AppSupport
-import ProjectFormat
 import SwiftUI
-import os
 
 @main
 struct TomaApp: App {
@@ -15,7 +13,10 @@ struct TomaApp: App {
         } label: {
             MenuBarIcon(recording: appDelegate.recording)
         }
-        .commands { EditorCommands() }
+        .commands {
+            EditorCommands()
+            LibraryCommands(app: appDelegate)
+        }
     }
 }
 
@@ -53,8 +54,6 @@ private struct MenuBarIcon: View {
 }
 
 private struct MenuContent: View {
-    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
-
     let app: AppDelegate
     let recording: RecordingController
     let updater: UpdaterController
@@ -95,9 +94,8 @@ private struct MenuContent: View {
         Divider()
         Button("Open Last Project") { recording.openLastProject() }
             .disabled(!recording.hasLastProject)
-        if recording.phase == .idle {
-            Button("Show Trash in Finder") { showTrash() }
-        }
+        Button("Library…") { app.showLibrary() }
+            .keyboardShortcut("l", modifiers: [.command, .shift])
         Button("Recover Recordings…") { app.recoverRecordings() }
         Button("Permissions…") { app.showOnboarding() }
         Button("Settings…") { app.showSettings() }
@@ -109,18 +107,16 @@ private struct MenuContent: View {
         Button("Quit") { NSApplication.shared.terminate(nil) }
             .keyboardShortcut("q")
     }
+}
 
-    /// Opens the folder restarted takes go to, made empty if none has gone there yet.
-    private func showTrash() {
-        let trash = ProjectTrash.folder(in: recording.projectsFolder)
-        do {
-            try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
-        } catch {
-            Self.logger.error("Cannot create the trash folder \(trash.path, privacy: .public): \(String(describing: error), privacy: .public)")
-            // Opening the projects folder instead still shows where to look.
-            NSWorkspace.shared.open(recording.projectsFolder)
-            return
+/// Window ▸ Library (⇧⌘L): while the app is active or the menu is open; not a global shortcut.
+private struct LibraryCommands: Commands {
+    let app: AppDelegate
+
+    var body: some Commands {
+        CommandGroup(after: .windowArrangement) {
+            Button("Library") { app.showLibrary() }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
         }
-        NSWorkspace.shared.open(trash)
     }
 }
