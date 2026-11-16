@@ -79,8 +79,11 @@ public enum AssetImport {
         case destination(POSIXError)
     }
 
-    /// `copy`, its failures told apart: the user's file or the package.
-    static func place(_ url: URL, into package: ProjectPackage) throws(Failure) -> String {
+    /// `copy`, its failures told apart: the user's file or the package. `syncFolder` makes a folder's entries durable
+    /// (`DurableFile.fullSync`; the tests count it).
+    static func place(
+        _ url: URL, into package: ProjectPackage, syncFolder: (Int32) throws -> Void = DurableFile.fullSync
+    ) throws(Failure) -> String {
         let ext = Self.extension(of: url)
         guard allowedExtensions.contains(ext) else { throw .unsupported(ext) }
         let source: (fd: Int32, size: off_t)
@@ -115,13 +118,19 @@ public enum AssetImport {
         }
         defer { close(assets) }
         do {
-            if made { try DurableFile.fullSync(folder) }
+            if made { try syncFolder(folder) }
         } catch {
             throw .destination((error as? POSIXError) ?? POSIXError(.EIO))
         }
 
         var info = stat()
         if fstatat(assets, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size == source.size {
+            // An earlier try may have moved it in and failed to sync the folder: its entry is made durable now.
+            do {
+                try syncFolder(assets)
+            } catch {
+                throw .destination((error as? POSIXError) ?? POSIXError(.EIO))
+            }
             return "assets/" + name
         }
         let temporary = name + ".tmp"
@@ -132,7 +141,7 @@ public enum AssetImport {
             // The bytes there are the ones named, or the file changed between its hash and its copy.
             guard try hash(placed) + "." + ext == name else { throw Failure.changed }
             guard renameat(assets, temporary, assets, name) == 0 else { throw Failure.destination(posixError()) }
-            try DurableFile.fullSync(assets)
+            try syncFolder(assets)
         } catch {
             unlinkat(assets, temporary, 0)
             switch error {

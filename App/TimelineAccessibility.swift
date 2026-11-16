@@ -145,7 +145,10 @@ final class TimelineAccessibility {
         switch track {
         case .video: model.selection = .clips([id])
         case .zoom: model.selection = .zooms([id])
-        case .camera: model.selection = .cameraChange(id)
+        case .camera:
+            // As a click and the Camera tab's list select one: the playhead goes onto it.
+            guard let output = view.hitItems.first(where: { $0.id == id })?.output.lowerBound else { return false }
+            model.selectCameraChange(id, output: output)
         case .ruler, .screen, .audio: return false
         }
         return true

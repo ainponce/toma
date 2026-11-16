@@ -17,8 +17,10 @@ import Synchronization
 ///   one before fades out over its last 192 frames (4 ms) and the one after fades in over its first 192, linearly. Where
 ///   the clip after goes on with the source of the one before (the same take and speed, its start the other's end, as
 ///   a clip split without a cut), there is no fade and the source is read on without a break: the mix is the clip's
-///   unsplit. The output never fades at its start or its end (plan decision 7), so the legacy document, one clip, mixes
-///   the samples the export always did.
+///   unsplit. The output's start fades in, and its end out, the same way only where the clip there starts or ends inside
+///   the take (`TakeTimeline.editableBounds`): a trimmed start or end never sounds as a step (final review C-M1). A clip
+///   at the take's own start or end never fades there (plan decision 7), so the legacy document, one clip over the whole
+///   take, mixes the samples the export always did.
 /// - A clip at another speed than 1, up to 4×, plays its source stretched to the clip's frames with its pitch kept
 ///   (`SpeedStretch`), track by track before its gain: the clips of one take at one speed that go on one from the
 ///   other are stretched as one, from where they start. A clip faster than 4×, or of another take, is silent.
@@ -31,7 +33,7 @@ import Synchronization
 /// A range of the mix is the same whatever was rendered before it, rendered without a preroll. With the limiter, whose
 /// gain depends on the frames before, a range that does not follow on from the one rendered last starts a limiter
 /// `PeakLimiter.settleFrames` before it (at frame 0, when that is closer), which by then gives what the limiter of a mix
-/// played from the start does; a stretched clip is stretched from its start. `render` holds a lock while it mixes (its
+/// played from the start does, but for an inaudible trace of an older peak in a loud sustained sound (`PeakLimiter`); a stretched clip is stretched from its start. `render` holds a lock while it mixes (its
 /// readers, its stretches and its limiter have state): calls take turns, and the export and the preview each have a mix
 /// of their own.
 public final class EditedMix: Sendable {
@@ -64,6 +66,9 @@ public final class EditedMix: Sendable {
         let takeID: String
         /// Frame 0 of the tracks' timeline: the take's timeline start, where its legacy document starts.
         let origin: HostTime
+        /// What a document can show of the take (`TakeTimeline.editableBounds`): a clip that starts after its start, or
+        /// ends before its end, is trimmed there.
+        let editable: ClosedRange<HostTime>
         let channels: Int
         /// Every microphone and system audio track of the take, in the take's order.
         let tracks: [AudioTrackTimeline]
@@ -72,9 +77,13 @@ public final class EditedMix: Sendable {
         /// The host times of the take's left and right `mouseDown`s, in order.
         let clicks: [HostTime]
 
-        init(takeID: String, origin: HostTime, channels: Int, tracks: [AudioTrackTimeline], clicks: [HostTime]) {
+        init(
+            takeID: String, origin: HostTime, editable: ClosedRange<HostTime>, channels: Int, tracks: [AudioTrackTimeline],
+            clicks: [HostTime]
+        ) {
             self.takeID = takeID
             self.origin = origin
+            self.editable = editable
             self.channels = channels
             self.tracks = tracks
             keys = tracks.map { AudioPlan.key(take: takeID, track: $0.track) }
@@ -140,7 +149,10 @@ public final class EditedMix: Sendable {
             guard case .mouseDown(let button, _, _) = event.kind, button == .left || button == .right else { return nil }
             return event.t
         }
-        let source = Source(takeID: project.take.id, origin: origin, channels: channels, tracks: timelines, clicks: clicks)
+        let editable = TakeTimeline.editableBounds(take: project.take, events: project.events)
+        let source = Source(
+            takeID: project.take.id, origin: origin, editable: editable.start...editable.end, channels: channels, tracks: timelines,
+            clicks: clicks)
         return EditedMix(source: source, document: document, framesPerSecond: framesPerSecond, prereadSegments: timelines.reduce(0) {
             $0 + $1.decodedSegments
         })
@@ -297,7 +309,8 @@ public final class EditedMix: Sendable {
         let starts = timeMap.clipOutputStarts.map(frames(ofNanoseconds:))
         var pieces: [Piece] = []
         var runs: [SpeedStretch.Run] = []
-        // The clip of the last piece.
+        // The clips of the first and the last piece.
+        var first: Clip?
         var previous: Clip?
         // Where the source heard in one go up to the last piece starts (the clips before it that it goes on from, at any
         // speed), and the runs in that stretch of source, whose effects are fed it: none after a silent piece.
@@ -346,8 +359,12 @@ public final class EditedMix: Sendable {
             }
             for run in heardRuns { runs[run].heard = runs[run].heard.lowerBound..<max(runs[run].heard.lowerBound, to) }
             pieces.append(piece)
+            if first == nil { first = clip }
             previous = clip
         }
+        // The output's own edges fade only where they are trimmed inside the take.
+        if let first, first.start > source.editable.lowerBound, !pieces.isEmpty { pieces[0].fadesIn = true }
+        if let previous, previous.end < source.editable.upperBound, let last = pieces.indices.last { pieces[last].fadesOut = true }
         return (pieces, runs)
     }
 

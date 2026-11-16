@@ -244,6 +244,17 @@
         }
       }
     },
+    "An export is in progress. Close the window and cancel it?" : {
+      "comment" : "Closing an editor's window while its export runs",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay una exportación en curso. ¿Cerrar la ventana y cancelarla?"
+          }
+        }
+      }
+    },
     "An export is in progress. Quit and cancel it?" : {
       "localizations" : {
         "es" : {
@@ -1840,6 +1851,17 @@
         }
       }
     },
+    "If you quit now, they're lost." : {
+      "comment" : "Quitting while an editor's last changes are not on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si se sale ahora, se pierden."
+          }
+        }
+      }
+    },
     "Image" : {
       "localizations" : {
         "es" : {
@@ -2734,6 +2756,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Salir y volver a abrir"
+          }
+        }
+      }
+    },
+    "Quit Anyway" : {
+      "comment" : "Quitting while an editor's last changes are not on the disk: they are lost",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salir igual"
           }
         }
       }
@@ -4234,6 +4267,17 @@
         }
       }
     },
+    "The video file couldn't be written: the disk is full." : {
+      "comment" : "An export that ran out of room on its disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo escribir el archivo de video: el disco está lleno."
+          }
+        }
+      }
+    },
     "The video was exported, but %lld parts have no sound: their microphone audio couldn't be read." : {
       "localizations" : {
         "en" : {
@@ -4671,7 +4715,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta grabación no tiene nada para exportar."
+            "value" : "Esta toma no tiene nada para exportar."
           }
         }
       }
@@ -5254,6 +5298,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    },
+    "screen.followCursor" : {
+      "comment" : "The screen track's menu: the screens shown follow the cursor (not a zoom's focus)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow the Cursor"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir al cursor"
           }
         }
       }

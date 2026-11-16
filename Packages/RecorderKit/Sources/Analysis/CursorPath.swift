@@ -23,8 +23,11 @@ public struct CursorSample: Equatable, Sendable {
 /// The path of the drawn cursor of a take in the output (design §8.4–§8.6): where it is, how visible and how pressed.
 ///
 /// The raw positions are the take's `cursor`, `mouseDown` and `mouseUp` events in global points at their output times,
-/// by the rule of the render (`TimeMap.output(ofSampleAt:take:)`): one in a cut between two clips is dropped, one
-/// before the first clip or after the last keeps its time through that clip's mapping. Whether a button is down (any
+/// by the rule of the render (`TimeMap.output(ofSampleAt:take:)`): one before the first clip or after the last keeps its
+/// time through that clip's mapping. In a cut between two clips, the pointer's last position is where it is when the next
+/// clip starts, and is placed there as a change is (`TimeMap.output(ofChangeAt:take:)`; one at that clip's start wins):
+/// the others in the cut are dropped, so nothing of it is drawn, and a pointer that moved there and stood still after is
+/// where it stands (final review B-I1). Whether a button is down (any
 /// button) changes at each `mouseDown` and `mouseUp`, placed as every other change (`TimeMap.output(ofChangeAt:take:)`):
 /// one in a cut rules from the first instant kept after it, so a press or a release the cut leaves out holds from the
 /// next clip on, even with the pointer still. The clicks, and the landings on them, are the `mouseDown`s (of any button)
@@ -55,6 +58,10 @@ public struct CursorPath: Sendable {
     /// reads the buttons (one in a cut, from the next clip on; one after the last clip, never), in output order. Where
     /// the press of the click effects ends.
     public let releases: [Int64]
+    /// Where the cursor jumps, in order: with `off`, at each clip start where a position the pointer took in the cut
+    /// before it is placed (from the output just before it through it). A spring never jumps. A motion blur never mixes
+    /// the two sides.
+    public let jumps: [ClosedRange<Int64>]
 
     /// The raw positions, in output order.
     private let samples: [Sample]
@@ -69,6 +76,10 @@ public struct CursorPath: Sendable {
         var buttons: [ButtonChange] = []
         var clicks: [(output: Int64, point: SIMD2<Double>)] = []
         var down = Set<MouseButton>()
+        /// The last position of the cut the events are in, at the output the next clip starts at.
+        var inCut: Sample?
+        /// The outputs where a position of a cut is placed.
+        var placedFromCuts: [Int64] = []
         for event in events.sortedByTime() {
             switch event.kind {
             case let .mouseDown(button, _, _): down.insert(button)
@@ -84,13 +95,26 @@ public struct CursorPath: Sendable {
             default:
                 break
             }
-            guard let point = event.kind.pointerPosition, let output = timeMap.output(ofSampleAt: event.t, take: take.id)
-            else { continue }
+            guard let point = event.kind.pointerPosition else { continue }
+            guard let output = timeMap.output(ofSampleAt: event.t, take: take.id) else {
+                // In a cut: where the pointer is when the next clip starts, placed there as a change is (the last of
+                // the cut wins); none of the cut is drawn.
+                guard let rules = timeMap.output(ofChangeAt: event.t, take: take.id) else { continue }
+                if let pending = inCut, pending.output != rules { samples.append(pending) }
+                if inCut?.output != rules { placedFromCuts.append(rules) }
+                inCut = Sample(output: rules, point: point)
+                continue
+            }
+            if let pending = inCut {
+                samples.append(pending)
+                inCut = nil
+            }
             samples.append(Sample(output: output, point: point))
             if case .mouseDown = event.kind, let kept = timeMap.output(atSource: event.t, take: take.id) {
                 clicks.append((kept, point))
             }
         }
+        if let inCut { samples.append(inCut) }
         self.samples = samples
         self.buttons = buttons
         self.clicks = clicks
@@ -100,6 +124,12 @@ public struct CursorPath: Sendable {
                 positions: samples.map { ($0.output, $0.point) }, presses: Self.presses(buttons), clicks: clicks.map(\.output),
                 delay: style.idleDelay)
             : nil
+        switch style.smoothing {
+        case .off:
+            jumps = placedFromCuts.map { ($0 - 1)...$0 }
+        case .spring:
+            jumps = []
+        }
         switch style.smoothing {
         case .off:
             motion = nil

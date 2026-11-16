@@ -252,10 +252,11 @@ public final class EditSession {
 
     public var caches: ProjectCaches { projectCaches }
 
-    /// The label of the next undo; `nil` without one, or while the project cannot be edited.
-    public var undoLabel: EditLabel? { isEditable ? history.undoLabel : nil }
+    /// The label of the next undo; `nil` without one, while the project cannot be edited, and while a new log starts
+    /// (nothing can be undone then: `canUndo` is false).
+    public var undoLabel: EditLabel? { isEditable && !restartingLog ? history.undoLabel : nil }
 
-    public var redoLabel: EditLabel? { isEditable ? history.redoLabel : nil }
+    public var redoLabel: EditLabel? { isEditable && !restartingLog ? history.redoLabel : nil }
 
     /// Some change is not on disk yet (`JournalState` is not `.saved`), or is not in a log at all while a new one starts
     /// or while the package moves to version 3. Never depends on the snapshot, which the log can always make again.
@@ -586,6 +587,8 @@ public final class EditSession {
     private func restartLog() {
         guard isEditable, !restartingLog, let old = journal else { return }
         restartingLog = true
+        // Nothing can be undone or redone until it has started: said now, after the flag (the labels read it).
+        onChange?()
         idleTask?.cancel()
         restartTask = Task { [weak self] in
             await old.close()

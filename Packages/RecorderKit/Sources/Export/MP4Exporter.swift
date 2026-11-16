@@ -269,6 +269,7 @@ public final class MP4Exporter: Sendable {
         do {
             try DurableFile.fullSync(fd)
         } catch {
+            if ExportError.isDiskFull(error) { throw ExportError.diskFull }
             throw ExportError.writerFailed("cannot sync \(url.path): \(error)")
         }
     }
@@ -283,6 +284,7 @@ public final class MP4Exporter: Sendable {
             do {
                 _ = try FileManager.default.replaceItemAt(destination, withItemAt: partial)
             } catch {
+                if ExportError.isDiskFull(error) { throw ExportError.diskFull }
                 throw ExportError.writerFailed("cannot replace \(destination.path): \(error)")
             }
         } else {
@@ -293,8 +295,10 @@ public final class MP4Exporter: Sendable {
         }
     }
 
+    /// The failure of a call that set `errno`: `diskFull` for `ENOSPC` and `EDQUOT`.
     private static func posixFailure(_ what: String) -> ExportError {
-        .writerFailed("\(what): \(String(cString: strerror(errno)))")
+        if errno == ENOSPC || errno == EDQUOT { return .diskFull }
+        return .writerFailed("\(what): \(String(cString: strerror(errno)))")
     }
 }
 
@@ -538,9 +542,10 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// The writer's error as `writerFailed`.
+    /// The writer's error as `writerFailed`, or `diskFull` when that is what it says.
     private func failure() -> ExportError {
-        .writerFailed(writer.error.map { String(describing: $0) } ?? "the writer stopped (status \(writer.status.rawValue))")
+        if let error = writer.error, ExportError.isDiskFull(error) { return .diskFull }
+        return .writerFailed(writer.error.map { String(describing: $0) } ?? "the writer stopped (status \(writer.status.rawValue))")
     }
 }
 
@@ -562,5 +567,20 @@ private final class DrawnFrame: @unchecked Sendable {
 
     func finish(_ error: (any Error)?) {
         lock.withLock { outcome = error.map { .failure($0) } ?? .success(()) }
+    }
+}
+
+extension ExportError {
+    /// Whether `error` says the disk is full: AVFoundation's `diskFull`, `ENOSPC` or `EDQUOT`, Foundation's out of
+    /// space, or an error whose underlying error says so.
+    static func isDiskFull(_ error: any Error) -> Bool {
+        let error = error as NSError
+        switch error.domain {
+        case AVFoundationErrorDomain where error.code == AVError.Code.diskFull.rawValue: return true
+        case NSPOSIXErrorDomain where error.code == Int(ENOSPC) || error.code == Int(EDQUOT): return true
+        case NSCocoaErrorDomain where error.code == NSFileWriteOutOfSpaceError: return true
+        default: break
+        }
+        return (error.userInfo[NSUnderlyingErrorKey] as? NSError).map(isDiskFull) ?? false
     }
 }

@@ -154,15 +154,16 @@ public enum EditLogReader {
         return read
     }
 
-    /// Makes the file end at a line break before more lines are appended to it, with the rules of
-    /// `EventLogReader.truncateIncompleteTail`: a last line without its line break that is a complete JSON object gets
-    /// one, and any other is truncated away; then the file is full-synced. Returns `true` if the file changed. Opens it
+    /// Makes the file end at a line break before more lines are appended to it, as `EventLogReader.truncateIncompleteTail`
+    /// does but with `read`'s own rule for a whole object (`JSONValue`), so what `read` dropped as cut short is what goes:
+    /// a last line without its line break that is a complete JSON object gets one, and any other is truncated away; then
+    /// the file is full-synced. Returns `true` if the file changed. Opens it
     /// without following a symlink (`ELOOP`) and refuses what is not a regular file (`EFTYPE`) without blocking.
     public static func truncateIncompleteTail(_ url: URL) throws -> Bool {
         let (fd, _) = try SafeRead.openRegularFile(url, flags: O_RDWR | O_APPEND)
         let changed: Bool
         do {
-            changed = try EventLogReader.endAtLineBoundary(fd)
+            changed = try EventLogReader.endAtLineBoundary(fd, isWholeObject: isWholeObject)
         } catch {
             close(fd)
             throw error

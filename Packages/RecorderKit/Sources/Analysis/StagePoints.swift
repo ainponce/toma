@@ -37,6 +37,17 @@ public struct StagePoints: Sendable {
     public let screenTrackIDs: [String]
 
     public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
+        let ordered = events.sortedByTime()
+        self.init(take: take, document: document) { ScreenGeometry(track: $0, events: ordered) }
+    }
+
+    /// The same as `init(take:events:document:)`, from the take's screens read once (`TakeScreens`): it reads only what
+    /// the document names, so an editor makes one for each revision without going over the take's events again.
+    public init(take: TakeRecord, document: EditDocument, screens: TakeScreens) {
+        self.init(take: take, document: document) { screens.geometry(of: $0) }
+    }
+
+    private init(take: TakeRecord, document: EditDocument, geometry: (TrackRecord) -> ScreenGeometry) {
         ratio = document.aspect.ratio
         padding = document.style.padding
         switch document.style.frame {
@@ -45,7 +56,6 @@ public struct StagePoints: Sendable {
         case .macWindow:
             windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(aspect: document.aspect, shortSide: Self.windowFrameShortSide))
         }
-        let ordered = events.sortedByTime()
         let initialScreen = document.screens.initial[take.id]
         self.initialScreen = initialScreen
         let changes = document.screens.changes.filter { $0.take == take.id }
@@ -56,7 +66,7 @@ public struct StagePoints: Sendable {
         var screenTrackIDs: [String] = []
         for id in [initialScreen].compactMap({ $0 }) + changes.map(\.track) where screens[id] == nil {
             guard let track = take.track(id), track.kind.isScreen else { continue }
-            screens[id] = ScreenGeometry(track: track, events: ordered)
+            screens[id] = geometry(track)
             screenTrackIDs.append(id)
         }
         self.screens = screens
@@ -112,5 +122,24 @@ public struct StagePoints: Sendable {
             Rect(x: rect.x / output.y, y: rect.y / output.y, width: rect.width / output.y, height: rect.height / output.y)
         }
         return (units(layout.window), units(layout.screen))
+    }
+}
+
+/// What `StagePoints` reads of a take whatever the document: where each of its screen tracks is (`ScreenGeometry`), from
+/// its events sorted once. The same for every revision of a document of the take, so an editor makes it once, off the
+/// main thread, and each revision's `StagePoints(take:document:screens:)` reads only what that document names.
+public struct TakeScreens: Sendable {
+    private let geometries: [String: ScreenGeometry]
+
+    public init(take: TakeRecord, events: [InputEvent]) {
+        let ordered = events.sortedByTime()
+        geometries = Dictionary(
+            take.tracks.filter(\.kind.isScreen).map { ($0.id, ScreenGeometry(track: $0, events: ordered)) },
+            uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The screen `track` of the take, as the take's events place it.
+    func geometry(of track: TrackRecord) -> ScreenGeometry {
+        geometries[track.id] ?? ScreenGeometry(track: track, events: [])
     }
 }
