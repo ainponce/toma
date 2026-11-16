@@ -422,3 +422,44 @@ extension CursorPath {
         }
     }
 }
+
+extension CursorPath {
+    /// The cursor read step after step, as the zoom camera reads it (design §8.6: on each step, first the cursor, then
+    /// the camera): `sample(atStep:)` with the same bits, from one simulation that goes forward with the steps asked
+    /// for instead of one from the checkpoint before each of them.
+    struct Reader: Sendable {
+        private let path: CursorPath
+        private var simulation: Simulation?
+
+        init(_ path: CursorPath) {
+            self.path = path
+        }
+
+        /// `sample(atStep: s)`: going forward from the step asked for before when `s` is not before it and that step is
+        /// not before the checkpoint of `s`; from that checkpoint otherwise.
+        mutating func sample(atStep s: Int) -> CursorSample? {
+            guard let motion = path.motion else { return path.sample(atStep: s) }
+            guard let firstStep = motion.firstStep, s >= 0, motion.clamped(s) >= firstStep else { return nil }
+            let step = motion.clamped(s)
+            let checkpoint = step / StepGrid.checkpointEvery * StepGrid.checkpointEvery
+            var current = simulation.flatMap { $0.step <= step && $0.step >= checkpoint ? $0 : nil }
+                ?? motion.simulation(from: step)
+            motion.advance(&current, to: step)
+            simulation = current
+            // From the first step on, the cursor is there.
+            return current.state.map { path.sample($0, atStep: step) }
+        }
+    }
+}
+
+extension CursorPath.Motion {
+    /// A simulation from the checkpoint at or before step `s` (in `0...lastStep`).
+    fileprivate func simulation(from s: Int) -> CursorPath.Simulation {
+        simulation(toward: s)
+    }
+
+    /// `simulation` taken forward to step `s`.
+    fileprivate func advance(_ simulation: inout CursorPath.Simulation, to s: Int) {
+        while simulation.step < s { advance(&simulation) }
+    }
+}

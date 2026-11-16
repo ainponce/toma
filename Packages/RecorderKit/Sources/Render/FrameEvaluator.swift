@@ -19,7 +19,8 @@ import ProjectFormat
 /// - Screen: the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before the
 ///   source instant (it jumps); none without one, or for a track the take does not have. What is shown of it, and
 ///   where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, with the
-///   document's corners.
+///   document's corners. With a macOS window frame (`style.frame`), the window is `StageLayout.windowRect` there, with
+///   those corners, and the screen fills it under its bar (`WindowFrameLayer`).
 /// - Cursor (Toma's arrow, `cursor.show`): the take's pointer positions (`cursor`, `mouseDown`, `mouseUp`) in output
 ///   time. A position in a cut between two clips is dropped; one before the first clip or after the last keeps its
 ///   time through that clip's mapping (negative, or past `D`), so a sample the recorder took before the sources
@@ -130,10 +131,20 @@ public struct FrameEvaluator: Sendable {
         let output = min(max(τ, 0), timeMap.duration - 1)
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
         if let trackID = screen(at: source), let view = screens[trackID]?.shown(at: source) {
-            let rect = StageLayout.screenRect(
-                contentAspect: view.region.map { $0.width / $0.height }, padding: document.style.padding, outputSize: size)
-            frame.screen = ScreenLayer(
-                trackID: trackID, sourceTime: source, rect: rect, cornerRadius: document.style.cornerRadius * size.x, crop: view.crop)
+            let aspect = view.region.map { $0.width / $0.height }, padding = document.style.padding
+            let cornerRadius = document.style.cornerRadius * size.x
+            let rect: Rect
+            switch document.style.frame {
+            case .none:
+                rect = StageLayout.screenRect(contentAspect: aspect, padding: padding, outputSize: size)
+            case let .macWindow(appearance, title, buttons):
+                let window = StageLayout.windowRect(contentAspect: aspect, padding: padding, outputSize: size)
+                rect = window.screen
+                frame.windowFrame = WindowFrameLayer(
+                    rect: window.window, barHeight: window.barHeight, appearance: appearance, title: title, buttons: buttons,
+                    cornerRadius: cornerRadius)
+            }
+            frame.screen = ScreenLayer(trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: view.crop)
             if document.cursor.show, view.onScreen, let region = view.region {
                 frame.cursor = cursor(at: output, in: region, shownIn: rect)
             }

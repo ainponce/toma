@@ -45,8 +45,10 @@ public enum ShaderSource {
         float2 contentSize;     // size of the image
         float2 uvOrigin;        // texture coordinates at the image's top-left corner
         float2 uvSize;          // texture coordinates across the image
-        float radius;           // corner radius of the image
+        float radius;           // corner radius of the image (of the shape, with one)
         float clampsToCrop;     // 1: sample only inside uvOrigin...uvOrigin + uvSize (a crop), 0: as given
+        float2 shapeOrigin;     // top-left corner of the rounded rect that cuts the image (a window frame's)
+        float2 shapeSize;       // its size; 0: none, the image's own corners are rounded
     };
 
     struct QuadOut {
@@ -72,9 +74,10 @@ public enum ShaderSource {
         return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     }
 
-    // The screen and the camera: bilinear, opaque, with antialiased rounded corners. For a crop, the texture is
-    // sampled half a texel inside it at most, so neither the bilinear filter nor the antialiased edge (drawn past
-    // the image) mixes in what is outside it.
+    // The screen and the camera: bilinear, opaque, with antialiased rounded corners. Inside a window frame, the window's
+    // rounded rect (the shape) cuts the screen instead, and its own rect, square, along the edge it does not share with
+    // the window: the top one, under the bar. For a crop, the texture is sampled half a texel inside it at most, so
+    // neither the bilinear filter nor the antialiased edge (drawn past the image) mixes in what is outside it.
     fragment float4 screenFragment(QuadOut in [[stage_in]],
                                    constant QuadUniforms &u [[buffer(0)]],
                                    texture2d<float> source [[texture(0)]],
@@ -83,6 +86,13 @@ public enum ShaderSource {
         float radius = min(u.radius, min(halfSize.x, halfSize.y));
         float d = roundedRectDistance(in.p - (u.contentOrigin + halfSize), halfSize, radius);
         float coverage = clamp(0.5 - d, 0.0, 1.0);
+        if (u.shapeSize.x > 0.0) {
+            float2 halfShape = u.shapeSize * 0.5;
+            float shapeRadius = min(u.radius, min(halfShape.x, halfShape.y));
+            float shape = roundedRectDistance(in.p - (u.shapeOrigin + halfShape), halfShape, shapeRadius);
+            float rect = roundedRectDistance(in.p - (u.contentOrigin + halfSize), halfSize, 0.0);
+            coverage = clamp(0.5 - max(shape, rect), 0.0, 1.0);
+        }
         float2 uv = in.uv;
         if (u.clampsToCrop != 0.0) {
             float2 halfTexel = 0.5 / float2(source.get_width(), source.get_height());
@@ -91,6 +101,43 @@ public enum ShaderSource {
             uv = clamp(uv, low, high);
         }
         float3 color = source.sample(linearSampler, uv).rgb;
+        return float4(color, 1.0) * coverage;
+    }
+
+    struct WindowBarUniforms {
+        float4 barColor;
+        float4 red;             // the buttons' colours, left to right
+        float4 yellow;
+        float4 green;
+        float2 windowOrigin;    // the whole window, bar and screen
+        float2 windowSize;
+        float2 firstButton;     // the first button's centre
+        float buttonSpacing;    // between the buttons' centres
+        float buttonRadius;     // 0: no buttons
+        float radius;           // the window's corners
+        float barBottom;        // where the bar meets the screen
+        float2 padding;
+    };
+
+    // A window frame's title bar (`WindowFrameLayer`), over a quad around it: the window's rounded rect down to one pixel
+    // under the screen's top edge, so the screen, drawn over it, leaves no seam of background where they meet; in the
+    // bar's colour, with the buttons' antialiased circles. Opaque, premultiplied by how much of the pixel it covers.
+    fragment float4 windowBarFragment(QuadOut in [[stage_in]],
+                                      constant WindowBarUniforms &u [[buffer(0)]]) {
+        float2 halfSize = u.windowSize * 0.5;
+        float radius = min(u.radius, min(halfSize.x, halfSize.y));
+        float window = roundedRectDistance(in.p - (u.windowOrigin + halfSize), halfSize, radius);
+        float bar = in.p.y - (u.barBottom + 1.0);
+        float coverage = clamp(0.5 - max(window, bar), 0.0, 1.0);
+        float3 color = u.barColor.rgb;
+        if (u.buttonRadius > 0.0) {
+            float3 buttons[3] = { u.red.rgb, u.yellow.rgb, u.green.rgb };
+            for (int i = 0; i < 3; i++) {
+                float2 centre = u.firstButton + float2(u.buttonSpacing * float(i), 0.0);
+                float button = clamp(0.5 - (length(in.p - centre) - u.buttonRadius), 0.0, 1.0);
+                color = mix(color, buttons[i], button);
+            }
+        }
         return float4(color, 1.0) * coverage;
     }
 
@@ -224,7 +271,7 @@ public enum ShaderSource {
         return sum / total;
     }
 
-    // The cursor sprite, already premultiplied.
+    // The cursor sprite, or a window frame's title, already premultiplied.
     fragment float4 spriteFragment(QuadOut in [[stage_in]],
                                    texture2d<float> sprite [[texture(0)]],
                                    sampler mipSampler [[sampler(0)]]) {

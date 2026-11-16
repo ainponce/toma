@@ -116,7 +116,7 @@ public struct Clip: Codable, Equatable, Sendable {
     public var start: HostTime
     /// Excluded.
     public var end: HostTime
-    /// 0.25 to 16.
+    /// 0.25 to 16 (`ClipSpeed.range`), and read through `ClipSpeed.clamped(_:)`.
     public var speed: Double
 
     public init(id: String, take: String, start: HostTime, end: HostTime, speed: Double) {
@@ -125,6 +125,17 @@ public struct Clip: Codable, Equatable, Sendable {
         self.start = start
         self.end = end
         self.speed = speed
+    }
+}
+
+/// The speeds a clip plays at, and how a speed out of them is read: clamped into the range, and 1 if it is not a
+/// number, so a document edited by hand never stops the render. The one rule for every reader of `Clip.speed` (the time
+/// map, the sequence commands, the sound's speed), so the picture and the sound never disagree about a clip's length.
+public enum ClipSpeed {
+    public static let range: ClosedRange<Double> = 0.25...16
+
+    public static func clamped(_ speed: Double) -> Double {
+        speed.isNaN ? 1 : min(max(speed, range.lowerBound), range.upperBound)
     }
 }
 
