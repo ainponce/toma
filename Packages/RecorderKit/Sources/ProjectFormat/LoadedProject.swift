@@ -24,9 +24,10 @@ public struct LoadedProject: Sendable {
     /// Throws `LoadedProjectError` for a manifest of a format version outside `Manifest.supportedFormatVersions`
     /// (a newer one, for example), one with a path that could leave the package
     /// (`Manifest.validatePaths()`), a package without takes or an unknown take, and the underlying error if
-    /// the manifest or the event log cannot be read. Both are read with `SafeRead.regularFile(at:)`: one that is a
-    /// symlink throws `ELOOP` and one that is a FIFO or anything else that is not a regular file `EFTYPE`, at once,
-    /// never followed nor waited on. A take without an event log has no events.
+    /// the manifest or the event log cannot be read. Both are read with `SafeRead`: one that is a symlink, or reached
+    /// through one inside the package (`takes/`, `takes/<take>/`), throws `ELOOP`, and one that is a FIFO or anything
+    /// else that is not a regular file `EFTYPE`, at once, never followed nor waited on. A take without an event log has
+    /// no events.
     public static func load(_ url: URL, take: String? = nil) throws -> LoadedProject {
         let package = ProjectPackage(url: url)
         let data = try SafeRead.regularFile(at: package.manifestURL)
@@ -52,7 +53,7 @@ public struct LoadedProject: Sendable {
         }
         let events: [InputEvent]
         do {
-            events = try EventLogReader.read(package.eventsURL(take: record.id)).events
+            events = try EventLogReader.read(take: record.id, of: package).events
         } catch let error as POSIXError where error.code == .ENOENT {
             events = []
         }

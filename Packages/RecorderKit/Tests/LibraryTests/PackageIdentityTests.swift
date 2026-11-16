@@ -241,15 +241,16 @@ private let app = AppInfo(name: "Tests", version: "0")
 @Test func volumeOfTheTemporaryFolderIsLocalAndInternal() throws {
     try withTemporaryDirectory { folder in
         let volume = try SystemFileSystem().volume(of: folder)
-        let values = try folder.resourceValues(forKeys: [.volumeUUIDStringKey, .volumeLocalizedNameKey])
+        let values = try folder.resourceValues(forKeys: [.volumeUUIDStringKey, .volumeLocalizedNameKey, .volumeURLKey])
         #expect(volume.uuid == values.volumeUUIDString)
         #expect(volume.name == values.volumeLocalizedName)
+        #expect(volume.mountPath == values.volume?.path)
         #expect(volume.isInternal)
         #expect(!volume.isRemovable)
         #expect(!volume.isNetwork)
         #expect(!volume.isSynced)
         #expect(!volume.isReadOnly)
-        #expect(volume.availableBytes > 0)
+        #expect(try SystemFileSystem().freeSpace(of: folder) > 0)
     }
 }
 
@@ -261,14 +262,18 @@ private let app = AppInfo(name: "Tests", version: "0")
         let volume = try SystemFileSystem().volume(of: package.url)
         #expect(volume.uuid != (try SystemFileSystem().volume(of: folder)).uuid)
         #expect(volume.name == "TomaTest")
+        #expect(
+            URL(fileURLWithPath: volume.mountPath).resolvingSymlinksInPath().path
+                == image.mountPoint.resolvingSymlinksInPath().path)
         #expect(!volume.isInternal)
         #expect(volume.isRemovable)
         #expect(!volume.isNetwork)
         #expect(!volume.isSynced)
         #expect(!volume.isReadOnly)
         // Free space as the disk has it, though the figure for important usage is 0 on an image.
-        #expect(volume.availableBytes > 1_000_000)
-        #expect(volume.availableBytes < 20 * 1_048_576)
+        let free = try SystemFileSystem().freeSpace(of: package.url)
+        #expect(free > 1_000_000)
+        #expect(free < 20 * 1_048_576)
         #expect(try PackageIdentity(of: package.url, in: SystemFileSystem()).volume == volume.uuid)
 
         // The same disk attached read-only.

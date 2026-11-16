@@ -127,10 +127,12 @@ public enum ProjectReader {
     /// written, the tail of the log applied), for the output's length and format and the version it is written in.
     /// The size on disk and the thumbnail are left for later.
     ///
-    /// The state, the first that holds: a package that is not there is `.unavailable(.notFound)`, with an identity of
-    /// file 0, which no item has (the caller keeps the one it knew); a link, a manifest or a document that cannot be
-    /// read is `.needsRepair`; a newer format or document `.newerVersion`; then `.inTrash` (in `place` `.trash`, since
-    /// the package got there), `.unfinished`, `.readOnlyVolume`, `.normal`.
+    /// The state, the first that holds: a package that is not there (`ENOENT`, `ENOTDIR`) is `.unavailable(.notFound)`
+    /// and one that cannot be looked at for another reason (`EIO`, `EACCES`…) `.needsRepair`, both with an identity of
+    /// file 0, which no item has (the caller keeps the one it knew, and a disk that fails for a moment never makes a
+    /// project look gone); a link, a manifest or a document that cannot be read is `.needsRepair`; a newer format or
+    /// document `.newerVersion`; then `.inTrash` (in `place` `.trash`, since the package got there), `.unfinished`,
+    /// `.readOnlyVolume`, `.normal`. The volume's free space is never asked.
     public static func summary(
         of url: URL, place: Place, fileSystem: any LibraryFileSystem,
         readDocument: (@Sendable (URL) throws -> (LoadedProject, EditDocument, Int))? = nil, context: EditContext,
@@ -145,9 +147,11 @@ public enum ProjectReader {
             volume = try fileSystem.volume(of: url)
             folder = try fileSystem.stat(url, withAddedDate: place == .trash)
         } catch {
+            let state: ProjectState =
+                isMissing(error) ? .unavailable(.notFound) : .needsRepair("The package cannot be looked at: \(reason(error))")
             return ProjectSummary(
                 identity: PackageIdentity(volume: url.path, file: 0), path: url.path, name: name, place: place,
-                hasCamera: false, state: .unavailable(.notFound), lastSeen: lastSeen)
+                hasCamera: false, state: state, lastSeen: lastSeen)
         }
         var summary = ProjectSummary(
             identity: PackageIdentity(volume: volume.uuid, file: folder.fileID), path: url.path, name: name, place: place,
@@ -232,11 +236,27 @@ public enum ProjectReader {
 
     /// `error` in a few words, for the help text of a project to repair.
     private static func reason(_ error: any Error) -> String {
+        if let code = posixCode(of: error) { return String(cString: strerror(code)) + "." }
         switch error {
-        case let error as POSIXError: String(cString: strerror(error.code.rawValue)) + "."
-        case is DecodingError: "It is not one this version reads."
-        case let error as LoadedProjectError: "\(error)."
-        default: "\(error)"
+        case is DecodingError: return "It is not one this version reads."
+        case let error as LoadedProjectError: return "\(error)."
+        default: return "\(error)"
         }
+    }
+
+    /// Whether `error` says nothing is at the path: `ENOENT`, `ENOTDIR` (a folder on the way is not one), or
+    /// Foundation's "no such file", itself or as its underlying error.
+    private static func isMissing(_ error: any Error) -> Bool {
+        if let code = posixCode(of: error) { return code == ENOENT || code == ENOTDIR }
+        let error = error as NSError
+        return error.domain == NSCocoaErrorDomain
+            && [CocoaError.fileNoSuchFile.rawValue, CocoaError.fileReadNoSuchFile.rawValue].contains(error.code)
+    }
+
+    /// The POSIX error `error` is or carries as its underlying error, if any.
+    private static func posixCode(of error: any Error) -> Int32? {
+        let error = error as NSError
+        if error.domain == NSPOSIXErrorDomain { return Int32(error.code) }
+        return (error.userInfo[NSUnderlyingErrorKey] as? NSError).flatMap { posixCode(of: $0) }
     }
 }

@@ -9,7 +9,7 @@ import Synchronization
 /// lock.
 final class CountingFileSystem: LibraryFileSystem {
     enum Operation: Equatable, Sendable {
-        case list, stat, volume, read, allocatedSize
+        case list, stat, volume, freeSpace, read, allocatedSize
     }
 
     struct Access: Equatable, Sendable {
@@ -51,6 +51,11 @@ final class CountingFileSystem: LibraryFileSystem {
         return try base.volume(of: url)
     }
 
+    func freeSpace(of url: URL) throws -> Int64 {
+        note(.freeSpace, url)
+        return try base.freeSpace(of: url)
+    }
+
     func read(_ url: URL, maxBytes: Int) throws -> Data {
         note(.read, url)
         return try base.read(url, maxBytes: maxBytes)
@@ -76,11 +81,14 @@ final class DelayingFileSystem: LibraryFileSystem {
         var root: URL
         var info: VolumeInfo
         var delay: Duration
+        /// What `freeSpace(of:)` answers, in bytes.
+        var freeBytes: Int64
 
-        init(root: URL, info: VolumeInfo, delay: Duration = .zero) {
+        init(root: URL, info: VolumeInfo, delay: Duration = .zero, freeBytes: Int64 = 100_000_000_000) {
             self.root = root
             self.info = info
             self.delay = delay
+            self.freeBytes = freeBytes
         }
     }
 
@@ -95,11 +103,11 @@ final class DelayingFileSystem: LibraryFileSystem {
     /// A volume that is local, internal, writable and neither removable nor synced unless the test says otherwise.
     static func volumeInfo(
         uuid: String, name: String = "Fake", isInternal: Bool = true, isRemovable: Bool = false, isNetwork: Bool = false,
-        isSynced: Bool = false, availableBytes: Int64 = 100_000_000_000, isReadOnly: Bool = false
+        isSynced: Bool = false, isReadOnly: Bool = false, mountPath: String = "/Volumes/Fake"
     ) -> VolumeInfo {
         VolumeInfo(
             uuid: uuid, name: name, isInternal: isInternal, isRemovable: isRemovable, isNetwork: isNetwork, isSynced: isSynced,
-            availableBytes: availableBytes, isReadOnly: isReadOnly)
+            isReadOnly: isReadOnly, mountPath: mountPath)
     }
 
     func list(_ directory: URL) throws -> [URL] {
@@ -115,6 +123,11 @@ final class DelayingFileSystem: LibraryFileSystem {
     func volume(of url: URL) throws -> VolumeInfo {
         wait(for: url)
         return try fakeVolume(of: url)?.info ?? base.volume(of: url)
+    }
+
+    func freeSpace(of url: URL) throws -> Int64 {
+        wait(for: url)
+        return try fakeVolume(of: url)?.freeBytes ?? base.freeSpace(of: url)
     }
 
     func read(_ url: URL, maxBytes: Int) throws -> Data {

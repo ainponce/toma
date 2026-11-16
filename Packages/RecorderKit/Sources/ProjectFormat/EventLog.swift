@@ -289,7 +289,16 @@ public enum EventLogReader {
     /// Throws only if the file cannot be read: with `SafeRead.regularFile(at:)`, so a symlink throws `ELOOP` and a FIFO
     /// or anything else that is not a regular file `EFTYPE`, at once, never followed nor waited on.
     public static func read(_ url: URL) throws -> EventLogReadResult {
-        let data = try SafeRead.regularFile(at: url)
+        parse(try SafeRead.regularFile(at: url))
+    }
+
+    /// `read(_:)` of the `events.jsonl` of take `take` of `package`, reached from the package's folder through no link
+    /// (`SafeRead.regularFile(_:in:)`): a `takes/` or `takes/<take>/` that is a link throws `ELOOP` too.
+    public static func read(take: String, of package: ProjectPackage) throws -> EventLogReadResult {
+        parse(try SafeRead.regularFile("takes/\(take)/events.jsonl", in: package.url))
+    }
+
+    private static func parse(_ data: Data) -> EventLogReadResult {
         let decoder = JSONDecoder()
         var result = EventLogReadResult(events: [], droppedTruncatedTail: false, skippedLines: 0)
         // A line that fails to decode is not an error of the file as a whole: it is counted.

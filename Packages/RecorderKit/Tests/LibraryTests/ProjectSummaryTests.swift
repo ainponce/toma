@@ -82,11 +82,45 @@ private final class LimitRecordingFileSystem: LibraryFileSystem {
     func list(_ directory: URL) throws -> [URL] { try base.list(directory) }
     func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat { try base.stat(url, withAddedDate: withAddedDate) }
     func volume(of url: URL) throws -> VolumeInfo { try base.volume(of: url) }
+    func freeSpace(of url: URL) throws -> Int64 { try base.freeSpace(of: url) }
     func allocatedSize(of package: URL) throws -> Int64 { try base.allocatedSize(of: package) }
 
     func read(_ url: URL, maxBytes: Int) throws -> Data {
         log.withLock { $0.append(Read(url: url, maxBytes: maxBytes)) }
         return try base.read(url, maxBytes: maxBytes)
+    }
+}
+
+/// The disk, except that `call` on `url` throws `error`. Nothing in it changes once it is made.
+private final class FailingFileSystem: LibraryFileSystem, @unchecked Sendable {
+    enum Call: Sendable {
+        case volume, stat
+    }
+
+    let url: URL
+    let call: Call
+    let error: any Error
+    private let base = SystemFileSystem()
+
+    init(url: URL, call: Call, error: any Error) {
+        self.url = url
+        self.call = call
+        self.error = error
+    }
+
+    func list(_ directory: URL) throws -> [URL] { try base.list(directory) }
+    func freeSpace(of url: URL) throws -> Int64 { try base.freeSpace(of: url) }
+    func read(_ url: URL, maxBytes: Int) throws -> Data { try base.read(url, maxBytes: maxBytes) }
+    func allocatedSize(of package: URL) throws -> Int64 { try base.allocatedSize(of: package) }
+
+    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat {
+        if call == .stat, url == self.url { throw error }
+        return try base.stat(url, withAddedDate: withAddedDate)
+    }
+
+    func volume(of url: URL) throws -> VolumeInfo {
+        if call == .volume, url == self.url { throw error }
+        return try base.volume(of: url)
     }
 }
 
@@ -165,9 +199,12 @@ private func unblocking<T>(
         #expect(unreadable.manifest != nil)
         #expect(unreadable.outputSeconds == nil && unreadable.formatVersion == nil && unreadable.documentVersion == nil)
 
+        // The first synthetic package lasts 1 s, and has the event log of a second of recording.
         let synthetic = Reading.summary(urls[6], in: dir)
         #expect(synthetic.state == .normal)
-        #expect(synthetic.outputSeconds != nil)
+        #expect(synthetic.outputSeconds == 1)
+        #expect(Reading.summary(urls[7], in: dir).outputSeconds == 2)
+        #expect(try LoadedProject.load(urls[6]).events.count == 65)
 
         // A document of a newer version, in a package this version reads.
         let newerDocument = urls[7]
@@ -244,14 +281,19 @@ private func unblocking<T>(
 
 @Test func eventsThatAreAFifoOrALinkAreRepairNotFollowed() async throws {
     try await withTemporaryDirectory { dir in
-        let urls = try await LibraryFixtures.folder(in: dir, kinds: [.fifoEvents, .symlinkedEvents, .fifoManifest])
+        let urls = try await LibraryFixtures.folder(
+            in: dir, kinds: [.fifoEvents, .symlinkedEvents, .fifoManifest, .symlinkedPackage])
         let take = LibraryFixtures.take
         let events = ProjectPackage(url: urls[1]).eventsURL(take: take)
         // The link points at a whole event log: followed, the project would read as normal.
         let target = try FileManager.default.destinationOfSymbolicLink(atPath: events.path)
         #expect(try EventLogReader.read(URL(fileURLWithPath: target)).events.isEmpty == false)
         let fifos = [ProjectPackage(url: urls[0]).eventsURL(take: take), ProjectPackage(url: urls[2]).manifestURL]
-        let before = try urls.map(treeHash)
+        let linkedPackage = urls[3]
+        let linkTarget = URL(fileURLWithPath: try FileManager.default.destinationOfSymbolicLink(atPath: linkedPackage.path))
+        #expect(try LoadedProject.load(linkTarget).events.isEmpty == false)
+        let before = try (urls.dropLast() + [linkTarget]).map(treeHash)
+        let counting = CountingFileSystem()
 
         try await unblocking(fifos) {
             let clock = ContinuousClock()
@@ -262,7 +304,7 @@ private func unblocking<T>(
                 var summary: ProjectSummary?
                 for _ in 0..<3 {
                     let start = clock.now
-                    summary = Reading.summary(url, in: dir)
+                    summary = Reading.summary(url, in: dir, fileSystem: counting)
                     times.append(start.duration(to: clock.now))
                 }
                 let best = try #require(times.min())
@@ -282,7 +324,11 @@ private func unblocking<T>(
                 try EditSession.readDocumentWithDiskVersion(urls[2], take: nil, context: context)
             }
         }
-        #expect(try urls.map(treeHash) == before)
+        // A package that is a link: the link itself is looked at, nothing through it.
+        let throughLink = counting.accesses.filter { $0.url.path.hasPrefix(linkedPackage.path + "/") }
+        #expect(throughLink == [])
+        #expect(Set(counting.accesses.filter { $0.url == linkedPackage }.map(\.operation)) == [.volume, .stat])
+        #expect(try (urls.dropLast() + [linkTarget]).map(treeHash) == before)
     }
 }
 
@@ -327,5 +373,75 @@ private func unblocking<T>(
         #expect(summary.aspect == .landscape)
         // Nothing was cut from the log: reading is not opening.
         #expect(try treeHash(url) == before)
+    }
+}
+
+@Test func linkedFoldersInsideAPackageAreRepairNotFollowed() async throws {
+    try await withTemporaryDirectory { dir in
+        let urls = try await LibraryFixtures.folder(in: dir, kinds: [.v3, .v3])
+        let elsewhere = dir.appending(path: ".elsewhere", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: false)
+        // `takes/` of one, `takes/take-001/` of the other: moved out whole and linked back, so following the link would
+        // read the take's whole event log.
+        let linked = [
+            ProjectPackage(url: urls[0]).takesURL,
+            ProjectPackage(url: urls[1]).takeDirectory(LibraryFixtures.take),
+        ]
+        for (index, folder) in linked.enumerated() {
+            let moved = elsewhere.appending(path: "\(index)", directoryHint: .isDirectory)
+            try FileManager.default.moveItem(at: folder, to: moved)
+            try FileManager.default.createSymbolicLink(at: folder, withDestinationURL: moved)
+        }
+        let context = Reading.context(dir)
+        for url in urls {
+            let summary = Reading.summary(url, in: dir)
+            #expect(Reading.needsRepair(summary.state), "\(url.lastPathComponent): \(summary.state)")
+            #expect(throws: POSIXError(.ELOOP), "\(url.lastPathComponent)") {
+                try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
+            }
+        }
+    }
+}
+
+@Test func onlyAMissingPackageIsNotFound() async throws {
+    try await withTemporaryDirectory { dir in
+        let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v1]).first)
+        // Not there: no such item, or a folder on the way that is a file.
+        let plain = dir.appending(path: "plain", directoryHint: .notDirectory)
+        try Data().write(to: plain)
+        for missing in [dir.appending(path: "Gone.toma", directoryHint: .isDirectory), plain.appending(path: "Demo.toma")] {
+            #expect(Reading.summary(missing, in: dir).state == .unavailable(.notFound), "\(missing.path)")
+        }
+        // A disk that fails, or a folder that cannot be looked at, for a moment: the project is still there.
+        let failures: [(any Error, FailingFileSystem.Call)] = [
+            (POSIXError(.EIO), .stat), (POSIXError(.EACCES), .stat), (POSIXError(.ETIMEDOUT), .volume),
+            (CocoaError(.fileReadNoPermission, userInfo: [NSUnderlyingErrorKey: POSIXError(.EACCES)]), .volume),
+            (CocoaError(.fileReadUnknown), .volume),
+        ]
+        for (error, call) in failures {
+            let summary = Reading.summary(url, in: dir, fileSystem: FailingFileSystem(url: url, call: call, error: error))
+            #expect(Reading.needsRepair(summary.state), "\(error): \(summary.state)")
+            #expect(summary.identity.file == 0)
+        }
+        // Foundation's own "no such file" is not there.
+        let gone = FailingFileSystem(url: url, call: .volume, error: CocoaError(.fileReadNoSuchFile))
+        #expect(Reading.summary(url, in: dir, fileSystem: gone).state == .unavailable(.notFound))
+    }
+}
+
+@Test func aThousandSummariesNeverAskForFreeSpace() async throws {
+    try await withTemporaryDirectory { dir in
+        let urls = try await LibraryFixtures.folder(in: dir, kinds: [.synthetic(count: 1_000)])
+        let counting = CountingFileSystem()
+        // The document is not what is counted here: one read of it stands for all.
+        let read = try EditSession.readDocumentWithDiskVersion(urls[0], take: nil, context: Reading.context(dir))
+        let summaries = urls.map { url in
+            ProjectReader.summary(
+                of: url, place: Reading.projectsFolder, fileSystem: counting, readDocument: { _ in read },
+                context: Reading.context(dir), now: Reading.now)
+        }
+        #expect(summaries.allSatisfy { $0.state == .normal })
+        #expect(counting.urls(of: .freeSpace).isEmpty)
+        #expect(counting.urls(of: .volume).count == 1_000)
     }
 }

@@ -29,9 +29,11 @@ public enum LibraryFixtures {
         case fifoEvents
         /// `linked-events.toma`: the take's `events.jsonl` is a link to its whole event log, moved to `.targets/`.
         case symlinkedEvents
-        /// `Synthetic 0001.toma`…: small packages of format version 3 written directly, without media nor events (the
-        /// manifest names a segment that is not there) and with an edit log of the legacy document, to read many fast.
-        /// Package *n* lasts *(n − 1) mod 60 + 1* s.
+        /// `Synthetic 0001.toma`…: packages of format version 3 written directly, to read many: without media (the
+        /// manifest names a segment that is not there), with an event log like a recording's and an edit log of the
+        /// legacy document. Package *n* lasts *(n − 1) mod 60 + 1* s. Its event log has the display's geometry, the
+        /// segment's start and, each second, the cursor sampled at 120 Hz while it moves (half the second), a click
+        /// every 2 s and typing every 3 s: about 61 lines, 3 KB, a second.
         case synthetic(count: Int)
     }
 
@@ -53,6 +55,8 @@ public enum LibraryFixtures {
             return name
         }
         var urls: [URL] = []
+        // Made once, the first time a synthetic package needs it.
+        var syntheticLog: SyntheticLog?
         for kind in kinds {
             switch kind {
             case .v1:
@@ -113,8 +117,11 @@ public enum LibraryFixtures {
                 try FileManager.default.createSymbolicLink(at: events, withDestinationURL: moved)
                 urls.append(project.package.url)
             case .synthetic(let count):
+                let log = try syntheticLog ?? SyntheticLog()
+                syntheticLog = log
                 for number in stride(from: 1, through: count, by: 1) {
-                    urls.append(try synthetic(in: dir, name: free("Synthetic \(String(format: "%04d", number))"), number: number))
+                    let name = free("Synthetic \(String(format: "%04d", number))")
+                    urls.append(try synthetic(in: dir, name: name, number: number, log: log))
                 }
             }
         }
@@ -149,12 +156,57 @@ public enum LibraryFixtures {
         return try builder.write(status: status)
     }
 
+    /// The event log of `.synthetic` packages for 60 s, encoded once: a package of *d* seconds writes its first
+    /// `endOfSecond[d]` bytes.
+    private struct SyntheticLog {
+        static let start = HostTime(nanoseconds: 5_000_000_000_000)
+        /// The events that are not input: the display's geometry and the segment's start.
+        let header: [InputEvent]
+        let data: Data
+        /// The size of the log up to the end of each second, from 0 to 60.
+        let endOfSecond: [Int]
+
+        init() throws {
+            let start = Self.start
+            header = [
+                InputEvent(
+                    t: start.adding(seconds: -0.01),
+                    kind: .displayGeometry(displayID: 1, frame: LibraryFixtures.frame, scale: 1)),
+                InputEvent(t: start, kind: .segmentStarted(track: "display-1", index: 1)),
+            ]
+            var data = Data()
+            for event in header { data.append(Data((try event.jsonLine() + "\n").utf8)) }
+            var endOfSecond = [data.count]
+            for second in 0..<60 {
+                let at = { (offset: Double) in start.adding(seconds: Double(second) + offset) }
+                // Within the display's 640 × 360 points; the click is where the cursor stopped.
+                var events = (0..<60).map { k in
+                    let (x, y) = (Double(200 + 4 * k + 10 * (second % 7)), Double(150 + 2 * k + 5 * (second % 5)))
+                    return InputEvent(t: at(Double(k) / 120), kind: .cursor(x: x, y: y))
+                }
+                let (x, y) = (Double(436 + 10 * (second % 7)), Double(268 + 5 * (second % 5)))
+                if second.isMultiple(of: 2) {
+                    events += [
+                        InputEvent(t: at(0.6), kind: .mouseDown(.left, x: x, y: y)),
+                        InputEvent(t: at(0.7), kind: .mouseUp(.left, x: x, y: y)),
+                    ]
+                }
+                if second.isMultiple(of: 3) { events.append(InputEvent(t: at(0.8), kind: .keyActivity)) }
+                for event in events { data.append(Data((try event.jsonLine() + "\n").utf8)) }
+                endOfSecond.append(data.count)
+            }
+            self.data = data
+            self.endOfSecond = endOfSecond
+        }
+    }
+
     /// Package *number* of `.synthetic`, written with plain writes: a take of one display whose segment is not there,
-    /// and the edit log of its legacy document.
-    private static func synthetic(in dir: URL, name: String, number: Int) throws -> URL {
+    /// its event log and the edit log of its legacy document.
+    private static func synthetic(in dir: URL, name: String, number: Int, log: SyntheticLog) throws -> URL {
         let url = try emptyPackage(in: dir, name: name)
         let package = ProjectPackage(url: url)
-        let start = HostTime(nanoseconds: 5_000_000_000_000)
+        let seconds = (number - 1) % 60 + 1
+        let start = SyntheticLog.start
         let segment = package.segmentURL(take: take, track: "display-1", index: 1)
         let record = TakeRecord(
             id: take, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000),
@@ -165,7 +217,7 @@ public enum LibraryFixtures {
                     segments: [
                         SegmentRecord(
                             index: 1, file: "takes/\(take)/display-1/\(segment.lastPathComponent)", startHostTime: start,
-                            endHostTime: start.adding(seconds: Double((number - 1) % 60 + 1)), endReason: .stopped,
+                            endHostTime: start.adding(seconds: Double(seconds)), endReason: .stopped,
                             droppedFrames: 0, heartbeatFrames: 0)
                     ])
             ])
@@ -174,7 +226,10 @@ public enum LibraryFixtures {
             createdAt: Date(timeIntervalSince1970: 1_800_000_000 + Double(number)), takes: [record],
             projectID: ProjectID.random())
         try ProjectJSON.encoder().encode(manifest).write(to: package.manifestURL)
-        var document = EditDocument.legacy(take: record, events: [])
+        try FileManager.default.createDirectory(at: package.takeDirectory(take), withIntermediateDirectories: true)
+        try log.data.prefix(log.endOfSecond[seconds]).write(to: package.eventsURL(take: take))
+        // The input events change nothing of the legacy document.
+        var document = EditDocument.legacy(take: record, events: log.header)
         document.logSequence = 1
         let line = try EditLogEntry.create(seq: 1, document: document, app: app).jsonLine()
         try Data((line + "\n").utf8).write(to: package.editLogURL)

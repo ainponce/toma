@@ -163,8 +163,12 @@ public struct LibraryRecords: Codable, Equatable, Sendable {
 /// `write` wins. The folder is made if it is not there. A write that fails is tried again after `interval`, unless a
 /// newer one came meanwhile. Use one writer per file.
 public final class DebouncedWriter: Sendable {
+    /// Runs `work` once `delay` has passed, never before it returns.
+    package typealias Schedule = @Sendable (_ delay: Duration, _ work: @escaping @Sendable () -> Void) -> Void
+
     public let url: URL
     private let interval: Duration
+    private let schedule: Schedule
     private let queue = DispatchQueue(label: "dev.toma.Toma.DebouncedWriter", qos: .utility)
 
     private struct State {
@@ -178,9 +182,18 @@ public final class DebouncedWriter: Sendable {
 
     private let state = Mutex(State())
 
-    public init(url: URL, interval: Duration = .seconds(2)) {
+    public convenience init(url: URL, interval: Duration = .seconds(2)) {
+        self.init(url: url, interval: interval) { delay, work in
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + delay.dispatchInterval, execute: work)
+        }
+    }
+
+    /// With the timer `schedule`, which the tests run by hand. The work it is given writes on the writer's queue and
+    /// returns once it is done.
+    package init(url: URL, interval: Duration, schedule: @escaping Schedule) {
         self.url = url
         self.interval = interval
+        self.schedule = schedule
     }
 
     /// Keeps `data` to be written; returns at once.
@@ -212,7 +225,7 @@ public final class DebouncedWriter: Sendable {
             return state.generation
         }
         guard let generation else { return }
-        queue.asyncAfter(deadline: .now() + interval.dispatchInterval) { self.fire(generation) }
+        schedule(interval) { self.queue.sync { self.fire(generation) } }
     }
 
     /// The scheduled write `generation`, on the queue, unless `flush` wrote it already.

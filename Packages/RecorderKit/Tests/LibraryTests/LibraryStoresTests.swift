@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 // Not @testable: the app uses only the public API.
 import Library
@@ -170,41 +171,78 @@ private enum Stores {
     }
 }
 
+/// A timer for `DebouncedWriter` that the test runs by hand: what was scheduled, and when it would run.
+private final class ManualTimer: Sendable {
+    private let scheduled = Mutex<[(delay: Duration, work: @Sendable () -> Void)]>([])
+
+    func schedule(_ delay: Duration, _ work: @escaping @Sendable () -> Void) {
+        scheduled.withLock { $0.append((delay, work)) }
+    }
+
+    /// The delays of what is scheduled and has not run.
+    var delays: [Duration] { scheduled.withLock { $0.map(\.delay) } }
+
+    /// Runs what is scheduled, as if its time had come, and returns how many ran.
+    @discardableResult
+    func runDue() -> Int {
+        let due = scheduled.withLock { scheduled in
+            defer { scheduled = [] }
+            return scheduled
+        }
+        for task in due { task.work() }
+        return due.count
+    }
+}
+
 @Test func writerKeepsTheLastWithinTwoSeconds() async throws {
     try await withTemporaryDirectory { dir in
         // Its folder is made when it is first written.
         let url = dir.appending(path: "Library/out.json", directoryHint: .notDirectory)
-        let writer = DebouncedWriter(url: url)
-        let clock = ContinuousClock()
-        let start = clock.now
-        for i in 0..<10 {
-            writer.write(Data("\(i)".utf8))
-            try await Task.sleep(for: .milliseconds(10))
-        }
-        // The first write waits its 2 s.
-        let exists = { FileManager.default.fileExists(atPath: url.path) }
-        if start.duration(to: clock.now) < .milliseconds(1_900) { #expect(!exists()) }
-        #expect(await eventually(timeout: .seconds(10)) { exists() })
-        #expect(start.duration(to: clock.now) >= .seconds(2))
-        #expect(try Data(contentsOf: url) == Data("9".utf8))
-        // Once: no other write follows.
-        let written = try SystemFileSystem().stat(url).fileID
-        try await Task.sleep(for: .milliseconds(2_500))
-        #expect(try SystemFileSystem().stat(url).fileID == written)
-        #expect(try Data(contentsOf: url) == Data("9".utf8))
+        let read = { String(decoding: try Data(contentsOf: url), as: UTF8.self) }
+        let timer = ManualTimer()
+        let writer = DebouncedWriter(url: url, interval: .seconds(2), schedule: timer.schedule)
 
-        // `flush` writes it at once.
+        // Ten writes: one disk write, 2 s after the first, with the last.
+        for i in 0..<10 { writer.write(Data("\(i)".utf8)) }
+        #expect(timer.delays == [.seconds(2)])
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(timer.runDue() == 1)
+        #expect(try read() == "9")
+        // Nothing else is scheduled: no other write follows.
+        #expect(timer.delays.isEmpty)
+
+        // `flush` writes at once, and the write that was scheduled has nothing left to do.
         writer.write(Data("10".utf8))
+        #expect(timer.delays == [.seconds(2)])
         await writer.flush()
-        #expect(try Data(contentsOf: url) == Data("10".utf8))
+        #expect(try read() == "10")
+        let flushed = try SystemFileSystem().stat(url).fileID
+        #expect(timer.runDue() == 1)
+        #expect(try SystemFileSystem().stat(url).fileID == flushed)
+        // A write after the flush waits its own 2 s.
+        writer.write(Data("11".utf8))
+        #expect(timer.delays == [.seconds(2)])
+        #expect(try read() == "10")
+        timer.runDue()
+        #expect(try read() == "11")
 
         // From many threads at once, one of them wins, whole.
         DispatchQueue.concurrentPerform(iterations: 100) { i in writer.write(Data("thread \(i)".utf8)) }
+        #expect(timer.delays == [.seconds(2)])
         await writer.flush()
-        let last = String(decoding: try Data(contentsOf: url), as: UTF8.self)
+        let last = try read()
         #expect((0..<100).map { "thread \($0)" }.contains(last), "\(last)")
         // Nothing is left beside it.
         #expect(try FileManager.default.contentsOfDirectory(atPath: url.deletingLastPathComponent().path) == ["out.json"])
+
+        // The writer the app makes waits on the clock: 2 s at least.
+        let timedURL = dir.appending(path: "timed.json", directoryHint: .notDirectory)
+        let timed = DebouncedWriter(url: timedURL)
+        let clock = ContinuousClock()
+        let start = clock.now
+        timed.write(Data("timed".utf8))
+        #expect(await eventually(timeout: .seconds(10)) { FileManager.default.fileExists(atPath: timedURL.path) })
+        #expect(start.duration(to: clock.now) >= .seconds(2))
     }
 }
 
