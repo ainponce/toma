@@ -4,8 +4,9 @@ import ProjectFormat
 @testable import Analysis
 
 /// The synthetic take of the tests of the zoom cameras, `ZoomCameraPath` (design §7.4, §8.3 and §8.6) and `CardZoomPath`
-/// (1c design §5.4): source seconds count from `zoomOrigin`, the screen is a display of 1440×900 pt at the origin, and
-/// one clip spans its first 20 s unless a test says otherwise, so output seconds are then source seconds.
+/// (1c design §5.4), and the bits of every motion path's state, the cursor's too: source seconds count from
+/// `zoomOrigin`, the screen is a display of 1440×900 pt at the origin, and one clip spans its first 20 s unless a test
+/// says otherwise, so output seconds are then source seconds.
 ///
 /// The tests that use these helpers are nested in extensions of this namespace, where they are found unqualified, so
 /// other files of AnalysisTests can have helpers of their own with the same names.
@@ -123,6 +124,20 @@ enum ZoomFixtures {
     /// Every bit of a placed state of the card's camera.
     static func bits(_ state: CardZoomState) -> [UInt64] {
         [state.logDepth, state.center.x, state.center.y].map(\.bitPattern)
+    }
+
+    /// Every bit of the cursor's spring on a step (`CursorPath.State`).
+    static func bits(_ state: CursorPath.State?) -> [UInt64]? {
+        guard let state else { return nil }
+        let values = [state.position.x, state.position.y, state.velocity.x, state.velocity.y, state.target.x, state.target.y]
+        return (values + [state.scale, state.scaleVelocity]).map(\.bitPattern) + [state.pressed ? 1 : 0]
+    }
+
+    /// Every bit of a sample of the cursor's path.
+    static func bits(_ sample: CursorSample?) -> [UInt64]? {
+        guard let sample else { return nil }
+        let values = [sample.position.x, sample.position.y, sample.opacity, sample.clickScale]
+        return values.map(\.bitPattern) + [sample.pressed ? 1 : 0]
     }
 
     /// SplitMix64: the same numbers on every run.

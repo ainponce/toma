@@ -63,49 +63,84 @@ public struct CursorPath: Sendable {
     private let idle: IdleVisibility?
     /// `nil` with `off`.
     private let motion: Motion?
+    /// What it was built over and with, for `rebuilt(after:take:events:style:timeMap:)`.
+    private let timeMap: TimeMap
+    private let style: CursorStyle
 
     public init(take: TakeRecord, events: [InputEvent], style: CursorStyle, timeMap: TimeMap) {
-        var samples: [Sample] = []
-        var buttons: [ButtonChange] = []
-        var clicks: [(output: Int64, point: SIMD2<Double>)] = []
-        var down = Set<MouseButton>()
-        for event in events.sortedByTime() {
-            switch event.kind {
-            case let .mouseDown(button, _, _): down.insert(button)
-            case let .mouseUp(button, _, _): down.remove(button)
-            default: break
-            }
-            switch event.kind {
-            case .mouseDown, .mouseUp:
-                // The mapping of changes keeps source order, so these stay in output order.
-                if let output = timeMap.output(ofChangeAt: event.t, take: take.id) {
-                    buttons.append(ButtonChange(output: output, pressed: !down.isEmpty))
-                }
-            default:
-                break
-            }
-            guard let point = event.kind.pointerPosition, let output = timeMap.output(ofSampleAt: event.t, take: take.id)
-            else { continue }
-            samples.append(Sample(output: output, point: point))
-            if case .mouseDown = event.kind, let kept = timeMap.output(atSource: event.t, take: take.id) {
-                clicks.append((kept, point))
-            }
-        }
-        self.samples = samples
-        self.buttons = buttons
-        self.clicks = clicks
-        releases = buttons.filter { !$0.pressed }.map(\.output)
-        idle = style.hideWhenIdle
-            ? IdleVisibility(
-                positions: samples.map { ($0.output, $0.point) }, presses: Self.presses(buttons), clicks: clicks.map(\.output),
-                delay: style.idleDelay)
-            : nil
-        switch style.smoothing {
-        case .off:
+        let raw = Raw(take: take, events: events, timeMap: timeMap)
+        self.init(raw: raw, idle: Self.idle(raw, style), motion: Self.motion(raw, style, timeMap), timeMap: timeMap, style: style)
+    }
+
+    private init(raw: Raw, idle: IdleVisibility?, motion: Motion?, timeMap: TimeMap, style: CursorStyle) {
+        samples = raw.samples
+        buttons = raw.buttons
+        clicks = raw.clicks
+        releases = raw.releases
+        self.idle = idle
+        self.motion = motion
+        self.timeMap = timeMap
+        self.style = style
+    }
+
+    /// The path of the same take and events as `old` with `style` over `timeMap`, after an edit (design §8.6): bit for
+    /// bit `init(take:events:style:timeMap:)`'s, reusing what of `old` the edit leaves as it was. Over the same time map,
+    /// `old`'s raw positions, presses and clicks, and its `IdleVisibility` with the same idle settings; with the same
+    /// spring (as `StepGrid.stable(_:)` reads it), `old`'s checkpoints before the first step the edit can change
+    /// (`StepGrid.checkpointsKept(changingFrom:)`), the rest simulated from the last of them.
+    ///
+    /// - Returns: the path, and the first step on which the cursor's position (`sample(atStep:)`'s, its spring's state
+    ///   with a spring) can differ from `old`'s: that of the first raw position, button change or click that differs
+    ///   (`Raw.firstChangedStep`, not moved back for what reads them ahead: the checkpoints kept are), the one after the
+    ///   end of the shorter output when the end moved, 0 with another smoothing; `nil` on none (its opacity can still
+    ///   differ, with other idle settings).
+    static func rebuilt(
+        after old: CursorPath, take: TakeRecord, events: [InputEvent], style: CursorStyle, timeMap: TimeMap
+    ) -> (path: CursorPath, changedFrom: Int?) {
+        let sameTimeMap = timeMap == old.timeMap
+        let raw = sameTimeMap ? old.raw : Raw(take: take, events: events, timeMap: timeMap)
+        let sameIdle = style.hideWhenIdle == old.style.hideWhenIdle && style.idleDelay == old.style.idleDelay
+        let idle = sameTimeMap && sameIdle ? old.idle : Self.idle(raw, style)
+        var changed = sameTimeMap ? nil : Raw.firstChangedStep(old.raw, raw)
+        let motion: Motion?
+        switch (style.smoothing, old.motion) {
+        case (.off, _):
             motion = nil
-        case let .spring(spec):
+            if old.motion != nil { changed = 0 }
+        case let (.spring(spec), previous?) where StepGrid.stable(spec) == previous.spring:
+            let lastStep = StepGrid.firstStep(atOrAfter: timeMap.duration)
+            if lastStep != previous.lastStep { changed = min(changed ?? .max, min(lastStep, previous.lastStep) + 1) }
             motion = Motion(
-                samples: samples, buttons: buttons, clicks: clicks, spring: StepGrid.stable(spec), duration: timeMap.duration)
+                raw: raw, spring: previous.spring, duration: timeMap.duration, after: (previous, changed ?? .max))
+        case (.spring, _):
+            motion = Self.motion(raw, style, timeMap)
+            changed = 0
+        }
+        return (CursorPath(raw: raw, idle: idle, motion: motion, timeMap: timeMap, style: style), changed)
+    }
+
+    /// The spring's state on every `StepGrid.checkpointEvery`-th step: none with `off` (for the tests).
+    var checkpoints: [State?] { motion?.checkpoints ?? [] }
+
+    /// The steps simulated to build the spring's checkpoints: 0 with `off` (for the tests).
+    var simulatedSteps: Int { motion?.simulatedSteps ?? 0 }
+
+    /// What it reads of the events, placed over its time map.
+    private var raw: Raw {
+        Raw(samples: samples, buttons: buttons, clicks: clicks, releases: releases)
+    }
+
+    private static func idle(_ raw: Raw, _ style: CursorStyle) -> IdleVisibility? {
+        guard style.hideWhenIdle else { return nil }
+        return IdleVisibility(
+            positions: raw.samples.map { ($0.output, $0.point) }, presses: presses(raw.buttons), clicks: raw.clicks.map(\.output),
+            delay: style.idleDelay)
+    }
+
+    private static func motion(_ raw: Raw, _ style: CursorStyle, _ timeMap: TimeMap) -> Motion? {
+        switch style.smoothing {
+        case .off: nil
+        case let .spring(spec): Motion(raw: raw, spring: StepGrid.stable(spec), duration: timeMap.duration)
         }
     }
 
@@ -186,16 +221,84 @@ public struct CursorPath: Sendable {
     /// Two raw positions at most this far apart in output seconds are interpolated; farther apart, it stays put.
     static let maxInterpolationGap = 0.050
 
-    struct Sample: Sendable {
+    struct Sample: Equatable, Sendable {
         var output: Int64
         /// In global points.
         var point: SIMD2<Double>
     }
 
     /// A button went down or up: whether one is down from `output` on.
-    struct ButtonChange: Sendable {
+    struct ButtonChange: Equatable, Sendable {
         var output: Int64
         var pressed: Bool
+    }
+
+    /// What the path reads of the events of its take, placed over a time map (see `CursorPath`'s notes): the raw
+    /// positions, the button changes and the clicks in output order, and the releases.
+    fileprivate struct Raw: Sendable {
+        var samples: [Sample]
+        var buttons: [ButtonChange]
+        var clicks: [(output: Int64, point: SIMD2<Double>)]
+        var releases: [Int64]
+
+        init(
+            samples: [Sample], buttons: [ButtonChange], clicks: [(output: Int64, point: SIMD2<Double>)], releases: [Int64]
+        ) {
+            self.samples = samples
+            self.buttons = buttons
+            self.clicks = clicks
+            self.releases = releases
+        }
+
+        init(take: TakeRecord, events: [InputEvent], timeMap: TimeMap) {
+            var samples: [Sample] = []
+            var buttons: [ButtonChange] = []
+            var clicks: [(output: Int64, point: SIMD2<Double>)] = []
+            var down = Set<MouseButton>()
+            // Already in time order (as a take's events are recorded), they are what the stable sort would give.
+            let inOrder = zip(events, events.dropFirst()).allSatisfy { $0.t <= $1.t }
+            for event in inOrder ? events : events.sortedByTime() {
+                switch event.kind {
+                case let .mouseDown(button, _, _): down.insert(button)
+                case let .mouseUp(button, _, _): down.remove(button)
+                default: break
+                }
+                switch event.kind {
+                case .mouseDown, .mouseUp:
+                    // The mapping of changes keeps source order, so these stay in output order.
+                    if let output = timeMap.output(ofChangeAt: event.t, take: take.id) {
+                        buttons.append(ButtonChange(output: output, pressed: !down.isEmpty))
+                    }
+                default:
+                    break
+                }
+                guard let point = event.kind.pointerPosition, let output = timeMap.output(ofSampleAt: event.t, take: take.id)
+                else { continue }
+                samples.append(Sample(output: output, point: point))
+                if case .mouseDown = event.kind, let kept = timeMap.output(atSource: event.t, take: take.id) {
+                    clicks.append((kept, point))
+                }
+            }
+            self.init(samples: samples, buttons: buttons, clicks: clicks, releases: buttons.filter { !$0.pressed }.map(\.output))
+        }
+
+        /// The first step on which the cursor's position can differ between `old` and `new`: that of the first raw
+        /// position, button change or click (`ClickStep.step`) that differs in one of them (with the same smoothing, the
+        /// spring's state and the raw position at a step read those at or before its output time, and the next ones
+        /// ahead of it, which the checkpoints kept leave room for). `nil` when they are the same.
+        static func firstChangedStep(_ old: Raw, _ new: Raw) -> Int? {
+            func firstOutput<Item>(_ a: [Item], _ b: [Item], _ same: (Item, Item) -> Bool, _ output: (Item) -> Int64) -> Int64? {
+                let common = min(a.count, b.count)
+                let i = (0..<common).first { !same(a[$0], b[$0]) } ?? common
+                return [a, b].compactMap { i < $0.count ? output($0[i]) : nil }.min()
+            }
+            let sample = firstOutput(old.samples, new.samples, ==, \.output)
+            let button = firstOutput(old.buttons, new.buttons, ==, \.output)
+            let click = firstOutput(old.clicks, new.clicks, { $0.output == $1.output && $0.point == $1.point }, \.output)
+            let steps = [sample, button].compactMap { $0.map(StepGrid.firstStep(atOrAfter:)) }
+                + [click.map(StepGrid.nearestStep(toOutput:))].compactMap { $0 }
+            return steps.min()
+        }
     }
 
     private func sample(_ state: State, atStep s: Int) -> CursorSample {
@@ -310,18 +413,25 @@ extension CursorPath {
         let lastStep: Int
         /// The state on every `StepGrid.checkpointEvery`-th step from 0 to `lastStep`; `nil` before the cursor starts.
         private(set) var checkpoints: [State?] = []
+        /// The steps simulated to build `checkpoints`.
+        private(set) var simulatedSteps = 0
 
-        init(
-            samples: [Sample], buttons: [ButtonChange], clicks: [(output: Int64, point: SIMD2<Double>)], spring: SpringSpec,
-            duration: Int64
-        ) {
-            self.samples = samples
-            self.buttons = buttons
-            self.clicks = clicks.map { ClickStep(step: StepGrid.nearestStep(toOutput: $0.output), point: $0.point) }
+        /// `spring` over `raw`, simulated from output 0; after an edit, `old`, the same spring over inputs that read as
+        /// `raw` on the steps before `changedFrom`: `old`'s checkpoints before that step
+        /// (`StepGrid.checkpointsKept(changingFrom:)`), the rest simulated from the last of them.
+        fileprivate init(raw: Raw, spring: SpringSpec, duration: Int64, after old: (motion: Motion, changedFrom: Int)? = nil) {
+            samples = raw.samples
+            buttons = raw.buttons
+            clicks = raw.clicks.map { ClickStep(step: StepGrid.nearestStep(toOutput: $0.output), point: $0.point) }
             self.spring = spring
             firstStep = samples.first.map { StepGrid.firstStep(atOrAfter: $0.output) }
             lastStep = StepGrid.firstStep(atOrAfter: duration)
-            if firstStep != nil { checkpoints = simulatedCheckpoints() }
+            guard firstStep != nil else { return }
+            let kept = old.map { old in
+                old.motion.checkpoints.prefix(min(
+                    StepGrid.checkpointsKept(changingFrom: old.changedFrom), lastStep / StepGrid.checkpointEvery + 1))
+            }
+            (checkpoints, simulatedSteps) = simulatedCheckpoints(keeping: kept ?? [])
         }
 
         /// `s` held to `0...lastStep`.
@@ -348,16 +458,20 @@ extension CursorPath {
             return simulation.state
         }
 
-        /// The states on steps 0, `StepGrid.checkpointEvery`, … up to `lastStep`, simulated from output 0.
-        private func simulatedCheckpoints() -> [State?] {
-            var simulation = simulation(atStep: -1, state: nil)
-            var checkpoints: [State?] = []
+        /// The states on steps 0, `StepGrid.checkpointEvery`, … up to `lastStep`: `kept`, those of the first steps,
+        /// then the rest simulated from the last of them (from output 0 without one); and the steps simulated.
+        private func simulatedCheckpoints(keeping kept: ArraySlice<State?>) -> (checkpoints: [State?], steps: Int) {
+            var checkpoints = Array(kept)
+            guard checkpoints.count <= lastStep / StepGrid.checkpointEvery else { return (checkpoints, 0) }
+            var simulation = kept.last.map { simulation(atStep: (kept.count - 1) * StepGrid.checkpointEvery, state: $0) }
+                ?? simulation(atStep: -1, state: nil)
             checkpoints.reserveCapacity(lastStep / StepGrid.checkpointEvery + 1)
+            let first = simulation.step
             while simulation.step < lastStep {
                 advance(&simulation)
                 if simulation.step % StepGrid.checkpointEvery == 0 { checkpoints.append(simulation.state) }
             }
-            return checkpoints
+            return (checkpoints, simulation.step - first)
         }
 
         /// A simulation from the checkpoint at or before step `s` (in `0...lastStep`).

@@ -75,9 +75,22 @@ public struct ZoomCameraPath: Sendable {
     private let simulation: ZoomSimulation<StageViewport>
 
     public init(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
+        self.init(
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil)
+    }
+
+    /// The camera of the same take after an edit (`MotionPaths.init(take:events:document:after:)`): bit for bit
+    /// `init(document:timeMap:stage:cursor:take:)`'s (that one without `old`), from `old`'s checkpoints as
+    /// `ZoomSimulation` keeps them. `changed` is the first step at which what the camera reads besides its blocks and
+    /// spring (the time map, the stage, the cursor and the camera's bubble) can differ; `nil`, none of them does.
+    init(
+        document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
+        after old: ZoomCameraPath?, changedFrom changed: Int?
+    ) {
         simulation = ZoomSimulation(
             document: document, timeMap: timeMap, cursor: cursor, take: take,
-            viewport: StageViewport(stage: stage, bubble: CameraBubble(document: document, take: take, timeMap: timeMap)))
+            viewport: StageViewport(stage: stage, bubble: CameraBubble(document: document, take: take, timeMap: timeMap)),
+            after: old?.simulation, changedFrom: changed)
     }
 
     /// The camera on step `s` of the grid (held to the steps of the output), placed.
@@ -131,6 +144,16 @@ public struct ZoomCameraPath: Sendable {
     func stateSimulatedFromStart(atStep s: Int) -> ZoomCameraState {
         ZoomCameraState(simulation.stateSimulatedFromStart(atStep: s))
     }
+
+    /// The camera on every `StepGrid.checkpointEvery`-th step.
+    var checkpoints: [Camera] { simulation.checkpoints }
+
+    /// The steps simulated to build `checkpoints`.
+    var simulatedSteps: Int { simulation.simulatedSteps }
+
+    /// The checkpoint from which the checkpoints are the old simulation's, after an edit of blocks alone; `nil` when
+    /// they were all simulated or kept from before the edit.
+    var splicedAt: Int? { simulation.splicedAt }
 }
 
 extension ZoomCameraState {
@@ -247,6 +270,16 @@ struct ZoomCamera: Equatable, Sendable {
     var target: SIMD2<Double>
     /// The block of the step, as an index of the blocks in output order; `nil` outside them.
     var block: Int?
+
+    /// Whether `other` is this camera bit for bit: `==` would take 0 for −0, which can part from it on later steps.
+    func hasTheBits(of other: ZoomCamera) -> Bool {
+        let values = [logDepth, logDepthVelocity, center.x, center.y, centerVelocity.x, centerVelocity.y, target.x, target.y]
+        let others = [
+            other.logDepth, other.logDepthVelocity, other.center.x, other.center.y, other.centerVelocity.x,
+            other.centerVelocity.y, other.target.x, other.target.y,
+        ]
+        return block == other.block && values.map(\.bitPattern) == others.map(\.bitPattern)
+    }
 }
 
 /// A zoom camera drawn: its depth (`u = ln z`, at least 0) and the centre of its crop, placed, in its viewport's units.
@@ -256,7 +289,7 @@ struct ZoomPlacement: Equatable, Sendable {
 }
 
 /// A zoom block of the take, on the grid.
-private struct ZoomBlock: Sendable {
+private struct ZoomBlock: Equatable, Sendable {
     /// The steps whose output time is in its output range.
     var steps: Range<Int>
     /// From 1 to 16.
@@ -310,6 +343,29 @@ private struct ZoomBlock: Sendable {
     private static func unit(_ value: Double) -> Double {
         value.isNaN ? 0.5 : min(max(value, 0), 1)
     }
+
+    /// The first step on which a camera over `new` can read another block than over `old`: the first step of the first
+    /// block that differs in one of them (a step before it is in the same blocks of both, under the same index, or in
+    /// none). `nil` when they are the same.
+    static func firstChangedStep(_ old: [ZoomBlock], _ new: [ZoomBlock]) -> Int? {
+        let common = min(old.count, new.count)
+        let i = (0..<common).first { old[$0] != new[$0] } ?? common
+        return [old, new].compactMap { i < $0.count ? $0[i].steps.lowerBound : nil }.min()
+    }
+
+    /// Where `old` and `new` differ, when they do: past the blocks both start with, before those both end with (the
+    /// most they can), the blocks of either one there are the ones an edit changed. `end`, the step after the last of
+    /// those to end (a step from it on is in a block both end with, or in none); `oldAfter`, the index in `old` of the
+    /// first block both end with; `shift`, how far its index moves in `new`.
+    static func edited(_ old: [ZoomBlock], _ new: [ZoomBlock]) -> (end: Int, oldAfter: Int, shift: Int)? {
+        let common = min(old.count, new.count)
+        let first = (0..<common).first { old[$0] != new[$0] } ?? common
+        guard first < max(old.count, new.count) else { return nil }
+        var last = 0
+        while last < common - first, old[old.count - 1 - last] == new[new.count - 1 - last] { last += 1 }
+        let changed = old[first..<(old.count - last)] + new[first..<(new.count - last)]
+        return (changed.map(\.steps.upperBound).max() ?? 0, old.count - last, new.count - old.count)
+    }
 }
 
 /// A zoom camera simulated on `StepGrid` from output 0 over `Viewport` (design §8.3 and §8.6, 1c design §5.4), what
@@ -327,7 +383,10 @@ private struct ZoomBlock: Sendable {
 ///
 /// The whole state is kept every `StepGrid.checkpointEvery` steps, and every query reads a step from its checkpoint (or
 /// from the steps a span kept), with the same bits as from output 0: a run from a checkpoint is a pure function of it
-/// and the inputs, so the checkpoints after one can be simulated again from it alone.
+/// and the inputs, so the checkpoints after one can be simulated again from it alone. That is also how an edit rebuilds
+/// it (`init(document:timeMap:cursor:take:viewport:after:changedFrom:)` with `old`): the checkpoints before the first
+/// step the edit can change are kept, and the rest simulated again from the last of them, until, after an edit of
+/// blocks alone, the camera is again on one of the old simulation's.
 struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     /// The last step simulated: the one of the end of the output.
     let lastStep: Int
@@ -341,9 +400,28 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     private let timeMap: TimeMap
     private let cursor: CursorPath
     /// The camera on every `StepGrid.checkpointEvery`-th step from 0 to `lastStep`.
-    private var checkpoints: [ZoomCamera] = []
+    private(set) var checkpoints: [ZoomCamera] = []
+    /// The steps simulated to build `checkpoints`.
+    private(set) var simulatedSteps = 0
+    /// The step of the checkpoint from which `checkpoints` are the old simulation's tail (`Tail`); `nil` without one.
+    private(set) var splicedAt: Int?
 
-    init(document: EditDocument, timeMap: TimeMap, cursor: CursorPath, take: TakeRecord, viewport: Viewport) {
+    /// The simulation from output 0 without `old`. With `old`, the simulation of the same take after an edit, bit for
+    /// bit the one without it: `old`'s checkpoints before the first step the edit can change
+    /// (`StepGrid.checkpointsKept(changingFrom:)`), the rest simulated from the last of them. That step is the first of
+    /// `changed` (where what it reads besides its blocks and spring, the time map, the viewport and the cursor, can
+    /// differ from what `old` read; `nil`, nowhere), of the first block that differs (`ZoomBlock.firstChangedStep`), the
+    /// one after the end of the shorter output when the end moved, and 0 with another spring.
+    ///
+    /// After an edit of blocks alone (`changed` `nil`, the same spring and end), the simulation also takes `old`'s tail:
+    /// once the camera on a checkpoint at or after the end of the blocks the edit changed (`ZoomBlock.edited`) is bit
+    /// for bit the old one there, with the index of its block moved as the blocks after the edit moved, every later
+    /// step reads the same as the old one did, so every later checkpoint is the old one, moved alike (`Tail`). Without
+    /// such a checkpoint, the rest is simulated.
+    init(
+        document: EditDocument, timeMap: TimeMap, cursor: CursorPath, take: TakeRecord, viewport: Viewport,
+        after old: ZoomSimulation?, changedFrom changed: Int?
+    ) {
         lastStep = StepGrid.firstStep(atOrAfter: timeMap.duration)
         self.viewport = viewport
         spring = StepGrid.stable(document.zoom.spring)
@@ -352,7 +430,21 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         clipTakes = document.sequence.map(\.take)
         self.timeMap = timeMap
         self.cursor = cursor
-        checkpoints = simulatedCheckpoints(from: startingRun())
+        var kept: ArraySlice<ZoomCamera> = []
+        var tail: Tail?
+        if let old {
+            var first = [changed, ZoomBlock.firstChangedStep(old.blocks, blocks)].compactMap { $0 }.min() ?? .max
+            if lastStep != old.lastStep { first = min(first, min(lastStep, old.lastStep) + 1) }
+            if spring != old.spring { first = 0 }
+            kept = old.checkpoints.prefix(
+                min(StepGrid.checkpointsKept(changingFrom: first), lastStep / StepGrid.checkpointEvery + 1))
+            if changed == nil, spring == old.spring, lastStep == old.lastStep,
+                let edit = ZoomBlock.edited(old.blocks, blocks)
+            {
+                tail = Tail(checkpoints: old.checkpoints, from: edit.end, oldAfter: edit.oldAfter, shift: edit.shift)
+            }
+        }
+        (checkpoints, simulatedSteps, splicedAt) = simulatedCheckpoints(keeping: kept, tail: tail)
     }
 
     // MARK: - Queries
@@ -487,16 +579,47 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         var cursor: CursorPath.Reader
     }
 
-    /// The camera on every `StepGrid.checkpointEvery`-th step after `run`'s, to `lastStep`.
-    private func simulatedCheckpoints(from run: Run) -> [ZoomCamera] {
-        var run = run
-        var checkpoints: [ZoomCamera] = []
+    /// What of an old simulation an edit of its blocks alone can leave as it was after it: its checkpoints from the first
+    /// one at or after `from` on which the camera is the old one, `moved`.
+    private struct Tail {
+        /// The old simulation's, over the same steps.
+        let checkpoints: [ZoomCamera]
+        /// The end of the blocks the edit changed (`ZoomBlock.edited`): no checkpoint before it is compared.
+        let from: Int
+        /// The old index of the first block after those the edit changed, and how far it moved.
+        let oldAfter: Int
+        let shift: Int
+
+        /// The old camera on checkpoint `index`, with the index of its block in the edited blocks.
+        func moved(_ index: Int) -> ZoomCamera {
+            var camera = checkpoints[index]
+            if let block = camera.block, block >= oldAfter { camera.block = block + shift }
+            return camera
+        }
+    }
+
+    /// The camera on every `StepGrid.checkpointEvery`-th step to `lastStep`: `kept`, those of the first steps, then the
+    /// rest simulated from the last of them (from output 0 without one), or `tail`'s from the first checkpoint on which
+    /// the camera simulated is its, bit for bit; the steps simulated, and that checkpoint's step.
+    private func simulatedCheckpoints(
+        keeping kept: ArraySlice<ZoomCamera>, tail: Tail?
+    ) -> (checkpoints: [ZoomCamera], steps: Int, splicedAt: Int?) {
+        var checkpoints = Array(kept)
+        guard checkpoints.count <= lastStep / StepGrid.checkpointEvery else { return (checkpoints, 0, nil) }
+        var run = kept.last.map { run(atCheckpoint: kept.count - 1, camera: $0) } ?? startingRun()
         checkpoints.reserveCapacity(lastStep / StepGrid.checkpointEvery + 1)
+        let first = run.step
         while run.step < lastStep {
             advance(&run)
-            if run.step % StepGrid.checkpointEvery == 0 { checkpoints.append(run.camera) }
+            guard run.step % StepGrid.checkpointEvery == 0 else { continue }
+            checkpoints.append(run.camera)
+            let index = run.step / StepGrid.checkpointEvery
+            if let tail, run.step >= tail.from, run.camera.hasTheBits(of: tail.moved(index)) {
+                checkpoints += (index + 1..<tail.checkpoints.count).map(tail.moved)
+                return (checkpoints, run.step - first, run.step)
+            }
         }
-        return checkpoints
+        return (checkpoints, run.step - first, nil)
     }
 
     /// A run at rest before step 0.
@@ -511,13 +634,18 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     private func run(toward s: Int) -> Run {
         let index = s / StepGrid.checkpointEvery
         guard index < checkpoints.count else { return startingRun() }
+        return run(atCheckpoint: index, camera: checkpoints[index])
+    }
+
+    /// A run on checkpoint `index` with `camera` on it.
+    private func run(atCheckpoint index: Int, camera: ZoomCamera) -> Run {
         let step = index * StepGrid.checkpointEvery
         var low = 0, high = blocks.count
         while low < high {
             let mid = (low + high) / 2
             if blocks[mid].steps.upperBound <= step { low = mid + 1 } else { high = mid }
         }
-        return Run(step: step, camera: checkpoints[index], nextBlock: low, cursor: CursorPath.Reader(cursor))
+        return Run(step: step, camera: camera, nextBlock: low, cursor: CursorPath.Reader(cursor))
     }
 
     /// Takes `run` to the next step: reads the block and, in a following one, the cursor, places the target, and moves

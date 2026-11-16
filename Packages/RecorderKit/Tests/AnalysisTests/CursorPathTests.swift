@@ -75,13 +75,6 @@ private func apart(_ a: SIMD2<Double>, _ b: SIMD2<Double>) -> Double {
     ((a - b) * (a - b)).sum().squareRoot()
 }
 
-/// Every bit of a state of the path.
-private func bits(_ state: CursorPath.State?) -> [UInt64]? {
-    guard let state else { return nil }
-    let values = [state.position.x, state.position.y, state.velocity.x, state.velocity.y, state.target.x, state.target.y]
-    return (values + [state.scale, state.scaleVelocity]).map(\.bitPattern) + [state.pressed ? 1 : 0]
-}
-
 /// The cursor of phase 0 and 1a (`FrameEvaluator.cursor(at:)`), copied: the last position at or before `τ`, moved
 /// toward the next one if that comes within 50 ms.
 private func todaysCursor(at τ: Int64, positions: [(t: Int64, point: SIMD2<Double>)]) -> SIMD2<Double>? {
@@ -159,9 +152,9 @@ func smoothedCursorIsExactlyOnEachClick(smoothing: CursorSmoothing) throws {
     let path = cursorPath(curveEvents + positions(from: 4, to: 6) { _ in SIMD2(200, 200) }, smooth, hideWhenIdle: true)
     #expect(StepGrid.checkpointEvery == 600)
     for step in [0, 1, 599, 600, 601, 1199, 1200, 1234, 1500, 1799, 2399, 2400, 3599] {
-        let fromCheckpoint = bits(path.state(atStep: step))
+        let fromCheckpoint = ZoomFixtures.bits(path.state(atStep: step))
         #expect(fromCheckpoint != nil)
-        #expect(fromCheckpoint == bits(path.stateSimulatedFromStart(atStep: step)), "step \(step)")
+        #expect(fromCheckpoint == ZoomFixtures.bits(path.stateSimulatedFromStart(atStep: step)), "step \(step)")
     }
 }
 
@@ -417,13 +410,6 @@ private struct PathRandom: RandomNumberGenerator {
     }
 }
 
-/// Every bit of a sample of the path.
-private func bits(_ sample: CursorSample?) -> [UInt64]? {
-    guard let sample else { return nil }
-    let values = [sample.position.x, sample.position.y, sample.opacity, sample.clickScale]
-    return values.map(\.bitPattern) + [sample.pressed ? 1 : 0]
-}
-
 @Test(arguments: [CursorSmoothing.off, fast, medium, smooth])
 func aSpanAndTheReaderGiveTheSampleOfEachInstant(smoothing: CursorSmoothing) {
     // Hidden when idle (the opacity moves too), clicks landing, a checkpoint, the first step and the output's end.
@@ -436,7 +422,8 @@ func aSpanAndTheReaderGiveTheSampleOfEachInstant(smoothing: CursorSmoothing) {
         let span = path.span(from: t - h, through: t + h)
         // On and off the grid, inside the span, and out of it (worked out on its own).
         for τ in Array(stride(from: t - h, through: t + h, by: 1_234_567)) + [t, t - h - 5_000_000, t + h + 1, t + 2 * h, -1] {
-            #expect(bits(span.sample(atOutput: τ)) == bits(path.sample(atOutput: τ)), "\(smoothing) at \(τ)")
+            #expect(
+                ZoomFixtures.bits(span.sample(atOutput: τ)) == ZoomFixtures.bits(path.sample(atOutput: τ)), "\(smoothing) at \(τ)")
         }
     }
     // At the first click's step, the click's point itself, read either way.
@@ -448,6 +435,7 @@ func aSpanAndTheReaderGiveTheSampleOfEachInstant(smoothing: CursorSmoothing) {
     // The reader, forward, back, across checkpoints and past the end: the sample of each step.
     var reader = CursorPath.Reader(path)
     for s in [0, 1, 239, 240, 241, 598, 599, 600, 601, 300, 1199, 1200, 4799, 4800, 4801, 5000, 10] {
-        #expect(bits(reader.sample(atStep: s)) == bits(path.sample(atStep: s)), "\(smoothing) step \(s)")
+        #expect(
+            ZoomFixtures.bits(reader.sample(atStep: s)) == ZoomFixtures.bits(path.sample(atStep: s)), "\(smoothing) step \(s)")
     }
 }
