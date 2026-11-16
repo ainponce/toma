@@ -330,6 +330,10 @@ final class TimelineTracks {
     var waveformLevels: [String: WaveformLevels] = [:]
     /// Called once a thumbnail arrived, to draw it.
     var thumbnailArrived: () -> Void = {}
+    /// The items that are selected (outlined in the accent color), by id.
+    var selected: Set<String> = []
+    /// This update moves the items to their new places with `Motion.trackItem` (after an edit), not at once.
+    var settling = false
 
     private struct ThumbnailKey: Hashable {
         var track: String
@@ -476,8 +480,10 @@ final class TimelineTracks {
                 clip.borderColor = palette.contrastBorder
                 clip.badge.contentsScale = geometry.backingScale
             }
-            clip.frame = rect
-            clip.borderWidth = palette.increaseContrast ? 1 : 0
+            place(clip, rect, isNew: isNew)
+            let isSelected = selected.contains(item.id)
+            clip.borderColor = isSelected ? palette.selection : palette.contrastBorder
+            clip.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
             let text = item.info.speed == 1 ? nil : TimelineFormat.multiplier(item.info.speed)
             if clip.badgeText != text {
                 clip.badgeText = text
@@ -487,7 +493,14 @@ final class TimelineTracks {
             clip.badge.isHidden = text == nil || rect.width < badgeWidth + 6
             clip.badge.frame = CGRect(x: max(3, -rect.minX + 3), y: 3, width: badgeWidth, height: 14)
         }
+        let previousMask = clipMask.path
         clipMask.path = mask
+        if settling, let previousMask, previousMask != mask, Self.sameShape(previousMask, mask) {
+            let morph = CASpringAnimation(keyPath: "path", spring: Motion.trackItem)
+            morph.fromValue = previousMask
+            morph.toValue = mask
+            clipMask.add(morph, forKey: "settle")
+        }
 
         layOutThumbnails(content, geometry, height: height, &wanted)
 
@@ -564,6 +577,33 @@ final class TimelineTracks {
         }
     }
 
+    // MARK: - Settling
+
+    /// Puts `layer` at `rect`; settling, it goes there from where it was with `Motion.trackItem`.
+    private func place(_ layer: CALayer, _ rect: CGRect, isNew: Bool) {
+        let from = layer.presentation()?.frame ?? layer.frame
+        layer.frame = rect
+        guard settling, !isNew, from != rect else { return }
+        let move = CASpringAnimation(keyPath: "position", spring: Motion.trackItem)
+        move.fromValue = NSValue(point: CGPoint(x: from.midX, y: from.midY))
+        move.toValue = NSValue(point: CGPoint(x: rect.midX, y: rect.midY))
+        let grow = CASpringAnimation(keyPath: "bounds", spring: Motion.trackItem)
+        grow.fromValue = NSValue(rect: CGRect(origin: .zero, size: from.size))
+        grow.toValue = NSValue(rect: CGRect(origin: .zero, size: rect.size))
+        layer.add(move, forKey: "settleMove")
+        layer.add(grow, forKey: "settleSize")
+    }
+
+    /// Whether two paths have the same elements, so one can morph into the other.
+    private static func sameShape(_ a: CGPath, _ b: CGPath) -> Bool {
+        func kinds(_ path: CGPath) -> [CGPathElementType] {
+            var kinds: [CGPathElementType] = []
+            path.applyWithBlock { kinds.append($0.pointee.type) }
+            return kinds
+        }
+        return kinds(a) == kinds(b)
+    }
+
     // MARK: - Screen, Zoom, Camera
 
     private func layOutScreens(
@@ -580,8 +620,10 @@ final class TimelineTracks {
                 span.label.foregroundColor = palette.screenText
                 span.label.contentsScale = geometry.backingScale
             }
-            span.frame = rect
-            span.borderWidth = palette.increaseContrast ? 1 : 0
+            place(span, rect, isNew: isNew)
+            let isSelected = selected.contains(item.id)
+            span.borderColor = isSelected ? palette.selection : palette.contrastBorder
+            span.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
             if span.labelText != item.info.name {
                 span.labelText = item.info.name
                 span.label.string = item.info.name
@@ -609,14 +651,24 @@ final class TimelineTracks {
                 block.lineDashPattern = automatic ? [3, 2] : nil
                 block.label.foregroundColor = automatic ? palette.zoomAutoText : palette.zoomText
             }
-            block.strokeColor = automatic ? palette.zoomStroke : (palette.increaseContrast ? palette.contrastBorder : nil)
-            block.frame = rect
+            let isSelected = selected.contains(item.id)
+            block.strokeColor = isSelected ? palette.selection
+                : automatic ? palette.zoomStroke : (palette.increaseContrast ? palette.contrastBorder : nil)
+            block.lineWidth = isSelected ? 2 : 1
+            let previousPath = block.path
+            place(block, rect, isNew: isNew)
             if block.drawnSize != rect.size {
                 block.drawnSize = rect.size
                 let radius = min(5, rect.width / 2, rect.height / 2)
                 block.path = CGPath(
                     roundedRect: CGRect(origin: .zero, size: rect.size).insetBy(dx: 0.5, dy: 0.5), cornerWidth: max(radius - 0.5, 0),
                     cornerHeight: max(radius - 0.5, 0), transform: nil)
+                if settling, !isNew, let previousPath, let path = block.path {
+                    let morph = CASpringAnimation(keyPath: "path", spring: Motion.trackItem)
+                    morph.fromValue = previousPath
+                    morph.toValue = path
+                    block.add(morph, forKey: "settleShape")
+                }
             }
             let text = (automatic ? "A " : "") + TimelineFormat.multiplier(item.info.depth)
             if block.labelText != text {
@@ -642,9 +694,19 @@ final class TimelineTracks {
                 diamond.backgroundColor = palette.camera
                 diamond.borderColor = palette.contrastBorder
             }
-            diamond.borderWidth = palette.increaseContrast ? 1 : 0
+            let isSelected = selected.contains(item.id)
+            diamond.borderColor = isSelected ? palette.selection : palette.contrastBorder
+            diamond.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
             diamond.bounds = CGRect(x: 0, y: 0, width: side, height: side)
-            diamond.position = CGPoint(x: geometry.snapped(geometry.x(item.output.lowerBound)), y: row.top + row.height / 2)
+            let previous = diamond.position
+            let position = CGPoint(x: geometry.snapped(geometry.x(item.output.lowerBound)), y: row.top + row.height / 2)
+            diamond.position = position
+            if settling, !isNew, previous != position {
+                let move = CASpringAnimation(keyPath: "position", spring: Motion.trackItem)
+                move.fromValue = NSValue(point: previous)
+                move.toValue = NSValue(point: position)
+                diamond.add(move, forKey: "settle")
+            }
         }
     }
 

@@ -78,7 +78,7 @@ extension EditorModel {
         seek(frame: frame)
     }
 
-    private static func newID(_ prefix: String) -> String {
+    static func newID(_ prefix: String) -> String {
         prefix + String(format: "%08x", UInt32.random(in: .min ... .max))
     }
 

@@ -158,6 +158,17 @@
         }
       }
     },
+    "Add Zoom" : {
+      "comment" : "The timeline's track bar: makes a zoom block of 3 s at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar zoom"
+          }
+        }
+      }
+    },
     "Adjust Area" : {
       "localizations" : {
         "es" : {
@@ -390,6 +401,17 @@
         }
       }
     },
+    "Automatic zoom of %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: an automatic zoom block, its depth, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom automático de %1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "Avoid Clipping" : {
       "comment" : "The Audio tab: the limiter",
       "localizations" : {
@@ -547,6 +569,17 @@
         }
       }
     },
+    "Camera change at %@" : {
+      "comment" : "VoiceOver: a change of the camera's style on the timeline, its time",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambio de la cámara en %@"
+          }
+        }
+      }
+    },
     "Can't check the free disk space." : {
       "localizations" : {
         "es" : {
@@ -574,6 +607,160 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cancelar la exportación"
+          }
+        }
+      }
+    },
+    "Center of the Screen" : {
+      "comment" : "The timeline's menu of a zoom: the focus is fixed in the middle",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Centro de la pantalla"
+          }
+        }
+      }
+    },
+    "Change Background" : {
+      "comment" : "An undo step: the background",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el fondo"
+          }
+        }
+      }
+    },
+    "Change Camera" : {
+      "comment" : "An undo step: the camera bubble or its changes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la cámara"
+          }
+        }
+      }
+    },
+    "Change Corners" : {
+      "comment" : "An undo step: the screen's corners",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar las esquinas"
+          }
+        }
+      }
+    },
+    "Change Cursor" : {
+      "comment" : "An undo step: the cursor's look",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el cursor"
+          }
+        }
+      }
+    },
+    "Change Format" : {
+      "comment" : "An undo step: the project's format (16:9, 9:16, 1:1)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el formato"
+          }
+        }
+      }
+    },
+    "Change Frame" : {
+      "comment" : "An undo step: the frame around the screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el marco"
+          }
+        }
+      }
+    },
+    "Change Frame Rate" : {
+      "comment" : "An undo step: the project's frames per second",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar los cuadros por segundo"
+          }
+        }
+      }
+    },
+    "Change Padding" : {
+      "comment" : "An undo step: the padding around the screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el margen"
+          }
+        }
+      }
+    },
+    "Change Screen" : {
+      "comment" : "An undo step: which screen is shown",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la pantalla"
+          }
+        }
+      }
+    },
+    "Change Shadow" : {
+      "comment" : "An undo step: the screen's shadow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la sombra"
+          }
+        }
+      }
+    },
+    "Change Speed" : {
+      "comment" : "An undo step: a part's speed (Edit ▸ Undo Change Speed)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la velocidad"
+          }
+        }
+      }
+    },
+    "Change Volume" : {
+      "comment" : "An undo step: a track's volume or mute",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el volumen"
+          }
+        }
+      }
+    },
+    "Change Zoom" : {
+      "comment" : "An undo step: a zoom's depth, focus or animation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el zoom"
           }
         }
       }
@@ -720,6 +907,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cerrar"
+          }
+        }
+      }
+    },
+    "Close Anyway" : {
+      "comment" : "Closing with unsaved changes: the window closes, losing them",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cerrar igual"
           }
         }
       }
@@ -917,12 +1115,45 @@
         }
       }
     },
+    "Custom Speed" : {
+      "comment" : "The sheet that asks for a clip's speed: its title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Velocidad personalizada"
+          }
+        }
+      }
+    },
+    "Custom Speed…" : {
+      "comment" : "The speed menu of the timeline: asks for any speed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Velocidad personalizada…"
+          }
+        }
+      }
+    },
     "Dark" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Oscura"
+          }
+        }
+      }
+    },
+    "Delete" : {
+      "comment" : "The timeline's menu of a clip: deletes what is selected",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar"
           }
         }
       }
@@ -1213,6 +1444,17 @@
         }
       }
     },
+    "Fit to Window" : {
+      "comment" : "The timeline's track bar: the whole sequence in the width",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustar a la ventana"
+          }
+        }
+      }
+    },
     "Fixed Point" : {
       "comment" : "The Zoom tab: the selected zoom's focus",
       "localizations" : {
@@ -1300,6 +1542,17 @@
         }
       }
     },
+    "Frames per Second" : {
+      "comment" : "The Project menu: the project's frames per second",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadros por segundo"
+          }
+        }
+      }
+    },
     "Free" : {
       "comment" : "An area's proportion: none",
       "localizations" : {
@@ -1307,6 +1560,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Libre"
+          }
+        }
+      }
+    },
+    "From 0.25× to 16×." : {
+      "comment" : "The sheet that asks for a clip's speed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 0,25× a 16×."
           }
         }
       }
@@ -1488,6 +1752,17 @@
         }
       }
     },
+    "If the window is closed now, they're lost." : {
+      "comment" : "Closing an editor whose last changes are not on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si se cierra la ventana ahora, se pierden."
+          }
+        }
+      }
+    },
     "If you denied it, the system audio track will be silent. You can change it in System Settings → Privacy & Security → Screen & System Audio Recording." : {
       "comment" : "Under the system audio permission once it was asked for: macOS doesn't say whether it was allowed",
       "localizations" : {
@@ -1516,6 +1791,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Instantánea"
+          }
+        }
+      }
+    },
+    "Keep Open" : {
+      "comment" : "Closing with unsaved changes: the window stays open (the default)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dejar abierta"
           }
         }
       }
@@ -1764,6 +2050,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Desenfoque de movimiento"
+          }
+        }
+      }
+    },
+    "Move Zoom" : {
+      "comment" : "An undo step: a zoom moved or trimmed on the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover el zoom"
           }
         }
       }
@@ -2112,6 +2409,17 @@
         }
       }
     },
+    "Open…" : {
+      "comment" : "File menu and the menu bar icon's menu: opens a project chosen in an open panel",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir…"
+          }
+        }
+      }
+    },
     "Optional: a shortcut you make in Shortcuts turns it on while recording, so notifications don't sound. They never appear in the video." : {
       "localizations" : {
         "es" : {
@@ -2149,6 +2457,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Panel"
+          }
+        }
+      }
+    },
+    "Part from %1$@ to %2$@, speed %3$@" : {
+      "comment" : "VoiceOver: a clip of the timeline, its start, end and speed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tramo de %1$@ a %2$@, velocidad %3$@"
           }
         }
       }
@@ -2257,6 +2576,17 @@
         }
       }
     },
+    "Playhead, %1$@ of %2$@" : {
+      "comment" : "VoiceOver: the timeline's playhead, its time and what the output lasts",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cabezal, %1$@ de %2$@"
+          }
+        }
+      }
+    },
     "Points" : {
       "comment" : "Display resolution: one pixel per point",
       "localizations" : {
@@ -2296,6 +2626,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escritorio anterior"
+          }
+        }
+      }
+    },
+    "Project" : {
+      "comment" : "The editor's menu of the project's format and frames per second",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proyecto"
           }
         }
       }
@@ -2524,6 +2865,28 @@
         }
       }
     },
+    "Redo" : {
+      "comment" : "Edit menu: redoes the last undone edit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rehacer"
+          }
+        }
+      }
+    },
+    "Redo %@" : {
+      "comment" : "Edit menu: redoes the named step (Redo Split)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rehacer %@"
+          }
+        }
+      }
+    },
     "Regenerate Automatic Zooms" : {
       "comment" : "The Zoom tab: a button",
       "localizations" : {
@@ -2531,6 +2894,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Regenerar los zooms automáticos"
+          }
+        }
+      }
+    },
+    "Regenerate Zooms" : {
+      "comment" : "An undo step: the automatic zooms planned again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regenerar los zooms"
           }
         }
       }
@@ -2979,6 +3353,17 @@
         }
       }
     },
+    "Show “%@”" : {
+      "comment" : "The timeline's menu of a screen's stretch: shows that screen there; the screen's name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar «%@»"
+          }
+        }
+      }
+    },
     "Size" : {
       "comment" : "The camera's size, or the cursor's",
       "localizations" : {
@@ -3023,6 +3408,17 @@
         }
       }
     },
+    "Snapping" : {
+      "comment" : "The timeline's track bar: edges stick to the playhead and to other edges",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajuste"
+          }
+        }
+      }
+    },
     "Soft" : {
       "comment" : "The Cursor tab: a click sound",
       "localizations" : {
@@ -3040,6 +3436,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudieron guardar algunos cuadros de la cámara."
+          }
+        }
+      }
+    },
+    "Some changes couldn't be saved" : {
+      "comment" : "Closing an editor whose last changes are not on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay cambios que no se pudieron guardar"
           }
         }
       }
@@ -3122,6 +3529,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Velocidad"
+          }
+        }
+      }
+    },
+    "Split" : {
+      "comment" : "The timeline's track bar and a clip's menu: cuts the clip in two",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dividir"
           }
         }
       }
@@ -3917,6 +4335,17 @@
         }
       }
     },
+    "There has to be at least one clip." : {
+      "comment" : "The timeline: what is said when the last clip is deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tiene que quedar al menos un tramo."
+          }
+        }
+      }
+    },
     "There isn't enough free disk space to record (%@ available)." : {
       "localizations" : {
         "es" : {
@@ -4178,6 +4607,28 @@
         }
       }
     },
+    "Timeline" : {
+      "comment" : "VoiceOver: the editor's timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Línea de tiempo"
+          }
+        }
+      }
+    },
+    "Timeline Scale" : {
+      "comment" : "The timeline's track bar: the scale's slider",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escala de la línea de tiempo"
+          }
+        }
+      }
+    },
     "Title" : {
       "localizations" : {
         "es" : {
@@ -4273,6 +4724,39 @@
         }
       }
     },
+    "Trim" : {
+      "comment" : "An undo step: trimming a part (Edit ▸ Undo Trim)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar"
+          }
+        }
+      }
+    },
+    "Trim End to Playhead" : {
+      "comment" : "VoiceOver: an action of a clip: its end trimmed up to the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar el final hasta el cabezal"
+          }
+        }
+      }
+    },
+    "Trim Start to Playhead" : {
+      "comment" : "VoiceOver: an action of a clip: its start trimmed up to the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar el inicio hasta el cabezal"
+          }
+        }
+      }
+    },
     "Turn on Do Not Disturb with a shortcut" : {
       "localizations" : {
         "es" : {
@@ -4301,6 +4785,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escribir el atajo"
+          }
+        }
+      }
+    },
+    "Undo" : {
+      "comment" : "Edit menu: undoes the last edit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deshacer"
+          }
+        }
+      }
+    },
+    "Undo %@" : {
+      "comment" : "Edit menu: undoes the named step (Undo Split)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deshacer %@"
+          }
+        }
+      }
+    },
+    "Up to 4× the sound speeds up without changing pitch; faster, the clip has no sound." : {
+      "comment" : "The speed menu of the timeline: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hasta 4× el sonido se acelera sin cambiar el tono; más rápido, el tramo va sin sonido."
           }
         }
       }
@@ -4358,17 +4875,6 @@
         }
       }
     },
-    "Waiting for space on the disk to apply the default style…" : {
-      "comment" : "Editor banner (amber): Apply Default Style waits for room on a full disk to bring its image in",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Esperando espacio en el disco para aplicar el estilo por defecto…"
-          }
-        }
-      }
-    },
     "Volume" : {
       "comment" : "The Cursor tab: the click sound's volume; the Audio tab: a track's",
       "localizations" : {
@@ -4376,6 +4882,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Volumen"
+          }
+        }
+      }
+    },
+    "Waiting for space on the disk to apply the default style…" : {
+      "comment" : "Editor banner (amber): Apply Default Style waits for room on a full disk to bring its image in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando espacio en el disco para aplicar el estilo por defecto…"
           }
         }
       }
@@ -4533,6 +5050,17 @@
         }
       }
     },
+    "Zoom In" : {
+      "comment" : "The timeline's track bar: a larger scale",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acercar"
+          }
+        }
+      }
+    },
     "Zoom On" : {
       "comment" : "The Zoom tab: what triggers an automatic zoom",
       "localizations" : {
@@ -4540,6 +5068,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hacer zoom con"
+          }
+        }
+      }
+    },
+    "Zoom Out" : {
+      "comment" : "The timeline's track bar: a smaller scale",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alejar"
+          }
+        }
+      }
+    },
+    "Zoom of %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a zoom block of the user's, its depth, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom de %1$@, de %2$@ a %3$@"
           }
         }
       }
