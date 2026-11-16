@@ -12,7 +12,10 @@ import os
 /// Segments that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a file of 0 bytes or
 /// none) and files AVFoundation cannot open or read are gaps: the last frame before them is held. Reading
 /// forward by less than `sequentialWindow` keeps decoding the open reader (the export path); a step back or a
-/// longer jump opens a new reader `preroll` before the time. At most one `AVAssetReader` is open at a time.
+/// longer jump opens a new reader at the frame presented at or before the time, which its file's sample cursor finds
+/// (`AVSampleCursor`), so it hands over that frame first and decodes no more than its group of pictures up to it; for
+/// a file that has no sample cursor, `preroll` before the time. At most one `AVAssetReader` reads at a time: the one
+/// it leaves is cancelled on a queue of its own, without waiting for it.
 ///
 /// When decoding stops with an error partway through a segment, the next time asked for after the last
 /// frame decoded opens a reader again right after that frame; if it stops at the same frame again, each
@@ -153,6 +156,27 @@ public final class TrackFrameReader: @unchecked Sendable {
         open?.reader.cancelReading()
     }
 
+    /// A segment's file and video track, and the host time its file starts at.
+    struct Media: @unchecked Sendable {
+        var start: HostTime
+        /// Where the segment ends; `nil` for one left open.
+        var end: HostTime?
+        var asset: AVURLAsset
+        var track: AVAssetTrack
+    }
+
+    /// The segment that shows `time` (the last usable one starting at or before it), with its file and video track,
+    /// loaded as `pixelBuffer(at:)` loads them (it blocks the same way, up to `trackLoadTimeout`); `nil` before the track's
+    /// first segment, in a segment that cannot be used, and while its load is backing off after timing out. Opens no
+    /// reader: for `KeyFrameDecoder`, which reads the file on its own.
+    func media(at time: HostTime) -> Media? {
+        lock.withLock {
+            guard let k = segments.lastIndex(where: { $0.usable && $0.start <= time }), let (asset, track) = loadMedia(k)
+            else { return nil }
+            return Media(start: segments[k].start, end: segments[k].end, asset: asset, track: track)
+        }
+    }
+
     /// A BGRA, IOSurface-backed, Metal-compatible frame: the latest one presented at or before `time`.
     /// `nil` before the first readable frame of the track.
     public func pixelBuffer(at time: HostTime) -> CVPixelBuffer? {
@@ -175,6 +199,10 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// The latest frame of segment `k` at or before `time`, or `nil` (marking the segment unusable when it
     /// holds no frame at all).
     private func frame(at time: HostTime, in k: Int) -> Frame? {
+        // A step back that stays on the frame held (no frame comes between it and the last time asked for): that frame.
+        if let reader = open, reader.segment == k, let current = reader.current, time >= current.time, time < reader.lastRequest {
+            return current
+        }
         if var reader = open, reader.segment == k, reader.current != nil, time >= reader.lastRequest,
            time.seconds(since: reader.lastRequest) < Self.sequentialWindow {
             advance(&reader, to: time)
@@ -185,12 +213,19 @@ public final class TrackFrameReader: @unchecked Sendable {
         let segment = segments[k]
         let offset = time.seconds(since: segment.start)
         let end = segment.end.map { $0.seconds(since: segment.start) } ?? offset
-        let from = max(0, min(offset, end) - Self.preroll)
+        let target = min(offset, end)
+        var from = max(0, target - Self.preroll)
+        // Loaded once here (`openReader` does not try again): right at the frame shown at `target`, a little before it
+        // so a rounding never leaves it out.
+        let media = loadMedia(k)
+        if target > 0, let track = media?.track, let shown = Self.presentationTime(atOrBefore: target, of: track) {
+            from = max(0, shown - Self.seekMargin)
+        }
         // From 0 too if nothing turns up, in case the frame shown at `time` came more than `preroll` earlier.
         var failure: String?
         for start in from > 0 ? [from, 0] : [0] {
             var reader: OpenReader
-            switch openReader(k, from: start) {
+            switch openReader(k, from: start, media: media) {
             case .opened(let opened):
                 reader = opened
             case .later:
@@ -259,6 +294,21 @@ public final class TrackFrameReader: @unchecked Sendable {
         return held
     }
 
+    /// Seconds a reader opened at a frame starts before it: less than any frame lasts.
+    static let seekMargin = 0.001
+
+    /// The presentation time, in seconds into its file, of the sample of `track` presented at or before `seconds`;
+    /// `nil` when the file has no sample cursor or no sample at or before it.
+    static func presentationTime(atOrBefore seconds: Double, of track: AVAssetTrack) -> Double? {
+        let time = CMTime(seconds: seconds, preferredTimescale: 1_000_000_000)
+        guard let cursor = track.makeSampleCursor(presentationTimeStamp: time) else { return nil }
+        while cursor.presentationTimeStamp > time {
+            guard cursor.stepInPresentationOrder(byCount: -1) == -1 else { return nil }
+        }
+        let shown = cursor.presentationTimeStamp.seconds
+        return shown.isFinite ? shown : nil
+    }
+
     /// Decodes up to the first frame after `time`.
     private func advance(_ reader: inout OpenReader, to time: HostTime) {
         let segmentStart = segments[reader.segment].start
@@ -293,8 +343,11 @@ public final class TrackFrameReader: @unchecked Sendable {
 
     /// Opens a reader on segment `k` from `offset` seconds into its file, after closing the open one.
     /// The open reader stays open if the segment's track is not loaded yet.
-    private func openReader(_ k: Int, from offset: Double) -> Opening {
-        guard let (asset, track) = loadMedia(k) else {
+    /// `media`: `loadMedia(k)`, just called (the default calls it).
+    private func openReader(
+        _ k: Int, from offset: Double, media: (asset: AVURLAsset, track: AVAssetTrack)?? = .none
+    ) -> Opening {
+        guard let (asset, track) = media ?? loadMedia(k) else {
             return segments[k].retryAfter == nil ? .unreadable(segments[k].loadFailure ?? "the file has no readable video track") : .later
         }
         close()
@@ -323,10 +376,18 @@ public final class TrackFrameReader: @unchecked Sendable {
         return .opened(OpenReader(segment: k, reader: reader, output: output, lastRequest: segments[k].start))
     }
 
+    /// Lets the open reader go. Cancelling a reader waits for what it is decoding ahead, tens of milliseconds at 4K, so
+    /// it is cancelled on a queue of its own: a jump opens its new reader at once, while the old one winds down.
     private func close() {
-        open?.reader.cancelReading()
+        if let reader = open?.reader {
+            let closing = ClosingReader(reader)
+            Self.closingQueue.async { closing.reader.cancelReading() }
+        }
         open = nil
     }
+
+    /// Where readers let go are cancelled.
+    private static let closingQueue = DispatchQueue(label: "dev.toma.TrackFrameReader.close", qos: .userInitiated)
 
     private func markUnusable(_ k: Int, _ reason: MissingVideo.Reason) {
         segments[k].usable = false
@@ -353,6 +414,8 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// timed-out load is backing off, `nil` without it when the file has no readable video track.
     private func loadMedia(_ k: Int) -> (asset: AVURLAsset, track: AVAssetTrack)? {
         if let media = segments[k].media { return media }
+        // A load that failed never succeeds: it is not tried again.
+        if segments[k].loadFailure != nil { return nil }
         if let retryAfter = segments[k].retryAfter, HostTime.now() < retryAfter { return nil }
         let asset = AVURLAsset(url: segments[k].url)
         switch trackLoader(asset) {
@@ -406,6 +469,15 @@ public final class TrackFrameReader: @unchecked Sendable {
             kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
             kCVPixelBufferMetalCompatibilityKey as String: true,
         ]
+    }
+}
+
+/// A reader handed to `TrackFrameReader.closingQueue` to be cancelled there; nothing else uses it any more.
+private final class ClosingReader: @unchecked Sendable {
+    let reader: AVAssetReader
+
+    init(_ reader: AVAssetReader) {
+        self.reader = reader
     }
 }
 

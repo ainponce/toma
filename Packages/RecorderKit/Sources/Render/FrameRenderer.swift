@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import CoreVideo
 import Foundation
 import Metal
@@ -22,6 +23,9 @@ public enum RenderError: Error, Equatable {
     case textureCreationFailed(CVReturn)
     /// The GPU did not complete the frame.
     case gpuFailed(String)
+    /// A frame was to be drawn without the frame of track `track` at source instant `sourceTime` that it shows, which
+    /// was never decoded for it: drawing it would show no screen (or camera) where there is one.
+    case frameNotDecoded(track: String, sourceTime: HostTime)
 }
 
 /// Renders frames of a take: the one drawing path behind the editor preview and the MP4 export.
@@ -36,6 +40,13 @@ public enum RenderError: Error, Equatable {
 /// Use one renderer per consumer: the preview and an export each make their own. A renderer keeps one
 /// decoder position per track it reads, so two consumers reading different times would keep sending
 /// them back and forth, reopening a reader for nearly every frame.
+///
+/// What it draws is a scene (`FrameEvaluator`), which carries its output size: the renderer's own (`setScene(_:)`, the
+/// one `init` makes, at the size given) for `encode(at:into:commandBuffer:)`, `render(at:into:)`, `renderBytes(at:)` and
+/// `render(at:into:completion:)`, or any other one `encode(scene:at:into:commandBuffer:)` is given. Scenes of the same
+/// project share the renderer's readers, so a scene of another size or revision (`makeScene(document:paths:outputSize:)`,
+/// `FrameEvaluator.resized(to:)`) draws without opening any decoder again. What depends on the size (a blurred
+/// background's or a wallpaper's texture, the window title's) is kept for each size, for the last two sizes drawn.
 ///
 /// `render(at:into:completion:)` only queues the frame and returns: on queues of the renderer's, each track's frames are
 /// decoded ahead (up to `FramePrefetcher.maxFrames`) along the grid of `frameRate` from the frame asked for, as the export
@@ -59,27 +70,33 @@ public enum RenderError: Error, Equatable {
 ///
 /// Thread-safe: frames are encoded one at a time, and those of `render(at:into:completion:)` in the order asked for.
 public final class FrameRenderer: @unchecked Sendable {
-    public let outputSize: SIMD2<Int>
+    /// The size of the renderer's scene, which `encode(at:into:commandBuffer:)` checks its target against.
+    public var outputSize: SIMD2<Int> { scene.outputSize }
     /// The device everything is drawn with; a view showing the preview must use it too.
     public let device: any MTLDevice
     let commandQueue: any MTLCommandQueue
-    private let evaluator: FrameEvaluator
+    /// The renderer's scene (`setScene(_:)`).
+    private let current: Mutex<FrameEvaluator>
     private let package: ProjectPackage
     private let take: TakeRecord
+    private let events: [InputEvent]
+    /// The frames per second scenes are drawn at; the document's when `nil`.
+    private let frameRateOverride: Int?
     /// The reader of each track read so far, by track ID, made the first time a frame (or `missingVideo`) needs it.
     private let readers = Mutex<[String: TrackFrameReader]>([:])
     private let compositor: Compositor
     /// The textures of the frames' background images; used with `lock` held.
     let backgroundImages: BackgroundImages
-    /// The texture of the frames' window title; used with `lock` held.
-    let titleTexture: TitleTexture
+    /// The textures of the frames' window titles, one store for each of the last two sizes drawn, the latest last; used
+    /// with `lock` held.
+    private var titleTextures: [(size: SIMD2<Int>, titles: TitleTexture)] = []
     /// The textures of the frames' cursors; used with `lock` held.
     private let cursorImages: CursorImages
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
-    /// The frames per second the output is drawn at (the document's unless given): the motion blur's frame, and the grid
-    /// along which `render(at:into:completion:)` decodes ahead.
-    let frameRate: Int
+    /// The frames per second the renderer's scene is drawn at (the document's unless given): the motion blur's frame, and
+    /// the grid along which `render(at:into:completion:)` decodes ahead.
+    var frameRate: Int { scene.frameRate }
     /// Where `render(at:into:completion:)` evaluates and draws its frames, one at a time.
     private let renderQueue = DispatchQueue(label: "dev.toma.FrameRenderer", qos: .userInitiated)
     /// The last frame `render(at:into:completion:)` queued: the next one starts once it is drawn.
@@ -99,8 +116,14 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The frames of the grid decoded ahead of the one asked for.
     static let lookahead = FramePrefetcher.maxFrames
 
-    /// Output seconds the take lasts.
-    public var duration: Double { evaluator.duration }
+    /// Output seconds the take lasts, in the renderer's scene.
+    public var duration: Double { scene.duration }
+
+    /// The renderer's scene: what `encode(at:into:commandBuffer:)` and the other ways to draw without a scene draw.
+    public var scene: FrameEvaluator { current.withLock { $0 } }
+
+    /// The window titles of the renderer's scene's size, for tests.
+    var titleTexture: TitleTexture { lock.withLock { titles(for: outputSize) } }
 
     /// The spans of the screen and of the camera shown with the frame before them so far, because a segment could
     /// not be decoded there (`TrackFrameReader`), in output seconds within `[0, duration]`, in time order (by start, end
@@ -111,8 +134,9 @@ public final class FrameRenderer: @unchecked Sendable {
     /// are listed before a frame is drawn. After drawing every frame of the timeline in order (an export), it lists every
     /// such span of the output.
     public var missingVideo: [MissingVideo] {
-        let timeMap = evaluator.timeMap, takeID = take.id, shown = evaluator.screenRanges
-        return evaluator.videoTrackIDs
+        let scene = self.scene
+        let timeMap = scene.timeMap, takeID = take.id, shown = scene.screenRanges
+        return scene.videoTrackIDs
             .compactMap(reader(for:))
             .flatMap { reader in reader.gaps.map { (reader.trackID, $0) } }
             .flatMap { track, gap -> [MissingVideo] in
@@ -149,14 +173,15 @@ public final class FrameRenderer: @unchecked Sendable {
         try self.init(project: project, document: .legacy(for: project), outputSize: outputSize, device: device)
     }
 
-    /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps.
+    /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps. Its scene is `document`
+    /// at `outputSize`.
     /// - Parameters:
     ///   - device: the system default device when `nil`.
     ///   - frameRate: the frames per second the output is drawn at, whose frame the motion blur's shutters are
-    ///     fractions of (`FrameEvaluator`); the document's when `nil`.
+    ///     fractions of (`FrameEvaluator`), in every scene of the renderer; the document's when `nil`.
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
     ///   errors of `Compositor.init` and `CursorSprite.makeTexture`. Builds the document's motion paths
-    ///   (`MotionPaths`).
+    ///   (`MotionPaths`), which takes tens of milliseconds for an hour of take: never on the main thread.
     public init(
         project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil,
         frameRate: Int? = nil
@@ -174,40 +199,105 @@ public final class FrameRenderer: @unchecked Sendable {
         guard status == kCVReturnSuccess, let cache else {
             throw RenderError.metalResourceUnavailable("texture cache (CVReturn \(status))")
         }
-        self.outputSize = outputSize
         self.device = device
         self.commandQueue = commandQueue
         textureCache = cache
         compositor = try Compositor(device: device)
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
-        titleTexture = TitleTexture(device: device)
         cursorImages = try CursorImages(device: device, package: project.package, take: project.take.id)
-        evaluator = FrameEvaluator(
-            take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate)
-        self.frameRate = frameRate ?? document.frameRate
+        current = Mutex(FrameEvaluator(
+            take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate))
+        frameRateOverride = frameRate
         package = project.package
         take = project.take
+        events = project.events
     }
 
-    /// Encodes the frame at `outputTime` into `target`, which must be `.bgra8Unorm` and `outputSize` big
-    /// (otherwise this throws and encodes nothing), decoding its screen and camera frames now. The caller commits
-    /// `commandBuffer`.
+    /// A scene of this renderer's take: `document` at `outputSize`, with `paths` (`MotionPaths(take:events:document:)` of
+    /// `document`, built off the main thread), at the renderer's frames per second (the document's unless the renderer was
+    /// given some). Cheap: the paths are what costs.
+    public func makeScene(document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
+        FrameEvaluator(
+            take: take, events: events, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride)
+    }
+
+    /// Makes `scene` the renderer's scene, and its size the one `encode(at:into:commandBuffer:)` checks: what was decoded
+    /// ahead for the scene before goes, and a background image that could not be read is looked for again.
+    public func setScene(_ scene: FrameEvaluator) {
+        current.withLock { $0 = scene }
+        resetPrefetchers()
+        lock.withLock { backgroundImages.forgetUnreadable() }
+    }
+
+    /// Encodes the frame at `outputTime` of the renderer's scene into `target`, which must be `.bgra8Unorm` and
+    /// `outputSize` big (otherwise this throws and encodes nothing), decoding its screen and camera frames now. The caller
+    /// commits `commandBuffer`.
     public func encode(at outputTime: Double, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer) throws {
-        try check(target)
+        try encode(scene: scene, at: outputTime, into: target, commandBuffer: commandBuffer)
+    }
+
+    /// Encodes the frame at `outputTime` of `scene` (one of this renderer's take) into `target`, which must be
+    /// `.bgra8Unorm` and `scene.outputSize` big (otherwise this throws and encodes nothing), decoding its screen and camera
+    /// frames now. The caller commits `commandBuffer`.
+    public func encode(
+        scene: FrameEvaluator, at outputTime: Double, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer
+    ) throws {
+        try check(target, size: scene.outputSize)
         try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
-            let frame = try evaluator.frame(at: outputTime) { try cursorImages.isReadable($0) }
+            let frame = try scene.frame(at: outputTime) { try cursorImages.isReadable($0) }
             try draw(frame, into: target, commandBuffer: commandBuffer) { trackID, time in
                 try reader(for: trackID)?.pixelBuffer(at: time).map(metalTexture(for:))
             }
         }
     }
 
-    /// Throws unless `target` is `.bgra8Unorm` and `outputSize` big.
-    private func check(_ target: any MTLTexture) throws {
-        let size = SIMD2(target.width, target.height)
-        guard size == outputSize else { throw RenderError.targetSizeMismatch(expected: outputSize, actual: size) }
+    /// The frame at `outputTime` of `scene`, with the cursor images the renderer can read: what
+    /// `encode(scene:at:into:commandBuffer:)` draws.
+    func frame(of scene: FrameEvaluator, at outputTime: Double) throws -> RenderFrame {
+        try lock.withLock { try scene.frame(at: outputTime) { try cursorImages.isReadable($0) } }
+    }
+
+    /// Encodes `frame` (of a scene of this renderer) into `target`, `.bgra8Unorm` and `frame.outputSize` big, with the
+    /// screen and camera frames `decoded` gives for each (track, source instant) it shows. The caller commits
+    /// `commandBuffer`.
+    func encode(
+        _ frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
+        decoded: (_ trackID: String, _ time: HostTime) throws -> CachedTexture?
+    ) throws {
+        try check(target, size: frame.outputSize)
+        try lock.withLock { try draw(frame, into: target, commandBuffer: commandBuffer, decoded: decoded) }
+    }
+
+    /// The frame of track `trackID` at source instant `time`, decoded now as `encode(at:into:commandBuffer:)` decodes it
+    /// (`TrackFrameReader.pixelBuffer(at:)`), as a texture; `nil` before the track's first readable frame and for a track
+    /// the take does not have. Blocks while it decodes: never on a Swift concurrency thread.
+    func decodedFrame(track trackID: String, at time: HostTime) throws -> CachedTexture? {
+        try lock.withLock {
+            CVMetalTextureCacheFlush(textureCache, 0)
+            return try reader(for: trackID)?.pixelBuffer(at: time).map(metalTexture(for:))
+        }
+    }
+
+    /// Throws unless `target` is `.bgra8Unorm` and `size` big.
+    private func check(_ target: any MTLTexture, size: SIMD2<Int>) throws {
+        let actual = SIMD2(target.width, target.height)
+        guard actual == size else { throw RenderError.targetSizeMismatch(expected: size, actual: actual) }
         guard target.pixelFormat == Compositor.pixelFormat else { throw RenderError.unsupportedPixelFormat }
+    }
+
+    /// The window titles of frames `size` big: the store of the last two sizes drawn. Call with `lock` held.
+    private func titles(for size: SIMD2<Int>) -> TitleTexture {
+        if let index = titleTextures.firstIndex(where: { $0.size == size }) {
+            let found = titleTextures.remove(at: index)
+            titleTextures.append(found)
+            return found.titles
+        }
+        // The oldest size's titles go.
+        if titleTextures.count >= 2 { titleTextures.removeFirst() }
+        let titles = TitleTexture(device: device)
+        titleTextures.append((size, titles))
+        return titles
     }
 
     /// Encodes `frame` into `target` with the screen and camera frames `decoded` gives for each (track, source instant)
@@ -227,7 +317,8 @@ public final class FrameRenderer: @unchecked Sendable {
         let screen = try frame.screen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let previousScreen = try frame.previousScreen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let camera = try frame.camera.flatMap { try texture($0.trackID, $0.sourceTime) }
-        let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: outputSize)
+        let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: frame.outputSize)
+        let titleTexture = titles(for: frame.outputSize)
         let windowTitle = try TitleTexture.source(for: frame).flatMap {
             try titleTexture.texture(for: $0, scale: TitleTexture.scale(for: frame))
         }
@@ -260,10 +351,11 @@ public final class FrameRenderer: @unchecked Sendable {
     /// Draws the frame at `outputTime` into `pixelBuffer` (32BGRA, IOSurface-backed, `outputSize` big), decoding its
     /// frames now, and waits for the GPU to finish.
     public func render(at outputTime: Double, into pixelBuffer: CVPixelBuffer) throws {
-        try check(pixelBuffer)
+        let scene = self.scene
+        try check(pixelBuffer, size: scene.outputSize)
         let target = try lock.withLock { try metalTexture(for: pixelBuffer) }
         let commandBuffer = try makeCommandBuffer()
-        try encode(at: outputTime, into: target.texture, commandBuffer: commandBuffer)
+        try encode(scene: scene, at: outputTime, into: target.texture, commandBuffer: commandBuffer)
         try finish(commandBuffer)
         withExtendedLifetime(target) {}
     }
@@ -306,8 +398,9 @@ public final class FrameRenderer: @unchecked Sendable {
     /// for. Schedules the frames of the grid ahead of it, from the one expected next: from it, when it is not. Runs on
     /// `renderQueue`.
     private func prepare(at outputTime: Double) throws -> PreparedFrame {
-        let index = gridIndex(of: outputTime)
-        let lastIndex = evaluator.timeMap.frameCount(frameRate: frameRate) - 1
+        let scene = self.scene, frameRate = scene.frameRate
+        let index = gridIndex(of: outputTime, frameRate: frameRate)
+        let lastIndex = scene.timeMap.frameCount(frameRate: frameRate) - 1
         return try ahead.withLock { ahead in
             // Another frame than the one expected next: what was read ahead is of no use.
             if index == nil || index != ahead.expected || ahead.frames.first.map({ $0.index != index }) == true {
@@ -318,7 +411,7 @@ public final class FrameRenderer: @unchecked Sendable {
             if let index, index <= lastIndex {
                 var next = ahead.frames.last.map { $0.index + 1 } ?? index
                 while next <= min(index + Self.lookahead, lastIndex) {
-                    let frame = try evaluate(at: Double(TimeMap.frameTime(next, frameRate: frameRate)) / 1e9)
+                    let frame = try self.frame(of: scene, at: Double(TimeMap.frameTime(next, frameRate: frameRate)) / 1e9)
                     try schedule(frame, in: &ahead)
                     ahead.frames.append((next, frame))
                     next += 1
@@ -326,15 +419,10 @@ public final class FrameRenderer: @unchecked Sendable {
                 let first = ahead.frames.removeFirst()
                 return PreparedFrame(frame: first.frame, sources: try sources(of: first.frame, in: &ahead))
             }
-            let frame = try evaluate(at: outputTime)
+            let frame = try self.frame(of: scene, at: outputTime)
             try schedule(frame, in: &ahead)
             return PreparedFrame(frame: frame, sources: try sources(of: frame, in: &ahead))
         }
-    }
-
-    /// The frame at `outputTime`, with the cursor images the renderer can read.
-    private func evaluate(at outputTime: Double) throws -> RenderFrame {
-        try lock.withLock { try evaluator.frame(at: outputTime) { try cursorImages.isReadable($0) } }
     }
 
     /// Tells the prefetchers of the frames `frame` shows that they will be asked for them.
@@ -348,16 +436,36 @@ public final class FrameRenderer: @unchecked Sendable {
         let layers = [frame.screen.map { ($0.trackID, $0.sourceTime) }, frame.previousScreen.map { ($0.trackID, $0.sourceTime) },
                       frame.camera.map { ($0.trackID, $0.sourceTime) }].compactMap { $0 }
         return try layers.compactMap { trackID, time in
-            if let prefetcher = ahead.prefetchers[trackID] { return (DecodedKey(trackID: trackID, time: time), prefetcher) }
-            guard let reader = reader(for: trackID) else { return nil }
-            let prefetcher = try FramePrefetcher(reader: reader, device: device)
-            ahead.prefetchers[trackID] = prefetcher
-            return (DecodedKey(trackID: trackID, time: time), prefetcher)
+            try prefetcher(for: trackID, in: &ahead).map { (DecodedKey(trackID: trackID, time: time), $0) }
+        }
+    }
+
+    /// The prefetcher of track `trackID`, made the first time; `nil` for a track the take does not have.
+    private func prefetcher(for trackID: String, in ahead: inout Ahead) throws -> FramePrefetcher? {
+        if let prefetcher = ahead.prefetchers[trackID] { return prefetcher }
+        guard let reader = reader(for: trackID) else { return nil }
+        let prefetcher = try FramePrefetcher(reader: reader, device: device)
+        ahead.prefetchers[trackID] = prefetcher
+        return prefetcher
+    }
+
+    /// The prefetcher that decodes ahead the frames of track `trackID` (made the first time; `nil` for a track the take
+    /// does not have), shared with `render(at:into:completion:)`: one consumer of the renderer uses them.
+    func prefetcher(for trackID: String) throws -> FramePrefetcher? {
+        try ahead.withLock { try prefetcher(for: trackID, in: &$0) }
+    }
+
+    /// Drops what every prefetcher scheduled and decoded ahead, as after a jump.
+    func resetPrefetchers() {
+        ahead.withLock { ahead in
+            for prefetcher in ahead.prefetchers.values { prefetcher.reset() }
+            ahead.frames.removeAll()
+            ahead.expected = nil
         }
     }
 
     /// The index of `outputTime` on the grid of `frameRate`: `n` when it is `TimeMap.frameTime(n, frameRate:)` exactly.
-    private func gridIndex(of outputTime: Double) -> Int? {
+    private func gridIndex(of outputTime: Double, frameRate: Int) -> Int? {
         guard frameRate > 0, outputTime.isFinite, outputTime >= 0 else { return nil }
         let nanoseconds = TimeMap.outputNanoseconds(seconds: outputTime)
         let index = Int((Double(nanoseconds) * Double(frameRate) / 1e9).rounded())
@@ -365,18 +473,22 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// Draws `frame` with the frames `decoded` holds into `pixelBuffer`, commits it and calls `completion` on `renderQueue`
-    /// once the GPU is done; throws, having committed nothing, what kept it from being drawn. Runs on `renderQueue`.
-    private func draw(
+    /// once the GPU is done; throws, having committed nothing, what kept it from being drawn: `RenderError.frameNotDecoded`
+    /// for a frame of a track of the take that `decoded` lacks. Runs on `renderQueue` (and in tests).
+    func draw(
         _ frame: RenderFrame, decoded: [DecodedKey: CachedTexture?], into pixelBuffer: CVPixelBuffer,
         completion: @escaping @Sendable ((any Error)?) -> Void
     ) throws {
-        try check(pixelBuffer)
+        try check(pixelBuffer, size: frame.outputSize)
         let commandBuffer = try makeCommandBuffer()
         let target = try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
             let target = try metalTexture(for: pixelBuffer)
             try draw(frame, into: target.texture, commandBuffer: commandBuffer) { trackID, time in
-                decoded[DecodedKey(trackID: trackID, time: time)] ?? nil
+                if let texture = decoded[DecodedKey(trackID: trackID, time: time)] { return texture }
+                // A track the take does not have shows nothing, as drawing it frame by frame does; any other was decoded.
+                guard reader(for: trackID) != nil else { return nil }
+                throw RenderError.frameNotDecoded(track: trackID, sourceTime: time)
             }
             return target
         }
@@ -399,25 +511,33 @@ public final class FrameRenderer: @unchecked Sendable {
         }
     }
 
-    /// Throws unless `pixelBuffer` is 32BGRA and `outputSize` big.
-    private func check(_ pixelBuffer: CVPixelBuffer) throws {
+    /// Throws unless `pixelBuffer` is 32BGRA and `size` big.
+    private func check(_ pixelBuffer: CVPixelBuffer, size: SIMD2<Int>) throws {
         guard CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA else {
             throw RenderError.unsupportedPixelFormat
         }
-        let size = SIMD2(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer))
-        guard size == outputSize else { throw RenderError.targetSizeMismatch(expected: outputSize, actual: size) }
+        let actual = SIMD2(CVPixelBufferGetWidth(pixelBuffer), CVPixelBufferGetHeight(pixelBuffer))
+        guard actual == size else { throw RenderError.targetSizeMismatch(expected: size, actual: actual) }
     }
 
-    /// The frame at `outputTime` as BGRA bytes, `outputSize.x × 4` per row with no padding.
+    /// The frame at `outputTime` of the renderer's scene as BGRA bytes, `outputSize.x × 4` per row with no padding.
     public func renderBytes(at outputTime: Double) throws -> [UInt8] {
-        try renderOffscreen { target, commandBuffer in
-            try encode(at: outputTime, into: target, commandBuffer: commandBuffer)
+        let scene = self.scene
+        return try renderOffscreen(size: scene.outputSize) { target, commandBuffer in
+            try encode(scene: scene, at: outputTime, into: target, commandBuffer: commandBuffer)
         }
     }
 
-    /// Runs `draw` on a new `.bgra8Unorm` texture of `outputSize`, waits for the GPU and returns the
-    /// texture's bytes without row padding.
+    /// `renderOffscreen(size:_:)` at the size of the renderer's scene.
     func renderOffscreen(_ draw: (any MTLTexture, any MTLCommandBuffer) throws -> Void) throws -> [UInt8] {
+        try renderOffscreen(size: outputSize, draw)
+    }
+
+    /// Runs `draw` on a new `.bgra8Unorm` texture `outputSize` big, waits for the GPU and returns the texture's bytes
+    /// without row padding.
+    func renderOffscreen(
+        size outputSize: SIMD2<Int>, _ draw: (any MTLTexture, any MTLCommandBuffer) throws -> Void
+    ) throws -> [UInt8] {
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: Compositor.pixelFormat, width: outputSize.x, height: outputSize.y, mipmapped: false)
         descriptor.usage = [.renderTarget, .shaderRead]
@@ -460,8 +580,8 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// The reader of track `trackID` of the take, made the first time it is asked for; `nil` for a track the take does
-    /// not have.
-    private func reader(for trackID: String) -> TrackFrameReader? {
+    /// not have. Every scene of the renderer reads with it.
+    func reader(for trackID: String) -> TrackFrameReader? {
         readers.withLock { readers in
             if let reader = readers[trackID] { return reader }
             guard let track = take.track(trackID) else { return nil }
@@ -479,7 +599,7 @@ public final class FrameRenderer: @unchecked Sendable {
 }
 
 /// The screen or camera frame a frame shows: its track and its source instant.
-private struct DecodedKey: Hashable, Sendable {
+struct DecodedKey: Hashable, Sendable {
     var trackID: String
     var time: HostTime
 }

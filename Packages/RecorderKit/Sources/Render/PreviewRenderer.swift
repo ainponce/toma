@@ -63,11 +63,12 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
         try renderer.encode(at: outputTime, into: target, commandBuffer: commandBuffer)
     }
 
-    /// The frame at `outputTime` drawn by `renderPreview` into an offscreen `.bgra8Unorm` texture of
-    /// `renderer.outputSize`, as BGRA bytes with no row padding.
+    /// The frame at `outputTime` of the renderer's scene (`FrameRenderer.scene`), drawn as `renderPreview` draws it into
+    /// an offscreen `.bgra8Unorm` texture of that scene's size, as BGRA bytes with no row padding.
     public func snapshot(at outputTime: Double) throws -> [UInt8] {
-        try renderer.renderOffscreen { target, commandBuffer in
-            try renderPreview(at: outputTime, into: target, commandBuffer: commandBuffer)
+        let scene = renderer.scene
+        return try renderer.renderOffscreen(size: scene.outputSize) { target, commandBuffer in
+            try renderer.encode(scene: scene, at: outputTime, into: target, commandBuffer: commandBuffer)
         }
     }
 

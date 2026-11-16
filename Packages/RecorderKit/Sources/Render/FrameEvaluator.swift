@@ -93,11 +93,17 @@ public struct FrameEvaluator: Sendable {
     /// Output seconds: `timeMap.durationSeconds`.
     public let duration: Double
 
-    private let takeID: String
-    private let outputSize: SIMD2<Int>
-    private let background: BackgroundLayer
+    /// The size of the frames, in pixels.
+    public private(set) var outputSize: SIMD2<Int>
+    /// The frames per second the output is drawn at: the motion blur's frame, and the grid a frame `n` is on.
+    public let frameRate: Int
+
+    private let take: TakeRecord
+    private let events: [InputEvent]
+    private var takeID: String { take.id }
+    private var background: BackgroundLayer
     /// The gradient of a `.gradient` background; the classic one with any other.
-    private let gradient: Gradient
+    private var gradient: Gradient
     /// Which screen is shown, and the drawn cursor's path.
     private let paths: MotionPaths
     /// The video tracks a frame can show: the screens of `paths.stage`, then the camera when it is shown.
@@ -108,7 +114,7 @@ public struct FrameEvaluator: Sendable {
     /// The take's tracks that recorded a window.
     private let windowTrackIDs: Set<String>
     /// The changes of the screen's shape and of the screen shown, and where each screen is shown.
-    private let transitions: ScreenTransitions
+    private var transitions: ScreenTransitions
     /// `nil` when no camera is drawn.
     private let bubble: CameraBubble?
     /// The take's `cursorImage` events, in time order.
@@ -134,7 +140,8 @@ public struct FrameEvaluator: Sendable {
         self.timeMap = timeMap
         timelineStart = document.sequence.first?.start ?? HostTime(nanoseconds: 0)
         duration = timeMap.durationSeconds
-        takeID = take.id
+        self.take = take
+        self.events = events
         self.outputSize = outputSize
         (background, gradient) = Self.background(of: document.style, take: take, outputSize: outputSize, screens: document.screens)
         let paths = paths ?? MotionPaths(take: take, events: events, document: document)
@@ -142,10 +149,7 @@ public struct FrameEvaluator: Sendable {
         bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
         windowTrackIDs = Set(take.tracks.filter { $0.kind == .window }.map(\.id))
-        let style = document.style, stageSize = SIMD2(Double(outputSize.x), Double(outputSize.y))
-        transitions = ScreenTransitions(take: take, events: events, document: document, timeMap: timeMap, stage: paths.stage) {
-            Self.placement(of: $0, style: style, outputSize: stageSize)
-        }
+        transitions = Self.transitions(take: take, events: events, document: document, timeMap: timeMap, paths: paths, outputSize: outputSize)
         cursorImages = events.sortedByTime().compactMap { event in
             guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
             return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
@@ -155,10 +159,36 @@ public struct FrameEvaluator: Sendable {
             ClickPlace(click, take: take.id, sequence: document.sequence, timeMap: timeMap, stage: paths.stage)
         }
         let rate = frameRate ?? document.frameRate
+        self.frameRate = rate
         frameDuration = rate > 0 ? TimeMap.frameTime(1, frameRate: rate) : 0
         func shutter(_ value: Double) -> Double { value.isNaN ? 0 : min(max(value, 0), 1) }
         zoomShutter = shutter(document.zoom.motionBlur)
         cursorShutter = shutter(document.cursor.motionBlur)
+    }
+
+    /// The same document, motion paths and frames per second drawn at `outputSize`: only what depends on the size (the
+    /// background's blur, where the screens go and how a change moves them) is worked out again, so it is cheap; the
+    /// paths, which are in output time and stage units, are shared.
+    public func resized(to outputSize: SIMD2<Int>) -> FrameEvaluator {
+        guard outputSize != self.outputSize else { return self }
+        var resized = self
+        resized.outputSize = outputSize
+        (resized.background, resized.gradient) = Self.background(
+            of: document.style, take: take, outputSize: outputSize, screens: document.screens)
+        resized.transitions = Self.transitions(
+            take: take, events: events, document: document, timeMap: timeMap, paths: paths, outputSize: outputSize)
+        return resized
+    }
+
+    /// The changes of the screen's shape and of the screen shown, placed in an output of `outputSize`.
+    private static func transitions(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, timeMap: TimeMap, paths: MotionPaths,
+        outputSize: SIMD2<Int>
+    ) -> ScreenTransitions {
+        let style = document.style, stageSize = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        return ScreenTransitions(take: take, events: events, document: document, timeMap: timeMap, stage: paths.stage) {
+            Self.placement(of: $0, style: style, outputSize: stageSize)
+        }
     }
 
     /// The legacy document of the take (`EditDocument.legacy(take:events:)`) with the gradient, the padding and the

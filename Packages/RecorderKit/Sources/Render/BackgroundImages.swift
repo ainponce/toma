@@ -8,13 +8,15 @@ import Synchronization
 /// The textures of one renderer's background images (`BackgroundLayer.image`) and blurred wallpapers: for each frame, a
 /// texture of the output's size in which the image already covers the stage (aspect fill, centred), or the wallpaper's
 /// mesh gradient is drawn over it without its grain, already blurred, made once per (background, output size, σ) and
-/// reused while the frames ask for the same.
+/// reused while the frames ask for the same: the textures of the last two sizes asked for are kept, so a preview that
+/// goes from one size to another and back (`PreviewQuality`, a pause at the export's size) does not blur again.
 ///
 /// - The image is read only through the package's safe readers (`ProjectPackage.asset(_:)`, `wallpaper(take:displayID:)`)
 ///   and taken from the process's cache (`BackgroundImageCache`), where it is decoded once while any renderer holds
 ///   it: the preview's and the export's renderers draw the same pixels even where ImageIO would decode a JPEG or a HEIC
 ///   differently twice (in hardware or in software). A missing or unreadable image gives no texture, and every
-///   renderer the classic gradient for it.
+///   renderer the classic gradient for it; that, and an image whose texture Metal could not make, are kept until
+///   `forgetUnreadable()` (a new scene), so no frame reads or decodes it again before then.
 /// - The image is uploaded as the bytes of a fixed sRGB `CGContext` to an `.rgba8Unorm` texture, never an `_srgb` one,
 ///   which would linearize them when sampled (and the compositor writes the bytes as they are), with mipmaps so an
 ///   image larger than the stage is reduced to it without aliasing.
@@ -46,10 +48,14 @@ final class BackgroundImages {
     /// Made the first time an image is drawn: a renderer whose frames show none never builds them.
     private var pipelines: Pipelines?
     /// The image last asked for: the cache's entry, held so another renderer of it shares the decoded pixels, and its
-    /// texture (`nil` when it is missing or unreadable).
-    private var source: (source: BackgroundImage.Source, entry: BackgroundImageCache.Entry, texture: (any MTLTexture)?)?
-    /// The texture last made for a frame, and what it is of.
-    private var prepared: (content: Content, outputSize: SIMD2<Int>, texture: any MTLTexture)?
+    /// texture (`nil` when it is missing or unreadable), or why Metal could not make it.
+    private var source: (
+        source: BackgroundImage.Source, entry: BackgroundImageCache.Entry, texture: Result<(any MTLTexture)?, any Error>
+    )?
+    /// The textures last made for frames, and what they are of: the latest last, one for each of the last two sizes.
+    private var prepared: [(content: Content, outputSize: SIMD2<Int>, texture: any MTLTexture)] = []
+    /// How many sizes `prepared` keeps.
+    private static let keptSizes = 2
 
     /// What a texture for frames shows.
     private enum Content: Equatable {
@@ -98,7 +104,7 @@ final class BackgroundImages {
     /// - Throws: `RenderError` if Metal cannot make what it needs or the GPU fails.
     func texture(for background: BackgroundImage, outputSize: SIMD2<Int>) throws -> (any MTLTexture)? {
         let content = Content.image(background)
-        if let prepared, prepared.content == content, prepared.outputSize == outputSize { return prepared.texture }
+        if let texture = preparedTexture(of: content, outputSize: outputSize) { return texture }
         guard let image = try sourceTexture(of: background.source) else { return nil }
         return try prepare(content, outputSize: outputSize, blurredBy: background.blurSigma) { encoder, pipelines in
             // The image covers the stage: aspect fill, centred.
@@ -118,7 +124,7 @@ final class BackgroundImages {
     /// - Throws: `RenderError` if Metal cannot make what it needs or the GPU fails.
     func texture(forWallpaper preset: WallpaperPreset, blurSigma: Double, outputSize: SIMD2<Int>) throws -> any MTLTexture {
         let content = Content.wallpaper(preset, blurSigma: blurSigma)
-        if let prepared, prepared.content == content, prepared.outputSize == outputSize { return prepared.texture }
+        if let texture = preparedTexture(of: content, outputSize: outputSize) { return texture }
         // No image is shown: its memory goes.
         source = nil
         return try prepare(content, outputSize: outputSize, blurredBy: blurSigma) { encoder, pipelines in
@@ -131,17 +137,35 @@ final class BackgroundImages {
         }
     }
 
+    /// Lets go of an image that is missing or cannot be read, or whose texture could not be made, so the next frame that
+    /// shows it looks for it again: for a new scene (`FrameRenderer.setScene(_:)`), after which a file put back or
+    /// imported again is drawn.
+    func forgetUnreadable() {
+        guard let current = source else { return }
+        if case .success(.some) = current.texture { return }
+        source = nil
+    }
+
+    /// The texture kept for `content` at `outputSize`, now the latest; `nil` if none is.
+    private func preparedTexture(of content: Content, outputSize: SIMD2<Int>) -> (any MTLTexture)? {
+        guard let index = prepared.firstIndex(where: { $0.content == content && $0.outputSize == outputSize }) else { return nil }
+        let found = prepared.remove(at: index)
+        prepared.append(found)
+        return found.texture
+    }
+
     /// The texture of the image of `source`, uploaded once while it is the one asked for; `nil` when it is missing or
-    /// cannot be read, which is kept too, so a missing file is not looked for again on every frame.
+    /// cannot be read, which is kept too, so a missing file is not looked for again on every frame, as is the error of a
+    /// texture Metal could not make (thrown again without decoding or uploading it again), until `forgetUnreadable()`.
     private func sourceTexture(of source: BackgroundImage.Source) throws -> (any MTLTexture)? {
-        if let current = self.source, current.source == source { return current.texture }
+        if let current = self.source, current.source == source { return try current.texture.get() }
         // The previous image's memory goes before the next one is decoded.
         self.source = nil
-        prepared = nil
+        prepared.removeAll { if case .image = $0.content { true } else { false } }
         let entry = BackgroundImageCache.shared.entry(for: source, in: package)
-        let texture = try entry.image().map(upload)
+        let texture = Result { try entry.image().map(upload) }
         self.source = (source, entry, texture)
-        return texture
+        return try texture.get()
     }
 
     /// `image` as an `.rgba8Unorm` texture with mipmaps.
@@ -200,7 +224,11 @@ final class BackgroundImages {
             }
         }
         if blurs { blurCount += 1 }
-        prepared = (content, outputSize, result)
+        // One texture for each size (a blur's σ follows the size, so the same background is another content at another
+        // size): this one replaces that size's, and a third size's makes the oldest go.
+        prepared.removeAll { $0.outputSize == outputSize }
+        if prepared.count >= Self.keptSizes { prepared.removeFirst() }
+        prepared.append((content, outputSize, result))
         return result
     }
 

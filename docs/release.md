@@ -498,6 +498,12 @@ El export dibuja los cuadros de la vista previa, con la edición, al tamaño, lo
 - Con una toma real editada en el editor (un corte, un tramo a 2×, un zoom, el fondo de pantalla, el marco y la cámara), exportarla en 16:9 a 1080p60 y a 4K (`--width 1920 --height 1080` y `--width 3840 --height 2160`), en 9:16 (`--width 1080 --height 1920` y `--width 2160 --height 3840`) y en 1:1 (`--width 1080 --height 1080` y `--width 2160 --height 2160`), siempre con `--fps 60`. Cada MP4 se abre en QuickTime, se reproduce sin saltos, con el sonido en sincronía, sin nada de lo cortado, y se ve como la vista previa del editor en el mismo instante (el 9:16 y el 1:1, con el formato del proyecto cambiado a ese en el editor). Que cada uno de esos tamaños se codifica ya lo prueba `everyExportSizeEncodes` en la Mac del agente.
 - En la Mac M1 de piso, con la copia en Release: `recorder-dev bench-export --synthetic --width 1920 --height 1080` exporta una toma sintética de 10 s a 1080p60 con todo prendido. Anotar la línea `speed:` (la meta es ≥ 1× el tiempo real, diseño §7.9) y la de `peak memory:` en la tabla y en `docs/performance.md`, sección "El export (Task 30)".
 
+**La vista previa** (31)
+
+La vista previa decodifica, dibuja y presenta en una cola propia: el hilo principal solo pide el cuadro. En pausa muestra exactamente el cuadro del export; al arrastrar el cabezal, el cuadro clave de la pantalla en o antes del instante (con el cursor y el zoom del instante exacto) y, al soltar, el exacto; reproduciendo, si la Mac no da abasto durante medio segundo, dibuja a la mitad del lado (nunca menos de 720p) hasta pausar. Hasta que el editor la use (Task 34), se mide con `recorder-dev` compilado en Release (como en el export, arriba).
+- En la Mac M1 de piso: `recorder-dev bench-preview --synthetic --width 1920 --height 1080` (reproduce y arrastra una toma sintética de 10 s a 1080p60 con todo prendido). Anotar las líneas `playing:` (la meta: 60 cuadros por segundo, p95 del cuadro ≤ 16,7 ms), `scrubbing:` (≥ 20 cuadros nuevos por segundo), `release:` (el exacto ≤ 150 ms después de soltar), `released moving:` y `main thread:` (ninguna espera > 4 ms), en la tabla y en `docs/performance.md`, sección "La vista previa (Task 31)". Y `recorder-dev bench-export --synthetic --width 1920 --height 1080` (≥ 1×), si no se anotó ya con el export.
+- En la Mac del dueño, cuando el editor la muestre (Task 34): la vista previa en pausa se ve igual de nítida que el MP4 exportado abierto en QuickTime al mismo tamaño en pantalla (el texto de una ventana grabada, sin titilar ni dientes), y del mismo color.
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
@@ -508,6 +514,7 @@ El export dibuja los cuadros de la vista previa, con la edición, al tamaño, lo
 | 2. Esquinas de las tomas de ventana: ninguna negra con el estilo por defecto; radio de las negras en píxeles y en puntos (macOS 26 y 15) | pendiente | pendiente | pendiente |
 | 2. Dos pantallas y cambios de forma: el cambio de pantalla y el de resolución se animan sin saltos ni estirar; nada fuera del Área | pendiente | pendiente | pendiente |
 | 2. El export: 16:9, 9:16 y 1:1 a 1080p60 y a 4K se abren en QuickTime y se ven como la vista previa; en la M1, 1080p60 con todo ≥ 1× (velocidad y memoria) | pendiente | pendiente | pendiente |
+| 2. La vista previa: en la M1, `bench-preview --synthetic --width 1920 --height 1080` (60 fps, p95 ≤ 16,7 ms, arrastre ≥ 20 por segundo, ≤ 150 ms al soltar, hilo principal ≤ 4 ms); en la del dueño, tan nítida como el MP4 en QuickTime | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 
