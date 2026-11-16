@@ -270,12 +270,12 @@ private enum SmallDocument {
     try withTemporaryDirectory { dir in
         let fifo = dir.appending(path: "edit-log.jsonl")
         #expect(mkfifo(fifo.path, 0o644) == 0)
-        let clock = ContinuousClock()
-        let started = clock.now
+        // An open that waited for a writer would wait for the watchdog, and the test would fail instead of hanging.
+        let watchdog = FIFOWatchdog(paths: [fifo.path])
         #expect(throws: POSIXError(.EFTYPE)) { try EditLogReader.read(fifo) }
         #expect(throws: POSIXError(.EFTYPE)) { try EditLogReader.truncateIncompleteTail(fifo) }
         #expect(throws: POSIXError(.EFTYPE)) { try SafeRead.regularFile(at: fifo) }
-        #expect(clock.now - started < .milliseconds(100))
+        #expect(!watchdog.disarm(), "an open of the FIFO waited for its other end")
 
         let target = dir.appending(path: "target.jsonl")
         let line = try EditLogEntry.create(seq: 1, document: SmallDocument.document, app: app).jsonLine() + "\n"
