@@ -152,11 +152,11 @@ func windowSegmentsAtAnotherScaleFillTheWindow() async throws {
 }
 
 /// Projects of version 1 and 2 without edits draw the same bytes from one version of the render to the next (plan
-/// decision 3). It runs only with `TOMA_GOLDEN_FILE` set: the frames of every case of `GoldenProjects` that has times,
-/// drawn by `FrameRenderer` at 1280 × 720 at those times, one after the other in the order of the cases, must equal
-/// that file byte for byte. With `TOMA_GOLDEN_RECORD=1` as well, it writes them to that file instead (run it so on the
-/// code to compare against: `make golden-record`), and never over a file already there. Without the file and without
-/// the switch it fails: it never passes without comparing.
+/// decision 3). It runs only with `TOMA_GOLDEN_FILE` set (`make golden`): the frames of every case of `GoldenProjects`
+/// that has times, drawn by `FrameRenderer` at 1280 × 720 at those times, one after the other in the order of the
+/// cases, must equal that file byte for byte. With `TOMA_GOLDEN_RECORD=1` as well (`make golden-record`, only from Task
+/// 1's commit), it writes them to that file instead, once every check passed, and never over a file already there.
+/// Without the file and without the switch it fails: it never passes without comparing.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_GOLDEN_FILE"] != nil))
 func goldenFramesMatch() async throws {
     let environment = ProcessInfo.processInfo.environment
@@ -164,18 +164,24 @@ func goldenFramesMatch() async throws {
     let recording = environment["TOMA_GOLDEN_RECORD"] == "1"
     let exists = FileManager.default.fileExists(atPath: url.path)
     if recording {
-        try #require(!exists, "\(url.path) is already there: remove it to record the golden frames again")
+        try #require(!exists, "\(url.path) is already there: golden frames are never recorded over others")
     } else {
         try #require(
-            exists, "No golden frames at \(url.path): record them first, with TOMA_GOLDEN_RECORD=1, on the code to compare against")
+            exists, """
+                No golden frames at \(url.path): they are recorded with `make golden-record` from Task 1's commit, never \
+                from later code (plan decision 3)
+                """)
     }
     let size = SIMD2(1280, 720)
     var bytes: [UInt8] = []
     // The case and the time of each frame in `bytes`.
     var frames: [(name: String, time: Double)] = []
+    // Every check is a `#require`: when recording, nothing is written unless they all passed.
     try await withTemporaryDirectory { dir in
         for golden in GoldenProjects.cases where !golden.times.isEmpty {
-            let renderer = try FrameRenderer(project: try await GoldenProjects.make(golden.name, in: dir), outputSize: size)
+            let project = try await GoldenProjects.make(golden.name, in: dir)
+            try #require(project.manifest.formatVersion == (golden.name == "phaseZero" ? 1 : 2), "\(golden.name) is a v1 or v2 project")
+            let renderer = try FrameRenderer(project: project, outputSize: size)
             try #require(
                 renderer.duration >= 3 && golden.times.allSatisfy { $0 < renderer.duration },
                 "\(golden.name) lasts \(renderer.duration) s, its times are \(golden.times)")
@@ -183,7 +189,7 @@ func goldenFramesMatch() async throws {
                 bytes += try renderer.renderBytes(at: t)
                 frames.append((golden.name, t))
             }
-            #expect(renderer.missingVideo.isEmpty, "\(golden.name): \(renderer.missingVideo)")
+            try #require(renderer.missingVideo.isEmpty, "\(golden.name): \(renderer.missingVideo)")
         }
     }
     if recording {
@@ -197,7 +203,33 @@ func goldenFramesMatch() async throws {
     let frameBytes = size.x * size.y * 4
     let frame = frames[first / frameBytes]
     let differing = zip(golden, bytes).reduce(0) { $0 + ($1.0 != $1.1 ? 1 : 0) }
-    Issue.record("\(differing) bytes differ, the first in \(frame.name) at \(frame.time) s (byte \(first % frameBytes) of its frame)")
+    Issue.record("""
+        \(differing) bytes differ, the first in \(frame.name) at \(frame.time) s (byte \(first % frameBytes) of its frame): \
+        the render of a v1 or v2 project changed. Never record the golden frames again from this code, only from Task 1's \
+        commit when the system changed (plan decision 3)
+        """)
+}
+
+/// Plan ruling R3: a golden frame sees a cursor sample from before `timelineStart`. The cursor of `windowMoving` starts
+/// 0.045 s before its segment, off the 1/120 s grid, and its frame at 0 is drawn from the sample 3.3 ms before the take:
+/// without the samples before the take that frame has no cursor, so a render that dropped them would change its bytes.
+@Test func goldenFramesSeeTheCursorBeforeTheTake() async throws {
+    try await withTemporaryDirectory { dir in
+        #expect(GoldenProjects.cases.first { $0.name == "windowMoving" }?.times.first == 0)
+        let project = try await GoldenProjects.make("windowMoving", in: dir)
+        #expect(project.manifest.formatVersion == 2)
+        func evaluator(_ events: [InputEvent]) -> FrameEvaluator {
+            FrameEvaluator(take: project.take, events: events, style: StyleV0(), outputSize: [1280, 720])
+        }
+        let start = evaluator(project.events).timelineStart
+        func isEarlyCursor(_ event: InputEvent) -> Bool {
+            if case .cursor = event.kind { event.t < start } else { false }
+        }
+        let early = project.events.filter(isEarlyCursor)
+        #expect(early.count == 6 && early.allSatisfy { $0.t.seconds(since: start) > -0.05 })
+        #expect(evaluator(project.events).frame(at: 0).cursor != nil)
+        #expect(evaluator(project.events.filter { !isEarlyCursor($0) }).frame(at: 0).cursor == nil)
+    }
 }
 
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
