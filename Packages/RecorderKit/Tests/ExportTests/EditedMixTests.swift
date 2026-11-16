@@ -606,7 +606,9 @@ func seekLatencyOnALongTake(microphoneRate: Double) async throws {
         #expect(sixty.contentFrames == 48_485)
         let samples = try await rendered(sixty)
         try #require(samples.count == 48_800)
-        #expect(abs(rms(samples, start: 0, from: 47_485.0 / 48_000, to: 48_485.0 / 48_000) - 0.25 / 2.0.squareRoot()) < 0.01)
+        // The content to its end; its last 192 frames fade out, the clip's end being trimmed inside the take.
+        #expect(abs(rms(samples, start: 0, from: 47_293.0 / 48_000, to: 48_293.0 / 48_000) - 0.25 / 2.0.squareRoot()) < 0.01)
+        #expect(samples[48_484] == 0 && samples[48_292] != 0, "the content goes on to its end")
         #expect(samples[48_485...].allSatisfy { $0 == 0 }, "silence after the content")
 
         let twentyFour = sixty.with(document: document, framesPerSecond: 24)

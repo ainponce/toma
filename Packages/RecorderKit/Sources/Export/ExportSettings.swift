@@ -77,6 +77,9 @@ public enum ExportError: Error, Equatable {
     case cancelled
     /// Writing the MP4 failed (`AVAssetWriter`'s error, or the file system's when moving it into place).
     case writerFailed(String)
+    /// The destination's disk is full (`AVError.diskFull`, `ENOSPC` or `EDQUOT`, while writing, syncing or moving the
+    /// MP4 into place): its partial file was removed, so the room it took is back (final review C-M3).
+    case diskFull
     /// The legacy document (`EditDocument.legacy(for:)`) of a take whose screen (`ScreenChoice`: a display or a window)
     /// recorded no segment, or that has none: as in phase 0 and 1a, there is no screen to export. An edited document of
     /// such a take exports its background, its camera and its audio.

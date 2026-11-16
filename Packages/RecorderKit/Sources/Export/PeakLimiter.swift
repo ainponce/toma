@@ -12,10 +12,14 @@ import Foundation
 ///
 /// Deterministic: a function of the frames given since it was made, whatever blocks they came in; the average adds
 /// fixed-point integers, so it never drifts. The release lands exactly on the gain needed once it is within
-/// `releaseSnap` of it, so a limiter forgets where it started: two limiters in different states given the same frames
-/// come together when their envelopes land on the same gain (at the first peak that needs less than both, or when the
-/// release lands, within `settleFrames`), and give the same bits 241 frames later. That is how a mix started in the
-/// middle sounds as the one played from the start (`EditedMix`).
+/// `releaseSnap` of it, so a limiter almost always forgets where it started: two limiters in different states given the
+/// same frames come together when their envelopes land on the same gain (at the first peak that needs less than both,
+/// or when the release lands, within `settleFrames` while the gain needed stays put), and give the same bits 241 frames
+/// later. Not always: after a stronger peak, while a loud sustained sound's needed gain keeps rising in steps smaller
+/// than `releaseSnap`, the release never lands, and one limiter's envelope remembers that peak however long ago it
+/// was; the two then differ by an inaudible trace (up to 3.2·10⁻⁶ of full scale, about −110 dBFS, in Task 28's probe of
+/// a sustained tone). That is how a mix started in the middle sounds as the one played from the start (`EditedMix`),
+/// but for that trace.
 public struct PeakLimiter: Sendable {
     /// −1 dBFS: 10^(−1/20).
     public static let ceiling: Float = 0.8912509
@@ -25,9 +29,10 @@ public struct PeakLimiter: Sendable {
     public static let releaseFrames = 2_400
     /// How close the release gets to the gain needed before it lands on it: −120 dB, inaudible.
     static let releaseSnap = 1e-6
-    /// 1 s at 48 kHz: what a limiter needs of the frames before one to give it as one that saw them all would. The
-    /// release lands from any gain in under 33 200 frames (`releaseFrames × ln(1 / releaseSnap)`), and the lookahead
-    /// and the average forget what came before it in 241 more.
+    /// 1 s at 48 kHz: what a limiter needs of the frames before one to give it as one that saw them all would, but for
+    /// the trace the type's notes describe. Toward a needed gain that stays put, the release lands from any gain in under
+    /// 33 200 frames (`releaseFrames × ln(1 / releaseSnap)`), and the lookahead and the average forget what came before it
+    /// in 241 more.
     static let settleFrames = 48_000
 
     /// The frames each gain is taken over: the lookahead and the frame itself.
