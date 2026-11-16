@@ -26,8 +26,8 @@ struct RecorderDev: AsyncParsableCommand {
         commandName: "recorder-dev",
         abstract: "Records, recovers, verifies, exports and stresses the editing of Toma takes from the command line.",
         subcommands: [
-            SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, BenchExport.self,
-            BenchPreview.self, EditStress.self, EditCheck.self, LibraryEmpty.self,
+            SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, ExportGIF.self,
+            BenchExport.self, BenchGIF.self, BenchPreview.self, EditStress.self, EditCheck.self, LibraryEmpty.self,
         ]
     )
 }
@@ -625,6 +625,84 @@ struct ExportMP4: AsyncParsableCommand {
     }
 }
 
+extension GIFQuality: ExpressibleByArgument {}
+
+struct ExportGIF: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "export-gif",
+        abstract: "Exports a package's last take as an animated GIF, with its edit, with Toma's own encoder.",
+        discussion: """
+            Exports the edit the editor shows (EditSession.readDocument, which writes nothing into the package), from \
+            --start to --end in seconds of the edited video (all of it by default; an --end past it ends with it), \
+            --long-side pixels on the longer side of the project's format, at --fps frames per second and --quality, \
+            with dither, in a loop: what the export sheet's GIF does. Writes <out.gif>.partial.gif next to the \
+            destination (removing one left by an export that was killed) and moves it into place once it is complete, \
+            replacing a file already there in one step; if the export fails or is killed, the destination is left as it \
+            was. Never writes into a .toma package. Prints the progress every 10 % as "progress: <n> %", then \
+            "exported: <path>" and "frames: <n>, images: <n>, bytes: <n>" (the frames drawn, the images written: an \
+            unchanged frame is folded into the one before it).
+            """
+    )
+
+    @Argument(help: "The .toma package.")
+    var package: String
+
+    @Argument(help: "The GIF to write.")
+    var output: String
+
+    @Option(help: "The longer side of the GIF, in pixels (the export sheet offers 480, 640, 800, 1080, 1280 and 1920).")
+    var longSide = 800
+
+    @Option(help: "Frames per second (the export sheet offers 10, 15, 20, 25 and 30).")
+    var fps = 15
+
+    @Option(help: "light (up to 128 colours a frame), balanced or high.")
+    var quality: GIFQuality = .balanced
+
+    @Option(help: "Where the GIF starts, in seconds of the edited video.")
+    var start: Double?
+
+    @Option(help: "Where the GIF ends, in seconds of the edited video.")
+    var end: Double?
+
+    func validate() throws {
+        guard (16...4096).contains(longSide) else { throw ValidationError("--long-side must be from 16 to 4096.") }
+        guard (1...100).contains(fps) else { throw ValidationError("--fps must be from 1 to 100.") }
+        if let start, !(start >= 0) { throw ValidationError("--start cannot be negative.") }
+        if let start, let end, !(end > start) { throw ValidationError("--end must come after --start.") }
+    }
+
+    func run() async throws {
+        let (project, document) = try readProject(package, raw: false)
+        let whole = ExportRange.whole(TimeMap(sequence: document.sequence))
+        // Within the edited video: an --end past it ends with it.
+        let range = ExportRange(
+            start: start.map(TimeMap.outputNanoseconds(seconds:)) ?? whole.start,
+            end: min(end.map(TimeMap.outputNanoseconds(seconds:)) ?? whole.end, whole.end))
+        // As given, made absolute by hand, as export does: the exporter resolves `..` the way the kernel does.
+        let destination = URL(fileURLWithPath: output.hasPrefix("/") ? output : FileManager.default.currentDirectoryPath + "/" + output)
+        let exporter = GIFExporter(
+            project: project, document: document, settings: GIFSettings(longSide: longSide, fps: fps, quality: quality, range: range))
+        let printed = Mutex(-1)  // tenths of the export last printed
+        let summary: GIFExportSummary
+        do {
+            summary = try await exporter.export(to: destination) { progress in
+                let tenths = Int(progress * 10)
+                let reached = printed.withLock { last in
+                    defer { last = max(last, tenths) }
+                    return tenths > last
+                }
+                if reached { print("progress: \(tenths * 10) %") }
+            }
+        } catch {
+            printError("error: the export failed: \(error)")
+            throw ExitCode.failure
+        }
+        print("exported: \(destination.path)")
+        print("frames: \(summary.frames), images: \(summary.writtenFrames), bytes: \(summary.bytes)")
+    }
+}
+
 /// The last take of the package at `path` and the document it is exported with: its edit, as the editor shows it
 /// (`EditSession.readDocument`, which writes nothing), or with `raw` the legacy document.
 private func readProject(_ path: String, raw: Bool) throws -> (LoadedProject, EditDocument) {
@@ -734,6 +812,99 @@ struct BenchExport: AsyncParsableCommand {
         var arguments = ["bench-export", take, "--all-on", "--width", String(width), "--height", String(height), "--fps", String(fps)]
         if backgroundImage { arguments.append("--background-image") }
         print(try runThisTool(arguments), terminator: "")
+    }
+}
+
+struct BenchGIF: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "bench-gif",
+        abstract: "Exports a package, or a synthetic 4K60 take of 60 s with a camera, as a GIF and prints the time and the peak memory.",
+        discussion: """
+            Exports the package's last take with its edit (as export-gif does), or with --all-on with the benchmarks' \
+            document (bench-export's, everything on), all of it, as a GIF of --long-side pixels at --fps, Balanced, with \
+            dither, into a temporary folder, and prints the time GIFExporter.export took, the GIF's frames, images and \
+            size, "peak memory: <n> MB" (the largest physical footprint of the process: the GPU's and the decoders' \
+            included) and the load average (of the last minute) when the export started. The GIF is removed.
+
+            --synthetic records a synthetic take of 60 s at 3840 × 2160 and 60 fps with a camera (synth-record --width \
+            3840 --height 2160 --fps 60 --camera) in a temporary folder and exports it with --all-on in a process of its \
+            own (so the recording's memory is not counted), then removes the folder: the GIF of design §15's targets.
+            """
+    )
+
+    /// Seconds of the synthetic take.
+    static let seconds = 60.0
+
+    @Argument(help: "The .toma package; leave it out with --synthetic.")
+    var package: String?
+
+    @Flag(help: "Record a synthetic 4K60 take of 60 s with a camera in a temporary folder and export it with --all-on.")
+    var synthetic = false
+
+    @Flag(help: "Export with the benchmarks' document, everything on, instead of the package's edit.")
+    var allOn = false
+
+    @Option(help: "The longer side of the GIF, in pixels.")
+    var longSide = 800
+
+    @Option(help: "Frames per second of the GIF.")
+    var fps = 15
+
+    func validate() throws {
+        guard (16...4096).contains(longSide) else { throw ValidationError("--long-side must be from 16 to 4096.") }
+        guard (1...100).contains(fps) else { throw ValidationError("--fps must be from 1 to 100.") }
+        guard synthetic != (package != nil) else { throw ValidationError("Give a package or --synthetic, not both.") }
+    }
+
+    func run() async throws {
+        if synthetic {
+            try runSynthetic()
+            return
+        }
+        guard let package else { return }
+        let (project, edit) = try readProject(package, raw: false)
+        let document = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: false) : edit
+        let folder = FileManager.default.temporaryDirectory.appending(path: "bench-gif-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let range = ExportRange.whole(TimeMap(sequence: document.sequence))
+        let settings = GIFSettings(longSide: longSide, fps: fps, range: range)
+        let exporter = GIFExporter(project: project, document: document, settings: settings)
+        let load = loadAverage()
+        let started = Date()
+        let summary: GIFExportSummary
+        do {
+            summary = try await exporter.export(to: folder.appending(path: "bench.gif")) { _ in }
+        } catch {
+            printError("error: the export failed: \(error)")
+            throw ExitCode.failure
+        }
+        let elapsed = Date().timeIntervalSince(started)
+        let size = settings.outputSize(aspect: document.aspect)
+        print(String(
+            format: "exported: %.2f s of video as a GIF of %d × %d at %d fps in %.2f s (%d frames, %d images, %.1f MB)",
+            Double(range.end - range.start) / 1e9, size.x, size.y, fps, elapsed, summary.frames, summary.writtenFrames,
+            Double(summary.bytes) / 1e6))
+        print("peak memory: \(peakFootprint().map { "\($0 >> 20) MB" } ?? "unknown")")
+        print(String(format: "load average: %.2f", load))
+    }
+
+    /// Records the synthetic take with `synth-record` and benchmarks its GIF with `--all-on`, each in a process of its
+    /// own, then removes the take.
+    private func runSynthetic() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "bench-gif-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        print("recording a synthetic take of \(Int(Self.seconds)) s, 3840 × 2160 at 60 fps, with a camera")
+        let recorded = try runThisTool([
+            "synth-record", folder.path, "--duration", String(Self.seconds), "--width", "3840", "--height", "2160", "--fps", "60",
+            "--camera",
+        ])
+        guard let take = recorded.split(separator: "\n").first.map(String.init), take.hasSuffix(".toma") else {
+            printError("error: synth-record printed no package")
+            throw ExitCode.failure
+        }
+        print(try runThisTool(["bench-gif", take, "--all-on", "--long-side", String(longSide), "--fps", String(fps)]), terminator: "")
     }
 }
 

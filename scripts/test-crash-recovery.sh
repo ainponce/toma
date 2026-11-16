@@ -16,6 +16,10 @@
 # Sixth, the library (library_case): library-empty of a trash of 30 packages, killed at a random moment 20 times; after
 # every kill, library-empty --finish-only must leave no Trash/.deleting-*, every package left in the trash must be whole
 # and the 3 projects out of the trash must not change.
+# Seventh, the GIF export (gif_case): export-gif of a 10 s take killed at a random moment 20 times; after every kill
+# nothing has the final name, and the next export to the same destination finishes, removes the .partial.gif left and
+# writes a GIF sips reads, with the bytes of the first one; the package never changes. Then the peak memory of
+# export-gif (/usr/bin/time -l) of a 10 s and of a 60 s take at 800 px must be the same within 10 %.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -378,10 +382,109 @@ library_case() {
   echo "library crash case passed (20 runs)"
 }
 
+# The peak memory footprint, in bytes, of export-gif of package $1 into $2, from /usr/bin/time -l (with its maximum
+# resident set size after it); fails if the export does.
+gif_peak() {
+  local OUT
+  OUT=$(mktemp)
+  if ! /usr/bin/time -l "$BIN" export-gif "$1" "$2" > /dev/null 2> "$OUT"; then
+    echo "FAIL: export-gif $1 failed:" >&2
+    cat "$OUT" >&2
+    exit 1
+  fi
+  awk '/peak memory footprint/ { peak = $1 } /maximum resident set size/ { rss = $1 } END { print peak + 0, rss + 0 }' "$OUT"
+  rm -f "$OUT"
+}
+
+# The GIF export (Task 22, 1c design §7.4 and §16.1): 20 runs of export-gif of a 10 s synth-record take (800 px, 15 fps),
+# each killed with SIGKILL at a random moment from 0.2 to 2.0 s. After every kill nothing may have the final name; then
+# export-gif to the same destination must finish, remove the .partial.gif the kill left and write a GIF that sips reads
+# as 800 px wide and that has the bytes of the first one (every export is a process of its own: the same project and
+# options give the same GIF); it is removed before the next run, so the next kill is checked against no file again. No
+# export, killed or not, may change a byte of the package. Then the peak
+# memory (H19, in processes of their own: a test run measures every test at once): export-gif of a 10 s and of a 60 s
+# take at 800 px must reach the same peak memory footprint within 10 %, the memory not growing with the duration.
+gif_case() {
+  local DIR PKG BEFORE LONG RUN PID STATUS PARTIALS=0 WIDTH PEAKS SHORT SHORT_RSS LONG_PEAK LONG_RSS
+  DIR=$(mktemp -d)
+  echo "== GIF: export-gif of a 10 s take, kill -9 at random, 20 times (in $DIR)"
+  "$BIN" synth-record "$DIR" --duration 10 > "$DIR/short.out"
+  PKG=$(head -1 "$DIR/short.out")
+  BEFORE=$(package_hash "$PKG")
+  for RUN in $(seq 1 20); do
+    STATUS=0
+    "$BIN" export-gif "$PKG" "$DIR/out.gif" > "$DIR/gif.out" 2> "$DIR/gif.err" &
+    PID=$!
+    sleep "$(kill_time)"
+    kill -9 "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || STATUS=$?
+    if [ "$STATUS" -ne 137 ]; then
+      echo "FAIL: export-gif was not killed as expected in run $RUN (status $STATUS):"
+      cat "$DIR/gif.err"
+      exit 1
+    fi
+    if [ -e "$DIR/out.gif" ]; then
+      echo "FAIL: a killed export-gif left out.gif in run $RUN"
+      exit 1
+    fi
+    if [ -e "$DIR/out.gif.partial.gif" ]; then PARTIALS=$((PARTIALS + 1)); fi
+    if ! "$BIN" export-gif "$PKG" "$DIR/out.gif" > "$DIR/gif.out" 2> "$DIR/gif.err"; then
+      echo "FAIL: export-gif after the kill of run $RUN failed:"
+      cat "$DIR/gif.err"
+      exit 1
+    fi
+    if [ -e "$DIR/out.gif.partial.gif" ] || [ ! -s "$DIR/out.gif" ]; then
+      echo "FAIL: export-gif after the kill of run $RUN did not leave a finished out.gif and nothing else"
+      exit 1
+    fi
+    WIDTH=$(sips -g pixelWidth "$DIR/out.gif" 2>/dev/null | awk '/pixelWidth/ { print $2 }')
+    if [ "$WIDTH" != 800 ]; then
+      echo "FAIL: sips does not read the GIF of run $RUN as 800 px wide (${WIDTH:-no width})"
+      exit 1
+    fi
+    if [ "$RUN" -eq 1 ]; then
+      mv "$DIR/out.gif" "$DIR/first.gif"
+    elif ! cmp -s "$DIR/first.gif" "$DIR/out.gif"; then
+      echo "FAIL: the GIF of run $RUN does not have the bytes of the first one"
+      exit 1
+    else
+      rm "$DIR/out.gif"
+    fi
+    if [ "$(package_hash "$PKG")" != "$BEFORE" ]; then
+      echo "FAIL: export-gif changed the package in run $RUN"
+      exit 1
+    fi
+  done
+  if [ "$PARTIALS" -eq 0 ]; then
+    echo "FAIL: no run was killed while it wrote out.gif.partial.gif: nothing was checked"
+    exit 1
+  fi
+  tail -1 "$DIR/gif.out"
+  echo "$PARTIALS of 20 runs killed while writing out.gif.partial.gif; every next export finished, removed it and wrote" \
+    "the same bytes; the package did not change"
+
+  echo "== GIF: the peak memory of export-gif of a 10 s and of a 60 s take"
+  "$BIN" synth-record "$DIR" --duration 60 > "$DIR/long.out"
+  LONG=$(head -1 "$DIR/long.out")
+  PEAKS=$(gif_peak "$PKG" "$DIR/short.gif")
+  read -r SHORT SHORT_RSS <<< "$PEAKS"
+  PEAKS=$(gif_peak "$LONG" "$DIR/long.gif")
+  read -r LONG_PEAK LONG_RSS <<< "$PEAKS"
+  echo "peak memory footprint: $((SHORT >> 20)) MB for 10 s, $((LONG_PEAK >> 20)) MB for 60 s" \
+    "(maximum resident set size: $((SHORT_RSS >> 20)) MB, $((LONG_RSS >> 20)) MB)"
+  if ! awk -v s="$SHORT" -v l="$LONG_PEAK" 'BEGIN { exit !(s > 0 && l <= s * 1.1 && l >= s * 0.9) }'; then
+    echo "FAIL: the peak memory of a GIF of 60 s is not that of one of 10 s within 10 %"
+    exit 1
+  fi
+  rm -rf "$DIR"
+  echo "gif crash case passed (20 runs)"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
 run_case "--window" "" "window-4242 mic"
 edit_case
 library_case
+gif_case
 echo "crash test passed"
