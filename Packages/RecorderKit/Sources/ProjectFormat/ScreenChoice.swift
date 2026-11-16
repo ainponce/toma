@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import CoreGraphics
-import ProjectFormat
 
 /// Which recorded screen a take shows (plan decision 2): the preview, the export and the camera's anchors all use
 /// this one.
@@ -34,7 +33,7 @@ public enum ScreenChoice {
 
 extension InputEvent.Kind {
     /// Where the pointer is, in global points, for `cursor`, `mouseDown` and `mouseUp`; `nil` for the others.
-    var pointerPosition: SIMD2<Double>? {
+    public var pointerPosition: SIMD2<Double>? {
         switch self {
         case let .cursor(x, y), let .mouseDown(_, x, y), let .mouseUp(_, x, y):
             SIMD2(x, y)
