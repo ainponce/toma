@@ -99,8 +99,9 @@ public struct StagePoints: Sendable {
     }
 
     /// The screen's rect for `view`, of the region's aspect (of the whole room inside the padding without a region), and
-    /// the window's around it: the same rect without a window frame.
-    private func rects(of view: ShownScreen) -> (window: Rect, screen: Rect) {
+    /// the window's around it: the same rect without a window frame. The screen's is where `stagePoint(global:at:)` places
+    /// the cursor; the window's is `screenRect(at:)`.
+    public func rects(of view: ShownScreen) -> (window: Rect, screen: Rect) {
         let aspect = view.region.map { $0.width / $0.height }
         guard let output = windowFrameOutput else {
             let rect = StageLayout.screenRect(contentAspect: aspect, padding: padding, outputSize: stageSize)
