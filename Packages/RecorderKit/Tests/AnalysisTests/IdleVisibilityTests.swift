@@ -87,3 +87,15 @@ private func moving(from: Double, to: Double, x: Double, y: Double = 300) -> [Id
     let around = (0...400).map { idle.opacity(atOutput: idleTime(Double($0) / 100)) }
     #expect(around.allSatisfy { $0 == 1 })
 }
+
+@Test func pressesKnownApartFromThePositions() {
+    // Still from 0 s, with a button down over [1.04, 6.04) s and no position to say so (the press came in a cut).
+    let positions: [(output: Int64, point: SIMD2<Double>)] = [(0, SIMD2(300, 300)), (idleTime(8), SIMD2(300, 300))]
+    let pressed = IdleVisibility(positions: positions, presses: [idleTime(1.04)..<idleTime(6.04)], clicks: [], delay: 2)
+    let whileDown = (0...604).map { pressed.opacity(atOutput: idleTime(Double($0) / 100)) }
+    #expect(whileDown.allSatisfy { $0 == 1 })
+    #expect(pressed.opacity(atOutput: idleTime(6.34)) == 0)
+    // Without it, the same positions hide from 2 s.
+    let free = IdleVisibility(positions: positions, presses: [], clicks: [], delay: 2)
+    #expect(free.opacity(atOutput: idleTime(2.3)) == 0)
+}
