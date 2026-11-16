@@ -4,6 +4,7 @@ import AppSupport
 import Editing
 import ProjectFormat
 import Recording
+import UniformTypeIdentifiers
 import os
 
 /// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
@@ -160,11 +161,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
+    /// The editors' windows close with the app: their states are written as when one closes (design §5.1), and waited for.
+    func applicationWillTerminate(_ notification: Notification) {
+        for editor in editors.values { editor.writeStateBeforeQuit() }
+        EditorStateWriter.flush()
+    }
+
     // MARK: - Menu actions
 
     /// Opens the island on the screen with the pointer.
     func newRecording() {
         island?.invoke()
+    }
+
+    /// File ▸ Open… (⌘O, design §5.1): the projects chosen in an open panel that shows only Toma's projects, from the
+    /// projects folder, open in the editor (one open already comes to the front).
+    func openProject() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: ProjectPackage.fileExtension, conformingTo: .package) ?? .package]
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.directoryURL = recording.projectsFolder
+        NSApp.activate()
+        Task {
+            guard await panel.begin() == .OK else { return }
+            for url in panel.urls { showEditor(for: url, take: nil) }
+        }
     }
 
     func recoverRecordings() {
@@ -273,11 +295,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in open { showEditor(for: url, take: nil) }
     }
 
+    /// Opens the project at `url` in an editor. One open already (also through a symlink, or after it was moved) comes to
+    /// the front instead: never a second session on the same package. A new editor shows its window once the state it was
+    /// left in is read and applied (its frame, its panel).
     func showEditor(for url: URL, take: String?) {
         let key = url.standardizedFileURL
-        if let editor = editors[key] {
+        if let editor = openEditor(of: key) {
             editor.reloadIfNeeded()
-            present(editor)
+            // One still reading its state shows itself once it has.
+            if editor.isRestored { present(editor) }
             return
         }
         let editor = EditorWindowController(
@@ -289,7 +315,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateActivationPolicy()
         }
         editors[key] = editor
-        present(editor)
+        Task {
+            await editor.restoreWindowState()
+            // Gone meanwhile: nothing to show.
+            guard editors[key] === editor else { return }
+            present(editor)
+        }
+    }
+
+    /// The editor that has the package at `url` open: the one opened from that path, or one whose package is the same
+    /// folder (`PackageIdentity`).
+    private func openEditor(of url: URL) -> EditorWindowController? {
+        if let editor = editors[url] { return editor }
+        guard let identity = PackageIdentity(url) else { return nil }
+        return editors.values.first { $0.showsPackage(identity) }
     }
 
     private func present(_ controller: NSWindowController?) {

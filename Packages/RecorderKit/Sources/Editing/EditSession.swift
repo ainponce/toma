@@ -300,11 +300,31 @@ public final class EditSession {
         return outcome
     }
 
-    /// Undoes the group on top of the undo stack.
-    public func undo() -> EditOutcome {
+    /// Whether `undo()` would undo a group now, rather than refuse: the Edit menu offers it only then. Changes nothing.
+    public var canUndo: Bool { undoing() != nil }
+
+    /// Whether `redo()` would redo a group now, rather than refuse. Changes nothing.
+    public var canRedo: Bool { redoing() != nil }
+
+    /// The group on top of the undo stack and the document undoing it leaves; `nil` when `undo()` refuses.
+    private func undoing() -> (group: Int, next: EditDocument)? {
         guard isEditable, !restartingLog, let group = history.done.last, let changes = groups[group],
             let next = try? document.applying(changes.reversed().map(\.inverse)), next.isDrawable
-        else { return .refused }
+        else { return nil }
+        return (group, next)
+    }
+
+    /// The group on top of the redo stack and the document redoing it leaves; `nil` when `redo()` refuses.
+    private func redoing() -> (group: Int, next: EditDocument)? {
+        guard isEditable, !restartingLog, let group = history.undone.last, let changes = groups[group],
+            let next = try? document.applying(changes), next.isDrawable
+        else { return nil }
+        return (group, next)
+    }
+
+    /// Undoes the group on top of the undo stack.
+    public func undo() -> EditOutcome {
+        guard let (group, next) = undoing() else { return .refused }
         let line = EditLogEntry.undo(seq: history.nextSeq, group: group)
         guard let outcome = hand([line]) else { return .refused }
         history.record(line)
@@ -314,9 +334,7 @@ public final class EditSession {
 
     /// Redoes the group on top of the redo stack.
     public func redo() -> EditOutcome {
-        guard isEditable, !restartingLog, let group = history.undone.last, let changes = groups[group],
-            let next = try? document.applying(changes), next.isDrawable
-        else { return .refused }
+        guard let (group, next) = redoing() else { return .refused }
         let line = EditLogEntry.redo(seq: history.nextSeq, group: group)
         guard let outcome = hand([line]) else { return .refused }
         history.record(line)

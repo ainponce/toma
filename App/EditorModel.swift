@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
-import AppSupport
 import Analysis
 import AppSupport
 import Editing
@@ -120,6 +119,12 @@ final class EditorModel {
     var selection: EditorSelection?
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
+    /// The panel's tab.
+    var panelTab = EditorPanelTab.background
+    /// The timeline's scale, in points per second (`nil`: the whole sequence fitted to the window), and how far it is
+    /// scrolled, in points: remembered with the window's state for the timeline to start from.
+    var timelineScale: Double?
+    var timelineOffset = 0.0
     /// The image the background is being imported from (the panel's "Choose Image…").
     var imageImport = ImageImportState.idle
     @ObservationIgnored var importTask: Task<Void, Never>?
@@ -178,7 +183,12 @@ final class EditorModel {
     @ObservationIgnored private var pendingAudioStart: Double?
     @ObservationIgnored private var clockGeneration = 0
     @ObservationIgnored private var lastLabelUpdate = 0.0
-    @ObservationIgnored private var editorState = EditorState()
+    /// The window's state, remembered in the project's caches (`EditorWindowState`).
+    @ObservationIgnored let windowMemory = EditorWindowMemory()
+    /// The window's undo manager: Edit ▸ Undo and Redo (`EditorMenus`).
+    @ObservationIgnored private(set) lazy var undoManager = EditorUndoManager(model: self)
+    /// "Some changes couldn't be saved" is being asked as the window closes.
+    @ObservationIgnored var isAskingToClose = false
     /// Banners closed in this window (the legacy one is remembered in the project's caches).
     @ObservationIgnored private var dismissedRecovery = false
     @ObservationIgnored private var dismissedReopened = false
@@ -191,7 +201,7 @@ final class EditorModel {
     @ObservationIgnored private var applyTask: Task<Void, Never>?
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     @ObservationIgnored private var exportFinishedTask: Task<Void, Never>?
-    @ObservationIgnored private var closed = false
+    @ObservationIgnored private(set) var closed = false
 
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Editor")
 
@@ -294,8 +304,8 @@ final class EditorModel {
             show(shown)
             return
         }
-        let caches = session.caches
-        editorState = await Task.detached { EditorState.load(caches) }.value
+        // Read already before the window showed, unless its manifest could not be read then.
+        await restoreWindowState(sessionCaches: session.caches)
         let document = session.document, revision = session.revision
         let project = currentProject(of: session)
         let size = Self.exportSize(of: document)
@@ -342,7 +352,7 @@ final class EditorModel {
         previewAspect = document.aspect
         durationSeconds = timeline?.map.durationSeconds ?? 0
         state = .ready
-        seek(frame: 0)
+        restorePlayheadAndTab()
         // The session may have changed while the renderer was made.
         sessionChanged()
         makeMix(of: project, document: document, revision: revision)
@@ -585,8 +595,8 @@ final class EditorModel {
     func dismissBanner() {
         switch banner {
         case .legacyLook?:
-            editorState.legacyBannerDismissed = true
-            if let caches = session?.caches { editorState.save(caches) }
+            windowMemory.state.legacyBannerDismissed = true
+            writeWindowState()
         case .recovered?: dismissedRecovery = true
         case .reopenedAfterOtherApp?: dismissedReopened = true
         case .saveFailed?, .waitingForSpace?, .readOnly?, .videoGap?, nil: return
@@ -829,7 +839,7 @@ final class EditorModel {
         }
         let next = Self.banner(
             access: session.access, notices: session.notices, applyingDefaultStyle: isApplyingDefaultStyle,
-            legacyDismissed: editorState.legacyBannerDismissed || editedHere,
+            legacyDismissed: windowMemory.state.legacyBannerDismissed || editedHere,
             recoveryDismissed: dismissedRecovery, reopenedDismissed: dismissedReopened,
             inGap: missingVideo.contains { $0.contains(currentSeconds) })
         if banner != next { banner = next }
@@ -959,11 +969,13 @@ final class EditorModel {
 
     // MARK: - Closing
 
-    /// The window closed: playback stops, an export in progress is cancelled, and the session closes (its snapshot and
-    /// lock), off the main thread. An "Apply Default Style" waiting for room on a full disk gives up as the session
-    /// closes, without applying anything (cancelling its task would apply Toma's gradient instead).
+    /// The window closed: its state is written, playback stops, an export in progress is cancelled, and the session closes
+    /// (its snapshot and lock), off the main thread. An "Apply Default Style" waiting for room on a full disk gives up as
+    /// the session closes, without applying anything (cancelling its task would apply Toma's gradient instead).
     func close() {
         guard !closed else { return }
+        writeWindowState()
+        stopAutosave()
         closed = true
         openTask?.cancel()
         exportTask?.cancel()

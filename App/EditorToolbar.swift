@@ -43,8 +43,9 @@ struct EditorToolbar: CustomizableToolbarContent {
     }
 }
 
-/// The format selector: 16:9, 9:16 and 1:1. Choosing one is an edit.
-private struct FormatMenu: View {
+/// The format selector: 16:9, 9:16 and 1:1. Choosing one is an edit. Its formats, titles and symbols are also the
+/// Project menu's (`ProjectCommands`).
+struct FormatMenu: View {
     let model: EditorModel
 
     var body: some View {
@@ -71,7 +72,7 @@ private struct FormatMenu: View {
         .accessibilityValue(Text(Self.title(aspect)))
     }
 
-    private static let aspects: [Aspect] = [.landscape, .portrait, .square]
+    static let aspects: [Aspect] = [.landscape, .portrait, .square]
 
     static func symbol(_ aspect: Aspect) -> String {
         switch aspect {
