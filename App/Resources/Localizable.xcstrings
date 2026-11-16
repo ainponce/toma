@@ -4715,7 +4715,7 @@
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Esta grabación no tiene nada para exportar."
+            "value" : "Esta toma no tiene nada para exportar."
           }
         }
       }
@@ -5298,6 +5298,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    },
+    "screen.followCursor" : {
+      "comment" : "The screen track's menu: the screens shown follow the cursor (not a zoom's focus)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Follow the Cursor"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir al cursor"
           }
         }
       }

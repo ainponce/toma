@@ -218,6 +218,8 @@ final class KeyEditor: ObservableObject {
         var aspect: Aspect
         var frameRate: Int
         var canEdit: Bool
+        /// The speed of the clips a speed applies to (`EditorModel.speedTargets`); `nil` if they differ.
+        var speed: Double?
     }
 
     /// Whether the key editor shows its panel; `nil` while no editor is the key window.
@@ -249,6 +251,14 @@ final class KeyEditor: ObservableObject {
         model?.setFrameRate(fps)
     }
 
+    func setSpeed(_ speed: Double) {
+        model?.setSpeed(speed)
+    }
+
+    func askCustomSpeed() {
+        model?.askCustomSpeed()
+    }
+
     private func follow(_ model: EditorModel?) {
         self.model = model
         generation += 1
@@ -260,7 +270,9 @@ final class KeyEditor: ObservableObject {
         guard generation == self.generation else { return }
         let (panel, next) = withObservationTracking {
             (model?.panelVisible, model.flatMap { model in
-                model.document.map { Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit) }
+                model.document.map {
+                    Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets)
+                }
             })
         } onChange: { [weak self] in
             // Before the change: read once it is made.
@@ -271,9 +283,10 @@ final class KeyEditor: ObservableObject {
     }
 }
 
-/// File ▸ Open… (⌘O, design §5.1), and the editor's Project menu: Format (16:9 · 9:16 · 1:1, as the bar's selector) and
-/// Frames per Second (24 · 25 · 30 · 50 · 60) of the key editor's project, each an edit that is undone like any other.
-/// The project's frames per second change only here.
+/// File ▸ Open… (⌘O, design §5.1), and the editor's Project menu: Format (16:9 · 9:16 · 1:1, as the bar's selector),
+/// Frames per Second (24 · 25 · 30 · 50 · 60) and the Speed of the selected clips, or of the one under the playhead (the
+/// track bar's presets and "Custom Speed…", for the keyboard: design §5.10), of the key editor's project, each an edit
+/// that is undone like any other. The project's frames per second change only here.
 struct ProjectCommands: Commands {
     let app: AppDelegate
     @ObservedObject var editor = KeyEditor.shared
@@ -297,6 +310,14 @@ struct ProjectCommands: Commands {
                 }
             }
             .disabled(project?.canEdit != true)
+            Picker("Speed", selection: Binding(get: { project?.speed }, set: { $0.map(editor.setSpeed) })) {
+                ForEach(SequenceCommands.speedPresets, id: \.self) { speed in
+                    Text(verbatim: TimelineFormat.multiplier(speed)).tag(Optional(speed))
+                }
+            }
+            .disabled(project?.canEdit != true)
+            Button("Custom Speed…") { editor.askCustomSpeed() }
+                .disabled(project?.canEdit != true)
         }
     }
 }

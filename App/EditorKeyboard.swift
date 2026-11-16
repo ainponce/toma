@@ -41,7 +41,9 @@ final class EditorKeyboard {
         guard let model, let timeline else { return false }
         let modifiers = Self.modifiers(event.modifierFlags)
         guard let characters = event.charactersIgnoringModifiers,
-            let key = EditorKey(characters: characters, unmodified: event.characters(byApplyingModifiers: []), modifiers: modifiers)
+            let key = EditorKey(
+                characters: characters, unmodified: event.characters(byApplyingModifiers: []), modifiers: modifiers,
+                keyCode: event.keyCode)
         else { return false }
         commands.shuttle = model.playbackSpeed
         guard let command = commands.command(for: key, focus: Self.focus(of: window.firstResponder, in: window)) else { return false }
@@ -78,6 +80,8 @@ final class EditorKeyboard {
     // MARK: - The commands
 
     private func perform(_ command: EditorCommand, _ model: EditorModel, _ timeline: EditorTimelineView) -> Bool {
+        // A drag's end is an edit made from the document as the drag found it: nothing else edits meanwhile.
+        if command.edits, model.isGesturing { return false }
         switch command {
         case .playPause:
             guard model.canPlay else { return false }
@@ -164,6 +168,8 @@ final class EditorKeyboard {
         case .open:
             open()
             return true
+        case .selectAll:
+            return model.selectAllOfTrack()
         }
     }
 
@@ -209,6 +215,29 @@ extension EditorModel {
             frameCount: map.frameCount(frameRate: document.frameRate))
         else { return false }
         seek(frame: frame)
+        return true
+    }
+
+    /// ⌘A on the timeline (design §5.5): every item of the track with the focus, the selection's: every zoom block the
+    /// timeline shows when blocks are selected, every clip otherwise. A camera change or a change of screen is selected
+    /// one at a time: nothing then.
+    func selectAllOfTrack() -> Bool {
+        guard state == .ready, let document else { return false }
+        let map = TimeMap(sequence: document.sequence)
+        switch selection {
+        case .zooms?:
+            let shown = document.zoom.regions.filter { region in
+                region.start < region.end && !(map.outputRange(ofSource: region.start..<region.end, take: region.take)?.isEmpty ?? true)
+            }
+            guard !shown.isEmpty else { return false }
+            selection = .zooms(Set(shown.map(\.id)))
+        case .clips?, nil:
+            let clips = document.sequence.filter { TimeMap.outputDuration(of: $0) > 0 }
+            guard !clips.isEmpty else { return false }
+            selection = .clips(Set(clips.map(\.id)))
+        case .cameraChange?, .screenChange?:
+            return false
+        }
         return true
     }
 

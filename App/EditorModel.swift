@@ -172,6 +172,8 @@ final class EditorModel {
     @ObservationIgnored weak var window: NSWindow?
     /// Called with the project once it was recovered from this editor; set by the app delegate.
     @ObservationIgnored var onRecovered: (URL) -> Void = { _ in }
+    /// "Custom Speed…" of the Project menu: the timeline's sheet; set by the window.
+    @ObservationIgnored var askCustomSpeed: () -> Void = {}
 
     @ObservationIgnored private let exportGate: ExportGate
     @ObservationIgnored private var session: EditSession?
@@ -963,7 +965,21 @@ final class EditorModel {
             legacyDismissed: windowMemory.state.legacyBannerDismissed || editedHere,
             recoveryDismissed: dismissedRecovery, reopenedDismissed: dismissedReopened,
             inGap: missingVideo.contains { $0.contains(currentSeconds) })
-        if banner != next { banner = next }
+        guard banner != next else { return }
+        banner = next
+        // VoiceOver says a banner as it comes up: the amber one above all, whose edits wait in memory.
+        if let next {
+            let warning: Bool = switch next {
+            case .saveFailed, .waitingForSpace: true
+            case .readOnly, .reopenedAfterOtherApp, .recovered, .legacyLook, .videoGap: false
+            }
+            NSAccessibility.post(
+                element: window ?? NSApp as Any, notification: .announcementRequested,
+                userInfo: [
+                    .announcement: EditorBanners.text(next),
+                    .priority: (warning ? NSAccessibilityPriorityLevel.high : .medium).rawValue,
+                ])
+        }
     }
 
     /// The most pressing banner: a save that failed, then why the project is read-only, then what opening found, then

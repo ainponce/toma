@@ -67,6 +67,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.keyboard = keyboard
         super.init(window: window)
         keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
+        model.askCustomSpeed = { [weak timeline] in timeline?.timelineView.interaction.askCustomSpeed() }
         // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
         // the content's views ask for it. Its delegate's (`windowWillReturnUndoManager`) is Edit ▸ Undo's.
         window.delegate = self

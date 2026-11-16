@@ -230,7 +230,12 @@ enum TimelineFormat {
     }()
 
     static func multiplier(_ value: Double) -> String {
-        (formatter.string(from: NSNumber(value: value)) ?? String(value)) + "×"
+        number(value) + "×"
+    }
+
+    /// `value` with the decimals it has (two at most) in the user's language: "1,5".
+    static func number(_ value: Double) -> String {
+        formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 }
 

@@ -6,10 +6,14 @@
 public struct EditorKey: Equatable, Sendable {
     public var key: String
     public var modifiers: KeyModifiers
+    /// The key's virtual key code (`NSEvent.keyCode`), for the keys found by where they are rather than by what they
+    /// type: ⌥[ and ⌥] on a layout where "[" and "]" need ⌥ themselves (Spanish, Latin American).
+    public var keyCode: UInt16?
 
-    public init(key: String, modifiers: KeyModifiers = []) {
+    public init(key: String, modifiers: KeyModifiers = [], keyCode: UInt16? = nil) {
         self.key = key
         self.modifiers = modifiers
+        self.keyCode = keyCode
     }
 }
 
@@ -17,16 +21,26 @@ extension EditorKey {
     /// The key of an event that types `characters` ignoring the modifiers but ⇧ (`NSEvent.charactersIgnoringModifiers`)
     /// and `unmodified` without any (`characters(byApplyingModifiers: [])`): a key without a sign by its name, a letter
     /// or a sign in lowercase, and with ⇧ the one the key types without it (⇧, is "," whatever the layout types with ⇧).
-    /// `nil` if it types nothing (a dead key).
-    public init?(characters: String, unmodified: String?, modifiers: KeyModifiers) {
-        guard let scalar = characters.unicodeScalars.first else { return nil }
+    /// `nil` if it types nothing (a dead key) and has no `keyCode`; with one, a key that types nothing is found by it
+    /// alone.
+    public init?(characters: String, unmodified: String?, modifiers: KeyModifiers, keyCode: UInt16? = nil) {
+        guard let scalar = characters.unicodeScalars.first else {
+            guard let keyCode else { return nil }
+            self.init(key: "", modifiers: modifiers, keyCode: keyCode)
+            return
+        }
         if let name = Self.names[scalar.value] {
-            self.init(key: name, modifiers: modifiers)
+            self.init(key: name, modifiers: modifiers, keyCode: keyCode)
             return
         }
         let typed = modifiers.contains(.shift) ? unmodified.flatMap { $0.isEmpty ? nil : $0 } ?? characters : characters
-        self.init(key: typed.lowercased(), modifiers: modifiers)
+        self.init(key: typed.lowercased(), modifiers: modifiers, keyCode: keyCode)
     }
+
+    /// The ANSI keys "[" and "]" (`kVK_ANSI_LeftBracket`, `kVK_ANSI_RightBracket`): ⌥[ and ⌥] where the layout types
+    /// something else there.
+    public static let leftBracketKeyCode: UInt16 = 0x21
+    public static let rightBracketKeyCode: UInt16 = 0x1E
 
     /// The keys without a sign: AppKit's function keys (`NSUpArrowFunctionKey`…) and the characters some keys type.
     private static let names: [UInt32: String] = [
@@ -77,12 +91,23 @@ public enum EditorCommand: Equatable, Sendable {
     case togglePanel
     case export
     case open
+    /// ⌘A on the timeline: every item of the track with the focus (design §5.5).
+    case selectAll
 
     /// Whether holding the key does it again with each repeat: only what moves the playhead, the selection or the scale
     /// by a step. The rest happens once a press (held L does not run up to 8×).
     public var repeats: Bool {
         switch self {
         case .step, .stepSeconds, .previousEditPoint, .nextEditPoint, .nudge, .zoomIn, .zoomOut: true
+        default: false
+        }
+    }
+
+    /// Whether it changes the document: refused while a drag is under way (its end is an edit of its own, built from the
+    /// document as the drag found it), as Undo is.
+    public var edits: Bool {
+        switch self {
+        case .split, .delete, .trimStartToPlayhead, .trimEndToPlayhead, .nudge, .addZoom: true
         default: false
         }
     }
@@ -105,9 +130,13 @@ public struct KeyboardCommands {
 
     public init() {}
 
-    /// The command of `key` with the focus on `focus`; `nil` if it has none there.
+    /// The command of `key` with the focus on `focus`; `nil` if it has none there. ⌘A is the timeline's only: anywhere
+    /// else it is the system's Select All (a field's text).
     public mutating func command(for key: EditorKey, focus: EditorFocus) -> EditorCommand? {
-        if key.modifiers.contains(.command) { return Self.commandKey(key) }
+        if key.modifiers.contains(.command) {
+            if key.key == "a", key.modifiers == [.command] { return focus == .timeline ? .selectAll : nil }
+            return Self.commandKey(key)
+        }
         guard focus == .preview || focus == .timeline else { return nil }
         switch (key.key, key.modifiers) {
         case ("space", []):
@@ -174,7 +203,17 @@ public struct KeyboardCommands {
         case ("n", []): .toggleSnapping
         case ("z", [.shift]): .fitTimeline
         case ("escape", []): .deselect
-        default: nil
+        default: byPlace(key)
+        }
+    }
+
+    /// ⌥[ and ⌥] by the key's place, where the layout types something else there (or nothing, a dead key).
+    private static func byPlace(_ key: EditorKey) -> EditorCommand? {
+        guard key.modifiers == [.option] else { return nil }
+        switch key.keyCode {
+        case EditorKey.leftBracketKeyCode?: return .trimStartToPlayhead
+        case EditorKey.rightBracketKeyCode?: return .trimEndToPlayhead
+        default: return nil
         }
     }
 

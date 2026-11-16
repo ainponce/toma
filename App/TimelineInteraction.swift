@@ -130,7 +130,13 @@ final class TimelineInteraction {
         guard let model else { return }
         let next = TimelineHitTest.selection(selectedIDs, clicking: hit, shift: shift) { [weak self] in self?.item($0)?.track }
         guard hit != .playhead else { return }
-        model.selection = Self.selection(next, on: next.first.flatMap { item($0)?.track })
+        let track = next.first.flatMap { item($0)?.track }
+        if track == .camera, let id = next.first, let output = item(id)?.output.lowerBound {
+            // As the Camera tab's list selects one: the playhead goes onto it, so the tab edits it.
+            model.selectCameraChange(id, output: output)
+            return
+        }
+        model.selection = Self.selection(next, on: track)
     }
 
     /// `ids`, all of `track`, as the model's selection.
@@ -683,7 +689,9 @@ final class TimelineInteraction {
             menu.addItem(show)
         }
         if !menu.items.isEmpty { menu.addItem(.separator()) }
-        let follow = MenuAction(String(localized: "Follow the Cursor")) { model.followCursor() }
+        let follow = MenuAction(String(
+            localized: "screen.followCursor", comment: "The screen track's menu: the screens shown follow the cursor (not a zoom's focus)")
+        ) { model.followCursor() }
         follow.isEnabled = canEdit
         menu.addItem(follow)
     }
@@ -703,7 +711,8 @@ final class TimelineInteraction {
         alert.messageText = String(localized: "Custom Speed")
         alert.informativeText = String(localized: "From 0.25× to 16×.") + " " + String(localized: "Up to 4× the sound speeds up without changing pitch; faster, the clip has no sound.")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
-        field.stringValue = model.speedOfTargets.map { String($0) } ?? "1"
+        // In the user's language ("1,5"), as it is read back.
+        field.stringValue = TimelineFormat.number(model.speedOfTargets ?? 1)
         field.setAccessibilityLabel(String(localized: "Speed"))
         alert.accessoryView = field
         alert.addButton(withTitle: String(localized: "OK"))
