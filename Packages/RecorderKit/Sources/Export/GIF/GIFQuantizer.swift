@@ -7,7 +7,9 @@ import Render
 /// pixel to a palette index with an ordered dither.
 ///
 /// Both are encoded into the caller's command buffer and read after it completes, so several frames can be in flight
-/// on the same quantizer: it holds only its compiled pipelines, and every pass its own buffers. Results never depend
+/// on the same quantizer: it holds only its compiled pipelines, and every pass its own buffers. A pass makes all its
+/// buffers before its one compute encoder, so when Metal cannot make one it throws
+/// `RenderError.metalResourceUnavailable` having encoded nothing (as `Compositor.encode` does). Results never depend
 /// on how the GPU schedules its threads: the histogram adds integers with 32-bit atomics, the indices are a function
 /// of each pixel and its position alone, and the mapping's error is summed in integers per threadgroup and then, on
 /// the CPU, in `Int64` in the order of the threadgroups.
@@ -67,23 +69,20 @@ public final class GIFQuantizer: @unchecked Sendable {
         mapPipeline = try pipeline("gifMap", threads: Self.mapGroupSide * Self.mapGroupSide)
     }
 
-    /// Encodes the histogram of `texture` (`.bgra8Unorm`, alpha not read) into `commandBuffer`: buffers cleared by a
-    /// blit, then the kernel. Read it with `result()` once the command buffer has completed.
-    public func histogram(of texture: any MTLTexture, into commandBuffer: any MTLCommandBuffer) -> HistogramPass {
+    /// Encodes the histogram of `texture` (`.bgra8Unorm`, alpha not read) into `commandBuffer`, with buffers cleared on
+    /// the CPU. Read it with `result()` once the command buffer has completed without error. Throws
+    /// `RenderError.metalResourceUnavailable`, having encoded nothing, if Metal cannot make a buffer or the encoder.
+    public func histogram(of texture: any MTLTexture, into commandBuffer: any MTLCommandBuffer) throws -> HistogramPass {
         Self.check(texture)
         let pixelCount = texture.width * texture.height
         precondition(pixelCount <= ColorHistogram.maxPixels, "a frame of \(texture.width) × \(texture.height) overflows the sums")
         let buckets = ColorHistogram.bucketCount
         // Per bucket: a count, and the sums and squares as 4 words (red, green, blue, unused), SIMD3<UInt32>'s layout.
-        let counts = Self.buffer(commandBuffer.device, length: buckets * 4)
-        let lowSums = Self.buffer(commandBuffer.device, length: buckets * 16)
-        let lowSquares = Self.buffer(commandBuffer.device, length: buckets * 16)
+        let counts = try Self.buffer(commandBuffer.device, length: buckets * 4, cleared: true)
+        let lowSums = try Self.buffer(commandBuffer.device, length: buckets * 16, cleared: true)
+        let lowSquares = try Self.buffer(commandBuffer.device, length: buckets * 16, cleared: true)
 
-        let blit = Self.required(commandBuffer.makeBlitCommandEncoder(), "a blit encoder")
-        for buffer in [counts, lowSums, lowSquares] { blit.fill(buffer: buffer, range: 0..<buffer.length, value: 0) }
-        blit.endEncoding()
-
-        let encoder = Self.required(commandBuffer.makeComputeCommandEncoder(), "a compute encoder")
+        let encoder = try Self.computeEncoder(commandBuffer)
         encoder.setComputePipelineState(histogramPipeline)
         encoder.setTexture(texture, index: 0)
         encoder.setBuffer(counts, offset: 0, index: 0)
@@ -103,8 +102,15 @@ public final class GIFQuantizer: @unchecked Sendable {
     /// the whole palette (plan decision 19; the lower index on ties), of the pixel plus `(m − 0.5) × dither / 16` on
     /// each channel (plan decision 17), clamped to 0...1, with `m` the threshold map at `(x mod 8, y mod 8)`; with
     /// `dither` 0, the nearest. The error of a pixel is its distance in OKLab, undithered, to the colour it maps to.
-    /// Read the indices and the error once the command buffer has completed.
-    public func map(_ texture: any MTLTexture, palette: GIFPalette, dither: Float, into commandBuffer: any MTLCommandBuffer) -> MapPass {
+    /// Read the indices and the error once the command buffer has completed without error. Throws
+    /// `RenderError.metalResourceUnavailable`, having encoded nothing, if Metal cannot make a buffer or the encoder.
+    ///
+    /// `texture` is the whole output frame: the threshold map is anchored at its origin, so a pixel that does not change
+    /// keeps its index from frame to frame. Crop after mapping, never before (a cropped texture would shift the pattern
+    /// and make still areas shimmer).
+    public func map(
+        _ texture: any MTLTexture, palette: GIFPalette, dither: Float, into commandBuffer: any MTLCommandBuffer
+    ) throws -> MapPass {
         Self.check(texture)
         precondition((1...255).contains(palette.colors.count), "a GIF palette has 1...255 colours and the transparent index")
         precondition((0...palette.colors.count).contains(palette.exactCount), "more exact colours than colours")
@@ -119,15 +125,12 @@ public final class GIFQuantizer: @unchecked Sendable {
         let side = Self.mapGroupSide
         let groups = MTLSize(width: (texture.width + side - 1) / side, height: (texture.height + side - 1) / side, depth: 1)
         let pixelCount = texture.width * texture.height
-        let indices = Self.buffer(commandBuffer.device, length: pixelCount)
-        let errorPartials = Self.buffer(commandBuffer.device, length: groups.width * groups.height * 4)
-        let largeErrors = Self.buffer(commandBuffer.device, length: 4)
+        // Every index and every threadgroup's slot is written by the kernel; only the count of large errors starts at 0.
+        let indices = try Self.buffer(commandBuffer.device, length: pixelCount, cleared: false)
+        let errorPartials = try Self.buffer(commandBuffer.device, length: groups.width * groups.height * 4, cleared: false)
+        let largeErrors = try Self.buffer(commandBuffer.device, length: 4, cleared: true)
 
-        let blit = Self.required(commandBuffer.makeBlitCommandEncoder(), "a blit encoder")
-        blit.fill(buffer: largeErrors, range: 0..<largeErrors.length, value: 0)
-        blit.endEncoding()
-
-        let encoder = Self.required(commandBuffer.makeComputeCommandEncoder(), "a compute encoder")
+        let encoder = try Self.computeEncoder(commandBuffer)
         encoder.setComputePipelineState(mapPipeline)
         encoder.setTexture(texture, index: 0)
         // At most 255 × 16 bytes: within setBytes's 4 KB.
@@ -149,14 +152,20 @@ public final class GIFQuantizer: @unchecked Sendable {
         precondition(texture.usage.contains(.shaderRead), "the frame must be readable by shaders")
     }
 
-    /// A buffer the CPU reads back. Metal fails to make one this small only when the process is out of memory.
-    private static func buffer(_ device: any MTLDevice, length: Int) -> any MTLBuffer {
-        required(device.makeBuffer(length: max(length, 1), options: .storageModeShared), "a buffer of \(length) bytes")
+    /// A buffer the CPU reads back, shared; `cleared` sets it to 0 on the CPU (the GPU has not seen it yet).
+    private static func buffer(_ device: any MTLDevice, length: Int, cleared: Bool) throws -> any MTLBuffer {
+        guard let buffer = device.makeBuffer(length: length, options: .storageModeShared) else {
+            throw RenderError.metalResourceUnavailable("GIF buffer of \(length) bytes")
+        }
+        if cleared { memset(buffer.contents(), 0, length) }
+        return buffer
     }
 
-    private static func required<T>(_ value: T?, _ what: String) -> T {
-        guard let value else { preconditionFailure("Metal could not make \(what)") }
-        return value
+    private static func computeEncoder(_ commandBuffer: any MTLCommandBuffer) throws -> any MTLComputeCommandEncoder {
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw RenderError.metalResourceUnavailable("GIF compute encoder")
+        }
+        return encoder
     }
 }
 
@@ -169,7 +178,8 @@ public struct HistogramPass {
     let pixelCount: Int
 
     /// The histogram, equal to `ColorHistogram(bgra:width:height:bytesPerRow:)` of the same frame. Only after the
-    /// command buffer completed.
+    /// command buffer completed: the caller first checks it for `.error` (the GPU can fail one at run time, and its
+    /// buffers then hold nothing usable) and reports that as its own typed error; reading before completion traps.
     public func result() -> ColorHistogram {
         precondition(commandBuffer.status == .completed, "the histogram is read after its command buffer completed")
         let buckets = ColorHistogram.bucketCount
@@ -191,7 +201,9 @@ public struct MapPass {
     let largeErrors: any MTLBuffer
     let pixelCount: Int
 
-    /// A palette index per pixel, row by row, without padding. Only after the command buffer completed.
+    /// A palette index per pixel, row by row, without padding. Only after the command buffer completed: the caller
+    /// first checks it for `.error` (the GPU can fail one at run time, and its buffers then hold nothing usable) and
+    /// reports that as its own typed error; reading before completion traps.
     public func indices() -> [UInt8] {
         precondition(commandBuffer.status == .completed, "the indices are read after their command buffer completed")
         return Array(UnsafeBufferPointer(start: indexBuffer.contents().assumingMemoryBound(to: UInt8.self), count: pixelCount))
@@ -199,7 +211,7 @@ public struct MapPass {
 
     /// The mean distance in OKLab from each pixel to its colour (the threadgroups' sums of `distance × 10⁶`, each
     /// rounded per pixel, added in their order in `Int64`) and the share farther than `PaletteRules.largeError`. Only
-    /// after the command buffer completed.
+    /// after the command buffer completed, checked for `.error` first, as for `indices()`.
     public func error() -> PaletteError {
         precondition(commandBuffer.status == .completed, "the error is read after its command buffer completed")
         let partials = UnsafeBufferPointer(

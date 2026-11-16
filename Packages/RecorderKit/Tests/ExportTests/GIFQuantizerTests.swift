@@ -124,24 +124,24 @@ private func nearest(_ colors: [SIMD3<UInt8>], in palette: GIFPalette) -> [(inde
     }
 
     /// Encodes with `encode` into a new command buffer, commits it and waits, without blocking a thread, until the GPU
-    /// is done.
-    private func run<Pass>(_ encode: (any MTLCommandBuffer) -> Pass) async throws -> Pass {
+    /// is done; a command buffer that failed fails the test before its pass is read.
+    private func run<Pass>(_ encode: (any MTLCommandBuffer) throws -> Pass) async throws -> Pass {
         let commands = try #require(queue.makeCommandBuffer())
-        let pass = encode(commands)
+        let pass = try encode(commands)
         commands.commit()
         await commands.completed()
-        #expect(commands.status == .completed, "\(String(describing: commands.error))")
+        try #require(commands.status == .completed, "\(String(describing: commands.error))")
         return pass
     }
 
     private func histogram(_ frame: Frame) async throws -> ColorHistogram {
         let texture = try texture(frame)
-        return try await run { quantizer.histogram(of: texture, into: $0) }.result()
+        return try await run { try quantizer.histogram(of: texture, into: $0) }.result()
     }
 
     private func map(_ frame: Frame, _ palette: GIFPalette, dither: Float) async throws -> (indices: [UInt8], error: PaletteError) {
         let texture = try texture(frame)
-        let pass = try await run { quantizer.map(texture, palette: palette, dither: dither, into: $0) }
+        let pass = try await run { try quantizer.map(texture, palette: palette, dither: dither, into: $0) }
         return (pass.indices(), pass.error())
     }
 
@@ -265,6 +265,44 @@ private func nearest(_ colors: [SIMD3<UInt8>], in palette: GIFPalette) -> [(inde
         #expect(mapped.error.largeErrorFraction == Double(large) / count)
     }
 
+    /// Sides off the 16-pixel threadgroup grid, 9:16 at 800 (450 × 800) and 37 × 23: without dither every pixel, at its
+    /// own position, is the CPU's nearest colour (but ties under 1e-5), and with or without dither the error is the
+    /// CPU's mean distance from each pixel to the colour it got.
+    @Test func sidesOffTheThreadgroupGridMapEveryPixel() async throws {
+        // Pixels picked at random from 4 096 colours, so neighbours differ and the CPU converts each colour once.
+        var random = SplitMix64(seed: 13)
+        let colors = (0..<4_096).map { _ in randomColor(using: &random) }
+        let colorLabs = colors.map { OKLab.fromSRGB(SIMD3<Float>($0) / 255) }
+        for (width, height) in [(450, 800), (37, 23)] {
+            var picks: [Int] = []
+            let frame = Frame(width: width, height: height) { _, _ in
+                picks.append(Int.random(in: 0..<colors.count, using: &random))
+                return colors[picks[picks.count - 1]]
+            }
+            let palette = PaletteBuilder.build(frame.histogram, quality: .balanced)
+            let labs = palette.colors.map { OKLab.fromSRGB(SIMD3<Float>($0) / 255) }
+            let reference = nearest(colors, in: palette)
+            let count = Double(width * height)
+            for dither: Float in [0, 1] {
+                let mapped = try await map(frame, palette, dither: dither)
+                try #require(mapped.indices.count == width * height)
+                var sum = 0.0
+                var large = 0
+                for (i, pick) in picks.enumerated() {
+                    let index = Int(mapped.indices[i])
+                    let distance = OKLab.distance(colorLabs[pick], labs[index])
+                    sum += Double(distance)
+                    if Double(distance) > PaletteRules.largeError { large += 1 }
+                    if dither == 0 && index != reference[pick].index {
+                        #expect(abs(distance - reference[pick].distance) < 1e-5, "\(width) × \(height) at (\(i % width), \(i / width))")
+                    }
+                }
+                #expect(abs(mapped.error.meanOKLab - sum / count) < 1e-6, "\(width) × \(height), dither \(dither)")
+                #expect(abs(mapped.error.largeErrorFraction - Double(large) / count) <= 2 / count, "\(width) × \(height), dither \(dither)")
+            }
+        }
+    }
+
     /// Two frames that differ only inside a rectangle, mapped with dither to the same palette: outside it, the same
     /// indices (the ordered dither depends on the pixel and its position only).
     @Test func orderedDitherIsStableForUnchangedPixels() async throws {
@@ -304,8 +342,8 @@ private func nearest(_ colors: [SIMD3<UInt8>], in palette: GIFPalette) -> [(inde
         // Three command buffers on two queues, all in flight together.
         let otherQueue = try #require(device.makeCommandQueue())
         let commands = try [queue, otherQueue, queue].map { try #require($0.makeCommandBuffer()) }
-        let histograms = [quantizer.histogram(of: texture, into: commands[0]), other.histogram(of: texture, into: commands[1])]
-        let maps = [
+        let histograms = try [quantizer.histogram(of: texture, into: commands[0]), other.histogram(of: texture, into: commands[1])]
+        let maps = try [
             quantizer.map(texture, palette: palette, dither: 1, into: commands[0]),
             quantizer.map(texture, palette: palette, dither: 1, into: commands[1]),
             other.map(texture, palette: palette, dither: 1, into: commands[2]),
@@ -313,7 +351,7 @@ private func nearest(_ colors: [SIMD3<UInt8>], in palette: GIFPalette) -> [(inde
         for buffer in commands { buffer.commit() }
         for buffer in commands {
             await buffer.completed()
-            #expect(buffer.status == .completed, "\(String(describing: buffer.error))")
+            try #require(buffer.status == .completed, "\(String(describing: buffer.error))")
         }
         #expect(histograms[0].result() == histograms[1].result())
         #expect(histograms[0].result() == frame.histogram)
