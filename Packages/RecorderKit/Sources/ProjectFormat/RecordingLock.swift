@@ -95,6 +95,11 @@ public final class HeldRecordingLock: Sendable {
 /// the process dies, so a crash never leaves a take that looks like it is still recording,
 /// even if the lock file stays behind.
 public enum RecordingLock {
+    /// How many more times an editor tries `edit.lock` while another open file holds it, and how long it waits
+    /// between attempts: enough for another opener's `isHeld` probe, which holds the lock for a moment, to let go.
+    public static let probeRetries = 4
+    public static let probeRetryDelay: Duration = .milliseconds(20)
+
     /// Takes the lock and writes `info` into the file.
     /// Throws `POSIXError(.EWOULDBLOCK)` if another open file holds it, even in this process, and
     /// `ELOOP` or `EFTYPE` if `url` is a symlink or not a regular file: a symlink is never followed, so
@@ -131,6 +136,25 @@ public enum RecordingLock {
             } catch let error as POSIXError where error.code == .EWOULDBLOCK && retriesLeft > 0 {
                 retriesLeft -= 1
                 try await Task.sleep(for: retryDelay)
+            }
+        }
+    }
+
+    /// `acquire(at:info:)` for a caller that can wait on its own thread (a queue of files, never the main thread): tried
+    /// again up to `retries` more times while another open file holds the lock, with `pause()` before each new attempt.
+    /// The same rule as the variant above, for the same reason: an `isHeld` probe takes the lock for a moment.
+    ///
+    /// Throws the last `POSIXError(.EWOULDBLOCK)` once the retries run out, and any other error of `acquire` at once.
+    public static func acquire(
+        at url: URL, info: RecordingLockInfo, retries: Int, pause: () -> Void
+    ) throws -> HeldRecordingLock {
+        var retriesLeft = retries
+        while true {
+            do {
+                return try acquire(at: url, info: info)
+            } catch let error as POSIXError where error.code == .EWOULDBLOCK && retriesLeft > 0 {
+                retriesLeft -= 1
+                pause()
             }
         }
     }
