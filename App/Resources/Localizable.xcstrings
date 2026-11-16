@@ -114,6 +114,17 @@
         }
       }
     },
+    "Add Layout Block" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block was added",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar un bloque de disposición"
+          }
+        }
+      }
+    },
     "Adjust Area" : {
       "localizations" : {
         "es" : {
@@ -182,6 +193,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hay otra grabación en curso en este proyecto."
+          }
+        }
+      }
+    },
+    "Apply a Style" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a named style was applied to the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aplicar un estilo"
           }
         }
       }
@@ -304,6 +326,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cancelar"
+          }
+        }
+      }
+    },
+    "Change Camera Border" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera's border width or color was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el borde de la cámara"
+          }
+        }
+      }
+    },
+    "Change Camera Shadow" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera's shadow was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la sombra de la cámara"
+          }
+        }
+      }
+    },
+    "Change Camera Split" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera's side or size in a split screen was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la división"
+          }
+        }
+      }
+    },
+    "Change Layout" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block's layout, transition or bubble style was changed; also the VoiceOver action on a block",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la disposición"
+          }
+        }
+      }
+    },
+    "Change Project Layout" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the project's camera layout was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la disposición del proyecto"
           }
         }
       }
@@ -516,6 +593,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuenta cancelada."
+          }
+        }
+      }
+    },
+    "Delete All Camera Changes" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): all the camera changes of the recording were deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar todos los cambios de la cámara"
+          }
+        }
+      }
+    },
+    "Delete Layout Block" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): camera layout blocks were deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el bloque de disposición"
           }
         }
       }
@@ -924,12 +1023,34 @@
         }
       }
     },
+    "Mirror Camera" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera's mirroring was turned on or off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espejar la cámara"
+          }
+        }
+      }
+    },
     "Mission Control" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mission Control"
+          }
+        }
+      }
+    },
+    "Move Layout Block" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block was moved",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover el bloque de disposición"
           }
         }
       }
@@ -2831,6 +2952,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Para cambiar de escritorio desde acá, activar “Mover un espacio a la izquierda” y “Mover un espacio a la derecha” en Ajustes del Sistema › Teclado › Atajos de teclado › Mission Control."
+          }
+        }
+      }
+    },
+    "Trim Layout Block" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an edge of a camera layout block was trimmed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar el bloque de disposición"
           }
         }
       }

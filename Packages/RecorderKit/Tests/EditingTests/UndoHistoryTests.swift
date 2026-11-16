@@ -147,10 +147,13 @@ private func perform(_ step: EditStep, after seconds: Double, in history: inout 
 }
 
 @Test func labelsAreTheNamesTheLogKeeps() {
-    // The 21 actions of design §5.11; their raw values are written in edit-log.jsonl, so they never change.
+    // The 21 actions of design §5.11, and the 12 of the 1c design §13.1 after them; their raw values are written in
+    // edit-log.jsonl, so they never change.
     #expect(EditLabel.allCases.map(\.rawValue) == [
         "split", "delete", "trim", "speed", "zoom.add", "zoom.move", "zoom.change", "zoom.delete", "zoom.regenerate",
         "style.background", "style.padding", "style.cornerRadius", "style.shadow", "style.frame", "cursor", "camera", "screen",
         "audio.volume", "aspect", "frameRate", "style.applyDefault",
+        "layout.add", "layout.change", "layout.move", "layout.trim", "layout.delete", "camera.layout", "camera.split",
+        "camera.mirror", "camera.border", "camera.shadow", "camera.changes.deleteAll", "style.apply",
     ])
 }

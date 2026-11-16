@@ -2,11 +2,11 @@
 import ProjectFormat
 
 /// The instants of the output that ↑ and ↓ move the playhead to and that edges snap to (design §5.5 and §5.7): the
-/// edges of the clips and of the zoom blocks, the camera and the screen changes, the take's markers, and the start and
-/// the end, all in output time.
+/// edges of the clips, of the zoom blocks and of the camera's layout blocks (1c design §5.5), the camera and the screen
+/// changes, the take's markers, and the start and the end, all in output time.
 ///
-/// Each one is where the output shows it (`TimeMap`): a zoom block from its first kept instant to the end of its last
-/// one, with the cuts inside it closed (`outputRange(ofSource:take:)`); a change or a marker at its own instant if it is
+/// Each one is where the output shows it (`TimeMap`): a block from its first kept instant to the end of its last one,
+/// with the cuts inside it closed (`outputRange(ofSource:take:)`); a change or a marker at its own instant if it is
 /// kept. What is cut is not a point: a change in a cut rules from the start of the next clip, which is one already.
 public struct EditPoints: Sendable {
     /// In order, without repeats, from 0 to the output's duration.
@@ -15,8 +15,10 @@ public struct EditPoints: Sendable {
     /// `markers`: the source instants of the take's `marker` events. In 1b a project has one take, the sequence's.
     public init(document: EditDocument, timeMap: TimeMap, markers: [HostTime]) {
         var points = timeMap.clipOutputStarts + [0, timeMap.duration]
-        for region in document.zoom.regions where region.start < region.end {
-            if let range = timeMap.outputRange(ofSource: region.start..<region.end, take: region.take) {
+        let blocks = document.zoom.regions.map { ($0.take, $0.start, $0.end) }
+            + document.camera.layouts.map { ($0.take, $0.start, $0.end) }
+        for (take, start, end) in blocks where start < end {
+            if let range = timeMap.outputRange(ofSource: start..<end, take: take) {
                 points += [range.lowerBound, range.upperBound]
             }
         }

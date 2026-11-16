@@ -74,6 +74,23 @@ private extension TwoClips {
     #expect(points.all == [0, TwoClips.output(4)])
 }
 
+@Test func editPointsIncludeLayoutBlockEdges() {
+    // `TwoClips` with camera layout blocks over the source [101.5 s, 102.5 s), [103 s, 111 s) across the cut and
+    // [106 s, 108 s) inside it: the edges of each block where the output shows it, as 1b's snapping counts them (1c design
+    // §5.5).
+    func block(_ id: String, from: Double, to: Double) -> LayoutBlock {
+        LayoutBlock(id: id, take: TwoClips.takeID, start: TwoClips.at(from), end: TwoClips.at(to), kind: .cameraFull, instant: false)
+    }
+    var document = TwoClips.document()
+    document.camera.layouts = [
+        block("l-00000001", from: 1.5, to: 2.5), block("l-00000002", from: 3, to: 11), block("l-00000003", from: 6, to: 8),
+    ]
+    let points = EditPoints(document: document, timeMap: TimeMap(sequence: document.sequence), markers: [])
+    // The start; the first block [0.5 s, 1.5 s); the one across the cut [2 s, 5 s); the edge between the clips; the end.
+    // Nothing of the one in the cut.
+    #expect(points.all == [0, 0.5, 1.5, 2, 4, 5, 8].map(TwoClips.output))
+}
+
 @Test func snappingPicksTheClosestWithinTolerance() {
     // The zoom starts at 1.0 s; the playhead is at 1.1 s.
     let points = TwoClips.Marked.points
