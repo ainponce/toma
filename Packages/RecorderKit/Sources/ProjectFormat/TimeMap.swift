@@ -8,10 +8,10 @@
 ///   it; the output lasts `D`, the sum of all of them. A clip whose `D_k` rounds to 0 is never shown.
 /// - Within each take, the clips are in source order and never overlap (as `EditDocument.sequence` is in 1b), so the
 ///   mapping is monotonic and each source instant is shown at most once.
-/// - A speed is read in its range, 0.25 to 16 (a speed out of it is clamped, one that is not a number is 1), so a
-///   document edited by hand never stops the render. Every mapping here reads it so, also the one of the instants
-///   outside the clips (`output(ofSampleAt:take:)`, `output(ofChangeAt:take:)`): the render and the motion paths share
-///   this one rule.
+/// - A speed is read with `ClipSpeed.clamped(_:)`, in its range from 0.25 to 16 (a speed out of it is clamped, one that
+///   is not a number is 1), so a document edited by hand never stops the render. Every mapping here reads it so, also
+///   the one of the instants outside the clips (`output(ofSampleAt:take:)`, `output(ofChangeAt:take:)`): the render, the
+///   motion paths and the sequence commands share this one rule.
 public struct TimeMap: Equatable, Sendable {
     /// `D`, in nanoseconds.
     public let duration: Int64
@@ -26,20 +26,27 @@ public struct TimeMap: Equatable, Sendable {
         var start: UInt64
         /// Never before `start`.
         var end: UInt64
+        /// `ClipSpeed.clamped`.
         var speed: Double
         var length: UInt64 { end - start }
+        /// `D_k`: `round(length / speed)`.
+        var outputDuration: Int64 { TimeMap.outputOffset(ofSource: length, speed: speed) }
+
+        /// `clip` as the mapping reads it: an end before the start is the start, and the speed is clamped.
+        init(_ clip: Clip) {
+            start = clip.start.nanoseconds
+            end = max(clip.end.nanoseconds, clip.start.nanoseconds)
+            speed = ClipSpeed.clamped(clip.speed)
+        }
     }
 
     public init(sequence: [Clip]) {
-        clips = sequence.map { clip in
-            let speed = clip.speed.isNaN ? 1 : min(max(clip.speed, 0.25), 16)
-            return Piece(start: clip.start.nanoseconds, end: max(clip.end.nanoseconds, clip.start.nanoseconds), speed: speed)
-        }
+        clips = sequence.map(Piece.init)
         var starts: [Int64] = []
         var total: Int64 = 0
         for piece in clips {
             starts.append(total)
-            total = Self.adding(total, Self.outputOffset(ofSource: piece.length, speed: piece.speed))
+            total = Self.adding(total, piece.outputDuration)
         }
         duration = total
         clipOutputStarts = starts
@@ -52,6 +59,12 @@ public struct TimeMap: Equatable, Sendable {
 
     /// `D` in seconds.
     public var durationSeconds: Double { Double(duration) / 1e9 }
+
+    /// `D_k` of `clip`, what it lasts in the output wherever it is in a sequence: `round((e − s) / v)` ns, with its speed
+    /// read by `ClipSpeed.clamped(_:)` and an end before its start read as no source.
+    public static func outputDuration(of clip: Clip) -> Int64 {
+        Piece(clip).outputDuration
+    }
 
     /// The clip and the source instant shown at output time `τ`, clamped to `[0, D)`: in the clip `k` with
     /// `O_k ≤ τ < O_k + D_k` (never one with `D_k == 0`), `s_k + round((τ − O_k) × v_k)` clamped to `[s_k, e_k − 1]`.
