@@ -16,6 +16,34 @@ public enum DurableFile {
         try writeThroughTemporaryFile(data, to: url) { rename($0, $1) }
     }
 
+    /// `writeAtomically(_:to:)` for the file `name` of the folder `fd` is open on, relative to that descriptor, so a
+    /// folder that is renamed or moved meanwhile still gets the file: `<name>.tmp` is removed if it is there (a symlink
+    /// is removed, not followed), created with `openat` and `O_EXCL | O_NOFOLLOW`, full-synced, moved over `name` with
+    /// `renameat` and the folder full-synced (`fcntl(fd, F_FULLFSYNC)`, with `fsync` where that is not supported).
+    /// `name` is one name, without `/`; anything else throws `EINVAL` and writes nothing.
+    public static func writeAtomically(_ data: Data, named name: String, inDirectory fd: Int32) throws {
+        guard !name.isEmpty, name != ".", name != "..", !name.contains("/") else { throw POSIXError(.EINVAL) }
+        let temporary = name + ".tmp"
+        guard unlinkat(fd, temporary, 0) == 0 || errno == ENOENT else { throw POSIXError.current() }
+        do {
+            let file = openat(fd, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+            guard file >= 0 else { throw POSIXError.current() }
+            do {
+                try writeAll(data, to: file)
+                try fullSync(file)
+            } catch {
+                close(file)
+                throw error
+            }
+            guard close(file) == 0 else { throw POSIXError.current() }
+            guard renameat(fd, temporary, fd, name) == 0 else { throw POSIXError.current() }
+        } catch {
+            unlinkat(fd, temporary, 0)
+            throw error
+        }
+        try fullSync(fd)
+    }
+
     /// Writes `data` as a new file at `url`, never over one that is there: a reader, or the next launch after a
     /// crash, sees no file or the whole one.
     ///
