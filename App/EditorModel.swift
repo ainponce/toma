@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import AppSupport
 import Analysis
 import Editing
 import Export
@@ -24,6 +25,8 @@ enum EditorSelection: Equatable {
 enum EditorBanner: Equatable {
     /// The last change could not be saved yet (amber).
     case saveFailed(POSIXErrorCode)
+    /// "Apply Default Style" waits for room on a full disk to bring its image in (amber): nothing is applied yet.
+    case waitingForSpace
     /// Nothing can be changed, for this reason (never `.newerDocument` nor `.unreadable`: those show no preview at all).
     case readOnly(ReadOnlyReason)
     /// Another app changed the project before its first edit here: it was opened again.
@@ -111,6 +114,8 @@ final class EditorModel {
     @ObservationIgnored private var player: PreviewAudioPlayer?
     /// The mix made when the project opened, which every revision's derives from.
     @ObservationIgnored private var baseMix: EditedMix?
+    /// Which revision's mix the player holds and which one is heard.
+    @ObservationIgnored private var sound = PlayingMix()
     /// The revision of the session's document shown.
     @ObservationIgnored private var shownRevision = -1
     /// The document the playhead's time is counted in: paused, the session's; playing, that of the scene and the mix
@@ -168,14 +173,12 @@ final class EditorModel {
 
         /// The frame of the grid at or before `seconds`, as the engine plays it.
         func frame(atOrBefore seconds: Double) -> Int {
-            let n = seconds.isFinite ? Int((seconds * Double(frameRate) + 1e-6).rounded(.down)) : 0
-            return min(max(n, 0), lastFrame)
+            PlayheadRule.frame(atOrBefore: seconds, frameRate: frameRate, frameCount: lastFrame + 1)
         }
 
         /// The frame of the grid nearest `seconds`.
         func frame(nearest seconds: Double) -> Int {
-            let n = seconds.isFinite ? Int((seconds * Double(frameRate)).rounded()) : 0
-            return min(max(n, 0), lastFrame)
+            PlayheadRule.frame(nearest: seconds, frameRate: frameRate, frameCount: lastFrame + 1)
         }
     }
 
@@ -269,11 +272,12 @@ final class EditorModel {
         }
         missingVideoCheck = check
         engine.onPresented = { _, _ in check.run() }
-        let builder = RevisionBuilder(renderer: renderer, take: project.take, events: project.events) { [weak self] built in
+        // With the paths the renderer's scene was made with: the first edit that keeps them builds none.
+        builder = RevisionBuilder(
+            renderer: renderer, take: project.take, events: project.events, paths: renderer.scene.paths
+        ) { [weak self] built in
             self?.revisionBuilt(built)
         }
-        builder.prime(document)
-        self.builder = builder
         shownRevision = revision
         timeline = Timeline(document, revision: revision)
         self.document = document
@@ -301,8 +305,9 @@ final class EditorModel {
             baseMix = mix
             let player = PreviewAudioPlayer(mix: mix)
             self.player = player
+            sound.hold(document)
             if shownRevision != revision, let session {
-                // Edited meanwhile: the mix (and scene) of the revision shown.
+                // Edited meanwhile: the mix (and scene) of the revision shown, played once built if playing.
                 builder?.build(revision: session.revision, document: session.document, outputSize: Self.exportSize(of: session.document), mix: mix)
             } else if isPlaying {
                 startClock(at: clockSeconds())
@@ -356,6 +361,7 @@ final class EditorModel {
         renderer = nil
         player?.stop()
         player = nil
+        sound = PlayingMix()
         baseMix = nil
         missingVideoCheck = nil
         missingVideo = []
@@ -427,6 +433,7 @@ final class EditorModel {
     func applyDefaultStyle() {
         guard let session, canEdit, applyTask == nil else { return }
         isApplyingDefaultStyle = true
+        updateBanner()
         applyTask = Task {
             let directory = DefaultStyleStore.defaultDirectory
             let style = await Task.detached { DefaultStyleStore(directory: directory).load() }.value
@@ -446,7 +453,7 @@ final class EditorModel {
             if let caches = session?.caches { editorState.save(caches) }
         case .recovered?: dismissedRecovery = true
         case .reopenedAfterOtherApp?: dismissedReopened = true
-        case .saveFailed?, .readOnly?, .videoGap?, nil: return
+        case .saveFailed?, .waitingForSpace?, .readOnly?, .videoGap?, nil: return
         }
         updateBanner()
     }
@@ -493,25 +500,27 @@ final class EditorModel {
 
     /// The scene and the mix of a revision are built: the preview and the sound take them. Playing, the time goes on
     /// in the new revision (the same source instant) and the new sound is heard from there.
+    ///
+    /// A build older than the revision the playhead is counted in is dropped: the newer one is on its way.
     private func revisionBuilt(_ built: RevisionBuilder.Built) {
-        guard let engine, state == .ready else { return }
+        guard let engine, state == .ready, built.revision >= timeline?.revision ?? .min else { return }
         engine.setScene(built.scene)
         previewAspect = built.document.aspect
-        let mixChanged = timeline.map { Self.mixChanged(from: $0.document, to: built.document) } ?? true
-        if let mix = built.mix { player?.setMix(mix) }
+        if let mix = built.mix, let player {
+            player.setMix(mix)
+            sound.hold(built.document)
+        }
         if isPlaying, let timeline {
             let seconds = Self.seconds(afterChange: clockSeconds(), from: timeline.document, to: built.document)
             self.timeline = Timeline(built.document, revision: built.revision)
-            if mixChanged || timeline.document.sequence != built.document.sequence { startClock(at: seconds) }
+            // The player plays a new mix only from its next `play` (and what it plays may be an older revision's than
+            // the playhead's); the host's clock goes on in the new revision's time.
+            if (player != nil && sound.needsPlay) || timeline.document.sequence != built.document.sequence {
+                startClock(at: seconds)
+            }
         } else {
             engine.request(.paused(frame: playheadFrame))
         }
-    }
-
-    /// Whether the sound of `new` differs from that of `old`.
-    private static func mixChanged(from old: EditDocument, to new: EditDocument) -> Bool {
-        old.sequence != new.sequence || old.frameRate != new.frameRate || old.audio != new.audio
-            || old.cursor.clickSound != new.cursor.clickSound || old.cursor.clickSoundGain != new.cursor.clickSoundGain
     }
 
     /// The playhead (paused) moves into `next`: the same source instant, or the edit point that replaced it.
@@ -530,11 +539,8 @@ final class EditorModel {
     /// (the end, if none is).
     private static func seconds(afterChange seconds: Double, from old: EditDocument, to new: EditDocument) -> Double {
         guard old.sequence != new.sequence else { return seconds }
-        let oldMap = TimeMap(sequence: old.sequence), newMap = TimeMap(sequence: new.sequence)
-        guard let (clip, source) = oldMap.source(atOutput: TimeMap.outputNanoseconds(seconds: seconds)) else { return 0 }
-        let take = old.sequence[clip].take
-        let output = newMap.output(atSource: source, take: take) ?? newMap.firstKeptOutput(atOrAfter: source, take: take)
-            ?? newMap.duration
+        let output = PlayheadRule.output(
+            afterChange: TimeMap.outputNanoseconds(seconds: seconds), from: old.sequence, to: new.sequence)
         return Double(output) / 1e9
     }
 
@@ -643,8 +649,10 @@ final class EditorModel {
             // Paused, or started again elsewhere, meanwhile.
             guard generation == clockGeneration, isPlaying else { return }
             do {
-                // The player takes the start before its first suspension: from here on its clock is the one.
+                // The player takes the start, and the mix it holds, before its first suspension: from here on its clock
+                // is the one.
                 pendingAudioStart = nil
+                sound.played()
                 try await player.play(fromSeconds: seconds)
             } catch {
                 guard generation == clockGeneration, isPlaying else { return }
@@ -652,6 +660,7 @@ final class EditorModel {
                 // On by the host's clock from where the sound stood.
                 hostClock = (player.clock.seconds(atHost: Self.hostSeconds()), Self.hostSeconds())
                 usesAudioClock = false
+                sound.stopped()
             }
         }
     }
@@ -667,6 +676,7 @@ final class EditorModel {
         clockGeneration += 1
         pendingAudioStart = nil
         player?.stop()
+        sound.stopped()
     }
 
     /// The host clock now, in seconds: the audio clock's.
@@ -682,7 +692,8 @@ final class EditorModel {
             return
         }
         let next = Self.banner(
-            access: session.access, notices: session.notices, legacyDismissed: editorState.legacyBannerDismissed || editedHere,
+            access: session.access, notices: session.notices, applyingDefaultStyle: isApplyingDefaultStyle,
+            legacyDismissed: editorState.legacyBannerDismissed || editedHere,
             recoveryDismissed: dismissedRecovery, reopenedDismissed: dismissedReopened,
             inGap: missingVideo.contains { $0.contains(currentSeconds) })
         if banner != next { banner = next }
@@ -691,10 +702,13 @@ final class EditorModel {
     /// The most pressing banner: a save that failed, then why the project is read-only, then what opening found, then
     /// the earlier version's look, then a part of the video that could not be read under the playhead.
     private static func banner(
-        access: EditAccess, notices: [EditNotice], legacyDismissed: Bool, recoveryDismissed: Bool, reopenedDismissed: Bool,
-        inGap: Bool
+        access: EditAccess, notices: [EditNotice], applyingDefaultStyle: Bool, legacyDismissed: Bool, recoveryDismissed: Bool,
+        reopenedDismissed: Bool, inGap: Bool
     ) -> EditorBanner? {
-        for case let .saveFailed(code) in notices { return .saveFailed(code) }
+        for case let .saveFailed(code) in notices {
+            // Its image waits for room: nothing of the style is applied yet.
+            return applyingDefaultStyle && (code == .ENOSPC || code == .EDQUOT) ? .waitingForSpace : .saveFailed(code)
+        }
         if case let .readOnly(reason) = access { return .readOnly(reason) }
         if !reopenedDismissed, notices.contains(.reopenedAfterOtherApp) { return .reopenedAfterOtherApp }
         if !recoveryDismissed { for case let .recovered(date) in notices { return .recovered(upTo: date) } }
@@ -874,17 +888,16 @@ private final class RevisionBuilder: Sendable {
         var paths: MotionPaths?
     }
 
-    /// `built` is called on the main actor with each revision built.
-    init(renderer: FrameRenderer, take: TakeRecord, events: [InputEvent], built: @escaping @MainActor @Sendable (Built) -> Void) {
+    /// `paths`: those of the revision shown. `built` is called on the main actor with each revision built.
+    init(
+        renderer: FrameRenderer, take: TakeRecord, events: [InputEvent], paths: MotionPaths,
+        built: @escaping @MainActor @Sendable (Built) -> Void
+    ) {
         self.renderer = renderer
         self.take = take
         self.events = events
         self.built = built
-    }
-
-    /// Builds the paths of `document` (the revision shown) ahead, so the first edit that keeps them does not build them.
-    func prime(_ document: EditDocument) {
-        queue.async { _ = self.paths(of: document) }
+        state.withLock { $0.paths = paths }
     }
 
     /// Builds `revision` of the document, `document` at `outputSize`, and its mix from `mix` (the project's).

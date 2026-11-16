@@ -19,6 +19,11 @@ struct EditorBanners: View {
                     Text(Self.text(banner))
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    if Self.isWarning(banner), model.isApplyingDefaultStyle {
+                        // "Apply Default Style" is still under way, waiting to save.
+                        ProgressView()
+                            .controlSize(.small)
+                    }
                     if banner == .legacyLook {
                         if model.isApplyingDefaultStyle {
                             ProgressView()
@@ -49,19 +54,22 @@ struct EditorBanners: View {
     }
 
     private static func isWarning(_ banner: EditorBanner) -> Bool {
-        if case .saveFailed = banner { true } else { false }
+        switch banner {
+        case .saveFailed, .waitingForSpace: true
+        case .readOnly, .reopenedAfterOtherApp, .recovered, .legacyLook, .videoGap: false
+        }
     }
 
     private static func canClose(_ banner: EditorBanner) -> Bool {
         switch banner {
         case .legacyLook, .recovered, .reopenedAfterOtherApp: true
-        case .saveFailed, .readOnly, .videoGap: false
+        case .saveFailed, .waitingForSpace, .readOnly, .videoGap: false
         }
     }
 
     private static func symbol(_ banner: EditorBanner) -> String {
         switch banner {
-        case .saveFailed: "exclamationmark.triangle.fill"
+        case .saveFailed, .waitingForSpace: "exclamationmark.triangle.fill"
         case .readOnly: "lock"
         case .reopenedAfterOtherApp, .recovered, .legacyLook, .videoGap: "info.circle"
         }
@@ -74,6 +82,8 @@ struct EditorBanners: View {
             String(localized: "The last change couldn't be saved: the disk is full. Changes are saved as soon as there is space.")
         case .saveFailed:
             String(localized: "The last change couldn't be saved yet. Saving it is tried again every few seconds.")
+        case .waitingForSpace:
+            String(localized: "Waiting for space on the disk to apply the default style…")
         case let .readOnly(reason):
             text(reason)
         case .reopenedAfterOtherApp:

@@ -3133,13 +3133,13 @@
         }
       }
     },
-    "View" : {
-      "comment" : "The View menu, made when the app has none",
+    "Waiting for space on the disk to apply the default style…" : {
+      "comment" : "Editor banner (amber): Apply Default Style waits for room on a full disk to bring its image in",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Visualización"
+            "value" : "Esperando espacio en el disco para aplicar el estilo por defecto…"
           }
         }
       }

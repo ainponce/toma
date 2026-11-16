@@ -21,7 +21,7 @@ final class ExportGate {
 /// whose view has the part's identifier (`preview`, `inspector`, `timeline`); the preview's bridges its `.toolbar` and
 /// title to the window (`sceneBridgingOptions`), without which the bar would not appear.
 @MainActor
-final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenuItemValidation {
+final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
     private let model: EditorModel
     private let onClose: () -> Void
@@ -100,21 +100,19 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     /// there is one (Task 37), collapses or expands.
     @objc func togglePanel(_ sender: Any?) {
         model.panelVisible.toggle()
+        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = model.panelVisible }
         guard let inspector = horizontalSplit.splitViewItems.first(where: { $0.behavior == .inspector }) else { return }
         inspector.animator().isCollapsed = !model.panelVisible
-    }
-
-    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
-        if menuItem.action == #selector(togglePanel(_:)) {
-            menuItem.title = model.panelVisible ? String(localized: "Hide Panel") : String(localized: "Show Panel")
-        }
-        return true
     }
 
     // MARK: - Window
 
     func windowDidBecomeKey(_ notification: Notification) {
-        EditorMenuItems.install()
+        KeyEditorPanel.shared.isVisible = model.panelVisible
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        KeyEditorPanel.shared.isVisible = nil
     }
 
     /// The window's least size is `EditorLayout.minimumSize`, its bar included. AppKit keeps it as the content's least
@@ -127,6 +125,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSMenu
     }
 
     func windowWillClose(_ notification: Notification) {
+        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = nil }
         model.close()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
@@ -180,45 +179,28 @@ private struct EditorPreviewPane: View {
     }
 }
 
-/// The editor's items of the app's menus that SwiftUI's scenes cannot give an AppKit window: View ▸ Show Panel / Hide
-/// Panel (⌥⌘I; `InspectorCommands` is for SwiftUI's scenes only), sent along the responder chain to the key editor.
+/// The key editor's panel, for the View menu's item: SwiftUI's commands do not see an AppKit window's responder chain.
+/// An `ObservableObject`, which commands follow (`@ObservedObject`).
 @MainActor
-enum EditorMenuItems {
-    /// Adds them to the main menu if they are not there (SwiftUI may build the menu again): to the View menu, made before
-    /// the Window menu if the app has none.
-    static func install() {
-        guard let mainMenu = NSApp.mainMenu else { return }
-        let toggle = #selector(EditorWindowController.togglePanel(_:))
-        guard !mainMenu.items.contains(where: { $0.submenu?.items.contains { $0.action == toggle } == true }) else { return }
-        let viewMenu = existingViewMenu(in: mainMenu) ?? makeViewMenu(in: mainMenu)
-        if let last = viewMenu.items.last, !last.isSeparatorItem { viewMenu.addItem(.separator()) }
-        let item = NSMenuItem(title: String(localized: "Show Panel"), action: toggle, keyEquivalent: "i")
-        item.keyEquivalentModifierMask = [.command, .option]
-        viewMenu.addItem(item)
-    }
+final class KeyEditorPanel: ObservableObject {
+    static let shared = KeyEditorPanel()
+    /// Whether the key editor shows its panel; `nil` while no editor is the key window.
+    @Published var isVisible: Bool?
+}
 
-    /// The View menu SwiftUI makes, which has no items until it opens and no identifier: the one with the full screen or
-    /// toolbar item, or else the one just before the Window menu, unless that is the Edit menu (it has Undo) or the
-    /// app's.
-    private static func existingViewMenu(in mainMenu: NSMenu) -> NSMenu? {
-        let standard = [#selector(NSWindow.toggleFullScreen(_:)), #selector(NSWindow.toggleToolbarShown(_:))]
-        if let menu = mainMenu.items.compactMap(\.submenu).first(where: { $0.items.contains { $0.action.map(standard.contains) == true } }) {
-            return menu
+/// View ▸ Show Panel / Hide Panel (⌥⌘I), in SwiftUI's View menu with the sidebar's commands (`InspectorCommands` is for
+/// SwiftUI's scenes only), sent along the responder chain to the key editor.
+struct EditorCommands: Commands {
+    @ObservedObject var panel = KeyEditorPanel.shared
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            let isVisible = panel.isVisible
+            Button(isVisible == false ? LocalizedStringKey("Show Panel") : LocalizedStringKey("Hide Panel")) {
+                NSApp.sendAction(#selector(EditorWindowController.togglePanel(_:)), to: nil, from: nil)
+            }
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .disabled(isVisible == nil)
         }
-        guard let windows = NSApp.windowsMenu, let index = mainMenu.items.firstIndex(where: { $0.submenu === windows }),
-            index > 1, let candidate = mainMenu.items[index - 1].submenu,
-            !candidate.items.contains(where: { $0.action == Selector(("undo:")) })
-        else { return nil }
-        return candidate
-    }
-
-    private static func makeViewMenu(in mainMenu: NSMenu) -> NSMenu {
-        let title = String(localized: "View")
-        let menu = NSMenu(title: title)
-        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        item.submenu = menu
-        let windowIndex = NSApp.windowsMenu.flatMap { windows in mainMenu.items.firstIndex { $0.submenu === windows } }
-        mainMenu.insertItem(item, at: windowIndex ?? max(mainMenu.items.count - 1, 0))
-        return menu
     }
 }

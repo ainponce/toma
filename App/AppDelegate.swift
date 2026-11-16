@@ -94,8 +94,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         #endif
-        // The cache folders of projects not opened for 30 days (plan decision 27), off the main thread.
-        Task.detached(priority: .utility) { ProjectCaches.removeUnused(root: ProjectCaches.defaultRoot, now: Date()) }
+        // The cache folders of projects not opened for 30 days (plan decision 27), off the main thread, only while no
+        // project is open: projects opened from the Finder at launch are here already (`application(_:open:)` comes
+        // before this), and their folders are left alone until the next launch.
+        if editors.isEmpty {
+            Task.detached(priority: .utility) { ProjectCaches.removeUnused(root: ProjectCaches.defaultRoot, now: Date()) }
+        }
         // A take that turned Do Not Disturb on and never ended (the app was killed): turned off now. A take started
         // meanwhile runs its shortcut after this one.
         Task { await focus.recoverAfterLaunch() }
