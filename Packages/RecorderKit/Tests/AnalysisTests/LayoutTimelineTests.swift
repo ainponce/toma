@@ -121,23 +121,32 @@ private func numbers(_ g: LayoutGeometry) -> [Double] {
     ]
 }
 
-/// The largest change of a number between `a` and `b`. The place and corners of a part count only where it is seen in
-/// both (opacity above 0): one that is not seen can be anywhere, so a part that appears can appear where it goes.
-private func largestChange(_ a: LayoutGeometry, _ b: LayoutGeometry) -> Double {
+/// The largest change between `a` and `b` of the numbers in pixels (rects and corners) and of those from 0 to 1 (opacities
+/// and the camera's border and shadow weights). A part's place, corners and weights count only where it is seen in both
+/// (opacity above 0): one that is not seen can be anywhere, so a part that appears can appear where it goes. Its opacity
+/// always counts.
+private func largestChange(_ a: LayoutGeometry, _ b: LayoutGeometry) -> (pixels: Double, units: Double) {
     func change(_ x: Double, _ y: Double) -> Double { abs(x - y) }
     func change(_ r: Rect, _ q: Rect) -> Double {
         max(change(r.x, q.x), change(r.y, q.y), change(r.width, q.width), change(r.height, q.height))
     }
-    var largest = max(
-        change(a.screen.opacity, b.screen.opacity), change(a.camera.opacity, b.camera.opacity),
-        change(a.camera.borderWeight, b.camera.borderWeight), change(a.camera.shadowWeight, b.camera.shadowWeight))
+    var pixels = 0.0
+    var units = max(change(a.screen.opacity, b.screen.opacity), change(a.camera.opacity, b.camera.opacity))
     if a.screen.opacity > 0, b.screen.opacity > 0 {
-        largest = max(largest, change(a.screen.rect, b.screen.rect), change(a.screen.cornerRadius, b.screen.cornerRadius))
+        pixels = max(pixels, change(a.screen.rect, b.screen.rect), change(a.screen.cornerRadius, b.screen.cornerRadius))
     }
     if a.camera.opacity > 0, b.camera.opacity > 0 {
-        largest = max(largest, change(a.camera.rect, b.camera.rect), change(a.camera.cornerRadius, b.camera.cornerRadius))
+        pixels = max(pixels, change(a.camera.rect, b.camera.rect), change(a.camera.cornerRadius, b.camera.cornerRadius))
+        units = max(units, change(a.camera.borderWeight, b.camera.borderWeight), change(a.camera.shadowWeight, b.camera.shadowWeight))
     }
-    return largest
+    return (pixels, units)
+}
+
+/// Whether nothing jumps from `a` to `b`, a step of 600 Hz later: no number in pixels moves more than 0.02 of the output's
+/// width, and no opacity or weight more than 0.02 (the design's spring moves at most about 0.008 in a step).
+private func noJump(_ a: LayoutGeometry, _ b: LayoutGeometry) -> Bool {
+    let change = largestChange(a, b)
+    return change.pixels <= 0.02 * outputSize.x && change.units <= 0.02
 }
 
 private func centre(_ rect: Rect) -> SIMD2<Double> { SIMD2(rect.x + rect.width / 2, rect.y + rect.height / 2) }
@@ -185,7 +194,7 @@ private struct LayoutRandom: RandomNumberGenerator {
         }
         // The largest change of a number between two steps of 600 Hz, and the steps whose opacities leave 0…1 or whose
         // screen's opacity is not `screenOpacity(atOutput:)`, over the run's documents.
-        var worst = 0.0
+        var worst = (pixels: 0.0, units: 0.0)
         var outOfRange = 0, notTheScreensOpacity = 0
         for _ in 0..<25 {
             let sequence: [Clip]
@@ -223,13 +232,14 @@ private struct LayoutRandom: RandomNumberGenerator {
             for s in 1...lastStep {
                 let τ = StepGrid.outputTime(ofStep: s)
                 let now = scene.geometry(at: τ)
-                worst = max(worst, largestChange(before, now))
+                let change = largestChange(before, now)
+                worst = (max(worst.pixels, change.pixels), max(worst.units, change.units))
                 if s % 7 == 0, scene.timeline.screenOpacity(atOutput: τ) != now.screen.opacity { notTheScreensOpacity += 1 }
                 if !(0...1).contains(now.screen.opacity) || !(0...1).contains(now.camera.opacity) { outOfRange += 1 }
                 before = now
             }
         }
-        #expect(worst <= 0.02 * outputSize.x)
+        #expect(worst.pixels <= 0.02 * outputSize.x && worst.units <= 0.02)
         #expect(outOfRange == 0 && notTheScreensOpacity == 0)
     }
 
@@ -322,7 +332,7 @@ private struct LayoutRandom: RandomNumberGenerator {
         var τ = output(4.9) + step
         while τ < output(7.5) {
             let now = scene.geometry(at: τ)
-            #expect(largestChange(before, now) <= 0.02 * outputSize.x)
+            #expect(noJump(before, now))
             if τ >= output(5), τ < output(5.6) {
                 #expect(now.camera.rect != full && now.camera.rect.width < outputSize.x)
             }
@@ -387,7 +397,8 @@ private struct LayoutRandom: RandomNumberGenerator {
         #expect(scene.geometry(at: border).camera.rect == presented.rect)
         #expect(scene.geometry(at: border).camera.cornerRadius == presented.cornerRadius)
         #expect(nearlySame(scene.geometry(at: border - 1), scene.geometry(at: border), within: 1e-4))
-        #expect(largestChange(scene.geometry(at: border - step), scene.geometry(at: border + step)) <= 0.02 * outputSize.x)
+        #expect(noJump(scene.geometry(at: border - step), scene.geometry(at: border)))
+        #expect(noJump(scene.geometry(at: border), scene.geometry(at: border + step)))
     }
 
     @Test func trivialDocumentIsThe1bBubble() {
@@ -457,10 +468,28 @@ private struct LayoutRandom: RandomNumberGenerator {
             #expect(p.progress(seconds: 0) == 0 && p.progress(seconds: p.settleSeconds) == 1)
             #expect(abs(1 - p.progress(seconds: p.settleSeconds.nextDown)) < 1e-6)
         }
+        // Inside, each regime is its step response in another closed form: under 1, `1 − e^(−ζωt) sin(ω_d t + acos ζ) /
+        // √(1 − ζ²)`; at 1, `1 − (1 + ωt)e^(−ωt)`; above, `1 − (λ₂e^(−λ₁t) − λ₁e^(−λ₂t)) / (λ₂ − λ₁)` with
+        // λ₁,₂ = ω(ζ ∓ √(ζ² − 1)), which rises without overshooting.
+        let under = LayoutTimeline.StepResponse(SpringSpec(damping: 0.5, response: 0.5))
         let critical = LayoutTimeline.StepResponse(SpringSpec(damping: 1, response: 0.3))
-        for t in stride(from: 0.01, to: critical.settleSeconds, by: 0.01) {
-            let omega = 2 * Double.pi / 0.3
-            #expect(abs(critical.progress(seconds: t) - (1 - (1 + omega * t) * exp(-omega * t))) < 1e-12)
+        let over = LayoutTimeline.StepResponse(SpringSpec(damping: 1.6, response: 0.4))
+        for t in stride(from: 0.005, to: 1.5, by: 0.005) {
+            let ω = 2 * Double.pi / 0.5, ζ = 0.5, ωd = ω * (1 - ζ * ζ).squareRoot()
+            #expect(abs(under.progress(seconds: t) - (1 - exp(-ζ * ω * t) * sin(ωd * t + acos(ζ)) / (1 - ζ * ζ).squareRoot())) < 1e-12)
+        }
+        for t in stride(from: 0.005, to: critical.settleSeconds, by: 0.005) {
+            let ω = 2 * Double.pi / 0.3
+            #expect(abs(critical.progress(seconds: t) - (1 - (1 + ω * t) * exp(-ω * t))) < 1e-12)
+        }
+        var previous = 0.0
+        for t in stride(from: 0.005, to: over.settleSeconds, by: 0.005) {
+            let ω = 2 * Double.pi / 0.4, ζ = 1.6, root = (ζ * ζ - 1).squareRoot()
+            let (λ1, λ2) = (ω * (ζ - root), ω * (ζ + root))
+            let p = over.progress(seconds: t)
+            #expect(abs(p - (1 - (λ2 * exp(-λ1 * t) - λ1 * exp(-λ2 * t)) / (λ2 - λ1))) < 1e-12)
+            #expect(p > previous && p < 1)
+            previous = p
         }
         // A slower spring in the document is still moving where the design's has arrived.
         let slow = SpringSpec(damping: 0.95, response: 1)
@@ -492,11 +521,78 @@ private struct LayoutRandom: RandomNumberGenerator {
         }
         let settled = leaving.geometry(at: output(4))
         #expect(settled.camera == leaving.destination(.cameraOnly, at: output(4)).camera && settled.screen.opacity == 0)
+        // Screen only ↔ Camera full screen: the camera comes and goes with Camera full screen's border and shadow, none.
+        let full = Scene(layoutDocument(
+            blocks: [block(1, .cameraFull, from: 2, to: 5)], project: CameraLayout(kind: .screenOnly)))
+        for seconds in stride(from: 2.0, through: 7.0, by: 0.01) {
+            let camera = full.geometry(at: output(seconds)).camera
+            #expect(camera.borderWeight == 0 && camera.shadowWeight == 0)
+            #expect(seconds > 5 || seconds < 2.01 || camera.opacity > 0)
+        }
         // Bubble → Camera full screen: the bubble grows to the edges while the screen fades under it, in place.
         let growing = Scene(layoutDocument(blocks: [block(1, .cameraFull, from: 2, to: 10)]))
         let stage = growing.destination(.bubble, at: output(1)).screen
         let halfway = growing.geometry(at: output(2.2))
         #expect(near(centre(halfway.screen.rect), centre(stage.rect)) && halfway.camera.rect.width > 300)
+    }
+
+    @Test func aFastBurstNeverSlidesAFadingPart() {
+        // Split → Camera only → Camera full screen, 0.3 s apart: the screen still fades where the split showed it, at 90 %.
+        let screenLeaving = Scene(layoutDocument(blocks: [
+            block(1, .split, from: 0, to: 1), block(2, .cameraOnly, from: 1, to: 1.3), block(3, .cameraFull, from: 1.3, to: 10),
+        ]))
+        let card = screenLeaving.destination(.split, at: output(0.5)).screen
+        var seen = 0
+        for seconds in stride(from: 1.0, through: 3.0, by: 0.005) {
+            let screen = screenLeaving.geometry(at: output(seconds)).screen
+            guard screen.opacity > 0 else { continue }
+            seen += 1
+            #expect(near(centre(screen.rect), centre(card.rect)))
+            #expect(screen.rect.width <= card.rect.width * 1.0001 && screen.rect.width >= 0.9 * card.rect.width * 0.9999)
+        }
+        #expect(seen > 60)
+        // Bubble → Split → Screen only, 0.1 s apart: the camera fades where it was on screen when it started to leave, a
+        // third of the way to its card.
+        let cameraLeaving = Scene(layoutDocument(blocks: [
+            block(1, .split, from: 1, to: 1.1), block(2, .screenOnly, from: 1.1, to: 10),
+        ]))
+        let leavingAt = cameraLeaving.geometry(at: output(1.1)).camera
+        #expect(!near(centre(leavingAt.rect), centre(cameraLeaving.destination(.split, at: output(1.1)).camera.rect), within: 100))
+        for seconds in stride(from: 1.1, through: 3.0, by: 0.005) {
+            let camera = cameraLeaving.geometry(at: output(seconds)).camera
+            guard camera.opacity > 0 else { continue }
+            #expect(near(centre(camera.rect), centre(leavingAt.rect)))
+            #expect(camera.rect.width <= leavingAt.rect.width * 1.0001 && camera.rect.width >= 0.9 * leavingAt.rect.width * 0.9999)
+        }
+    }
+
+    @Test func cardWeightBlendsStageAndCard() {
+        // 0 where the layout acts on the stage, 1 in a card (the geometry's mode), blended as the geometry is.
+        let scene = Scene(layoutDocument(blocks: [
+            block(1, .split, from: 2, to: 5), block(2, .cameraOnly, from: 5, to: 8), block(3, .screenOnly, from: 8, to: 12),
+            block(4, .cameraFull, from: 12, to: 14),
+        ]))
+        let timeline = scene.timeline
+        for kind in LayoutKind.allCases {
+            let alone = Scene(layoutDocument(project: CameraLayout(kind: kind))).timeline
+            let mode = scene.destination(kind, at: output(1)).mode
+            #expect(alone.cardWeight(atOutput: output(1)) == (mode == .card ? 1 : 0))
+        }
+        #expect(timeline.cardWeight(atOutput: output(1)) == 0)
+        #expect(timeline.cardWeight(atOutput: output(3.5)) == 1)
+        let halfway = timeline.cardWeight(atOutput: output(2.15))
+        #expect(halfway > 0 && halfway < 1)
+        // Split → Camera only stays in a card; Screen only → Camera full screen goes into one.
+        for seconds in stride(from: 5.0, through: 7.0, by: 0.01) {
+            #expect(abs(timeline.cardWeight(atOutput: output(seconds)) - 1) < 1e-15)
+        }
+        #expect(timeline.cardWeight(atOutput: output(11)) == 0)
+        #expect(timeline.cardWeight(atOutput: output(13.9)) == 1)
+        // A screen's card in the split's place blends with the stage's by the same weight: its rect is the weight of the way.
+        let stage = scene.destination(.bubble, at: output(2.15)).screen.rect
+        let split = scene.destination(.split, at: output(2.15)).screen.rect
+        let shown = scene.geometry(at: output(2.15)).screen.rect
+        #expect(abs(shown.x - (stage.x * (1 - halfway) + split.x * halfway)) < 1e-9)
     }
 
     @Test func blocksPlacedAsTheZoomsAre() {

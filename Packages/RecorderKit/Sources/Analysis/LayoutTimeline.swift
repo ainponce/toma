@@ -80,10 +80,12 @@ public struct LayoutInputs: Sendable {
 ///   goes on moving through the transition. A border reached before the transition before it has settled starts from
 ///   what was shown, as `CameraStyleTimeline` does: the burst is played forward from its first border. A border at an
 ///   edge of an instant block jumps to the new geometry, and a burst starts there.
-/// - Appearing and leaving (1c design §5.3): a part the new layout hides (opacity 0) while the one before shows it shrinks
-///   to 90 % around its centre and fades where that layout has it; a part the new layout shows while nothing of it was
-///   seen grows from 90 % where it goes. A part that is not seen can be anywhere, so its place jumps there; what is seen
-///   never does.
+/// - Appearing and leaving (1c design §5.3): a part the new layout shows while nothing of it was seen starts as
+///   `CameraLayoutGeometry` hides it where it goes (at 90 % of its size around its centre, its corners too, the camera
+///   with that layout's border and shadow weights) and grows from there; a part the new layout hides while it is seen
+///   ends so where it was seen at the border, and fades there (one already leaving goes on to where it was going), so in
+///   a burst too what leaves never slides. A part that is not seen (opacity 0 or less) can be anywhere, so its place and
+///   weights jump while it is not seen; what is seen never does.
 /// - A span's geometry is `CameraLayoutGeometry`'s at the instant's inputs: in Bubble, the camera is the take's bubble
 ///   presented for the project's layout and a block's own style measured against the output (`CameraStyle
 ///   .frame(in:reference:)`) for a Bubble block, which, as the take's bubble in 1b, is not drawn before the camera's
@@ -166,33 +168,50 @@ public struct LayoutTimeline: Sendable {
         // The live geometry of the spans the burst reads, from the one before its start on.
         let base = max(burst.first - 2, 0)
         let live = spans[base...burst.last].map { layoutGeometry($0, inputs) }
+        func geometry(_ i: Int) -> LayoutGeometry { live[i - base] }
         // What span `k` shows once its border has settled: its geometry, with what it hides where the span before showed it.
         func settled(_ k: Int) -> LayoutGeometry {
-            k == 0 ? live[0] : Self.placingHidden(live[k - base], where: live[k - 1 - base])
+            k == 0 ? geometry(0) : Self.placingHidden(geometry(k), where: geometry(k - 1))
         }
         var shown = settled(burst.first - 1)
+        // Where the transition before was going: at the start of a burst, what is shown.
+        var heading = shown
         for (offset, p) in burst.progress.enumerated() {
             let k = burst.first + offset
-            shown = LayoutGeometry.mix(Self.placingHidden(shown, where: live[k - base]), settled(k), p)
+            // What comes grows from 90 % of where it goes; what leaves goes to 90 % of where it is seen, or on to where it
+            // was already going.
+            let from = Self.placingHidden(shown, where: geometry(k))
+            let to = Self.leaving(settled(k), from: from, heading: heading, before: geometry(k - 1))
+            shown = LayoutGeometry.mix(from, to, p)
+            heading = to
         }
         return Self.clamped(shown)
     }
 
     /// The screen's opacity at output time `τ`, as `geometry(atOutput:_:)` draws it, without the inputs: 1 where the layout
-    /// shows the screen and 0 where it does not (Camera only and Camera full screen), blended by the same transitions.
+    /// shows the screen and 0 where it does not (Camera only and Camera full screen), blended by the same transitions and
+    /// kept in 0…1.
     public func screenOpacity(atOutput τ: Int64) -> Double {
-        let burst = burst(atOutput: τ)
-        func opacity(_ i: Int) -> Double {
-            switch spans[i].kind {
+        Self.unit(blended(atOutput: τ) { kind in
+            switch kind {
             case .bubble, .screenOnly, .split: 1
             case .cameraOnly, .cameraFull: 0
             }
+        })
+    }
+
+    /// How much of the way from the stage to a card the layouts are at output time `τ` (1c design §5.4), without the
+    /// inputs: 0 where the zoom acts on the whole stage (Bubble and Screen only) and 1 where the background stays still and
+    /// the screen is in its card (Split, Camera only and Camera full screen), the geometry's `mode`, blended by the same
+    /// transitions. It is the weight the background's transform, the screen's content and its clip blend with, as the
+    /// rest of the geometry: not kept in 0…1, so it overshoots with the card's rect.
+    public func cardWeight(atOutput τ: Int64) -> Double {
+        blended(atOutput: τ) { kind in
+            switch kind {
+            case .bubble, .screenOnly: 0
+            case .split, .cameraOnly, .cameraFull: 1
+            }
         }
-        var shown = opacity(burst.first - 1)
-        for (offset, p) in burst.progress.enumerated() {
-            shown = shown * (1 - p) + opacity(burst.first + offset) * p
-        }
-        return Self.unit(shown)
     }
 
     /// The camera changes of `doc` (`camera.changes`, this take's) that start to rule inside a block shown, by the id of
@@ -294,7 +313,7 @@ public struct LayoutTimeline: Sendable {
         while first > 1, isMoving(border: first - 1, at: spans[first].output.lowerBound) { first -= 1 }
         return Burst(first: first, progress: (first...last).map { k in
             let until = k < last ? spans[k + 1].output.lowerBound : τ
-            return response.progress(seconds: Self.seconds(until, since: spans[k].output.lowerBound))
+            return response.progress(seconds: CursorPath.seconds(until, since: spans[k].output.lowerBound))
         })
     }
 
@@ -302,7 +321,7 @@ public struct LayoutTimeline: Sendable {
     /// instant block, less than `settleSeconds` before `x`. There is none at the first span.
     private func isMoving(border k: Int, at x: Int64) -> Bool {
         guard k > 0, !spans[k].instant, !spans[k - 1].instant else { return false }
-        return Self.seconds(x, since: spans[k].output.lowerBound) < response.settleSeconds
+        return CursorPath.seconds(x, since: spans[k].output.lowerBound) < response.settleSeconds
     }
 
     /// What `span` shows settled, with `inputs`.
@@ -316,26 +335,62 @@ public struct LayoutTimeline: Sendable {
             cornerRadius: inputs.cornerRadius, screenAspect: inputs.screenAspect)
     }
 
-    /// `geometry` with each part it does not show (opacity 0 or less) where `other` shows it, at
-    /// `CameraLayoutGeometry.hiddenScale` of its size around its centre, its corners too: so a part leaves, or comes,
-    /// where it is seen.
+    /// `value` of each span's kind, blended by the transitions at `τ` as `LayoutGeometry.mix` blends a number.
+    private func blended(atOutput τ: Int64, _ value: (LayoutKind) -> Double) -> Double {
+        let burst = burst(atOutput: τ)
+        var shown = value(spans[burst.first - 1].kind)
+        for (offset, p) in burst.progress.enumerated() {
+            shown = shown * (1 - p) + value(spans[burst.first + offset].kind) * p
+        }
+        return shown
+    }
+
+    /// `geometry` with each part it does not show (opacity 0 or less) where `other` shows it, as `CameraLayoutGeometry`
+    /// hides a part (at `hiddenScale` of its size around its centre, its corners too, the camera with its border and
+    /// shadow weights), keeping its opacity: so a part comes, or leaves, as it is where it is seen.
     private static func placingHidden(_ geometry: LayoutGeometry, where other: LayoutGeometry) -> LayoutGeometry {
         var geometry = geometry
         if geometry.screen.opacity <= 0, other.screen.opacity > 0 {
-            geometry.screen.rect = shrunk(other.screen.rect)
-            geometry.screen.cornerRadius = other.screen.cornerRadius * CameraLayoutGeometry.hiddenScale
+            geometry.screen = hidden(other.screen, opacity: geometry.screen.opacity)
         }
         if geometry.camera.opacity <= 0, other.camera.opacity > 0 {
-            geometry.camera.rect = shrunk(other.camera.rect)
-            geometry.camera.cornerRadius = other.camera.cornerRadius * CameraLayoutGeometry.hiddenScale
+            geometry.camera = hidden(other.camera, opacity: geometry.camera.opacity)
         }
         return geometry
     }
 
-    /// `rect` at `CameraLayoutGeometry.hiddenScale` of its size around its centre, as `CameraLayoutGeometry` hides a part.
-    private static func shrunk(_ rect: Rect) -> Rect {
-        let width = rect.width * CameraLayoutGeometry.hiddenScale, height = rect.height * CameraLayoutGeometry.hiddenScale
-        return Rect(x: rect.x + (rect.width - width) / 2, y: rect.y + (rect.height - height) / 2, width: width, height: height)
+    /// `to`, a span settled, with each part it hides that is still seen in `from` (what was shown at the border) where
+    /// that part goes: to where the transition before was `heading` if the layout `before` hid it too (it was already
+    /// leaving), and otherwise hidden where it is seen. So what leaves fades in its place, in a burst too.
+    private static func leaving(
+        _ to: LayoutGeometry, from: LayoutGeometry, heading: LayoutGeometry, before: LayoutGeometry
+    ) -> LayoutGeometry {
+        var to = to
+        if to.screen.opacity <= 0, from.screen.opacity > 0 {
+            let opacity = to.screen.opacity
+            to.screen = before.screen.opacity <= 0 ? heading.screen : CameraLayoutGeometry.hidden(from.screen)
+            to.screen.opacity = opacity
+        }
+        if to.camera.opacity <= 0, from.camera.opacity > 0 {
+            let opacity = to.camera.opacity
+            to.camera = before.camera.opacity <= 0 ? heading.camera : CameraLayoutGeometry.hidden(from.camera)
+            to.camera.opacity = opacity
+        }
+        return to
+    }
+
+    /// `screen` as `CameraLayoutGeometry` hides it, with `opacity`.
+    private static func hidden(_ screen: ScreenCard, opacity: Double) -> ScreenCard {
+        var hidden = CameraLayoutGeometry.hidden(screen)
+        hidden.opacity = opacity
+        return hidden
+    }
+
+    /// `camera` as `CameraLayoutGeometry` hides it, with `opacity`.
+    private static func hidden(_ camera: CameraCard, opacity: Double) -> CameraCard {
+        var hidden = CameraLayoutGeometry.hidden(camera)
+        hidden.opacity = opacity
+        return hidden
     }
 
     /// `geometry` with its opacities and weights kept in 0…1.
@@ -350,10 +405,5 @@ public struct LayoutTimeline: Sendable {
 
     private static func unit(_ value: Double) -> Double {
         min(max(value, 0), 1)
-    }
-
-    /// Seconds from output time `b` to `a`, counted as `CameraStyleTimeline` counts them.
-    private static func seconds(_ a: Int64, since b: Int64) -> Double {
-        (Double(a) - Double(b)) / 1_000_000_000
     }
 }

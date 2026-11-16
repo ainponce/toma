@@ -272,8 +272,9 @@ public struct CursorPath: Sendable {
         return presses
     }
 
-    /// Seconds from output time `b` to `a`, counted as the render has always counted them.
-    private static func seconds(_ a: Int64, since b: Int64) -> Double {
+    /// Seconds from output time `b` to `a`, counted as the render has always counted them (`CameraStyleTimeline` and the
+    /// layouts' timeline count them so too).
+    static func seconds(_ a: Int64, since b: Int64) -> Double {
         (Double(a) - Double(b)) / 1_000_000_000
     }
 }
