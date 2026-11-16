@@ -24,6 +24,9 @@ public struct RenderFrame: Equatable, Sendable {
     /// The macOS window around the screen, its bar above `screen`'s rect; `nil` without a frame, and when no screen is
     /// shown.
     public var windowFrame: WindowFrameLayer?
+    /// The click effects shown (`ClickEffects`), in click order: in stage coordinates like the cursor, drawn over it
+    /// and never blurred. None without an effect.
+    public var clickEffects: [ClickEffectLayer]
 
     public init(
         outputSize: SIMD2<Int>,
@@ -34,7 +37,8 @@ public struct RenderFrame: Equatable, Sendable {
         cursor: CursorLayer? = nil,
         camera: CameraLayer? = nil,
         background: BackgroundLayer = .gradient,
-        windowFrame: WindowFrameLayer? = nil
+        windowFrame: WindowFrameLayer? = nil,
+        clickEffects: [ClickEffectLayer] = []
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -45,6 +49,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.camera = camera
         self.background = background
         self.windowFrame = windowFrame
+        self.clickEffects = clickEffects
     }
 }
 

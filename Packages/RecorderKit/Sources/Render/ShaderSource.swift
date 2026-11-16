@@ -285,5 +285,31 @@ public enum ShaderSource {
                                    sampler mipSampler [[sampler(0)]]) {
         return sprite.sample(mipSampler, in.uv) * opacity;
     }
+
+    struct ClickEffectUniforms {
+        float2 center;      // output pixels
+        float radius;       // a ring's middle circle, or a disc's edge
+        float thickness;    // a ring's white, across
+        float opacity;      // of the white
+        float outline;      // of a ring's 1 px black outline, along both edges of its white
+        float ring;         // 1: a ring (a ripple), 0: a filled disc (a circle)
+        float padding;
+    };
+
+    // A click effect (`ClickEffectLayer`), over a quad around it: a white ring with its outline, or a white disc, with
+    // antialiased edges. Premultiplied: the white and the black cover parts of the pixel that do not overlap.
+    fragment float4 clickEffectFragment(QuadOut in [[stage_in]],
+                                        constant ClickEffectUniforms &u [[buffer(0)]]) {
+        float r = length(in.p - u.center);
+        if (u.ring == 0.0) {
+            return float4(u.opacity * clamp(u.radius + 0.5 - r, 0.0, 1.0));
+        }
+        float d = abs(r - u.radius);
+        float halfWidth = u.thickness * 0.5;
+        float white = clamp(halfWidth + 0.5 - d, 0.0, 1.0);
+        float outlined = clamp(halfWidth + 1.5 - d, 0.0, 1.0);
+        float w = u.opacity * white;
+        return float4(w, w, w, w + u.outline * (outlined - white));
+    }
     """#
 }
