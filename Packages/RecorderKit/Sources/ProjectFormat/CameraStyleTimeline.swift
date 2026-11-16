@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
-import ProjectFormat
 
-/// Where the camera is drawn at any time of a take: its initial style, then each `cameraStyle` event reached with
-/// the spring of the bubble's shape and size (notch design §5.3 and §5.6, plan decision 26), so the video follows
-/// the bubble the way it moved on screen.
+/// Where the camera is drawn at any output time: its initial style, then each change reached with the spring of the
+/// bubble's shape and size (notch design §5.3 and §5.6, plan decision 26), so the video follows the bubble the way it
+/// moved on screen.
 ///
-/// The region is the whole output. At an event, the position, the size and the corner radius go from what was shown
-/// at that instant (the transition before it included, so a burst of changes never jumps) to the new style's
-/// `CameraStyle.frame(in:)`, along `progress` of the time since the event.
+/// Times are output nanoseconds (`TimeMap`); the caller places each change of the source in the output (a change in a
+/// cut rules from `TimeMap.firstKeptOutput`). The region is the whole output. At a change, the position, the size and
+/// the corner radius go from what was shown at that instant (the transition before it included, so a burst of changes
+/// never jumps) to the new style's `CameraStyle.frame(in:)`, along `progress` of the time since the change.
 public struct CameraStyleTimeline: Equatable, Sendable {
     /// The spring of the bubble's shape and size (`Motion` in the app): damping ratio and response in seconds.
     public static let damping = 0.95
@@ -17,45 +17,42 @@ public struct CameraStyleTimeline: Equatable, Sendable {
     public static let settleSeconds = 1.5
 
     private struct Change: Equatable, Sendable {
-        var t: HostTime
+        var t: Int64
         var style: CameraStyle
     }
 
     private let initial: CameraStyle
-    /// The `cameraStyle` events, in time order.
+    /// In time order.
     private let changes: [Change]
 
-    public init(initial: CameraStyle, events: [InputEvent]) {
+    /// `changes` at their output times, in any order; changes at the same time keep the order they have here.
+    public init(initial: CameraStyle, changes: [(t: Int64, style: CameraStyle)]) {
         self.initial = initial
-        changes = events
-            .filter { if case .cameraStyle = $0.kind { true } else { false } }
-            .sortedByTime()
-            .compactMap { event in
-                guard case let .cameraStyle(style) = event.kind else { return nil }
-                return Change(t: event.t, style: style)
-            }
+        self.changes = changes.enumerated()
+            .sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
+            .map { Change(t: $0.element.t, style: $0.element.style) }
     }
 
-    /// The camera at `host` in an output of `output` pixels.
-    public func frame(at host: HostTime, output: SIMD2<Double>) -> CameraFrame {
+    /// The camera at output time `τ` in an output of `output` pixels.
+    public func frame(atOutput τ: Int64, output: SIMD2<Double>) -> CameraFrame {
         let region = Rect(x: 0, y: 0, width: output.x, height: output.y)
-        // Index of the first change after `host`.
+        // Index of the first change after `τ`.
         var low = 0, high = changes.count
         while low < high {
             let mid = (low + high) / 2
-            if changes[mid].t <= host { low = mid + 1 } else { high = mid }
+            if changes[mid].t <= τ { low = mid + 1 } else { high = mid }
         }
         guard low > 0 else { return initial.frame(in: region) }
         // Settled: exactly the last style.
-        if host.seconds(since: changes[low - 1].t) >= Self.settleSeconds { return changes[low - 1].style.frame(in: region) }
+        if Self.seconds(τ, since: changes[low - 1].t) >= Self.settleSeconds { return changes[low - 1].style.frame(in: region) }
         // A change made once the one before it had settled starts from that one's style exactly: go back to the
-        // first change of the burst that ends at `host`, and play the burst forward from there.
+        // first change of the burst that ends at `τ`, and play the burst forward from there.
         var first = low - 1
-        while first > 0, changes[first].t.seconds(since: changes[first - 1].t) < Self.settleSeconds { first -= 1 }
+        while first > 0, Self.seconds(changes[first].t, since: changes[first - 1].t) < Self.settleSeconds { first -= 1 }
         var shown = first == 0 ? initial.frame(in: region) : changes[first - 1].style.frame(in: region)
         for k in first..<low {
-            let until = k + 1 < low ? changes[k + 1].t : host
-            shown = Self.blend(shown, changes[k].style.frame(in: region), Self.progress(seconds: until.seconds(since: changes[k].t)))
+            let until = k + 1 < low ? changes[k + 1].t : τ
+            shown = Self.blend(shown, changes[k].style.frame(in: region), Self.progress(seconds: Self.seconds(until, since: changes[k].t)))
         }
         return shown
     }
@@ -70,6 +67,11 @@ public struct CameraStyleTimeline: Equatable, Sendable {
         let dampedOmega = omega * (1 - damping * damping).squareRoot()
         let decay = exp(-damping * omega * t)
         return 1 - decay * (cos(dampedOmega * t) + damping * omega / dampedOmega * sin(dampedOmega * t))
+    }
+
+    /// Seconds from output time `b` to `a`, counted as `HostTime.seconds(since:)` counts them.
+    private static func seconds(_ a: Int64, since b: Int64) -> Double {
+        (Double(a) - Double(b)) / 1_000_000_000
     }
 
     /// `from` at 0, `to` at 1, exactly.
