@@ -73,6 +73,54 @@ private let twoClips = TimeMap(sequence: [
     #expect(twoClips.firstKeptOutput(atOrAfter: ns(0), take: "take-002") == nil)
 }
 
+@Test func samplesOutsideTheClipsKeepTheirTimeThroughTheNearestClip() {
+    // [1 s, 2 s) at 2× and [3 s, 4 s) at 1×: 0.5 s of output, then 1 s.
+    let map = TimeMap(sequence: [
+        clip("c-00000001", 1_000_000_000, 2_000_000_000, speed: 2), clip("c-00000002", 3_000_000_000, 4_000_000_000),
+    ])
+    func sample(_ x: UInt64, take: String = "take-001") -> Int64? { map.output(ofSampleAt: ns(x), take: take) }
+    // Before the first clip, through its mapping: −round(0.6 s / 2); after the last, through its own: 0.5 s + 1.5 s.
+    #expect(sample(400_000_000) == -300_000_000)
+    #expect(sample(4_500_000_000) == 2_000_000_000)
+    #expect(sample(4_000_000_000) == map.duration)
+    // In a clip, its own; in the cut between the two, dropped; another take has none.
+    #expect(sample(1_500_000_000) == 250_000_000)
+    #expect(sample(3_500_000_000) == 1_000_000_000)
+    #expect(sample(2_500_000_000) == nil)
+    #expect(sample(2_000_000_000) == nil)
+    #expect(sample(1_500_000_000, take: "take-002") == nil)
+    #expect(TimeMap(sequence: []).output(ofSampleAt: ns(0), take: "take-001") == nil)
+
+    // The speed is the clamped one, and a half rounds away from zero on both sides: −round(1.5) and round(6.5).
+    func atZero(speed: Double) -> Int64? {
+        let map = TimeMap(sequence: [clip("c-00000001", 1_000_000_000, 2_000_000_000, speed: speed)])
+        return map.output(ofSampleAt: ns(0), take: "take-001")
+    }
+    #expect(atZero(speed: .nan) == -1_000_000_000)
+    #expect(atZero(speed: 100) == -62_500_000)
+    let halves = TimeMap(sequence: [clip("c-00000001", 10, 20, speed: 2)])
+    #expect(halves.output(ofSampleAt: ns(7), take: "take-001") == -2)
+    #expect(halves.output(ofSampleAt: ns(23), take: "take-001") == 7)
+    // Far away it saturates instead of trapping.
+    let late = TimeMap(sequence: [clip("c-00000001", UInt64.max - 10, UInt64.max, speed: 0.25)])
+    #expect(late.output(ofSampleAt: ns(0), take: "take-001") == -Int64.max)
+    let early = TimeMap(sequence: [clip("c-00000001", 0, 10, speed: 0.25)])
+    #expect(early.output(ofSampleAt: ns(UInt64.max), take: "take-001") == .max)
+}
+
+@Test func changesBeforeTheFirstClipAreUnderWayAtZero() {
+    let map = TimeMap(sequence: [
+        clip("c-00000001", 1_000_000_000, 2_000_000_000, speed: 2), clip("c-00000002", 3_000_000_000, 4_000_000_000),
+    ])
+    func change(_ x: UInt64, take: String = "take-001") -> Int64? { map.output(ofChangeAt: ns(x), take: take) }
+    #expect(change(400_000_000) == -300_000_000)
+    // In a clip, its own time; in the cut, from the next clip; after the last, never; another take, never.
+    #expect(change(1_500_000_000) == 250_000_000)
+    #expect(change(2_500_000_000) == 500_000_000)
+    #expect(change(4_000_000_000) == nil)
+    #expect(change(400_000_000, take: "take-002") == nil)
+}
+
 @Test func propertiesHoldForRandomSequences() {
     var generator = SplitMix64(seed: 0x746f_6d61_2d31_62)
     var failures: [String] = []
