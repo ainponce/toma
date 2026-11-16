@@ -21,29 +21,32 @@ public struct CursorKindMatcher: Sendable {
     /// recorded image. If two kinds had the same fingerprint, the first one listed would win.
     ///
     /// In a process without an `NSApplication` (a command-line tool, the tests) AppKit gives `nil` for the arrow and the
-    /// I-beam, although the SDK says they are never `nil`, and Swift cannot tell: they are left out there.
+    /// I-beam, although the SDK says they are never `nil`: they are left out there. Every cursor is also taken as an
+    /// optional, so any other one AppKit gave as `nil` would be skipped alone, not end the list.
     @MainActor public static func makeLive() -> CursorKindMatcher {
-        var cursors: [(NSCursor, CursorKind)] = []
+        var cursors: [(NSCursor?, CursorKind)] = []
         if NSApp != nil {
-            cursors += [(.arrow, .arrow), (.iBeam, .iBeam)]
+            cursors += [(NSCursor.arrow, .arrow), (NSCursor.iBeam, .iBeam)]
         }
         cursors += [
-            (.pointingHand, .pointingHand), (.openHand, .openHand), (.closedHand, .closedHand), (.crosshair, .crosshair),
-            (.operationNotAllowed, .notAllowed), (.resizeLeftRight, .resizeLeftRight), (.resizeUpDown, .resizeUpDown),
+            (NSCursor.pointingHand, .pointingHand), (NSCursor.openHand, .openHand), (NSCursor.closedHand, .closedHand),
+            (NSCursor.crosshair, .crosshair), (NSCursor.operationNotAllowed, .notAllowed),
+            (NSCursor.resizeLeftRight, .resizeLeftRight), (NSCursor.resizeUpDown, .resizeUpDown),
         ]
         let directions: [NSCursor.FrameResizeDirection.Set] = [.all, .inward, .outward]
         for position: NSCursor.FrameResizePosition in [.left, .right] {
-            cursors += directions.map { (.frameResize(position: position, directions: $0), .resizeLeftRight) }
+            cursors += directions.map { (NSCursor.frameResize(position: position, directions: $0), .resizeLeftRight) }
         }
         for position: NSCursor.FrameResizePosition in [.top, .bottom] {
-            cursors += directions.map { (.frameResize(position: position, directions: $0), .resizeUpDown) }
+            cursors += directions.map { (NSCursor.frameResize(position: position, directions: $0), .resizeUpDown) }
         }
-        cursors += [NSHorizontalDirection.Set.all, .left, .right].map { (.columnResize(directions: $0), .resizeLeftRight) }
-        cursors += [NSVerticalDirection.Set.all, .up, .down].map { (.rowResize(directions: $0), .resizeUpDown) }
+        cursors += [NSHorizontalDirection.Set.all, .left, .right].map { (NSCursor.columnResize(directions: $0), .resizeLeftRight) }
+        cursors += [NSVerticalDirection.Set.all, .up, .down].map { (NSCursor.rowResize(directions: $0), .resizeUpDown) }
 
         var references: [UInt64: CursorKind] = [:]
         for (cursor, kind) in cursors {
-            guard let fingerprint = CursorSnapshot.fingerprint(of: cursor), references[fingerprint] == nil else { continue }
+            guard let cursor, let fingerprint = CursorSnapshot.fingerprint(of: cursor), references[fingerprint] == nil
+            else { continue }
             references[fingerprint] = kind
         }
         return CursorKindMatcher(references: references)

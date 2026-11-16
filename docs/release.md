@@ -455,7 +455,7 @@ Una sola pasada de fin de hito, contra la app de esta rama, en orden: la prepara
 - En `events.jsonl` de esa toma, los `cursorImage` del I-beam, la mano y los bordes tienen `"kind"` (`iBeam`, `pointingHand`, `resizeLeftRight`, `resizeUpDown`); el de la esquina y el de la app de dibujo, no.
 - Toma no aparece en ninguna lista nueva de Ajustes del Sistema ▸ Privacidad y seguridad.
 - Grabando con el cursor quieto, el uso de CPU de Toma (Monitor de Actividad) es a lo sumo 2 puntos más que con la copia del hito 1a en la misma toma: anotar los dos números.
-- Con Accesibilidad ▸ Pantalla ▸ Puntero en un tamaño más grande, o con otros colores del puntero, grabar 10 s moviéndolo: anotar el tamaño en píxeles de las imágenes de `cursors/` (una de más de 512 px de lado no se lee y el editor muestra la flecha) y si tienen `"kind"`.
+- Con Accesibilidad ▸ Pantalla ▸ Puntero en el tamaño más grande, o con otros colores del puntero, y con un pincel grande en una app de dibujo, grabar 10 s moviéndolo: ninguna imagen de `cursors/` pasa de 512 px de lado (un cursor de más de 128 pt se guarda a menos de 4 píxeles por punto), el editor muestra el puntero grabado de su tamaño, no la flecha de Toma, y anotar el tamaño en píxeles de las imágenes y si tienen `"kind"`.
 
 **Scroll y actividad del teclado** (17)
 

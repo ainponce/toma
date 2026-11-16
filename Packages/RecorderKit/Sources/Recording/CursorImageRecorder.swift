@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 
 /// The cursor macOS shows, as `CursorImageRecorder` records it.
 public struct CursorSnapshot: Sendable {
-    /// The cursor drawn at 4 times its size in points.
+    /// The cursor drawn at `scale(forPointSize:)` pixels per point: 4, or fewer for a cursor over 128 pt.
     public var image: CGImage
     /// Width (`x`) and height (`y`) in points.
     public var pointSize: SIMD2<Double>
@@ -28,27 +28,44 @@ public struct CursorSnapshot: Sendable {
         self.fingerprint = fingerprint
     }
 
-    /// How many pixels per point `image` has.
-    static let scale = 4.0
+    /// How many pixels per point `image` has at most: sharp up to 4× of zoom and size (design §9).
+    static let maxScale = 4.0
+    /// The largest side, in pixels, of an image in `cursors/`: what the package's reader decodes (design §6.1).
+    static let maxPixelSide = Double(PackageFileKind.cursorImage.maxPixelSide)
+    /// The largest side, in pixels, of the 1× drawing the fingerprint is taken of.
+    static let maxFingerprintSide = 128.0
     /// The largest cursor side, in points, that is drawn: anything bigger is not a cursor.
     static let maxPointSide = 1024.0
 
-    /// `cursor` drawn at 4×, with `fingerprint` if the caller already has it. `nil` if its image has no size.
+    /// The pixels per point `image` is drawn at: 4, or `512 / longest side` for a cursor over 128 pt, so that no side
+    /// passes the 512 px the package's reader decodes (design §6.1). The event's `size` stays in points and its
+    /// `hotspot` a fraction, so the editor draws it the same size, only less sharp when zoomed.
+    static func scale(forPointSize size: SIMD2<Double>) -> Double {
+        min(maxScale, maxPixelSide / max(size.x, size.y))
+    }
+
+    /// `cursor` drawn at `scale(forPointSize:)`, with `fingerprint` if the caller already has it. `nil` if its image
+    /// has no size or a side over `maxPointSide`.
     @MainActor init?(cursor: NSCursor, fingerprint: UInt64? = nil) {
-        guard let fingerprint = fingerprint ?? Self.fingerprint(of: cursor),
-              let image = Self.draw(cursor.image, scale: Self.scale)?.makeImage()
-        else { return nil }
         let size = cursor.image.size
+        guard let fingerprint = fingerprint ?? Self.fingerprint(of: cursor),
+              let image = Self.draw(
+                cursor.image, scale: Self.scale(forPointSize: SIMD2(size.width, size.height)), maxPixelSide: Self.maxPixelSide
+              )?.makeImage()
+        else { return nil }
         self.init(
             image: image, pointSize: SIMD2(size.width, size.height), hotspot: SIMD2(cursor.hotSpot.x, cursor.hotSpot.y),
             fingerprint: fingerprint)
     }
 
-    /// FNV-1a over the size and hotspot of `cursor` (`Float64` bits) and its pixels at 1×, drawn as in `draw`. `nil`
-    /// if its image has no size.
+    /// FNV-1a over the size and hotspot of `cursor` (`Float64` bits) and its pixels at 1×, drawn as in `draw`; a
+    /// cursor over 128 pt is drawn smaller, at most 128 px a side, so a sample never draws much. (No cursor of
+    /// `CursorKindMatcher.makeLive()` is that big.) `nil` if its image has no size or a side over `maxPointSide`.
     @MainActor static func fingerprint(of cursor: NSCursor) -> UInt64? {
-        guard let context = draw(cursor.image, scale: 1), let pixels = context.data else { return nil }
         let size = cursor.image.size
+        let scale = min(1, maxFingerprintSide / max(size.width, size.height))
+        guard let context = draw(cursor.image, scale: scale, maxPixelSide: maxFingerprintSide), let pixels = context.data
+        else { return nil }
         var hash: UInt64 = 0xcbf2_9ce4_8422_2325
         func mix(_ bytes: UnsafeRawBufferPointer) {
             for byte in bytes {
@@ -63,13 +80,13 @@ public struct CursorSnapshot: Sendable {
         return hash
     }
 
-    /// A context of `image` drawn at `scale` pixels per point, in `CursorImageHash`'s pixel format, rows packed.
-    @MainActor private static func draw(_ image: NSImage, scale: Double) -> CGContext? {
+    /// A context of `image` drawn at `scale` pixels per point, in `CursorImageHash`'s pixel format, rows packed, each
+    /// side rounded up to whole pixels and at most `maxPixelSide` (which only a rounding error of `scale` could pass).
+    @MainActor private static func draw(_ image: NSImage, scale: Double, maxPixelSide: Double) -> CGContext? {
         let size = image.size
-        guard size.width > 0, size.height > 0, size.width <= maxPointSide, size.height <= maxPointSide,
-              let context = CursorImageHash.makeContext(
-                width: Int((size.width * scale).rounded(.up)), height: Int((size.height * scale).rounded(.up)))
-        else { return nil }
+        guard size.width > 0, size.height > 0, size.width <= maxPointSide, size.height <= maxPointSide else { return nil }
+        func pixels(_ side: Double) -> Int { Int(min((side * scale).rounded(.up), maxPixelSide)) }
+        guard let context = CursorImageHash.makeContext(width: pixels(size.width), height: pixels(size.height)) else { return nil }
         context.scaleBy(x: scale, y: scale)
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
@@ -92,8 +109,8 @@ public protocol SystemCursorSource: Sendable {
 }
 
 /// The cursor of `NSCursor.currentSystem`, which needs no permission. The SDK marks it `API_TO_BE_DEPRECATED`: when it
-/// gives no cursor, `current()` is `nil` and the take records no image (plan decision 14). It is drawn at 4× only when
-/// its fingerprint changes.
+/// gives no cursor, `current()` is `nil` and the take records no image (plan decision 14). Its image is drawn (at
+/// `CursorSnapshot.scale(forPointSize:)`, at most 512 px a side) only when its fingerprint changes.
 public struct LiveSystemCursor: SystemCursorSource {
     /// The last cursor drawn.
     private final class Cache: Sendable {
@@ -116,8 +133,9 @@ public struct LiveSystemCursor: SystemCursorSource {
 /// The name of a cursor's image in `cursors/`.
 public enum CursorImageHash {
     /// The first 16 bytes of SHA-256, as 32 lowercase hex digits, over the width and height of `snapshot.image` in
-    /// pixels (`Int32` little-endian), `snapshot.hotspot` x and y (`Float64` little-endian) and the image's pixels as
-    /// `rgbaPixels(of:)` gives them (premultiplied RGBA at 4×).
+    /// pixels (`Int32` little-endian), `snapshot.hotspot` x and y in points (`Float64` little-endian) and the image's
+    /// pixels as drawn, as `rgbaPixels(of:)` gives them (premultiplied RGBA, at 4× or, over 128 pt, at
+    /// `CursorSnapshot.scale(forPointSize:)`).
     public static func hash(_ snapshot: CursorSnapshot) -> String {
         let image = snapshot.image
         var hasher = SHA256()
@@ -157,8 +175,9 @@ public enum CursorImageHash {
 /// take, not once per change. Nothing is sampled while paused; on `start` and `resume` the cursor is logged at once.
 ///
 /// The images are written off the main thread, one after the other, with `DurableFile.writeNew`, and the events are
-/// appended in the order of their samples. An image that cannot be written logs no event; it is tried again the next
-/// time the cursor takes that shape. Needs no permission.
+/// appended in the order of their samples. An image that cannot be written, or whose PNG is over the 1 MiB the
+/// package's reader takes (design §6.1), logs no event, only a line in the app's log; it is tried again the next time
+/// the cursor takes that shape. Needs no permission.
 public final class CursorImageRecorder: InputRecorder, Sendable {
     public static let interval: Duration = .nanoseconds(33_333_333)
 
@@ -196,6 +215,7 @@ public final class CursorImageRecorder: InputRecorder, Sendable {
     private let givenKinds: CursorKindMatcher?
     private let clock: @Sendable () -> HostTime
     private let ticks: RecordingTicks
+    private let maxImageBytes: Int
     /// Writes the images and appends their events, one sample after the other.
     private let writer = DispatchQueue(label: "dev.toma.cursor-images", qos: .utility)
     private let state = Mutex(State())
@@ -208,12 +228,16 @@ public final class CursorImageRecorder: InputRecorder, Sendable {
         self.init(source: source, kinds: kinds, clock: clock, ticks: .live)
     }
 
-    /// Tests pass their own ticks.
-    init(source: any SystemCursorSource, kinds: CursorKindMatcher?, clock: @escaping @Sendable () -> HostTime, ticks: RecordingTicks) {
+    /// Tests pass their own ticks, and a smaller limit for a PNG.
+    init(
+        source: any SystemCursorSource, kinds: CursorKindMatcher?, clock: @escaping @Sendable () -> HostTime, ticks: RecordingTicks,
+        maxImageBytes: Int = PackageFileKind.cursorImage.maxBytes
+    ) {
         self.source = source
         givenKinds = kinds
         self.clock = clock
         self.ticks = ticks
+        self.maxImageBytes = maxImageBytes
     }
 
     /// Images written to `cursors/` this take, not counting those already there.
@@ -319,12 +343,18 @@ public final class CursorImageRecorder: InputRecorder, Sendable {
     private func save(_ job: Job) {
         let hash = CursorImageHash.hash(job.snapshot)
         let folder = job.log.url.deletingLastPathComponent().appendingPathComponent("cursors", isDirectory: true)
-        let url = folder.appendingPathComponent(hash + ".png", isDirectory: false)
+        let name = hash + ".png"
         let known = state.withLock { $0.generation == job.generation && $0.saved.contains(hash) }
         if !known {
-            if !Self.isRegularFile(url) {
+            if !Self.isRegularFile(name, in: folder) {
                 do {
-                    let written = try Self.write(Self.pngData(job.snapshot.image), to: url)
+                    let png = try Self.pngData(job.snapshot.image)
+                    guard png.count <= maxImageBytes else {
+                        Self.logger.error(
+                            "A cursor image of \(png.count) bytes is over the \(self.maxImageBytes) a package's reader takes: not saved")
+                        return
+                    }
+                    let written = try Self.write(png, to: folder.appendingPathComponent(name, isDirectory: false))
                     if written { state.withLock { $0.imagesWritten += 1 } }
                 } catch {
                     Self.logger.error("Could not save a cursor image: \(String(describing: error), privacy: .public)")
@@ -346,16 +376,19 @@ public final class CursorImageRecorder: InputRecorder, Sendable {
     }
 
     /// Returns once everything sent to the writer before it is done.
-    private func writesDone() async {
+    func writesDone() async {
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
             writer.async { done.resume() }
         }
     }
 
-    /// Whether a regular file is at `url`, without following a symlink.
-    private static func isRegularFile(_ url: URL) -> Bool {
+    /// Whether `folder` (`cursors/`) is a folder and has a regular file called `name`, following no symlink in either.
+    private static func isRegularFile(_ name: String, in folder: URL) -> Bool {
+        let directory = open(folder.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard directory >= 0 else { return false }
+        defer { close(directory) }
         var info = stat()
-        return fstatat(AT_FDCWD, url.path, &info, AT_SYMLINK_NOFOLLOW) == 0 && info.st_mode & S_IFMT == S_IFREG
+        return fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 && info.st_mode & S_IFMT == S_IFREG
     }
 
     /// Writes `png` at `url` with `DurableFile.writeNew`, making `cursors/` if the take has none (never the take's
