@@ -108,8 +108,7 @@ struct LibraryList: View {
                 (\LibraryRow.size, .size),
             ]
             guard let sort = sorts.first(where: { $0.0 == first.keyPath })?.1 else { return }
-            model.sort = sort
-            model.ascending = first.order == .forward
+            model.setOrder(sort, ascending: first.order == .forward)
         }
     }
 }
