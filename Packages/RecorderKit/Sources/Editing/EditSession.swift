@@ -256,6 +256,13 @@ public final class EditSession {
     /// gets a `NewDocument` that is not saved. Throws `EditDocumentError.newerVersion` for a newer document and the
     /// `POSIXError` (`ELOOP`, `EFTYPE`) of an edit file that is a symlink or not a regular file: the take without its
     /// edit would show what was cut.
+    ///
+    /// The take's event log is read only for a document that comes from it, the legacy one (a version 1 or 2 package,
+    /// one upgraded and never edited) or a `NewDocument`, and an error reading it is thrown then, as `LoadedProject.load`
+    /// throws it. A document that comes from the edit files never needs it (the replay never reads events): the project
+    /// reads its events the first time they are asked for (`LoadedProject.events`), so the library reads an edited
+    /// project without opening its `events.jsonl` (Task 31b, design §15). One that is a link, is reached through one or is
+    /// not a regular file is refused all the same, at once (`LoadedProject.load(_:take:deferringEvents:)`).
     public nonisolated static func readDocument(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument) {
@@ -269,12 +276,25 @@ public final class EditSession {
     public nonisolated static func readDocumentWithDiskVersion(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
-        let project = try LoadedProject.load(url, take: take)
-        guard project.manifest.formatVersion >= 3 else { return (project, .legacy(for: project), EditDocument.currentVersion) }
+        try readDocumentWithDiskVersion(url, take: take, context: context, readingEvents: LoadedProject.takeEvents)
+    }
+
+    /// `readDocumentWithDiskVersion(_:take:context:)` with the take's events read by `read`.
+    package nonisolated static func readDocumentWithDiskVersion(
+        _ url: URL, take: String?, context: EditContext, readingEvents read: @escaping LoadedProject.EventsReader
+    ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
+        let project = try LoadedProject.load(url, take: take, deferringEvents: read)
+        guard project.manifest.formatVersion >= 3 else {
+            try project.readEvents()
+            return (project, .legacy(for: project), EditDocument.currentVersion)
+        }
         let files = try EditFiles.read(project.package)
         if let version = files.newerVersion { throw EditDocumentError.newerVersion(version) }
         if let code = files.unsafe { throw POSIXError(code) }
-        let resolution = Resolution.of(project, files: files, context: context)
+        let resolution = try Resolution.of(project, files: files, context: context) { project in
+            try project.readEvents()
+            return project
+        }
         return (project, resolution.shown, resolution.diskVersion)
     }
 
@@ -1402,10 +1422,21 @@ private struct Resolution: Sendable {
     /// or `diskVersion` for a log that starts with a `create` of `document`.
     var createVersion = EditDocument.currentVersion
 
+    /// The resolution for `project`, loaded with its events.
     static func of(_ project: LoadedProject, files: EditFiles, context: EditContext) -> Resolution {
+        of(project, files: files, context: context) { $0 }
+    }
+
+    /// The resolution for `project`, whose events may not be read yet: they are asked for (`withEvents`, which gives
+    /// `project` with its events read and throws what reading them throws) only for a document that comes from them, the
+    /// legacy one or a `NewDocument`. A document from the edit files never needs them.
+    static func of(
+        _ project: LoadedProject, files: EditFiles, context: EditContext,
+        withEvents: (LoadedProject) throws -> LoadedProject
+    ) rethrows -> Resolution {
         if let version = files.newerVersion {
             // Nothing to show: the app shows no preview.
-            return Resolution(document: .legacy(for: project), refusal: .newerDocument(version))
+            return Resolution(document: .legacy(for: try withEvents(project)), refusal: .newerDocument(version))
         }
         var snapshot: (document: EditDocument, modified: Date, version: Int)?
         if case let .document(document, modified, version) = files.snapshot { snapshot = (document, modified, version) }
@@ -1440,11 +1471,13 @@ private struct Resolution: Sendable {
             } else if case let .undrawable(document, version) = files.snapshot {
                 resolution = Resolution(document: document, diskVersion: version, createVersion: version)
             } else if project.manifest.upgradedFrom != nil {
-                resolution = Resolution(document: .legacy(for: project), createsLogAtFirstEdit: true, legacyLook: true)
+                resolution = Resolution(
+                    document: .legacy(for: try withEvents(project)), createsLogAtFirstEdit: true, legacyLook: true)
             } else {
                 resolution = Resolution(
                     document: NewDocument.make(
-                        project: project, defaultStyle: context.defaultStyle, makeID: context.makeID, cameraLook: context.cameraLook),
+                        project: try withEvents(project), defaultStyle: context.defaultStyle, makeID: context.makeID,
+                        cameraLook: context.cameraLook),
                     startsLog: true, isNewDocument: true)
             }
             if damaged {

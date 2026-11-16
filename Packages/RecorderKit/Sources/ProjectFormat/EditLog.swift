@@ -366,6 +366,34 @@ public enum SafeRead {
 
     /// `openRegularFile(_:flags:)` for `relativePath` inside `folder`, read-only, as `regularFile(_:in:)` reaches it.
     static func openRegularFile(_ relativePath: String, in folder: URL) throws -> (fd: Int32, size: off_t) {
+        let (directory, name) = try openParent(of: relativePath, in: folder)
+        let fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        let openError = fd < 0 ? POSIXError.current() : nil
+        close(directory)
+        if let openError { throw openError }
+        return (fd, try regularSize(of: fd))
+    }
+
+    /// Looks for the regular file `regularFile(_:in:)` would read at `relativePath` inside `folder` without opening it:
+    /// the folders on the way are opened as it opens them, and the file is looked at with `fstatat` and
+    /// `AT_SYMLINK_NOFOLLOW`. Throws what `regularFile(_:in:)` would throw before reading anything: `ELOOP` for a link
+    /// (the file, or a folder on the way), `EFTYPE` for a file that is not a regular one, `ENOENT`, `ENOTDIR`, `EINVAL`;
+    /// not what only opening or reading the file tells (`EACCES` on the file itself, `EIO`).
+    static func checkRegularFile(_ relativePath: String, in folder: URL) throws {
+        let (directory, name) = try openParent(of: relativePath, in: folder)
+        defer { close(directory) }
+        var info = stat()
+        guard fstatat(directory, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { throw POSIXError.current() }
+        switch info.st_mode & S_IFMT {
+        case S_IFREG: return
+        case S_IFLNK: throw POSIXError(.ELOOP)
+        default: throw POSIXError(.EFTYPE)
+        }
+    }
+
+    /// The folder `relativePath` ends in, inside `folder`, open as `regularFile(_:in:)` reaches it (each component with
+    /// `openat` and `O_NOFOLLOW` from the one before it), and the name of the file in it. The caller closes it.
+    private static func openParent(of relativePath: String, in folder: URL) throws -> (directory: Int32, name: String) {
         let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard let name = components.last, components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
             throw POSIXError(.EINVAL)
@@ -389,11 +417,7 @@ public enum SafeRead {
             close(directory)
             directory = next
         }
-        let fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        let openError = fd < 0 ? POSIXError.current() : nil
-        close(directory)
-        if let openError { throw openError }
-        return (fd, try regularSize(of: fd))
+        return (directory, name)
     }
 
     /// The size of the regular file open on `fd`; `EFTYPE`, and `fd` closed, for anything else.
