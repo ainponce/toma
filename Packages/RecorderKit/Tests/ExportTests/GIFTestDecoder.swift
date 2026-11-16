@@ -15,15 +15,16 @@ enum GIFTestDecoder {
         var bitCount = 0
         var position = 0
 
-        func expand(_ code: Int) -> [UInt8] {
-            var reversed = [UInt8]()
+        /// Appends the string of `code` to `out` (walking the chain backwards, then reversing in place).
+        func append(_ code: Int) {
+            let start = out.count
             var c = code
             while c >= clear + 2 {
-                reversed.append(suffix[c])
+                out.append(suffix[c])
                 c = prefix[c]
             }
-            reversed.append(UInt8(c))
-            return reversed.reversed()
+            out.append(UInt8(c))
+            out[start...].reverse()
         }
 
         while true {
@@ -49,20 +50,18 @@ enum GIFTestDecoder {
                 previous = code
                 continue
             }
-            let entry: [UInt8]
+            let start = out.count
             if code < next {
-                entry = expand(code)
+                append(code)
             } else if code == next {
-                var e = expand(previous)
-                e.append(e[0])
-                entry = e
+                append(previous)
+                out.append(out[start])
             } else {
                 return nil
             }
-            out += entry
             if next < 4096 {
                 prefix[next] = previous
-                suffix[next] = entry[0]
+                suffix[next] = out[start]
                 next += 1
                 if next == (1 << size) && size < 12 { size += 1 }
             }

@@ -2,6 +2,13 @@
 
 /// The variable-width LZW of GIF89a: LSB-first codes, `clear` when the table
 /// reaches 4096 entries, `end` closing the stream.
+public enum LZWError: Error, Equatable, Sendable {
+    /// The minimum code size must be 2...8.
+    case invalidMinimumCodeSize
+    /// An index is >= `1 << minimumCodeSize`; the decoder would read it as a clear/end code or a table entry.
+    case indexOutOfRange(Int)
+}
+
 public enum LZWEncoder {
     /// `max(2, ⌈log₂ colors⌉)`.
     public static func minimumCodeSize(colors: Int) -> Int {
@@ -10,8 +17,12 @@ public enum LZWEncoder {
         return size
     }
 
-    public static func encode(_ indices: UnsafeBufferPointer<UInt8>, minimumCodeSize: Int) -> [UInt8] {
-        precondition((2...8).contains(minimumCodeSize), "GIF minimum code size is 2...8")
+    /// Every index must be `< 1 << minimumCodeSize`, otherwise this throws instead of producing a
+    /// stream a decoder would misread.
+    public static func encode(_ indices: UnsafeBufferPointer<UInt8>, minimumCodeSize: Int) throws(LZWError) -> [UInt8] {
+        guard (2...8).contains(minimumCodeSize) else { throw .invalidMinimumCodeSize }
+        let limit = 1 << minimumCodeSize
+        for value in indices where Int(value) >= limit { throw .indexOutOfRange(Int(value)) }
         let clearCode = 1 << minimumCodeSize
         let endCode = clearCode + 1
         let firstFree = clearCode + 2

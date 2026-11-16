@@ -30,10 +30,18 @@ public struct GIFImageBlock: Equatable, Sendable {
     }
 }
 
-public enum GIFWriterError: Error, Equatable {
+public enum GIFWriterError: Error, Equatable, Sendable {
     case invalidSize
-    case invalidBlock(String)
-    case writeFailed(errno: Int32)
+    case blockOutsideScreen
+    /// A local table holds 1...256 colors.
+    case invalidPaletteSize
+    /// The minimum code size must be 2...8.
+    case invalidMinimumCodeSize
+    /// `1 << minimumCodeSize` must be at least the palette size, or its indices cannot be coded.
+    case minimumCodeSizeTooSmallForPalette
+    case invalidDelay
+    case transparentIndexOutsidePalette
+    case writeFailed(POSIXErrorCode)
     case finished
 }
 
@@ -47,7 +55,14 @@ public enum GIFDelays {
 }
 
 /// GIF89a writer: no global table, one local table per image block.
-public struct GIFWriter {
+///
+/// Rules `write` enforces (it throws a `GIFWriterError` instead of writing a corrupt file): the block
+/// lies inside the screen; the palette has 1...256 colors; `minimumCodeSize` is 2...8; the delay is
+/// 0...65535; `transparentIndex`, if any, is `0...palette.count` (`palette.count` is the usual way to mark
+/// unchanged pixels: the local table is padded to `max(2, palette.count, transparentIndex + 1)` entries rounded up
+/// to a power of two); and `1 << minimumCodeSize >= max(palette.count, transparentIndex + 1)`. Callers compute the
+/// minimum code size from `palette.count + 1` when they use a transparent index (so it never collides with `clear`). `LZWEncoder.encode` separately rejects indices `>= 1 << minimumCodeSize`.
+public struct GIFWriter: Sendable {
     private let fileDescriptor: Int32
     private let width: Int
     private let height: Int
@@ -72,12 +87,17 @@ public struct GIFWriter {
         guard !finished else { throw GIFWriterError.finished }
         guard block.width > 0, block.height > 0, block.x >= 0, block.y >= 0,
             block.x + block.width <= width, block.y + block.height <= height
-        else { throw GIFWriterError.invalidBlock("rectangle outside the screen") }
-        guard (1...256).contains(block.palette.count) else { throw GIFWriterError.invalidBlock("palette size") }
-        guard (2...8).contains(block.minimumCodeSize) else { throw GIFWriterError.invalidBlock("minimum code size") }
-        guard (0...65535).contains(block.delay) else { throw GIFWriterError.invalidBlock("delay") }
-        if let t = block.transparentIndex, !(0..<block.palette.count).contains(t) {
-            throw GIFWriterError.invalidBlock("transparent index")
+        else { throw GIFWriterError.blockOutsideScreen }
+        guard (1...256).contains(block.palette.count) else { throw GIFWriterError.invalidPaletteSize }
+        guard (2...8).contains(block.minimumCodeSize) else { throw GIFWriterError.invalidMinimumCodeSize }
+        guard (0...65535).contains(block.delay) else { throw GIFWriterError.invalidDelay }
+        // A transparent index may sit one past the palette (`palette.count`): the table is padded to hold it.
+        if let t = block.transparentIndex, !(0...block.palette.count).contains(t) {
+            throw GIFWriterError.transparentIndexOutsidePalette
+        }
+        let tableEntries = max(block.palette.count, (block.transparentIndex ?? -1) + 1)
+        guard (1 << block.minimumCodeSize) >= tableEntries else {
+            throw GIFWriterError.minimumCodeSizeTooSmallForPalette
         }
 
         var bytes = [UInt8]()
@@ -89,7 +109,7 @@ public struct GIFWriter {
         bytes += [UInt8(block.transparentIndex ?? 0), 0x00]
         // Image descriptor with a local table padded to a power of two (>= 2).
         var tableBits = 1
-        while (1 << tableBits) < block.palette.count { tableBits += 1 }
+        while (1 << tableBits) < tableEntries { tableBits += 1 }
         bytes.append(0x2C)
         Self.appendLE16(&bytes, block.x)
         Self.appendLE16(&bytes, block.y)
@@ -97,7 +117,7 @@ public struct GIFWriter {
         Self.appendLE16(&bytes, block.height)
         bytes.append(0x80 | UInt8(tableBits - 1))
         for color in block.palette { bytes += [color.x, color.y, color.z] }
-        for _ in block.palette.count..<(1 << tableBits) { bytes += [0, 0, 0] }
+        for _ in block.palette.count..<(1 << tableBits) { bytes += [0, 0, 0] }  // padding, incl. the transparent slot
         bytes.append(UInt8(block.minimumCodeSize))
         var offset = 0
         while offset < block.data.count {
@@ -128,7 +148,7 @@ public struct GIFWriter {
                 let n = Foundation.write(fd, raw.baseAddress! + done, raw.count - done)
                 if n < 0 {
                     if errno == EINTR { continue }
-                    throw GIFWriterError.writeFailed(errno: errno)
+                    throw GIFWriterError.writeFailed(POSIXErrorCode(rawValue: errno) ?? .EIO)
                 }
                 done += n
             }
