@@ -126,7 +126,7 @@ Las metas del diseño con lo que midió el agente en esta Mac (columna «M5 Pro,
 | Rearmar los caminos de movimiento de 1 h | ≤ 50 ms, fuera del hilo principal | ≤ 20 ms | 110 a 162 ms (119,7; 134,1; 125,4; 116,3; 118,5 y 162,0 ms con carga de 6 a 12; 109,6 a 115,0 ms con carga de 1 a 5); una edición que no toca lo que leen los caminos los reusa: 0 ms | **seguido: no cumple**; el rearmado incremental pasó al hito 1c, tarea 8b | pendiente | la línea de caminos de `bench-preview` (una hora armada repitiendo el cursor y los clics de la toma sintética, 222 953 eventos) |
 | Abrir un proyecto de 1 h hasta el primer cuadro | ≤ 2 s | ≤ 1 s | solo el dueño lo mide (con una hora de video real; del registro: reproducir uno largo cuesta 0,1 s) | pendiente | pendiente | con un cronómetro, un proyecto de 1 h (una toma real, o `recorder-dev synth-record <carpeta> --duration 3600 --width 1920 --height 1080`, que graba en tiempo real: tarda 1 h en armarlo): de abrirlo a ver el primer cuadro |
 | Línea de tiempo con 1 h, 500 tramos y 300 zooms: desplazar y escalar | 60 fps | 120 fps (ProMotion) | El hilo principal por cuadro, en Debug: p95 de 1,93 a 3,78 ms (el máximo pasa de 8,33 ms solo en el primer cuadro con la secuencia entera a la vista: 13 a 14 ms, una vez); carga 3,3 a 4,3. La frecuencia real de la pantalla **no se midió** (la pantalla de esta Mac estaba apagada) | cumple en el hilo principal; la frecuencia de la pantalla, pendiente | pendiente | `TOMA_BENCH_TIMELINE=1` con `-TomaDumpEditorStructure` (abajo, «La línea de tiempo (Task 40)») y su línea `paced pinch` con la pantalla encendida |
-| Un arrastre en la línea de tiempo con 1 h (216 040 eventos, 500 tramos, 300 zooms): el hilo principal por movimiento | ≤ 4 ms | ≤ 4 ms | p50 17,31 ms en Debug (antes de la revisión final, 43,78 ms) (carga 8,7) | **seguido: no cumple**: ya no crece con el registro de eventos; queda aplicar el paso una vez por movimiento (unos 13,5 ms en Debug) y rearmar el contenido de la línea de tiempo | pendiente | `TOMA_BENCH_TIMELINE=1` (abajo, «Arrastrar y editar en la línea de tiempo») |
+| Un arrastre en la línea de tiempo con 1 h (216 040 eventos, 500 tramos, 300 zooms): el hilo principal por movimiento | ≤ 4 ms | ≤ 4 ms | p50 10,17 y 10,23 ms en Release (antes de la revisión final, 20,49 y 20,43 ms) (carga 11,0 y 9,3); 17,31 ms en Debug (antes, 43,78 ms) (carga 8,7) | **seguido: no cumple**: ya no crece con el registro de eventos; queda aplicar el paso una vez por movimiento (unos 10 ms en Release, 13,5 ms en Debug) y rearmar el contenido de la línea de tiempo | pendiente | `TOMA_BENCH_TIMELINE=1` (abajo, «Arrastrar y editar en la línea de tiempo») |
 | Export 1080p60 H.264 con todo | ≥ 1× tiempo real | ≥ 3× | 3,38×, 4,17× y 3,57× (carga 8, 13 y 33); 2,40× y 2,01× (12 y 18) con otras pruebas codificando; de una toma ya grabada: 3,70×, 3,19×, 2,99× y 3,36× con 40 s | **seguido: cumple solo en corridas tranquilas**: el codificador de hardware es uno para toda la Mac; queda repetir la medida con la Mac quieta antes de entregar la pasada del dueño (el controlador) | pendiente | `recorder-dev bench-export --synthetic --width 1920 --height 1080`, en Release (la línea `speed:`) |
 | Export 4K60 | — | ≥ 1× | 1,17×, 1,19×, 1,01× y 1,19× (carga 8, 17, 7 y 15) | cumple | — | `recorder-dev bench-export --synthetic` (4K60) |
 | Memoria del export y de la vista previa | acotada, no crece con la duración; < 1,5 GB en un export 4K | igual | Export 4K: 868 a 881 MB; 4K con una imagen de fondo de 7680 px: 1 251 y 1 264 MB; export 1080p: 344 a 351 MB; vista previa a 4K: 457 a 481 MB (392 MB a 1080p) | cumple | pendiente | la línea `peak memory:` de `bench-export` y la memoria máxima de `bench-preview` |
@@ -288,7 +288,18 @@ TOMA_BENCH_TIMELINE=1 build/Build/Products/Debug/Toma.app/Contents/MacOS/Toma -T
 
 El mismo banco de «La línea de tiempo (Task 40)», con la hora armada en código y un cursor que se mueve a 60 Hz todo el tiempo: 216 040 eventos, 500 tramos y 300 zooms. Mide lo que hace el hilo principal en cada movimiento de un arrastre y en cada edición. Cada «antes» es lo que hacía el código hasta la revisión final, con las mismas llamadas y medido en la misma corrida: la pasada de la línea de tiempo por los eventos, dos aplicaciones del paso, `StagePoints` armado desde los eventos y el planificador en el hilo principal.
 
-Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026, compilación Debug. Entre paréntesis, la carga de la Mac (promedio de 1 min) al empezar: había pruebas de otros agentes. p50 / p95, en ms.
+Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026. Entre paréntesis, la carga de la Mac (promedio de 1 min) al empezar: había pruebas de otros agentes.
+
+En Release (la configuración Release con la bandera `DEBUG` prendida, para que exista el gancho del banco, y con `-O`), p50 de dos corridas (carga 11,0 y 9,3), en ms:
+
+| En el hilo principal | Antes | Después |
+|---|---|---|
+| Un arrastre de recorte, cada movimiento | 20,49 y 20,43 | 10,17 y 10,23 |
+| … de eso, aplicar el paso una vez | — | 10,14 y 10,09 |
+| Los puntos del escenario de la superposición, en cada edición con un zoom de punto fijo elegido | 4,49 y 4,47 | 0,00 |
+| «Seguir al cursor» de la pista de pantalla | 11,51 y 11,59 | nada: corre fuera del hilo principal |
+
+En Debug, p50 / p95, en ms:
 
 | En el hilo principal | Antes | Después |
 |---|---|---|
@@ -301,4 +312,4 @@ Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026, compilación Debug. Entre p
 
 Lo que bajó: el paso se aplica una vez por movimiento (antes, dos; tres en el recorte de un zoom); las marcas se leen una vez por toma, al abrir y fuera del hilo principal; los puntos del escenario salen de `TakeScreens`, armado una vez al abrir, y ya no ordenan los eventos; el planificador de «Seguir al cursor» corre en otra tarea. El «antes» del planificador es sin archivos de segmentos en el disco (el paquete del banco no existe): su `lstat` por segmento sumaría.
 
-**Sigue por encima de la meta.** Nada de lo que queda crece con el registro de eventos, pero un movimiento todavía tarda unos 17 ms en Debug, contra los 4 ms por espera del hilo principal del diseño §7.9: aplica el paso una vez en el hilo principal (unos 13,5 ms en Debug con 500 tramos) y rearma el contenido de la línea de tiempo. Aplicarlo fuera del hilo principal, o de forma incremental, queda en `docs/backlog.md`. Falta medirlo en Release y en la M1.
+**Sigue por encima de la meta.** Nada de lo que queda crece con el registro de eventos, pero un movimiento todavía tarda unos 10 ms en Release (17 ms en Debug), contra los 4 ms por espera del hilo principal del diseño §7.9: casi todo es aplicar el paso una vez en el hilo principal (unos 10 ms en Release, 13,5 ms en Debug, con 500 tramos), y el resto, rearmar el contenido de la línea de tiempo. Aplicar el paso fuera del hilo principal, o de forma incremental, queda en `docs/backlog.md`. Falta medirlo en la M1.
