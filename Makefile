@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 VERSION ?=
 
-.PHONY: project test tsan crash-test golden golden-record build install release
+.PHONY: project test tsan crash-test golden golden-record golden-fixtures golden-accept build install release
 
 project:
 	xcodegen generate
@@ -25,17 +25,25 @@ crash-test:
 # depend on the GPU, the system's Metal compiler and VideoToolbox), with VERSION, the fingerprint of the system that
 # recorded them, and COMMIT, the commit they were recorded from. They live in the main checkout (the parent of git's
 # common dir), so every worktree, build/golden-src included, compares against the same files and none records its own.
+# Next to them, fixtures.sha holds the digests of the cases' video as this code's hardware encoder writes it (make
+# golden-fixtures, once, from a run whose frames matched): with them, goldenFramesMatch tells a change of the render
+# from other video of the encoder, and writes the cases again only for the latter.
 GOLDEN_ROOT := $(dir $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null))
 GOLDEN ?= $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-1b/frames.bin
 GOLDEN_FILE = $(abspath $(GOLDEN))
 GOLDEN_DIR = $(patsubst %/,%,$(dir $(GOLDEN_FILE)))
 GOLDEN_SRC = $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-src
+GOLDEN_FIXTURES = $(GOLDEN_DIR)/fixtures.sha
+# 1 to have goldenFramesMatch write fixtures.sha (make golden-fixtures).
+GOLDEN_FIXTURES_RECORD ?=
 GOLDEN_TESTS = swift test --package-path Packages/RecorderKit --filter 'goldenFramesMatch|goldenMixMatches'
 # Sets $$commit to the commit the golden files were recorded from.
 GOLDEN_COMMIT = commit=$$(cat "$(GOLDEN_DIR)/COMMIT" 2>/dev/null || echo "<Task 1's last commit>")
-# Records them from $$commit, in a worktree of that commit.
+# Records them from $$commit, in a worktree of that commit, then checks them with this code (golden-accept). Record them
+# with the Mac doing no other video work: $$commit writes the cases' video with any encoder, so files recorded while the
+# media engine was busy would hold frames of the software encoder's video.
 GOLDEN_RECORD_AGAIN = git worktree add '$(GOLDEN_SRC)' $$commit && make -C '$(GOLDEN_SRC)' golden-record GOLDEN='$(GOLDEN_FILE)' \
-	&& git worktree remove '$(GOLDEN_SRC)'
+	&& git worktree remove '$(GOLDEN_SRC)' && make golden-accept GOLDEN='$(GOLDEN_FILE)'
 # Whether both golden tests ran and passed, from the output of GOLDEN_TESTS in file $(1): a filter that matches no test
 # exits with 0 too.
 GOLDEN_RAN = { grep -qF 'goldenFramesMatch() passed' "$(1)" && grep -qF 'goldenMixMatches() passed' "$(1)" \
@@ -67,8 +75,31 @@ golden:
 	fi; \
 	rm -f "$$now"
 	@set -o pipefail; log=$$(mktemp -t toma-golden); \
-	TOMA_GOLDEN_FILE="$(GOLDEN_FILE)" $(GOLDEN_TESTS) 2>&1 | tee "$$log" && $(call GOLDEN_RAN,$$log); \
+	TOMA_GOLDEN_FILE="$(GOLDEN_FILE)" TOMA_GOLDEN_FIXTURES="$(GOLDEN_FIXTURES)" TOMA_GOLDEN_FIXTURES_RECORD="$(GOLDEN_FIXTURES_RECORD)" \
+		$(GOLDEN_TESTS) 2>&1 | tee "$$log" && $(call GOLDEN_RAN,$$log); \
 	status=$$?; rm -f "$$log"; exit $$status
+
+# Records fixtures.sha next to the golden files from a run of make golden whose frames matched them, never over one.
+golden-fixtures:
+	@test ! -e "$(GOLDEN_FIXTURES)" || { echo "$(GOLDEN_FIXTURES) is already there: the digests are recorded once, never over others" >&2; exit 1; }
+	@$(MAKE) --no-print-directory golden GOLDEN='$(GOLDEN_FILE)' GOLDEN_FIXTURES_RECORD=1
+	@test -f "$(GOLDEN_FIXTURES)" || { echo "nothing recorded in $(GOLDEN_FIXTURES)" >&2; exit 1; }
+
+# Checks golden files just recorded from Task 1's commit with this code, three times, and records their fixtures.sha.
+# That commit writes the cases' video with any encoder: files it recorded while the media engine took no more hardware
+# sessions hold frames of the software encoder's video, which this code's cases (the hardware encoder's video alone)
+# never draw, so every later run would fail. Such files are moved aside, to be recorded again with the Mac doing no other
+# video work.
+golden-accept:
+	@for run in 1 2 3; do \
+		$(MAKE) --no-print-directory golden GOLDEN='$(GOLDEN_FILE)' || { \
+			aside="$(GOLDEN_DIR).rejected-$$(date +%Y%m%d-%H%M%S)"; mv "$(GOLDEN_DIR)" "$$aside"; \
+			echo "the golden files just recorded do not match the frames of this code (run $$run of 3): moved to $$aside;" \
+				"record them again with the Mac doing no other video work" >&2; \
+			exit 1; \
+		}; \
+	done
+	@$(MAKE) --no-print-directory golden-fixtures GOLDEN='$(GOLDEN_FILE)'
 
 # Records into $(GOLDEN_DIR).partial and moves that into place only once both tests passed and VERSION and COMMIT are
 # written: the golden files are there whole or not at all.

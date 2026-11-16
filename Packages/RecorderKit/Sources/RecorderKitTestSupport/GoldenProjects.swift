@@ -69,6 +69,20 @@ public enum GoldenProjects {
         }
     }
 
+    /// One line per video segment of `project` (display, window and camera tracks, in the take's order),
+    /// `<track> <segment> <digest>` with the `encodedVideoDigest(of:)` of its file: what `goldenFramesMatch` compares
+    /// with the digests recorded next to the golden files, to tell a change of the cases' video (the encoder) from a
+    /// change of the render.
+    public static func videoDigests(of project: LoadedProject) async throws -> [String] {
+        var lines: [String] = []
+        for track in project.take.tracks where [.display, .window, .camera].contains(track.kind) {
+            for segment in track.segments {
+                lines.append("\(track.id) \(segment.index) \(try await encodedVideoDigest(of: project.package.fileURL(segment.file)))")
+            }
+        }
+        return lines
+    }
+
     // MARK: - The cases
 
     /// The take of 1a's golden frames as the phase 0 recorder left it: a version 1 package with a 3 s display segment,
