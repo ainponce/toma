@@ -37,10 +37,13 @@ public struct RecordingLockInfo: Codable, Equatable, Sendable {
 /// owner must keep a strong reference for the whole take.
 public final class HeldRecordingLock: Sendable {
     private let path: String
+    /// The lock file's name in its folder.
+    private let name: String
     private let descriptor: Mutex<Int32?>
 
     init(path: String, descriptor: Int32) {
         self.path = path
+        name = URL(fileURLWithPath: path).lastPathComponent
         self.descriptor = Mutex(descriptor)
     }
 
@@ -48,14 +51,41 @@ public final class HeldRecordingLock: Sendable {
         release()
     }
 
-    /// Deletes the lock file and closes the descriptor, which releases the lock.
-    /// Calling it again does nothing.
+    /// Deletes the lock file, if the file at the path it was taken at is still that one, and closes the descriptor,
+    /// which releases the lock. After its folder was moved, that path can name another folder's lock, held by someone
+    /// else: it is left alone (and the moved folder keeps a stale lock file, which locks nothing). Calling it again
+    /// does nothing.
     public func release() {
+        release { held in
+            var named = stat()
+            guard lstat(path, &named) == 0, Self.isSameFile(held, named) else { return }
+            unlink(path)
+        }
+    }
+
+    /// `release()` for a lock in the folder `directory` is open on: the lock file is looked up and deleted by its name
+    /// relative to that descriptor, only if it is still the file locked, so a folder moved since the lock was taken
+    /// loses its own lock file and nothing at the old path is touched.
+    public func release(inDirectory directory: Int32) {
+        release { held in
+            var named = stat()
+            guard fstatat(directory, name, &named, AT_SYMLINK_NOFOLLOW) == 0, Self.isSameFile(held, named) else { return }
+            unlinkat(directory, name, 0)
+        }
+    }
+
+    /// Takes the descriptor, calls `unlinkLockFile` with what `fstat` says of it, and closes it.
+    private func release(_ unlinkLockFile: (stat) -> Void) {
         guard let fd = descriptor.withLock({ $0.take() }) else { return }
         // Unlink before closing: a process that opens the path after this point creates a
         // new file, so it can never hold a lock on the old, unlinked one.
-        unlink(path)
+        var held = stat()
+        if fstat(fd, &held) == 0 { unlinkLockFile(held) }
         close(fd)
+    }
+
+    private static func isSameFile(_ a: stat, _ b: stat) -> Bool {
+        a.st_dev == b.st_dev && a.st_ino == b.st_ino
     }
 }
 
