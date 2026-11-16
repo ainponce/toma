@@ -41,7 +41,8 @@ public enum RenderError: Error, Equatable {
 /// first frame that shows it decodes it (unless another renderer holds it already) and covers and blurs it, waiting
 /// for the GPU (`BackgroundImages`); the frames after it reuse that. A blurred wallpaper is drawn and blurred the same
 /// way, once. A window frame's title is drawn by CoreText the first time it is shown (`TitleTexture`), and reused the
-/// same way.
+/// same way. So is a cursor's image: each of Toma's cursors is drawn, and each image the take recorded read and uploaded,
+/// the first time a frame shows it (`CursorImages`), and reused.
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
@@ -59,7 +60,8 @@ public final class FrameRenderer: @unchecked Sendable {
     let backgroundImages: BackgroundImages
     /// The texture of the frames' window title; used with `lock` held.
     let titleTexture: TitleTexture
-    private let cursorTexture: any MTLTexture
+    /// The textures of the frames' cursors; used with `lock` held.
+    private let cursorImages: CursorImages
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
 
@@ -98,7 +100,8 @@ public final class FrameRenderer: @unchecked Sendable {
     /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps.
     /// - Parameter device: the system default device when `nil`.
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
-    ///   errors of `Compositor.init` and `CursorSprite.makeTexture`.
+    ///   errors of `Compositor.init` and `CursorSprite.makeTexture`. Builds the document's motion paths
+    ///   (`MotionPaths`).
     public init(project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil) throws {
         guard outputSize.x > 0, outputSize.y > 0 else { throw RenderError.invalidOutputSize(outputSize) }
         guard let device = device ?? MTLCreateSystemDefaultDevice() else { throw RenderError.noMetalDevice }
@@ -120,7 +123,7 @@ public final class FrameRenderer: @unchecked Sendable {
         compositor = try Compositor(device: device)
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
         titleTexture = TitleTexture(device: device)
-        cursorTexture = try CursorSprite.makeTexture(device: device)
+        cursorImages = try CursorImages(device: device, package: project.package, take: project.take.id)
         evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: outputSize)
         package = project.package
         take = project.take
@@ -134,7 +137,7 @@ public final class FrameRenderer: @unchecked Sendable {
         guard target.pixelFormat == Compositor.pixelFormat else { throw RenderError.unsupportedPixelFormat }
         try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
-            let frame = evaluator.frame(at: outputTime)
+            let frame = try evaluator.frame(at: outputTime) { try cursorImages.isReadable($0) }
             let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let backgroundImage: (any MTLTexture)?
@@ -147,8 +150,9 @@ public final class FrameRenderer: @unchecked Sendable {
                 backgroundImage = nil
             }
             let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0) }
+            let cursor = try cursorImages.texture(for: frame.cursor?.image ?? .toma(.arrow))
             compositor.encode(
-                frame, screen: screen, camera: camera, cursor: cursorTexture, backgroundImage: backgroundImage,
+                frame, screen: screen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
                 windowTitle: windowTitle, into: target, commandBuffer: commandBuffer)
         }
     }

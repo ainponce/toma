@@ -42,10 +42,10 @@ public struct ZoomCameraState: Equatable, Sendable {
 ///     what takes the cursor out of the bubble through its edge that faces the output's centre and `followStep` of the
 ///     crop more (the image moves away from the bubble), but never nearer the output's edge than `frameMargin`. The
 ///     bubble is applied after the box, so a bubble too big for the box leaves the cursor out of the box but visible,
-///     in the frame, on the same target every step. The bubble counts where the render draws the camera: with
-///     `camera.show`, a camera track with a segment, from the start of its first segment on. The cursor is
-///     `CursorPath`'s on the step, read before the camera moves (design §8.6), at its stage point
-///     (`StagePoints.stagePoint(global:at:)`); without one, the target stays.
+///     in the frame, on the same target every step. The bubble counts where the render draws the camera, by the one
+///     rule of both (`CameraBubble`): with `camera.show`, a camera track with a segment, from the start of its first
+///     segment on. The cursor is `CursorPath`'s on the step, read before the camera moves (design §8.6), at its stage
+///     point (`StagePoints.stagePoint(global:at:)`); without one, the target stays.
 /// - The motion: `zoom.spring` (`StepGrid.spring`, the spring read through `StepGrid.stable(_:)` so a document edited
 ///   by hand never stops the render) for `u` and for each axis of the centre, toward the target. On entering or
 ///   leaving an `instant` block, the camera jumps to the target with velocity 0.
@@ -78,7 +78,7 @@ public struct ZoomCameraPath: Sendable {
     private let stage: StagePoints
     private let cursor: CursorPath
     /// `nil` where the render draws no camera.
-    private let bubble: Bubble?
+    private let bubble: CameraBubble?
     /// The camera on every `StepGrid.checkpointEvery`-th step from 0 to `lastStep`.
     private var checkpoints: [Camera] = []
 
@@ -92,7 +92,7 @@ public struct ZoomCameraPath: Sendable {
         self.timeMap = timeMap
         self.stage = stage
         self.cursor = cursor
-        bubble = Self.bubble(of: document, take: take, timeMap: timeMap)
+        bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         checkpoints = simulatedCheckpoints()
     }
 
@@ -171,13 +171,6 @@ public struct ZoomCameraPath: Sendable {
         var instant: Bool
     }
 
-    /// The camera's bubble in the output, as the render draws it.
-    private struct Bubble: Sendable {
-        var timeline: CameraStyleTimeline
-        /// The start of the camera's first segment: no bubble before it.
-        var start: HostTime
-    }
-
     /// Where a simulation is: its step, the camera on it, and where it is in the inputs.
     private struct Simulation: Sendable {
         var step: Int
@@ -237,19 +230,6 @@ public struct ZoomCameraPath: Sendable {
     /// `value` read from 0 to 1, 0.5 if it is not a number.
     private static func unit(_ value: Double) -> Double {
         value.isNaN ? 0.5 : min(max(value, 0), 1)
-    }
-
-    /// The camera's bubble of `take`, where the render draws one (`FrameEvaluator`).
-    private static func bubble(of document: EditDocument, take: TakeRecord, timeMap: TimeMap) -> Bubble? {
-        guard document.camera.show, let camera = take.tracks.first(where: { $0.kind == .camera && !$0.segments.isEmpty }),
-            let start = camera.segments.map(\.startHostTime).min()
-        else { return nil }
-        let timeline = CameraStyleTimeline(
-            initial: document.camera.initial[take.id] ?? .default,
-            changes: document.camera.changes.filter { $0.take == take.id }.compactMap { change in
-                timeMap.output(ofChangeAt: change.t, take: take.id).map { ($0, change.style) }
-            })
-        return Bubble(timeline: timeline, start: start)
     }
 
     // MARK: - Simulation
@@ -383,8 +363,7 @@ public struct ZoomCameraPath: Sendable {
     /// The camera's bubble at output time `τ` (source instant `host`), grown by `bubbleMargin`; `nil` where there is
     /// none.
     private func bubbleRect(atOutput τ: Int64, host: HostTime) -> Rect? {
-        guard let bubble, host >= bubble.start else { return nil }
-        let rect = bubble.timeline.frame(atOutput: τ, output: stageSize).rect
+        guard let rect = bubble?.frame(atOutput: τ, host: host, output: stageSize)?.rect else { return nil }
         let grow = Self.bubbleMargin / 2
         return Rect(
             x: rect.x - rect.width * grow, y: rect.y - rect.height * grow, width: rect.width * (1 + Self.bubbleMargin),

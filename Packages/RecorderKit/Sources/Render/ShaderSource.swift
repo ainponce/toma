@@ -271,11 +271,19 @@ public enum ShaderSource {
         return sum / total;
     }
 
-    // The cursor sprite, or a window frame's title, already premultiplied.
+    // A window frame's title, already premultiplied.
     fragment float4 spriteFragment(QuadOut in [[stage_in]],
                                    texture2d<float> sprite [[texture(0)]],
                                    sampler mipSampler [[sampler(0)]]) {
         return sprite.sample(mipSampler, in.uv);
+    }
+
+    // The cursor's image, already premultiplied, at `opacity` (0...1; at 1, exactly the image).
+    fragment float4 cursorFragment(QuadOut in [[stage_in]],
+                                   constant float &opacity [[buffer(0)]],
+                                   texture2d<float> sprite [[texture(0)]],
+                                   sampler mipSampler [[sampler(0)]]) {
+        return sprite.sample(mipSampler, in.uv) * opacity;
     }
     """#
 }
