@@ -9,8 +9,8 @@ import ProjectFormat
 /// segment. The timeline ends at the latest segment end (the start, for a segment still open) of the screen and of
 /// every audio track (the microphones and system audio the export mixes), so audio recorded after the screen's last
 /// segment (a display that never came back) is in the preview and the export, over the screen's last frame, which
-/// `TrackFrameReader` holds. A take whose screen has no segment has a timeline of 0 s. Output times are clamped to
-/// `[0, duration]`.
+/// `TrackFrameReader` holds. A take whose screen has no segment has a timeline of 0 s (`TakeTimeline.bounds`). Output
+/// times are clamped to `[0, duration]`.
 ///
 /// Where the screen is at a time, in global points: for a display, the last `displayGeometry` event of its
 /// `displayID` at or before it; for a window, the last `windowGeometry` event of its track; before the first one,
@@ -80,16 +80,11 @@ public struct FrameEvaluator: Sendable {
         self.style = style
         self.outputSize = outputSize
         let ordered = events.sortedByTime()
-        let screen = ScreenChoice.screenTrack(in: take, events: events)
+        let bounds = TakeTimeline.bounds(take: take, events: events)
+        let screen = bounds.screen
         screenTrackID = screen?.id
-        let segments = screen?.segments ?? []
-        let start = segments.map(\.startHostTime).min() ?? HostTime(nanoseconds: 0)
-        // Without a screen segment there is nothing to show, and no start to measure the audio from.
-        let audio = segments.isEmpty ? [] : take.tracks.filter { !$0.kind.isVideo }.flatMap(\.segments)
-        // An open segment (no end yet) counts up to its start.
-        let end = (segments + audio).map { $0.endHostTime ?? $0.startHostTime }.max() ?? start
-        timelineStart = start
-        duration = max(0, end.seconds(since: start))
+        timelineStart = bounds.start
+        duration = max(0, bounds.end.seconds(since: bounds.start))
 
         let initialPlace = Place(frame: screen?.source.globalFrame.flatMap(Self.usable), onScreen: true)
         self.initialPlace = initialPlace
