@@ -105,11 +105,12 @@ public final class ScrollRecorder: InputRecorder, Sendable {
 
     /// Logs the scroll of the interval so far, and sums nothing until `resume()`. The monitor stays installed.
     public func pause() async {
-        let time = clock()
-        let position = location()
+        let end = intervalEnd()
         let timer = state.withLock { s -> (any RecordingTimer)? in
             guard s.log != nil, !s.paused else { return nil }
-            flush(&s, at: time, position)
+            if let end { flush(&s, at: end.time, end.position) }
+            // A scroll that came after `intervalEnd()` looked is the pause's.
+            (s.dx, s.dy, s.pending) = (0, 0, false)
             s.paused = true
             defer { s.timer = nil }
             return s.timer
@@ -127,10 +128,9 @@ public final class ScrollRecorder: InputRecorder, Sendable {
 
     /// Logs the scroll of the interval so far.
     public func stop() async {
-        let time = clock()
-        let position = location()
+        let end = intervalEnd()
         let timer = state.withLock { s -> (any RecordingTimer)? in
-            if !s.paused { flush(&s, at: time, position) }
+            if let end { flush(&s, at: end.time, end.position) }
             s.log = nil
             s.paused = false
             (s.dx, s.dy, s.pending) = (0, 0, false)
@@ -147,9 +147,15 @@ public final class ScrollRecorder: InputRecorder, Sendable {
     }
 
     private func tick() {
-        let time = clock()
-        let position = location()
-        state.withLock { flush(&$0, at: time, position) }
+        guard let end = intervalEnd() else { return }
+        state.withLock { flush(&$0, at: end.time, end.position) }
+    }
+
+    /// The time now and where the pointer is, if a scroll is waiting to be logged; `nil` otherwise, without asking
+    /// where the pointer is (a round trip to the window server).
+    private func intervalEnd() -> (time: HostTime, position: CGPoint)? {
+        guard state.withLock({ $0.log != nil && !$0.paused && $0.pending }) else { return nil }
+        return (clock(), location())
     }
 
     /// One scroll event, in points. One with a part that is not a number, or that does not move, is not a scroll.

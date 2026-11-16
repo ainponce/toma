@@ -16,11 +16,14 @@ import Synchronization
 ///   it was not recorded);
 /// - unless secure input (a password field, Terminal's Secure Keyboard Entry) was off both at the reading before and at
 ///   this one, so the Enter that closes a password field leaves no line either;
-/// - for a reading that `isUsable` refuses (not finite, or negative);
+/// - for a reading that `isUsable` refuses (not finite, or negative), nor for one longer than the time since the
+///   reading before (a key from before it, however long ago);
 /// - for the rest of the take once the reading follows the mouse: `mouseEchoPolls` readings in a row, each with the
 ///   mouse moving (`.mouseMoved` less than 1/30 s ago), within `mouseEchoTolerance` of the mouse's. Then it is not the
 ///   keyboard's. A reading with the mouse still, or one that cannot be used, says nothing about that: it neither counts
-///   nor breaks the run.
+///   nor breaks the run. While a run is on, its windows are held: a reading that breaks it writes them, and they go if
+///   it reaches `mouseEchoPolls` or a pause or the stop cuts it short, so a take whose reading follows the mouse writes
+///   none.
 ///
 /// At the start of each take it notes in the app's log what `listenAccess` says (whether Input Monitoring is granted;
 /// asking never shows a prompt), with no data about the keys.
@@ -49,6 +52,8 @@ public final class KeyActivityRecorder: InputRecorder, Sendable {
         var lastWindow: HostTime?
         /// Readings in a row, with the mouse moving, that matched the mouse's.
         var echoes = 0
+        /// The windows found since the run of `echoes` began, oldest first: written once it breaks.
+        var held: [HostTime] = []
         /// The reading follows the mouse: nothing more this take.
         var off = false
         /// The app's log already says a reading could not be used this take.
@@ -132,6 +137,8 @@ public final class KeyActivityRecorder: InputRecorder, Sendable {
         let timer = state.withLock { s -> (any RecordingTimer)? in
             guard s.log != nil, !s.paused else { return nil }
             s.paused = true
+            // A run the pause cuts short did not settle: its windows go.
+            (s.echoes, s.held) = (0, [])
             defer { s.timer = nil }
             return s.timer
         }
@@ -146,7 +153,6 @@ public final class KeyActivityRecorder: InputRecorder, Sendable {
             s.paused = false
             s.previous = (time, secure)
             s.acceptsFrom = time
-            s.echoes = 0
             if !s.off { s.timer = makeTimer() }
         }
     }
@@ -179,20 +185,34 @@ public final class KeyActivityRecorder: InputRecorder, Sendable {
                 return .unusable
             }
             if Self.isUsable(mouse), mouse < Self.mouseMoving {
-                s.echoes = abs(key - mouse) <= Self.mouseEchoTolerance ? s.echoes + 1 : 0
-                if s.echoes >= Self.mouseEchoPolls {
-                    s.off = true
-                    defer { s.timer = nil }
-                    return .off(timer: s.timer)
+                if abs(key - mouse) <= Self.mouseEchoTolerance {
+                    s.echoes += 1
+                    if s.echoes >= Self.mouseEchoPolls {
+                        s.off = true
+                        s.held = []
+                        defer { s.timer = nil }
+                        return .off(timer: s.timer)
+                    }
+                } else {
+                    // The run broke: the reading is not the mouse's, and what it held may be keys.
+                    for window in s.held { log.append(InputEvent(t: window, kind: .keyActivity)) }
+                    (s.echoes, s.held) = (0, [])
                 }
             }
             guard !previous.secure, !secure else { return .none }
+            // A key since the reading before; compared before converting, since a reading may be longer than the host
+            // clock can count.
+            guard key < time.seconds(since: previous.time) else { return .none }
             let pressed = time.adding(seconds: -key)
             guard pressed > previous.time else { return .none }
             let window = Self.windowStart(of: pressed)
             guard window >= s.acceptsFrom, s.lastWindow.map({ window > $0 }) ?? true else { return .none }
             s.lastWindow = window
-            log.append(InputEvent(t: window, kind: .keyActivity))
+            if s.echoes > 0 {
+                s.held.append(window)
+            } else {
+                log.append(InputEvent(t: window, kind: .keyActivity))
+            }
             return .none
         }
         switch outcome {

@@ -59,11 +59,17 @@ private final class FakeScrollEvents: ScrollEventSource {
     }
 }
 
-/// Where the pointer is.
+/// Where the pointer is, and how many times it was asked.
 private final class FakePointer: Sendable {
     private let point = Mutex(CGPoint(x: 1, y: 2))
+    private let readCount = Mutex(0)
 
-    var now: CGPoint { point.withLock { $0 } }
+    var now: CGPoint {
+        readCount.withLock { $0 += 1 }
+        return point.withLock { $0 }
+    }
+
+    var reads: Int { readCount.withLock { $0 } }
 
     func set(_ x: Double, _ y: Double) {
         point.withLock { $0 = CGPoint(x: x, y: y) }
@@ -109,6 +115,8 @@ private struct ScrollRig {
         await rig.tick(at: 10.7)
         let events = try await stopAndRead(rig.recorder, rig.log)
         #expect(!rig.events.isStarted)
+        // Asked only for the two events: not on a tick, nor at the stop, with nothing to write.
+        #expect(rig.pointer.reads == 2)
 
         #expect(events == [
             InputEvent(t: host(10.5), kind: .scroll(dx: 0, dy: -42.5, x: 640.5, y: 402)),
@@ -249,6 +257,22 @@ private struct KeyRig {
         await ticks.fire(every: KeyActivityRecorder.interval)
     }
 
+    /// At `seconds`, the mouse moving and `.keyDown` read 1 ms after `.mouseMoved`, then the recorder asks.
+    func echo(at seconds: Double) async {
+        clock.set(seconds)
+        input.moveMouse()
+        input.setKeyFollowsMouse(0.001)
+        await ticks.fire(every: KeyActivityRecorder.interval)
+        input.setKeyFollowsMouse(nil)
+    }
+
+    /// At `seconds`, the mouse moving and a `.keyDown` reading of its own (no key since boot), then the recorder asks.
+    func mouseOnly(at seconds: Double) async {
+        clock.set(seconds)
+        input.moveMouse()
+        await ticks.fire(every: KeyActivityRecorder.interval)
+    }
+
     /// Stops the recorder and returns the times of its `keyActivity` lines; any other event fails.
     func finish() async throws -> [HostTime] {
         try await stopAndRead(recorder, log).map { event in
@@ -308,11 +332,13 @@ private struct KeyRig {
         scroll.events.send(0, -7)
         scroll.clock.set(10.12)
         await scroll.recorder.pause()  // the scroll before the pause is logged at once
-        await scroll.recorder.pause()  // idempotent
+        await scroll.recorder.pause()
+        #expect(scroll.ticks.timers(every: ScrollRecorder.interval) == 0)
         scroll.events.send(0, -100)
         await scroll.tick(at: 10.2)
         await scroll.recorder.resume()
-        await scroll.recorder.resume()  // idempotent: one timer, not two
+        await scroll.recorder.resume()
+        #expect(scroll.ticks.timers(every: ScrollRecorder.interval) == 1)
         await scroll.tick(at: 10.3)
         scroll.events.send(0, -1)
         await scroll.tick(at: 10.4)
@@ -328,12 +354,16 @@ private struct KeyRig {
         await keys.key(at: 1.3)
         await keys.recorder.pause()
         await keys.recorder.pause()
+        #expect(keys.ticks.timers(every: KeyActivityRecorder.interval) == 0)
         await keys.key(at: 1.8)  // no poll while paused
+        #expect(keys.input.keyReads == 1)
         keys.clock.set(2.0)
         keys.input.press()
         await keys.recorder.resume()  // that key was pressed during the pause
         await keys.recorder.resume()
+        #expect(keys.ticks.timers(every: KeyActivityRecorder.interval) == 1)
         await keys.poll(at: 2.1)
+        #expect(keys.input.keyReads == 2)  // one poll, one reading
         // A key at 2.29 whose window starts at 2.25, after the resume.
         await keys.key(at: 2.3)
         #expect(try await keys.finish() == [host(1.25), host(2.25)])
@@ -366,27 +396,35 @@ private struct KeyRig {
     }
 }
 
+@Test func readingLongerThanTheHostClockIsNoKey() async throws {
+    try await withTemporaryDirectory { dir in
+        let rig = try KeyRig(in: dir)
+        await rig.recorder.start(log: rig.log)
+        // Finite and not negative, so usable, but longer than the host clock can count (2⁶⁴ ns and more): a key long
+        // before the previous reading, not one to convert to a host time.
+        for (i, reading) in [18_446_744_073.709_553, 1e300, .greatestFiniteMagnitude].enumerated() {
+            rig.input.setKeyReading(reading)
+            await rig.poll(at: 1.3 + 0.25 * Double(i))
+        }
+        rig.input.setKeyReading(nil)
+        await rig.key(at: 2.4)
+        #expect(try await rig.finish() == [host(2.25)])
+    }
+}
+
 @Test func readingThatFollowsTheMouseTurnsItselfOff() async throws {
     try await withTemporaryDirectory { dir in
         let rig = try KeyRig(in: dir)
+        // Each poll a quarter of a second after the one before, so each key falls in a window of its own.
         var time = 1.0
-        /// The next poll, a quarter of a second later, with the mouse moving and `.keyDown` read 1 ms after `.mouseMoved`.
         func echo() async {
             time += 0.25
-            rig.clock.set(time)
-            rig.input.moveMouse()
-            rig.input.setKeyFollowsMouse(0.001)
-            await rig.ticks.fire(every: KeyActivityRecorder.interval)
-            rig.input.setKeyFollowsMouse(nil)
+            await rig.echo(at: time)
         }
-        /// The next poll with the mouse moving and a `.keyDown` reading of its own (no key since boot).
         func mouseOnly() async {
             time += 0.25
-            rig.clock.set(time)
-            rig.input.moveMouse()
-            await rig.ticks.fire(every: KeyActivityRecorder.interval)
+            await rig.mouseOnly(at: time)
         }
-        /// The next poll with a key, the mouse still.
         func key() async {
             time += 0.25
             await rig.key(at: time)
@@ -416,13 +454,35 @@ private struct KeyRig {
         await key()
         let lines = try await rig.finish()
 
-        // Until it was off, the source looked like keys: each echo but the tenth wrote its window, and so did the key
-        // (9 + 9 + 1 + 9).
-        #expect(lines.count == 28)
+        // The windows of a run are held until it settles: the two runs of nine that broke were written (looking like
+        // keys, they may have been), and so was the key; those of the run of ten, none (9 + 9 + 1).
+        #expect(lines.count == 19)
         let (lastOnTime, tenthWindow) = (host(lastOn), host(off - 0.25))
-        #expect(lines.count { $0 >= lastOnTime } == 9)
-        // Nothing from the tenth on (its window would start at `off` − 0.25).
+        #expect(lines.count { $0 >= lastOnTime } == 0)
         #expect(lines.allSatisfy { $0 < tenthWindow })
+        // The first run's windows, in order: 1.244 s falls in the window of 1.0, … 3.244 s in that of 3.0.
+        #expect(Array(lines.prefix(9)) == (0..<9).map { host(1.0 + 0.25 * Double($0)) })
+    }
+}
+
+@Test func echoRunThatIsNotSettledWritesNothing() async throws {
+    try await withTemporaryDirectory { dir in
+        // A take whose reading follows the mouse from the start writes no window at all.
+        let rig = try KeyRig(in: dir)
+        await rig.recorder.start(log: rig.log)
+        for poll in 1...10 { await rig.echo(at: 1.0 + 0.25 * Double(poll)) }
+        #expect(try await rig.finish().isEmpty)
+
+        // A run that a pause or the stop cuts short did not show the reading was the keyboard's: its windows go.
+        rig.clock.set(5)
+        let log = try EventLogWriter(url: dir.appendingPathComponent("second.jsonl"))
+        await rig.recorder.start(log: log)
+        for poll in 1...3 { await rig.echo(at: 5.0 + 0.25 * Double(poll)) }
+        await rig.recorder.pause()
+        rig.clock.set(6)
+        await rig.recorder.resume()
+        for poll in 1...3 { await rig.echo(at: 6.0 + 0.25 * Double(poll)) }
+        #expect(try await stopAndRead(rig.recorder, log).isEmpty)
     }
 }
 
