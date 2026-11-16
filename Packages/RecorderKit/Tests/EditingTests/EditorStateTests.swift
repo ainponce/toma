@@ -133,3 +133,18 @@ private func setModificationDate(_ url: URL, _ date: Date) throws {
         ProjectCaches.removeUnused(root: dir.appending(path: "Missing"), now: now)
     }
 }
+
+@Test func editorStateRemembersTheLastLayout() throws {
+    try withTemporaryDirectory { dir in
+        let caches = ProjectCaches(root: dir.appending(path: "Projects"), projectID: ProjectID.random())
+        EditorState(lastBlockLayout: .split).save(caches)
+        #expect(EditorState.load(caches).lastBlockLayout == .split)
+        // A file of 1b has none; so does one with a layout this version does not know.
+        try Data("{\"playheadFrame\":7,\"tab\":\"zoom\"}".utf8).write(to: caches.editorState)
+        #expect(EditorState.load(caches).lastBlockLayout == nil)
+        #expect(EditorState.load(caches) == EditorState(playheadFrame: 7, tab: "zoom"))
+        try Data("{\"lastBlockLayout\":\"hologram\",\"tab\":\"zoom\"}".utf8).write(to: caches.editorState)
+        #expect(EditorState.load(caches).lastBlockLayout == nil)
+        #expect(EditorState.load(caches).tab == "zoom")
+    }
+}

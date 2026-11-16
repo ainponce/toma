@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import Editing
 import ProjectFormat
 
@@ -9,11 +10,28 @@ public struct CameraChangeRow: Equatable, Sendable {
     /// Output nanoseconds.
     public var output: Int64
     public var style: CameraStyle
+    /// The layout block that rules where this change falls, so the change is not seen while it does and still counts after
+    /// it (1c design §5.6); `nil` outside the blocks, or without the timeline of the layouts.
+    public var hiddenBy: HiddenBy? = nil
 
-    public init(id: String, output: Int64, style: CameraStyle) {
+    /// The block that hides a change: its id, where it starts in the output and its layout.
+    public struct HiddenBy: Equatable, Sendable {
+        public var blockID: String
+        public var output: Int64
+        public var kind: LayoutKind
+
+        public init(blockID: String, output: Int64, kind: LayoutKind) {
+            self.blockID = blockID
+            self.output = output
+            self.kind = kind
+        }
+    }
+
+    public init(id: String, output: Int64, style: CameraStyle, hiddenBy: HiddenBy? = nil) {
         self.id = id
         self.output = output
         self.style = style
+        self.hiddenBy = hiddenBy
     }
 }
 
@@ -27,10 +45,20 @@ public enum CameraEditTarget: Equatable, Sendable {
 /// The Camera tab's list and what it edits (design §5.4), as pure functions of the document.
 public enum CameraChangeList {
     /// The changes that are seen, in output order (those in a cut are not in the list; two at one instant keep the order
-    /// of the document).
-    public static func rows(_ doc: EditDocument, timeMap: TimeMap) -> [CameraChangeRow] {
-        doc.camera.changes.enumerated().compactMap { index, change -> (Int, CameraChangeRow)? in
-            timeMap.output(atSource: change.t, take: change.take).map { (index, CameraChangeRow(id: change.id, output: $0, style: change.style)) }
+    /// of the document). With the `layouts` of the project, a change that falls inside a block says which one (`hiddenBy`).
+    public static func rows(_ doc: EditDocument, timeMap: TimeMap, layouts: LayoutTimeline? = nil) -> [CameraChangeRow] {
+        let hidden = layouts?.hiddenChanges(doc) ?? [:]
+        let starts = Dictionary(
+            zip(doc.camera.layouts.map(\.id), LayoutTimeline.blockOutputs(of: doc, timeMap: timeMap)), uniquingKeysWith: { first, _ in first })
+        return doc.camera.changes.enumerated().compactMap { index, change -> (Int, CameraChangeRow)? in
+            guard let output = timeMap.output(atSource: change.t, take: change.take) else { return nil }
+            var row = CameraChangeRow(id: change.id, output: output, style: change.style)
+            if let blockID = hidden[change.id], let block = doc.camera.layouts.first(where: { $0.id == blockID }),
+                let start = starts[blockID]??.lowerBound
+            {
+                row.hiddenBy = CameraChangeRow.HiddenBy(blockID: blockID, output: start, kind: block.kind)
+            }
+            return (index, row)
         }
         .sorted { ($0.1.output, $0.0) < ($1.1.output, $1.0) }
         .map(\.1)

@@ -39,6 +39,21 @@ public enum PanelValues {
     public static func cameraSize(percent: Int) -> Double { Double(min(max(percent, cameraSizeRange.lowerBound), cameraSizeRange.upperBound)) / 100 }
     public static func percent(cameraSize: Double) -> Int { integer(cameraSize * 100, in: cameraSizeRange) }
 
+    /// The camera's border: `v / 100` (the width is that × 0.012 × the output's short side).
+    public static func cameraBorder(slider: Int) -> Double { Double(slider) / 100 }
+    public static func slider(cameraBorder: Double) -> Int { integer(cameraBorder * 100) }
+
+    /// The camera's shadow: `v / 100`.
+    public static func cameraShadow(slider: Int) -> Double { Double(slider) / 100 }
+    public static func slider(cameraShadow: Double) -> Int { integer(cameraShadow * 100) }
+
+    /// The camera's part of a split, as a percentage from 25 to 60 (`SplitLayout.shareRange`).
+    public static let splitShareRange = 25...60
+    public static func splitShare(percent: Int) -> Double {
+        Double(min(max(percent, splitShareRange.lowerBound), splitShareRange.upperBound)) / 100
+    }
+    public static func percent(splitShare: Double) -> Int { integer(splitShare * 100, in: splitShareRange) }
+
     /// The click sound's volume: `percent / 100`, from 0 to 100 %.
     public static func clickSoundGain(percent: Int) -> Double { Double(percent) / 100 }
     public static func percent(clickSoundGain: Double) -> Int { integer(clickSoundGain * 100) }

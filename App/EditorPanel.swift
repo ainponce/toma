@@ -35,7 +35,7 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
     static func tab(for selection: EditorSelection?) -> EditorPanelTab? {
         switch selection {
         case .zooms?: .zoom
-        case .cameraChange?: .camera
+        case .cameraChange?, .layoutBlock?: .camera
         case .clips?, .screenChange?, nil: nil
         }
     }
