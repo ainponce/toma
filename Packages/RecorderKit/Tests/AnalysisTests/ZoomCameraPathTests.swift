@@ -192,6 +192,13 @@ private func screen(at s: Int, in paths: MotionPaths) -> Rect? {
             if crop.y <= rect.height, low.y < rect.y - 1e-12 || high.y > rect.y + rect.height + 1e-12 {
                 bad.append("\(label): off the screen in y \(low.y) \(high.y) \(rect)")
             }
+            // Where it does not fit, it covers the whole screen.
+            if crop.x > rect.width, low.x > rect.x + 1e-12 || high.x < rect.x + rect.width - 1e-12 {
+                bad.append("\(label): part of the screen cut in x \(low.x) \(high.x) \(rect)")
+            }
+            if crop.y > rect.height, low.y > rect.y + 1e-12 || high.y < rect.y + rect.height - 1e-12 {
+                bad.append("\(label): part of the screen cut in y \(low.y) \(high.y) \(rect)")
+            }
         }
         for s in 0...(15 * 600) {
             check(motion.zoom.state(atStep: s), screen: screen(at: s, in: motion), at: "step \(s)")
@@ -328,7 +335,8 @@ private func screen(at s: Int, in paths: MotionPaths) -> Rect? {
 @Test func aBubbleTooBigForTheBoxStillUncoversTheCursor() {
     // 9:16 of a 16:9 display, a circle of 0.45 at the middle of the right edge: grown, it covers output x 0.0625…0.5485 of
     // 0.5625. The cursor at the centre is under it; clearing it takes the cursor out of the central box, and the camera
-    // settles where the cursor is out from under the bubble, without shaking.
+    // settles where the cursor is out from under the bubble, without shaking, and in the frame: `followStep` of the
+    // output past the bubble would be off it, so it stops at `frameMargin` from the edge.
     let bubble = CameraStyle(shape: .circle, size: 0.45, anchor: .trailing)
     let display = Rect(x: 0, y: 0, width: 1920, height: 1080)
     let events = [pointer(0, SIMD2(960, 540))]
@@ -341,6 +349,62 @@ private func screen(at s: Int, in paths: MotionPaths) -> Rect? {
     let cursor = (0.5625 / 2 - settled.center.x) * settled.depth + 0.5625 / 2
     let bubbleLeft = 0.5625 - 0.032 - 0.45 - 0.45 * ZoomCameraPath.bubbleMargin / 2
     #expect(cursor < bubbleLeft - 1e-6, "\(cursor)")
+    #expect(abs(cursor - ZoomCameraPath.frameMargin) < 1e-6, "\(cursor)")
+}
+
+@Test func sideBubblesLeaveTheCursorInTheFrame() {
+    // A 16:9 display in 9:16, 1:1 and 16:9, a bubble of every size on each side, and the cursor (without smoothing) held
+    // on points all over the screen: wherever the camera heads, the cursor is in the output's frame. In 9:16 a grown
+    // circle of 0.43 or more at the left or right covers the output but for less than `followStep` of its width.
+    let display = Rect(x: 0, y: 0, width: 1920, height: 1080)
+    let spots = [0.05, 0.25, 0.47, 0.5, 0.75, 0.95].flatMap { x in [0.1, 0.5, 0.9].map { y in SIMD2(x, y) * SIMD2(1920, 1080) } }
+    var bad: [String] = []
+    for aspect in [Aspect.portrait, .square, .landscape] {
+        for size in [0.10, 0.24, 0.33, 0.40, 0.43, 0.45] {
+            for anchor in [CameraAnchor.leading, .trailing, .top, .bottom] {
+                let bubble = CameraStyle(shape: .circle, size: size, anchor: anchor)
+                let events = spots.enumerated().map { pointer(1 + Double($0.offset), $0.element) }
+                let document = zoomDocument(aspect: aspect, regions: [block(1, from: 0.5, to: 20)], bubble: bubble)
+                let motion = paths(document, events: events, take: zoomTake(frame: display, camera: true))
+                let stage = motion.stage.stageSize
+                for (k, spot) in spots.enumerated() {
+                    let at = 1 + Double(k)
+                    guard let point = motion.stage.stagePoint(global: spot, at: source(at)) else { continue }
+                    // Where the camera heads, a few steps after the cursor got there, and where it is 0.95 s later.
+                    let target = motion.zoom.camera(atStep: step(at) + 3).target
+                    let headed = (point - target) * 2 + stage / 2
+                    let settled = motion.zoom.state(atStep: step(at + 0.95))
+                    let shown = (point - settled.center) * settled.depth + stage / 2
+                    let inFrame = { (q: SIMD2<Double>, tolerance: Double) in
+                        q.x >= -tolerance && q.y >= -tolerance && q.x <= stage.x + tolerance && q.y <= stage.y + tolerance
+                    }
+                    if !inFrame(headed, 1e-12) || !inFrame(shown, 0.01) {
+                        bad.append("\(aspect) \(size) \(anchor) at \(spot): heads to \(headed), shown at \(shown)")
+                    }
+                }
+            }
+        }
+    }
+    #expect(bad.isEmpty, "\(bad.count): \(bad.prefix(3))")
+}
+
+@Test func anUnderdampedSpringNeverZoomsOutPastTheStage() {
+    // `StepGrid.stable` lets a damping from 0 to 2 through: below 1 the camera overshoots on its way back to rest, and
+    // its `u` goes below 0, which is drawn as 0, so the crop never gets bigger than the stage.
+    for spring in [SpringSpec(damping: 0.5, response: 0.3), SpringSpec(damping: 0, response: 0.3)] {
+        var document = zoomDocument(padding: 0.08, regions: [block(1, from: 1, to: 3, focus: .fixed(x: 0.9, y: 0.2))])
+        document.zoom.spring = spring
+        let motion = paths(document)
+        let stage = motion.stage.stageSize
+        #expect((step(3)..<step(6)).contains { motion.zoom.camera(atStep: $0).logDepth < -1e-3 }, "\(spring)")
+        let bad = (0...(8 * 600)).filter { s in
+            let state = motion.zoom.state(atStep: s)
+            let crop = stage / state.depth
+            let low = state.center - crop / 2, high = state.center + crop / 2
+            return state.logDepth < 0 || low.x < -1e-12 || low.y < -1e-12 || high.x > stage.x + 1e-12 || high.y > stage.y + 1e-12
+        }
+        #expect(bad.isEmpty, "\(spring): \(bad.prefix(3))")
+    }
 }
 
 @Test func adjacentBlocksPassWithoutZoomingOut() throws {
@@ -477,6 +541,41 @@ private func screen(at s: Int, in paths: MotionPaths) -> Rect? {
             #expect(StageCrop.clamp(center: center, depth: 0.5, stage: stage, screen: screen) == stage / 2)
         }
     }
+}
+
+@Test func cropCoversTheScreenWhereItDoesNotFit() {
+    // Screens of every shape inside stages of the three aspects, depths 1 to 4 and centres anywhere: on each axis, the crop
+    // is inside the stage, inside the screen where it fits in it, and over the whole screen where it does not.
+    var generator = ZoomRandom(seed: 0x636f_7665)
+    var bad: [String] = []
+    var covered = 0
+    for _ in 0..<20_000 {
+        let stage = SIMD2([16.0 / 9, 9.0 / 16, 1][Int.random(in: 0..<3, using: &generator)], 1)
+        let size = SIMD2(Double.random(in: 0.05...1, using: &generator), Double.random(in: 0.05...1, using: &generator)) * stage
+        let place = SIMD2(Double.random(in: 0...1, using: &generator), Double.random(in: 0...1, using: &generator))
+        let origin = place * (stage - size)
+        let screen = Rect(x: origin.x, y: origin.y, width: size.x, height: size.y)
+        let depth = Double.random(in: 1...4, using: &generator)
+        let center = SIMD2(Double.random(in: -1...3, using: &generator), Double.random(in: -1...2, using: &generator))
+        let placed = StageCrop.clamp(center: center, depth: depth, stage: stage, screen: screen)
+        let half = stage / depth / 2
+        let low = placed - half, high = placed + half
+        for axis in 0..<2 {
+            let (a, b) = (origin[axis], origin[axis] + size[axis])
+            guard low[axis] >= -1e-12, high[axis] <= stage[axis] + 1e-12 else {
+                bad.append("off the stage: \(placed) \(depth) \(screen)")
+                continue
+            }
+            if 2 * half[axis] <= size[axis] {
+                if low[axis] < a - 1e-12 || high[axis] > b + 1e-12 { bad.append("off the screen: \(placed) \(depth) \(screen)") }
+            } else {
+                covered += 1
+                if low[axis] > a + 1e-12 || high[axis] < b - 1e-12 { bad.append("screen cut: \(placed) \(depth) \(screen)") }
+            }
+        }
+    }
+    #expect(bad.isEmpty, "\(bad.prefix(3))")
+    #expect(covered > 1_000)
 }
 
 @Test func cropIsContinuousThroughTheScreensSize() {

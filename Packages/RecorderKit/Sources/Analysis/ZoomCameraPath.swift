@@ -40,11 +40,12 @@ public struct ZoomCameraState: Equatable, Sendable {
 ///     bubble (its rect in the output, `CameraStyleTimeline` at stage size, grown by `bubbleMargin` of its size about
 ///     its centre) counts as out toward the bubble's side: the target moves, on the axis where that takes the least, by
 ///     what takes the cursor out of the bubble through its edge that faces the output's centre and `followStep` of the
-///     crop more (the image moves away from the bubble). The bubble is applied after the box, so a bubble too big for
-///     the box leaves the cursor out of the box but visible, on the same target every step. The bubble counts where
-///     the render draws the camera: with `camera.show`, a camera track with a segment, from the start of its first
-///     segment on. The cursor is `CursorPath`'s on the step, read before the camera moves (design §8.6), at its stage
-///     point (`StagePoints.stagePoint(global:at:)`); without one, the target stays.
+///     crop more (the image moves away from the bubble), but never nearer the output's edge than `frameMargin`. The
+///     bubble is applied after the box, so a bubble too big for the box leaves the cursor out of the box but visible,
+///     in the frame, on the same target every step. The bubble counts where the render draws the camera: with
+///     `camera.show`, a camera track with a segment, from the start of its first segment on. The cursor is
+///     `CursorPath`'s on the step, read before the camera moves (design §8.6), at its stage point
+///     (`StagePoints.stagePoint(global:at:)`); without one, the target stays.
 /// - The motion: `zoom.spring` (`StepGrid.spring`, the spring read through `StepGrid.stable(_:)` so a document edited
 ///   by hand never stops the render) for `u` and for each axis of the centre, toward the target. On entering or
 ///   leaving an `instant` block, the camera jumps to the target with velocity 0.
@@ -192,6 +193,10 @@ public struct ZoomCameraPath: Sendable {
     /// A bubble whose centre is this close to the output's centre on an axis is on neither side of it (one in the
     /// middle of an edge).
     private static let centred = 1e-9
+    /// The bubble never moves the cursor nearer the output's edges than this, in stage units: the camera's own margin
+    /// (`CameraStyle.marginFraction` of the height), so even the biggest bubble on the side of a 9:16 output leaves it in
+    /// the frame, and out from under the bubble.
+    static let frameMargin = CameraStyle.marginFraction
 
     /// The take's blocks of `zoom` on the grid, in output order (the document's among those that start together).
     private static func blocks(of zoom: ZoomPlan, take: String, timeMap: TimeMap) -> [Block] {
@@ -372,7 +377,7 @@ public struct ZoomCameraPath: Sendable {
             }
         }
         guard let bubble = bubbleRect(atOutput: τ, host: host) else { return moved }
-        return cleared(moved, of: bubble, cursor: point, depth: depth, crop: crop)
+        return cleared(moved, of: bubble, cursor: point, depth: depth)
     }
 
     /// The camera's bubble at output time `τ` (source instant `host`), grown by `bubbleMargin`; `nil` where there is
@@ -388,7 +393,7 @@ public struct ZoomCameraPath: Sendable {
 
     /// `target` with the cursor at stage point `point` moved out from under `bubble` (see the type's notes).
     private func cleared(
-        _ target: SIMD2<Double>, of bubble: Rect, cursor point: SIMD2<Double>, depth: Double, crop: SIMD2<Double>
+        _ target: SIMD2<Double>, of bubble: Rect, cursor point: SIMD2<Double>, depth: Double
     ) -> SIMD2<Double> {
         // The cursor in the output, as the crop the camera heads to shows it.
         let shown = (point - target) * depth + stageSize / 2
@@ -402,8 +407,15 @@ public struct ZoomCameraPath: Sendable {
             if best.map({ need < $0.need }) ?? true { best = (axis, need, side) }
         }
         guard let best else { return target }
+        // Where the cursor goes in the output on that axis: `followStep` of the output past the bubble's edge, but never
+        // nearer the output's edge than `frameMargin` (a big bubble on the side of a narrow output), nor back.
+        let axis = best.axis
+        let edge = stageSize[axis] * Self.followStep
+        let goal = best.side > 0
+            ? min(shown[axis], max(low[axis] - edge, Self.frameMargin))
+            : max(shown[axis], min(high[axis] + edge, stageSize[axis] - Self.frameMargin))
         var moved = target
-        moved[best.axis] += (best.side > 0 ? 1 : -1) * (best.need / depth + Self.followStep * crop[best.axis])
+        moved[axis] += (shown[axis] - goal) / depth
         return moved
     }
 }
