@@ -5,11 +5,12 @@ import ProjectFormat
 import RecorderKitTestSupport
 import Recording
 import Recovery
-import Render
 import SyntheticCapture
 import Testing
 
 @testable import Export
+// @testable for `FrameEvaluator.frame(at:)`, which takes every cursor image as readable.
+@testable import Render
 
 // Video the export cannot decode is never left out silently: the summary lists it.
 

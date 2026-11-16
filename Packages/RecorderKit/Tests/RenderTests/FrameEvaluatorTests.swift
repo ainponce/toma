@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import ProjectFormat
-import Render
+// @testable for `FrameEvaluator.frame(at:)`, which takes every cursor image as readable.
+@testable import Render
 import Testing
 
 private func seconds(_ s: Double) -> HostTime { HostTime(nanoseconds: UInt64(s * 1_000_000_000)) }
