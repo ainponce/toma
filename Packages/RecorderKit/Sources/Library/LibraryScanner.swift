@@ -661,6 +661,47 @@ public final class LibraryScanner: Sendable {
     }
 }
 
+/// Where a package is for the library (`LibraryScanner.location(of:projectsFolder:)`).
+public enum PackageLocation: Equatable, Sendable {
+    /// Where the walk lists it: in the projects folder, or in its trash.
+    case listed(Place)
+    /// Out of the projects folder: one of Other places.
+    case elsewhere
+    /// In the projects folder, where the walk never lists it.
+    case notListed(NotListed)
+}
+
+/// Why the walk never lists a package of the projects folder (design §6.2).
+public enum NotListed: Equatable, Sendable {
+    /// More than `LibraryScanner.maxDepth` folders down.
+    case tooDeep
+    /// In a hidden folder, or hidden itself.
+    case hidden
+    /// In a folder of the trash: only the trash itself is listed.
+    case inTrashFolder
+    /// Inside another project's package.
+    case insidePackage
+}
+
+extension LibraryScanner {
+    /// Where the package at `url` is for the library, by its path as the walk and `look(at:)` see it (standardized, no
+    /// link followed, nothing read): the one rule the app uses for where an action left a package, or a dropped one is.
+    public static func location(of url: URL, projectsFolder: URL) -> PackageLocation {
+        let projects = projectsFolder.standardizedFileURL.pathComponents
+        let components = url.standardizedFileURL.pathComponents
+        guard components.count > projects.count, components.starts(with: projects) else { return .elsewhere }
+        let relative = Array(components.dropFirst(projects.count))
+        let folders = relative.dropLast()
+        if folders.contains(where: PackageNames.isPackage) { return .notListed(.insidePackage) }
+        if relative.contains(where: PackageNames.isHidden) { return .notListed(.hidden) }
+        if let first = folders.first, PackageNames.isTrash(first) {
+            return folders.count == 1 ? .listed(.trash) : .notListed(.inTrashFolder)
+        }
+        guard folders.count <= maxDepth else { return .notListed(.tooDeep) }
+        return .listed(.projectsFolder(subfolder: folders.joined(separator: "/")))
+    }
+}
+
 /// How the library tells packages, hidden items and the trash by name.
 enum PackageNames {
     /// `<name>.toma`, in any case, as Finder takes it.

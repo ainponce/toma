@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import ProjectFormat
 
 /// What the app says of its own projects (design §6.6), by package path: the one a take records into, the ones its
 /// editors have open, and the ones found open in another app. Never found by probing a lock.
@@ -35,14 +36,23 @@ public struct LibraryChanges: Equatable, Sendable {
     public var status = false
     /// A walk of the projects folder ended.
     public var walkFinished = false
+    /// A card shown from the records (`LibraryCatalog.keep`) whose project the scanner told: what was kept by its
+    /// identity (a favorite, its last opening) goes to the project's.
+    public var replaced: [PackageIdentity: PackageIdentity] = [:]
+    /// The paths of the projects of Other places that are not any more (moved into the projects folder): their entries of
+    /// `places` go, or the records would show them again.
+    public var leftOtherPlaces: [String] = []
 
     public init(
-        projects: Bool = false, thumbnails: Set<PackageIdentity> = [], status: Bool = false, walkFinished: Bool = false
+        projects: Bool = false, thumbnails: Set<PackageIdentity> = [], status: Bool = false, walkFinished: Bool = false,
+        replaced: [PackageIdentity: PackageIdentity] = [:], leftOtherPlaces: [String] = []
     ) {
         self.projects = projects
         self.thumbnails = thumbnails
         self.status = status
         self.walkFinished = walkFinished
+        self.replaced = replaced
+        self.leftOtherPlaces = leftOtherPlaces
     }
 }
 
@@ -85,6 +95,9 @@ public struct LibrarySections: Equatable, Sendable {
 ///   from) stays, since a `.summary` of the same identity may follow (a project moved during a walk).
 /// - `.projectsFolderUnreadable` holds until a walk ends without saying it again (`.finished`); a walk started again
 ///   (`walkStarted()`) does not hide it before it ends.
+/// - A place of `library.json` the index lost is shown from what the records know (`keep`), and a summary the scanner
+///   tells at its path takes its place (`replaced`), wherever that is now; one of Other places now in the projects
+///   folder says its old path (`leftOtherPlaces`).
 public struct LibraryCatalog: Sendable {
     public private(set) var summaries: [PackageIdentity: ProjectSummary] = [:]
     /// There was no index, and the first walk is still finding projects: "Buscando proyectos… N".
@@ -118,7 +131,17 @@ public struct LibraryCatalog: Sendable {
             switch update {
             case .summary(var summary):
                 guard summary.identity.file != 0 else { continue }
+                if !Self.isFromTheRecords(summary.identity) {
+                    // What a place of the records is now, once the scanner looked at it: shown once.
+                    for stale in summaries.values where Self.isFromTheRecords(stale.identity) && stale.path == summary.path {
+                        summaries[stale.identity] = nil
+                        changes.projects = true
+                        changes.replaced[stale.identity] = summary.identity
+                        if stale.place == .elsewhere, summary.place != .elsewhere { changes.leftOtherPlaces.append(stale.path) }
+                    }
+                }
                 let old = summaries[summary.identity]
+                if let old, old.place == .elsewhere, summary.place != .elsewhere { changes.leftOtherPlaces.append(old.path) }
                 if summary.thumbnailKey == nil, let old, Self.sameFiles(old, summary) {
                     summary.thumbnailKey = old.thumbnailKey
                 }
@@ -167,6 +190,82 @@ public struct LibraryCatalog: Sendable {
         guard var summary = summaries[identity], summary.thumbnailKey != key else { return false }
         summary.thumbnailKey = key
         summaries[identity] = summary
+        return true
+    }
+
+    // MARK: - Other places the index lost
+
+    /// The volume of the identity a place of the records is shown with until the scanner looks at it: no volume's UUID.
+    static let recordsVolume = "library.json"
+
+    /// Shows each of `places` (of `library.json`) that no summary has at its path, from what the records know: its name
+    /// from its path, Other places, seen last when it was added, and an identity of its path that is the same in every
+    /// window (`isFromTheRecords`). Nothing is read (design §6.5: Other places are looked at only on an action of the
+    /// user); one looked at then is told by the scanner, which takes its place. Whether any was added.
+    @discardableResult
+    public mutating func keep(_ places: [OtherPlace]) -> Bool {
+        let paths = Set(summaries.values.map(\.path))
+        var added = false
+        for place in places where !paths.contains(place.path) {
+            let identity = PackageIdentity(volume: Self.recordsVolume, file: Self.stableHash(place.path))
+            guard summaries[identity] == nil else { continue }
+            summaries[identity] = ProjectSummary(
+                identity: identity, path: place.path,
+                name: URL(fileURLWithPath: place.path).deletingPathExtension().lastPathComponent, place: .elsewhere,
+                hasCamera: false, state: .normal, lastSeen: place.added)
+            added = true
+        }
+        return added
+    }
+
+    /// Whether `identity` is that of a place shown from the records (`keep`), not one the scanner found.
+    public static func isFromTheRecords(_ identity: PackageIdentity) -> Bool {
+        identity.volume == recordsVolume
+    }
+
+    /// FNV-1a of `path`'s UTF-8, never 0 (an identity of file 0 is never kept).
+    private static func stableHash(_ path: String) -> UInt64 {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in path.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        return hash == 0 ? 1 : hash
+    }
+
+    // MARK: - What an action of the user changed, before the scanner looks again (design §6.3)
+
+    /// The project `identity` was moved by an action of the user to `path` (renamed, to or from the trash), in `place`:
+    /// shown there at once, its name the package's. Into the trash it is there since `now` (in whole seconds); out of
+    /// it, a project like any other until the scanner reads it again; renamed, its state stays. Whether it changed.
+    @discardableResult
+    public mutating func move(_ identity: PackageIdentity, to path: String, place: Place, now: Date) -> Bool {
+        guard var summary = summaries[identity] else { return false }
+        summary.path = path
+        summary.name = URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent
+        summary.place = place
+        if place == .trash {
+            if case .inTrash = summary.state {} else { summary.state = .inTrash(since: now.roundedToWholeSeconds) }
+        } else if case .inTrash = summary.state {
+            summary.state = .normal
+        }
+        guard summary != summaries[identity] else { return false }
+        summaries[identity] = summary
+        return true
+    }
+
+    /// Takes the project `identity` out (deleted for good, taken out of the library) and returns what was known of it.
+    @discardableResult
+    public mutating func remove(_ identity: PackageIdentity) -> ProjectSummary? {
+        summaries.removeValue(forKey: identity)
+    }
+
+    /// Puts back what `remove` took (an undo), unless something of the same identity is known again meanwhile (the
+    /// scanner told it: what it told is newer). Whether it was put back. One without an identity is never kept.
+    @discardableResult
+    public mutating func putBack(_ summary: ProjectSummary) -> Bool {
+        guard summary.identity.file != 0, summaries[summary.identity] == nil else { return false }
+        summaries[summary.identity] = summary
         return true
     }
 

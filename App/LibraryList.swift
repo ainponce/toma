@@ -17,7 +17,8 @@ struct LibraryRow: Identifiable {
 /// The library as a list (design §6.2): the system's table with Name (and a thumbnail of 48 × 27), Date Recorded,
 /// Duration, Format, Size, Location and Status. A click on the heading of Name, Date Recorded, Duration or Size sorts by
 /// it (again, the other way); the rows come in the library's order. The table selects as the system's do (click, ⇧, ⌘,
-/// ⌘A, the arrows); Esc selects nothing, and a double click or ↩ opens.
+/// ⌘A, the arrows); Esc selects nothing, a double click or ↩ opens, "." adds to the favorites or takes out of them, and
+/// the rows have the projects' menu (design §6.3), Renombrar editing the name in its column.
 struct LibraryList: View {
     let model: LibraryModel
 
@@ -35,9 +36,17 @@ struct LibraryList: View {
                     }
                     .frame(width: LibraryLayout.listThumbnail.width, height: LibraryLayout.listThumbnail.height)
                     .clipShape(RoundedRectangle(cornerRadius: 3))
-                    Text(verbatim: row.name)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    if model.actions.renaming == row.id {
+                        LibraryRenameField(model: model, item: row.item)
+                    } else {
+                        Text(verbatim: row.name)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    if model.actions.busy[row.id] != nil {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
                     if row.item.favorite {
                         Image(systemName: "star.fill")
                             .font(.caption)
@@ -81,9 +90,15 @@ struct LibraryList: View {
             }
             .width(min: 80, ideal: 120)
         }
-        .contextMenu(forSelectionType: Library.PackageIdentity.self) { _ in
+        .contextMenu(forSelectionType: Library.PackageIdentity.self) { ids in
+            LibraryMenu(model: model, ids: ids)
         } primaryAction: { ids in
             model.open(ids)
+        }
+        .onKeyPress(".") {
+            guard !LibraryActions.textFieldTakes(nil) else { return .ignored }
+            model.perform(.toggleFavorite, on: model.selection.selected)
+            return .handled
         }
         .onExitCommand { model.clearSelection() }
         .accessibilityLabel(Text("Projects", comment: "The library: what VoiceOver calls its grid and its list"))

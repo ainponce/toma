@@ -5,16 +5,26 @@ import Testing
 
 @Test(arguments: [false, true])
 func quittingClosesATakeAndAsksBeforeCancellingAnExport(poweringOff: Bool) {
-    #expect(TerminationDecision.decide(isRecording: false, isExporting: false, isPoweringOff: poweringOff) == .now)
-    #expect(TerminationDecision.decide(isRecording: true, isExporting: false, isPoweringOff: poweringOff) == .closeTakeFirst)
+    #expect(TerminationDecision.decide(isRecording: false, isExporting: false, isPoweringOff: poweringOff, isCopying: false) == .now)
+    #expect(TerminationDecision.decide(isRecording: true, isExporting: false, isPoweringOff: poweringOff, isCopying: false) == .closeTakeFirst)
     if poweringOff {
         // Nobody to ask while logging out or shutting down: the export is cancelled, its partial file removed.
-        #expect(TerminationDecision.decide(isRecording: false, isExporting: true, isPoweringOff: true) == .cancelExportFirst(alsoClosingTake: false))
-        #expect(TerminationDecision.decide(isRecording: true, isExporting: true, isPoweringOff: true) == .cancelExportFirst(alsoClosingTake: true))
+        #expect(TerminationDecision.decide(isRecording: false, isExporting: true, isPoweringOff: true, isCopying: false) == .cancelExportFirst(alsoClosingTake: false))
+        #expect(TerminationDecision.decide(isRecording: true, isExporting: true, isPoweringOff: true, isCopying: false) == .cancelExportFirst(alsoClosingTake: true))
     } else {
-        #expect(TerminationDecision.decide(isRecording: false, isExporting: true, isPoweringOff: false) == .confirmCancelExport(alsoClosingTake: false))
-        #expect(TerminationDecision.decide(isRecording: true, isExporting: true, isPoweringOff: false) == .confirmCancelExport(alsoClosingTake: true))
+        #expect(TerminationDecision.decide(isRecording: false, isExporting: true, isPoweringOff: false, isCopying: false) == .confirmCancelExport(alsoClosingTake: false))
+        #expect(TerminationDecision.decide(isRecording: true, isExporting: true, isPoweringOff: false, isCopying: false) == .confirmCancelExport(alsoClosingTake: true))
     }
+}
+
+/// A copy of the library under way is never answered `.now`: it is never left half done (design §6.8). With a take or an
+/// export too, their own order holds, and the copies are waited for last.
+@Test(arguments: [false, true])
+func aCopyInProgressIsNeverQuitNow(poweringOff: Bool) {
+    #expect(TerminationDecision.decide(isRecording: false, isExporting: false, isPoweringOff: poweringOff, isCopying: true) == .finishCopiesFirst)
+    #expect(TerminationDecision.decide(isRecording: true, isExporting: false, isPoweringOff: poweringOff, isCopying: true) == .closeTakeFirst)
+    let export = TerminationDecision.decide(isRecording: false, isExporting: true, isPoweringOff: poweringOff, isCopying: true)
+    #expect(export == (poweringOff ? .cancelExportFirst(alsoClosingTake: false) : .confirmCancelExport(alsoClosingTake: false)))
 }
 
 @Test func recoveredProjectsOpenAFewAndReloadTheOpenOnes() {

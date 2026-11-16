@@ -20,6 +20,134 @@ private enum Catalog {
 }
 
 @Suite struct LibraryCatalogTests {
+    /// What an action of the user moved shows where it is at once, before the scanner looks again (design §6.3, §9).
+    @Test func anActionsMoveIsShownAtOnce() {
+        let demo = Catalog.summary(1, key: "k1")
+        var catalog = LibraryCatalog(index: LibraryIndex(projects: [demo]))
+        let now = Date(timeIntervalSince1970: 1_794_900_000.6)
+        func move(_ path: String, _ place: Place, _ identity: PackageIdentity = demo.identity) -> Bool {
+            catalog.move(identity, to: path, place: place, now: now)
+        }
+
+        // Renamed: another path and name, the same place, state and thumbnail.
+        #expect(move("/p/Demo 2.toma", demo.place))
+        let renamed = catalog.summaries[demo.identity]
+        #expect(renamed?.path == "/p/Demo 2.toma" && renamed?.name == "Demo 2")
+        #expect(renamed?.state == .normal && renamed?.thumbnailKey == "k1")
+        #expect(!move("/p/Demo 2.toma", demo.place), "nothing changed")
+
+        // Into the trash: there since now, in whole seconds (rounded down, as the index writes dates).
+        #expect(move("/p/Trash/Demo 2.toma", .trash))
+        #expect(catalog.summaries[demo.identity]?.place == .trash)
+        #expect(catalog.summaries[demo.identity]?.state == .inTrash(since: Date(timeIntervalSince1970: 1_794_900_000)))
+
+        // Out of it: a project like any other until it is read again.
+        #expect(move("/p/Clientes/Demo 2.toma", .projectsFolder(subfolder: "Clientes")))
+        #expect(catalog.summaries[demo.identity]?.state == .normal)
+        #expect(catalog.summaries[demo.identity]?.place == .projectsFolder(subfolder: "Clientes"))
+
+        // One the library does not know: nothing.
+        #expect(!move("/p/X.toma", .trash, PackageIdentity(volume: "V", file: 9)))
+        #expect(catalog.summaries.count == 1)
+    }
+
+    /// The places of `library.json` never leave the library with the index (a lost or dropped index): each the index does
+    /// not have is shown from what the records know, without reading anything (design §6.5), until the scanner tells
+    /// what it is now, on an action of the user.
+    @Test func placesOfTheRecordsOutliveTheIndex() {
+        let added = Date(timeIntervalSince1970: 1_794_000_000)
+        let demo = OtherPlace(added: added, bookmark: Data([1]), path: "/Volumes/Trabajo/Demo.toma")
+        let known = Catalog.summary(7, name: "Known", place: .elsewhere)
+        let knownPlace = OtherPlace(added: added, bookmark: Data([2]), path: known.path)
+        var catalog = LibraryCatalog(index: LibraryIndex(projects: [known]))
+        func keep(_ places: [OtherPlace]) -> Bool { catalog.keep(places) }
+        func apply(_ updates: [LibraryUpdate]) -> LibraryChanges { catalog.apply(updates) }
+
+        #expect(keep([demo, knownPlace]))
+        #expect(catalog.summaries.count == 2, "the one the index has is not shown twice")
+        let shown = catalog.summaries.values.first { $0.path == demo.path }
+        #expect(shown?.name == "Demo" && shown?.place == .elsewhere && shown?.lastSeen == added && shown?.state == .normal)
+        let identity = shown?.identity
+        #expect(identity.map(LibraryCatalog.isFromTheRecords) == true)
+        #expect(!LibraryCatalog.isFromTheRecords(known.identity))
+        #expect(!keep([demo]), "kept once")
+        // The same place gives the same identity in every window (and so in the index written from it).
+        var again = LibraryCatalog(index: LibraryIndex())
+        _ = again.keep([demo])
+        #expect(again.summaries.keys.first == identity)
+
+        // A look that finds nothing tells it with the identity it was shown with: "No disponible".
+        if let identity, var unavailable = shown {
+            unavailable.state = .unavailable(.diskNotConnected("Trabajo"))
+            #expect(apply([.summary(unavailable)]).projects)
+            #expect(catalog.summaries[identity]?.state == .unavailable(.diskNotConnected("Trabajo")))
+        }
+        // A look that finds it: what it is now takes its place, once, and what was kept by the card's identity (a
+        // favorite set on it) goes to the project's.
+        var real = Catalog.summary(8, name: "Demo", place: .elsewhere)
+        real.path = demo.path
+        let found = apply([.summary(real)])
+        #expect(found.projects && found.leftOtherPlaces.isEmpty)
+        #expect(identity.map { found.replaced == [$0: real.identity] } == true)
+        #expect(catalog.summaries.values.filter { $0.path == demo.path } == [real])
+        #expect(catalog.summaries.count == 2)
+
+        // One of Other places the walk finds in the projects folder (moved there in Finder): not one any more, and its
+        // entry of `places` goes, or it would come back from the records.
+        var movedIn = known
+        movedIn.path = "/p/Projects/Known.toma"
+        movedIn.place = .projectsFolder(subfolder: "")
+        #expect(apply([.summary(movedIn)]).leftOtherPlaces == [known.path])
+        // A records-only card whose project is found in the projects folder, at the path the card had followed.
+        var ghost = LibraryCatalog(index: LibraryIndex())
+        let moving = OtherPlace(added: added, bookmark: Data([3]), path: "/p/Projects/Moved.toma")
+        _ = ghost.keep([moving])
+        var inFolder = Catalog.summary(9, name: "Moved")
+        inFolder.path = moving.path
+        let replaced = ghost.apply([.summary(inFolder)])
+        #expect(replaced.leftOtherPlaces == [moving.path] && replaced.replaced.count == 1)
+        #expect(ghost.summaries.values.map(\.identity) == [inFolder.identity], "shown once")
+    }
+
+    /// What the records kept by a records-only card's identity follows its project; a place that left Other places goes.
+    @Test func theRecordsFollowWhatTheCatalogSays() {
+        let ghost = PackageIdentity(volume: "library.json", file: 5), real = PackageIdentity(volume: "V", file: 8)
+        let added = Date(timeIntervalSince1970: 1_794_000_000)
+        var records = LibraryRecords(
+            favorites: [ghost.string, "V:1"], lastOpened: [ghost.string: added],
+            places: [OtherPlace(added: added, bookmark: Data([1]), path: "/a/A.toma"), OtherPlace(added: added, bookmark: Data([2]), path: "/b/B.toma")])
+        let changed = records.follow(replaced: [ghost: real], leftOtherPlaces: ["/b/B.toma"])
+        #expect(changed)
+        #expect(records.favorites == [real.string, "V:1"])
+        #expect(records.lastOpened == [real.string: added])
+        #expect(records.places.map(\.path) == ["/a/A.toma"])
+        let unchanged = records.follow(replaced: [:], leftOtherPlaces: [])
+        #expect(!unchanged)
+    }
+
+    /// What an action took out (deleted for good, out of the library) comes back on undo, unless something newer of it
+    /// came meanwhile.
+    @Test func whatAnActionTookOutComesBack() {
+        let place = Catalog.summary(1, place: .elsewhere)
+        var catalog = LibraryCatalog(index: LibraryIndex(projects: [place, Catalog.summary(2, name: "B")]))
+        func remove() -> ProjectSummary? { catalog.remove(place.identity) }
+        func putBack(_ summary: ProjectSummary) -> Bool { catalog.putBack(summary) }
+        #expect(remove() == place)
+        #expect(remove() == nil)
+        #expect(catalog.summaries.count == 1)
+
+        #expect(putBack(place))
+        #expect(catalog.summaries[place.identity] == place)
+        // The scanner told it again meanwhile: what it told stays.
+        var newer = place
+        newer.size = 5_000
+        _ = catalog.apply([.summary(newer)])
+        #expect(!putBack(place))
+        #expect(catalog.summaries[place.identity] == newer)
+        // One without an identity is never kept.
+        #expect(!putBack(Catalog.summary(0, name: "Nobody")))
+    }
+
     @Test func summariesAreMergedByIdentity() {
         var catalog = LibraryCatalog(index: LibraryIndex(projects: [Catalog.summary(1, key: "k1"), Catalog.summary(2, name: "B")]))
         func apply(_ updates: [LibraryUpdate]) -> LibraryChanges { catalog.apply(updates) }

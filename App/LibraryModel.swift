@@ -53,6 +53,13 @@ struct LibraryHost {
     var record: () -> Void = {}
     /// The shortcut that opens the island, as the empty library names it: the user's.
     var recordShortcut: () -> String = { HotKeyBindings.defaults.combos[.islandOrStop]?.displayString ?? "" }
+    /// Closes the editor window of the package at the URL, which writes what is pending and lets go of its `edit.lock`,
+    /// and returns once it did: before the project goes to the trash or is deleted (design §6.3).
+    var close: (URL) async -> Void = { _ in }
+    /// Whether the editor of the package at the URL has changes it could not write (1b §5.9: the disk is full).
+    var hasUnsavedChanges: (URL) -> Bool = { _ in false }
+    /// Opens 1b's recovery on the package at the URL, a take that did not finish saving (design §6.6: Recuperar).
+    var recover: (URL) -> Void = { _ in }
 }
 
 /// A section of the grid: a date group when it is sorted by date, otherwise all the cards with no heading.
@@ -165,6 +172,8 @@ final class LibraryModel {
     @ObservationIgnored private var watcher: LibraryWatcher?
     @ObservationIgnored private var thumbnails: LibraryThumbnails?
     @ObservationIgnored private var context: EditContext?
+    /// The context being made, for who needs it before it is (`madeContext()`).
+    @ObservationIgnored private var contextTask: Task<EditContext, Never>?
     /// The projects folder's volume, once found; `nil` while it is not there.
     @ObservationIgnored private var projectsVolume: VolumeInfo?
     /// The projects folder's volume was looked for once.
@@ -204,6 +213,8 @@ final class LibraryModel {
     @ObservationIgnored private var looks: [Library.PackageIdentity: Task<Void, Never>] = [:]
 
     @ObservationIgnored private var noticeDismissal: Task<Void, Never>?
+    /// What the user does with the projects (`LibraryActions`), all through `perform(_:on:)`.
+    let actions = LibraryActions()
     /// How long a notice stays.
     private static let noticeDuration: Duration = .seconds(4)
     /// Who waits for the cached index to be shown (`whenLoaded(within:)`), each with its own time limit.
@@ -224,6 +235,7 @@ final class LibraryModel {
         asList = preferences.asList
         frame = preferences.frame
         indexWriter = DebouncedWriter(url: paths.index)
+        actions.model = self
     }
 
     // MARK: - Life
@@ -239,6 +251,7 @@ final class LibraryModel {
         // `LibraryRecordsStore` reads its file as it is made: never on the main thread.
         let store = Task.detached(priority: .userInitiated) { LibraryRecordsStore(url: paths.records) }
         let context = Task.detached(priority: .utility) { Self.makeContext() }
+        contextTask = context
         let volume = Task.detached(priority: .utility) { Self.lookAtVolume(of: paths.projectsFolder, fileSystem) }
         Task {
             let index = await index.value
@@ -246,8 +259,11 @@ final class LibraryModel {
             let records = await store.records
             guard !closed else { return }
             recordsStore = store
+            actions.start(records: store)
             self.records = records
             catalog = LibraryCatalog(index: index)
+            // Other places the index lost are shown from the records, without looking at them (design §6.5).
+            if catalog.keep(records.places) { scheduleIndexSave() }
             hasLoaded = true
             showStatus()
             refresh()
@@ -256,7 +272,8 @@ final class LibraryModel {
             let made = await context.value
             guard !closed else { return }
             self.context = made
-            startScanning(from: index, context: made)
+            // From what is shown, the places kept from the records too: a look that does not find one says so.
+            startScanning(from: LibraryIndex(projects: Array(catalog.summaries.values)), context: made)
             adopt(volume: await volume.value)
         }
     }
@@ -403,6 +420,7 @@ final class LibraryModel {
             Task {
                 let found = await Task.detached(priority: .userInitiated) { Self.resolve(bookmark) ?? url }.value
                 guard !closed else { return }
+                follow(summary, to: found)
                 look(at: [found])
                 host.open(found)
                 drawOpened(summary, at: found)
@@ -514,6 +532,14 @@ final class LibraryModel {
         }
         guard !closed else { return }
         let changes = catalog.apply(updates)
+        if !changes.replaced.isEmpty || !changes.leftOtherPlaces.isEmpty {
+            // What a records-only card kept goes to its project; a place that left Other places is forgotten.
+            let (replaced, left) = (changes.replaced, changes.leftOtherPlaces)
+            var followed = records
+            if followed.follow(replaced: replaced, leftOtherPlaces: left) {
+                changeRecords { $0.follow(replaced: replaced, leftOtherPlaces: left) }
+            }
+        }
         if changes.status { showStatus() }
         if changes.projects {
             refresh()
@@ -798,5 +824,135 @@ final class LibraryModel {
         return try? URL(
             resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting], relativeTo: nil,
             bookmarkDataIsStale: &isStale)
+    }
+}
+
+// MARK: - For the actions (`LibraryActions`)
+
+extension LibraryModel {
+    /// Whether a take is being recorded, asked from any thread.
+    var recordingProbe: @Sendable () -> Bool {
+        let shared = self.shared
+        return { shared.isRecording }
+    }
+
+    /// The context documents are read and edited with, waited for if it is still being made ("Duplicar como"'s first
+    /// edit); `nil` once the window closed.
+    func madeContext() async -> EditContext? {
+        if let context { return context }
+        guard let contextTask, !closed else { return nil }
+        let made = await contextTask.value
+        return closed ? nil : made
+    }
+
+    /// Every project of the trash, as Vaciar la papelera… takes them (not only those the search shows).
+    var trashedItems: [LibraryItem] {
+        trashedSummaries.map { LibraryItem(summary: $0, favorite: records.favorites.contains($0.identity.string)) }
+    }
+
+    /// Whether an editor of this app has the package at `url` open, as the app last said.
+    func isOpenHere(_ url: URL) -> Bool {
+        live.openHere.contains(url.standardizedFileURL.path)
+    }
+
+    /// The project known at `url`, if any.
+    func identity(at url: URL) -> Library.PackageIdentity? {
+        let path = url.standardizedFileURL.path
+        return catalog.summaries.first { $0.value.path == path }?.key
+    }
+
+    /// Every project of the trash the library knows, not only those the search shows.
+    var trashedSummaries: [ProjectSummary] {
+        catalog.summaries.values.filter { $0.place == .trash }.sorted { $0.path < $1.path }
+    }
+
+    /// The names of the other projects known in the folder of `summary`, to say at once that a name is taken.
+    func knownNames(besides summary: ProjectSummary) -> [String] {
+        let folder = (summary.path as NSString).deletingLastPathComponent
+        return catalog.summaries.values
+            .filter { ($0.path as NSString).deletingLastPathComponent == folder && $0.identity != summary.identity }
+            .map(\.name)
+    }
+
+    /// Where the package of `summary` is now: one of Other places is found again by its bookmark, off the main thread
+    /// (an action of the user, design §6.5); any other by its path.
+    func locate(_ summary: ProjectSummary) async -> URL {
+        let url = URL(filePath: summary.path, directoryHint: .isDirectory)
+        guard summary.place == .elsewhere else { return url }
+        let bookmark = records.places.first { $0.path == summary.path }?.bookmark
+        let found = await Task.detached(priority: .userInitiated) { Self.resolve(bookmark) ?? url }.value
+        follow(summary, to: found)
+        return found
+    }
+
+    /// One of Other places found at `url` by its bookmark, on an action of the user: if it moved, its card and its entry
+    /// of `places` follow it, so what the scanner tells of it there takes the card's place.
+    func follow(_ summary: ProjectSummary, to url: URL) {
+        let (old, new) = (summary.path, url.standardizedFileURL.path)
+        guard old != new else { return }
+        if records.places.contains(where: { $0.path == old }) {
+            changeRecords { records in
+                for index in records.places.indices where records.places[index].path == old { records.places[index].path = new }
+            }
+        }
+        if catalog.move(summary.identity, to: new, place: .elsewhere, now: Date()) {
+            refresh()
+            scheduleIndexSave()
+        }
+    }
+
+    /// Changes `library.json`, in memory and on disk, and shows it.
+    func changeRecords(_ change: @escaping @Sendable (inout LibraryRecords) -> Void) {
+        change(&records)
+        if let recordsStore { Task { await recordsStore.update(change) } }
+        refresh()
+    }
+
+    /// The project `id` is now at `url`, in `place` (`LibraryCatalog.move`): shown so at once, before the scanner looks
+    /// at it again.
+    func showMoved(_ id: Library.PackageIdentity, to url: URL, place: Place) {
+        let old = catalog.summaries[id]
+        guard catalog.move(id, to: url.standardizedFileURL.path, place: place, now: Date()) else { return }
+        // One of Other places renamed in its folder: its entry follows it.
+        if let old, old.place == .elsewhere, place == .elsewhere, old.path != url.standardizedFileURL.path {
+            let (from, to) = (old.path, url.standardizedFileURL.path)
+            changeRecords { records in
+                for index in records.places.indices where records.places[index].path == from { records.places[index].path = to }
+            }
+        }
+        refresh()
+        scheduleIndexSave()
+    }
+
+    /// The projects `ids` are gone for good (deleted): no longer shown.
+    func forget(_ ids: [Library.PackageIdentity]) {
+        guard ids.map({ catalog.remove($0) != nil }).contains(true) else { return }
+        refresh()
+        scheduleIndexSave()
+    }
+
+    /// Takes the project `id`, one of Other places, out of the library: its summary and its entry of `places`, which are
+    /// returned to be put back (`putBack`). Its file stays where it is.
+    func takeOut(_ id: Library.PackageIdentity) -> (summary: ProjectSummary, place: OtherPlace)? {
+        guard let summary = catalog.remove(id) else { return nil }
+        let path = summary.path
+        let place = records.places.first { $0.path == path } ?? OtherPlace(added: summary.lastSeen, bookmark: Data(), path: path)
+        changeRecords { $0.places.removeAll { $0.path == path } }
+        scheduleIndexSave()
+        return (summary, place)
+    }
+
+    /// Puts back what `takeOut` took: `place`, if it had a bookmark, and `summary`, if it is known and nothing newer of
+    /// it came meanwhile (`LibraryCatalog.putBack`).
+    func putBack(_ summary: ProjectSummary?, place: OtherPlace) {
+        if let summary { catalog.putBack(summary) }
+        if place.bookmark.isEmpty {
+            refresh()
+        } else {
+            changeRecords { records in
+                if !records.places.contains(where: { $0.path == place.path }) { records.places.append(place) }
+            }
+        }
+        scheduleIndexSave()
     }
 }

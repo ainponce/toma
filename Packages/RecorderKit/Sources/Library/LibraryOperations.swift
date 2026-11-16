@@ -64,6 +64,18 @@ public struct DuplicateRecord: Equatable, Sendable {
     }
 }
 
+/// What deleting forever did (`LibraryOperations.deletion(of:progress:)`): the projects deleted, by the identity they had,
+/// and why the others were not, if any was not.
+public struct LibraryDeletion: Equatable, Sendable {
+    public var deleted: [PackageIdentity]
+    public var failure: LibraryFailure?
+
+    public init(deleted: [PackageIdentity], failure: LibraryFailure? = nil) {
+        self.deleted = deleted
+        self.failure = failure
+    }
+}
+
 /// The library's file operations (design §6.3, §6.4): rename, duplicate, move to the trash, restore and delete
 /// forever, and undoing a duplicate. A project is never lost: each action is a rename of the whole package on its disk,
 /// or a copy that is hidden until it is whole; deleting renames the package out of every list first and only then
@@ -318,8 +330,18 @@ public final class LibraryOperations: Sendable {
     public func deleteForever(
         _ urls: [URL], progress: @escaping @Sendable (Int, Int, Bool) -> Void
     ) async -> Result<Void, LibraryFailure> {
+        let deletion = await deletion(of: urls, progress: progress)
+        if let failure = deletion.failure { return .failure(failure) }
+        return .success(())
+    }
+
+    /// `deleteForever`, saying also which projects it deleted, by the identity they had: a project that was not there
+    /// any more when its turn came (moved out of the trash meanwhile) is not one of them.
+    public func deletion(
+        of urls: [URL], progress: @escaping @Sendable (Int, Int, Bool) -> Void
+    ) async -> LibraryDeletion {
         let inTrash = await onDisk { [self] in urls.allSatisfy(isInTrash) }
-        guard inTrash else { return .failure(.outsideProjectsFolder) }
+        guard inTrash else { return LibraryDeletion(deleted: [], failure: .outsideProjectsFolder) }
         for url in urls where app.isOpenHere(url) { await app.close(url) }
         let total = urls.count
         let marked = await onDisk { [self] in markForDeletion(urls) }
@@ -332,11 +354,12 @@ public final class LibraryOperations: Sendable {
                 for identity in identities { records.trashOrigins[identity] = nil }
             }
         }
-        if let stuck = marked.stuck ?? deleted.stuck { return .failure(.posix(stuck)) }
+        let done = deleted.identities
+        if let stuck = marked.stuck ?? deleted.stuck { return LibraryDeletion(deleted: done, failure: .posix(stuck)) }
         let notDeleted = marked.locked + marked.failed + deleted.failed
-        if notDeleted == 0 { return .success(()) }
-        if total == 1, marked.locked == 1 { return .failure(.openElsewhere) }
-        return .failure(.someNotDeleted(notDeleted))
+        if notDeleted == 0 { return LibraryDeletion(deleted: done) }
+        if total == 1, marked.locked == 1 { return LibraryDeletion(deleted: done, failure: .openElsewhere) }
+        return LibraryDeletion(deleted: done, failure: .someNotDeleted(notDeleted))
     }
 
     /// Finishes what a crash left half done, and touches nothing else:
@@ -351,6 +374,35 @@ public final class LibraryOperations: Sendable {
         await onDisk(.utility) { [self] in
             finishDeleting()
             removeAbandonedCopies()
+        }
+    }
+
+    // MARK: - What the library's actions ask
+
+    /// The names of the projects in `folder` (without `.toma`), read off the main thread; none if it cannot be read.
+    public func namesOfProjects(in folder: URL) async -> [String] {
+        await onDisk { [self] in (try? projectNames(in: folder)) ?? [] }
+    }
+
+    /// `record` as its copy is now: the signatures of its `edit.json` and `edit-log.jsonl` read again, after an edit the
+    /// library itself made ("Duplicar como"'s first), so that undoing it finds the copy unchanged.
+    public func signed(_ record: DuplicateRecord) async -> DuplicateRecord {
+        await onDisk { [self] in
+            var record = record
+            let copy = ProjectPackage(url: record.copy)
+            record.editSignature = signature(of: copy.editURL)
+            record.logSignature = signature(of: copy.editLogURL)
+            return record
+        }
+    }
+
+    /// Those of `urls` that are a project's package: a folder named `<name>.toma`, never a file or a link.
+    public func packageFolders(_ urls: [URL]) async -> [URL] {
+        await onDisk { [self] in
+            urls.filter { url in
+                PackageNames.isPackage(url.lastPathComponent)
+                    && (try? fileSystem.stat(url, withAddedDate: false))?.kind == .directory
+            }
         }
     }
 
