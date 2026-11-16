@@ -46,7 +46,7 @@ public enum ShaderSource {
         float2 uvOrigin;        // texture coordinates at the image's top-left corner
         float2 uvSize;          // texture coordinates across the image
         float radius;           // corner radius of the image
-        float padding;
+        float clampsToCrop;     // 1: sample only inside uvOrigin...uvOrigin + uvSize (a crop), 0: as given
     };
 
     struct QuadOut {
@@ -72,7 +72,9 @@ public enum ShaderSource {
         return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     }
 
-    // The screen and the camera: bilinear, opaque, with antialiased rounded corners.
+    // The screen and the camera: bilinear, opaque, with antialiased rounded corners. For a crop, the texture is
+    // sampled half a texel inside it at most, so neither the bilinear filter nor the antialiased edge (drawn past
+    // the image) mixes in what is outside it.
     fragment float4 screenFragment(QuadOut in [[stage_in]],
                                    constant QuadUniforms &u [[buffer(0)]],
                                    texture2d<float> source [[texture(0)]],
@@ -81,7 +83,14 @@ public enum ShaderSource {
         float radius = min(u.radius, min(halfSize.x, halfSize.y));
         float d = roundedRectDistance(in.p - (u.contentOrigin + halfSize), halfSize, radius);
         float coverage = clamp(0.5 - d, 0.0, 1.0);
-        float3 color = source.sample(linearSampler, in.uv).rgb;
+        float2 uv = in.uv;
+        if (u.clampsToCrop != 0.0) {
+            float2 halfTexel = 0.5 / float2(source.get_width(), source.get_height());
+            float2 low = u.uvOrigin + halfTexel;
+            float2 high = max(u.uvOrigin + u.uvSize - halfTexel, low);
+            uv = clamp(uv, low, high);
+        }
+        float3 color = source.sample(linearSampler, uv).rgb;
         return float4(color, 1.0) * coverage;
     }
 

@@ -104,10 +104,11 @@ public final class Compositor: @unchecked Sendable {
         // 2. Screen.
         if let layer = frame.screen, let screen {
             let crop = layer.crop
+            // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
             drawImage(
                 screen, in: layer.rect, cornerRadius: layer.cornerRadius,
                 uvOrigin: SIMD2(Float(crop.x), Float(crop.y)), uvSize: SIMD2(Float(crop.width), Float(crop.height)),
-                viewport: viewport, encoder: encoder)
+                clampsToCrop: crop != Rect(x: 0, y: 0, width: 1, height: 1), viewport: viewport, encoder: encoder)
         }
 
         // 3. Cursor, its hotspot at the cursor position.
@@ -141,10 +142,11 @@ public final class Compositor: @unchecked Sendable {
     }
 
     /// Draws the part `uvOrigin`, `uvSize` of `texture` into `rect` with rounded corners (`screenFragment`), over a
-    /// quad one pixel larger on every side so its antialiased edge is drawn whole. Nothing for an empty rect.
+    /// quad one pixel larger on every side so its antialiased edge is drawn whole; with `clampsToCrop`, nothing of
+    /// `texture` outside that part shows, not even blended at the edge. Nothing for an empty rect.
     private func drawImage(
         _ texture: any MTLTexture, in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>,
-        viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
+        clampsToCrop: Bool = false, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
         var quad = QuadUniforms(
@@ -155,7 +157,8 @@ public final class Compositor: @unchecked Sendable {
             contentSize: SIMD2(Float(rect.width), Float(rect.height)),
             uvOrigin: uvOrigin,
             uvSize: uvSize,
-            radius: Float(max(cornerRadius, 0)))
+            radius: Float(max(cornerRadius, 0)),
+            clampsToCrop: clampsToCrop ? 1 : 0)
         encoder.setRenderPipelineState(screenPipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
@@ -196,5 +199,5 @@ private struct QuadUniforms {
     var uvOrigin: SIMD2<Float>
     var uvSize: SIMD2<Float>
     var radius: Float
-    var padding: Float = 0
+    var clampsToCrop: Float = 0
 }

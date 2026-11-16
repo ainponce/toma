@@ -159,12 +159,29 @@ func compositorDrawsOnlyTheCropOfTheScreen() throws {
         screen: ScreenLayer(
             trackID: trackID, sourceTime: base, rect: rect, cornerRadius: 0, crop: Rect(x: 0.5, y: 0, width: 0.5, height: 0.5)))
     let bytes = try draw(frame, screen: screen, device: device)
-    // The top-right quarter of the frame fills the whole rect: blue, without the green row below it, and the red
-    // half on its left only blends into its first texel (4.8 px).
-    #expect(pixel(bytes, width: size.x, x: 40, y: 90).z > 0)
-    for y in 31..<149 {
-        for x in 45..<279 {
+    // The top-right quarter of the frame fills the whole rect: blue, to its edges, without the red half on its left
+    // nor the green row below it, not even blended in by the filter or the antialiased edge.
+    for y in 30..<150 {
+        for x in 40..<280 {
             #expect(isClose(pixel(bytes, width: size.x, x: x, y: y), float(blue)), "at (\(x), \(y))")
+        }
+    }
+    let gradient = try draw(
+        RenderFrame(
+            outputSize: size, gradientStart: style.gradientStart, gradientEnd: style.gradientEnd,
+            gradientAngleDegrees: style.gradientAngleDegrees),
+        screen: screen, device: device)
+    // Its antialiased edge, outside the rect, blends only that blue into the background.
+    for y in 29...150 {
+        for x in [39, 280] {
+            let edge = pixel(bytes, width: size.x, x: x, y: y), under = pixel(gradient, width: size.x, x: x, y: y)
+            #expect(Int(edge.z) <= Int(under.z) + 1 && Int(edge.y) <= Int(under.y) + 1, "red or green at (\(x), \(y)): \(edge)")
+        }
+    }
+    for x in 39...280 {
+        for y in [29, 150] {
+            let edge = pixel(bytes, width: size.x, x: x, y: y), under = pixel(gradient, width: size.x, x: x, y: y)
+            #expect(Int(edge.z) <= Int(under.z) + 1 && Int(edge.y) <= Int(under.y) + 1, "red or green at (\(x), \(y)): \(edge)")
         }
     }
 }
