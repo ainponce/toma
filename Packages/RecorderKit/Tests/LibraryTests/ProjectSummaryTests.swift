@@ -195,7 +195,7 @@ private func unblocking<T>(
         #expect(unfinished.formatVersion == 3)
 
         let unreadable = Reading.summary(urls[5], in: dir)
-        #expect(Reading.needsRepair(unreadable.state), "\(unreadable.state)")
+        #expect(unreadable.state == .needsRepair(RepairReason(part: .manifest, problem: .unreadable)))
         #expect(unreadable.manifest != nil)
         #expect(unreadable.outputSeconds == nil && unreadable.formatVersion == nil && unreadable.documentVersion == nil)
 
@@ -294,6 +294,12 @@ private func unblocking<T>(
         #expect(try LoadedProject.load(linkTarget).events.isEmpty == false)
         let before = try (urls.dropLast() + [linkTarget]).map(treeHash)
         let counting = CountingFileSystem()
+        // Why each cannot be opened: the events or the manifest are not regular files or are links, the package is a link.
+        let reasons = [
+            RepairReason(part: .edit, problem: .system(EFTYPE)), RepairReason(part: .edit, problem: .system(ELOOP)),
+            RepairReason(part: .manifest, problem: .system(EFTYPE)), RepairReason(part: .package, problem: .isALink),
+        ]
+        let expected = Dictionary(uniqueKeysWithValues: zip(urls.map(\.lastPathComponent), reasons))
 
         try await unblocking(fifos) {
             let clock = ContinuousClock()
@@ -310,7 +316,7 @@ private func unblocking<T>(
                 let best = try #require(times.min())
                 let state = try #require(summary).state
                 #expect(best < .milliseconds(100), "\(url.lastPathComponent): \(times)")
-                #expect(Reading.needsRepair(state), "\(url.lastPathComponent): \(state)")
+                #expect(state == expected[url.lastPathComponent].map(ProjectState.needsRepair), "\(url.lastPathComponent)")
             }
             // What the editor reads them with refuses them too, at once.
             let context = Reading.context(dir)
@@ -345,7 +351,7 @@ private func unblocking<T>(
         let summary = ProjectReader.summary(
             of: url, place: Reading.projectsFolder, fileSystem: fileSystem, readDocument: reader.read,
             context: Reading.context(dir), now: Reading.now)
-        #expect(Reading.needsRepair(summary.state), "\(summary.state)")
+        #expect(summary.state == .needsRepair(RepairReason(part: .manifest, problem: .system(EFBIG))))
         #expect(fileSystem.reads == [.init(url: manifest, maxBytes: ProjectReader.maxManifestBytes)])
         #expect(ProjectReader.maxManifestBytes == 4 * 1_048_576)
         #expect(reader.calls.isEmpty)
@@ -395,7 +401,7 @@ private func unblocking<T>(
         let context = Reading.context(dir)
         for url in urls {
             let summary = Reading.summary(url, in: dir)
-            #expect(Reading.needsRepair(summary.state), "\(url.lastPathComponent): \(summary.state)")
+            #expect(summary.state == .needsRepair(RepairReason(part: .edit, problem: .system(ELOOP))), "\(url.lastPathComponent)")
             #expect(throws: POSIXError(.ELOOP), "\(url.lastPathComponent)") {
                 try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
             }
@@ -418,9 +424,21 @@ private func unblocking<T>(
             (CocoaError(.fileReadNoPermission, userInfo: [NSUnderlyingErrorKey: POSIXError(.EACCES)]), .volume),
             (CocoaError(.fileReadUnknown), .volume),
         ]
-        for (error, call) in failures {
+        // Why, by the system's code; one that has none says it in English.
+        let problems: [RepairReason.Problem?] = [.system(EIO), .system(EACCES), .system(ETIMEDOUT), .system(EACCES), nil]
+        for ((error, call), problem) in zip(failures, problems) {
             let summary = Reading.summary(url, in: dir, fileSystem: FailingFileSystem(url: url, call: call, error: error))
-            #expect(Reading.needsRepair(summary.state), "\(error): \(summary.state)")
+            guard case .needsRepair(let reason) = summary.state else {
+                Issue.record("\(error): \(summary.state)")
+                continue
+            }
+            #expect(reason.part == .package, "\(error)")
+            if let problem {
+                #expect(reason.problem == problem, "\(error)")
+            } else if case .other = reason.problem {
+            } else {
+                Issue.record("\(error): \(reason.problem)")
+            }
             #expect(summary.identity.file == 0)
         }
         // Foundation's own "no such file" is not there.
@@ -444,4 +462,14 @@ private func unblocking<T>(
         #expect(counting.urls(of: .freeSpace).isEmpty)
         #expect(counting.urls(of: .volume).count == 1_000)
     }
+}
+
+@Test func repairReasonsSayWhatAndWhy() {
+    // In English, for logs: the app says them in words of its own.
+    #expect(RepairReason(part: .manifest, problem: .system(EFBIG)).description == "manifest.json: File too large.")
+    #expect(RepairReason(part: .package, problem: .isALink).description == "The package is a link.")
+    #expect(RepairReason(part: .manifest, problem: .unknownFormat(0)).description == "manifest.json: there is no format version 0.")
+    #expect(RepairReason(part: .edit, problem: .unreadable).description == "It is not one this version reads.")
+    #expect(
+        RepairReason(part: .package, problem: .system(EIO)).description == "The package cannot be looked at: Input/output error.")
 }

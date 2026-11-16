@@ -45,6 +45,28 @@
         }
       }
     },
+    "%@ in the trash" : {
+      "comment" : "The library's sidebar: what the trash takes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ en la papelera"
+          }
+        }
+      }
+    },
+    "%@ left on “%@”" : {
+      "comment" : "The library's sidebar: the free space of the projects folder's disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quedan %1$@ en «%2$@»"
+          }
+        }
+      }
+    },
     "%lld markers" : {
       "comment" : "A saved take: how many markers it has",
       "localizations" : {
@@ -267,6 +289,17 @@
         }
       }
     },
+    "All Projects" : {
+      "comment" : "The library's sidebar: a section",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todos los proyectos"
+          }
+        }
+      }
+    },
     "Allowed" : {
       "comment" : "The state of a permission",
       "localizations" : {
@@ -421,6 +454,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Área guardada."
+          }
+        }
+      }
+    },
+    "Ascending" : {
+      "comment" : "The library's bar: the order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orden ascendente"
           }
         }
       }
@@ -756,12 +800,45 @@
         }
       }
     },
+    "Can't Be Opened" : {
+      "comment" : "The library: a project to repair",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede abrir"
+          }
+        }
+      }
+    },
     "Can't check the free disk space." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se puede comprobar el espacio libre en el disco."
+          }
+        }
+      }
+    },
+    "Can't read %@." : {
+      "comment" : "The library: why a project can't be opened",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer %@."
+          }
+        }
+      }
+    },
+    "Can't read %@: %@." : {
+      "comment" : "The library: why a project can't be opened, and the cause",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer %1$@: %2$@."
           }
         }
       }
@@ -1443,6 +1520,17 @@
         }
       }
     },
+    "Date Recorded" : {
+      "comment" : "The library's list: a column, and an order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fecha de grabación"
+          }
+        }
+      }
+    },
     "Delete" : {
       "comment" : "The timeline's menu of a clip: deletes what is selected",
       "localizations" : {
@@ -1542,6 +1630,17 @@
         }
       }
     },
+    "Descending" : {
+      "comment" : "The library's bar: the order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Orden descendente"
+          }
+        }
+      }
+    },
     "Desktop" : {
       "comment" : "A display's only desktop (Space), and the open island's section of desktops",
       "localizations" : {
@@ -1560,6 +1659,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escritorio %lld"
+          }
+        }
+      }
+    },
+    "Disk “%@” isn't connected." : {
+      "comment" : "The library: a project of Other places",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El disco «%@» no está conectado."
           }
         }
       }
@@ -1664,6 +1774,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Duplicar"
+          }
+        }
+      }
+    },
+    "Duration" : {
+      "comment" : "The library's list: a column, and an order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duración"
           }
         }
       }
@@ -1866,6 +1987,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Rápido"
+          }
+        }
+      }
+    },
+    "Favorites" : {
+      "comment" : "The library's sidebar: a section",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Favoritos"
           }
         }
       }
@@ -2287,6 +2419,17 @@
         }
       }
     },
+    "In the trash since %@" : {
+      "comment" : "The library: when a project went to the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En la papelera desde el %@"
+          }
+        }
+      }
+    },
     "Instant" : {
       "comment" : "The Zoom tab: the selected zoom cuts in and out",
       "localizations" : {
@@ -2316,6 +2459,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Va a la Papelera."
+          }
+        }
+      }
+    },
+    "It's recording." : {
+      "comment" : "The library: a project being recorded does not open",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se está grabando."
           }
         }
       }
@@ -2359,6 +2513,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grande"
+          }
+        }
+      }
+    },
+    "Last Opened" : {
+      "comment" : "The library's bar: an order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abierto por última vez"
+          }
+        }
+      }
+    },
+    "Last seen %@" : {
+      "comment" : "The library: when a project of Other places was last looked at",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Visto por última vez el %@"
           }
         }
       }
@@ -2428,6 +2604,17 @@
         }
       }
     },
+    "Library" : {
+      "comment" : "The library's window and its title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Biblioteca"
+          }
+        }
+      }
+    },
     "Light" : {
       "localizations" : {
         "es" : {
@@ -2444,6 +2631,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cargando…"
+          }
+        }
+      }
+    },
+    "Location" : {
+      "comment" : "The library's list: a column",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lugar"
+          }
+        }
+      }
+    },
+    "Looking for projects… %lld" : {
+      "comment" : "The library's sidebar: the first walk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscando proyectos… %lld"
           }
         }
       }
@@ -2476,6 +2685,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Administrar estilos…"
+          }
+        }
+      }
+    },
+    "Mark projects with ☆ to find them here." : {
+      "comment" : "The library: Favorites is empty",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marcar proyectos con ☆ para encontrarlos aquí."
           }
         }
       }
@@ -2754,6 +2974,17 @@
         }
       }
     },
+    "Needs a Newer Version of Toma" : {
+      "comment" : "The library: a project of a newer version",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Necesita una versión más nueva de Toma"
+          }
+        }
+      }
+    },
     "New Recording" : {
       "localizations" : {
         "es" : {
@@ -2877,12 +3108,34 @@
         }
       }
     },
+    "No recordings yet." : {
+      "comment" : "The library without projects",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay grabaciones."
+          }
+        }
+      }
+    },
     "No shortcuts found." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se encontraron atajos."
+          }
+        }
+      }
+    },
+    "No thumbnail in this location" : {
+      "comment" : "The library: a card in a synced or network location",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin miniatura en esta ubicación"
           }
         }
       }
@@ -2904,6 +3157,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No"
+          }
+        }
+      }
+    },
+    "Not Available" : {
+      "comment" : "The library: a project of Other places not found",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No disponible"
           }
         }
       }
@@ -2973,6 +3237,17 @@
         }
       }
     },
+    "Nothing matches “%@”." : {
+      "comment" : "The library: a search without results",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada coincide con «%@»."
+          }
+        }
+      }
+    },
     "OK" : {
       "localizations" : {
         "es" : {
@@ -3015,6 +3290,35 @@
         }
       }
     },
+    "Open" : {
+      "comment" : "The library: opens the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir"
+          }
+        }
+      }
+    },
+    "Open (library state)" : {
+      "comment" : "The library: a project this app has open",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abierto"
+          }
+        }
+      }
+    },
     "Open Last Project" : {
       "localizations" : {
         "es" : {
@@ -3042,6 +3346,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrir Ajustes del Sistema"
+          }
+        }
+      }
+    },
+    "Open in Another App" : {
+      "comment" : "The library: a project another app has open",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abierto en otra app"
           }
         }
       }
@@ -3104,6 +3419,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Opcional: solo para cambiar de escritorio desde el notch."
+          }
+        }
+      }
+    },
+    "Other Locations" : {
+      "comment" : "The library's sidebar: a section",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otros lugares"
           }
         }
       }
@@ -3309,6 +3635,28 @@
         }
       }
     },
+    "Projects" : {
+      "comment" : "The library: what VoiceOver calls its grid and its list",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proyectos"
+          }
+        }
+      }
+    },
+    "Projects opened from other folders show up here." : {
+      "comment" : "The library: Other Locations is empty",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los proyectos que se abran desde otras carpetas aparecen aquí."
+          }
+        }
+      }
+    },
     "Quality" : {
       "comment" : "The export sheet: the MP4's quality",
       "localizations" : {
@@ -3340,6 +3688,17 @@
         }
       }
     },
+    "Read-Only" : {
+      "comment" : "The library: a project on a disk that cannot be written",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo lectura"
+          }
+        }
+      }
+    },
     "Record" : {
       "comment" : "The button that starts a recording",
       "localizations" : {
@@ -3357,6 +3716,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grabar otra"
+          }
+        }
+      }
+    },
+    "Record from the notch or with %@." : {
+      "comment" : "The library without projects: how to record",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar desde el notch o con %@."
           }
         }
       }
@@ -3418,6 +3788,24 @@
     },
     "Recording (island state)" : {
       "comment" : "The open island while a take records: its state",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recording"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabando"
+          }
+        }
+      }
+    },
+    "Recording (library state)" : {
+      "comment" : "The library: a project being recorded",
       "extractionState" : "manual",
       "localizations" : {
         "en" : {
@@ -3952,6 +4340,17 @@
         }
       }
     },
+    "Search" : {
+      "comment" : "The library: the search field",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar"
+          }
+        }
+      }
+    },
     "Selected Block" : {
       "comment" : "Camera tab: card of the selected layout block",
       "localizations" : {
@@ -4257,6 +4656,17 @@
         }
       }
     },
+    "Sort By" : {
+      "comment" : "The library's bar: the order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordenar por"
+          }
+        }
+      }
+    },
     "Source code of this version: %@" : {
       "localizations" : {
         "es" : {
@@ -4394,6 +4804,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Iniciando la grabación…"
+          }
+        }
+      }
+    },
+    "Status" : {
+      "comment" : "The library's list: a column",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estado"
           }
         }
       }
@@ -4837,6 +5258,50 @@
         }
       }
     },
+    "The project can't be found." : {
+      "comment" : "The library: a project of Other places",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encuentra el proyecto."
+          }
+        }
+      }
+    },
+    "The project is a link." : {
+      "comment" : "The library: why a project can't be opened",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El proyecto es un enlace."
+          }
+        }
+      }
+    },
+    "The project isn't a folder." : {
+      "comment" : "The library: why a project can't be opened",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El proyecto no es una carpeta."
+          }
+        }
+      }
+    },
+    "The projects folder can't be read." : {
+      "comment" : "The library: a strip",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer la carpeta de proyectos."
+          }
+        }
+      }
+    },
     "The recording closed with an error: %@" : {
       "localizations" : {
         "es" : {
@@ -4957,6 +5422,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La toma quedó en la papelera."
+          }
+        }
+      }
+    },
+    "The trash is empty." : {
+      "comment" : "The library: the trash is empty",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La papelera está vacía."
           }
         }
       }
@@ -5484,6 +5960,17 @@
         }
       }
     },
+    "This version of Toma doesn't know the project's format." : {
+      "comment" : "The library: why a project can't be opened",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta versión de Toma no conoce el formato del proyecto."
+          }
+        }
+      }
+    },
     "Timeline" : {
       "comment" : "VoiceOver: the editor's timeline",
       "localizations" : {
@@ -5543,6 +6030,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Para cambiar de escritorio desde acá, activar “Mover un espacio a la izquierda” y “Mover un espacio a la derecha” en Ajustes del Sistema › Teclado › Atajos de teclado › Mission Control."
+          }
+        }
+      }
+    },
+    "Today" : {
+      "comment" : "The library: the heading of today's projects",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hoy"
           }
         }
       }
@@ -5623,6 +6121,17 @@
         }
       }
     },
+    "Trash" : {
+      "comment" : "The library: the section of the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Papelera"
+          }
+        }
+      }
+    },
     "Trim" : {
       "comment" : "An undo step: trimming a part (Edit ▸ Undo Trim)",
       "localizations" : {
@@ -5663,6 +6172,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Recortar el inicio hasta el cabezal"
+          }
+        }
+      }
+    },
+    "Try Again" : {
+      "comment" : "The library: walk the projects folder again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volver a intentar"
           }
         }
       }
@@ -5728,6 +6248,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Deshacer %@"
+          }
+        }
+      }
+    },
+    "Unfinished" : {
+      "comment" : "The library: a take that did not finish saving",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin terminar"
           }
         }
       }
@@ -5818,6 +6349,17 @@
         }
       }
     },
+    "View" : {
+      "comment" : "The library's bar: as a grid or as a list",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vista"
+          }
+        }
+      }
+    },
     "Violet" : {
       "comment" : "Colour of Toma's style",
       "localizations" : {
@@ -5836,6 +6378,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Volumen"
+          }
+        }
+      }
+    },
+    "Waiting for disk “%@”…" : {
+      "comment" : "The library's sidebar: a disk slow to answer",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando al disco «%@»…"
           }
         }
       }
@@ -6015,6 +6568,17 @@
         }
       }
     },
+    "Yesterday" : {
+      "comment" : "The library: the heading of yesterday's projects",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ayer"
+          }
+        }
+      }
+    },
     "Zoom" : {
       "comment" : "The panel's tab",
       "localizations" : {
@@ -6070,6 +6634,50 @@
         }
       }
     },
+    "a path in it leaves the project" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "una ruta sale del proyecto"
+          }
+        }
+      }
+    },
+    "a recording is missing" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "falta una grabación"
+          }
+        }
+      }
+    },
+    "as Grid" : {
+      "comment" : "The library's bar: the view",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como grilla"
+          }
+        }
+      }
+    },
+    "as List" : {
+      "comment" : "The library's bar: the view",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como lista"
+          }
+        }
+      }
+    },
     "cursor.none" : {
       "comment" : "The Cursor tab: no click effect or sound (not the generic \"None\")",
       "localizations" : {
@@ -6083,6 +6691,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "favorite" : {
+      "comment" : "VoiceOver: a project of the library is a favorite",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "favorito"
           }
         }
       }
@@ -6111,6 +6730,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "oculto por el bloque «%1$@» de %2$@"
+          }
+        }
+      }
+    },
+    "it isn't a regular file" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no es un archivo común"
+          }
+        }
+      }
+    },
+    "it isn't there" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no está"
+          }
+        }
+      }
+    },
+    "it's a link" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "es un enlace"
+          }
+        }
+      }
+    },
+    "it's damaged or of another version" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "está dañado o es de otra versión"
+          }
+        }
+      }
+    },
+    "it's too large" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "es demasiado grande"
           }
         }
       }
@@ -6146,6 +6820,39 @@
         }
       }
     },
+    "recorded on %@" : {
+      "comment" : "VoiceOver: when a project of the library was recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "grabado el %@"
+          }
+        }
+      }
+    },
+    "recorded today at %@" : {
+      "comment" : "VoiceOver: when a project of the library was recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "grabado hoy a las %@"
+          }
+        }
+      }
+    },
+    "recorded yesterday at %@" : {
+      "comment" : "VoiceOver: when a project of the library was recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "grabado ayer a las %@"
+          }
+        }
+      }
+    },
     "smoothing.medium" : {
       "comment" : "The Cursor tab: the middle smoothing (not the camera's \"Medium\")",
       "localizations" : {
@@ -6159,6 +6866,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Medio"
+          }
+        }
+      }
+    },
+    "the disk didn't answer" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el disco no respondió"
+          }
+        }
+      }
+    },
+    "the disk failed" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "falló el disco"
+          }
+        }
+      }
+    },
+    "the edit" : {
+      "comment" : "The library: what of a project can't be read (its document or its log)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la edición"
+          }
+        }
+      }
+    },
+    "the project" : {
+      "comment" : "The library: what of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el proyecto"
+          }
+        }
+      }
+    },
+    "there's no permission" : {
+      "comment" : "The library: why a part of a project can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no hay permiso"
           }
         }
       }

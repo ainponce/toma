@@ -98,7 +98,8 @@ private enum Stores {
     try withTemporaryDirectory { dir in
         // The index: every state and every place.
         let states: [ProjectState] = [
-            .normal, .unfinished, .needsRepair("manifest.json: File too large"), .newerVersion, .readOnlyVolume,
+            .normal, .unfinished, .needsRepair(RepairReason(part: .manifest, problem: .system(EFBIG))),
+            .needsRepair(RepairReason(part: .edit, problem: .other("Something else."))), .newerVersion, .readOnlyVolume,
             .inTrash(since: Date(timeIntervalSince1970: 1_794_750_000)), .unavailable(.diskNotConnected("Trabajo")),
             .unavailable(.notFound),
         ]

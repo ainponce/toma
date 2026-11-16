@@ -37,6 +37,11 @@ final class VolumeQueues: Sendable {
         }
     }
 
+    /// Every queue made so far.
+    var all: [VolumeQueue] {
+        state.withLock { Array($0.queues.values) }
+    }
+
     /// Queues `job`, a read, after the reads queued before it and before any size.
     func enqueue(on queue: VolumeQueue, _ job: @escaping @Sendable () -> Void) {
         queue.pending.withLock { $0.reads.append(job) }

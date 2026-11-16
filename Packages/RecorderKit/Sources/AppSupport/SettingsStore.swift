@@ -34,6 +34,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     /// The named style new projects take ("Use for New Projects", 1c design §8), by its id (`NamedStyle.id`, 8 hex
     /// digits); `nil`: Toma's style (plan decision 29). An id no style of the library has any more is Toma's style too.
     public var newProjectsStyleID: String?
+    /// The library's window: its frame, view, order and section (design §6.1).
+    public var library: LibraryPreferences = .init()
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -43,7 +45,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
         cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
         focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true,
-        export: ExportPreferences = .init(), newProjectsStyleID: String? = nil
+        export: ExportPreferences = .init(), newProjectsStyleID: String? = nil,
+        library: LibraryPreferences = .init()
     ) {
         self.selection = selection
         self.quick = quick
@@ -59,6 +62,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.noteKeyActivity = noteKeyActivity
         self.export = export
         self.newProjectsStyleID = newProjectsStyleID
+        self.library = library
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -82,6 +86,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         export = (try? container.decodeIfPresent(ExportPreferences.self, forKey: .export)) ?? defaults.export
         newProjectsStyleID =
             (try? container.decodeIfPresent(String.self, forKey: .newProjectsStyleID)) ?? defaults.newProjectsStyleID
+        library = (try? container.decodeIfPresent(LibraryPreferences.self, forKey: .library)) ?? defaults.library
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

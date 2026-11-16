@@ -12,7 +12,7 @@ public enum ProjectState: Codable, Equatable, Sendable {
     case unfinished
     /// The project cannot be opened; why, for the help text: a manifest that cannot be read, a path in it that could
     /// leave the package, a document or an event log that cannot be read.
-    case needsRepair(String)
+    case needsRepair(RepairReason)
     /// `formatVersion` > 3 or `documentVersion` > 2: a newer Toma wrote it.
     case newerVersion
     /// Its volume cannot be written to: it opens only to be looked at.
@@ -21,6 +21,74 @@ public enum ProjectState: Codable, Equatable, Sendable {
     case inTrash(since: Date)
     /// A project of Other places that a look asked by the user could not find.
     case unavailable(Unavailable)
+}
+
+/// Why a project cannot be opened (design §6.6, "Para reparar"): which part of it and what is wrong, as values the app
+/// says in words. `description` says it in English, for logs.
+public struct RepairReason: Codable, Equatable, Sendable, CustomStringConvertible {
+    /// The part of the project that could not be read.
+    public enum Part: String, Codable, Sendable {
+        /// The package itself.
+        case package
+        /// `manifest.json`.
+        case manifest
+        /// What the editor reads: the document, its event log, the take's events.
+        case edit
+    }
+
+    /// What is wrong with it.
+    public enum Problem: Codable, Equatable, Sendable {
+        /// The package is a link (never followed).
+        case isALink
+        /// The package is not a folder.
+        case notAFolder
+        /// A manifest of a format version that does not exist.
+        case unknownFormat(Int)
+        /// The system refused, with this `errno` (`EIO`, `EACCES`, `EFBIG` for a manifest past its limit, `ELOOP` for a
+        /// link inside, `EFTYPE` for something that is not a regular file…).
+        case system(Int32)
+        /// It is damaged, or not one this version reads.
+        case unreadable
+        /// A path in it could leave the package: nothing was read through it.
+        case pathLeavesThePackage
+        /// A take it names is not there, or it has none.
+        case missingTake
+        /// Anything else, in English.
+        case other(String)
+    }
+
+    public var part: Part
+    public var problem: Problem
+
+    public init(part: Part, problem: Problem) {
+        self.part = part
+        self.problem = problem
+    }
+
+    /// The reason in English: "manifest.json: File too large.".
+    public var description: String {
+        let what: String
+        switch problem {
+        case .isALink: return "The package is a link."
+        case .notAFolder: return "The package is not a folder."
+        case .unknownFormat(let version): what = "there is no format version \(version)."
+        case .system(let code): what = String(cString: strerror(code)) + "."
+        case .unreadable: what = "It is not one this version reads."
+        case .pathLeavesThePackage: what = "A path in it leaves the package."
+        case .missingTake: what = "A take is missing."
+        case .other(let text): what = text
+        }
+        switch part {
+        case .package: return "The package cannot be looked at: " + what
+        case .manifest: return "manifest.json: " + what
+        case .edit: return what
+        }
+    }
+
+    /// The reason `error` gives for `part`.
+    static func of(_ part: Part, _ error: any Error) -> RepairReason {
+        RepairReason(part: part, problem: ProjectReader.problem(of: error))
+    }
 }
 
 /// Why a project of Other places is not available (design §6.5).
@@ -157,7 +225,7 @@ public enum ProjectReader {
             identity: PackageIdentity(volume: volume.uuid, file: folder.fileID), path: url.path, name: name, place: place,
             hasCamera: false, state: .normal, lastSeen: lastSeen)
         guard folder.kind == .directory else {
-            summary.state = .needsRepair(folder.kind == .symlink ? "The package is a link." : "The package is not a folder.")
+            summary.state = .needsRepair(RepairReason(part: .package, problem: folder.kind == .symlink ? .isALink : .notAFolder))
             return summary
         }
         func signature(_ file: URL) -> FileSignature? {
@@ -177,13 +245,13 @@ public enum ProjectReader {
                 return summary
             }
             guard Manifest.supportedFormatVersions.contains(version) else {
-                summary.state = .needsRepair("manifest.json: there is no format version \(version).")
+                summary.state = .needsRepair(RepairReason(part: .manifest, problem: .unknownFormat(version)))
                 return summary
             }
             manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
             try manifest.validatePaths()
         } catch {
-            summary.state = .needsRepair("manifest.json: \(reason(error))")
+            summary.state = .needsRepair(.of(.manifest, error))
             return summary
         }
         summary.recordedAt = manifest.createdAt
@@ -213,7 +281,7 @@ public enum ProjectReader {
                 summary.state = .newerVersion
                 return summary
             } catch {
-                summary.state = .needsRepair(reason(error))
+                summary.state = .needsRepair(.of(.edit, error))
                 return summary
             }
         }
@@ -238,16 +306,18 @@ public enum ProjectReader {
 
     /// The state of a package that could not be looked at for another reason than not being there: `error` says why.
     static func cannotBeLookedAt(_ error: any Error) -> ProjectState {
-        .needsRepair("The package cannot be looked at: \(reason(error))")
+        .needsRepair(.of(.package, error))
     }
 
-    /// `error` in a few words, for the help text of a project to repair.
-    private static func reason(_ error: any Error) -> String {
-        if let code = posixCode(of: error) { return String(cString: strerror(code)) + "." }
+    /// What is wrong, by `error`: the system's code, a file that does not decode, or what `LoadedProject` refused.
+    static func problem(of error: any Error) -> RepairReason.Problem {
+        if let code = posixCode(of: error) { return .system(code) }
+        if error is DecodingError { return .unreadable }
+        guard let error = error as? LoadedProjectError else { return .other("\(error)") }
         switch error {
-        case is DecodingError: return "It is not one this version reads."
-        case let error as LoadedProjectError: return "\(error)."
-        default: return "\(error)"
+        case .invalidPath: return .pathLeavesThePackage
+        case .noTakes, .takeNotFound: return .missingTake
+        case .unsupportedFormatVersion(let version): return .unknownFormat(version)
         }
     }
 
