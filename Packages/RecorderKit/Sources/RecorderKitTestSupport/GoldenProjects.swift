@@ -3,6 +3,7 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import ProjectFormat
+import Recording
 
 /// The projects of the golden files of milestone 1b (plan decision 3): takes of version 1 and 2 without edits whose
 /// frames (`goldenFramesMatch`) and mix (`goldenMixMatches`) were recorded before the first change of 1b to the render,
@@ -29,19 +30,41 @@ public enum GoldenProjects {
         Case(name: "twoAudioTracks", times: []),
     ]
 
+    /// The HEVC encoder the video of the cases is written with when their frames are compared with the golden ones
+    /// (`goldenFramesMatch`, `make golden`).
+    ///
+    /// The golden frames are drawn from video the hardware encoder wrote, and every run writes the cases' video again.
+    /// The media engine takes a limited number of encoder sessions, shared by every process: while other processes
+    /// hold them (tests of other checkouts running at once), VideoToolbox writes with its software encoder instead,
+    /// whose bitstream decodes to other pixels (a level or a few apart), and the frames drawn from it differ from the
+    /// golden ones with nothing changed in the render. So these cases wait for the hardware encoder
+    /// (`TakeBuilder.videoEncoder`), and fail if it never takes them, rather than be written by another one.
+    public static let goldenFramesEncoder: VideoEncoderChoice = .hardwareOnly
+
     /// Writes case `name` into `dir`, as the package `<name>.toma` (so the cases fit in one folder), and returns its
     /// take. `formatVersion` `nil` gives the case's own version (1 for `phaseZero`, 2 for the others); another one is
-    /// passed to `TakeBuilder`, for example 3 for `pausedTake` as a version 3 package.
+    /// passed to `TakeBuilder`, for example 3 for `pausedTake` as a version 3 package. `videoEncoder` and
+    /// `makeVideoWriter` (when given) are the builder's (`TakeBuilder.videoEncoder`, `TakeBuilder.makeVideoWriter`):
+    /// `goldenFramesEncoder` for frames compared with the golden ones.
     /// - Throws: `TestSupportError.missing` for a name that is not a case, or what writing the take throws.
-    public static func make(_ name: String, in dir: URL, formatVersion: Int? = nil) async throws -> LoadedProject {
+    public static func make(
+        _ name: String, in dir: URL, formatVersion: Int? = nil, videoEncoder: VideoEncoderChoice = .any,
+        makeVideoWriter: TakeBuilder.VideoWriterFactory? = nil
+    ) async throws -> LoadedProject {
+        func builder(version: Int) throws -> TakeBuilder {
+            let builder = try TakeBuilder(in: dir, name: name, formatVersion: formatVersion ?? version)
+            builder.videoEncoder = videoEncoder
+            if let makeVideoWriter { builder.makeVideoWriter = makeVideoWriter }
+            return builder
+        }
         switch name {
-        case "phaseZero": return try await phaseZero(in: dir, formatVersion: formatVersion ?? 1)
-        case "windowMoving": return try await windowMoving(in: dir, formatVersion: formatVersion ?? 2)
-        case "areaOnDisplay": return try await areaOnDisplay(in: dir, formatVersion: formatVersion ?? 2)
-        case "cameraWithStyleChanges": return try await cameraWithStyleChanges(in: dir, formatVersion: formatVersion ?? 2)
-        case "geometryChange": return try await geometryChange(in: dir, formatVersion: formatVersion ?? 2)
-        case "pausedTake": return try await pausedTake(in: dir, formatVersion: formatVersion ?? 2)
-        case "twoAudioTracks": return try await twoAudioTracks(in: dir, formatVersion: formatVersion ?? 2)
+        case "phaseZero": return try await phaseZero(try builder(version: 1))
+        case "windowMoving": return try await windowMoving(try builder(version: 2))
+        case "areaOnDisplay": return try await areaOnDisplay(try builder(version: 2))
+        case "cameraWithStyleChanges": return try await cameraWithStyleChanges(try builder(version: 2))
+        case "geometryChange": return try await geometryChange(try builder(version: 2))
+        case "pausedTake": return try await pausedTake(try builder(version: 2))
+        case "twoAudioTracks": return try await twoAudioTracks(try builder(version: 2))
         default: throw TestSupportError.missing("golden case \(name)")
         }
     }
@@ -51,8 +74,7 @@ public enum GoldenProjects {
     /// The take of 1a's golden frames as the phase 0 recorder left it: a version 1 package with a 3 s display segment,
     /// the display's `displayGeometry` logged as the take starts (its `globalFrame`), the cursor moving over it the
     /// whole time and a microphone. Its frames are the first of the golden file, the bytes 1a recorded.
-    private static func phaseZero(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
-        let builder = try TakeBuilder(in: dir, name: "phaseZero", formatVersion: formatVersion)
+    private static func phaseZero(_ builder: TakeBuilder) async throws -> LoadedProject {
         try await builder.addVideoTrack(
             id: displayTrack, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
         try await builder.addAudioTrack(id: "mic", source: microphone, segments: [AudioSegmentSpec(start: base, seconds: 3)])
@@ -65,11 +87,10 @@ public enum GoldenProjects {
     /// its first segment (plan ruling R3): off the 1/120 s grid of its samples, so that the cursor of the frame at 0 is
     /// drawn from the sample 3.3 ms before `timelineStart` (moved toward the one 5 ms after it), and without the samples
     /// before the take that frame would have no cursor (`goldenFramesSeeTheCursorBeforeTheTake`).
-    private static func windowMoving(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
+    private static func windowMoving(_ builder: TakeBuilder) async throws -> LoadedProject {
         let window = "window-4242"
         let frame = Rect(x: 100, y: 100, width: 800, height: 600)
         let moved = Rect(x: 300, y: 100, width: 800, height: 600)
-        let builder = try TakeBuilder(in: dir, name: "windowMoving", formatVersion: formatVersion)
         try await builder.addVideoTrack(
             id: window, kind: .window,
             source: TrackSource(name: "Synthetic Window", globalFrame: frame, pixelScale: 1, windowID: 4242, bundleIdentifier: "dev.toma.tests"),
@@ -85,11 +106,10 @@ public enum GoldenProjects {
     }
 
     /// Area mode: a 1512 × 982 display of which the area (100, 100, 800, 450) is shown, the cursor moving over the display.
-    private static func areaOnDisplay(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
+    private static func areaOnDisplay(_ builder: TakeBuilder) async throws -> LoadedProject {
         let display = Rect(x: 0, y: 0, width: 1512, height: 982)
         var source = displaySource(globalFrame: display)
         source.captureArea = Rect(x: 100, y: 100, width: 800, height: 450)
-        let builder = try TakeBuilder(in: dir, name: "areaOnDisplay", formatVersion: formatVersion)
         try await builder.addVideoTrack(
             id: displayTrack, source: source, segments: [VideoSegmentSpec(start: base, seconds: 3, width: 1512, height: 982)])
         try builder.addEvents([startGeometry(display)])
@@ -100,8 +120,7 @@ public enum GoldenProjects {
     /// The display and a 4:3 camera, which starts as a small landscape box at the top left and changes to a large
     /// portrait one at the top at 1 s and, 0.1 s later, in the middle of that change, to a medium circle at the bottom
     /// right. The camera's colours are inverted: otherwise it would have the colour of the screen frame behind it.
-    private static func cameraWithStyleChanges(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
-        let builder = try TakeBuilder(in: dir, name: "cameraWithStyleChanges", formatVersion: formatVersion)
+    private static func cameraWithStyleChanges(_ builder: TakeBuilder) async throws -> LoadedProject {
         builder.cameraStyle = CameraStyle(shape: .landscape, size: 0.17, anchor: .topLeading)
         try await builder.addVideoTrack(
             id: displayTrack, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
@@ -118,9 +137,8 @@ public enum GoldenProjects {
     }
 
     /// The display, whose frame grows 1.25 times at 1.5 s (another resolution) with its segment going on.
-    private static func geometryChange(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
+    private static func geometryChange(_ builder: TakeBuilder) async throws -> LoadedProject {
         let grown = Rect(x: 0, y: 0, width: screenFrame.width * 1.25, height: screenFrame.height * 1.25)
-        let builder = try TakeBuilder(in: dir, name: "geometryChange", formatVersion: formatVersion)
         try await builder.addVideoTrack(
             id: displayTrack, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
         try builder.addEvents([
@@ -133,9 +151,8 @@ public enum GoldenProjects {
 
     /// The display and the microphone, paused by the user from 1 to 2 s: segments [0, 1] and [2, 3] s of each, and no
     /// cursor samples while paused, as the recorder leaves it.
-    private static func pausedTake(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
+    private static func pausedTake(_ builder: TakeBuilder) async throws -> LoadedProject {
         let resume = base.adding(seconds: 2)
-        let builder = try TakeBuilder(in: dir, name: "pausedTake", formatVersion: formatVersion)
         try await builder.addVideoTrack(
             id: displayTrack, source: displaySource(globalFrame: screenFrame),
             segments: [VideoSegmentSpec(start: base, seconds: 1, endReason: .paused), VideoSegmentSpec(start: resume, seconds: 1)])
@@ -155,8 +172,7 @@ public enum GoldenProjects {
 
     /// The display, the microphone at 0.6 of full scale (440 Hz) and stereo system audio at 0.7 (1000 Hz) over the
     /// same 3 s: where the two add up past full scale, the mix clips. Only mixed.
-    private static func twoAudioTracks(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
-        let builder = try TakeBuilder(in: dir, name: "twoAudioTracks", formatVersion: formatVersion)
+    private static func twoAudioTracks(_ builder: TakeBuilder) async throws -> LoadedProject {
         try await builder.addVideoTrack(
             id: displayTrack, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
         try await builder.addAudioTrack(

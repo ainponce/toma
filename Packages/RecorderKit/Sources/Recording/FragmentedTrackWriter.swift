@@ -5,6 +5,22 @@ import CoreMedia
 import Darwin
 import Foundation
 import ProjectFormat
+import VideoToolbox
+
+/// Which HEVC encoder a video `FragmentedTrackWriter` may use.
+public enum VideoEncoderChoice: Sendable, Equatable {
+    /// The one VideoToolbox picks: the hardware encoder, or its software encoder when the hardware one takes no
+    /// more sessions (the media engine has a limited number, shared by every process). What the recorder uses: a
+    /// recording goes on whichever encoder is free.
+    case any
+    /// The hardware encoder only: when it takes no more sessions the writer fails (it throws, or `finish` leaves its
+    /// `failure`) rather than write with the software encoder. The two encoders write different bitstreams of the same
+    /// frames, which decode to pixels a level or a few apart, so files that must decode to the same pixels on every run
+    /// (the golden projects) are written by this one alone.
+    case hardwareOnly
+    /// The software encoder only: what `.any` writes with while the hardware encoder takes no more sessions.
+    case softwareOnly
+}
 
 /// Writes one segment of one track as a fragmented QuickTime movie: every `fragmentInterval` of
 /// media the file gains a movie fragment, and everything up to the last fragment can be read back
@@ -38,6 +54,7 @@ public final class FragmentedTrackWriter: TrackWriting {
 
     private let media: TrackMedia
     private let realTime: Bool
+    private let videoEncoder: VideoEncoderChoice
     private let writer: AVAssetWriter
     private var input: AVAssetWriterInput?
     /// Host time of the first sample, time zero in the file.
@@ -65,11 +82,13 @@ public final class FragmentedTrackWriter: TrackWriting {
     /// - Throws: `WriterError.fileExists` if anything already exists at `url` (it is left untouched),
     ///   `WriterError.unsupportedFormat` for a URL that is not a file URL, a video rate below 1 fps or
     ///   a fragment interval that is not a positive time.
+    /// - Parameter videoEncoder: the HEVC encoder video is written with (`VideoEncoderChoice`).
     public init(
         url: URL,
         media: TrackMedia,
         realTime: Bool = true,
-        fragmentInterval: CMTime = defaultFragmentInterval
+        fragmentInterval: CMTime = defaultFragmentInterval,
+        videoEncoder: VideoEncoderChoice = .any
     ) throws {
         guard url.isFileURL else { throw WriterError.unsupportedFormat }
         if case .video(let framesPerSecond) = media, framesPerSecond < 1 { throw WriterError.unsupportedFormat }
@@ -81,6 +100,7 @@ public final class FragmentedTrackWriter: TrackWriting {
         writer.movieFragmentInterval = fragmentInterval
         self.media = media
         self.realTime = realTime
+        self.videoEncoder = videoEncoder
         readinessTimeoutSeconds = realTime ? Self.realTimeReadinessTimeoutSeconds : Self.offlineReadinessTimeoutSeconds
     }
 
@@ -207,7 +227,8 @@ public final class FragmentedTrackWriter: TrackWriting {
             let size = CMVideoFormatDescriptionGetDimensions(format)
             guard size.width > 0, size.height > 0 else { throw WriterError.unsupportedFormat }
             mediaType = .video
-            settings = Self.videoSettings(width: Int(size.width), height: Int(size.height), framesPerSecond: framesPerSecond)
+            settings = Self.videoSettings(
+                width: Int(size.width), height: Int(size.height), framesPerSecond: framesPerSecond, encoder: videoEncoder)
             hint = format
         case .audio:
             guard CMFormatDescriptionGetMediaType(format) == kCMMediaType_Audio,
@@ -241,8 +262,8 @@ public final class FragmentedTrackWriter: TrackWriting {
         onStart?(host)
     }
 
-    static func videoSettings(width: Int, height: Int, framesPerSecond: Int) -> [String: Any] {
-        [
+    static func videoSettings(width: Int, height: Int, framesPerSecond: Int, encoder: VideoEncoderChoice = .any) -> [String: Any] {
+        var settings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: width,
             AVVideoHeightKey: height,
@@ -260,6 +281,19 @@ public final class FragmentedTrackWriter: TrackWriting {
                 AVVideoAllowFrameReorderingKey: false,
             ],
         ]
+        switch encoder {
+        case .any:
+            break
+        case .hardwareOnly:
+            settings[AVVideoEncoderSpecificationKey] = [
+                kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder as String: true
+            ]
+        case .softwareOnly:
+            settings[AVVideoEncoderSpecificationKey] = [
+                kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder as String: false
+            ]
+        }
+        return settings
     }
 
     /// ALAC up to 8 channels (AVFoundation raises an exception without a bit-depth hint, and needs
