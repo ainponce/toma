@@ -94,6 +94,54 @@ public enum ShaderSource {
         return float4(color, 1.0) * coverage;
     }
 
+    struct WallpaperUniforms {
+        float2 stageSize;   // the stage, in output pixels
+        uint count;         // points: 1...6 (`WallpaperPreset.init`)
+        uint padding;
+    };
+
+    // lowbias32 (Chris Wellons): a 32-bit integer hash whose every output bit depends on every input bit.
+    static uint hash32(uint x) {
+        x ^= x >> 16;
+        x *= 0x7feb352du;
+        x ^= x >> 15;
+        x *= 0x846ca68bu;
+        x ^= x >> 16;
+        return x;
+    }
+
+    // One of Toma's wallpapers, over a quad of any part of the target: a mesh gradient of its colours, each weighing
+    // exp(-d² / 0.06) by its squared distance d² to the stage point in units of the stage's longer side (relative to
+    // the nearest point's, so the weights never all vanish), plus a grain of ±2 % from an integer hash of the output
+    // pixel. Nothing interpolated is read: a pixel depends on where it is alone, however the drawing is split. The grain
+    // is of the output pixel, not of the stage point, so a zoom of the stage enlarges the gradient and not the grain.
+    fragment float4 wallpaperFragment(QuadOut in [[stage_in]],
+                                      constant WallpaperUniforms &u [[buffer(0)]],
+                                      constant float2 *points [[buffer(1)]],   // fractions of the stage
+                                      constant float4 *colors [[buffer(2)]]) { // opaque
+        float2 pixel = in.position.xy;   // the centre of the output pixel
+        float2 stage = pixel;            // the stage point under it: the same until something transforms the stage
+        float side = max(u.stageSize.x, u.stageSize.y);
+        float distances[6];
+        float nearest = INFINITY;
+        for (uint i = 0; i < u.count; i++) {
+            float2 d = (stage - points[i] * u.stageSize) / side;
+            distances[i] = dot(d, d);
+            nearest = min(nearest, distances[i]);
+        }
+        float3 sum = 0.0;
+        float total = 0.0;
+        for (uint i = 0; i < u.count; i++) {
+            float weight = exp((nearest - distances[i]) / 0.06);
+            sum += colors[i].rgb * weight;
+            total += weight;
+        }
+        uint2 p = uint2(pixel);
+        uint h = hash32(p.x ^ hash32(p.y));
+        float grain = (float(h >> 8) / 16777216.0 - 0.5) * 0.04;
+        return float4(saturate(sum / total + grain), 1.0);
+    }
+
     // The cursor sprite, already premultiplied.
     fragment float4 spriteFragment(QuadOut in [[stage_in]],
                                    texture2d<float> sprite [[texture(0)]],
