@@ -91,8 +91,8 @@ struct FormatMenu: View {
     }
 }
 
-/// Export (⌘E), prominent; while exporting, a ring of its progress with "Cancel Export"; once done, "Export finished ·
-/// Show in Finder" for a few seconds.
+/// Export (⌘E), prominent, which opens the export sheet (`ExportSheet`); while exporting, a ring of its progress with
+/// "Cancel Export"; once done, "Export finished · Show in Finder" for 8 seconds.
 private struct ExportControl: View {
     let model: EditorModel
 
@@ -125,7 +125,7 @@ private struct ExportControl: View {
 
     @ViewBuilder
     private var exportButton: some View {
-        let button = Button("Export") { model.exportVideo() }
+        let button = Button("Export") { model.openExportSheet() }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(!model.canExport)
         if #available(macOS 26, *) {

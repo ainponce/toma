@@ -71,10 +71,10 @@ enum EditorBanner: Equatable {
 /// played by a `PreviewAudioPlayer`, whose clock leads playback; the playhead; and the banners.
 ///
 /// The playhead paused is always a frame of the project's grid (`playheadFrame`), the export's frame `n` at the export's
-/// size (the document's format at 1080 on its shorter side). Playing, the time runs free on the audio's clock (the
-/// host's while there is no sound) and the label follows it ten times a second. When the sequence changes, the playhead
-/// keeps the source instant it shows if that is still kept, at its new output time; if it was cut, it goes to the output
-/// time of the edit point that took its place (Task 14).
+/// size (the document's format at the resolution the export sheet remembers, plan decision 11). Playing, the time runs
+/// free on the audio's clock (the host's while there is no sound) and the label follows it ten times a second. When the
+/// sequence changes, the playhead keeps the source instant it shows if that is still kept, at its new output time; if it
+/// was cut, it goes to the output time of the edit point that took its place (Task 14).
 @MainActor @Observable
 final class EditorModel {
     enum State: Equatable {
@@ -209,8 +209,10 @@ final class EditorModel {
     private static let labelInterval = 0.1
     /// How long "Export finished · Show in Finder" stays.
     private static let exportFinishedDuration = Duration.seconds(8)
-    /// The shorter side of the export the paused preview is drawn at, until the export sheet remembers one (Task 43).
-    static let previewShortSide = 1080
+    /// The shorter side of the export the paused preview is drawn at: the resolution the export sheet remembers (1080
+    /// until something is exported, plan decision 11), followed as it changes (`exportPreferencesChanged`).
+    @ObservationIgnored private var previewShortSide = SettingsStore().settings.export.shortSide
+    @ObservationIgnored private var preferencesObserver: (any NSObjectProtocol)?
 
     /// A document and its time map.
     private struct Timeline {
@@ -247,6 +249,11 @@ final class EditorModel {
         self.takeID = takeID
         self.exportGate = exportGate
         name = packageURL.deletingPathExtension().lastPathComponent
+        preferencesObserver = NotificationCenter.default.addObserver(
+            forName: .exportPreferencesChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.exportPreferencesChanged() }
+        }
     }
 
     // MARK: - Opening
@@ -308,7 +315,7 @@ final class EditorModel {
         await restoreWindowState(sessionCaches: session.caches)
         let document = session.document, revision = session.revision
         let project = currentProject(of: session)
-        let size = Self.exportSize(of: document)
+        let size = previewSize(of: document)
         let renderer: FrameRenderer
         do {
             // Builds the motion paths: never on the main thread.
@@ -353,7 +360,8 @@ final class EditorModel {
         durationSeconds = timeline?.map.durationSeconds ?? 0
         state = .ready
         restorePlayheadAndTab()
-        // The session may have changed while the renderer was made.
+        // The session, or the resolution the export sheet remembers, may have changed while the renderer was made.
+        if previewSize(of: document) != size { showSessionRevision() }
         sessionChanged()
         makeMix(of: project, document: document, revision: revision)
     }
@@ -376,7 +384,7 @@ final class EditorModel {
             sound.hold(document)
             if shownRevision != revision, let session {
                 // Edited meanwhile: the mix (and scene) of the revision shown, played once built if playing.
-                builder?.build(revision: session.revision, document: session.document, outputSize: Self.exportSize(of: session.document), mix: mix)
+                builder?.build(revision: session.revision, document: session.document, outputSize: previewSize(of: session.document), mix: mix)
             } else if isPlaying {
                 startClock(at: clockSeconds())
             }
@@ -409,9 +417,20 @@ final class EditorModel {
         return project
     }
 
-    /// The export's size, which the paused preview is drawn at: the document's format at 1080 on its shorter side.
-    private static func exportSize(of document: EditDocument) -> SIMD2<Int> {
+    /// The export's size, which the paused preview is drawn at: the document's format at the resolution the export sheet
+    /// remembers.
+    private func previewSize(of document: EditDocument) -> SIMD2<Int> {
         StageLayout.outputSize(aspect: document.aspect, shortSide: previewShortSide)
+    }
+
+    /// The export sheet remembers another resolution (this editor's or another's exported at it): the preview is drawn at
+    /// it from now on, the paused frame at once.
+    private func exportPreferencesChanged() {
+        let shortSide = SettingsStore().settings.export.shortSide
+        guard shortSide != previewShortSide else { return }
+        previewShortSide = shortSide
+        // A gesture's next step is drawn at it, and its end draws the session's revision.
+        if !isGesturing { showSessionRevision() }
     }
 
     /// The state that shows no preview for `access`, if it is one of those.
@@ -542,13 +561,13 @@ final class EditorModel {
         shown = gestureLook(shown)
         // Negative revisions are the gestures': no session's revision is one.
         gestureBuilds += 1
-        builder.build(revision: -gestureBuilds, document: shown, outputSize: Self.exportSize(of: shown), mix: baseMix)
+        builder.build(revision: -gestureBuilds, document: shown, outputSize: previewSize(of: shown), mix: baseMix)
     }
 
     /// The preview shows the session's document again.
     private func showSessionRevision() {
         guard let session, let builder else { return }
-        builder.build(revision: session.revision, document: session.document, outputSize: Self.exportSize(of: session.document), mix: baseMix)
+        builder.build(revision: session.revision, document: session.document, outputSize: previewSize(of: session.document), mix: baseMix)
     }
 
     /// The project as the session has it, for what the overlays place.
@@ -621,7 +640,7 @@ final class EditorModel {
             durationSeconds = TimeMap(sequence: next.sequence).durationSeconds
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
-            builder?.build(revision: session.revision, document: next, outputSize: Self.exportSize(of: next), mix: baseMix)
+            builder?.build(revision: session.revision, document: next, outputSize: previewSize(of: next), mix: baseMix)
         }
         updateBanner()
     }
@@ -864,30 +883,15 @@ final class EditorModel {
 
     // MARK: - Export
 
-    func exportVideo() {
-        guard canExport, let window, let session else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
-        panel.canCreateDirectories = true
-        let current = session.packageURL
-        panel.nameFieldStringValue = current.deletingPathExtension().lastPathComponent + ".mp4"
-        panel.directoryURL = current.deletingLastPathComponent()
-        Task {
-            guard await panel.beginSheetModal(for: window) == .OK, let destination = panel.url else { return }
-            startExport(to: destination)
-        }
-    }
-
-    /// Exports the document as it is now (what is edited meanwhile is not in it), in its format at 1080 on the shorter
-    /// side and its frames per second, until the export sheet chooses (Task 43).
-    private func startExport(to destination: URL) {
-        guard canExport, let session else { return }
-        let project = currentProject(of: session), document = session.document
+    /// Exports `document`, the copy the export sheet took (what is edited meanwhile is not in it), with the sheet's
+    /// `settings`, from the package where it is now (`ExportSheet`). One export at a time in the whole app (`ExportGate`):
+    /// `false`, and nothing done, while another one runs or the project cannot be exported.
+    func startExport(_ document: EditDocument, settings: ExportSettings, to destination: URL) -> Bool {
+        guard canExport, let session else { return false }
+        let project = currentProject(of: session)
         exportGate.isBusy = true
         exportFinishedTask?.cancel()
         exportState = .running(progress: 0)
-        let settings = ExportSettings(
-            aspect: document.aspect, resolution: .p1080, framesPerSecond: document.frameRate, quality: .standard)
         let exporter = MP4Exporter(project: project, document: document, settings: settings)
         let throttle = ProgressThrottle()
         // Called off the main thread, per frame.
@@ -916,6 +920,7 @@ final class EditorModel {
             exportGate.isBusy = false
             exportTask = nil
         }
+        return true
     }
 
     /// What the export had to leave out, one sentence for each kind.
@@ -977,6 +982,8 @@ final class EditorModel {
         writeWindowState()
         stopAutosave()
         closed = true
+        if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
+        preferencesObserver = nil
         openTask?.cancel()
         exportTask?.cancel()
         exportFinishedTask?.cancel()

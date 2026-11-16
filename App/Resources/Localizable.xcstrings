@@ -127,6 +127,17 @@
         }
       }
     },
+    "About %@" : {
+      "comment" : "The export sheet: the MP4's estimated size, as “120 MB”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprox. %@"
+          }
+        }
+      }
+    },
     "Accessibility" : {
       "localizations" : {
         "es" : {
@@ -1357,6 +1368,17 @@
         }
       }
     },
+    "Export Video" : {
+      "comment" : "The export sheet's title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportar el video"
+          }
+        }
+      }
+    },
     "Export finished" : {
       "comment" : "The editor's bar, for a few seconds after an export",
       "localizations" : {
@@ -1374,6 +1396,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Exportando…"
+          }
+        }
+      }
+    },
+    "Export…" : {
+      "comment" : "The export sheet: goes on to the save panel and exports",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportar…"
           }
         }
       }
@@ -1472,6 +1505,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marco"
+          }
+        }
+      }
+    },
+    "Frame Rate" : {
+      "comment" : "The export sheet: the frames per second of the MP4",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadros por segundo"
           }
         }
       }
@@ -1619,6 +1663,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ocultar los íconos del escritorio al grabar"
+          }
+        }
+      }
+    },
+    "High" : {
+      "comment" : "The export sheet: the quality of 0.14 bits per pixel (Spanish: feminine, la calidad)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alta"
+          }
+        }
+      }
+    },
+    "Higher than the recording" : {
+      "comment" : "The export sheet: beside a resolution above what was recorded of the screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Más que la grabación"
           }
         }
       }
@@ -2542,6 +2608,17 @@
         }
       }
     },
+    "Quality" : {
+      "comment" : "The export sheet: the MP4's quality",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calidad"
+          }
+        }
+      }
+    },
     "Quit" : {
       "localizations" : {
         "es" : {
@@ -2848,6 +2925,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pedido"
+          }
+        }
+      }
+    },
+    "Resolution" : {
+      "comment" : "The export sheet: the MP4's resolution",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resolución"
           }
         }
       }
@@ -3419,6 +3507,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuadrado"
+          }
+        }
+      }
+    },
+    "Standard" : {
+      "comment" : "The export sheet: the quality of 0.08 bits per pixel",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estándar"
           }
         }
       }
