@@ -1426,7 +1426,7 @@ enum AwaitPoint: CaseIterable {
             hooks.releaseDidEnd()
             // The stop returned once the hooks had ended (a quit waits for Do Not Disturb to go off).
             #expect(await stopping.value == 1)
-            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(await eventually { rig.controller.phase.isRecordingATake && hooks.calls.count == 4 })
             #expect(!rig.controller.isEndingHooks)
             #expect(hooks.calls.map(\.name) == ["willStart", "didEnd", "willStart", "didStart"])
             #expect(hooks.endsReturnedAtWillStart == [0, 1])
@@ -1448,7 +1448,9 @@ enum AwaitPoint: CaseIterable {
             try await Task.sleep(for: .milliseconds(300))
             // The restart does not run the hooks again: Do Not Disturb is still not on.
             rig.controller.restartTake()
-            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            #expect(await eventually {
+                rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake && hooks.calls.count == 3
+            })
             #expect(rig.controller.notices == [.focusShortcutFailed])
             #expect(hooks.calls.map(\.name) == ["willStart", "didStart", "didStart"])
             await rig.controller.stop(openingEditor: false)
