@@ -139,11 +139,34 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
-    @Test func aRetryThatFailsAgainSaysWhy() async throws {
+    @Test func eachOptionalSourceThatFailsIsLeftOutInTurn() async throws {
         try await withRig { rig in
-            // The camera fails first; then, without it, the microphone. There is only one retry.
+            // The camera fails first; then, without it, the microphone (the sources start in order, so its failure
+            // is only seen once the camera is left out). The screen is recorded all the same.
             rig.takes.factory.cameraFailures = 99
             rig.takes.factory.microphoneFailures = 99
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.camera = .systemDefault
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.takes.requests.map(\.skipping) == [[], [.camera], [.camera, .microphone]])
+            #expect(rig.controller.notices == [.optionalSourceFailedToStart(.camera), .optionalSourceFailedToStart(.microphone)])
+            await rig.controller.stop(openingEditor: false)
+
+            #expect(try rig.packagesOnDisk().count == 3)  // the failed projects are left as they are
+            let last = try #require(rig.takes.packages.last)
+            let take = try #require(try rig.takesOnDisk(last.url).first)
+            #expect(take.status == .complete && take.tracks.map(\.kind) == [.display])
+            #expect(rig.startFailures.isEmpty)
+            #expect(rig.termination.began == 3 && rig.termination.ended == 3)
+        }
+    }
+
+    @Test func aRetryThatFailsForTheScreenSaysWhy() async throws {
+        try await withRig { rig in
+            // The camera fails; then, without it, the screen: nothing optional is left to leave out.
+            rig.takes.factory.cameraFailures = 99
+            rig.takes.displayFailuresFrom = (request: 1, failures: 99)
             var selection = CaptureSelection.mainDisplay(1)
             selection.camera = .systemDefault
             rig.controller.startRecording(selection: selection, settings: QuickSettings())
@@ -340,29 +363,42 @@ enum AwaitPoint: CaseIterable {
     @Test func hiddenWindowShowsANoticeUntilItReturns() async throws {
         try await withRig { rig in
             // Without a take, nothing is said.
-            rig.controller.windowVisibilityChanged(.hidden)
+            rig.controller.windowVisibilityChanged(.hidden, inProjectAt: rig.folder)
             #expect(rig.controller.notices.isEmpty)
 
             rig.controller.startRecording(selection: Self.window, settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
-            rig.controller.windowVisibilityChanged(.otherSpace)  // another Space is still recorded
+            let package = try #require(rig.takes.packages.first)
+            let visibility = { (visibility: WindowVisibility) in
+                rig.controller.windowVisibilityChanged(visibility, inProjectAt: package.url)
+            }
+            visibility(.otherSpace)  // another Space is still recorded
             #expect(rig.controller.notices.isEmpty)
-            rig.controller.windowVisibilityChanged(.hidden)
+            visibility(.hidden)
             #expect(rig.controller.notices == [.windowHidden])
-            rig.controller.windowVisibilityChanged(.hidden)
+            visibility(.hidden)
             #expect(rig.controller.notices == [.windowHidden])
-            rig.controller.windowVisibilityChanged(.visible)
+            visibility(.visible)
             #expect(rig.controller.notices.isEmpty)
-            rig.controller.windowVisibilityChanged(.hidden)
-            rig.controller.windowVisibilityChanged(.otherSpace)
+            visibility(.hidden)
+            visibility(.otherSpace)
             #expect(rig.controller.notices.isEmpty)
             await rig.controller.stop(openingEditor: false)
 
-            rig.controller.windowVisibilityChanged(.hidden)
+            visibility(.hidden)
             #expect(rig.controller.notices.isEmpty)
-            let package = try #require(rig.takes.packages.first)
             #expect(try rig.takesOnDisk(package.url).first?.tracks.map(\.kind) == [.window])
             #expect(rig.takes.factory.calls.first == .window(id: 4242, framesPerSecond: 60, scale: .native))
+
+            // Heard late, about the take before: the next take is not marked.
+            rig.controller.startRecording(selection: Self.window, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake && rig.takes.packages.count == 2 })
+            visibility(.hidden)
+            #expect(rig.controller.notices.isEmpty)
+            let next = try #require(rig.takes.packages.last)
+            rig.controller.windowVisibilityChanged(.hidden, inProjectAt: next.url)
+            #expect(rig.controller.notices == [.windowHidden])
+            await rig.controller.stop(openingEditor: false)
         }
     }
 
@@ -1295,7 +1331,8 @@ enum AwaitPoint: CaseIterable {
             log.note(rig.controller.phase)
             await rig.controller.stop(openingEditor: true)
             log.note(rig.controller.phase)
-            #expect(log.entries == [.countingDown(3), .takeWillStart, .countingDown(2), .takeDidEnd, .idle])
+            // Idle at once: Do Not Disturb goes off after.
+            #expect(log.entries == [.countingDown(3), .takeWillStart, .countingDown(2), .idle, .takeDidEnd])
             #expect(try rig.packagesOnDisk().isEmpty)
             #expect(rig.creation.arrivals == 0 && rig.confirmations == [.countdownCancelled])
 
@@ -1311,7 +1348,7 @@ enum AwaitPoint: CaseIterable {
             await rig.controller.stop(openingEditor: true)
             #expect(rig.controller.phase == .idle)
             #expect(hooks.calls.map(\.name) == ["willStart", "didEnd", "willStart", "didStart", "didEnd"])
-            #expect(hooks.phases.last == .countingDown(remaining: 2))
+            #expect(hooks.phases.last == .idle)
             #expect(rig.takes.packages.count == 1 && rig.editorOpenings.isEmpty)
             #expect(rig.startFailures.isEmpty)
         }
@@ -1350,19 +1387,83 @@ enum AwaitPoint: CaseIterable {
         try await withRig(hooks: hooks) { rig in
             var selection = CaptureSelection.mainDisplay(1)
             if afterARetry {
-                // The camera fails, and then, without it, the microphone: there is only one retry.
+                // The camera fails, and then, without it, the screen.
                 rig.takes.factory.cameraFailures = 99
-                rig.takes.factory.microphoneFailures = 99
                 selection.camera = .systemDefault
-            } else {
-                rig.takes.factory.displayFailures = 99
             }
+            rig.takes.displayFailuresFrom = (request: afterARetry ? 1 : 0, failures: 99)
             rig.controller.startRecording(selection: selection, settings: QuickSettings())
             #expect(await eventually { !rig.startFailures.isEmpty })
             #expect(rig.takes.requests.count == (afterARetry ? 2 : 1))
-            #expect(hooks.calls.map(\.name) == ["willStart", "didEnd"])
+            // The failure is shown at once; Do Not Disturb goes off after.
+            #expect(await eventually { hooks.calls.map(\.name) == ["willStart", "didEnd"] })
             #expect(rig.controller.phase == .idle)
             #expect(rig.termination.began == rig.termination.ended)
+        }
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aCancelledCountdownIsIdleWhileItsHooksEnd() async throws {
+        let hooks = FakeHooks(log: TakeLog())
+        hooks.holdsDidEnd = true
+        try await withRig(countdown: 3, hooks: hooks) { rig in
+            hooks.controller = rig.controller
+            rig.sleep.hold(from: 1)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.sleep.heldCall == 1 })
+            // Esc: the countdown ends at once, and says so, while Do Not Disturb goes off.
+            let stopping = Task {
+                await rig.controller.stop(openingEditor: true)
+                return hooks.endsReturned
+            }
+            #expect(await eventually { hooks.isHoldingDidEnd })
+            #expect(rig.controller.phase == .idle && rig.confirmations == [.countdownCancelled])
+            #expect(rig.controller.isEndingHooks)
+
+            // Recording again meanwhile: the new take's hooks begin once the last ones have ended.
+            rig.sleep.releaseAll()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            hooks.holdsDidEnd = false
+            hooks.releaseDidEnd()
+            // The stop returned once the hooks had ended (a quit waits for Do Not Disturb to go off).
+            #expect(await stopping.value == 1)
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(!rig.controller.isEndingHooks)
+            #expect(hooks.calls.map(\.name) == ["willStart", "didEnd", "willStart", "didStart"])
+            #expect(hooks.endsReturnedAtWillStart == [0, 1])
+            await rig.controller.stop(openingEditor: false)
+            #expect(hooks.calls.map(\.name).last == "didEnd" && hooks.endsReturned == 2)
+            let packages = try rig.packagesOnDisk()
+            #expect(packages.count == 1)
+            #expect(rig.startFailures.isEmpty)
+        }
+    }
+
+    @Test func aRestartStillSaysWhatTheHooksCouldNotDo() async throws {
+        let hooks = FakeHooks(log: TakeLog())
+        hooks.preparation = TakePreparation(notices: [.focusShortcutFailed])
+        try await withRig(hooks: hooks) { rig in
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.focusShortcutFailed])
+            try await Task.sleep(for: .milliseconds(300))
+            // The restart does not run the hooks again: Do Not Disturb is still not on.
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 2 && rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices == [.focusShortcutFailed])
+            #expect(hooks.calls.map(\.name) == ["willStart", "didStart", "didStart"])
+            await rig.controller.stop(openingEditor: false)
+
+            // A new take's hooks say again what they could not do, or nothing.
+            hooks.preparation = TakePreparation()
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.takes.packages.count == 3 && rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices.isEmpty)
+            try await Task.sleep(for: .milliseconds(300))
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.packages.count == 4 && rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.notices.isEmpty)
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.startFailures.isEmpty)
         }
     }
 
@@ -1418,17 +1519,22 @@ enum AwaitPoint: CaseIterable {
         let suite = "RecordingControllerTests-focus-\(UUID().uuidString)"
         let focusDefaults = try unwrap(UserDefaults(suiteName: suite), "a defaults suite")
         defer { focusDefaults.removePersistentDomain(forName: suite) }
-        let runner = FakeShortcuts { _ in throw ShortcutsCLIError.timedOut }
+        // The shortcut does not end in time: the take starts all the same, and its end turns Do Not Disturb off, as
+        // the shortcut may still have turned it on.
+        let runner = FakeShortcuts { run in
+            if run.input == "on" { throw ShortcutsCLIError.timedOut }
+            return ""
+        }
         let hooks = FocusTakeHooks(focus: FocusGuard(runner: runner, defaults: focusDefaults), shortcut: { "ID" })
         try await withRig(hooks: hooks) { rig in
             rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             #expect(rig.controller.notices == [.focusShortcutFailed])
-            #expect(focusDefaults.string(forKey: FocusGuard.activeKey) == nil)
+            #expect(focusDefaults.string(forKey: FocusGuard.activeKey) == "ID")
             await rig.controller.stop(openingEditor: false)
 
-            // Nothing was turned on, so nothing is turned off.
-            #expect(runner.runs == [ShortcutRun("ID", "on")])
+            #expect(runner.runs == [ShortcutRun("ID", "on"), ShortcutRun("ID", "off")])
+            #expect(focusDefaults.string(forKey: FocusGuard.activeKey) == nil)
             let package = try #require(rig.takes.packages.first)
             #expect(try rig.takesOnDisk(package.url).map(\.status) == [.complete])
             #expect(rig.startFailures.isEmpty)
@@ -1504,6 +1610,12 @@ extension FakeFactory {
     let log: TakeLog
     var preparation = TakePreparation()
     var holdsWillStart = false
+    /// `takeDidEnd` waits until `releaseDidEnd()`.
+    var holdsDidEnd = false
+    /// How many `takeDidEnd` calls have returned.
+    private(set) var endsReturned = 0
+    /// `endsReturned` at each `takeWillStart`.
+    private(set) var endsReturnedAtWillStart: [Int] = []
     /// Whose phase the calls note, once the test sets it.
     weak var controller: RecordingController?
     private(set) var calls: [Call] = []
@@ -1513,8 +1625,10 @@ extension FakeFactory {
     private(set) var sleepsAtWillStart: [Int] = []
     var sleeps: () -> Int = { 0 }
     private var heldWillStart: CheckedContinuation<Void, Never>?
+    private var heldDidEnd: CheckedContinuation<Void, Never>?
 
     var isHoldingWillStart: Bool { heldWillStart != nil }
+    var isHoldingDidEnd: Bool { heldDidEnd != nil }
 
     init(log: TakeLog) {
         self.log = log
@@ -1525,9 +1639,15 @@ extension FakeFactory {
         heldWillStart = nil
     }
 
+    func releaseDidEnd() {
+        heldDidEnd?.resume()
+        heldDidEnd = nil
+    }
+
     func takeWillStart(_ request: TakeRequest) async -> TakePreparation {
         record(.willStart(request), as: .takeWillStart)
         sleepsAtWillStart.append(sleeps())
+        endsReturnedAtWillStart.append(endsReturned)
         if holdsWillStart { await withCheckedContinuation { heldWillStart = $0 } }
         return preparation
     }
@@ -1538,6 +1658,8 @@ extension FakeFactory {
 
     func takeDidEnd() async {
         record(.didEnd, as: .takeDidEnd)
+        if holdsDidEnd { await withCheckedContinuation { heldDidEnd = $0 } }
+        endsReturned += 1
     }
 
     private func record(_ call: Call, as entry: TakeLog.Entry) {
@@ -1693,6 +1815,9 @@ extension FakeFactory {
     ]
 
     let factory = FakeFactory()
+    /// From the request with this index on (0 is the first), each new display fails its first `failures` starts
+    /// (`FakeFactory.displayFailures`).
+    var displayFailuresFrom: (request: Int, failures: Int)?
     private(set) var requests: [TakeRequest] = []
     /// The permissions granted for each request.
     private(set) var grants: [Set<PermissionKind>] = []
@@ -1721,6 +1846,7 @@ extension FakeFactory {
     }
 
     func prepare(_ package: ProjectPackage, _ request: TakeRequest, _ granted: Set<PermissionKind>) throws -> PreparedTake {
+        if let from = displayFailuresFrom, requests.count >= from.request { factory.displayFailures = from.failures }
         requests.append(request)
         grants.append(granted)
         let plan = try TakePlanner.plan(

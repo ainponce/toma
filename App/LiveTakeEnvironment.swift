@@ -15,9 +15,10 @@ enum LiveTakeEnvironment {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
 
     /// The camera is recorded from `cameraHost`, the session the bubble shows; `windowVisibilityChanged` hears, on the
-    /// main actor, whether the window recorded can be seen (`RecordingController.windowVisibilityChanged`).
+    /// main actor, whether the window recorded by the take of a project can be seen, with that project's URL
+    /// (`RecordingController.windowVisibilityChanged`).
     static func make(
-        cameraHost: CameraSessionHost, windowVisibilityChanged: @escaping @MainActor (WindowVisibility) -> Void
+        cameraHost: CameraSessionHost, windowVisibilityChanged: @escaping @MainActor (WindowVisibility, URL) -> Void
     ) -> TakeEnvironment {
         let folder = ProjectFolder.defaultURL(appName: AppIdentity.name)
         return TakeEnvironment(
@@ -29,8 +30,9 @@ enum LiveTakeEnvironment {
                 try ProjectFolder.createPackage(in: folder, prefix: prefix, app: app, now: now)
             },
             prepareTake: { package, request, granted in
+                let projectURL = package.url
                 let factory = LiveCaptureSourceFactory(cameraHost: cameraHost) { visibility in
-                    Task { @MainActor in windowVisibilityChanged(visibility) }
+                    Task { @MainActor in windowVisibilityChanged(visibility, projectURL) }
                 }
                 return try prepareTake(in: package, request, granted: granted, factory: factory, volume: folder)
             },

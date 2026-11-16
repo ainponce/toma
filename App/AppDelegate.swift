@@ -56,7 +56,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     override init() {
         // The controller hears whether the window it records can be seen; it is made with the environment that tells.
         weak var controller: RecordingController?
-        let environment = LiveTakeEnvironment.make(cameraHost: cameraHost) { controller?.windowVisibilityChanged($0) }
+        let environment = LiveTakeEnvironment.make(cameraHost: cameraHost) {
+            controller?.windowVisibilityChanged($0, inProjectAt: $1)
+        }
         recording = RecordingController(probe: probe, environment: environment, hooks: LiveTakeHooks(focus: focus, store: store))
         controller = recording
         updater = UpdaterController(recording: recording, exportGate: exportGate)
@@ -108,10 +110,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Nothing in progress is lost to a quit (`TerminationDecision`): the take is closed and the exports are
     /// cancelled first, within `QuitSequencer.quitTimeLimit` for the take; the user is asked before an export
-    /// is cancelled, unless the Mac is powering off.
+    /// is cancelled, unless the Mac is powering off. A start that ended without a take counts as a take while Do Not
+    /// Disturb goes off.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let decision = TerminationDecision.decide(
-            isRecording: recording.isRecording, isExporting: exportGate.isBusy, isPoweringOff: quit.isPoweringOff)
+            isRecording: recording.isRecording || recording.isEndingHooks, isExporting: exportGate.isBusy,
+            isPoweringOff: quit.isPoweringOff)
         return quit.shouldTerminate(decision) { confirmCancellingExport() }
     }
 
@@ -129,7 +133,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Logging out, restarting or shutting down: the take starts closing now, before the system asks the
     /// app to quit.
     private func willPowerOff() {
-        quit.powerOff(isRecording: recording.isRecording)
+        quit.powerOff(isRecording: recording.isRecording || recording.isEndingHooks)
     }
 
     /// Projects opened from Finder (or dropped on the app) open in the editor.

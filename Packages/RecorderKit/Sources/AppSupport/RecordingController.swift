@@ -56,6 +56,10 @@ public final class RecordingController {
     /// From the moment a take is asked for (its countdown included) until it is closed.
     public var isRecording: Bool { phase != .idle }
 
+    /// The hooks' `takeDidEnd` still runs after a start that ended without a take (Do Not Disturb going off): a quit
+    /// waits for it as for a take (`stop(openingEditor:)`).
+    public var isEndingHooks: Bool { endingHooks != nil }
+
     /// Whether the take records a microphone: from the moment it starts with one (also while it starts,
     /// once the permissions say it will) until the microphone is lost or the take ends.
     public private(set) var recordsMicrophone = false
@@ -138,6 +142,11 @@ public final class RecordingController {
     @ObservationIgnored private let hooks: (any TakeHooks)?
     /// `takeWillStart` was called, and its `takeDidEnd` is still owed (`endHooks()`).
     @ObservationIgnored private var hooksBegan = false
+    /// What the hooks' `takeWillStart` could not do (`TakePreparation.notices`): it holds for every take they wrap,
+    /// so a restart says it again.
+    @ObservationIgnored private var hookNotices: [TakeNotice] = []
+    /// The hooks' `takeDidEnd` in progress: the next `takeWillStart` waits for it, and so does a stop.
+    @ObservationIgnored private var endingHooks: Task<Void, Never>?
     /// The hooks' `takeDidStart` calls, each made once the one before has returned; `takeDidEnd` waits for them.
     @ObservationIgnored private var startedHooks: Task<Void, Never>?
     @ObservationIgnored var take: Take?
@@ -244,6 +253,9 @@ public final class RecordingController {
             // Once the permissions are answered, with the countdown on screen and before its first second, so the
             // notifications are quiet while it runs. A restart keeps what they prepared, as it keeps the permissions.
             if !startCancelled { await beginHooks(for: &request) }
+        } else {
+            // The hooks still wrap the take: what they could not do still holds.
+            for notice in hookNotices { addNotice(notice) }
         }
 
         // A stop during the countdown cancels this task: the wait in progress ends at once. A stop during the hooks
@@ -256,20 +268,21 @@ public final class RecordingController {
                 if remaining > 1 { setPhase(.countingDown(remaining: remaining - 1)) }
             }
         } catch {
-            // Stopped while counting down: nothing was made, and nothing the hooks said applies.
+            // Stopped while counting down: nothing was made, and nothing the hooks said applies. Idle at once; the
+            // hooks end after (a stop waits for them).
             notices = carried
-            await endHooks()
             setPhase(.idle)
             onConfirmation(.countdownCancelled)
+            await endHooks()
             return
         }
         let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request))
         guard preflight.canRecord, !startCancelled else {
             notices = carried
-            await endHooks()
             setPhase(.idle)
             // Screen recording was turned off meanwhile.
             if !startCancelled { openOnboarding() }
+            await endHooks()
             return
         }
         // What the take is about to record, until its sources say (`attempt`).
@@ -286,7 +299,6 @@ public final class RecordingController {
             addNotice(.systemAudioNotRequested)
         }
 
-        var retried = false
         while true {
             switch await attempt(request, granted: preflight.granted) {
             case .started, .handedToStop:
@@ -294,40 +306,46 @@ public final class RecordingController {
             case .cancelled:
                 // No take was recorded: nothing said about it applies.
                 notices = carried
-                await endHooks()
                 setPhase(.idle)
+                await endHooks()
                 return
             case .failed(let error, let failedOptional):
-                // A broken camera, microphone or system audio must not keep the screen from being recorded: once,
-                // in a new project, without the ones that failed. The failed project is left as it is.
-                if !failedOptional.isEmpty, !retried, !startCancelled {
-                    retried = true
-                    let kinds = failedOptional.map(\.rawValue).joined(separator: ", ")
+                // A broken camera, microphone or system audio must not keep the screen from being recorded: again, in
+                // a new project, without every one that failed so far, while each attempt fails for one not left out
+                // yet (once for each kind at most). The failed projects are left as they are.
+                let newlyFailed = failedOptional.filter { !request.skipping.contains($0) }
+                if !newlyFailed.isEmpty, !startCancelled {
+                    let kinds = newlyFailed.map(\.rawValue).joined(separator: ", ")
                     Self.logger.notice("Could not start \(kinds, privacy: .public); recording again without it, in a new project")
-                    for kind in failedOptional { addNotice(.optionalSourceFailedToStart(kind)) }
-                    request.skipping.formUnion(failedOptional)
+                    for kind in newlyFailed { addNotice(.optionalSourceFailedToStart(kind)) }
+                    request.skipping.formUnion(newlyFailed)
                     continue
                 }
                 // No take was recorded: the failure says why, and nothing said about the take applies.
                 notices = carried
-                await endHooks()
                 setPhase(.idle)
                 if !startCancelled { showStartFailure(error) }
+                await endHooks()
                 return
             }
         }
     }
 
-    /// Calls the hooks' `takeWillStart` for `request`, in a task of its own: a stop meanwhile cancels the start, not
-    /// the hooks, which run to their end. From now on their `takeDidEnd` is owed. The take, and its restarts, keep the
-    /// windows they prepared; what they could not do is said.
+    /// Calls the hooks' `takeWillStart` for `request`, in a task of its own, once the `takeDidEnd` of the start before
+    /// has returned: a stop meanwhile cancels the start, not the hooks, which run to their end. From now on their
+    /// `takeDidEnd` is owed. The take, and its restarts, keep the windows they prepared; what they could not do is said.
     private func beginHooks(for request: inout TakeRequest) async {
         guard let hooks else { return }
         hooksBegan = true
         let asked = request
-        let preparation = await Task { await hooks.takeWillStart(asked) }.value
+        let ending = endingHooks
+        let preparation = await Task {
+            await ending?.value
+            return await hooks.takeWillStart(asked)
+        }.value
         request.includedWindowIDs = preparation.includedWindowIDs
         currentRequest?.includedWindowIDs = preparation.includedWindowIDs
+        hookNotices = preparation.notices
         for notice in preparation.notices { addNotice(notice) }
     }
 
@@ -346,12 +364,16 @@ public final class RecordingController {
     private func endHooks() async {
         guard hooksBegan, let hooks else { return }
         hooksBegan = false
+        hookNotices = []
         let started = startedHooks
         startedHooks = nil
-        await Task {
+        let ending = Task {
             await started?.value
             await hooks.takeDidEnd()
-        }.value
+        }
+        endingHooks = ending
+        await ending.value
+        if endingHooks == ending { endingHooks = nil }
     }
 
     private enum AttemptOutcome {
@@ -473,7 +495,8 @@ public final class RecordingController {
 
     /// Closes the take, if any, and returns once it is closed and its hooks have ended (`takeDidEnd`); a stop
     /// already in progress is waited for, and so is a start still checking permissions, in its hooks'
-    /// `takeWillStart` or creating the project, which then gives up. A countdown ends at once, without waiting
+    /// `takeWillStart` or creating the project, which then gives up, and the hooks' `takeDidEnd` of a start that
+    /// ended without a take. A countdown ends at once, without waiting
     /// for the second in progress, and nothing is recorded. A restart still
     /// closing its take ends as this stop: the take is kept and no new one starts. Safe to call at any
     /// time, also while quitting. With `openingEditor` the take is saved and opened; without it (quitting)
@@ -505,6 +528,8 @@ public final class RecordingController {
             case .idle, .recording, .stopping:
                 break
             }
+            // A start that ended without a take is idle while its hooks end.
+            await endingHooks?.value
             return
         }
         let task = Task { await close(take, as: outcome) }
@@ -620,11 +645,13 @@ public final class RecordingController {
 
     // MARK: - Window
 
-    /// The window being recorded is now `visibility` (`LiveCaptureSourceFactory`'s window watcher): hidden, the take
-    /// says so until it is visible again or in another Space (a window in another Space is still recorded, and
-    /// changing Spaces says nothing). Without a take, nothing.
-    public func windowVisibilityChanged(_ visibility: WindowVisibility) {
-        guard take != nil else { return }
+    /// The window being recorded by the take of the project at `projectURL` is now `visibility`
+    /// (`LiveCaptureSourceFactory`'s window watcher): hidden, the take says so until it is visible again or in another
+    /// Space (a window in another Space is still recorded, and changing Spaces says nothing). Each take has a project of
+    /// its own, so what is heard late about one already let go says nothing about the current one; without a take,
+    /// nothing.
+    public func windowVisibilityChanged(_ visibility: WindowVisibility, inProjectAt projectURL: URL) {
+        guard take?.package.url == projectURL else { return }
         switch visibility {
         case .hidden: if !notices.contains(.windowHidden) { addNotice(.windowHidden) }
         case .visible, .otherSpace: notices.removeAll { $0 == .windowHidden }

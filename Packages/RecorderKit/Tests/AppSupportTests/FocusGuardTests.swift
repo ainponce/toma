@@ -69,12 +69,68 @@ import Testing
 
     @Test func aFailedShortcutLeavesNothingToTurnOff() async throws {
         try await withFocusDefaults { defaults, _ in
-            let runner = FakeShortcuts { _ in throw ShortcutsCLIError.timedOut }
+            let runner = FakeShortcuts { _ in throw ShortcutsCLIError.failed(status: 1, message: "No shortcut") }
             let focus = FocusGuard(runner: runner, defaults: defaults)
             #expect(await focus.takeWillStart(shortcut: "ID") == false)
             #expect(defaults.string(forKey: FocusGuard.activeKey) == nil)
             await focus.takeDidEnd()
             #expect(runner.runs == [ShortcutRun("ID", "on")])
+        }
+    }
+
+    @Test func aShortcutThatDidNotEndInTimeIsTurnedOffAfterTheTake() async throws {
+        try await withFocusDefaults { defaults, _ in
+            // Terminated at its time limit, it may still turn Do Not Disturb on: the take's end turns it off.
+            let runner = FakeShortcuts { run in
+                if run.input == "on" { throw ShortcutsCLIError.timedOut }
+                return ""
+            }
+            let focus = FocusGuard(runner: runner, defaults: defaults)
+            #expect(await focus.takeWillStart(shortcut: "ID") == false)
+            #expect(defaults.string(forKey: FocusGuard.activeKey) == "ID")
+            await focus.takeDidEnd()
+            #expect(runner.runs == [ShortcutRun("ID", "on"), ShortcutRun("ID", "off")])
+            #expect(defaults.string(forKey: FocusGuard.activeKey) == nil)
+        }
+    }
+
+    @Test func anOffThatFailedIsTriedAgain() async throws {
+        try await withFocusDefaults { defaults, _ in
+            // `shortcuts` cannot run while the Mac logs out.
+            let failing = FakeShortcuts { run in
+                if run.input == "off" { throw ShortcutsCLIError.failed(status: 1, message: "Logging out") }
+                return FocusGuard.changedOutput
+            }
+            let focus = FocusGuard(runner: failing, defaults: defaults)
+            #expect(await focus.takeWillStart(shortcut: "ID"))
+            await focus.takeDidEnd()
+            #expect(failing.runs == [ShortcutRun("ID", "on"), ShortcutRun("ID", "off")])
+            // Do Not Disturb may still be on: the mark stays.
+            #expect(defaults.string(forKey: FocusGuard.activeKey) == "ID")
+
+            // At the next launch it is turned off.
+            let runner = FakeShortcuts { _ in "" }
+            await FocusGuard(runner: runner, defaults: defaults).recoverAfterLaunch()
+            #expect(runner.runs == [ShortcutRun("ID", "off")])
+            #expect(defaults.string(forKey: FocusGuard.activeKey) == nil)
+        }
+    }
+
+    @Test(arguments: [false, true]) func anOffOwedFromBeforeStaysOwed(onFails: Bool) async throws {
+        try await withFocusDefaults { defaults, _ in
+            // The last take's `off` failed, so Do Not Disturb is still on: this take's `on` changes nothing (or fails),
+            // and the `off` is still owed when it ends.
+            let runner = FakeShortcuts { run in
+                if run.input == "on", onFails { throw ShortcutsCLIError.failed(status: 1, message: "") }
+                return ""
+            }
+            let focus = FocusGuard(runner: runner, defaults: defaults)
+            defaults.set("OLD", forKey: FocusGuard.activeKey)
+            #expect(await focus.takeWillStart(shortcut: "ID") == !onFails)
+            #expect(defaults.string(forKey: FocusGuard.activeKey) == "OLD")
+            await focus.takeDidEnd()
+            #expect(runner.runs == [ShortcutRun("ID", "on"), ShortcutRun("OLD", "off")])
+            #expect(defaults.string(forKey: FocusGuard.activeKey) == nil)
         }
     }
 
