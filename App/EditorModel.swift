@@ -42,13 +42,6 @@ enum ImageImportState: Equatable {
     case saveFailed
 }
 
-/// "Use This Style for New Projects" and "Restore Toma's Style", as the panel shows them.
-enum StyleStoreState: Equatable {
-    case idle
-    case working
-    case failed
-}
-
 /// A strip above the preview (design §5.9): one at a time, the most pressing.
 enum EditorBanner: Equatable {
     /// The last change could not be saved yet (amber).
@@ -123,8 +116,6 @@ final class EditorModel {
     /// The image the background is being imported from (the panel's "Choose Image…").
     var imageImport = ImageImportState.idle
     @ObservationIgnored var importTask: Task<Void, Never>?
-    /// Saving or restoring the style for new projects is under way, or failed.
-    var styleStore = StyleStoreState.idle
     /// The take has a photo of the desktop (`wallpapers/`) the Desktop background can show.
     private(set) var hasDesktopPhoto = false
     /// The take has a camera: the panel's Camera tab exists.
@@ -262,12 +253,13 @@ final class EditorModel {
                 state = .unfinished(takeID: unfinished)
                 return
             }
-            let defaultStyle = await Task.detached { DefaultStyleStore(directory: DefaultStyleStore.defaultDirectory).load() }.value
+            // A new project takes the style of the new projects (1c design §8): its look, its image and its camera.
+            let newProjects = await StyleCatalog.shared.newProjectsStyle()
             let context = EditContext(
                 app: AppInfo(name: AppIdentity.name, version: AppIdentity.version), cachesRoot: ProjectCaches.defaultRoot,
-                defaultStyle: defaultStyle, now: { Date() },
+                defaultStyle: newProjects.style.look, now: { Date() },
                 makeID: { prefix in prefix + String(format: "%08x", UInt32.random(in: .min ... .max)) },
-                styleDirectory: DefaultStyleStore.defaultDirectory)
+                styleDirectory: newProjects.imageDirectory, cameraLook: newProjects.style.camera)
             let session: EditSession
             do {
                 session = try await EditSession.open(url, take: take, context: context)
@@ -563,21 +555,35 @@ final class EditorModel {
         perform(step)
     }
 
-    /// "Apply Default Style" of the earlier version's banner: one edit. Its image background waits for a full disk to
-    /// have room (the amber banner says so) until it is saved, or the window closes and the session with it; it is never
-    /// cancelled midway, which would apply Toma's gradient instead.
+    /// "Apply Default Style" of the earlier version's banner: one edit, with the look of the style of the new projects
+    /// (1c design §8; its camera is left as the project has it). Its image background waits for a full disk to have room
+    /// (the amber banner says so) until it is saved, or the window closes and the session with it; it is never cancelled
+    /// midway, which would apply Toma's gradient instead.
     func applyDefaultStyle() {
         guard let session, canEdit, applyTask == nil else { return }
         isApplyingDefaultStyle = true
         updateBanner()
         applyTask = Task {
-            let directory = DefaultStyleStore.defaultDirectory
-            let style = await Task.detached { DefaultStyleStore(directory: directory).load() }.value
-            if await session.applyDefaultStyle(style, styleDirectory: directory) != .refused { editedHere = true }
+            let newProjects = await StyleCatalog.shared.newProjectsStyle()
+            let outcome = await session.applyDefaultStyle(newProjects.style.look, styleDirectory: newProjects.imageDirectory)
+            if outcome != .refused { editedHere = true }
             isApplyingDefaultStyle = false
             applyTask = nil
             updateBanner()
         }
+    }
+
+    /// "Apply" of the row Style (1c design §8): `EditSession.applyStyle`, one edit, which brings the style's image from
+    /// `imageDirectory` first (waiting for a full disk to have room, as an import does). `(.refused, false)` if the project
+    /// cannot be edited.
+    func applyStyle(_ style: NamedStyle, imageDirectory: URL?) async -> (outcome: EditOutcome, imageMissing: Bool) {
+        guard let session, canEdit else { return (.refused, false) }
+        let result = await session.applyStyle(style, imageDirectory: imageDirectory)
+        if result.outcome != .refused, !editedHere {
+            editedHere = true
+            updateBanner()
+        }
+        return result
     }
 
     /// Closes the banner shown, if it can be closed: the earlier version's one for good (in the project's caches), the

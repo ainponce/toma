@@ -23,6 +23,28 @@
         }
       }
     },
+    "%@ copy" : {
+      "comment" : "The name of a copy",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ copia"
+          }
+        }
+      }
+    },
+    "%@ copy %lld" : {
+      "comment" : "The name of a copy when «… copy» is taken",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ copia %lld"
+          }
+        }
+      }
+    },
     "%lld markers" : {
       "comment" : "A saved take: how many markers it has",
       "localizations" : {
@@ -852,6 +874,17 @@
         }
       }
     },
+    "Couldn't apply the style." : {
+      "comment" : "The row Style of the editor's panel: applying a style failed on the disk; nothing was applied",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo aplicar el estilo."
+          }
+        }
+      }
+    },
     "Couldn't draw the preview." : {
       "localizations" : {
         "es" : {
@@ -868,6 +901,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't import the style." : {
+      "comment" : "Importing a .tomastyle failed on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo importar el estilo."
+          }
+        }
+      }
+    },
+    "Couldn't import the style: the file is damaged." : {
+      "comment" : "Importing a .tomastyle that can't be read as a style",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo importar el estilo: el archivo está dañado."
           }
         }
       }
@@ -1058,6 +1113,28 @@
         }
       }
     },
+    "Delete the style “%@”?" : {
+      "comment" : "Manage Styles: the alert before a style goes to the Trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Borrar el estilo «%@»?"
+          }
+        }
+      }
+    },
+    "Delete…" : {
+      "comment" : "Manage Styles: a style's menu item, which asks first",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar…"
+          }
+        }
+      }
+    },
     "Depth" : {
       "comment" : "The Zoom tab: how far a zoom goes in",
       "localizations" : {
@@ -1180,6 +1257,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Duna"
+          }
+        }
+      }
+    },
+    "Duplicate" : {
+      "comment" : "A menu item: make a copy",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicar"
           }
         }
       }
@@ -1638,6 +1726,17 @@
         }
       }
     },
+    "Import…" : {
+      "comment" : "Manage Styles: add .tomastyle files",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importar…"
+          }
+        }
+      }
+    },
     "Instant" : {
       "comment" : "The Zoom tab: the selected zoom cuts in and out",
       "localizations" : {
@@ -1645,6 +1744,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Instantánea"
+          }
+        }
+      }
+    },
+    "It goes to the Trash." : {
+      "comment" : "Manage Styles: the alert before a style goes to the macOS Trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Va a la Papelera."
           }
         }
       }
@@ -1739,6 +1849,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Queda poco espacio en el disco: %@."
+          }
+        }
+      }
+    },
+    "Manage Styles" : {
+      "comment" : "The title of the sheet Manage Styles…",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Administrar estilos"
+          }
+        }
+      }
+    },
+    "Manage Styles…" : {
+      "comment" : "The row Style of the editor's panel: a menu item",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Administrar estilos…"
           }
         }
       }
@@ -1929,6 +2061,17 @@
         }
       }
     },
+    "Move to Trash" : {
+      "comment" : "A destructive button or menu item: to the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a la papelera"
+          }
+        }
+      }
+    },
     "Mute" : {
       "comment" : "The Audio tab: a track's switch",
       "localizations" : {
@@ -1936,6 +2079,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Silenciar"
+          }
+        }
+      }
+    },
+    "My Style" : {
+      "comment" : "The style made from the default style of an earlier version",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mi estilo"
+          }
+        }
+      }
+    },
+    "Name" : {
+      "comment" : "A name: a field, a column or an order",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nombre"
           }
         }
       }
@@ -2706,6 +2871,17 @@
         }
       }
     },
+    "Rename" : {
+      "comment" : "A menu item: give a new name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renombrar"
+          }
+        }
+      }
+    },
     "Replaces the automatic zooms that weren't changed." : {
       "comment" : "The Zoom tab: what the button does",
       "localizations" : {
@@ -2822,12 +2998,45 @@
         }
       }
     },
+    "Save" : {
+      "comment" : "Save as New Style: the alert's button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar"
+          }
+        }
+      }
+    },
     "Save Area" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Guardar el área"
+          }
+        }
+      }
+    },
+    "Save as New Style" : {
+      "comment" : "The title of the alert that asks the new style's name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar como estilo nuevo"
+          }
+        }
+      }
+    },
+    "Save as New Style…" : {
+      "comment" : "The row Style of the editor's panel: a menu item",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar como estilo nuevo…"
           }
         }
       }
@@ -3349,6 +3558,17 @@
         }
       }
     },
+    "Style “%@” was added." : {
+      "comment" : "A .tomastyle was imported",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agregó el estilo «%@»."
+          }
+        }
+      }
+    },
     "Sunset" : {
       "localizations" : {
         "es" : {
@@ -3770,6 +3990,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The style couldn't be moved to the Trash." : {
+      "comment" : "Manage Styles: deleting a style failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo mover el estilo a la Papelera."
           }
         }
       }
@@ -4307,6 +4538,17 @@
         }
       }
     },
+    "This style's image wasn't found: the background stays as it was." : {
+      "comment" : "The row Style of the editor's panel: the style was applied without its image",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontró la imagen de este estilo: el fondo queda como estaba."
+          }
+        }
+      }
+    },
     "Title" : {
       "localizations" : {
         "es" : {
@@ -4365,6 +4607,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Toma clásico"
+          }
+        }
+      }
+    },
+    "Toma's Style" : {
+      "comment" : "The style a project has when nothing was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estilo de Toma"
           }
         }
       }
@@ -4445,6 +4698,17 @@
         }
       }
     },
+    "Update “%@” with This Project" : {
+      "comment" : "The row Style of the editor's panel: save this project's look over the style it came from",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizar «%@» con este proyecto"
+          }
+        }
+      }
+    },
     "Updates are checked once the recording ends." : {
       "localizations" : {
         "es" : {
@@ -4461,6 +4725,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Usar este estilo en los proyectos nuevos"
+          }
+        }
+      }
+    },
+    "Use for New Projects" : {
+      "comment" : "The row Style of the editor's panel and Manage Styles: the style new projects take",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar en los proyectos nuevos"
           }
         }
       }

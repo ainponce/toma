@@ -251,6 +251,37 @@ import Testing
         }
     }
 
+    @Test func newProjectsStyleIDRoundTripsAndDefaultsToToma() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            // Toma's style until one is chosen.
+            #expect(store.settings.newProjectsStyleID == nil)
+            #expect(RecorderSettings().newProjectsStyleID == nil)
+
+            var settings = store.settings
+            settings.countdownSeconds = 5
+            settings.newProjectsStyleID = "a1b2c3d4"
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings.newProjectsStyleID == "a1b2c3d4")
+            #expect(SettingsStore(defaults: defaults).settings == settings)
+
+            // Back to Toma's style.
+            settings.newProjectsStyleID = nil
+            store.settings = settings
+            #expect(SettingsStore(defaults: defaults).settings.newProjectsStyleID == nil)
+            #expect(SettingsStore(defaults: defaults).settings.countdownSeconds == 5)
+
+            // Saved by 1b, which had no such field: Toma's style, and the rest is kept.
+            defaults.set(Data(#"{"countdownSeconds":10,"noteKeyActivity":false}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.newProjectsStyleID == nil)
+            #expect(store.settings.countdownSeconds == 10 && !store.settings.noteKeyActivity)
+
+            // A value this version cannot read: Toma's style, and the rest is kept.
+            defaults.set(Data(#"{"countdownSeconds":10,"newProjectsStyleID":42}"#.utf8), forKey: SettingsStore.key)
+            #expect(store.settings.newProjectsStyleID == nil && store.settings.countdownSeconds == 10)
+        }
+    }
+
     /// Saves `settings` in `defaults` as another version could have: with `change` made to the object at `key`.
     private func save(
         _ settings: RecorderSettings, in defaults: UserDefaults, changing key: String, _ change: (inout [String: Any]) -> Void

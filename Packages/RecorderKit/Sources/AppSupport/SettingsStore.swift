@@ -29,6 +29,9 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var hideDesktopIcons: Bool = false
     /// Whether a take notes when keys are typed, never which (`KeyActivityRecorder`), for the zoom while typing.
     public var noteKeyActivity: Bool = true
+    /// The named style new projects take ("Use for New Projects", 1c design §8), by its id (`NamedStyle.id`, 8 hex
+    /// digits); `nil`: Toma's style (plan decision 29). An id no style of the library has any more is Toma's style too.
+    public var newProjectsStyleID: String?
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -37,7 +40,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
         hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
         cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
-        focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true
+        focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true,
+        newProjectsStyleID: String? = nil
     ) {
         self.selection = selection
         self.quick = quick
@@ -51,6 +55,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.focusShortcutIdentifier = focusShortcutIdentifier
         self.hideDesktopIcons = hideDesktopIcons
         self.noteKeyActivity = noteKeyActivity
+        self.newProjectsStyleID = newProjectsStyleID
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -71,6 +76,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
             (try? container.decodeIfPresent(String.self, forKey: .focusShortcutIdentifier)) ?? defaults.focusShortcutIdentifier
         hideDesktopIcons = (try? container.decodeIfPresent(Bool.self, forKey: .hideDesktopIcons)) ?? defaults.hideDesktopIcons
         noteKeyActivity = (try? container.decodeIfPresent(Bool.self, forKey: .noteKeyActivity)) ?? defaults.noteKeyActivity
+        newProjectsStyleID =
+            (try? container.decodeIfPresent(String.self, forKey: .newProjectsStyleID)) ?? defaults.newProjectsStyleID
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.
