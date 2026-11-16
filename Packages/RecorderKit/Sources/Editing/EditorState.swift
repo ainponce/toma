@@ -22,10 +22,14 @@ public struct EditorState: Codable, Equatable, Sendable {
     public var panelVisible: Bool
     /// Whether the banner of a project of an earlier version (design §5.9) was closed.
     public var legacyBannerDismissed: Bool
+    /// The layout of the last block made or changed in this project (1c plan decision 10): the next one takes it. `nil`
+    /// until there is one, and in a file of 1b.
+    public var lastBlockLayout: LayoutKind?
 
     public init(
         windowFrame: Rect? = nil, playheadFrame: Int = 0, timelineScale: Double? = nil, timelineOffset: Double = 0,
-        tab: String = EditorState.defaultTab, panelVisible: Bool = true, legacyBannerDismissed: Bool = false
+        tab: String = EditorState.defaultTab, panelVisible: Bool = true, legacyBannerDismissed: Bool = false,
+        lastBlockLayout: LayoutKind? = nil
     ) {
         self.windowFrame = windowFrame
         self.playheadFrame = playheadFrame
@@ -34,6 +38,7 @@ public struct EditorState: Codable, Equatable, Sendable {
         self.tab = tab
         self.panelVisible = panelVisible
         self.legacyBannerDismissed = legacyBannerDismissed
+        self.lastBlockLayout = lastBlockLayout
     }
 
     /// The state in `editor-state.json` of `caches`, or `EditorState()` (the panel visible on Background, the timeline
@@ -68,6 +73,7 @@ public struct EditorState: Codable, Equatable, Sendable {
             timelineOffset: value(.timelineOffset, Double.self).flatMap { $0 >= 0 ? $0 : nil } ?? defaults.timelineOffset,
             tab: value(.tab, String.self).flatMap { $0.isEmpty ? nil : $0 } ?? defaults.tab,
             panelVisible: value(.panelVisible, Bool.self) ?? defaults.panelVisible,
-            legacyBannerDismissed: value(.legacyBannerDismissed, Bool.self) ?? defaults.legacyBannerDismissed)
+            legacyBannerDismissed: value(.legacyBannerDismissed, Bool.self) ?? defaults.legacyBannerDismissed,
+            lastBlockLayout: value(.lastBlockLayout, LayoutKind.self))
     }
 }

@@ -70,4 +70,17 @@ import Testing
         #expect(CursorSmoothingPreset(DefaultStyle.toma.cursor.smoothing) == .medium)
         #expect(CursorSmoothingPreset(.spring(SpringSpec(damping: 0.5, response: 0.5))) == nil)
     }
+
+    @Test func borderShadowAndShareSliders() {
+        #expect(close(PanelValues.cameraBorder(slider: 50), 0.5))
+        #expect(close(PanelValues.cameraShadow(slider: 40), 0.4))
+        #expect(PanelValues.slider(cameraBorder: 0.5) == 50)
+        #expect(PanelValues.slider(cameraShadow: 0.4) == 40)
+        #expect(PanelValues.slider(cameraShadow: 7) == 100)
+        #expect(close(PanelValues.splitShare(percent: 34), 0.34))
+        #expect(close(PanelValues.splitShare(percent: 10), 0.25))
+        #expect(PanelValues.percent(splitShare: 0.6) == 60)
+        #expect(PanelValues.percent(splitShare: 0.9) == 60)
+        #expect(PanelValues.percent(splitShare: 0.1) == 25)
+    }
 }

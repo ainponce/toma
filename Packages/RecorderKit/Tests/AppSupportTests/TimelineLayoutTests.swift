@@ -25,7 +25,7 @@ import Testing
         ])
         #expect(one.tracks == [
             TimelineRow(track: .ruler, height: 24), TimelineRow(track: .video, height: 56), TimelineRow(track: .zoom, height: 28),
-            TimelineRow(track: .camera, height: 24), TimelineRow(track: .audio(id: "mic"), height: 36),
+            TimelineRow(track: .camera, height: 32), TimelineRow(track: .audio(id: "mic"), height: 36),
             TimelineRow(track: .audio(id: "system-audio"), height: 36),
         ])
 

@@ -39,13 +39,13 @@ public struct TimelineLayout: Equatable, Sendable {
     public static let headerWidth = 88.0
     /// The closest the timeline zooms in.
     public static let maxPointsPerSecond = 600.0
-    /// The ruler's height, which the design does not give: the timeline is 236 pt (§5.1), and with the track bar's
-    /// 32 pt a take with a camera and two audio tracks fills it exactly.
+    /// The ruler's height, which the design does not give. The Camera row is 32 pt since 1c (design §5.5: it holds the
+    /// layout blocks as well as the bubble's changes).
     public static let rulerHeight = 24.0
     static let videoHeight = 56.0
     static let screenHeight = 24.0
     static let zoomHeight = 28.0
-    static let cameraHeight = 24.0
+    static let cameraHeight = 32.0
     static let audioHeight = 36.0
 
     /// Top to bottom: the ruler, Video, Screen (with two or more screen tracks that recorded something), Zoom, Camera
