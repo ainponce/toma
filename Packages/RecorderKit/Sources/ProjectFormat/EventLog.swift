@@ -385,7 +385,7 @@ public enum EventLogReader {
     private static let chunkSize: off_t = 64 * 1024
 
     /// The offset right after the last line break before `size`, or 0 if there is none.
-    private static func startOfLastLine(_ fd: Int32, size: off_t) throws -> off_t {
+    static func startOfLastLine(_ fd: Int32, size: off_t) throws -> off_t {
         var end = size
         while end > 0 {
             let start = max(0, end - chunkSize)
@@ -399,7 +399,7 @@ public enum EventLogReader {
     }
 
     /// Up to `count` bytes at `offset`; fewer only if the file ends first.
-    private static func readBytes(_ fd: Int32, at offset: off_t, count: Int) throws -> [UInt8] {
+    static func readBytes(_ fd: Int32, at offset: off_t, count: Int) throws -> [UInt8] {
         var bytes = [UInt8](repeating: 0, count: count)
         var done = 0
         try bytes.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in

@@ -248,6 +248,39 @@ extension JSONValue {
         try Data(try text([create], createVersion: 1).utf8).write(to: url)
         #expect(try EditLogReader.truncateIncompleteTail(url) == false)
         #expect(try EditLogReader.read(url).entries == [create])
+
+        // A migrate to a version newer than this app's is never cut, nor the one before it: a newer app wrote it, and
+        // the read refuses the log.
+        let newer = headText + migrate + "\n" + (try EditLogEntry.migrate(seq: 4, from: 2, to: 3).jsonLine()) + "\n"
+        try Data(newer.utf8).write(to: url)
+        #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogReader.read(url) }
+        #expect(try EditLogReader.truncateIncompleteTail(url) == false)
+        #expect(try SafeRead.regularFile(at: url) == Data(newer.utf8))
+    }
+}
+
+@Test func lineOfVersion1ThatWritesWhatTheMigrationAddsIsRefused() throws {
+    // A line made by hand on a document of version 1 that writes a member version 2 adds: version 1 has no place for it,
+    // so the replay stops at it, as 1b's did, whether a migrate follows (which would write over it) or not.
+    let v1 = try #require(DocumentMigration.reverted(JSONValue(encoding: legacy), to: 1))
+    guard case let .object(document) = v1, case let .object(camera)? = document["camera"] else {
+        Issue.record("no camera")
+        return
+    }
+    var mirrored = camera
+    mirrored["mirror"] = .bool(true)
+    let wholeCamera = EditLogEntry.do(
+        seq: 2, group: 2, label: "camera", changes: [try set("/camera", .object(camera), .object(mirrored))], at: date)
+    for (name, entries) in [
+        ("at the end", [create, wholeCamera]),
+        ("before a migrate", [create, wholeCamera, .migrate(seq: 3, from: 1, to: 2), try padding(4)]),
+    ] {
+        let replayed = try replay(entries, createVersion: 1)
+        #expect(replayed.mismatchSeq == 2, "\(name)")
+        #expect(replayed.lastAppliedSeq == 1, "\(name)")
+        #expect(replayed.version == 1, "\(name)")
+        #expect(replayed.document == at(1, legacy), "\(name)")
+        #expect(!replayed.document.camera.mirror, "\(name)")
     }
 }
 

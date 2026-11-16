@@ -233,8 +233,8 @@ public enum EditLogReader {
         // `end` is always right after a line break, or 0.
         var end = info.st_size
         while end > 0 {
-            let start = try startOfLine(endingAt: end - 1, in: fd)
-            guard isMigrate(try bytes(of: fd, in: start..<(end - 1))) else { break }
+            let start = try EventLogReader.startOfLastLine(fd, size: end - 1)
+            guard isMigrate(try EventLogReader.readBytes(fd, at: start, count: Int(end - 1 - start))) else { break }
             end = start
         }
         guard end < info.st_size else { return false }
@@ -251,42 +251,6 @@ public enum EditLogReader {
             case let .migrate(_, _, to)? = try? EditLogEntry(jsonLineData: data)
         else { return false }
         return to <= EditDocument.currentVersion
-    }
-
-    private static let chunkSize: off_t = 64 * 1024
-
-    /// The offset right after the last line break before `end`, or 0 if there is none.
-    private static func startOfLine(endingAt end: off_t, in fd: Int32) throws -> off_t {
-        var chunkEnd = end
-        while chunkEnd > 0 {
-            let chunkStart = max(0, chunkEnd - chunkSize)
-            if let index = try bytes(of: fd, in: chunkStart..<chunkEnd).lastIndex(of: newline) {
-                return chunkStart + off_t(index) + 1
-            }
-            chunkEnd = chunkStart
-        }
-        return 0
-    }
-
-    /// The bytes of the file at `range`; fewer only if it ends first.
-    private static func bytes(of fd: Int32, in range: Range<off_t>) throws -> [UInt8] {
-        let count = Int(range.count)
-        var bytes = [UInt8](repeating: 0, count: count)
-        var done = 0
-        try bytes.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
-            guard let base = buffer.baseAddress else { return }
-            while done < count {
-                let result = pread(fd, base + done, count - done, range.lowerBound + off_t(done))
-                if result < 0 {
-                    if errno == EINTR { continue }
-                    throw POSIXError.current()
-                }
-                if result == 0 { break }
-                done += result
-            }
-        }
-        bytes.removeLast(count - done)
-        return bytes
     }
 
     /// Each line of `data` without its line break, and whether it is a last line without one. A file that ends with a
@@ -505,7 +469,10 @@ public struct EditReplay: Sendable {
         var seq: Int
         var action: Action
 
-        /// `state` after this line; throws if the line does not match it.
+        /// `state` after this line; throws if the line does not match it. A `migrate` also throws if the state holds
+        /// something the migration would write over (a line of the older version wrote a member it adds): reverted, the
+        /// migrated state must be the state again, so that line is never lost in silence; the replay stops before the
+        /// `migrate`, where the check of the end finds it.
         func applied(to state: State) throws -> State {
             switch action {
             case let .changes(changes):
@@ -514,7 +481,11 @@ public struct EditReplay: Sendable {
                 guard DocumentMigration.follows(from: from, to: to, atVersion: state.version) else {
                     throw EditChangeError.invalidDocument("/documentVersion")
                 }
-                return State(json: try DocumentMigration.migrate(state.json, from: from), version: to)
+                let migrated = try DocumentMigration.migrate(state.json, from: from)
+                guard DocumentMigration.reverted(migrated, to: from) == state.json else {
+                    throw EditChangeError.invalidDocument("")
+                }
+                return State(json: migrated, version: to)
             }
         }
     }
