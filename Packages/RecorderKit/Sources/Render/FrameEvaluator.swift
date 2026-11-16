@@ -34,6 +34,11 @@ import ProjectFormat
 ///     without images (takes before 1b), the arrow.
 ///   It is `scale × its height in points × the screen's rect height / the region's height` tall: in `toma`, 24 pt,
 ///   whatever it is drawn with; in `system`, a recorded image's `size.height` (and the arrow's 24 pt).
+/// - Click effects (`cursor.clickEffect`, `ClickEffects`), with the cursor shown, their `h` its height: those of the
+///   cursor path's clicks (the `mouseDown`s inside a kept clip, `CursorPath.clicks`), placed as the cursor is, and only
+///   while that point is in the region the screen shows; none while a window is not on screen. A click is pressed until
+///   no button is down any more, at each `mouseUp` that leaves none down, placed as the cursor's press reads it
+///   (`TimeMap.output(ofChangeAt:take:)`: one in a cut, from the next clip on).
 /// - Camera (`camera.show`): the camera's bubble (`CameraBubble`, the zoom's rule too): the first camera track with a
 ///   segment, from the start of its first segment on, at the `CameraStyleTimeline` of the take's `camera.initial` and
 ///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
@@ -62,6 +67,8 @@ public struct FrameEvaluator: Sendable {
     private let bubble: CameraBubble?
     /// The take's `cursorImage` events, in time order.
     private let cursorImages: [RecordedCursor]
+    /// When no button is down any more, in output order: where the click effects' presses end.
+    private let releases: [Int64]
 
     /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`.
     public init(
@@ -79,10 +86,12 @@ public struct FrameEvaluator: Sendable {
         self.paths = paths
         bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
-        cursorImages = events.sortedByTime().compactMap { event in
+        let ordered = events.sortedByTime()
+        cursorImages = ordered.compactMap { event in
             guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
             return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
         }
+        releases = Self.releases(in: ordered, take: take.id, timeMap: timeMap)
     }
 
     /// The legacy document of the take (`EditDocument.legacy(take:events:)`) with the gradient, the padding and the
@@ -133,8 +142,18 @@ public struct FrameEvaluator: Sendable {
             }
             frame.screen = ScreenLayer(trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: view.crop)
             if document.cursor.show, view.onScreen, let region = view.region {
-                frame.cursor = try cursor(
-                    at: output, source: source, in: region, shownIn: rect, cursorImageIsReadable: cursorImageIsReadable)
+                // A point in global points, placed on the rect where it is in the region; `nil` off the region.
+                func place(_ global: SIMD2<Double>) -> SIMD2<Double>? {
+                    let point = CGPoint(x: global.x, y: global.y)
+                    guard CursorGeometry.contains(point, region) else { return nil }
+                    return SIMD2(rect.x, rect.y) + CursorGeometry.normalized(point, in: region) * SIMD2(rect.width, rect.height)
+                }
+                let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
+                let height = document.cursor.scale * look.pointHeight * rect.height / region.height
+                frame.cursor = cursor(at: output, look: look, height: height, place: place)
+                frame.clickEffects = ClickEffects.layers(
+                    atOutput: output, clicks: paths.cursor.clicks, releases: releases, effect: document.cursor.clickEffect,
+                    cursorHeight: height, place: place)
             }
         }
         frame.camera = camera(at: source, output: output)
@@ -196,21 +215,33 @@ public struct FrameEvaluator: Sendable {
         }
     }
 
-    /// The drawn cursor at output time `τ` (one `source(atOutput:)` shows, at source instant `source`): where the cursor
-    /// path is then, placed on `rect` where it is in `region`. `nil` before the path's first position and off `region`.
+    /// The drawn cursor at output time `τ`, drawn with `look` and `height` tall: where the cursor path is then, placed
+    /// by `place`. `nil` before the path's first position and where `place` has no point for it.
     private func cursor(
-        at τ: Int64, source: HostTime, in region: Rect, shownIn rect: Rect, cursorImageIsReadable: (String) throws -> Bool
-    ) rethrows -> CursorLayer? {
-        guard let sample = paths.cursor.sample(atOutput: τ) else { return nil }
-        let global = CGPoint(x: sample.position.x, y: sample.position.y)
-        guard CursorGeometry.contains(global, region) else { return nil }
-        let normalized = CursorGeometry.normalized(global, in: region)
-        let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
+        at τ: Int64, look: Look, height: Double, place: (SIMD2<Double>) -> SIMD2<Double>?
+    ) -> CursorLayer? {
+        guard let sample = paths.cursor.sample(atOutput: τ), let hotspot = place(sample.position) else { return nil }
         return CursorLayer(
-            hotspot: SIMD2(rect.x, rect.y) + normalized * SIMD2(rect.width, rect.height),
-            height: document.cursor.scale * look.pointHeight * rect.height / region.height,
-            image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect, opacity: sample.opacity,
-            clickScale: sample.clickScale)
+            hotspot: hotspot, height: height, image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect,
+            opacity: sample.opacity, clickScale: sample.clickScale)
+    }
+
+    /// When no button is down any more in `events` (in time order): at each `mouseUp` that leaves none down, from where
+    /// it starts to rule (`TimeMap.output(ofChangeAt:take:)`, as `CursorPath` reads the buttons), in output order.
+    private static func releases(in events: [InputEvent], take: String, timeMap: TimeMap) -> [Int64] {
+        var down = Set<MouseButton>(), releases: [Int64] = []
+        for event in events {
+            switch event.kind {
+            case let .mouseDown(button, _, _):
+                down.insert(button)
+            case let .mouseUp(button, _, _):
+                down.remove(button)
+                if down.isEmpty, let output = timeMap.output(ofChangeAt: event.t, take: take) { releases.append(output) }
+            default:
+                break
+            }
+        }
+        return releases
     }
 
     /// What the cursor is drawn with at source instant `source`, by the document's `cursor.style` (see the type's notes).

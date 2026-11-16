@@ -3,8 +3,9 @@ import Foundation
 import Metal
 import ProjectFormat
 
-/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the window frame, the screen, the cursor and the
-/// camera, in that order, in one render pass that starts by clearing the target, blended premultiplied "over".
+/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the window frame, the screen, the cursor, the
+/// click effects and the camera, in that order, in one render pass that starts by clearing the target, blended
+/// premultiplied "over".
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
@@ -22,6 +23,7 @@ public final class Compositor: @unchecked Sendable {
     private let spritePipeline: any MTLRenderPipelineState
     private let cursorPipeline: any MTLRenderPipelineState
     private let windowBarPipeline: any MTLRenderPipelineState
+    private let clickEffectPipeline: any MTLRenderPipelineState
     private let screenSampler: any MTLSamplerState
     private let spriteSampler: any MTLSamplerState
 
@@ -31,6 +33,8 @@ public final class Compositor: @unchecked Sendable {
         precondition(MemoryLayout<QuadUniforms>.stride == 80, "QuadUniforms must keep the layout of the shaders' struct: 80 bytes")
         precondition(
             MemoryLayout<WindowBarUniforms>.stride == 112, "WindowBarUniforms must keep the layout of the shaders' struct: 112 bytes")
+        precondition(
+            MemoryLayout<ClickEffectUniforms>.stride == 32, "ClickEffectUniforms must keep the layout of the shaders' struct: 32 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)
@@ -64,6 +68,7 @@ public final class Compositor: @unchecked Sendable {
         spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
         cursorPipeline = try pipeline(vertex: "quadVertex", fragment: "cursorFragment", blended: true)
         windowBarPipeline = try pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blended: true)
+        clickEffectPipeline = try pipeline(vertex: "quadVertex", fragment: "clickEffectFragment", blended: true)
 
         let sampler = MTLSamplerDescriptor()
         sampler.minFilter = .linear
@@ -85,8 +90,9 @@ public final class Compositor: @unchecked Sendable {
     /// map onto the whole target (they are in pixels of `frame.outputSize`). The screen is drawn only when
     /// `frame.screen` is set and `screen` is given, its `crop` filling its rect; the cursor only when `frame.cursor`
     /// is set, shown (opacity above 0) and of some size, with `cursor` the texture of its image (`CursorImages`); the
-    /// camera only when `frame.camera` is set and `camera` is given, filling its rect without stretching (cropped,
-    /// centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
+    /// click effects over it (`frame.clickEffects`); the camera only when `frame.camera` is set and `camera` is given,
+    /// filling its rect without stretching (cropped, centred, to the rect's shape). An `.image` background is
+    /// `backgroundImage`, the texture
     /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn directly
     /// without `backgroundImage`; with one, its blurred mesh gradient (`BackgroundImages.texture(forWallpaper:…)`), the
     /// grain is added to it. A window frame's title is `windowTitle`, the texture `TitleTexture` made of it, drawn at the
@@ -165,7 +171,10 @@ public final class Compositor: @unchecked Sendable {
             }
         }
 
-        // 5. Camera, over everything.
+        // 5. Click effects, over the cursor.
+        drawClickEffects(frame.clickEffects, viewport: viewport, encoder: encoder)
+
+        // 6. Camera, over everything.
         if let layer = frame.camera, let camera {
             let fill = Self.aspectFill(SIMD2(Double(camera.width), Double(camera.height)), in: layer.rect)
             drawImage(
@@ -280,6 +289,36 @@ public final class Compositor: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
+    /// Draws `layers` in order (`clickEffectFragment`), each over the square around it that holds its outline and its
+    /// antialiased edge; nothing of one at opacity 0 or of no size. Their positions are stage coordinates, which are
+    /// output pixels while the stage is not transformed: with the zoom's camera, they are drawn once, never blurred,
+    /// after the blur's subsamples are resolved, through the stage's transform at the frame's time (plan decision 26).
+    private func drawClickEffects(
+        _ layers: [ClickEffectLayer], viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
+    ) {
+        for layer in layers {
+            guard layer.opacity > 0, layer.opacity.isFinite, layer.radius > 0, layer.radius.isFinite, layer.center.x.isFinite,
+                  layer.center.y.isFinite
+            else { continue }
+            let ring = layer.kind == .ripple
+            let thickness = ring && layer.thickness.isFinite ? max(layer.thickness, 0) : 0
+            // A ring's white, its outline and half a pixel of antialiasing past it; a disc's edge and half a pixel.
+            let reach = layer.radius + thickness / 2 + (ring ? 2 : 1)
+            let origin = SIMD2<Float>(layer.center - reach), size = SIMD2<Float>(repeating: Float(2 * reach))
+            var quad = QuadUniforms(
+                viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
+                uvSize: .one, radius: 0)
+            var uniforms = ClickEffectUniforms(
+                center: SIMD2<Float>(layer.center), radius: Float(layer.radius), thickness: Float(thickness),
+                opacity: Float(min(layer.opacity, 1)), outline: Float(min(ClickEffects.outlineOpacity(of: layer), 1)),
+                ring: ring ? 1 : 0)
+            encoder.setRenderPipelineState(clickEffectPipeline)
+            encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ClickEffectUniforms>.stride, index: 0)
+            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        }
+    }
+
     /// Draws the title bar of `window` with its buttons (`windowBarFragment`), over a quad one pixel larger than the bar
     /// on every side and one more at the bottom, where the bar goes on one pixel under the screen.
     private func drawWindowBar(_ window: WindowFrameLayer, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
@@ -372,6 +411,17 @@ private struct QuadUniforms {
     var clampsToCrop: Float = 0
     var shapeOrigin: SIMD2<Float> = .zero
     var shapeSize: SIMD2<Float> = .zero
+}
+
+/// `ClickEffectUniforms` in `ShaderSource.metal`: 32 bytes.
+private struct ClickEffectUniforms {
+    var center: SIMD2<Float>
+    var radius: Float
+    var thickness: Float
+    var opacity: Float
+    var outline: Float
+    var ring: Float
+    var padding: Float = 0
 }
 
 /// `WindowBarUniforms` in `ShaderSource.metal`: 112 bytes.
