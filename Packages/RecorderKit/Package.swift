@@ -31,7 +31,7 @@ let package = Package(
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
-                "ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Export",
+                "ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Export", "Editing", "Analysis",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

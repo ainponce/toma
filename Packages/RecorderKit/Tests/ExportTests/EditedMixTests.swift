@@ -468,66 +468,94 @@ private struct SplitMix: RandomNumberGenerator {
     }
 }
 
-/// A track's reader starts the file near the frame asked for, one ALAC packet before it, and reads the samples a
-/// reader from the file's start does: right after the segment's start, across packets, in the middle and at its very
-/// end. A 44.1 kHz segment, which the reader resamples, is read from its start instead, with the same bits.
-@Test func aTrackIsReadFromNearTheFrameAskedFor() async throws {
+/// A track's reader starts the file near the frame asked for, at least one ALAC packet before it, and reads the samples
+/// a reader from the file's start does: right after the segment's start, across packets, in the middle and at its very
+/// end. A segment at 48 kHz is started one packet before; one the reader resamples (a microphone at 44.1 kHz, mono or
+/// stereo, or at 24, 16, 11.025 or 8 kHz), at the last frame before that where one of its samples and a decoded frame
+/// fall at the same time (every 160, 2, 3, 640 and 6 frames), from where the resampler gives the frames it gives from
+/// the start once it has taken in a few, and to the very end (where it may run out a few frames early).
+@Test(arguments: [(48_000.0, 1), (44_100.0, 1), (44_100.0, 2), (24_000.0, 1), (16_000.0, 1), (11_025.0, 1), (8_000.0, 1)])
+func aTrackIsReadFromNearTheFrameAskedFor(rate: Double, channels: Int) async throws {
     try await withTemporaryDirectory { dir in
-        for rate in [48_000.0, 44_100.0] {
-            let project = try await take(
-                in: dir, name: "seek\(Int(rate))", seconds: 20, mic: [AudioSegmentSpec(start: base, seconds: 20, sampleRate: rate, transform: noise)])
-            let track = try #require(project.take.tracks.first { $0.id == micID })
-            let timeline = try await AudioTrackTimeline.load(project, track: track, origin: base, channels: 1)
-            let placed = try #require(timeline.placed.first)
-            #expect((placed.seekOrigin != nil) == (rate == 48_000), "\(rate) Hz")
-            // The whole segment, read in order from its start.
-            let all = placed.start..<placed.end
-            let whole = try await offThePool {
+        let project = try await take(
+            in: dir, name: "seek\(Int(rate))", seconds: 20,
+            mic: [AudioSegmentSpec(start: base, seconds: 20, sampleRate: rate, channels: channels, transform: noise)])
+        let track = try #require(project.take.tracks.first { $0.id == micID })
+        let timeline = try await AudioTrackTimeline.load(project, track: track, origin: base, channels: channels)
+        let placed = try #require(timeline.placed.first)
+        #expect(placed.seekOrigin != nil, "\(rate) Hz")
+        let step = try #require(AudioTrackTimeline.seekGrid(sourceRate: rate)).decoded
+        #expect(step == [48_000: 1, 44_100: 160, 24_000: 2, 16_000: 3, 11_025: 640, 8_000: 6][Int(rate)])
+        // The whole segment, read in order from its start.
+        let all = placed.start..<placed.end
+        let whole = try await offThePool {
+            let reader = AudioTrackTimeline.Reader(timeline)
+            var samples: [Float] = [], block: [Float] = []
+            var frame = all.lowerBound
+            while frame < all.upperBound {
+                let end = min(frame + 4_096, all.upperBound)
+                reader.read(frame..<end, into: &block)
+                samples += block
+                frame = end
+            }
+            return samples
+        }
+        #expect(whole.count == all.count * channels && whole.contains { $0 != 0 })
+        let length = all.count
+        for offset in [1, 100, 4_095, 4_097, 4_257, 8_193, 250_001, length / 2, length - 4_000, length - 10, length - 1] {
+            let from = all.lowerBound + Int64(offset), to = min(from + 3_000, all.upperBound)
+            let (part, opening) = try await offThePool {
                 let reader = AudioTrackTimeline.Reader(timeline)
-                var samples: [Float] = [], block: [Float] = []
-                var frame = all.lowerBound
-                while frame < all.upperBound {
-                    let end = min(frame + 4_096, all.upperBound)
-                    reader.read(frame..<end, into: &block)
-                    samples += block
-                    frame = end
-                }
-                return samples
+                var samples: [Float] = []
+                reader.read(from..<to, into: &samples)
+                return (samples, reader.lastOpening)
             }
-            #expect(whole.count == all.count && whole.contains { $0 != 0 })
-            let length = all.count
-            for offset in [1, 100, 4_095, 4_097, 8_193, 250_001, length / 2, length - 4_000, length - 10, length - 1] {
-                let from = all.lowerBound + Int64(offset), to = min(from + 3_000, all.upperBound)
-                let (part, opening) = try await offThePool {
-                    let reader = AudioTrackTimeline.Reader(timeline)
-                    var samples: [Float] = []
-                    reader.read(from..<to, into: &samples)
-                    return (samples, reader.lastOpening)
-                }
-                #expect(bits(part) == bits(whole[offset..<(offset + Int(to - from))]), "\(rate) Hz from \(offset)")
-                let needed = Int64(placed.segment.map.decoded(atOutput: Double(from)).rounded(.down))
-                let expected = rate == 48_000 && needed > AudioTrackTimeline.seekPreroll ? needed - AudioTrackTimeline.seekPreroll : 0
-                #expect(opening == expected, "\(rate) Hz from \(offset): started at \(String(describing: opening))")
-            }
+            let range = (offset * channels)..<((offset + Int(to - from)) * channels)
+            #expect(bits(part) == bits(whole[range]), "\(rate) Hz from \(offset)")
+            let needed = Int64(placed.segment.map.decoded(atOutput: Double(from)).rounded(.down))
+            let start = (needed - AudioTrackTimeline.seekPreroll) / step * step
+            let expected = needed > AudioTrackTimeline.seekPreroll && start > 0 ? start : 0
+            #expect(opening == expected, "\(rate) Hz from \(offset): started at \(String(describing: opening))")
         }
     }
 }
 
-/// How long the first render of a revision takes at different points of a 10 min take with a microphone and system
-/// audio at 48 kHz, one segment each, and how long making the mix takes. Run by an agent, with `TOMA_BENCH=1`.
-@Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
-func seekLatencyOnALongTake() async throws {
+/// What tells a segment the reader resamples it can be started in the middle: a reader started on a frame where one of
+/// the file's samples falls gives the frames of a reader from the start, `seekPreroll` frames on; started 7 frames
+/// later, off that grid, it never does (its resampler runs at another phase), and the check says so.
+@Test func aResampledSegmentIsStartedOnlyWhereItGivesTheSameFrames() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(
+            in: dir, name: "probe", seconds: 10, mic: [AudioSegmentSpec(start: base, seconds: 10, sampleRate: 44_100, transform: noise)])
+        let track = try #require(project.take.tracks.first { $0.id == micID })
+        let timeline = try await AudioTrackTimeline.load(project, track: track, origin: base, channels: 1)
+        let placed = try #require(timeline.placed.first)
+        let origin = try #require(placed.seekOrigin)
+        let (onTheGrid, offTheGrid) = try await offThePool {
+            (try AudioTrackTimeline.startsExactly(placed.segment, channels: 1, origin: origin, at: 160 * 1_000),
+             try AudioTrackTimeline.startsExactly(placed.segment, channels: 1, origin: origin, at: 160 * 1_000 + 7))
+        }
+        #expect(onTheGrid && !offTheGrid)
+    }
+}
+
+/// How long the first render of a revision takes at different points of a 10 min take with a microphone (at 48 kHz, or
+/// at 44.1 kHz, which the reader resamples) and system audio at 48 kHz, one segment each, and how long making the mix
+/// takes. Run by an agent, with `TOMA_BENCH=1`.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"), arguments: [48_000.0, 44_100.0])
+func seekLatencyOnALongTake(microphoneRate: Double) async throws {
     try await withTemporaryDirectory { dir in
         let minutes = 10.0
         let project = try await take(
-            in: dir, name: "long", seconds: minutes * 60,
+            in: dir, name: "long", seconds: minutes * 60, mic: [AudioSegmentSpec(start: base, seconds: minutes * 60, sampleRate: microphoneRate)],
             systemAudio: [AudioSegmentSpec(start: base, seconds: minutes * 60, channels: 2, frequency: 1000)])
         let document = EditDocument.legacy(for: project)
         let clock = ContinuousClock()
         var made: EditedMix?
         let making = try await clock.measure { made = try await EditedMix.make(project: project, document: document, framesPerSecond: 60) }
         let mix = try #require(made)
-        print("seekLatencyOnALongTake: make \(making) for \(minutes) min of microphone and system audio")
+        let name = "seekLatencyOnALongTake (microphone at \(Int(microphoneRate)) Hz)"
+        print("\(name): make \(making) for \(minutes) min of microphone and system audio")
         for seconds in [1.0, 60, 300, minutes * 60 - 1] {
             let start = Int64(seconds * 48_000)
             let revision = mix.with(document: document, framesPerSecond: 60)
@@ -537,7 +565,7 @@ func seekLatencyOnALongTake() async throws {
                     revision.render(outputFrames: start..<(start + 4_096), into: &block)
                 }
             }
-            print("seekLatencyOnALongTake: first block at \(seconds) s of a new revision: \(latency)")
+            print("\(name): first block at \(seconds) s of a new revision: \(latency)")
         }
     }
 }
