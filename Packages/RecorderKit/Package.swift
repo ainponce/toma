@@ -9,6 +9,7 @@ let package = Package(
         .library(
             name: "RecorderKit", targets: [
                 "ProjectFormat", "Analysis", "Editing", "Recording", "SyntheticCapture", "Recovery", "Render", "Export",
+                "Library",
             ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
@@ -25,6 +26,7 @@ let package = Package(
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
         .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
+        .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
         .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording"]),
         // Shared by every test target; not a product.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture"]),
@@ -49,6 +51,7 @@ let package = Package(
             dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
             name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
+        .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )

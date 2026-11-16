@@ -224,16 +224,34 @@ public enum SafeRead {
     public static func regularFile(at url: URL) throws -> Data {
         let (fd, size) = try openRegularFile(url, flags: O_RDONLY)
         defer { close(fd) }
-        var data = Data(capacity: Int(size))
+        return try readToEnd(fd, capacity: Int(size), limit: nil)
+    }
+
+    /// The bytes of the regular file at `url`, read as `regularFile(at:)` reads them, if there are no more than
+    /// `maxBytes`: `EFBIG` if `fstat` says the file is larger, before anything is read, and `EFBIG` if it grew past
+    /// `maxBytes` since, as soon as one byte past the limit is read. Never more than that byte.
+    public static func regularFile(at url: URL, maxBytes: Int) throws -> Data {
+        let (fd, size) = try openRegularFile(url, flags: O_RDONLY)
+        defer { close(fd) }
+        guard size <= maxBytes else { throw POSIXError(.EFBIG) }
+        return try readToEnd(fd, capacity: Int(size), limit: maxBytes)
+    }
+
+    /// Everything from `fd` to its end; with a `limit`, `EFBIG` once more than `limit` bytes were read.
+    private static func readToEnd(_ fd: Int32, capacity: Int, limit: Int?) throws -> Data {
+        var data = Data(capacity: capacity)
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
-            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+            // With a limit, at most one byte past it: the byte that tells a file that grew past it from one that ends there.
+            let wanted = limit.map { min(buffer.count, $0 + 1 - data.count) } ?? buffer.count
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, wanted) }
             if count < 0 {
                 if errno == EINTR { continue }
                 throw POSIXError.current()
             }
             if count == 0 { return data }
             data.append(contentsOf: buffer[..<count])
+            if let limit, data.count > limit { throw POSIXError(.EFBIG) }
         }
     }
 
