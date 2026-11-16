@@ -69,8 +69,8 @@ private func removeEventLog(of package: ProjectPackage) throws {
     }
 }
 
-/// A manifest of format version 3 that this version's `Manifest` cannot decode.
-private let newerManifest = Data(#"{"formatVersion":3,"projects":[{"takes":[]}]}"#.utf8)
+/// A manifest of format version 4 that this version's `Manifest` cannot decode.
+private let newerManifest = Data(#"{"formatVersion":4,"projects":[{"takes":[]}]}"#.utf8)
 
 @Test func scanFlagsNewerFormatVersionWithoutRecoveringIt() async throws {
     try await withTemporaryDirectory { dir in
@@ -86,8 +86,8 @@ private let newerManifest = Data(#"{"formatVersion":3,"projects":[{"takes":[]}]}
             return
         }
         #expect(found == package)
-        #expect(reason == "format version 3 is newer than 2")
-        await #expect(throws: RecoveryError.unsupportedFormatVersion(3)) {
+        #expect(reason == "format version 4 is newer than 3")
+        await #expect(throws: RecoveryError.unsupportedFormatVersion(4)) {
             try await TakeRecovery.recover(package: package, takeID: "take-001")
         }
         #expect(try Data(contentsOf: package.manifestURL) == newerManifest)
@@ -119,6 +119,28 @@ private let newerManifest = Data(#"{"formatVersion":3,"projects":[{"takes":[]}]}
         // Rewritten with the take closed, never as a package of the current version.
         #expect(try manifestOnDisk(package).formatVersion == 1)
         #expect(try LoadedProject.load(package.url).manifest.formatVersion == 1)
+    }
+}
+
+@Test func recoveryKeepsProjectIDAndUpgradedFrom() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir, formatVersion: 3, upgradedFrom: 1)
+        try await builder.addAudioTrack(id: "mic", source: micSource, segments: [])
+        try builder.addEmptySegment(track: "mic", index: 1, start: base, endReason: nil, file: .zeroBytes)
+        let package = try builder.write(status: .recording).package
+        let before = try manifestOnDisk(package)
+        #expect(before.formatVersion == 3 && before.upgradedFrom == 1)
+        let projectID = try #require(before.projectID)
+        #expect(ProjectID.isValid(projectID))
+        #expect(RecoveryScanner.scan(directory: dir) == [.recoverable(package: package, takeID: "take-001")])
+
+        let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+        #expect(record.status == .recovered)
+        let after = try manifestOnDisk(package)
+        #expect(after.formatVersion == 3)
+        #expect(after.upgradedFrom == 1)
+        #expect(after.projectID == projectID)
     }
 }
 

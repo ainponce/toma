@@ -36,6 +36,13 @@ extension InputEvent {
          #"{"frame":{"height":600,"width":800,"x":100,"y":80},"onScreen":true,"t":5,"track":"window-4242","type":"windowGeometry"}"#),
         (InputEvent(t: HostTime(nanoseconds: 5), kind: .cameraStyle(CameraStyle(shape: .landscape, size: CameraStyle.small, anchor: .topLeading))),
          #"{"style":{"anchor":"topLeading","shape":"landscape","size":0.17},"t":5,"type":"cameraStyle"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .cursorImage(
+            hash: "3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e", hotspot: SIMD2(0.16, 0.12), size: SIMD2(24, 32), kind: .arrow)),
+         #"{"hash":"3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e","hotspot":{"x":0.16,"y":0.12},"kind":"arrow","size":{"height":32,"width":24},"t":5,"type":"cursorImage"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .scroll(dx: 0, dy: -42.5, x: 640.5, y: 402)),
+         #"{"dx":0,"dy":-42.5,"t":5,"type":"scroll","x":640.5,"y":402}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .keyActivity),
+         #"{"t":5,"type":"keyActivity"}"#),
     ]
 }
 
@@ -63,7 +70,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
     #expect(Set(types) == [
         "cursor", "mouseDown", "mouseUp", "displayGeometry", "segmentStarted",
         "streamInterrupted", "paused", "resumed", "deviceChanged", "marker", "droppedSamples", "audioClock",
-        "windowGeometry", "cameraStyle",
+        "windowGeometry", "cameraStyle", "cursorImage", "scroll", "keyActivity",
     ])
 }
 
@@ -83,9 +90,44 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
 }
 
 @Test func unknownTypeOrMissingFieldFailsToDecode() {
-    #expect(throws: DecodingError.self) { try InputEvent(jsonLine: #"{"dy":1,"t":5,"type":"scroll"}"#) }
+    #expect(throws: DecodingError.self) { try InputEvent(jsonLine: #"{"phase":1,"t":5,"type":"gesture"}"#) }
     #expect(throws: DecodingError.self) { try InputEvent(jsonLine: #"{"t":5,"type":"cursor","x":1}"#) }
+    #expect(throws: DecodingError.self) { try InputEvent(jsonLine: #"{"dy":1,"t":5,"type":"scroll"}"#) }
+    #expect(throws: DecodingError.self) {
+        try InputEvent(jsonLine: #"{"hash":"3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e","hotspot":{"x":0.16},"size":{"height":32,"width":24},"t":5,"type":"cursorImage"}"#)
+    }
     #expect(throws: DecodingError.self) { try InputEvent(jsonLine: #"{"type":"marker"}"#) }
+}
+
+@Test func cursorImageWithoutKindOmitsIt() throws {
+    let line = #"{"hash":"00112233445566778899aabbccddeeff","hotspot":{"x":0.5,"y":0.5},"size":{"height":16,"width":16},"t":7,"type":"cursorImage"}"#
+    let event = try InputEvent(jsonLine: line)
+    #expect(event == InputEvent(t: HostTime(nanoseconds: 7), kind: .cursorImage(
+        hash: "00112233445566778899aabbccddeeff", hotspot: SIMD2(0.5, 0.5), size: SIMD2(16, 16), kind: nil)))
+    #expect(try event.jsonLine() == line)
+    #expect(!(try event.jsonLine()).contains("kind"))
+}
+
+@Test func unknownCursorKindReadsAsAbsent() throws {
+    // A shape a newer version knows: the line still counts, with the recorded image and no kind.
+    let line = #"{"hash":"3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e","hotspot":{"x":0.16,"y":0.12},"kind":"resizeDiagonal","size":{"height":32,"width":24},"t":5,"type":"cursorImage"}"#
+    let event = try InputEvent(jsonLine: line)
+    guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else {
+        Issue.record("expected a cursorImage, got \(event)")
+        return
+    }
+    #expect(event.t == HostTime(nanoseconds: 5))
+    #expect(hash == "3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e")
+    #expect(hotspot == SIMD2(0.16, 0.12))
+    #expect(size == SIMD2(24, 32))
+    #expect(kind == nil)
+}
+
+@Test func cursorKindsAreTheNineOfTheDesign() {
+    #expect(CursorKind.allCases.map(\.rawValue) == [
+        "arrow", "iBeam", "pointingHand", "openHand", "closedHand", "crosshair", "resizeLeftRight", "resizeUpDown",
+        "notAllowed",
+    ])
 }
 
 @Test func sortedByTimeKeepsFileOrderForEqualTimes() {
@@ -307,7 +349,7 @@ struct BadLine: Sendable, CustomTestStringConvertible {
 
 @Test(arguments: [
     BadLine(name: "garbage", text: "garbage{{"),
-    BadLine(name: "unknown type", text: #"{"dy":1,"t":2,"type":"scroll"}"#),
+    BadLine(name: "unknown type", text: #"{"phase":1,"t":2,"type":"gesture"}"#),
     BadLine(name: "missing field", text: #"{"t":2,"type":"cursor","x":1}"#),
     BadLine(name: "empty line", text: ""),
     BadLine(name: "zeros left by a power loss", text: String(repeating: "\u{0}", count: 64)),
@@ -340,7 +382,7 @@ func undecodableMiddleLineIsSkipped(badLine: BadLine) async throws {
 @Test func unknownEventTypeAtTailIsKeptNotTruncated() async throws {
     try withTemporaryDirectory { dir in
         // A whole line of a type a newer version writes, missing only its line break.
-        let newer = #"{"dy":1,"t":2,"type":"scroll"}"#
+        let newer = #"{"phase":1,"t":2,"type":"gesture"}"#
         let contents = try line(marker(1)) + newer
 
         let url = dir.appendingPathComponent("events.jsonl")

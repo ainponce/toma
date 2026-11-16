@@ -111,14 +111,24 @@ public final class TakeBuilder {
     private var framesWritten: [String: Int] = [:]
     private var written = false
 
-    /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`: with an older one, the package
-    /// an earlier version of the app would have created, which keeps that version.
-    public init(in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion) throws {
+    /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`. With a version below 3, the
+    /// package an earlier version of the app would have created, which keeps that version: without `projectID` and
+    /// `upgradedFrom`, so its id is the derived one (`upgradedFrom` must be `nil`). From version 3, the `projectID` of
+    /// `ProjectPackage.create` and `upgradedFrom` as given: a package an edit upgraded from that version.
+    public init(
+        in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion,
+        upgradedFrom: Int? = nil
+    ) throws {
+        guard formatVersion >= 3 || upgradedFrom == nil else {
+            throw TestSupportError.failed("a package of version \(formatVersion) has no upgradedFrom")
+        }
         package = try ProjectPackage.create(in: directory, name: name, app: AppInfo(name: "Tests", version: "0"), now: Date())
-        if formatVersion != Manifest.currentFormatVersion {
+        if formatVersion != Manifest.currentFormatVersion || upgradedFrom != nil {
             // Written here: `ManifestStore` keeps the version a package was created with.
             var manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
             manifest.formatVersion = formatVersion
+            manifest.upgradedFrom = upgradedFrom
+            if formatVersion < 3 { manifest.projectID = nil }
             try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
         }
     }

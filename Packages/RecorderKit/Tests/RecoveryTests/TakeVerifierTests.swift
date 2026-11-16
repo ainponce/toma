@@ -208,8 +208,8 @@ private func completeTake(
             try LoadedProject.load(package.url, take: "take-009")
         }
         // Newer and not decodable as this version's `Manifest`: still recognized as newer.
-        try Data(#"{"formatVersion":3,"projects":[]}"#.utf8).write(to: package.manifestURL)
-        #expect(throws: LoadedProjectError.unsupportedFormatVersion(3)) { try LoadedProject.load(package.url) }
+        try Data(#"{"formatVersion":4,"projects":[]}"#.utf8).write(to: package.manifestURL)
+        #expect(throws: LoadedProjectError.unsupportedFormatVersion(4)) { try LoadedProject.load(package.url) }
         // No version of the format is below 1.
         try Data(#"{"formatVersion":0,"projects":[]}"#.utf8).write(to: package.manifestURL)
         #expect(throws: LoadedProjectError.unsupportedFormatVersion(0)) { try LoadedProject.load(package.url) }
