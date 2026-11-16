@@ -168,6 +168,42 @@ private final class SlowFileSystem: LibraryFileSystem {
     }
 }
 
+/// A file system that writes down every access and holds the first read of a `manifest.json` until `open()`, as a disk
+/// that stalls on it.
+private final class GateFileSystem: LibraryFileSystem {
+    let counting = CountingFileSystem()
+    private let held = DispatchSemaphore(value: 0)
+    private let state = Mutex((reads: 0, holding: false))
+
+    /// The first manifest read is waiting.
+    var isHolding: Bool { state.withLock { $0.holding } }
+    /// How many manifests were read.
+    var manifestReads: Int { state.withLock { $0.reads } }
+
+    func open() {
+        held.signal()
+    }
+
+    func read(_ url: URL, maxBytes: Int) throws -> Data {
+        if url.lastPathComponent == "manifest.json" {
+            let first = state.withLock { state -> Bool in
+                state.reads += 1
+                guard state.reads == 1 else { return false }
+                state.holding = true
+                return true
+            }
+            if first { held.wait() }
+        }
+        return try counting.read(url, maxBytes: maxBytes)
+    }
+
+    func list(_ directory: URL) throws -> [URL] { try counting.list(directory) }
+    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat { try counting.stat(url, withAddedDate: withAddedDate) }
+    func volume(of url: URL) throws -> VolumeInfo { try counting.volume(of: url) }
+    func freeSpace(of url: URL) throws -> Int64 { try counting.freeSpace(of: url) }
+    func allocatedSize(of package: URL) throws -> Int64 { try counting.allocatedSize(of: package) }
+}
+
 /// A file system that answers as the disk does, except that every access at or under one of `failing` throws `EIO`, as a
 /// disk that fails for a moment; its volume is still told (the system knows it without reading the disk).
 private final class FailingFileSystem: LibraryFileSystem {
@@ -945,6 +981,36 @@ private func unblocking<T>(
             // Only the project and its disk's folder in /Volumes were asked about.
             let onVolumes = counting.accesses.filter { $0.url.path.hasPrefix("/Volumes") }.map(\.url.path)
             #expect(onVolumes == [url.path, "/Volumes/" + disk])
+        }
+    }
+
+    @Test func stopEndsTheWalkAndItsUpdates() async throws {
+        try await withTemporaryDirectory { dir in
+            let projects = try Scan.folder("Projects", in: dir)
+            _ = try await LibraryFixtures.folder(in: projects, kinds: [.synthetic(count: 12)])
+            let gate = GateFileSystem()
+            let updates = Updates()
+            let scanner = Scan.scanner(projects: projects, in: dir, fileSystem: gate, updates: updates)
+            scanner.reconcile(from: LibraryIndex())
+            // The walk is held in the first manifest it reads.
+            #expect(await eventually(timeout: .seconds(20)) { gate.isHolding })
+            let told = updates.all.count
+            scanner.stop()
+            gate.open()
+            await scanner.whenStopped()
+            // The read under way ended; nothing more was looked at, and nothing was told after the stop.
+            #expect(updates.all.count == told)
+            #expect(gate.manifestReads == 1)
+            let packagesLookedAt = gate.counting.accesses.filter { $0.operation == .stat && $0.url.pathExtension == "toma" }
+            #expect(Set(packagesLookedAt.map(\.url)).count == 1)
+            #expect(!updates.all.contains(.finished))
+
+            // A stopped scanner does nothing more.
+            scanner.reconcile(from: LibraryIndex())
+            scanner.look(at: [projects])
+            scanner.accountSizes(of: [])
+            await scanner.whenStopped()
+            #expect(updates.all.count == told && gate.manifestReads == 1)
         }
     }
 
