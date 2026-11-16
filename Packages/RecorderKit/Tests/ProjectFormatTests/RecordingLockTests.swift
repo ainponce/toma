@@ -68,6 +68,48 @@ extension RecordingLockInfo {
     }
 }
 
+/// `<dir>/A/edit.lock` held, then `A` moved to `B` and another folder put at `A` with its own lock, held by someone
+/// else: what a session closing a moved package finds.
+private func withMovedLock(
+    _ body: (_ moved: HeldRecordingLock, _ old: URL, _ new: URL, _ other: HeldRecordingLock) throws -> Void
+) throws {
+    try withTemporaryDirectory { dir in
+        let old = dir.appendingPathComponent("A", isDirectory: true)
+        let new = dir.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: false)
+        let moved = try RecordingLock.acquire(at: old.appendingPathComponent("edit.lock"), info: .fixture)
+        try FileManager.default.moveItem(at: old, to: new)
+        try FileManager.default.createDirectory(at: old, withIntermediateDirectories: false)
+        let other = try RecordingLock.acquire(at: old.appendingPathComponent("edit.lock"), info: .fixture)
+        defer { other.release() }
+        try body(moved, old, new, other)
+    }
+}
+
+@Test func releaseAfterAMoveLeavesTheLockAtTheOldPath() throws {
+    try withMovedLock { moved, old, new, _ in
+        moved.release()
+        #expect(FileManager.default.fileExists(atPath: old.appendingPathComponent("edit.lock").path))
+        #expect(RecordingLock.isHeld(at: old.appendingPathComponent("edit.lock")))
+        // Its own file went with the folder, and locks nothing now.
+        #expect(FileManager.default.fileExists(atPath: new.appendingPathComponent("edit.lock").path))
+        #expect(!RecordingLock.isHeld(at: new.appendingPathComponent("edit.lock")))
+    }
+}
+
+@Test func releaseInTheFolderRemovesTheLockOfAMovedFolderOnly() throws {
+    try withMovedLock { moved, old, new, _ in
+        let folder = open(new.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        #expect(folder >= 0)
+        defer { close(folder) }
+        moved.release(inDirectory: folder)
+        #expect(!FileManager.default.fileExists(atPath: new.appendingPathComponent("edit.lock").path))
+        #expect(RecordingLock.isHeld(at: old.appendingPathComponent("edit.lock")))
+        moved.release(inDirectory: folder)
+        #expect(RecordingLock.isHeld(at: old.appendingPathComponent("edit.lock")))
+    }
+}
+
 @Test func staleLockFileFromACrashIsNotHeld() async throws {
     try withTemporaryDirectory { dir in
         let url = dir.appendingPathComponent("recording.lock")
