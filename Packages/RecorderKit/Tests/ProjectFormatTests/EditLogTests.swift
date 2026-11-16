@@ -563,19 +563,22 @@ func largeDocumentReplaysItsTailFast() throws {
     // 500 clips and 300 zooms as its reference).
     var big = DesignExample.document
     let origin: UInt64 = 81_000_000_000_000
+    // Random ids, as the format makes them: some start with `0` (`z-0a…`), like a `-0` written in the text.
+    let zoomIDs = randomIDs(400, prefix: "z-", seed: 400)
+    let clipIDs = randomIDs(100, prefix: "c-", seed: 100)
     big.zoom.regions = []
     for i in 0..<400 {
         let start = origin + UInt64(i) * 9_000_000_000
         let focus = ZoomFocus.fixed(x: Double(i % 97) / 97, y: Double(i % 89) / 89)
         big.zoom.regions.append(ZoomRegion(
-            id: String(format: "z-%08x", i), take: "take-001", start: ns(start), end: ns(start + 4_000_000_000), origin: .auto,
+            id: zoomIDs[i], take: "take-001", start: ns(start), end: ns(start + 4_000_000_000), origin: .auto,
             focus: focus, instant: false))
     }
     big.sequence = []
     for i in 0..<100 {
         let start = origin + UInt64(i) * 36_000_000_000
         big.sequence.append(
-            Clip(id: String(format: "c-%08x", i), take: "take-001", start: ns(start), end: ns(start + 30_000_000_000), speed: 1))
+            Clip(id: clipIDs[i], take: "take-001", start: ns(start), end: ns(start + 30_000_000_000), speed: 1))
     }
     let bytes = try ProjectJSON.encoder().encode(big).count
     var entries: [EditLogEntry] = [.create(seq: 1, document: big, app: app)]
@@ -599,6 +602,10 @@ func largeDocumentReplaysItsTailFast() throws {
     #expect(full.mismatchSeq == nil)
     #expect(full.document == tail.document)
 
+    #expect(zoomIDs.contains { $0.hasPrefix("z-0") } && clipIDs.contains { $0.hasPrefix("c-0") })
+    let encodeStart = clock.now
+    for _ in 0..<20 { _ = try JSONValue(encoding: big) }
+    print("BENCH one JSONValue(encoding:) \((clock.now - encodeStart) / 20)")
     let change = try #require(big.setChange("/style/shadow", 0.5))
     let applyStart = clock.now
     for _ in 0..<20 { _ = try big.applying([change]) }

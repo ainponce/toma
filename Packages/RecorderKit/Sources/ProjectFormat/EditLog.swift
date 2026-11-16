@@ -345,14 +345,15 @@ public struct EditReplay: Sendable {
         if let end = try? EditDocument.holding(json) {
             return EditReplay(document: end.document, lastAppliedSeq: steps[applied - 1].seq, mismatchSeq: mismatch)
         }
-        return firstInvalidStep(in: steps[..<applied], after: (document, start, seq))
+        return firstInvalidStep(in: steps[..<applied], after: (document, start, seq), else: mismatch)
     }
 
     /// The replay up to the first of `steps` that leaves no document, when after the last one there is none: each of
     /// them matched, and the state before the first one, `good`, is a document. It decodes about 2√n times: at every
-    /// √nth step until one is no document, then at each step after the last good one.
+    /// √nth step until one is no document, then at each step after the last good one. `mismatch` is the line after
+    /// `steps` that did not match, if every step turned out to leave a document.
     private static func firstInvalidStep(
-        in steps: ArraySlice<Step>, after good: (document: EditDocument, json: JSONValue, seq: Int)
+        in steps: ArraySlice<Step>, after good: (document: EditDocument, json: JSONValue, seq: Int), else mismatch: Int?
     ) -> EditReplay {
         var good = good
         let stride = max(1, Int(Double(steps.count).squareRoot().rounded(.up)))
@@ -371,8 +372,8 @@ public struct EditReplay: Sendable {
             }
             chunkStart = chunk.endIndex
         }
-        // Not reached: the last step leaves no document.
-        return EditReplay(document: good.document, lastAppliedSeq: good.seq)
+        // Not reached, since the last step leaves no document; if it were, the replay is as if it had checked out.
+        return EditReplay(document: good.document, lastAppliedSeq: good.seq, mismatchSeq: mismatch)
     }
 
     /// `steps`, which all matched before, applied to `json` again.

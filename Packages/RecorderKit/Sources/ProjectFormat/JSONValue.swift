@@ -30,36 +30,55 @@ public indirect enum JSONValue: Codable, Equatable, Sendable {
     /// The JSON text `data` (a line of the edit log, or what `JSONEncoder` wrote), read as `init(from:)` reads it.
     /// Throws if it is not JSON.
     init(parsing data: Data) throws {
-        // `JSONSerialization` reads a whole document many times faster than `init(from:)`, whose every guess at a
-        // type throws. Its numbers read the same except two kinds, rare in a document, which `JSONEncoder` writes and
-        // `JSONSerialization` does not keep as written: `-0` (−0.0), which it reads as the integer 0, and an integer
-        // written with an exponent past 2⁵³ (a huge `Double`), whose digits it rounds. With one of them, the whole value
-        // is read with `init(from:)`.
-        if !Self.mayHoldNegativeZero(data),
-            let serialized = JSONValue(serialized: try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed))
-        {
-            self = serialized
-        } else {
-            self = try ProjectJSON.decoder().decode(JSONValue.self, from: data)
-        }
+        self = try Self.parsed(data).value
     }
 
-    /// Whether `data` has a `-0` that is not the start of a longer number. One inside a string is found too, which only
-    /// costs the slower reading.
-    private static func mayHoldNegativeZero(_ data: Data) -> Bool {
-        data.withUnsafeBytes { (buffer: UnsafeRawBufferPointer) in
-            guard let base = buffer.baseAddress else { return false }
-            var start = 0
-            while start < buffer.count, let found = memchr(base + start, Int32(UInt8(ascii: "-")), buffer.count - start) {
-                let index = base.distance(to: UnsafeRawPointer(found))
-                let rest = buffer[(index + 1)...].prefix(2)
-                if rest.first == UInt8(ascii: "0") {
-                    let next = rest.dropFirst().first
-                    guard let next, next == UInt8(ascii: ".") || next == UInt8(ascii: "e") || next == UInt8(ascii: "E")
-                        || (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(next)
-                    else { return true }
+    /// How `init(parsing:)` read a text.
+    enum Reading: Equatable {
+        /// With `JSONSerialization`, many times faster than `init(from:)`, whose every guess at a type throws.
+        case serialization
+        /// With `init(from:)`, for a text with a number `JSONSerialization` does not keep as written.
+        case decoder
+    }
+
+    /// `data` read as `init(parsing:)` reads it, and how.
+    ///
+    /// `JSONSerialization` reads numbers as `init(from:)` does except two kinds, rare in a document, which `JSONEncoder`
+    /// writes: `-0` (−0.0), which it reads as the integer 0, and an integer written with an exponent past 2⁵³ (a huge
+    /// `Double`), whose digits it rounds. A text with one of them is read with `init(from:)`: the first is found in the
+    /// text, outside its strings (the format's ids, like `z-0a1b2c3d`, never count), and the second as it is read.
+    static func parsed(_ data: Data) throws -> (value: JSONValue, reading: Reading) {
+        if !hasNegativeZero(data),
+            let value = JSONValue(serialized: try JSONSerialization.jsonObject(with: data, options: .fragmentsAllowed))
+        {
+            return (value, .serialization)
+        }
+        return (try ProjectJSON.decoder().decode(JSONValue.self, from: data), .decoder)
+    }
+
+    /// Whether `data` has the number `-0`, outside its strings: a `-0` that does not go on as a longer number (`-0.5`,
+    /// `-0e0` and `-0.0` read with their sign).
+    private static func hasNegativeZero(_ data: Data) -> Bool {
+        data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+            var inString = false
+            var index = 0
+            while index < bytes.count {
+                switch bytes[index] {
+                case UInt8(ascii: "\\") where inString:
+                    // The escaped character, even a quote, stays in the string.
+                    index += 1
+                case UInt8(ascii: "\""):
+                    inString.toggle()
+                case UInt8(ascii: "-") where !inString && index + 1 < bytes.count && bytes[index + 1] == UInt8(ascii: "0"):
+                    guard index + 2 < bytes.count else { return true }
+                    switch bytes[index + 2] {
+                    case UInt8(ascii: "0")...UInt8(ascii: "9"), UInt8(ascii: "."), UInt8(ascii: "e"), UInt8(ascii: "E"): break
+                    default: return true
+                    }
+                default:
+                    break
                 }
-                start = index + 1
+                index += 1
             }
             return false
         }

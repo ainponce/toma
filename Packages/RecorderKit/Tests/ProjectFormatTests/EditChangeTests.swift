@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import Testing
-// Not @testable: the editor uses only the public API.
-import ProjectFormat
+// @testable only for `JSONValue.parsed`, which says how a text was read: the rest is the public API the editor uses.
+@testable import ProjectFormat
 
 private func ns(_ nanoseconds: UInt64) -> HostTime { HostTime(nanoseconds: nanoseconds) }
 
@@ -101,6 +101,12 @@ func randomDoubles(_ count: Int, seed: UInt64) -> [Double] {
     return values
 }
 
+/// Ids as the format makes them, `prefix` and 8 random hex (`z-0a1b2c3d`), the same ones for a seed.
+func randomIDs(_ count: Int, prefix: String, seed: UInt64) -> [String] {
+    var generator = SplitMix64(seed: seed)
+    return (0..<count).map { _ in prefix + String(format: "%08x", UInt32(truncatingIfNeeded: generator.next())) }
+}
+
 /// SplitMix64: a seeded generator, so a failure can be run again.
 private struct SplitMix64: RandomNumberGenerator {
     private var state: UInt64
@@ -150,6 +156,44 @@ func canonical(_ document: EditDocument) throws -> String {
         wrong.append(value)
     }
     #expect(wrong.isEmpty, "\(wrong.count) of \(fast.count) differ, the first \(wrong.prefix(5))")
+}
+
+@Test func idsNeverSendADocumentToTheSlowReading() throws {
+    // 400 zoom ids like `z-0a1b2c3d`: the text has `-0` in it, but inside strings.
+    var document = DesignExample.document
+    let region = document.zoom.regions[0]
+    let ids = randomIDs(400, prefix: "z-0a", seed: 3).map { String($0.dropLast(2)) }
+    document.zoom.regions = ids.enumerated().map { index, id in
+        var copy = region
+        copy.id = id
+        copy.focus = .fixed(x: Double(index) / 401, y: 7.0 / 267)
+        return copy
+    }
+    let data = try ProjectJSON.compactEncoder().encode(document)
+    #expect(String(decoding: data, as: UTF8.self).contains(#""id":"z-0a"#))
+    let (value, reading) = try JSONValue.parsed(data)
+    #expect(reading == .serialization)
+    #expect(try canonical(value.decoded(as: EditDocument.self)) == canonical(document))
+    let change = try #require(document.setChange("/style/padding", 0.1))
+    #expect(try canonical(document.applying([change, change.inverse])) == canonical(document))
+
+    // Only a `-0` number outside the strings, or an integer past 2⁵³ written with an exponent, takes the exact reading;
+    // both readings give the same value.
+    let texts: [(String, JSONValue.Reading)] = [
+        (#"["z-0a", "-0", "c-0f"]"#, .serialization),
+        (#"[-0.5, -0.0, -0e0, -10, 0, 2e20]"#, .serialization),
+        (#"["a\"-0", 1]"#, .serialization),
+        (#"["a\\", -0]"#, .decoder),
+        (#"[-0]"#, .decoder),
+        (#"-0"#, .decoder),
+        (#"{"z-0a":-0}"#, .decoder),
+        (#"[1e19]"#, .decoder),
+    ]
+    for (text, expected) in texts {
+        let (value, reading) = try JSONValue.parsed(Data(text.utf8))
+        #expect(reading == expected, "\(text)")
+        #expect(identical(value, try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))), "\(text)")
+    }
 }
 
 @Test func longDecimalsSurviveEveryEditAndItsInverse() throws {
