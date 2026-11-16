@@ -14,6 +14,28 @@ public enum UpgradeResult: Sendable {
     case changedMeanwhile
 }
 
+/// The calls through which `PackageUpgrade` writes and waits, so tests can make a write fail or see a wait (like
+/// `EditJournalIO`).
+public struct PackageUpgradeIO: Sendable {
+    /// Writes `data` as the file `name` of the folder `directory` is open on; throws a `POSIXError`.
+    public var write: @Sendable (_ data: Data, _ name: String, _ directory: Int32) throws -> Void
+    /// Waits `delay` before `edit.lock` is tried again, while another open file holds it.
+    public var pause: @Sendable (_ delay: Duration) -> Void
+
+    public init(
+        write: @escaping @Sendable (_ data: Data, _ name: String, _ directory: Int32) throws -> Void,
+        pause: @escaping @Sendable (_ delay: Duration) -> Void
+    ) {
+        self.write = write
+        self.pause = pause
+    }
+
+    /// `DurableFile.writeAtomically(_:named:inDirectory:)`, and a sleep of the calling thread.
+    public static let system = PackageUpgradeIO(
+        write: { try DurableFile.writeAtomically($0, named: $1, inDirectory: $2) },
+        pause: { Thread.sleep(forTimeInterval: $0 / .seconds(1)) })
+}
+
 /// The first edit of a version 1 or 2 package moves it to version 3, in the order of design §6.1, so that a crash at
 /// any point leaves a package that opens with the look it had:
 ///
@@ -27,52 +49,102 @@ public enum UpgradeResult: Sendable {
 ///
 /// A crash between 2 and 3 leaves a version 3 package with `upgradedFrom` and no log, which opens with the legacy
 /// document; no older reader can show an edit, since edits only exist after the version changed. Both files are written
-/// with `DurableFile.writeAtomically(_:named:inDirectory:)`, relative to the package folder's descriptor.
+/// through `context.upgradeIO` (`DurableFile.writeAtomically(_:named:inDirectory:)`), relative to the package folder's
+/// descriptor.
 ///
 /// Synchronous: it waits for the lock's file and for `F_FULLFSYNC`, so it runs on the session's queue of files, never
 /// on the main actor (plan decision 28).
 public enum PackageUpgrade {
-    /// Another opener's probe of `RecordingLock.isHeld` takes `edit.lock` for a moment: an attempt that meets one is
-    /// tried again this many times, `lockRetryDelay` apart, before the lock counts as taken, here and when a version 3
-    /// package opens (as the recorder does with `recording.lock`).
-    static let lockRetries = 4
-    static let lockRetryDelay: Duration = .milliseconds(20)
-
     /// Moves the package at `package` (its current place), whose folder `folder` is open on, from the version 1 or 2
     /// manifest `opened` (as the session read it) to version 3, with the `create` of `legacy` and the `do` of `first`.
     ///
     /// Throws, having released the lock, if a step cannot be done: `EINVAL` for a manifest `opened` that is not of
     /// version 1 or 2, the error of `legacy.applying(first.changes)` (nothing is touched then), and the `POSIXError` of
     /// a file that cannot be written or read. After a failure in step 3 the package is the one a crash there leaves.
+    /// The session does not let go: it takes the upgrade up again from the step it reached (`advance`).
     public static func upgrade(
         _ package: ProjectPackage, folder: Int32, opened: Manifest, legacy: EditDocument, first: EditStep?,
         context: EditContext
     ) throws -> UpgradeResult {
-        guard (1...2).contains(opened.formatVersion) else { throw POSIXError(.EINVAL) }
-        let at = context.now()
-        // Everything is encoded before anything is touched.
-        let manifest = upgraded(opened)
-        let manifestData = try ProjectJSON.encoder().encode(manifest)
-        let lines = try entries(legacy: legacy, first: first, at: at, app: context.app).map { try $0.jsonLine() + "\n" }
-        let log = Data(lines.joined().utf8)
-
-        // (1)
-        guard let lock = try acquireLock(at: package.editLockURL, info: .current(now: at)) else { return .lockTaken }
+        var progress = Progress(encoded: try Encoded(opened: opened, legacy: legacy, first: first, context: context))
         do {
-            let current = try SafeRead.regularFile(at: package.manifestURL)
-            guard (try? ProjectJSON.decoder().decode(Manifest.self, from: current)) == opened else {
-                lock.release(inDirectory: folder)
-                return .changedMeanwhile
-            }
-            // (2)
-            try DurableFile.writeAtomically(manifestData, named: package.manifestURL.lastPathComponent, inDirectory: folder)
-            // (3)
-            try DurableFile.writeAtomically(log, named: package.editLogURL.lastPathComponent, inDirectory: folder)
+            return try advance(&progress, package, folder: folder, opened: opened, io: context.upgradeIO)
         } catch {
-            lock.release(inDirectory: folder)
+            progress.lock?.release(inDirectory: folder)
             throw error
         }
-        return .upgraded(lock, manifest)
+    }
+
+    /// What an upgrade writes, encoded before anything is touched.
+    struct Encoded: Sendable {
+        var manifest: Manifest
+        var manifestData: Data
+        /// The log: the `create` and the `do`, each with its line break.
+        var log: Data
+        /// When the step was made: the `do`'s `at` and the lock's `startedAt`.
+        var at: Date
+
+        init(opened: Manifest, legacy: EditDocument, first: EditStep?, context: EditContext) throws {
+            guard (1...2).contains(opened.formatVersion) else { throw POSIXError(.EINVAL) }
+            at = context.now()
+            manifest = PackageUpgrade.upgraded(opened)
+            manifestData = try ProjectJSON.encoder().encode(manifest)
+            let lines = try PackageUpgrade.entries(legacy: legacy, first: first, at: at, app: context.app)
+            log = Data(try lines.map { try $0.jsonLine() + "\n" }.joined().utf8)
+        }
+    }
+
+    /// How far an upgrade got. A step counts as done once its write returned; one that threw may have reached the disk
+    /// all the same, and is written again, with the same bytes, under the same lock: no other process can have touched
+    /// the package meanwhile.
+    struct Progress: Sendable {
+        var encoded: Encoded
+        /// Held from step 1 on.
+        var lock: HeldRecordingLock?
+        var manifestWritten = false
+        var logWritten = false
+    }
+
+    /// Takes the upgrade up from where `progress` says, each step not done yet in order. Throws the error of the step
+    /// that failed, `progress` saying how far it got and the lock kept, except when step 1's read of the manifest fails:
+    /// the lock is let go, so the next attempt asks again whether another process came.
+    static func advance(
+        _ progress: inout Progress, _ package: ProjectPackage, folder: Int32, opened: Manifest, io: PackageUpgradeIO
+    ) throws -> UpgradeResult {
+        if progress.lock == nil {
+            // (1)
+            let lock: HeldRecordingLock
+            do {
+                lock = try RecordingLock.acquire(
+                    at: package.editLockURL, info: .current(now: progress.encoded.at), retries: RecordingLock.probeRetries,
+                    pause: { io.pause(RecordingLock.probeRetryDelay) })
+            } catch let error as POSIXError where error.code == .EWOULDBLOCK {
+                return .lockTaken
+            }
+            do {
+                let current = try SafeRead.regularFile(at: package.manifestURL)
+                guard (try? ProjectJSON.decoder().decode(Manifest.self, from: current)) == opened else {
+                    lock.release(inDirectory: folder)
+                    return .changedMeanwhile
+                }
+            } catch {
+                lock.release(inDirectory: folder)
+                throw error
+            }
+            progress.lock = lock
+        }
+        if !progress.manifestWritten {
+            // (2)
+            try io.write(progress.encoded.manifestData, package.manifestURL.lastPathComponent, folder)
+            progress.manifestWritten = true
+        }
+        if !progress.logWritten {
+            // (3)
+            try io.write(progress.encoded.log, package.editLogURL.lastPathComponent, folder)
+            progress.logWritten = true
+        }
+        guard let lock = progress.lock else { throw POSIXError(.EBADF) }
+        return .upgraded(lock, progress.encoded.manifest)
     }
 
     /// `opened` at version 3: `upgradedFrom` its version and the id it already had, the derived one.
@@ -97,18 +169,5 @@ public enum PackageUpgrade {
                 .do(seq: 2, group: 2, label: first.label.rawValue, changes: first.changes, at: at.roundedToWholeSeconds))
         }
         return entries
-    }
-
-    /// `RecordingLock.acquire`, with `lockRetries` more attempts while another open file holds it; `nil` if it still
-    /// does. Any other error is thrown.
-    private static func acquireLock(at url: URL, info: RecordingLockInfo) throws -> HeldRecordingLock? {
-        for attempt in 0...lockRetries {
-            do {
-                return try RecordingLock.acquire(at: url, info: info)
-            } catch let error as POSIXError where error.code == .EWOULDBLOCK {
-                if attempt < lockRetries { usleep(useconds_t(lockRetryDelay / .microseconds(1))) }
-            }
-        }
-        return nil
     }
 }

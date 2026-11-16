@@ -25,7 +25,9 @@ private enum UpgradeFixture {
         }
     }
 
-    static func context(caches: URL, clock: Clock = Clock(), io: EditJournalIO = .system) -> EditContext {
+    static func context(
+        caches: URL, clock: Clock = Clock(), io: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system
+    ) -> EditContext {
         let count = Mutex(0)
         return EditContext(
             app: app, cachesRoot: caches, defaultStyle: .toma, now: { clock.now() },
@@ -35,7 +37,58 @@ private enum UpgradeFixture {
                     return prefix + String(format: "%08x", count)
                 }
             },
-            journalIO: io)
+            journalIO: io, upgradeIO: upgradeIO)
+    }
+
+    /// The upgrade's writes, failing for a file while a code is set for its name, and those that went through counted;
+    /// and its pauses at the lock, counted and handed to `onPause` in place of the wait.
+    final class Writes: Sendable {
+        private struct State {
+            var failing: [String: POSIXErrorCode] = [:]
+            var written: [String: Int] = [:]
+            var pauses = 0
+        }
+
+        private let state = Mutex(State())
+        private let onPause: @Sendable () -> Void
+
+        init(onPause: @escaping @Sendable () -> Void = {}) {
+            self.onPause = onPause
+        }
+
+        func fail(_ name: String, with code: POSIXErrorCode?) { state.withLock { $0.failing[name] = code } }
+        func written(_ name: String) -> Int { state.withLock { $0.written[name, default: 0] } }
+        var pauses: Int { state.withLock { $0.pauses } }
+
+        var io: PackageUpgradeIO {
+            PackageUpgradeIO(
+                write: { [self] data, name, directory in
+                    if let code = state.withLock({ $0.failing[name] }) { throw POSIXError(code) }
+                    try PackageUpgradeIO.system.write(data, name, directory)
+                    state.withLock { $0.written[name, default: 0] += 1 }
+                },
+                pause: { [self] _ in
+                    state.withLock { $0.pauses += 1 }
+                    onPause()
+                })
+        }
+    }
+
+    /// The kind of each line of the log, its `seq` and group: `do 2 2 style.padding`.
+    static func shape(_ package: ProjectPackage) throws -> [String] {
+        try entries(package).map { entry in
+            switch entry {
+            case let .create(seq, _, _): "create \(seq)"
+            case let .do(seq, group, label, _, _): "do \(seq) \(group) \(label)"
+            case let .undo(seq, group): "undo \(seq) \(group)"
+            case let .redo(seq, group): "redo \(seq) \(group)"
+            case let .migrate(seq, _, _): "migrate \(seq)"
+            }
+        }
+    }
+
+    static func isSaveFailed(_ notice: EditNotice) -> Bool {
+        if case .saveFailed = notice { true } else { false }
     }
 
     /// The system's calls, with the first `count` opens of the log failing with `EMFILE`.
@@ -172,6 +225,8 @@ private enum UpgradeFixture {
         #expect(!session.hasUnsavedChanges)
         #expect(session.access == .editable)
         #expect(session.document.style.padding == 0.1)
+        // It is not a project without edits any more.
+        #expect(!session.notices.contains(.legacyLook))
         // (2) The manifest: version 3, upgraded from 1, the derived id, and nothing else.
         let expected = UpgradeFixture.upgraded(project.manifest)
         #expect(try UpgradeFixture.manifest(project.package) == expected)
@@ -226,17 +281,8 @@ private enum UpgradeFixture {
         #expect(await session.flushed() == 4)
         #expect(session.access == .editable)
         #expect(!session.hasUnsavedChanges)
-        let entries = try UpgradeFixture.entries(project.package)
-        let shape = entries.map { entry -> String in
-            switch entry {
-            case let .create(seq, _, _): "create \(seq)"
-            case let .do(seq, group, label, _, _): "do \(seq) \(group) \(label)"
-            case let .undo(seq, group): "undo \(seq) \(group)"
-            case let .redo(seq, group): "redo \(seq) \(group)"
-            case let .migrate(seq, _, _): "migrate \(seq)"
-            }
-        }
-        #expect(shape == ["create 1", "do 2 2 style.padding", "do 3 3 style.shadow", "undo 4 3"])
+        #expect(
+            try UpgradeFixture.shape(project.package) == ["create 1", "do 2 2 style.padding", "do 3 3 style.shadow", "undo 4 3"])
         #expect(session.document.style.padding == 0.1)
         #expect(session.document.style.shadow == 0)
         await session.close()
@@ -325,23 +371,128 @@ private enum UpgradeFixture {
     }
 }
 
-@MainActor @Test func aLogThatCannotBeOpenedAfterTheUpgradeIsReadBackFromTheDisk() async throws {
+// MARK: - Errors that pass
+
+@MainActor @Test func aLogThatCannotBeOpenedYetKeepsEveryStep() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await UpgradeFixture.package(in: dir, formatVersion: 1)
         let context = UpgradeFixture.context(caches: dir.appending(path: "Caches"), io: UpgradeFixture.failingOpens(1))
         let session = try await UpgradeFixture.open(project, context)
         #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
         #expect(session.perform(try UpgradeFixture.step(session.document, "/style/shadow", 0.3, .shadow)) == .pendingUpgrade)
+        // The upgrade is on disk, its log not open for appending yet: the step after the first waits in memory.
         #expect(await session.flushed() == 2)
-        // The first edit is in the log the upgrade wrote; the one after it never got to a log.
-        #expect(session.document.style.padding == 0.1)
-        #expect(session.document.style.shadow == 0)
+        #expect(session.notices.contains(.saveFailed(.EMFILE)))
+        #expect(session.hasUnsavedChanges)
         #expect(session.access == .editable)
-        #expect(!session.notices.contains(.reopenedAfterOtherApp))
+        #expect(session.document.style.shadow == 0.3)
         #expect(session.project.manifest == UpgradeFixture.upgraded(project.manifest))
-        #expect(session.perform(try UpgradeFixture.step(session.document, "/style/shadow", 0.3, .shadow)) == .applied)
-        #expect(await session.flushed() == 3)
+        #expect(RecordingLock.isHeld(at: project.package.editLockURL))
+        // The next attempt opens it, and the step goes after the first.
+        #expect(await eventually(timeout: .seconds(10)) { !session.hasUnsavedChanges })
+        #expect(!session.notices.contains(where: UpgradeFixture.isSaveFailed))
+        #expect(try UpgradeFixture.shape(project.package) == ["create 1", "do 2 2 style.padding", "do 3 3 style.shadow"])
+        #expect(session.document.style.shadow == 0.3)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.2)) == .applied)
+        #expect(await session.flushed() == 4)
         await session.close()
+    }
+}
+
+/// A full disk at `name` (the manifest or the log) during the upgrade: the steps wait in memory, in order, with the amber
+/// notice, and are all on disk once there is room; the manifest is written once.
+@MainActor private func fullDiskKeepsEveryStep(at name: String) async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 2)
+        let writes = UpgradeFixture.Writes()
+        writes.fail(name, with: .ENOSPC)
+        let session = try await UpgradeFixture.open(
+            project, UpgradeFixture.context(caches: dir.appending(path: "Caches"), upgradeIO: writes.io))
+        let manifest = try Data(contentsOf: project.package.manifestURL)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 0)
+        #expect(session.notices.contains(.saveFailed(.ENOSPC)))
+        #expect(session.hasUnsavedChanges)
+        #expect(session.access == .editable)
+        // The lock stays: nobody else gets in between two attempts.
+        #expect(RecordingLock.isHeld(at: project.package.editLockURL))
+        if name == "manifest.json" {
+            #expect(try Data(contentsOf: project.package.manifestURL) == manifest)
+        } else {
+            #expect(try UpgradeFixture.manifest(project.package) == UpgradeFixture.upgraded(project.manifest))
+            #expect(session.project.manifest == UpgradeFixture.upgraded(project.manifest))
+        }
+        #expect(!FileManager.default.fileExists(atPath: project.package.editLogURL.path))
+        // Editing goes on.
+        #expect(session.perform(try UpgradeFixture.step(session.document, "/style/shadow", 0.3, .shadow)) == .pendingUpgrade)
+        #expect(session.undo() == .pendingUpgrade)
+        #expect(session.redo() == .pendingUpgrade)
+        #expect(session.document.style.shadow == 0.3)
+
+        writes.fail(name, with: nil)
+        #expect(await eventually(timeout: .seconds(10)) { !session.hasUnsavedChanges })
+        #expect(!session.notices.contains(where: UpgradeFixture.isSaveFailed))
+        #expect(
+            try UpgradeFixture.shape(project.package)
+                == ["create 1", "do 2 2 style.padding", "do 3 3 style.shadow", "undo 4 3", "redo 5 3"])
+        #expect(try UpgradeFixture.manifest(project.package) == UpgradeFixture.upgraded(project.manifest))
+        #expect(writes.written("manifest.json") == 1)
+        #expect(writes.written("edit-log.jsonl") == 1)
+        #expect(session.document.style.padding == 0.1)
+        #expect(session.document.style.shadow == 0.3)
+        await session.close()
+
+        let again = try await UpgradeFixture.open(project, UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+        #expect(UpgradeFixture.state(again.document) == UpgradeFixture.state(session.document))
+        await again.close()
+    }
+}
+
+@MainActor @Test func aFullDiskAtTheManifestKeepsEveryStepAndTriesAgain() async throws {
+    try await fullDiskKeepsEveryStep(at: "manifest.json")
+}
+
+@MainActor @Test func aFullDiskAtTheLogKeepsEveryStepAndTriesAgain() async throws {
+    try await fullDiskKeepsEveryStep(at: "edit-log.jsonl")
+}
+
+@MainActor @Test func aManifestMissingAtTheLockIsAskedAboutAgain() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 1)
+        let session = try await UpgradeFixture.open(project, UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+        // For a moment the manifest cannot be read at step 1: the lock is let go and it is all asked again.
+        let aside = dir.appending(path: "manifest.aside")
+        try FileManager.default.moveItem(at: project.package.manifestURL, to: aside)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 0)
+        #expect(session.notices.contains(.saveFailed(.ENOENT)))
+        #expect(!RecordingLock.isHeld(at: project.package.editLockURL))
+        try FileManager.default.moveItem(at: aside, to: project.package.manifestURL)
+        #expect(await eventually(timeout: .seconds(10)) { !session.hasUnsavedChanges })
+        #expect(try UpgradeFixture.shape(project.package) == ["create 1", "do 2 2 style.padding"])
+        #expect(try UpgradeFixture.manifest(project.package) == UpgradeFixture.upgraded(project.manifest))
+        await session.close()
+    }
+}
+
+// MARK: - Errors that never pass, and other processes
+
+@MainActor @Test func aReadOnlyVolumeDiscardsTheFirstEdit() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 1)
+        let writes = UpgradeFixture.Writes()
+        writes.fail("manifest.json", with: .EROFS)
+        let before = try await UpgradeFixture.hash(project.package)
+        let session = try await UpgradeFixture.open(
+            project, UpgradeFixture.context(caches: dir.appending(path: "Caches"), upgradeIO: writes.io))
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 0)
+        #expect(session.document == .legacy(for: project))
+        #expect(session.access == .readOnly(.diskNotWritable))
+        #expect(!session.notices.contains(where: UpgradeFixture.isSaveFailed))
+        #expect(!session.hasUnsavedChanges)
+        await session.close()
+        #expect(try await UpgradeFixture.hash(project.package) == before)
     }
 }
 
@@ -503,26 +654,115 @@ private enum UpgradeFixture {
         let builder = try TakeBuilder(in: dir, formatVersion: 2)
         try builder.addEvents(UpgradeFixture.cursor)
         let project = try builder.write()
-        // What `RecordingLock.isHeld` does from another opener, on the lock file a crash left: the lock for a moment.
+        // What `RecordingLock.isHeld` does from another opener, on the lock file a crash left: the lock for a moment. It
+        // lets go at the upgrade's first pause, which comes only after an attempt met it.
         try Data().write(to: project.package.editLockURL)
-        let probe = open(project.package.editLockURL.path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC)
-        #expect(probe >= 0)
-        // Let go 10 ms in, on a thread of its own (a queue's worker can be late while the other tests sync): well
-        // inside the retries, and after the first attempt.
-        Thread.detachNewThread {
-            Thread.sleep(forTimeInterval: 0.010)
-            close(probe)
+        let probe = Mutex(open(project.package.editLockURL.path, O_RDONLY | O_EXLOCK | O_NONBLOCK | O_CLOEXEC))
+        #expect(probe.withLock { $0 } >= 0)
+        let writes = UpgradeFixture.Writes {
+            probe.withLock { fd in
+                if fd >= 0 { close(fd) }
+                fd = -1
+            }
         }
         let legacy = EditDocument.legacy(for: project)
         let result = try UpgradeFixture.withFolder(project.package) { folder in
             try PackageUpgrade.upgrade(
                 project.package, folder: folder, opened: project.manifest, legacy: legacy, first: nil,
-                context: UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+                context: UpgradeFixture.context(caches: dir.appending(path: "Caches"), upgradeIO: writes.io))
         }
         guard case let .upgraded(lock, _) = result else {
             Issue.record("not upgraded: \(result)")
             return
         }
+        #expect(writes.pauses == 1)
         lock.release()
     }
+}
+
+@MainActor @Test func closingRightAfterTheFirstEditLogsEveryStep() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 1)
+        let session = try await UpgradeFixture.open(project, UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(session.perform(try UpgradeFixture.step(session.document, "/style/shadow", 0.3, .shadow)) == .pendingUpgrade)
+        await session.close()
+        #expect(!session.hasUnsavedChanges)
+        #expect(try UpgradeFixture.shape(project.package) == ["create 1", "do 2 2 style.padding", "do 3 3 style.shadow"])
+        #expect(try UpgradeFixture.manifest(project.package) == UpgradeFixture.upgraded(project.manifest))
+        #expect(!RecordingLock.isHeld(at: project.package.editLockURL))
+        #expect(!FileManager.default.fileExists(atPath: project.package.editLockURL.path))
+    }
+}
+
+@MainActor @Test func aLegacyPackageChangedButNotUpgradedIsLegacyAgain() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 1)
+        let session = try await UpgradeFixture.open(project, UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+        // Another process rewrote the manifest (a recovery, say) and left it at version 1.
+        var changed = project.manifest
+        changed.app = AppInfo(name: "Recovery", version: "1")
+        try await UpgradeFixture.write(changed, to: project.package)
+        let before = try await UpgradeFixture.hash(project.package)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 0)
+        #expect(session.document == .legacy(for: project))
+        #expect(session.notices == [.legacyLook, .reopenedAfterOtherApp])
+        #expect(session.access == .editable)
+        #expect(session.project.manifest == changed)
+        // Nothing was written: the lock taken for step 1 went with its file.
+        #expect(try await UpgradeFixture.hash(project.package) == before)
+        // The next edit upgrades the manifest as it is now.
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 2)
+        #expect(try UpgradeFixture.manifest(project.package) == UpgradeFixture.upgraded(changed))
+        #expect(session.access == .editable)
+        await session.close()
+    }
+}
+
+@MainActor @Test func aStaleLockLeftByACrashIsTakenOverAtTheFirstEdit() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 2)
+        // A crash after step 1: the lock file stays, and locks nothing.
+        let stale = #"{"bootSessionUUID":"","pid":1,"startedAt":"2026-11-15T20:12:03Z"}"#
+        try Data(stale.utf8).write(to: project.package.editLockURL)
+        let session = try await UpgradeFixture.open(project, UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+        #expect(session.access == .editable)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 2)
+        #expect(session.access == .editable)
+        #expect(RecordingLock.isHeld(at: project.package.editLockURL))
+        #expect(RecordingLock.readInfo(at: project.package.editLockURL)?.pid == getpid())
+        #expect(try UpgradeFixture.shape(project.package) == ["create 1", "do 2 2 style.padding"])
+        await session.close()
+    }
+}
+
+/// Another process changes the package's manifest to `manifest` before the first edit: the edit is discarded and,
+/// since the package cannot be opened any more, nothing of it is shown.
+@MainActor private func unopenableAfterAnotherApp(_ manifest: Data, gives reason: ReadOnlyReason) async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await UpgradeFixture.package(in: dir, formatVersion: 1)
+        let session = try await UpgradeFixture.open(project, UpgradeFixture.context(caches: dir.appending(path: "Caches")))
+        try manifest.write(to: project.package.manifestURL)
+        let before = try await UpgradeFixture.hash(project.package)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.1)) == .pendingUpgrade)
+        #expect(await session.flushed() == 0)
+        #expect(session.access == .readOnly(reason))
+        #expect(!session.hasUnsavedChanges)
+        #expect(session.undoLabel == nil)
+        #expect(session.perform(try UpgradeFixture.padding(session.document, 0.2)) == .refused)
+        await session.close()
+        #expect(try await UpgradeFixture.hash(project.package) == before)
+    }
+}
+
+@MainActor @Test func aPackageMovedToANewerFormatMeanwhileShowsNothing() async throws {
+    let newer = Data(#"{"formatVersion":4,"somethingNew":true}"#.utf8)
+    try await unopenableAfterAnotherApp(newer, gives: .newerDocument(4))
+}
+
+@MainActor @Test func aManifestThatNoLongerDecodesShowsNothing() async throws {
+    try await unopenableAfterAnotherApp(Data("not a manifest".utf8), gives: .unreadable)
 }

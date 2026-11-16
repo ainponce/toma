@@ -21,12 +21,14 @@ public struct EditContext: Sendable {
     public var compaction: (maxBytes: Int, maxEntries: Int)
     /// The journal's calls to the disk.
     public var journalIO: EditJournalIO
+    /// The writes and waits of the upgrade of a version 1 or 2 package to version 3.
+    public var upgradeIO: PackageUpgradeIO
 
     public init(
         app: AppInfo, cachesRoot: URL, defaultStyle: DefaultStyle, now: @escaping @Sendable () -> Date,
         makeID: @escaping @Sendable (String) -> String,
         compaction: (maxBytes: Int, maxEntries: Int) = (LogCompaction.maxBytes, LogCompaction.maxEntries),
-        journalIO: EditJournalIO = .system
+        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system
     ) {
         self.app = app
         self.cachesRoot = cachesRoot
@@ -35,6 +37,7 @@ public struct EditContext: Sendable {
         self.makeID = makeID
         self.compaction = compaction
         self.journalIO = journalIO
+        self.upgradeIO = upgradeIO
     }
 }
 
@@ -52,12 +55,17 @@ public enum ReadOnlyReason: Equatable, Sendable {
     case otherAppStartedEditing
     /// The package is on a volume or in a folder that cannot be written, or whose file system has no `flock`.
     case diskNotWritable
-    /// The edit document is of this `documentVersion`, newer than this app's: there is nothing to show.
+    /// The edit document is of this `documentVersion`, newer than this app's, or another process moved the package to
+    /// this `formatVersion`, newer than this app's, before its first edit here: there is nothing to show.
     case newerDocument(Int)
     /// `edit.json`, `edit-log.jsonl` or `edit.lock` is a symlink or not a regular file, or the document holds values no
     /// render can draw (a frame rate other than 24, 25, 30, 50 or 60, a clip speed outside 0.25…16): what can be read
     /// safely is shown, those values clamped.
     case unsafeEditFiles
+    /// Another process changed the package before its first edit here into one this app cannot open (a manifest that
+    /// no longer decodes, a take it removed): as with `newerDocument`, there is nothing to show (the legacy document is
+    /// only a placeholder: it would show what the other app cut); the app says the project could not be opened.
+    case unreadable
 }
 
 /// What a session has to tell (design §5.9).
@@ -81,8 +89,9 @@ public enum EditOutcome: Equatable, Sendable {
     /// would leave one no render can draw, or there is nothing to undo or redo.
     case refused
     /// The first change of a version 1 or 2 project, or one that comes while the package moves to version 3, applied in
-    /// memory (Task 12b, plan decision 28). Once the upgrade comes back it is in the log, or, if another process got to
-    /// the package first, discarded: `access` and `notices` tell, and `flushed()` waits for it.
+    /// memory (Task 12b, plan decision 28). Once the upgrade is done it is in the log, or, if another process got to the
+    /// package first or it can never be written, discarded: `access` and `notices` tell, and `flushed()` waits for each
+    /// attempt.
     case pendingUpgrade
 }
 
@@ -101,7 +110,11 @@ public enum EditOutcome: Equatable, Sendable {
 /// come meanwhile apply in memory at once (`.pendingUpgrade`) and wait for it; once it is back they go to the log in
 /// order, or, if another process took `edit.lock` first, they are discarded and the project goes back to its legacy
 /// document, read-only (`.otherAppStartedEditing`); if the package is not the one opened any more, they are discarded
-/// and it opens again from the disk (`.reopenedAfterOtherApp`).
+/// and it opens again from the disk (`.reopenedAfterOtherApp`), or, if it cannot be opened any more, nothing is shown
+/// (`.newerDocument`, `.unreadable`). An error that can pass (a full disk, `EIO`, a log that cannot be opened for
+/// appending yet) keeps every step in memory, in order, with `.saveFailed`, and the upgrade is tried again every
+/// `EditJournal.retryInterval` from the step it reached, the lock held; one that never can (a volume or folder that
+/// cannot be written) discards them, read-only.
 ///
 /// A version 3 package takes `edit.lock` and reads `edit.json` and `edit-log.jsonl` without following a symlink or
 /// blocking on a FIFO; then, as design §6.5 and plan decision 5 say: with a log, its replay (from the snapshot when the
@@ -270,6 +283,8 @@ public final class EditSession {
             seq: history.nextSeq, group: group, label: step.label.rawValue, changes: step.changes, at: at.roundedToWholeSeconds)
         lines.append(line)
         guard let outcome = hand(lines, first: step, at: at) else { return .refused }
+        // The first edit of a package upgraded without a log: it is not a project without edits any more (design §5.9).
+        if pendingCreate != nil, outcome == .applied { notices.removeAll { $0 == .legacyLook } }
         // A new group ends what could be redone.
         let closing = groups[group] == nil ? history.undone : []
         history.record(line)
@@ -304,11 +319,11 @@ public final class EditSession {
         return outcome
     }
 
-    /// Waits for the upgrade to version 3 under way to come back, then until the journal confirmed every line handed to
-    /// it before the call, or an attempt to write one failed, and returns the `seq` of the last line on disk: 0 without
-    /// a log.
+    /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every
+    /// line handed to it before the call, or an attempt to write one failed, and returns the `seq` of the last line on
+    /// disk: 0 without a log.
     public func flushed() async -> Int {
-        while let upgrade { await upgrade.task.value }
+        while let attempt = upgrade?.attempt { await attempt.value }
         guard let journal else { return baseSeq }
         let (base, seqs) = (baseSeq, appendedSeqs)
         let confirmed = await journal.flushed()
@@ -323,8 +338,14 @@ public final class EditSession {
     public func close() async {
         guard !isClosed else { return }
         isClosed = true
-        // The upgrade under way comes back first: its lines go to the journal, which closes below.
-        while let upgrade { await upgrade.task.value }
+        // The upgrade under way comes back first, after one last attempt if it was waiting to try again: its lines go to
+        // the journal, which closes below. If it still fails, they are lost and `hasUnsavedChanges` stays `true`.
+        if upgrade != nil {
+            upgrade?.retry?.cancel()
+            upgrade?.retry = nil
+            runUpgradeAttempt()
+            while let attempt = upgrade?.attempt { await attempt.value }
+        }
         idleTask?.cancel()
         restartTask?.cancel()
         // A new log whose files are touched already gets its `create`, which the journal saves below.
@@ -350,7 +371,9 @@ public final class EditSession {
 
     // MARK: - Lines
 
-    private var isEditable: Bool { access == .editable && !isClosed && (journal != nil || legacyManifest != nil) }
+    private var isEditable: Bool {
+        access == .editable && !isClosed && (journal != nil || upgrade != nil || legacyManifest != nil)
+    }
 
     /// The `seq` of the last line of the log.
     private var lastSeq: Int { entries.last?.seq ?? 0 }
@@ -360,14 +383,15 @@ public final class EditSession {
     /// over, if one cannot be encoded or the journal is closed.
     private func hand(_ lines: [EditLogEntry], first step: EditStep? = nil, at: Date? = nil) -> EditOutcome? {
         if let journal { return append(lines, to: journal) ? .applied : nil }
-        guard let manifest = legacyManifest, (try? lines.map({ try $0.jsonLine() })) != nil else { return nil }
         if upgrade != nil {
+            guard (try? lines.map({ try $0.jsonLine() })) != nil else { return nil }
             upgrade?.queued += lines
-        } else {
-            // Only a step can come first: before it there is nothing to undo or redo.
-            guard let step, let at, let legacy = pendingCreate else { return nil }
-            startUpgrade(manifest, legacy: legacy, first: step, at: at, lines: lines)
+            return .pendingUpgrade
         }
+        // Only a step can come first: before it there is nothing to undo or redo. Its lines are encoded on the queue of
+        // files, with the manifest.
+        guard let manifest = legacyManifest, let step, let at, let legacy = pendingCreate else { return nil }
+        startUpgrade(manifest, legacy: legacy, first: step, at: at, lines: lines)
         return .pendingUpgrade
     }
 
@@ -501,100 +525,158 @@ public final class EditSession {
 
     // MARK: - The upgrade to version 3
 
-    /// The upgrade to version 3 that the first edit of a version 1 or 2 package started (Task 12b, plan decision 28).
+    /// The upgrade to version 3 that the first edit of a version 1 or 2 package started (Task 12b, plan decision 28),
+    /// until it is done or refused.
     private struct PendingUpgrade {
-        var task: Task<Void, Never>
+        /// The manifest as the package was opened.
+        var opened: Manifest
         /// The document as the package has it, which a refused upgrade goes back to.
         var legacy: EditDocument
+        /// The first step and when it was made: the upgrade's clock is that instant.
+        var first: EditStep
+        var at: Date
         /// What the upgrade writes: the `create` and the `do` of the first step.
         var written: [EditLogEntry]
         /// The lines of the steps that came after the first one, in order.
         var queued: [EditLogEntry] = []
+        /// How far the last attempt got, with the lock it holds; `nil` before the first one.
+        var progress: PackageUpgrade.Progress?
+        /// The attempt under way.
+        var attempt: Task<Void, Never>?
+        /// The wait before the next attempt, after one that failed.
+        var retry: Task<Void, Never>?
     }
 
     /// Starts moving the package to version 3 with `step`, made at `at`, whose `lines` (`create` and `do`) the upgrade
-    /// writes as `perform` numbered them: its clock is that instant. Nothing here waits for the lock or the disk.
+    /// writes as `perform` numbered them. Nothing here waits for the lock or the disk.
     private func startUpgrade(
         _ manifest: Manifest, legacy: EditDocument, first step: EditStep, at: Date, lines: [EditLogEntry]
     ) {
         assert((try? PackageUpgrade.entries(legacy: legacy, first: step, at: at, app: context.app)) == lines)
-        var pinned = context
-        pinned.now = { at }
-        let (files, folder, caches, take, context) = (files, folder, projectCaches, project.take.id, context)
-        let task = Task { [weak self] in
-            let outcome = await Self.upgrade(
-                on: files, folder: folder, caches: caches, take: take, opened: manifest, legacy: legacy, first: step,
-                upgradeContext: pinned, context: context)
-            self?.finishUpgrade(outcome)
-        }
-        upgrade = PendingUpgrade(task: task, legacy: legacy, written: lines)
+        upgrade = PendingUpgrade(opened: manifest, legacy: legacy, first: step, at: at, written: lines)
+        runUpgradeAttempt()
     }
 
-    /// `PackageUpgrade.upgrade` on the queue of files and, at version 3, the journal opened on the log it wrote; if the
-    /// package is not the one opened any more (or that log cannot be opened for appending), the package opened again
-    /// from the disk. Off the main actor.
+    /// One attempt at the upgrade, from where the last one got, unless one is under way.
+    private func runUpgradeAttempt() {
+        guard var upgrade, upgrade.attempt == nil else { return }
+        var pinned = context
+        pinned.now = { [at = upgrade.at] in at }
+        let (files, folder, caches, take, context) = (files, folder, projectCaches, project.take.id, context)
+        let (progress, opened, legacy, first) = (upgrade.progress, upgrade.opened, upgrade.legacy, upgrade.first)
+        upgrade.retry = nil
+        upgrade.attempt = Task { [weak self] in
+            let outcome = await Self.attemptUpgrade(
+                progress, on: files, folder: folder, caches: caches, take: take, opened: opened, legacy: legacy,
+                first: first, upgradeContext: pinned, context: context)
+            self?.finishUpgradeAttempt(outcome)
+        }
+        self.upgrade = upgrade
+    }
+
+    /// On the queue of files: `PackageUpgrade.advance` from `progress` and, at version 3, the journal opened on the log
+    /// it wrote. An error that can never be saved past refuses it (the lock let go); any other one, and a log that
+    /// cannot be opened for appending yet, keeps the progress and the lock for the next attempt. If the package is not
+    /// the one opened any more, it is opened again from the disk, off the main actor.
     @concurrent
-    private nonisolated static func upgrade(
-        on queue: DispatchQueue, folder: PackageFolder, caches: ProjectCaches, take: String, opened: Manifest,
-        legacy: EditDocument, first: EditStep, upgradeContext: EditContext, context: EditContext
+    private nonisolated static func attemptUpgrade(
+        _ progress: PackageUpgrade.Progress?, on queue: DispatchQueue, folder: PackageFolder, caches: ProjectCaches,
+        take: String, opened: Manifest, legacy: EditDocument, first: EditStep, upgradeContext: EditContext,
+        context: EditContext
     ) async -> UpgradeOutcome {
         let part = try? await run(on: queue) { () -> UpgradeStep in
+            var progress = progress
             do {
-                guard let path = folder.path() else { throw POSIXError(.EBADF) }
+                if progress == nil {
+                    let encoded = try PackageUpgrade.Encoded(
+                        opened: opened, legacy: legacy, first: first, context: upgradeContext)
+                    progress = PackageUpgrade.Progress(encoded: encoded)
+                }
+                guard var reached = progress, let path = folder.path() else { throw POSIXError(.EBADF) }
                 let package = ProjectPackage(url: URL(fileURLWithPath: path, isDirectory: true))
-                let result = try PackageUpgrade.upgrade(
-                    package, folder: folder.descriptor, opened: opened, legacy: legacy, first: first,
-                    context: upgradeContext)
-                switch result {
+                defer { progress = reached }
+                switch try PackageUpgrade.advance(
+                    &reached, package, folder: folder.descriptor, opened: opened, io: upgradeContext.upgradeIO)
+                {
                 case let .upgraded(lock, manifest):
-                    guard let journal = try? EditJournal(logURL: package.editLogURL, io: context.journalIO) else {
-                        // What the upgrade wrote is on disk: it is read from there.
-                        lock.release(inDirectory: folder.descriptor)
-                        return .reopen(otherApp: false)
+                    do {
+                        let journal = try EditJournal(logURL: package.editLogURL, io: context.journalIO)
+                        return .done(.upgraded(lock, manifest, journal, logBytes: reached.encoded.log.count))
+                    } catch {
+                        // What the upgrade wrote is on disk and the lock held: the next attempt opens the log again.
+                        return .done(.failed(reached, Opening.code(of: error)))
                     }
-                    return .done(.upgraded(lock, manifest, journal))
                 case .lockTaken:
                     return .done(.refused(.otherAppStartedEditing))
                 case .changedMeanwhile:
-                    return .reopen(otherApp: true)
+                    return .reopen
                 }
             } catch {
-                return .done(.refused(Opening.writeRefusal(error)))
+                if let reason = Opening.lastingRefusal(error) {
+                    progress?.lock?.release(inDirectory: folder.descriptor)
+                    return .done(.refused(reason))
+                }
+                // Only the encoding comes before `progress`, and its errors are lasting ones.
+                guard let progress else { return .done(.refused(.diskNotWritable)) }
+                return .done(.failed(progress, Opening.code(of: error)))
             }
         }
         switch part ?? .done(.refused(.diskNotWritable)) {
         case let .done(outcome):
             return outcome
-        case let .reopen(otherApp):
+        case .reopen:
             do {
-                let opened = try await Opening.reopen(folder, take: take, caches: caches, context: context)
-                return .reopened(opened, otherApp: otherApp)
+                return .reopened(try await Opening.reopen(folder, take: take, caches: caches, context: context))
+            } catch let LoadedProjectError.unsupportedFormatVersion(version) {
+                return .refused(.newerDocument(version))
             } catch {
-                return .refused(otherApp ? .otherAppStartedEditing : Opening.writeRefusal(error))
+                return .refused(.unreadable)
             }
         }
     }
 
-    /// On the main actor, once the upgrade is back: at version 3 the session goes on as one, the steps that came after
-    /// the first one handed to the journal in order; refused, every step is discarded and the legacy document shown,
-    /// read-only; opened again, every step is discarded and the session is what the disk has.
-    private func finishUpgrade(_ outcome: UpgradeOutcome) {
-        guard let upgrade else { return }
-        self.upgrade = nil
+    /// On the main actor, once an attempt is back:
+    /// - at version 3, the session goes on as one, the steps after the first handed to the journal in order;
+    /// - failed for now, every step stays in memory, `.saveFailed` tells, and the next attempt comes in
+    ///   `EditJournal.retryInterval` (the session is at version 3 as far as the attempt got);
+    /// - refused (another process holds the lock, or the error can never be saved past), every step is discarded and
+    ///   the legacy document shown, read-only;
+    /// - opened again, every step is discarded and the session is what the disk has.
+    private func finishUpgradeAttempt(_ outcome: UpgradeOutcome) {
+        guard var upgrade else { return }
+        upgrade.attempt = nil
         switch outcome {
-        case let .upgraded(lock, manifest, journal):
+        case let .upgraded(lock, manifest, journal, logBytes):
+            self.upgrade = nil
             self.lock = lock
             project.manifest = manifest
             legacyManifest = nil
             self.journal = journal
             listen(to: journal)
             entries = upgrade.written
-            logBytes = upgrade.written.reduce(0) { $0 + ((try? $1.jsonLine())?.utf8.count ?? 0) + 1 }
+            self.logBytes = logBytes
             baseSeq = upgrade.written.last?.seq ?? 0
             snapshotPolicy = SnapshotPolicy(entriesSinceSnapshot: upgrade.written.count, lastChange: .now)
+            // It has its first edit: it is not a project without edits any more (design §5.9).
+            notices.removeAll { $0 == .legacyLook }
+            showSaveFailed(nil)
             // Each of them was encoded once already, and the journal is open: they all go.
             if upgrade.queued.isEmpty || !append(upgrade.queued, to: journal) { armIdleTimer() }
+        case let .failed(progress, code):
+            upgrade.progress = progress
+            self.upgrade = upgrade
+            lock = progress.lock
+            if progress.manifestWritten { project.manifest = progress.encoded.manifest }
+            if progress.logWritten {
+                entries = upgrade.written
+                logBytes = progress.encoded.log.count
+                baseSeq = upgrade.written.last?.seq ?? 0
+            }
+            showSaveFailed(code)
+            if !isClosed { retryUpgrade() }
         case let .refused(reason):
+            self.upgrade = nil
+            lock = nil
             document = upgrade.legacy
             revision += 1
             history = UndoHistory(entries: [])
@@ -602,12 +684,22 @@ public final class EditSession {
             pendingCreate = nil
             legacyManifest = nil
             access = .readOnly(reason)
+            notices.removeAll { if case .saveFailed = $0 { true } else { false } }
             onChange?()
-        case let .reopened(opened, otherApp):
+        case let .reopened(opened):
+            self.upgrade = nil
             adopt(opened)
             revision += 1
-            if otherApp { notices.append(.reopenedAfterOtherApp) }
+            notices.append(.reopenedAfterOtherApp)
             onChange?()
+        }
+    }
+
+    private func retryUpgrade() {
+        upgrade?.retry = Task { [weak self] in
+            try? await Task.sleep(for: EditJournal.retryInterval)
+            guard !Task.isCancelled else { return }
+            self?.runUpgradeAttempt()
         }
     }
 
@@ -715,21 +807,23 @@ private struct Opened: Sendable {
     var snapshotSeq: Int?
 }
 
-/// What an upgrade to version 3 gives back to the main actor.
+/// What an attempt at the upgrade to version 3 gives back to the main actor.
 private enum UpgradeOutcome: Sendable {
-    /// At version 3, its log open for appending.
-    case upgraded(HeldRecordingLock, Manifest, EditJournal)
-    /// Nothing was written (or, after a failed step 3, what a crash there leaves): the legacy document, read-only.
+    /// At version 3, its log (of `logBytes`) open for appending.
+    case upgraded(HeldRecordingLock, Manifest, EditJournal, logBytes: Int)
+    /// Not yet, for this error: how far it got, with the lock held from step 1 on, for the next attempt.
+    case failed(PackageUpgrade.Progress, POSIXErrorCode)
+    /// Never: the package is the legacy one (or, after step 2, what a crash before step 3 leaves), read-only.
     case refused(ReadOnlyReason)
-    /// The package as the disk has it now; `otherApp` when another process changed it.
-    case reopened(Opened, otherApp: Bool)
+    /// Another process changed the package: it as the disk has it now.
+    case reopened(Opened)
 }
 
-/// How the part of the upgrade on the queue of files ends.
+/// How the part of an attempt on the queue of files ends.
 private enum UpgradeStep: Sendable {
     case done(UpgradeOutcome)
     /// The package is to be opened again from the disk.
-    case reopen(otherApp: Bool)
+    case reopen
 }
 
 private enum Opening {
@@ -782,8 +876,8 @@ private enum Opening {
         do {
             // Another opener's `RecordingLock.isHeld` takes the lock for a moment: that is not another app editing.
             lock = try await RecordingLock.acquire(
-                at: package.editLockURL, info: .current(now: context.now()), retries: PackageUpgrade.lockRetries,
-                retryDelay: PackageUpgrade.lockRetryDelay)
+                at: package.editLockURL, info: .current(now: context.now()), retries: RecordingLock.probeRetries,
+                retryDelay: RecordingLock.probeRetryDelay)
         } catch let error as POSIXError {
             guard let reason = lockRefusal(error.code) else { throw error }
             return try readOnly(opened, reason, context: context)
@@ -938,6 +1032,22 @@ private enum Opening {
         case .ELOOP, .EFTYPE, .EISDIR, .ENXIO: .unsafeEditFiles
         default: nil
         }
+    }
+
+    /// The reason to stay read-only for an error that writing again can never get past: a volume or folder that cannot
+    /// be written (`EROFS`, `EACCES`, `EPERM`, no `flock`), a file that is not one this can write safely, or one that is
+    /// not of the disk (the encoding). `nil` for any other (`ENOSPC`, `EDQUOT`, `EIO`, `EMFILE`…): it is tried again.
+    static func lastingRefusal(_ error: any Error) -> ReadOnlyReason? {
+        guard let code = (error as? POSIXError)?.code else { return .diskNotWritable }
+        switch code {
+        case .EROFS, .EACCES, .EPERM, .ENOTSUP, .EOPNOTSUPP, .EINVAL: return .diskNotWritable
+        case .ELOOP, .EFTYPE, .EISDIR, .ENXIO, .ENOTDIR: return .unsafeEditFiles
+        default: return nil
+        }
+    }
+
+    static func code(of error: any Error) -> POSIXErrorCode {
+        (error as? POSIXError)?.code ?? .EIO
     }
 
     static func writeRefusal(_ error: any Error) -> ReadOnlyReason {
