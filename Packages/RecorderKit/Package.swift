@@ -30,7 +30,8 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
-        .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat", "RecorderKitTestSupport"]),
+        // Render for `StyleV0`, the look the legacy edit document reproduces.
+        .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat", "Render", "RecorderKitTestSupport"]),
         .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
             name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
