@@ -64,6 +64,39 @@
         }
       }
     },
+    "16:9 Landscape" : {
+      "comment" : "A format of the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "16:9 horizontal"
+          }
+        }
+      }
+    },
+    "1:1 Square" : {
+      "comment" : "A format of the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1:1 cuadrado"
+          }
+        }
+      }
+    },
+    "9:16 Portrait" : {
+      "comment" : "A format of the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "9:16 vertical"
+          }
+        }
+      }
+    },
     "A file isn't inside the project." : {
       "localizations" : {
         "es" : {
@@ -176,12 +209,56 @@
         }
       }
     },
+    "Another app changed this project, and this version of Toma can't open it now." : {
+      "comment" : "Why a project couldn't be opened: another process changed it into one this version can't read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otra app cambió este proyecto y esta versión de Toma ya no puede abrirlo."
+          }
+        }
+      }
+    },
+    "Another app changed this project: it was opened again and the last change wasn't applied." : {
+      "comment" : "Editor banner: another process upgraded and edited the project before its first edit here",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otra app cambió este proyecto: se volvió a abrir y el último cambio no se aplicó."
+          }
+        }
+      }
+    },
+    "Another app started editing this project first: the last change wasn't applied and the project is now read-only." : {
+      "comment" : "Editor banner: another process took the lock before the first edit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Otra app empezó a editar este proyecto: el último cambio no se aplicó y el proyecto queda solo para ver."
+          }
+        }
+      }
+    },
     "Another recording in this project is in progress." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hay otra grabación en curso en este proyecto."
+          }
+        }
+      }
+    },
+    "Apply Default Style" : {
+      "comment" : "The banner of a project of an earlier version",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aplicar el estilo por defecto"
           }
         }
       }
@@ -308,6 +385,17 @@
         }
       }
     },
+    "Cancel Export" : {
+      "comment" : "The menu of the export's progress ring in the editor's bar",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cancelar la exportación"
+          }
+        }
+      }
+    },
     "Check for Updates…" : {
       "localizations" : {
         "es" : {
@@ -395,16 +483,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Llega en la fase 2."
-          }
-        }
-      }
-    },
-    "Couldn't draw the preview." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "No se pudo dibujar la vista previa."
           }
         }
       }
@@ -645,22 +723,24 @@
         }
       }
     },
-    "Export MP4…" : {
+    "Export" : {
+      "comment" : "The editor's Export button",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Exportar MP4…"
+            "value" : "Exportar"
           }
         }
       }
     },
-    "Export finished." : {
+    "Export finished" : {
+      "comment" : "The editor's bar, for a few seconds after an export",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Exportación terminada."
+            "value" : "Exportación terminada"
           }
         }
       }
@@ -682,6 +762,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Para el zoom al escribir. En los campos de contraseña no se anota nada."
+          }
+        }
+      }
+    },
+    "Format" : {
+      "comment" : "The editor's format selector: the project's aspect",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Formato"
           }
         }
       }
@@ -717,6 +808,28 @@
         }
       }
     },
+    "Go to the Beginning" : {
+      "comment" : "The editor's transport: moves the playhead to the start",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir al principio"
+          }
+        }
+      }
+    },
+    "Go to the End" : {
+      "comment" : "The editor's transport: moves the playhead to the end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir al final"
+          }
+        }
+      }
+    },
     "Grid" : {
       "localizations" : {
         "es" : {
@@ -733,6 +846,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ocultar íconos"
+          }
+        }
+      }
+    },
+    "Hide Panel" : {
+      "comment" : "The editor's bar and the View menu: hides the panel",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar el panel"
           }
         }
       }
@@ -1246,6 +1370,17 @@
         }
       }
     },
+    "Opening…" : {
+      "comment" : "The editor's preview while a project opens",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abriendo…"
+          }
+        }
+      }
+    },
     "Optional: a shortcut you make in Shortcuts turns it on while recording, so notifications don't sound. They never appear in the video." : {
       "localizations" : {
         "es" : {
@@ -1367,6 +1502,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Puntos"
+          }
+        }
+      }
+    },
+    "Preview" : {
+      "comment" : "VoiceOver: the editor's preview",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vista previa"
           }
         }
       }
@@ -1868,6 +2014,17 @@
         }
       }
     },
+    "Show Panel" : {
+      "comment" : "The editor's bar and the View menu: shows the panel",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar el panel"
+          }
+        }
+      }
+    },
     "Show Trash in Finder" : {
       "localizations" : {
         "es" : {
@@ -2252,6 +2409,17 @@
         }
       }
     },
+    "The edit was recovered up to %@. What couldn't be read was kept apart." : {
+      "comment" : "Editor banner: the edit log was damaged; the time of the last good change",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se recuperó la edición hasta las %@. Lo que no se pudo leer quedó guardado aparte."
+          }
+        }
+      }
+    },
     "The export was canceled." : {
       "localizations" : {
         "es" : {
@@ -2268,6 +2436,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Los primeros %lld se abren ahora; los demás están en la carpeta de proyectos."
+          }
+        }
+      }
+    },
+    "The last change couldn't be saved yet. Saving it is tried again every few seconds." : {
+      "comment" : "Editor banner (amber): an edit waits in memory after an error other than a full disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no se pudo guardar el último cambio. Se vuelve a intentar cada pocos segundos."
+          }
+        }
+      }
+    },
+    "The last change couldn't be saved: the disk is full. Changes are saved as soon as there is space." : {
+      "comment" : "Editor banner (amber): an edit waits in memory for room on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar el último cambio: el disco está lleno. Los cambios se guardan apenas haya lugar."
           }
         }
       }
@@ -2724,6 +2914,17 @@
         }
       }
     },
+    "This part of the recording couldn't be read: the frame before it is shown." : {
+      "comment" : "Editor banner: the playhead is in a part of the video that couldn't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta parte de la grabación no se pudo leer: se muestra el cuadro anterior."
+          }
+        }
+      }
+    },
     "This project has files in unexpected places. It was left untouched." : {
       "localizations" : {
         "es" : {
@@ -2744,12 +2945,67 @@
         }
       }
     },
+    "This project is on a disk that can't be written to: changes can't be saved." : {
+      "comment" : "Editor banner: the project's disk or folder can't be written",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto está en un disco donde no se puede escribir: los cambios no se pueden guardar."
+          }
+        }
+      }
+    },
+    "This project is open in another app: it opens read-only." : {
+      "comment" : "Editor banner: another process holds the project's lock",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto está abierto en otra app: se abre solo para ver."
+          }
+        }
+      }
+    },
+    "This project was edited with a newer version of Toma. Update Toma to open it." : {
+      "comment" : "The editor, in place of the preview: the edit document is of a newer version",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto se editó con una versión más nueva de Toma. Actualizar Toma para abrirlo."
+          }
+        }
+      }
+    },
+    "This project was recorded with an earlier version and keeps its look." : {
+      "comment" : "The banner of a project of an earlier version",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto se grabó con una versión anterior y conserva su aspecto."
+          }
+        }
+      }
+    },
     "This project was saved by a newer version and can't be opened." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Este proyecto se guardó con una versión más nueva y no se puede abrir."
+          }
+        }
+      }
+    },
+    "This project's edit files can't be used safely: it opens read-only." : {
+      "comment" : "Editor banner: an edit file is a link or not a regular file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los archivos de edición de este proyecto no se pueden usar con seguridad: se abre solo para ver."
           }
         }
       }
@@ -2873,6 +3129,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vertical"
+          }
+        }
+      }
+    },
+    "Waiting for space on the disk to apply the default style…" : {
+      "comment" : "Editor banner (amber): Apply Default Style waits for room on a full disk to bring its image in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esperando espacio en el disco para aplicar el estilo por defecto…"
           }
         }
       }

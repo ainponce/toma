@@ -104,8 +104,9 @@ public struct FrameEvaluator: Sendable {
     private var background: BackgroundLayer
     /// The gradient of a `.gradient` background; the classic one with any other.
     private var gradient: Gradient
-    /// Which screen is shown, and the drawn cursor's path.
-    private let paths: MotionPaths
+    /// Which screen is shown, and the drawn cursor's path: the motion paths of the document's revision, which a scene of
+    /// a later revision that keeps them (`MotionPaths.areThePaths(of:)`) can be made with.
+    public let paths: MotionPaths
     /// The video tracks a frame can show: the screens of `paths.stage`, then the camera when it is shown.
     let videoTrackIDs: [String]
     /// The output ranges in which each of `paths.stage`'s screens is shown (`ScreenTransitions.shownRanges`): the plan's

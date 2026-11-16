@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import AppSupport
+import Editing
 import ProjectFormat
 import Recording
 import os
@@ -87,6 +88,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Life cycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        if let path = Self.editorStructureDumpPath {
+            dumpEditorStructure(of: path)
+            return
+        }
+        #endif
+        // The cache folders of projects not opened for 30 days (plan decision 27), off the main thread, only while no
+        // project is open: projects opened from the Finder at launch are here already (`application(_:open:)` comes
+        // before this), and their folders are left alone until the next launch.
+        if editors.isEmpty {
+            Task.detached(priority: .utility) { ProjectCaches.removeUnused(root: ProjectCaches.defaultRoot, now: Date()) }
+        }
         // A take that turned Do Not Disturb on and never ended (the app was killed): turned off now. A take started
         // meanwhile runs its shortcut after this one.
         Task { await focus.recoverAfterLaunch() }
@@ -205,6 +218,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         present(notices)
     }
+
+    #if DEBUG
+    // MARK: - -TomaDumpEditorStructure
+
+    /// `Toma -TomaDumpEditorStructure <package>`: the package to open and describe.
+    private static var editorStructureDumpPath: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-TomaDumpEditorStructure"), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
+    }
+
+    /// Opens the package in an editor, without the onboarding, the recovery or anything that asks, and once it has
+    /// opened (or could not) and its bar has its items, writes to stdout a line `toolbar:` with the identifiers of the
+    /// bar's items and a line `split:` with those of the splits' parts, in order, and quits: with 0, or with 1 if that
+    /// did not happen within 30 s.
+    private func dumpEditorStructure(of path: String) {
+        let key = URL(fileURLWithPath: path).standardizedFileURL
+        showEditor(for: key, take: nil)
+        Task {
+            let deadline = ContinuousClock.now + .seconds(30)
+            while ContinuousClock.now < deadline, editors[key]?.structureIsSettled != true {
+                try? await Task.sleep(for: .milliseconds(100))
+            }
+            // The bar's items arrive from SwiftUI over a few turns of the run loop.
+            try? await Task.sleep(for: .milliseconds(500))
+            let editor = editors[key]
+            print("toolbar: " + (editor?.toolbarIdentifiers ?? []).joined(separator: " "))
+            print("split: " + (editor?.splitIdentifiers ?? []).joined(separator: " "))
+            fflush(stdout)
+            exit(editor?.structureIsSettled == true ? 0 : 1)
+        }
+    }
+    #endif
 
     // MARK: - Windows
 
