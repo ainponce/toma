@@ -2,254 +2,254 @@
 import CoreGraphics
 import ProjectFormat
 
-/// Works out what an output frame shows at an output time: a pure function of the take, its events,
-/// the style and the output size.
+/// Works out what an output frame shows at an output time: a pure function of the take, its events, the edit
+/// document and the output size.
 ///
-/// The screen is the track `ScreenChoice` picks. Output time 0 is `timelineStart`, the start of that track's first
-/// segment. The timeline ends at the latest segment end (the start, for a segment still open) of the screen and of
-/// every audio track (the microphones and system audio the export mixes), so audio recorded after the screen's last
-/// segment (a display that never came back) is in the preview and the export, over the screen's last frame, which
-/// `TrackFrameReader` holds. A take whose screen has no segment has a timeline of 0 s (`TakeTimeline.bounds`). Output
-/// times are clamped to `[0, duration]`.
+/// The output is the document's clips one after the other (`TimeMap`, design §6.6): output time `t` shows the source
+/// instant `timeMap.source(atOutput:)` of `t` in nanoseconds, clamped to `[0, D)`; an output of 0 s shows only the
+/// background. The legacy document (`EditDocument.legacy`) is one clip at 1× over `TakeTimeline.bounds`, so it shows
+/// what phase 0 and 1a show at every time before the end, with the same arithmetic.
 ///
-/// Where the screen is at a time, in global points: for a display, the last `displayGeometry` event of its
-/// `displayID` at or before it; for a window, the last `windowGeometry` event of its track; before the first one,
-/// its `globalFrame`. A frame that is not finite and positive is skipped (a window's event still says whether it is
-/// on screen). What is shown of it is the display's `captureArea`, or all of it. The area is kept where it was on
-/// the display when the take started: its offset from the display's corner is measured from `globalFrame`, so it
-/// follows the display when the display moves, and it is clamped to the display's current size. When no part of it
-/// is on the display, or it cannot be placed (a `captureArea` with a value that is not finite or a size that is not
-/// positive, or a display without a finite `globalFrame` of positive size), neither the screen nor the cursor is
-/// drawn, never what the user left out of the area. The screen's rect has the shape of what is shown; the cursor is placed
-/// on it, hidden off it, and hidden while a window is not on screen. A take of version 1 has one `displayGeometry`
-/// per display, at its start and equal to its `globalFrame`, and no area: it is drawn as in phase 0.
-///
-/// The camera is the first camera track with a segment, drawn from the start of its first segment on at the
-/// `CameraStyleTimeline` of the take's `cameraStyle` (`CameraStyle.default` without one) and its `cameraStyle`
-/// events, in the whole output. It does not make the timeline longer.
+/// - Background: the document's `gradient` (any other background draws the classic one, until the render has it).
+/// - Screen: the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before the
+///   source instant (it jumps); none without one, or for a track the take does not have. What is shown of it, and
+///   where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, with the
+///   document's corners.
+/// - Cursor (Toma's arrow, `cursor.show`): the take's pointer positions (`cursor`, `mouseDown`, `mouseUp`) in output
+///   time. A position in a cut between two clips is dropped; one before the first clip or after the last keeps its
+///   time through that clip's mapping (negative, or past `D`), so a sample the recorder took before the sources
+///   started counts at output 0, as it always did. At an output time the cursor is the last position at or before it,
+///   moved toward the next one if that comes within `maxInterpolationGap`; `scale × 24` points tall in the region the
+///   screen shows; hidden off that region, while a window is not on screen, and without a usable frame.
+/// - Camera (`camera.show`): the first camera track with a segment, from the start of its first segment on, at the
+///   `CameraStyleTimeline` of the take's `camera.initial` and its `camera.changes` in output time: a change in a cut
+///   rules from the first instant kept after it, one before the first clip keeps its time through that clip's mapping
+///   (it is under way at output 0, as it always was), and one after the last never rules.
 public struct FrameEvaluator: Sendable {
-    /// Two cursor samples at most this far apart are interpolated; farther apart, the cursor stays put
-    /// until the next one.
+    /// Two cursor samples at most this far apart in output seconds are interpolated; farther apart, the cursor stays
+    /// put until the next one.
     static let maxInterpolationGap = 0.050
 
-    /// Host time at output time 0.
-    public private(set) var timelineStart: HostTime
-    /// Seconds from `timelineStart` to the latest end of a segment of the screen or of an audio track.
-    public private(set) var duration: Double
+    public let document: EditDocument
+    public let timeMap: TimeMap
+    /// Host time at output time 0: the start of the first clip (host time 0 without clips).
+    public let timelineStart: HostTime
+    /// Output seconds: `timeMap.durationSeconds`.
+    public let duration: Double
 
-    private let style: StyleV0
+    private let takeID: String
     private let outputSize: SIMD2<Int>
-    /// ID of the screen track shown, `nil` if the take has none.
-    let screenTrackID: String?
-    /// Where the screen is before its first geometry event: its `globalFrame`.
-    private let initialPlace: Place
-    /// Where the screen is from each geometry event on, in time order.
-    private let places: [(t: HostTime, place: Place)]
-    /// In Area mode, the area in points from the display's top-left corner as the take started: `captureArea` moved
-    /// by the origin of `globalFrame`. `nil` without an area.
-    private let areaOffset: Rect?
-    /// An area was recorded but cannot be placed: it or the display's `globalFrame` is not usable.
-    private let areaUnplaced: Bool
-    /// ID of the camera track shown, `nil` if the take has none with a segment.
+    private let gradient: (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float)
+    /// The screen track of the take at its start, and from each of its changes on (in time order).
+    private let initialScreen: String?
+    private let screenChanges: [(t: HostTime, track: String)]
+    /// Where each screen track the plan names is, by ID: only the take's screen tracks.
+    private let screens: [String: ScreenGeometry]
+    /// The video tracks a frame can show: the screens of `screens`, then the camera when it is shown.
+    let videoTrackIDs: [String]
+    /// ID of the take's camera track, the first with a segment; `nil` if it has none.
     let cameraTrackID: String?
     /// Start of the camera's first segment.
     private let cameraStart: HostTime?
     private let cameraStyle: CameraStyleTimeline
-    /// Cursor, mouse-down and mouse-up positions in global points, in time order.
-    private let positions: [(t: HostTime, point: SIMD2<Double>)]
+    /// Cursor, mouse-down and mouse-up positions in global points at their output times, in time order.
+    private let positions: [(t: Int64, point: SIMD2<Double>)]
 
-    /// Where the screen is: its frame in global points (`nil` when unknown), and whether macOS has it on screen.
-    private struct Place: Sendable {
-        var frame: Rect?
-        var onScreen: Bool
-    }
-
-    /// What is shown of the screen at a time.
-    private struct ScreenView {
-        /// In output pixels.
-        var rect: Rect
-        /// Of the recorded frame.
-        var crop: Rect
-        /// The global points the crop shows, where the cursor is placed; `nil` when the cursor is not shown.
-        var cursorRegion: Rect?
-    }
-
-    private static let wholeFrame = Rect(x: 0, y: 0, width: 1, height: 1)
-
-    public init(take: TakeRecord, events: [InputEvent], style: StyleV0, outputSize: SIMD2<Int>) {
-        self.style = style
+    public init(take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>) {
+        let timeMap = TimeMap(sequence: document.sequence)
+        self.document = document
+        self.timeMap = timeMap
+        timelineStart = document.sequence.first?.start ?? HostTime(nanoseconds: 0)
+        duration = timeMap.durationSeconds
+        takeID = take.id
         self.outputSize = outputSize
+        gradient = Self.gradient(of: document.style.background)
         let ordered = events.sortedByTime()
-        let bounds = TakeTimeline.bounds(take: take, events: events)
-        let screen = bounds.screen
-        screenTrackID = screen?.id
-        timelineStart = bounds.start
-        duration = max(0, bounds.end.seconds(since: bounds.start))
+        let placement = OutputPlacement(sequence: document.sequence, timeMap: timeMap, take: take.id)
 
-        let initialPlace = Place(frame: screen?.source.globalFrame.flatMap(Self.usable), onScreen: true)
-        self.initialPlace = initialPlace
-        var places: [(t: HostTime, place: Place)] = []
-        if let screen {
-            var last = initialPlace
-            for event in ordered {
-                switch event.kind {
-                case let .displayGeometry(displayID, frame, _) where screen.kind == .display && displayID == screen.source.displayID:
-                    guard let frame = Self.usable(frame) else { continue }
-                    last = Place(frame: frame, onScreen: true)
-                case let .windowGeometry(track, frame, onScreen) where screen.kind == .window && track == screen.id:
-                    // Without a usable frame, the window stays where it was, but whether it is on screen still counts.
-                    last = Place(frame: Self.usable(frame) ?? last.frame, onScreen: onScreen)
-                default:
-                    continue
-                }
-                places.append((event.t, last))
-            }
+        initialScreen = document.screens.initial[take.id]
+        let changes = document.screens.changes.filter { $0.take == take.id }
+        screenChanges = changes.enumerated()
+            .sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
+            .map { ($0.element.t, $0.element.track) }
+        var screens: [String: ScreenGeometry] = [:]
+        var videoTrackIDs: [String] = []
+        for id in [initialScreen].compactMap({ $0 }) + changes.map(\.track) where screens[id] == nil {
+            guard let track = take.track(id), track.kind.isScreen else { continue }
+            screens[id] = ScreenGeometry(track: track, events: ordered)
+            videoTrackIDs.append(id)
         }
-        self.places = places
-        if screen?.kind == .display, let area = screen?.source.captureArea {
-            let placed = Self.usable(area).flatMap { area in
-                initialPlace.frame.map { Rect(x: area.x - $0.x, y: area.y - $0.y, width: area.width, height: area.height) }
-            }
-            areaOffset = placed
-            areaUnplaced = placed == nil
-        } else {
-            areaOffset = nil
-            areaUnplaced = false
-        }
+        self.screens = screens
 
         let camera = take.tracks.first { $0.kind == .camera && !$0.segments.isEmpty }
         cameraTrackID = camera?.id
         cameraStart = camera?.segments.map(\.startHostTime).min()
-        cameraStyle = CameraStyleTimeline(initial: take.cameraStyle ?? .default, events: events)
+        if document.camera.show, let camera { videoTrackIDs.append(camera.id) }
+        self.videoTrackIDs = videoTrackIDs
+        cameraStyle = CameraStyleTimeline(
+            initial: document.camera.initial[take.id] ?? .default,
+            changes: document.camera.changes.filter { $0.take == take.id }.compactMap { change in
+                placement.output(ofChangeAt: change.t).map { ($0, change.style) }
+            })
 
-        positions = ordered.compactMap { event in event.kind.pointerPosition.map { (event.t, $0) } }
+        positions = ordered.compactMap { event in
+            guard let point = event.kind.pointerPosition, let t = placement.output(ofSampleAt: event.t) else { return nil }
+            return (t, point)
+        }
+    }
+
+    /// The legacy document of the take (`EditDocument.legacy(take:events:)`) with the gradient, the padding and the
+    /// corners of `style`, and its cursor `style.cursorPointHeight` tall: what phase 0 and 1a draw.
+    public init(take: TakeRecord, events: [InputEvent], style: StyleV0, outputSize: SIMD2<Int>) {
+        func rgba(_ color: SIMD4<Float>) -> RGBA { RGBA(Double(color.x), Double(color.y), Double(color.z), Double(color.w)) }
+        var document = EditDocument.legacy(take: take, events: events)
+        document.style.background = .gradient(
+            start: rgba(style.gradientStart), end: rgba(style.gradientEnd), angle: Double(style.gradientAngleDegrees))
+        document.style.padding = style.paddingFraction
+        document.style.cornerRadius = style.cornerRadiusFraction
+        document.cursor.scale = style.cursorPointHeight / 24
+        self.init(take: take, events: events, document: document, outputSize: outputSize)
     }
 
     public func frame(at outputTime: Double) -> RenderFrame {
-        let time = outputTime.isNaN ? 0 : min(max(outputTime, 0), duration)
-        let host = timelineStart.adding(seconds: time)
-        let view = screenView(at: host)
-        return RenderFrame(
-            outputSize: outputSize,
-            gradientStart: style.gradientStart,
-            gradientEnd: style.gradientEnd,
-            gradientAngleDegrees: style.gradientAngleDegrees,
-            screen: view.flatMap { view in
-                screenTrackID.map {
-                    ScreenLayer(
-                        trackID: $0, sourceTime: host, rect: view.rect,
-                        cornerRadius: style.cornerRadiusFraction * Double(outputSize.x), crop: view.crop)
-                }
-            },
-            cursor: view.flatMap { cursor(at: host, on: $0) },
-            camera: camera(at: host)
-        )
+        var frame = RenderFrame(
+            outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle)
+        let τ = TimeMap.outputNanoseconds(seconds: outputTime)
+        guard let shown = timeMap.source(atOutput: τ), document.sequence[shown.clip].take == takeID else { return frame }
+        let source = shown.source
+        // The output time shown, as `source(atOutput:)` clamps it.
+        let output = min(max(τ, 0), timeMap.duration - 1)
+        let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        if let trackID = screen(at: source), let view = screens[trackID]?.shown(at: source) {
+            let rect = StageLayout.screenRect(
+                contentAspect: view.region.map { $0.width / $0.height }, padding: document.style.padding, outputSize: size)
+            frame.screen = ScreenLayer(
+                trackID: trackID, sourceTime: source, rect: rect, cornerRadius: document.style.cornerRadius * size.x, crop: view.crop)
+            if document.cursor.show, view.onScreen, let region = view.region {
+                frame.cursor = cursor(at: output, in: region, shownIn: rect)
+            }
+        }
+        frame.camera = camera(at: source, output: output)
+        return frame
     }
 
-    /// `rect` when its values are finite and its size positive.
-    private static func usable(_ rect: Rect) -> Rect? {
-        [rect.x, rect.y, rect.width, rect.height].allSatisfy(\.isFinite) && rect.width > 0 && rect.height > 0 ? rect : nil
+    /// The gradient of `background`, as the shader takes it; the classic one for a background that is not a gradient.
+    private static func gradient(of background: Background) -> (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float) {
+        guard case let .gradient(start, end, angle) = background else { return gradient(of: .tomaClassic) }
+        func floats(_ color: RGBA) -> SIMD4<Float> { SIMD4(Float(color.r), Float(color.g), Float(color.b), Float(color.a)) }
+        return (floats(start), floats(end), Float(angle))
     }
 
-    /// Where the screen is at `host`: the last geometry event at or before it, or its `globalFrame`.
-    private func place(at host: HostTime) -> Place {
-        var low = 0, high = places.count
+    /// The screen track shown at `source`: the last change at or before it, or the initial one.
+    private func screen(at source: HostTime) -> String? {
+        var low = 0, high = screenChanges.count
         while low < high {
             let mid = (low + high) / 2
-            if places[mid].t <= host { low = mid + 1 } else { high = mid }
+            if screenChanges[mid].t <= source { low = mid + 1 } else { high = mid }
         }
-        return low > 0 ? places[low - 1].place : initialPlace
+        return low > 0 ? screenChanges[low - 1].track : initialScreen
     }
 
-    /// What is shown of the screen at `host`, and where. Without a frame, the whole area inside the padding and
-    /// no cursor. `nil`, nothing of the screen, when its area is not on the display or cannot be placed.
-    private func screenView(at host: HostTime) -> ScreenView? {
-        guard !areaUnplaced else { return nil }
-        let place = place(at: host)
-        guard let frame = place.frame else {
-            return ScreenView(rect: Self.contentRect(aspect: nil, style: style, outputSize: outputSize), crop: Self.wholeFrame, cursorRegion: nil)
-        }
-        var crop = Self.wholeFrame, region = frame
-        if let areaOffset {
-            guard let area = Self.crop(areaOffset, in: frame) else { return nil }
-            crop = area
-            region = Rect(
-                x: frame.x + area.x * frame.width, y: frame.y + area.y * frame.height,
-                width: area.width * frame.width, height: area.height * frame.height)
-        }
-        let rect = Self.contentRect(aspect: region.width / region.height, style: style, outputSize: outputSize)
-        return ScreenView(rect: rect, crop: crop, cursorRegion: place.onScreen ? region : nil)
-    }
-
-    /// The area at `offset` from the display's corner as fractions of the display's current `frame`
-    /// (`(offset.x / frame.width, …, offset.width / frame.width, …)`, where `offset.x` is `area.x − globalFrame.x`)
-    /// clamped to `[0, 1]`; `nil` when no part of it is on the display.
-    private static func crop(_ offset: Rect, in frame: Rect) -> Rect? {
-        var x = offset.x / frame.width, width = offset.width / frame.width
-        var y = offset.y / frame.height, height = offset.height / frame.height
-        if x < 0 {
-            width += x
-            x = 0
-        }
-        if y < 0 {
-            height += y
-            y = 0
-        }
-        width = min(width, 1 - x)
-        height = min(height, 1 - y)
-        guard width > 0, height > 0 else { return nil }
-        return Rect(x: x, y: y, width: width, height: height)
-    }
-
-    /// The screen's rect: the area inside the padding, or the largest rect of `aspect` centred in it. Without an
-    /// aspect, the whole area inside the padding.
-    private static func contentRect(aspect: Double?, style: StyleV0, outputSize: SIMD2<Int>) -> Rect {
-        let width = Double(outputSize.x), height = Double(outputSize.y)
-        let padding = style.paddingFraction * width
-        let available = SIMD2(max(width - 2 * padding, 0), max(height - 2 * padding, 0))
-        var size = available
-        if let aspect, available.x > 0, available.y > 0 {
-            size = available.x / available.y > aspect
-                ? SIMD2(available.y * aspect, available.y)
-                : SIMD2(available.x, available.x / aspect)
-        }
-        return Rect(x: (width - size.x) / 2, y: (height - size.y) / 2, width: size.x, height: size.y)
-    }
-
-    /// The cursor at `host`: the last position at or before it, moved toward the next one if that comes
-    /// within `maxInterpolationGap`. `nil` before the first position, off what `view` shows, or without a geometry.
-    private func cursor(at host: HostTime, on view: ScreenView) -> CursorLayer? {
-        guard let region = view.cursorRegion, screenTrackID != nil else { return nil }
-        // Index of the first position after `host`.
+    /// The cursor at output time `τ`: the last position at or before it, moved toward the next one if that comes
+    /// within `maxInterpolationGap`, placed on `rect` where it is in `region`. `nil` before the first position and off
+    /// `region`.
+    private func cursor(at τ: Int64, in region: Rect, shownIn rect: Rect) -> CursorLayer? {
+        // Index of the first position after `τ`.
         var low = 0, high = positions.count
         while low < high {
             let mid = (low + high) / 2
-            if positions[mid].t <= host { low = mid + 1 } else { high = mid }
+            if positions[mid].t <= τ { low = mid + 1 } else { high = mid }
         }
         guard low > 0 else { return nil }
         let previous = positions[low - 1]
         var point = previous.point
         if low < positions.count {
             let next = positions[low]
-            let gap = next.t.seconds(since: previous.t)
+            let gap = Self.seconds(next.t, since: previous.t)
             if gap <= Self.maxInterpolationGap {
-                point += (next.point - previous.point) * (host.seconds(since: previous.t) / gap)
+                point += (next.point - previous.point) * (Self.seconds(τ, since: previous.t) / gap)
             }
         }
         let global = CGPoint(x: point.x, y: point.y)
         guard CursorGeometry.contains(global, region) else { return nil }
         let normalized = CursorGeometry.normalized(global, in: region)
-        let rect = view.rect
         return CursorLayer(
             hotspot: SIMD2(rect.x, rect.y) + normalized * SIMD2(rect.width, rect.height),
-            height: style.cursorPointHeight * rect.height / region.height
+            height: document.cursor.scale * 24 * rect.height / region.height
         )
     }
 
-    /// The camera at `host`, from the start of its first segment on.
-    private func camera(at host: HostTime) -> CameraLayer? {
-        guard let cameraTrackID, let cameraStart, host >= cameraStart else { return nil }
-        let frame = cameraStyle.frame(at: host, output: SIMD2(Double(outputSize.x), Double(outputSize.y)))
-        return CameraLayer(trackID: cameraTrackID, sourceTime: host, rect: frame.rect, cornerRadius: frame.cornerRadius)
+    /// The camera at source instant `source` and output time `output`, from the start of its first segment on.
+    private func camera(at source: HostTime, output: Int64) -> CameraLayer? {
+        guard document.camera.show, let cameraTrackID, let cameraStart, source >= cameraStart else { return nil }
+        let frame = cameraStyle.frame(atOutput: output, output: SIMD2(Double(outputSize.x), Double(outputSize.y)))
+        return CameraLayer(trackID: cameraTrackID, sourceTime: source, rect: frame.rect, cornerRadius: frame.cornerRadius)
+    }
+
+    /// Seconds from output time `b` to `a`, counted as `HostTime.seconds(since:)` counts them: with integer
+    /// nanoseconds below 2⁵³, the same `Double` as the difference of the source instants they stand for at 1×.
+    private static func seconds(_ a: Int64, since b: Int64) -> Double {
+        (Double(a) - Double(b)) / 1_000_000_000
+    }
+}
+
+/// Where a source instant of a take goes in the output, beyond `TimeMap`'s own rule for the instants of its clips:
+/// what happens at an instant the clips leave out.
+private struct OutputPlacement {
+    let sequence: [Clip]
+    let timeMap: TimeMap
+    let take: String
+    /// The take's first and last clips with any source (`start < end`), as `TimeMap` counts them: indices in `sequence`.
+    let first: Int?
+    let last: Int?
+
+    init(sequence: [Clip], timeMap: TimeMap, take: String) {
+        self.sequence = sequence
+        self.timeMap = timeMap
+        self.take = take
+        let clips = sequence.indices.filter { sequence[$0].take == take && sequence[$0].start < sequence[$0].end }
+        first = clips.first
+        last = clips.last
+    }
+
+    /// A pointer sample's output time: its own in a clip, through the mapping of the first clip before it and of the
+    /// last one from its end on; `nil` in a cut between two clips.
+    func output(ofSampleAt x: HostTime) -> Int64? {
+        guard let first, let last else { return nil }
+        if x < sequence[first].start { return extrapolated(x, clip: first) }
+        if x >= sequence[last].end { return extrapolated(x, clip: last) }
+        return timeMap.output(atSource: x, take: take)
+    }
+
+    /// Where a change (of the camera) starts to rule: before the first clip, at its time through that clip's mapping;
+    /// otherwise from the first instant kept at or after it (`TimeMap.firstKeptOutput`), never after the last clip.
+    func output(ofChangeAt x: HostTime) -> Int64? {
+        guard let first else { return nil }
+        if x < sequence[first].start { return extrapolated(x, clip: first) }
+        return timeMap.firstKeptOutput(atOrAfter: x, take: take)
+    }
+
+    /// `O_k + round((x − s_k) / v_k)` for an instant `x` outside clip `k`, as `TimeMap` maps the ones inside it,
+    /// saturating at the ends of `Int64`.
+    private func extrapolated(_ x: HostTime, clip k: Int) -> Int64 {
+        let clip = sequence[k]
+        let speed = Self.speed(of: clip)
+        let offset = x >= clip.start
+            ? Self.rounded(Double(x.nanoseconds - clip.start.nanoseconds) / speed)
+            : -Self.rounded(Double(clip.start.nanoseconds - x.nanoseconds) / speed)
+        let (sum, overflow) = timeMap.clipOutputStarts[k].addingReportingOverflow(offset)
+        return overflow ? (offset < 0 ? .min : .max) : sum
+    }
+
+    /// The speed `TimeMap` reads for `clip`: clamped to 0.25…16, 1 when it is not a number.
+    private static func speed(of clip: Clip) -> Double {
+        clip.speed.isNaN ? 1 : min(max(clip.speed, 0.25), 16)
+    }
+
+    /// `x` (never negative) rounded to the nearest integer, halves away from zero, at most `Int64.max`.
+    private static func rounded(_ x: Double) -> Int64 {
+        let rounded = x.rounded()
+        // `Double(Int64.max)` is 2⁶³, one past it.
+        return rounded >= Double(Int64.max) ? .max : Int64(rounded)
     }
 }
