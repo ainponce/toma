@@ -473,12 +473,18 @@ Lo de "sin permiso" solo vale con Toma abierta desde Finder: la que se abre desd
 El estirador (`AVAudioUnitTimePitch`) solo se midió en macOS 26: ahí avanza su entrada de a `round(256 × rate)` cuadros por salto, que es lo que corrige Toma para que el audio no se corra del video, y su latencia es 0. Ningún agente tiene una Mac con macOS 15.
 - En una Mac con macOS 15 (mejor la del piso M1), en una copia de esta rama con Xcode, correr `swift test --package-path Packages/RecorderKit --filter 'aLongClipAtAnUnevenSpeedDoesNotDrift|stretchedOnsetIsAligned|stretchIsDeterministic'`: las tres pasan (`stretchedOnsetIsAligned` con sus 4 casos, a 0,25×, 0,7×, 2× y 4×). Anotar la versión exacta de macOS y, si alguna falla, el mensaje entero: en `aLongClipAtAnUnevenSpeedDoesNotDrift` dice cuánto se corrió el sonido (el salto del efecto es otro), en `stretchedOnsetIsAligned` cuánto antes o después empieza (una latencia que el efecto no informa) y en `stretchIsDeterministic` qué rango dio otros bits.
 
+**Micrófonos que no graban a 48 kHz, en macOS 15** (32)
+
+Un micrófono USB a 44,1 kHz o uno Bluetooth a 16 o 24 kHz se graba a su frecuencia y se remuestrea a 48 kHz al leerlo. Para que un salto de la vista previa no lo decodifique desde el comienzo, Toma lo empieza en el medio, en un punto donde coinciden una muestra del archivo y una de 48 kHz: ahí el remuestreador de macOS da, a las pocas muestras, las mismas que leyéndolo desde el comienzo. Eso solo se midió en macOS 26. Al abrir el proyecto Toma lo comprueba en cada segmento, y si no da lo mismo, ese segmento se lee desde el comienzo: el sonido es el mismo, pero un salto tarda más (unos 0,35 s a los 10 min de una toma, en esta Mac).
+- En una Mac con macOS 15, en una copia de esta rama con Xcode, correr `swift test --package-path Packages/RecorderKit --filter 'aTrackIsReadFromNearTheFrameAskedFor|aResampledSegmentIsStartedOnlyWhereItGivesTheSameFrames'`: las dos pasan (la primera, con sus 7 casos: 48; 44,1 mono y estéreo; 24; 16; 11,025 y 8 kHz). Anotar la versión exacta de macOS y, si alguna falla, el mensaje entero: si dice `placed.seekOrigin != nil` o "started at", en esa versión el remuestreador no da lo mismo desde el medio (y esos segmentos se leen desde el comienzo); si dice `bits`, el sonido leído desde el medio es otro, y eso no tiene que pasar.
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
 | 2. Imágenes del cursor (macOS 15 y 26) | pendiente | pendiente | pendiente |
 | 2. Scroll y actividad del teclado sin Monitoreo de entrada (macOS 15 y 26) | pendiente | pendiente | pendiente |
 | 2. Audio con velocidad en macOS 15: deriva, comienzo y determinismo | pendiente | pendiente | pendiente |
+| 2. Micrófonos a 44,1, 24 y 16 kHz en macOS 15: empezar en el medio | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 
