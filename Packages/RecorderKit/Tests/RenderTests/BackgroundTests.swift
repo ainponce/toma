@@ -68,7 +68,7 @@ private func drawn(_ background: BackgroundLayer, size: SIMD2<Int>, compositor: 
         gradientAngleDegrees: style.gradientAngleDegrees, background: background)
     let cursor = try CursorSprite.makeTexture(device: device)
     return try drawn(device, size: size) { target, commandBuffer in
-        compositor.encode(frame, screen: nil, camera: nil, cursor: cursor, into: target, commandBuffer: commandBuffer)
+        try compositor.encode(frame, screen: nil, camera: nil, cursor: cursor, into: target, commandBuffer: commandBuffer)
     }
 }
 

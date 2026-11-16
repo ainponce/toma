@@ -2,10 +2,11 @@
 import Foundation
 import Metal
 import ProjectFormat
+import Synchronization
 
-/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the window frame, the screen, the cursor, the
-/// click effects and the camera, in that order, in one render pass that starts by clearing the target, blended
-/// premultiplied "over".
+/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the shadow, the window frame, the screen, the
+/// cursor, the click effects and the camera, in that order, in one render pass that starts by clearing the target,
+/// blended premultiplied "over"; before it, for a screen sampled with mipmaps, a blit pass that makes them.
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
@@ -20,21 +21,26 @@ public final class Compositor: @unchecked Sendable {
     private let backgroundImagePipeline: any MTLRenderPipelineState
     private let blurredWallpaperPipeline: any MTLRenderPipelineState
     private let screenPipeline: any MTLRenderPipelineState
+    private let mipmappedScreenPipeline: any MTLRenderPipelineState
+    private let shadowPipeline: any MTLRenderPipelineState
     private let spritePipeline: any MTLRenderPipelineState
     private let cursorPipeline: any MTLRenderPipelineState
     private let windowBarPipeline: any MTLRenderPipelineState
     private let clickEffectPipeline: any MTLRenderPipelineState
     private let screenSampler: any MTLSamplerState
-    private let spriteSampler: any MTLSamplerState
+    /// Linear between the texels and between the mipmap levels: the cursor, the title and a screen with mipmaps.
+    private let trilinearSampler: any MTLSamplerState
+    private let mipmappedCopies: MipmappedCopies
 
     /// Throws the compiler's error if the shaders do not build, and `RenderError` if Metal cannot make a
     /// pipeline or sampler.
     public init(device: any MTLDevice) throws {
-        precondition(MemoryLayout<QuadUniforms>.stride == 80, "QuadUniforms must keep the layout of the shaders' struct: 80 bytes")
+        precondition(MemoryLayout<QuadUniforms>.stride == 88, "QuadUniforms must keep the layout of the shaders' struct: 88 bytes")
         precondition(
             MemoryLayout<WindowBarUniforms>.stride == 112, "WindowBarUniforms must keep the layout of the shaders' struct: 112 bytes")
         precondition(
             MemoryLayout<ClickEffectUniforms>.stride == 32, "ClickEffectUniforms must keep the layout of the shaders' struct: 32 bytes")
+        precondition(MemoryLayout<ShadowUniforms>.stride == 32, "ShadowUniforms must keep the layout of the shaders' struct: 32 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)
@@ -65,6 +71,8 @@ public final class Compositor: @unchecked Sendable {
         backgroundImagePipeline = try pipeline(vertex: "gradientVertex", fragment: "backgroundImageFragment", blended: false)
         blurredWallpaperPipeline = try pipeline(vertex: "gradientVertex", fragment: "blurredWallpaperFragment", blended: false)
         screenPipeline = try pipeline(vertex: "quadVertex", fragment: "screenFragment", blended: true)
+        mipmappedScreenPipeline = try pipeline(vertex: "quadVertex", fragment: "mipmappedScreenFragment", blended: true)
+        shadowPipeline = try pipeline(vertex: "quadVertex", fragment: "shadowFragment", blended: true)
         spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
         cursorPipeline = try pipeline(vertex: "quadVertex", fragment: "cursorFragment", blended: true)
         windowBarPipeline = try pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blended: true)
@@ -79,16 +87,21 @@ public final class Compositor: @unchecked Sendable {
             throw RenderError.metalResourceUnavailable("screen sampler")
         }
         sampler.mipFilter = .linear
-        guard let spriteSampler = device.makeSamplerState(descriptor: sampler) else {
+        guard let trilinearSampler = device.makeSamplerState(descriptor: sampler) else {
             throw RenderError.metalResourceUnavailable("cursor sampler")
         }
         self.screenSampler = screenSampler
-        self.spriteSampler = spriteSampler
+        self.trilinearSampler = trilinearSampler
+        mipmappedCopies = MipmappedCopies(device: device)
     }
 
     /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame`
     /// map onto the whole target (they are in pixels of `frame.outputSize`). The screen is drawn only when
-    /// `frame.screen` is set and `screen` is given, its `crop` filling its rect; the cursor only when `frame.cursor`
+    /// `frame.screen` is set and `screen` is given, its `crop` filling its rect: with `mipmapped`, trilinear from a copy
+    /// with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even its mipmaps hold
+    /// anything outside an Area; nothing for a crop that is not finite. The shadow (`frame.shadow`) only with it, under it
+    /// and the window frame. Throws `RenderError.metalResourceUnavailable`, having encoded nothing, when Metal cannot make
+    /// that copy: a frame is never drawn some other way. The cursor only when `frame.cursor`
     /// is set, shown (opacity above 0) and of some size, with `cursor` the texture of its image (`CursorImages`); the
     /// click effects over it (`frame.clickEffects`); the camera only when `frame.camera` is set and `camera` is given,
     /// filling its rect without stretching (cropped, centred, to the rect's shape). An `.image` background is
@@ -107,7 +120,11 @@ public final class Compositor: @unchecked Sendable {
         windowTitle: (any MTLTexture)? = nil,
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer
-    ) {
+    ) throws {
+        // What the screen is sampled from, its copy with mipmaps made before the render pass.
+        let screenImage = try frame.screen.flatMap { layer in
+            try screen.flatMap { try image(of: layer, in: $0, commandBuffer: commandBuffer) }
+        }
         let encoder = renderPass(into: target, commandBuffer: commandBuffer)
         let viewport = SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y))
         func drawFramesGradient() {
@@ -139,7 +156,12 @@ public final class Compositor: @unchecked Sendable {
             }
         }
 
-        // 2. Window frame: its bar and buttons, then its title.
+        // 2. Shadow, under the window or the screen, with the screen drawn.
+        if let shadow = frame.shadow, screenImage != nil {
+            drawShadow(shadow, viewport: viewport, encoder: encoder)
+        }
+
+        // 3. Window frame: its bar and buttons, then its title.
         if let window = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
             drawWindowBar(window, viewport: viewport, encoder: encoder)
             if let windowTitle {
@@ -149,18 +171,19 @@ public final class Compositor: @unchecked Sendable {
             }
         }
 
-        // 3. Screen, cut by the window around it if there is one.
-        if let layer = frame.screen, let screen {
-            let crop = layer.crop
+        // 4. Screen, cut by the window around it if there is one.
+        if let layer = frame.screen, let screenImage {
+            let window = frame.windowFrame
             // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
             drawImage(
-                screen, in: layer.rect, cornerRadius: frame.windowFrame?.cornerRadius ?? layer.cornerRadius,
-                uvOrigin: SIMD2(Float(crop.x), Float(crop.y)), uvSize: SIMD2(Float(crop.width), Float(crop.height)),
-                clampsToCrop: crop != Rect(x: 0, y: 0, width: 1, height: 1), shape: frame.windowFrame?.rect, viewport: viewport,
-                encoder: encoder)
+                screenImage.texture, in: layer.rect, cornerRadius: window?.cornerRadius ?? layer.cornerRadius,
+                uvOrigin: screenImage.uvOrigin, uvSize: screenImage.uvSize,
+                clampsToCrop: layer.crop != Rect(x: 0, y: 0, width: 1, height: 1),
+                shape: window.map { ($0.rect, bottomRadius: $0.bottomCornerRadius, imageTopRadius: $0.screenTopCornerRadius) },
+                mipmapped: layer.mipmapped, viewport: viewport, encoder: encoder)
         }
 
-        // 4. Cursor, its hotspot at the cursor position, pressed smaller about it, at its opacity.
+        // 5. Cursor, its hotspot at the cursor position, pressed smaller about it, at its opacity.
         if let layer = frame.cursor, layer.opacity > 0 {
             let height = layer.height * layer.clickScale
             if height > 0, height.isFinite, layer.aspect > 0, layer.aspect.isFinite {
@@ -171,10 +194,10 @@ public final class Compositor: @unchecked Sendable {
             }
         }
 
-        // 5. Click effects, over the cursor.
+        // 6. Click effects, over the cursor.
         drawClickEffects(frame.clickEffects, viewport: viewport, encoder: encoder)
 
-        // 6. Camera, over everything.
+        // 7. Camera, over everything.
         if let layer = frame.camera, let camera {
             let fill = Self.aspectFill(SIMD2(Double(camera.width), Double(camera.height)), in: layer.rect)
             drawImage(
@@ -183,6 +206,25 @@ public final class Compositor: @unchecked Sendable {
         }
         encoder.endEncoding()
     }
+
+    /// What `layer` samples of the screen's `frame`: the frame and the layer's crop of it; with `mipmapped`, a copy with
+    /// mipmaps of the crop's whole pixels alone, rounded inward (`MipmappedCopies.region(of:width:height:)`), and the crop
+    /// as fractions of that copy, so neither the copy nor any of its levels holds anything outside the crop. `nil`, no
+    /// screen, for a crop that is not finite.
+    private func image(
+        of layer: ScreenLayer, in frame: any MTLTexture, commandBuffer: any MTLCommandBuffer
+    ) throws -> (texture: any MTLTexture, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>)? {
+        let crop = layer.crop
+        guard layer.mipmapped else {
+            return (frame, SIMD2(Float(crop.x), Float(crop.y)), SIMD2(Float(crop.width), Float(crop.height)))
+        }
+        guard let region = MipmappedCopies.region(of: crop, width: frame.width, height: frame.height) else { return nil }
+        let copy = try mipmappedCopies.copy(of: frame, region: region.pixels, commandBuffer: commandBuffer)
+        return (copy, region.uvOrigin, region.uvSize)
+    }
+
+    /// How many mipmapped copies of the screen were made so far, and how many no frame on the GPU uses: for tests.
+    var mipmappedCopiesCount: (made: Int, free: Int) { mipmappedCopies.count }
 
     /// Draws `preset` alone into all of `target` (`.bgra8Unorm`): in one quad as `encode` draws a frame's wallpaper when
     /// `tileSize` is `nil`, otherwise in one quad per square of `tileSize` pixels (cut at the right and bottom edges). For
@@ -285,7 +327,7 @@ public final class Compositor: @unchecked Sendable {
         }
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
-        encoder.setFragmentSamplerState(spriteSampler, index: 0)
+        encoder.setFragmentSamplerState(trilinearSampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
@@ -320,11 +362,29 @@ public final class Compositor: @unchecked Sendable {
         }
     }
 
+    /// Draws `layer` (`shadowFragment`) over a quad of its box and 3σ and a pixel more on every side: past 3σ of its box
+    /// the shadow is under 0.35 / 255, which rounds to nothing in every output. Nothing of a layer `ShadowMath.Box`
+    /// leaves out.
+    private func drawShadow(_ layer: ShadowLayer, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        guard let box = ShadowMath.Box(layer) else { return }
+        let reach = 3 * box.sigma + 1
+        let origin = box.lower - reach, size = box.upper - box.lower + 2 * reach
+        var quad = QuadUniforms(
+            viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
+            uvSize: .one, radius: 0)
+        var uniforms = ShadowUniforms(lower: box.lower, upper: box.upper, sigma: box.sigma, corner: box.corner, opacity: box.opacity)
+        encoder.setRenderPipelineState(shadowPipeline)
+        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShadowUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+    }
+
     /// Draws the title bar of `window` with its buttons (`windowBarFragment`), over a quad one pixel larger than the bar
-    /// on every side and one more at the bottom, where the bar goes on one pixel under the screen.
+    /// on every side and one more at the bottom, where the bar goes on one pixel under the screen, and down behind the
+    /// screen's round top corners.
     private func drawWindowBar(_ window: WindowFrameLayer, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
-        let rect = window.rect, bar = window.barHeight
-        let origin = SIMD2(Float(rect.x - 1), Float(rect.y - 1)), size = SIMD2(Float(rect.width + 2), Float(bar + 3))
+        let rect = window.rect, bar = window.barHeight, below = max(window.screenTopCornerRadius, 0)
+        let origin = SIMD2(Float(rect.x - 1), Float(rect.y - 1)), size = SIMD2(Float(rect.width + 2), Float(bar + 3 + below))
         var quad = QuadUniforms(
             viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
             uvSize: .one, radius: 0)
@@ -334,7 +394,8 @@ public final class Compositor: @unchecked Sendable {
             windowOrigin: SIMD2(Float(rect.x), Float(rect.y)), windowSize: SIMD2(Float(rect.width), Float(rect.height)),
             firstButton: SIMD2<Float>(window.firstButton), buttonSpacing: Float(WindowFrameLayer.buttonSpacing * bar),
             buttonRadius: window.buttons ? Float(WindowFrameLayer.buttonDiameter / 2 * bar) : 0,
-            radius: Float(max(window.cornerRadius, 0)), barBottom: Float(rect.y + bar))
+            radius: Float(max(window.cornerRadius, 0)), barBottom: Float(rect.y + bar),
+            bottomRadius: Float(max(window.bottomCornerRadius, 0)), below: Float(below))
         encoder.setRenderPipelineState(windowBarPipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WindowBarUniforms>.stride, index: 0)
@@ -343,11 +404,15 @@ public final class Compositor: @unchecked Sendable {
 
     /// Draws the part `uvOrigin`, `uvSize` of `texture` into `rect` with rounded corners (`screenFragment`), over a
     /// quad one pixel larger on every side so its antialiased edge is drawn whole; with `clampsToCrop`, nothing of
-    /// `texture` outside that part shows, not even blended at the edge. With a `shape`, the rounded rect that cuts it is
-    /// that one (with `cornerRadius`), and `rect`'s own edges are square. Nothing for an empty rect.
+    /// `texture` outside that part shows directly, and bilinear only the pixels that part cuts blend in at its edge;
+    /// `mipmapped`, trilinear from `texture`'s mipmaps (`mipmappedScreenFragment`), where only a `texture` made of that
+    /// part's whole pixels alone keeps all of what is outside it out (`image(of:in:commandBuffer:)`). With a `shape`,
+    /// the rounded rect that cuts it is that one (with `cornerRadius` at its top and `bottomRadius` at its bottom), and
+    /// `rect`'s own edges are square but for its top corners of `imageTopRadius`. Nothing for an empty rect.
     private func drawImage(
         _ texture: any MTLTexture, in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>,
-        clampsToCrop: Bool = false, shape: Rect? = nil, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
+        clampsToCrop: Bool = false, shape: (rect: Rect, bottomRadius: Double, imageTopRadius: Double)? = nil,
+        mipmapped: Bool = false, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
         var quad = QuadUniforms(
@@ -360,13 +425,15 @@ public final class Compositor: @unchecked Sendable {
             uvSize: uvSize,
             radius: Float(max(cornerRadius, 0)),
             clampsToCrop: clampsToCrop ? 1 : 0,
-            shapeOrigin: shape.map { SIMD2(Float($0.x), Float($0.y)) } ?? .zero,
-            shapeSize: shape.map { SIMD2(Float($0.width), Float($0.height)) } ?? .zero)
-        encoder.setRenderPipelineState(screenPipeline)
+            shapeOrigin: shape.map { SIMD2(Float($0.rect.x), Float($0.rect.y)) } ?? .zero,
+            shapeSize: shape.map { SIMD2(Float($0.rect.width), Float($0.rect.height)) } ?? .zero,
+            shapeBottomRadius: shape.map { Float(max($0.bottomRadius, 0)) } ?? 0,
+            topRadius: shape.map { Float(max($0.imageTopRadius, 0)) } ?? 0)
+        encoder.setRenderPipelineState(mipmapped ? mipmappedScreenPipeline : screenPipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
-        encoder.setFragmentSamplerState(screenSampler, index: 0)
+        encoder.setFragmentSamplerState(mipmapped ? trilinearSampler : screenSampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
@@ -399,7 +466,7 @@ struct WallpaperUniforms {
     var padding: UInt32
 }
 
-/// `QuadUniforms` in `ShaderSource.metal`: 80 bytes.
+/// `QuadUniforms` in `ShaderSource.metal`: 88 bytes.
 private struct QuadUniforms {
     var viewport: SIMD2<Float>
     var origin: SIMD2<Float>
@@ -412,6 +479,8 @@ private struct QuadUniforms {
     var clampsToCrop: Float = 0
     var shapeOrigin: SIMD2<Float> = .zero
     var shapeSize: SIMD2<Float> = .zero
+    var shapeBottomRadius: Float = 0
+    var topRadius: Float = 0
 }
 
 /// `ClickEffectUniforms` in `ShaderSource.metal`: 32 bytes.
@@ -422,6 +491,16 @@ private struct ClickEffectUniforms {
     var opacity: Float
     var outline: Float
     var ring: Float
+    var padding: Float = 0
+}
+
+/// `ShadowUniforms` in `ShaderSource.metal`: 32 bytes.
+private struct ShadowUniforms {
+    var lower: SIMD2<Float>
+    var upper: SIMD2<Float>
+    var sigma: Float
+    var corner: Float
+    var opacity: Float
     var padding: Float = 0
 }
 
@@ -438,5 +517,114 @@ private struct WindowBarUniforms {
     var buttonRadius: Float
     var radius: Float
     var barBottom: Float
-    var padding: SIMD2<Float> = .zero
+    var bottomRadius: Float
+    var below: Float
+}
+
+/// The mipmapped copies of the screen's frames (`ScreenLayer.mipmapped`), each of the part of its frame shown alone: one
+/// for each frame on the GPU, of its size and format, kept once the GPU is done with that frame for a later one to use
+/// again, so a frame never writes into a copy another frame still reads.
+///
+/// A frame's completion hands its copy back on a thread of Metal's, which reads nothing of this but through `state`'s
+/// lock: what Metal orders between a commit and its completion, the thread sanitizer cannot see.
+private final class MipmappedCopies: @unchecked Sendable {
+    /// The most copies kept for later frames: past it the oldest is let go, so copies of a size no longer drawn do not
+    /// stay. Two screens (a change of screen) of three frames on the GPU (the preview's drawables, the export's).
+    private static let kept = 6
+
+    /// A copy, to be handed back: textures are not `Sendable`. Made with `state`'s lock held.
+    private final class Copy: @unchecked Sendable {
+        let texture: any MTLTexture
+
+        init(_ texture: any MTLTexture) {
+            self.texture = texture
+        }
+    }
+
+    private struct State {
+        /// The copies no frame on the GPU uses, oldest first.
+        var free: [Copy] = []
+        /// How many were made, for tests.
+        var made = 0
+    }
+
+    private let device: any MTLDevice
+    private let state = Mutex(State())
+
+    init(device: any MTLDevice) {
+        self.device = device
+    }
+
+    var count: (made: Int, free: Int) { state.withLock { ($0.made, $0.free.count) } }
+
+    /// The whole pixels of a frame `width` × `height` inside `crop` (fractions of it, 0, 0 its top-left corner), rounded
+    /// inward: on each axis from `ceil(start − 10⁻⁶)` to `floor(end + 10⁻⁶)` within the frame, or the pixel of the crop's
+    /// middle when no whole pixel is inside it. And `crop` as fractions of those pixels: (0, 0) to (1, 1) when its
+    /// borders are on pixels, a little past them when they are not (the part that only the cut pixels show). `nil` for a
+    /// crop that is not finite.
+    static func region(
+        of crop: Rect, width: Int, height: Int
+    ) -> (pixels: MTLRegion, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>)? {
+        guard [crop.x, crop.y, crop.width, crop.height].allSatisfy(\.isFinite), width > 0, height > 0 else { return nil }
+        func axis(_ start: Double, _ length: Double, _ pixels: Int) -> (first: Int, count: Int, uvOrigin: Float, uvSize: Float) {
+            let count = Double(pixels), low = start * count, high = (start + length) * count
+            var first = min(max((low - 1e-6).rounded(.up), 0), count)
+            var end = min(max((high + 1e-6).rounded(.down), 0), count)
+            if end <= first {
+                first = min(max(((low + high) / 2).rounded(.down), 0), count - 1)
+                end = first + 1
+            }
+            let size = end - first
+            return (Int(first), Int(size), Float((low - first) / size), Float(length * count / size))
+        }
+        let x = axis(crop.x, crop.width, width), y = axis(crop.y, crop.height, height)
+        return (MTLRegionMake2D(x.first, y.first, x.count, y.count), SIMD2(x.uvOrigin, y.uvOrigin), SIMD2(x.uvSize, y.uvSize))
+    }
+
+    /// A copy of `region` of `source` with its mipmaps, encoded into `commandBuffer`, which has no encoder open: a blit of
+    /// those pixels of its level 0, then `generateMipmaps`. Throws `RenderError.metalResourceUnavailable`, having encoded
+    /// nothing, when Metal cannot make the copy or the blit pass.
+    func copy(of source: any MTLTexture, region: MTLRegion, commandBuffer: any MTLCommandBuffer) throws -> any MTLTexture {
+        guard let copy = take(width: region.size.width, height: region.size.height, pixelFormat: source.pixelFormat) else {
+            throw RenderError.metalResourceUnavailable("mipmapped copy of the screen")
+        }
+        guard let blit = commandBuffer.makeBlitCommandEncoder() else {
+            give(copy)
+            throw RenderError.metalResourceUnavailable("blit pass for the screen's mipmaps")
+        }
+        blit.label = "Compositor mipmaps"
+        blit.copy(
+            from: source, sourceSlice: 0, sourceLevel: 0, sourceOrigin: region.origin, sourceSize: region.size, to: copy.texture,
+            destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blit.generateMipmaps(for: copy.texture)
+        blit.endEncoding()
+        commandBuffer.addCompletedHandler { [self] _ in give(copy) }
+        return copy.texture
+    }
+
+    /// A free copy of that size and format, or a new one.
+    private func take(width: Int, height: Int, pixelFormat: MTLPixelFormat) -> Copy? {
+        let reused = state.withLock { state -> Copy? in
+            let index = state.free.lastIndex {
+                $0.texture.width == width && $0.texture.height == height && $0.texture.pixelFormat == pixelFormat
+            }
+            return index.map { state.free.remove(at: $0) }
+        }
+        if let reused { return reused }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: pixelFormat, width: width, height: height, mipmapped: true)
+        descriptor.usage = [.shaderRead, .renderTarget]
+        descriptor.storageMode = .private
+        guard let texture = device.makeTexture(descriptor: descriptor) else { return nil }
+        return state.withLock { state in
+            state.made += 1
+            return Copy(texture)
+        }
+    }
+
+    private func give(_ copy: Copy) {
+        state.withLock { state in
+            state.free.append(copy)
+            if state.free.count > Self.kept { state.free.removeFirst() }
+        }
+    }
 }

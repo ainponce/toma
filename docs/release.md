@@ -478,6 +478,13 @@ El estirador (`AVAudioUnitTimePitch`) solo se midió en macOS 26: ahí avanza su
 Un micrófono USB a 44,1 kHz o uno Bluetooth a 16 o 24 kHz se graba a su frecuencia y se remuestrea a 48 kHz al leerlo. Para que un salto de la vista previa no lo decodifique desde el comienzo, Toma lo empieza en el medio, en un punto donde coinciden una muestra del archivo y una de 48 kHz: ahí el remuestreador de macOS da, a las pocas muestras, las mismas que leyéndolo desde el comienzo. Eso solo se midió en macOS 26. Al abrir el proyecto Toma lo comprueba en cada segmento, y si no da lo mismo, ese segmento se lee desde el comienzo: el sonido es el mismo, pero un salto tarda más (unos 0,35 s a los 10 min de una toma, en esta Mac).
 - En una Mac con macOS 15, en una copia de esta rama con Xcode, correr `swift test --package-path Packages/RecorderKit --filter 'aTrackIsReadFromNearTheFrameAskedFor|aResampledSegmentIsStartedOnlyWhereItGivesTheSameFrames'`: las dos pasan (la primera, con sus 7 casos: 48; 44,1 mono y estéreo; 24; 16; 11,025 y 8 kHz). Anotar la versión exacta de macOS y, si alguna falla, el mensaje entero: si dice `placed.seekOrigin != nil` o "started at", en esa versión el remuestreador no da lo mismo desde el medio (y esos segmentos se leen desde el comienzo); si dice `bits`, el sonido leído desde el medio es otro, y eso no tiene que pasar.
 
+**Esquinas de las tomas de ventana** (22)
+
+Una captura de ventana graba en negro las esquinas redondeadas de la ventana, con un radio que depende del macOS que grabó. Un proyecto nuevo de una toma de ventana empieza con esquinas que tapan 26 pt de la ventana (`WindowCornerCover.blackCornerPoints`, provisional hasta esta medida).
+- En macOS 26 y, si hay a mano, en macOS 15, grabar una ventana en modo Ventana (una de Safari o de Finder, con sus esquinas a la vista) y abrir la toma en el editor con el estilo por defecto: no se ve ninguna esquina negra en las cuatro esquinas de la pantalla, ni en la vista previa ni en el video exportado. Lo mismo con el marco "Ventana de macOS" prendido: ni bajo la barra ni en las esquinas de abajo.
+- Medir el radio de las esquinas negras de esa toma: exportarla sin edición y a 1:1 con `recorder-dev export --raw <paquete> <salida.mp4>`, con `--width` igual al ancho en píxeles de la ventana grabada dividido por 0,84 (el margen del legado ocupa el 16 % del ancho), redondeado a par, y `--height` de al menos el alto en píxeles de la ventana más 0,16 veces ese `--width`, también par (así la ventana sale de su tamaño grabado). En un cuadro del video al 100 %, contar los píxeles desde la esquina de la pantalla hasta donde el borde de arriba deja de tener negro, y dividirlos por el `pixelScale` de la pista (en el manifiesto) para pasarlos a puntos.
+- Anotar en la tabla, para cada macOS, el radio en píxeles y en puntos: con eso se ajusta `blackCornerPoints` antes del cierre del hito (más grande si alguno pasa de 26 pt).
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
@@ -485,6 +492,7 @@ Un micrófono USB a 44,1 kHz o uno Bluetooth a 16 o 24 kHz se graba a su frecuen
 | 2. Scroll y actividad del teclado sin Monitoreo de entrada (macOS 15 y 26) | pendiente | pendiente | pendiente |
 | 2. Audio con velocidad en macOS 15: deriva, comienzo y determinismo | pendiente | pendiente | pendiente |
 | 2. Micrófonos a 44,1, 24 y 16 kHz en macOS 15: empezar en el medio | pendiente | pendiente | pendiente |
+| 2. Esquinas de las tomas de ventana: ninguna negra con el estilo por defecto; radio de las negras en píxeles y en puntos (macOS 26 y 15) | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

@@ -77,7 +77,7 @@ private func composite(_ frame: RenderFrame, cursor: ((any MTLDevice) throws -> 
     let target = try #require(device.makeTexture(descriptor: descriptor))
     let commandBuffer = try #require(device.makeCommandQueue()?.makeCommandBuffer())
     let texture = try cursor?(device) ?? CursorSprite.makeTexture(device: device)
-    compositor.encode(frame, screen: nil, camera: nil, cursor: texture, into: target, commandBuffer: commandBuffer)
+    try compositor.encode(frame, screen: nil, camera: nil, cursor: texture, into: target, commandBuffer: commandBuffer)
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
     #expect(commandBuffer.status == .completed)

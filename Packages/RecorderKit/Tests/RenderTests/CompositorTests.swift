@@ -52,7 +52,7 @@ private func draw(
     let target = try #require(device.makeTexture(descriptor: descriptor))
     let queue = try #require(device.makeCommandQueue())
     let commandBuffer = try #require(queue.makeCommandBuffer())
-    compositor.encode(frame, screen: screen, camera: camera, cursor: cursor, into: target, commandBuffer: commandBuffer)
+    try compositor.encode(frame, screen: screen, camera: camera, cursor: cursor, into: target, commandBuffer: commandBuffer)
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
     #expect(commandBuffer.status == .completed)

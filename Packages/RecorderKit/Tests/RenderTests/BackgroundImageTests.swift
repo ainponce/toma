@@ -515,7 +515,7 @@ func blurredWallpaperIsSmoothAndKeepsItsGrain() async throws {
                 descriptor.storageMode = .shared
                 let target = device.makeTexture(descriptor: descriptor)!
                 let commandBuffer = device.makeCommandQueue()!.makeCommandBuffer()!
-                compositor.encode(
+                try compositor.encode(
                     frame(background), screen: nil, camera: nil, cursor: cursor, backgroundImage: image, into: target,
                     commandBuffer: commandBuffer)
                 commandBuffer.commit()
