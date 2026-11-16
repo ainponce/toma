@@ -98,11 +98,16 @@ final class TitleTexture {
         return pow(2, Double(level) / 2)
     }
 
-    /// The system's window-title font at `size` points (one point a pixel of the texture). `CTFontCreateUIFontForLanguage`
-    /// gives the window-title font at its own size whatever size it is asked for (13 pt on macOS 26), so the size is set
-    /// on a copy of it.
+    /// The language the window-title font is asked for, so the glyphs of a title in Chinese, Japanese or Korean (which
+    /// share Han characters drawn differently in each) are the same whatever language the system is set to: a frame
+    /// draws the same title the same way on every Mac that has the font (the font itself still changes with macOS).
+    static let fontLanguage = "en"
+
+    /// The system's window-title font at `size` points (one point a pixel of the texture), for `fontLanguage`.
+    /// `CTFontCreateUIFontForLanguage` gives the window-title font at its own size whatever size it is asked for (13 pt on
+    /// macOS 26), so the size is set on a copy of it.
     static func font(size: Double) -> CTFont? {
-        guard size > 0, size.isFinite, let font = CTFontCreateUIFontForLanguage(.windowTitle, 0, nil) else { return nil }
+        guard size > 0, size.isFinite, let font = CTFontCreateUIFontForLanguage(.windowTitle, 0, fontLanguage as CFString) else { return nil }
         return CTFontCreateCopyWithAttributes(font, size, nil, nil)
     }
 
