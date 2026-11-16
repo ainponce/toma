@@ -34,9 +34,10 @@ public struct DiskImage: Sendable {
         return DiskImage(mountPoint: mountPoint, image: image)
     }
 
-    /// Mounts the volume again at `mountPoint`, after `detach`: as a disk that was pulled out and plugged in again.
-    public func reattach() throws {
-        try hdiutil(["attach", "-nobrowse", "-mountpoint", mountPoint.path, image.path])
+    /// Mounts the volume again at `mountPoint`, after `detach`: as a disk that was pulled out and plugged in again; with
+    /// `readOnly`, as a volume that cannot be written to.
+    public func reattach(readOnly: Bool = false) throws {
+        try hdiutil(["attach", "-nobrowse"] + (readOnly ? ["-readonly"] : []) + ["-mountpoint", mountPoint.path, image.path])
     }
 
     /// Unmounts the volume; with `force`, even while files on it are open.

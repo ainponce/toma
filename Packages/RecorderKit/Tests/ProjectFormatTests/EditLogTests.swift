@@ -306,6 +306,34 @@ private enum SmallDocument {
     }
 }
 
+@Test func boundedSafeReadKeepsToItsLimit() throws {
+    try withTemporaryDirectory { dir in
+        let url = dir.appending(path: "manifest.json")
+        let bytes = Data((0..<300_000).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        try bytes.write(to: url)
+        #expect(try SafeRead.regularFile(at: url, maxBytes: 300_000) == bytes)
+        #expect(try SafeRead.regularFile(at: url, maxBytes: 1_000_000) == bytes)
+        // `Int.max` means no limit, without overflowing the one byte past it.
+        #expect(try SafeRead.regularFile(at: url, maxBytes: .max) == bytes)
+        #expect(throws: POSIXError(.EFBIG)) { try SafeRead.regularFile(at: url, maxBytes: 299_999) }
+        try Data().write(to: url)
+        #expect(try SafeRead.regularFile(at: url, maxBytes: 0).isEmpty)
+
+        // The same refusals as the unbounded read, at once.
+        let fifo = dir.appending(path: "fifo.json")
+        #expect(mkfifo(fifo.path, 0o644) == 0)
+        let link = dir.appending(path: "link.json")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: url)
+        let clock = ContinuousClock()
+        let started = clock.now
+        #expect(throws: POSIXError(.EFTYPE)) { try SafeRead.regularFile(at: fifo, maxBytes: 100) }
+        #expect(clock.now - started < .milliseconds(100))
+        #expect(throws: POSIXError(.ELOOP)) { try SafeRead.regularFile(at: link, maxBytes: 100) }
+        #expect(throws: POSIXError(.EFTYPE)) { try SafeRead.regularFile(at: dir, maxBytes: 100) }
+        #expect(throws: POSIXError(.ENOENT)) { try SafeRead.regularFile(at: dir.appending(path: "missing"), maxBytes: 100) }
+    }
+}
+
 // MARK: - Replay
 
 @Test func replayAppliesTheTailAfterTheSnapshot() throws {
