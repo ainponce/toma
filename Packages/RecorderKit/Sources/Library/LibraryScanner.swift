@@ -73,6 +73,8 @@ public final class LibraryScanner: Sendable {
     private let onUpdate: @Sendable (LibraryUpdate) -> Void
     private let queues: VolumeQueues
     private let state = Mutex(State())
+    /// Set by `stop()`: nothing more is told, looked at or queued.
+    private let stopped = StopFlag()
 
     private struct State {
         /// What the library knows, by identity, as the scanner last told it (or the index said).
@@ -96,8 +98,45 @@ public final class LibraryScanner: Sendable {
         self.readDocument = readDocument ?? ProjectReader.defaultReadDocument(context: context)
         self.isLockHeld = isLockHeld
         self.context = context
-        self.onUpdate = onUpdate
-        queues = VolumeQueues(isRecording: isRecording, onUpdate: onUpdate)
+        // Nothing is told once the scanner is stopped, from any of its queues.
+        let stopped = self.stopped
+        let tell: @Sendable (LibraryUpdate) -> Void = { update in
+            if !stopped.isSet { onUpdate(update) }
+        }
+        self.onUpdate = tell
+        queues = VolumeQueues(isRecording: isRecording, onUpdate: tell)
+    }
+
+    // MARK: - Stopping
+
+    /// Stops for good (the library's window closed): from now on nothing is told, a walk under way ends at its next
+    /// package or folder, nothing queued starts, and `reconcile`, `look(at:)` and `accountSizes(of:)` do nothing. An
+    /// access to the disk under way is never cut short (design §6.8): `whenStopped()` returns once it ended.
+    public func stop() {
+        stopped.set()
+    }
+
+    /// Returns once the job under way on each of the scanner's queues when it is called has ended: after `stop()`, once
+    /// the scanner touches no disk any more (so a new one does not walk the same disk at the same time).
+    public func whenStopped() async {
+        let all = queues.all
+        await withTaskGroup(of: Void.self) { group in
+            for queue in all {
+                group.addTask {
+                    await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+                        self.queues.enqueue(on: queue) { done.resume() }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Queues `job` on `queue`; it does nothing once the scanner is stopped.
+    private func enqueue(on queue: VolumeQueue, _ job: @escaping @Sendable () -> Void) {
+        queues.enqueue(on: queue) { [stopped] in
+            guard !stopped.isSet else { return }
+            job()
+        }
     }
 
     // MARK: - What the library asks
@@ -109,6 +148,7 @@ public final class LibraryScanner: Sendable {
     /// first. An entry of the index with no identity (`.unavailable(.notFound)` of a package that was not there) is
     /// dropped.
     public func reconcile(from index: LibraryIndex) {
+        guard !stopped.isSet else { return }
         withProjectsVolume(refresh: true) { result in
             guard case .success(let volume) = result, volume.isLookedAtAlone else {
                 self.start(from: index)
@@ -119,7 +159,7 @@ public final class LibraryScanner: Sendable {
                 return
             }
             let queue = self.volumeQueue(for: volume, at: self.projectsFolder)
-            self.queues.enqueue(on: queue) {
+            self.enqueue(on: queue) {
                 // On the walk's queue: a walk under way ends with what it started from.
                 self.start(from: index)
                 self.walkEverything(volume: volume, queue: queue)
@@ -137,6 +177,7 @@ public final class LibraryScanner: Sendable {
     ///   looked at.
     /// Every package looked at is read again. Its size comes after, except on the network or in a synced location.
     public func look(at urls: [URL]) {
+        guard !stopped.isSet else { return }
         var inProjectsFolder: [URL] = []
         var outside: [String: URL] = [:]
         for url in urls {
@@ -152,7 +193,7 @@ public final class LibraryScanner: Sendable {
                 switch result {
                 case .success(let volume):
                     let queue = self.volumeQueue(for: volume, at: self.projectsFolder)
-                    self.queues.enqueue(on: queue) { self.lookInside(inside, volume: volume, queue: queue) }
+                    self.enqueue(on: queue) { self.lookInside(inside, volume: volume, queue: queue) }
                 case .failure(let error):
                     if !ProjectReader.isMissing(error) { self.onUpdate(.projectsFolderUnreadable) }
                 }
@@ -160,11 +201,11 @@ public final class LibraryScanner: Sendable {
         }
         for url in outside.values {
             let resolver = self.resolver(for: url, isProjectsFolder: false)
-            queues.enqueue(on: resolver) {
+            enqueue(on: resolver) {
                 switch self.findVolume(of: url, on: resolver) {
                 case .success(let volume):
                     let queue = self.volumeQueue(for: volume, at: url)
-                    self.queues.enqueue(on: queue) { self.lookElsewhere(url, volume: volume, queue: queue) }
+                    self.enqueue(on: queue) { self.lookElsewhere(url, volume: volume, queue: queue) }
                 case .failure(let error):
                     if ProjectReader.isMissing(error) {
                         let fileSystem = TimedFileSystem(base: self.fileSystem, queues: self.queues, queue: resolver)
@@ -182,6 +223,7 @@ public final class LibraryScanner: Sendable {
     /// projects takes, telling it with their summary. Only those the scanner looks at by itself: of the projects folder
     /// (or its trash) on a local internal volume. The others are left as they are.
     public func accountSizes(of identities: [PackageIdentity]) {
+        guard !stopped.isSet else { return }
         withProjectsVolume(refresh: false) { result in
             guard case .success(let volume) = result, volume.isLookedAtAlone else { return }
             let mine = self.state.withLock { state in
@@ -195,12 +237,15 @@ public final class LibraryScanner: Sendable {
         }
     }
 
-    /// What the scanner knows becomes `index`'s, without the entries that have no identity.
+    /// What the scanner knows takes `index`'s entries, without those that have no identity. What a look found before the
+    /// walk began and the index does not have stays: a look queued on the same disk before the walk (one of Other places
+    /// the user opened) would otherwise lose its size, summed after the walk.
     private func start(from index: LibraryIndex) {
         state.withLock { state in
-            state.known = [:]
-            state.byPath = [:]
             for summary in index.projects where summary.identity.file != 0 {
+                if let old = state.known[summary.identity], state.byPath[old.path] == summary.identity {
+                    state.byPath[old.path] = nil
+                }
                 state.known[summary.identity] = summary
                 state.byPath[summary.path] = summary.identity
             }
@@ -233,7 +278,10 @@ public final class LibraryScanner: Sendable {
     /// The walk of `reconcile`, on the queue of the projects folder's volume.
     private func walkEverything(volume: VolumeInfo, queue: VolumeQueue) {
         var pass = pass(volume: volume, queue: queue, reportsProgress: true)
-        if walk(projectsFolder, depth: 0, subfolder: "", &pass) {
+        let walked = walk(projectsFolder, depth: 0, subfolder: "", &pass)
+        // Stopped half way: nothing found so far says what is gone.
+        guard !stopped.isSet else { return }
+        if walked {
             removeMissing(everywhere: true, under: [], pass)
             reportProgress(&pass, final: true)
         } else if !pass.unreadable.isEmpty {
@@ -249,6 +297,7 @@ public final class LibraryScanner: Sendable {
     /// gone, is kept in `unreadable`.
     @discardableResult
     private func walk(_ folder: URL, depth: Int, subfolder: String, _ pass: inout Pass) -> Bool {
+        guard !stopped.isSet else { return false }
         let entries: [URL]
         do {
             entries = try pass.fileSystem.list(folder)
@@ -259,6 +308,7 @@ public final class LibraryScanner: Sendable {
         var folders: [(url: URL, subfolder: String)] = []
         var trash: URL?
         for entry in entries {
+            if stopped.isSet { return false }
             let name = entry.lastPathComponent
             if PackageNames.isHidden(name) { continue }
             if PackageNames.isPackage(name) {
@@ -285,7 +335,7 @@ public final class LibraryScanner: Sendable {
             if !ProjectReader.isMissing(error) { pass.unreadable.append(trash.standardizedFileURL.path) }
             return
         }
-        for entry in entries {
+        for entry in entries where !stopped.isSet {
             let name = entry.lastPathComponent
             if !PackageNames.isHidden(name), PackageNames.isPackage(name) { visit(entry, place: .trash, reread: false, &pass) }
         }
@@ -295,6 +345,7 @@ public final class LibraryScanner: Sendable {
     /// library knew there stays if it cannot be looked at for another reason. Unless `reread`, a package the library
     /// knows at this path and place, with the same signatures, is not read again.
     private func visit(_ url: URL, place: Place, reread: Bool, _ pass: inout Pass) {
+        guard !stopped.isSet else { return }
         let fileSystem = pass.fileSystem
         let path = url.standardizedFileURL.path
         let folder: FileStat
@@ -367,7 +418,7 @@ public final class LibraryScanner: Sendable {
         var pass = pass(volume: volume, queue: queue, reportsProgress: false)
         var everywhere = false
         var scopes: [String] = []
-        for url in urls {
+        for url in urls where !stopped.isSet {
             switch item(at: url) {
             case .projectsFolder:
                 let unreadable = pass.unreadable.count
@@ -393,6 +444,7 @@ public final class LibraryScanner: Sendable {
                 scopes.append(path)
             }
         }
+        guard !stopped.isSet else { return }
         removeMissing(everywhere: everywhere, under: scopes, pass)
         scheduleSizes(of: pass.sizes, on: queue, volume: volume)
     }
@@ -522,7 +574,10 @@ public final class LibraryScanner: Sendable {
     private func scheduleSizes(of identities: [PackageIdentity], on queue: VolumeQueue, volume: VolumeInfo) {
         guard volume.readsSizes else { return }
         for identity in identities {
-            queues.enqueueSize(of: identity, on: queue) { self.sumSize(of: identity, queue: queue) }
+            queues.enqueueSize(of: identity, on: queue) { [stopped] in
+                guard !stopped.isSet else { return }
+                self.sumSize(of: identity, queue: queue)
+            }
         }
     }
 
@@ -549,7 +604,7 @@ public final class LibraryScanner: Sendable {
             return
         }
         let resolver = resolver(for: projectsFolder, isProjectsFolder: true)
-        queues.enqueue(on: resolver) {
+        enqueue(on: resolver) {
             let result = self.findVolume(of: self.projectsFolder, on: resolver)
             switch result {
             case .success(let volume): self.state.withLock { $0.projectsVolume = volume }
@@ -638,5 +693,16 @@ extension ProjectState {
     fileprivate var isUnavailable: Bool {
         if case .unavailable = self { return true }
         return false
+    }
+}
+
+/// A flag set once, from any thread: the scanner is stopped.
+private final class StopFlag: Sendable {
+    private let state = Atomic(false)
+
+    var isSet: Bool { state.load(ordering: .acquiring) }
+
+    func set() {
+        state.store(true, ordering: .releasing)
     }
 }

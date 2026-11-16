@@ -83,13 +83,15 @@ final class LibraryThumbnail {
     fileprivate(set) var image: CGImage?
     /// Goes up by one each time the image changes, for its fade.
     fileprivate(set) var version = 0
+    /// It is on the network or in a synced location: it has none, and says so (design §6.5).
+    fileprivate(set) var isOffHere = false
 }
 
-/// The library window's model (design §6): it reads the cached index off the main thread and shows it at once, then
-/// keeps it in step with the disk through `LibraryScanner` and `LibraryWatcher` (their updates gathered and applied on
-/// the main thread at most every `drainDelay`); it draws the thumbnails of the cards on the screen, two at a time and
-/// with a low priority; it writes the index and the records with their `DebouncedWriter`s. Nothing here touches the disk
-/// on the main thread.
+/// The library window's model (design §6): the main-actor shell around the library's values. It reads the cached index
+/// and the records off the main thread and shows them at once; it keeps `LibraryCatalog` in step with `LibraryScanner`
+/// and `LibraryWatcher` (their updates gathered and applied on the main thread at most every `drainDelay`); it carries
+/// out what `LibraryThumbnailQueue` decides for the thumbnails of the cards on the screen; it writes the index and the
+/// records with their `DebouncedWriter`s. Nothing here touches the disk on the main thread.
 @MainActor @Observable
 final class LibraryModel {
     // MARK: What the user chose
@@ -136,8 +138,6 @@ final class LibraryModel {
     private(set) var freeSpace: LibraryFreeSpace?
     /// What the projects of the trash take, as far as their sizes are summed.
     private(set) var trashBytes: Int64 = 0
-    /// The projects folder is on the network or in a synced location: no thumbnails there.
-    private(set) var thumbnailsAreOffHere = false
 
     // MARK: -
 
@@ -146,9 +146,17 @@ final class LibraryModel {
     @ObservationIgnored private let savePreferences: (LibraryPreferences) -> Void
     /// How many columns the grid has now, for the arrows; the grid sets it.
     @ObservationIgnored var columns = 1
+    /// The window's frame, as the window controller last saved it.
+    @ObservationIgnored var frame: Rect? {
+        didSet { if frame != oldValue { savePreferences(preferences) } }
+    }
+    /// `sort` and `ascending` are being set together (`setOrder`): one refresh and one save, after both.
+    @ObservationIgnored private var isSettingTheOrder = false
 
-    /// What is known of each project, by identity.
-    @ObservationIgnored private var summaries: [PackageIdentity: ProjectSummary] = [:]
+    /// What is known of the projects and of the walk.
+    @ObservationIgnored private var catalog = LibraryCatalog(index: LibraryIndex())
+    /// What the app said of its own state (design §6.6).
+    @ObservationIgnored private var live = LibraryLive()
     @ObservationIgnored private var records = LibraryRecords()
     @ObservationIgnored private var recordsStore: LibraryRecordsStore?
     @ObservationIgnored private var scanner: LibraryScanner?
@@ -159,21 +167,14 @@ final class LibraryModel {
     @ObservationIgnored private var context: EditContext?
     /// The projects folder's volume, once found; `nil` while it is not there.
     @ObservationIgnored private var projectsVolume: VolumeInfo?
-    /// The projects folder's volume was looked for: until then no thumbnail is looked for, since where it may come from
-    /// depends on it.
+    /// The projects folder's volume was looked for once.
     @ObservationIgnored private var volumeWasLookedFor = false
+    /// The thumbnails' queue was told it can start: the context, the cache and the projects folder's volume are known.
+    @ObservationIgnored private var queueIsReady = false
     @ObservationIgnored private let fileSystem = SystemFileSystem()
     @ObservationIgnored private var started = false
     @ObservationIgnored private(set) var closed = false
-    /// A `.projectsFolderUnreadable` came since the last `reconcile` began.
-    @ObservationIgnored private var unreadableThisWalk = false
-    /// The walk of `reconcile` ended.
-    @ObservationIgnored private(set) var walkFinished = false
 
-    /// What the app said of its own state (design §6.6), by package path.
-    @ObservationIgnored private var recordingPath: String?
-    @ObservationIgnored private var openHerePaths: Set<String> = []
-    @ObservationIgnored private var openElsewherePaths: Set<String> = []
     /// What the scanner, the watcher and the thumbnails share with the model from their own threads.
     @ObservationIgnored private let shared = Shared()
 
@@ -185,9 +186,9 @@ final class LibraryModel {
 
         var isRecording: Bool { take.withLock { $0.isRecording } }
     }
+
     /// How long updates are gathered before they are applied: a walk tells hundreds a second.
     nonisolated private static let drainDelay: DispatchTimeInterval = .milliseconds(50)
-
     /// The index is written at most this often (and its writer waits as long again).
     private static let indexSaveDelay: Duration = .seconds(2)
     @ObservationIgnored private let indexWriter: DebouncedWriter
@@ -196,26 +197,17 @@ final class LibraryModel {
     @ObservationIgnored private var indexIsDirty = false
     @ObservationIgnored private var indexSaveScheduled = false
 
-    // Thumbnails (design §6.8): only the cards on the screen, two at a time, with a low priority.
-    private static let concurrentThumbnails = 2
-    /// How many cards off the screen keep their image in memory (each is about 600 KB).
-    private static let keptOffScreen = 120
+    // Thumbnails (design §6.8): `LibraryThumbnailQueue` decides, the model looks.
+    @ObservationIgnored private var queue = LibraryThumbnailQueue()
     @ObservationIgnored private var slots: [PackageIdentity: LibraryThumbnail] = [:]
-    /// How many views show each card now (the grid's card or the list's row).
-    @ObservationIgnored private var onScreen: [PackageIdentity: Int] = [:]
-    /// The cards whose thumbnail is to be looked for, in the order they appeared.
-    @ObservationIgnored private var wanted: [PackageIdentity] = []
-    @ObservationIgnored private var loading: [PackageIdentity: Task<Void, Never>] = [:]
-    /// The cards whose thumbnail is as current as it can be.
-    @ObservationIgnored private var thumbnailIsCurrent: Set<PackageIdentity> = []
-    /// Cards that got none while a take was being recorded: looked for again once it ends.
-    @ObservationIgnored private var missedWhileRecording: Set<PackageIdentity> = []
-    /// Cards off the screen with an image, oldest first: the first to let it go.
-    @ObservationIgnored private var offScreenOrder: [PackageIdentity] = []
+    /// The looks under way, by card: a cancelled one still reports when it ends.
+    @ObservationIgnored private var looks: [PackageIdentity: Task<Void, Never>] = [:]
 
     @ObservationIgnored private var noticeDismissal: Task<Void, Never>?
-    /// Who waits for the cached index to be shown (`whenLoaded(within:)`).
-    @ObservationIgnored private var loadedWaiters: [CheckedContinuation<Void, Never>] = []
+    /// How long a notice stays.
+    private static let noticeDuration: Duration = .seconds(4)
+    /// Who waits for the cached index to be shown (`whenLoaded(within:)`), each with its own time limit.
+    @ObservationIgnored private var loadedWaiters: [UUID: CheckedContinuation<Void, Never>] = [:]
 
     nonisolated private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Library")
 
@@ -255,9 +247,9 @@ final class LibraryModel {
             guard !closed else { return }
             recordsStore = store
             self.records = records
-            for summary in index.projects where summary.identity.file != 0 { summaries[summary.identity] = summary }
-            isLookingForProjects = index.projects.isEmpty
+            catalog = LibraryCatalog(index: index)
             hasLoaded = true
+            showStatus()
             refresh()
             resumeLoadedWaiters()
 
@@ -269,36 +261,41 @@ final class LibraryModel {
         }
     }
 
-    /// Stops the watcher and writes what is pending of the index and the records; the window closed. Updates that come
-    /// later are dropped.
+    /// Stops the scanner and the watcher, and writes what is pending of the index and the records; the window closed.
+    /// Returns once the scanner touches no disk any more (a window opened again does not walk the same disk at the same
+    /// time). Updates that come later are dropped.
     func close() async {
         guard !closed else { return }
         closed = true
         resumeLoadedWaiters()
-        for task in loading.values { task.cancel() }
-        loading = [:]
+        for look in looks.values { look.cancel() }
+        looks = [:]
+        scanner?.stop()
         if let watcher { await Task.detached { watcher.stop() }.value }
         saveIndexNow()
         await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in indexQueue.async { done.resume() } }
         await indexWriter.flush()
         await recordsStore?.flush()
+        await scanner?.whenStopped()
     }
 
     /// Returns once the cached index is shown, or `limit` has passed, or the window closed.
     func whenLoaded(within limit: Duration) async {
         guard !hasLoaded, !closed else { return }
+        let id = UUID()
         await withCheckedContinuation { (waiter: CheckedContinuation<Void, Never>) in
-            loadedWaiters.append(waiter)
+            loadedWaiters[id] = waiter
             Task {
                 try? await Task.sleep(for: limit)
-                resumeLoadedWaiters()
+                // Only this waiter: another may have a later limit.
+                loadedWaiters.removeValue(forKey: id)?.resume()
             }
         }
     }
 
     private func resumeLoadedWaiters() {
-        let waiters = loadedWaiters
-        loadedWaiters = []
+        let waiters = loadedWaiters.values
+        loadedWaiters = [:]
         for waiter in waiters { waiter.resume() }
     }
 
@@ -306,36 +303,32 @@ final class LibraryModel {
 
     /// Whether a take is being recorded (any) and the package it records into, if it has one yet (design §6.6): that
     /// card says "Grabando", the thumbnails stop being drawn and the watcher looks at that package at most every 2 s.
+    /// Once the take ends, what it kept from being drawn, its own card included, is looked for again.
     func setTake(isRecording: Bool, package: URL?) {
-        let wasRecording = shared.take.withLock { take in
+        let changed = shared.take.withLock { take -> Bool in
             defer { take = (isRecording, package) }
-            return take.isRecording
+            return take.isRecording != isRecording || take.package != package
         }
-        let path = package?.standardizedFileURL.path
-        guard path != recordingPath || wasRecording != isRecording else { return }
-        recordingPath = path
+        guard changed else { return }
+        live.recordingPath = package?.standardizedFileURL.path
         refresh()
-        if wasRecording, !isRecording {
-            // What a take kept from being drawn.
-            for id in missedWhileRecording where onScreen[id, default: 0] > 0 { want(id) }
-            missedWhileRecording = []
-            pumpThumbnails()
-        }
+        // After the recording path changed: what is decided from now on sees it.
+        perform(queue.takeChanged(isRecording: isRecording))
     }
 
     /// The packages this app's editors have open.
     func setOpenEditors(_ urls: Set<URL>) {
         let paths = Set(urls.map(\.standardizedFileURL.path))
-        guard paths != openHerePaths else { return }
-        openHerePaths = paths
+        guard paths != live.openHere else { return }
+        live.openHere = paths
         refresh()
     }
 
     /// The packages found open in another app (by an editor that opened read-only, or just before an action).
     func setOpenElsewhere(_ urls: Set<URL>) {
         let paths = Set(urls.map(\.standardizedFileURL.path))
-        guard paths != openElsewherePaths else { return }
-        openElsewherePaths = paths
+        guard paths != live.openElsewhere else { return }
+        live.openElsewhere = paths
         refresh()
     }
 
@@ -351,13 +344,11 @@ final class LibraryModel {
 
     // MARK: - What the user does
 
-    /// The banner's "Volver a intentar": the projects folder is walked again.
+    /// The banner's "Volver a intentar": the projects folder is walked again; the strip stays until that walk says.
     func retry() {
         guard let scanner else { return }
-        isFolderUnreadable = false
-        unreadableThisWalk = false
-        walkFinished = false
-        scanner.reconcile(from: LibraryIndex(projects: Array(summaries.values)))
+        catalog.walkStarted()
+        scanner.reconcile(from: LibraryIndex(projects: Array(catalog.summaries.values)))
     }
 
     /// The banner's "Mostrar en Finder".
@@ -369,6 +360,16 @@ final class LibraryModel {
     func dismissNotice() {
         noticeDismissal?.cancel()
         notice = nil
+    }
+
+    /// The order and its direction at once (a heading of the list): one refresh and one save.
+    func setOrder(_ sort: LibrarySort, ascending: Bool) {
+        guard sort != self.sort || ascending != self.ascending else { return }
+        isSettingTheOrder = true
+        self.sort = sort
+        self.ascending = ascending
+        isSettingTheOrder = false
+        choicesChanged()
     }
 
     /// Opens the selected projects (↩, ⌘O, ⌘↓).
@@ -409,33 +410,6 @@ final class LibraryModel {
         }
     }
 
-    /// The thumbnail of a project the library does not look at by itself (Other places, a removable disk), which the
-    /// user just opened (design §6.5): its key is read and kept in the index, and it is drawn unless its disk is on the
-    /// network or synced (`LibraryThumbnails.mayDraw(…, opened: true)`).
-    private func drawOpened(_ summary: ProjectSummary, at url: URL) {
-        guard let thumbnails, let context, summary.path != recordingPath, Self.opens(summary.state) else { return }
-        let fileSystem = self.fileSystem, id = summary.identity
-        Task(priority: .low) {
-            let looked = await Task.detached(priority: .utility) { () -> (key: String, mayDraw: Bool)? in
-                guard let key = try? LibraryThumbnails.key(of: url), let volume = try? fileSystem.volume(of: url) else {
-                    return nil
-                }
-                return (key, LibraryThumbnails.mayDraw(place: summary.place, volume: volume, opened: true))
-            }.value
-            guard let looked, !closed, var known = summaries[id] else { return }
-            known.thumbnailKey = looked.key
-            summaries[id] = known
-            scheduleIndexSave()
-            let image = looked.mayDraw
-                ? await thumbnails.render(url, summary: known, context: context) : await thumbnails.cached(looked.key)
-            guard !closed, let image else { return }
-            let slot = thumbnail(for: id)
-            slot.image = image
-            slot.version += 1
-            thumbnailIsCurrent.insert(id)
-        }
-    }
-
     func click(_ id: PackageIdentity, extending: Bool, toggling: Bool) {
         selection.click(id, order: shownIDs, extending: extending, toggling: toggling)
     }
@@ -468,34 +442,29 @@ final class LibraryModel {
         return slot
     }
 
-    /// A view of the card `id` is on the screen: its thumbnail is looked for if it is not current.
+    /// A view of the card `id` is on the screen.
     func cardAppeared(_ id: PackageIdentity) {
-        onScreen[id, default: 0] += 1
-        guard onScreen[id] == 1 else { return }
-        offScreenOrder.removeAll { $0 == id }
-        if !thumbnailIsCurrent.contains(id) { want(id) }
-        pumpThumbnails()
+        perform(queue.appeared(id))
     }
 
-    /// A view of the card `id` left the screen: once none is left, its thumbnail is no longer looked for, and its image
-    /// may be let go.
+    /// A view of the card `id` left the screen.
     func cardDisappeared(_ id: PackageIdentity) {
-        guard let count = onScreen[id] else { return }
-        guard count <= 1 else {
-            onScreen[id] = count - 1
-            return
-        }
-        onScreen[id] = nil
-        wanted.removeAll { $0 == id }
-        loading.removeValue(forKey: id)?.cancel()
-        if slots[id]?.image != nil { offScreenOrder.append(id) }
-        while offScreenOrder.count > Self.keptOffScreen {
-            let old = offScreenOrder.removeFirst()
-            slots[old]?.image = nil
-            thumbnailIsCurrent.remove(old)
-        }
-        pumpThumbnails()
+        perform(queue.disappeared(id))
     }
+
+    /// Asked again when the window comes forward: a take may have filled the disk meanwhile.
+    func windowBecameKey() {
+        guard hasLoaded else { return }
+        refreshVolume()
+    }
+
+    #if DEBUG
+    /// Nothing is being looked for and the walk ended (`-TomaLibraryBench`).
+    var isSettled: Bool { catalog.walkFinished && volumeWasLookedFor && queue.isIdle }
+
+    /// How many cards are on the screen (`-TomaLibraryBench`).
+    var cardsOnScreen: Int { queue.cardsOnScreen }
+    #endif
 
     // MARK: - Updates
 
@@ -521,101 +490,65 @@ final class LibraryModel {
             folder: paths.projectsFolder, recordingPackage: { shared.take.withLock { $0.package } },
             onPackages: { urls in scanner.look(at: urls) }, fileSystem: fileSystem)
         self.watcher = watcher
-        unreadableThisWalk = false
         scanner.reconcile(from: index)
         watcher.start()
         if !pendingLooks.isEmpty {
             scanner.look(at: pendingLooks)
             pendingLooks = []
         }
+        makeTheQueueReady()
     }
 
-    /// Applies what the scanner told since the last time.
+    /// Tells the thumbnails' queue it can start, once what it needs to decide is known.
+    private func makeTheQueueReady() {
+        guard !queueIsReady, volumeWasLookedFor, context != nil, thumbnails != nil else { return }
+        queueIsReady = true
+        perform(queue.ready())
+    }
+
+    /// Applies what the scanner told since the last time (`LibraryCatalog.apply`), and carries out what follows.
     private func drain() {
         let updates = shared.inbox.withLock { inbox -> [LibraryUpdate] in
             defer { inbox = ([], false) }
             return inbox.updates
         }
         guard !closed else { return }
-        var indexChanged = false
-        var lookAtVolume = false
-        for update in updates {
-            switch update {
-            case .summary(var summary):
-                // The scanner keeps the identity it knew; one without any is never kept (design §13.4).
-                guard summary.identity.file != 0 else { continue }
-                // The scanner does not know the thumbnail's key: one found on an action of the user holds while the
-                // files it comes from look the same.
-                if summary.thumbnailKey == nil, let known = summaries[summary.identity], known.manifest == summary.manifest,
-                    known.edit == summary.edit, known.log == summary.log
-                {
-                    summary.thumbnailKey = known.thumbnailKey
-                }
-                let old = summaries.updateValue(summary, forKey: summary.identity)
-                indexChanged = true
-                if old.map({ Self.looksDifferent($0, summary) }) ?? true { thumbnailChanged(summary.identity) }
-            case .removed(let identity):
-                // Only the summary: favorites and where a project of the trash came from stay (a `.summary` may follow).
-                if summaries.removeValue(forKey: identity) != nil { indexChanged = true }
-            case .progress(let found):
-                projectsFound = found
-            case .waiting(let volume):
-                if !waitingFor.contains(volume) { waitingFor.append(volume) }
-            case .waitingEnded(let volume):
-                waitingFor.removeAll { $0 == volume }
-            case .projectsFolderUnreadable:
-                unreadableThisWalk = true
-                isFolderUnreadable = true
-            case .finished:
-                walkFinished = true
-                isLookingForProjects = false
-                if !unreadableThisWalk { isFolderUnreadable = false }
-                unreadableThisWalk = false
-                lookAtVolume = true
-            }
-        }
-        // Only what changed is set: progress and waits leave the cards alone.
-        if indexChanged {
+        let changes = catalog.apply(updates)
+        if changes.status { showStatus() }
+        if changes.projects {
             refresh()
             scheduleIndexSave()
-            // A projects folder that was not there is now.
-            if projectsVolume == nil { lookAtVolume = true }
         }
-        if lookAtVolume { refreshVolume() }
-        pumpThumbnails()
+        // In a stable order: the queue starts them in the order it is told.
+        for id in changes.thumbnails.sorted(by: { $0.string < $1.string }) { perform(queue.changed(id)) }
+        // A walk ended, or a projects folder that was not there is now: its disk is looked at again.
+        if changes.walkFinished || (changes.projects && projectsVolume == nil) { refreshVolume() }
     }
 
-    /// Whether a new summary of the same project may show another thumbnail: what it was read from changed.
-    private static func looksDifferent(_ a: ProjectSummary, _ b: ProjectSummary) -> Bool {
-        a.manifest != b.manifest || a.edit != b.edit || a.log != b.log || a.state != b.state || a.path != b.path
-            || a.thumbnailKey != b.thumbnailKey
+    /// The walk's state, as the catalog has it, for the sidebar's foot and the strip.
+    private func showStatus() {
+        if isLookingForProjects != catalog.isLookingForProjects { isLookingForProjects = catalog.isLookingForProjects }
+        if projectsFound != catalog.projectsFound { projectsFound = catalog.projectsFound }
+        if waitingFor != catalog.waitingFor { waitingFor = catalog.waitingFor }
+        if isFolderUnreadable != catalog.isFolderUnreadable { isFolderUnreadable = catalog.isFolderUnreadable }
     }
 
-    /// Everything shown again from what is known: the items with what the records and the app add, the section's in
-    /// order, the grid's sections, the counts, what the trash takes; and what is no longer shown is no longer selected.
+    /// Everything shown again from what is known (`LibraryCatalog.sections`); each value set only when it changed, since
+    /// setting one redraws what reads it; and what is no longer shown is no longer selected.
     private func refresh() {
-        let all = summaries.values.map { summary in
-            LibraryItem(
-                summary: summary, favorite: records.favorites.contains(summary.identity.string),
-                lastOpened: records.lastOpened[summary.identity.string], live: live(of: summary))
-        }
-        // Each is set only when it changed: setting one redraws what reads it.
-        let counts = LibraryListing.counts(all)
-        if counts != self.counts { self.counts = counts }
-        let shown = LibraryListing.items(all, section: section, search: search, sort: sort, ascending: ascending)
-        if shown != self.shown { self.shown = shown }
-        let groups: [LibraryShownGroup]
-        if sort == .dateRecorded {
-            let calendar = Calendar.current
-            groups = LibraryListing.groups(shown, now: Date(), calendar: calendar).map { group, items in
-                LibraryShownGroup(id: Self.key(of: group), title: Self.title(of: group, calendar: calendar), items: items)
-            }
-        } else {
-            groups = shown.isEmpty ? [] : [LibraryShownGroup(id: "all", title: nil, items: shown)]
+        let calendar = Calendar.current
+        let sections = catalog.sections(
+            section: section, search: search, sort: sort, ascending: ascending, records: records, live: live, now: Date(),
+            calendar: calendar)
+        if sections.counts != counts { counts = sections.counts }
+        if sections.shown != shown { shown = sections.shown }
+        let groups = sections.groups.map { group in
+            LibraryShownGroup(
+                id: group.date.map(Self.key(of:)) ?? "all", title: group.date.map { Self.title(of: $0, calendar: calendar) },
+                items: group.items)
         }
         if groups != self.groups { self.groups = groups }
-        let trashBytes = all.reduce(0) { total, item in item.summary.place == .trash ? total + (item.summary.size ?? 0) : total }
-        if trashBytes != self.trashBytes { self.trashBytes = trashBytes }
+        if sections.trashBytes != trashBytes { trashBytes = sections.trashBytes }
         var selection = self.selection
         selection.keep(only: Set(shownIDs))
         if selection != self.selection { self.selection = selection }
@@ -623,13 +556,6 @@ final class LibraryModel {
 
     private var shownIDs: [PackageIdentity] {
         shown.map(\.summary.identity)
-    }
-
-    private func live(of summary: ProjectSummary) -> LiveState {
-        if let recordingPath, summary.path == recordingPath { return .recording }
-        if openHerePaths.contains(summary.path) { return .openHere }
-        if openElsewherePaths.contains(summary.path) { return .openElsewhere }
-        return .none
     }
 
     private static func key(of group: DateGroup) -> String {
@@ -649,22 +575,17 @@ final class LibraryModel {
         }
     }
 
-    private func choicesChanged() {
-        refresh()
-        var preferences = LibraryPreferences(
-            asList: asList, sort: sort.rawValue, ascending: ascending, section: section.rawValue)
-        preferences.frame = frame
-        savePreferences(preferences)
+    // MARK: - Preferences and notices
+
+    /// What the library remembers (design §6.1).
+    private var preferences: LibraryPreferences {
+        LibraryPreferences(frame: frame, asList: asList, sort: sort.rawValue, ascending: ascending, section: section.rawValue)
     }
 
-    /// The window's frame, as the window controller last saved it.
-    @ObservationIgnored var frame: Rect? {
-        didSet {
-            guard frame != oldValue else { return }
-            savePreferences(
-                LibraryPreferences(
-                    frame: frame, asList: asList, sort: sort.rawValue, ascending: ascending, section: section.rawValue))
-        }
+    private func choicesChanged() {
+        guard !isSettingTheOrder else { return }
+        refresh()
+        savePreferences(preferences)
     }
 
     /// A notice for a few seconds.
@@ -677,9 +598,6 @@ final class LibraryModel {
             self.notice = nil
         }
     }
-
-    /// How long a notice stays.
-    private static let noticeDuration: Duration = .seconds(4)
 
     // MARK: - Records and the index
 
@@ -708,7 +626,7 @@ final class LibraryModel {
         indexSaveScheduled = false
         guard indexIsDirty else { return }
         indexIsDirty = false
-        let projects = Array(summaries.values), writer = indexWriter
+        let projects = Array(catalog.summaries.values), writer = indexWriter
         indexQueue.async {
             let index = LibraryIndex(projects: projects.sorted { $0.path < $1.path })
             do {
@@ -739,124 +657,127 @@ final class LibraryModel {
         }
     }
 
+    /// The projects folder's volume as just found: the free space; the thumbnails start once it was looked for; when the
+    /// folder appears after a look found it missing (the first take made it), it is watched and the cards without an
+    /// image are looked for again.
     private func adopt(volume found: (volume: VolumeInfo, free: Int64?)?) {
         guard !closed else { return }
-        let firstLook = !volumeWasLookedFor
-        let appeared = projectsVolume == nil && found != nil
+        let appeared = volumeWasLookedFor && projectsVolume == nil && found != nil
         volumeWasLookedFor = true
         projectsVolume = found?.volume
         freeSpace = found.flatMap { found in found.free.map { LibraryFreeSpace(bytes: $0, volumeName: found.volume.name) } }
-        thumbnailsAreOffHere = found.map { $0.volume.isNetwork || $0.volume.isSynced } ?? false
+        makeTheQueueReady()
         if appeared {
-            // The projects folder was made since (the first take): it is watched now, and what was on the screen is
-            // looked for again.
             watcher?.start()
-            for id in onScreen.keys where slots[id]?.image == nil {
-                thumbnailIsCurrent.remove(id)
-                want(id)
-            }
+            perform(queue.lookAgainWithoutImage())
         }
-        if firstLook || appeared { pumpThumbnails() }
-    }
-
-    /// Asked again when the window comes forward: a take may have filled the disk meanwhile.
-    func windowBecameKey() {
-        guard hasLoaded else { return }
-        refreshVolume()
     }
 
     // MARK: - Thumbnails
 
-    private func want(_ id: PackageIdentity) {
-        guard !wanted.contains(id), loading[id] == nil else { return }
-        wanted.append(id)
-    }
-
-    /// What `summary` changed: its thumbnail is looked for again if its card is on the screen; the old one shows until
-    /// the new one arrives.
-    private func thumbnailChanged(_ id: PackageIdentity) {
-        thumbnailIsCurrent.remove(id)
-        loading.removeValue(forKey: id)?.cancel()
-        if onScreen[id, default: 0] > 0 { want(id) }
-    }
-
-    /// Where the thumbnail of a card comes from (design §6.5, §6.8): drawn (or read from the cache) for a project the
-    /// library may look at by itself; only from the cache, by the key its summary has, for any other (Other places, a
-    /// removable, network or synced disk); none for the one being recorded or one that cannot be opened.
-    private enum ThumbnailSource {
-        case render(URL, ProjectSummary)
-        case cached(String)
-    }
-
-    private func source(of summary: ProjectSummary) -> ThumbnailSource? {
-        guard summary.path != recordingPath, Self.opens(summary.state) else { return nil }
-        let cached = summary.thumbnailKey.map(ThumbnailSource.cached)
-        guard let projectsVolume, LibraryThumbnails.mayDraw(place: summary.place, volume: projectsVolume) else {
-            return cached
+    /// Carries out what the queue decided: a look started as `LibraryThumbnailQueue.decide` says (one with nothing to
+    /// look for reports at once), a look cancelled (it still reports when it ends), an image shown or let go.
+    private func perform(_ actions: [LibraryThumbnailQueue.Action]) {
+        var pending = actions[...]
+        while let action = pending.popFirst() {
+            switch action {
+            case .start(let id):
+                pending.append(contentsOf: start(id))
+            case .cancel(let id):
+                looks[id]?.cancel()
+            case .show:
+                break  // shown by `lookEnded`, which has the image
+            case .release(let id):
+                slots[id]?.image = nil
+            }
         }
-        return .render(URL(filePath: summary.path, directoryHint: .isDirectory), summary)
+    }
+
+    /// Starts the look for the card `id`; what the queue says at once when there is nothing to look for.
+    private func start(_ id: PackageIdentity) -> [LibraryThumbnailQueue.Action] {
+        guard !closed, let thumbnails, let context, let summary = catalog.summaries[id] else {
+            return queue.returned(id, .nothing)
+        }
+        let decision = LibraryThumbnailQueue.decide(summary, projectsVolume: projectsVolume, recordingPath: live.recordingPath)
+        thumbnail(for: id).isOffHere = decision == .notHere
+        switch decision {
+        case .draw(let url):
+            looks[id] = Task(priority: .low) {
+                let image = await thumbnails.render(url, summary: summary, context: context)
+                lookEnded(id, image, cancelled: Task.isCancelled)
+            }
+        case .cached(let key):
+            looks[id] = Task(priority: .low) {
+                let image = await thumbnails.cached(key)
+                lookEnded(id, image, cancelled: Task.isCancelled)
+            }
+        case .afterTheTake:
+            return queue.returned(id, .afterTheTake)
+        case .notHere, .none:
+            return queue.returned(id, .nothing)
+        }
+        return []
+    }
+
+    /// A look ended (or was cancelled: what it found is dropped).
+    private func lookEnded(_ id: PackageIdentity, _ image: CGImage?, cancelled: Bool) {
+        looks[id] = nil
+        guard !closed else { return }
+        let outcome: LibraryThumbnailQueue.Outcome = image == nil ? .noImage : .image
+        let actions = queue.returned(id, cancelled ? .noImage : outcome)
+        if let image, actions.contains(.show(id)) { show(image, on: id) }
+        perform(actions)
+    }
+
+    private func show(_ image: CGImage, on id: PackageIdentity) {
+        let slot = thumbnail(for: id)
+        slot.image = image
+        slot.isOffHere = false
+        slot.version += 1
     }
 
     /// Whether the library draws the thumbnail of `summary` by itself, in the background.
     private func drawsByItself(_ summary: ProjectSummary) -> Bool {
-        if case .render? = source(of: summary) { return true }
+        if case .draw = LibraryThumbnailQueue.decide(summary, projectsVolume: projectsVolume, recordingPath: live.recordingPath) {
+            return true
+        }
         return false
     }
 
-    /// Whether a project in `state` opens, and so has a thumbnail.
-    private static func opens(_ state: ProjectState) -> Bool {
-        switch state {
-        case .normal, .readOnlyVolume, .inTrash: true
-        case .unfinished, .needsRepair, .newerVersion, .unavailable: false
+    /// The thumbnail of a project the library does not look at by itself (Other places, a removable disk), which the
+    /// user just opened (design §6.5): its key is read and kept in the index, and it is drawn unless its disk is on the
+    /// network or synced (`LibraryThumbnails.mayDraw(…, opened: true)`); what it gives is kept as the queue keeps any.
+    private func drawOpened(_ summary: ProjectSummary, at url: URL) {
+        guard let thumbnails, let context, summary.path != live.recordingPath else { return }
+        switch summary.state {
+        case .normal, .readOnlyVolume, .inTrash: break
+        case .unfinished, .needsRepair, .newerVersion, .unavailable: return
         }
-    }
-
-    /// Starts looking for the wanted thumbnails, at most `concurrentThumbnails` at a time, with a low priority; nothing
-    /// before the context is made and the projects folder's volume was looked for.
-    private func pumpThumbnails() {
-        guard !closed, let thumbnails, let context, volumeWasLookedFor else { return }
-        while loading.count < Self.concurrentThumbnails, !wanted.isEmpty {
-            let id = wanted.removeFirst()
-            guard let summary = summaries[id], let source = source(of: summary) else {
-                thumbnailIsCurrent.insert(id)
-                continue
-            }
-            loading[id] = Task(priority: .low) {
-                let image: CGImage?
-                switch source {
-                case .render(let url, let summary): image = await thumbnails.render(url, summary: summary, context: context)
-                case .cached(let key): image = await thumbnails.cached(key)
+        let fileSystem = self.fileSystem, id = summary.identity
+        Task(priority: .low) {
+            let looked = await Task.detached(priority: .utility) { () -> (key: String, mayDraw: Bool, offHere: Bool)? in
+                guard let key = try? LibraryThumbnails.key(of: url), let volume = try? fileSystem.volume(of: url) else {
+                    return nil
                 }
-                guard !Task.isCancelled else { return }
-                thumbnailArrived(id, image)
+                return (key, LibraryThumbnails.mayDraw(place: summary.place, volume: volume, opened: true),
+                    volume.isNetwork || volume.isSynced)
+            }.value
+            guard let looked, !closed else { return }
+            if catalog.setThumbnailKey(looked.key, for: id) { scheduleIndexSave() }
+            guard let known = catalog.summaries[id] else { return }
+            if looked.offHere {
+                thumbnail(for: id).isOffHere = true
+                perform(queue.lookedForByTheUser(id, .nothing))
+                return
             }
+            let image = looked.mayDraw
+                ? await thumbnails.render(url, summary: known, context: context) : await thumbnails.cached(looked.key)
+            guard !closed else { return }
+            let actions = queue.lookedForByTheUser(id, image == nil ? .noImage : .image)
+            if let image, actions.contains(.show(id)) { show(image, on: id) }
+            perform(actions)
         }
     }
-
-    private func thumbnailArrived(_ id: PackageIdentity, _ image: CGImage?) {
-        loading[id] = nil
-        if let image {
-            let slot = thumbnail(for: id)
-            slot.image = image
-            slot.version += 1
-            thumbnailIsCurrent.insert(id)
-        } else if shared.isRecording {
-            missedWhileRecording.insert(id)
-        } else {
-            thumbnailIsCurrent.insert(id)
-        }
-        pumpThumbnails()
-    }
-
-    #if DEBUG
-    /// Nothing is being looked for and the walk ended (`-TomaLibraryBench`).
-    var isSettled: Bool {
-        walkFinished && volumeWasLookedFor && loading.isEmpty && wanted.isEmpty
-    }
-
-    /// How many cards are on the screen (`-TomaLibraryBench`).
-    var cardsOnScreen: Int { onScreen.count }
-    #endif
 
     // MARK: - Off the main thread
 
