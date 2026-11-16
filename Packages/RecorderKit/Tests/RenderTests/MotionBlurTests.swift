@@ -109,8 +109,8 @@ func oneSampleIsNoBlur() async throws {
         let sharp = try FrameRenderer(project: project, document: still, outputSize: size)
         let blur = try FrameRenderer(project: project, document: blurred, outputSize: size)
         for t in [0.1, 1.0, 1.9] {
-            let a = try await StageDrawing.offThePool { try sharp.renderBytes(at: t) }
-            let b = try await StageDrawing.offThePool { try blur.renderBytes(at: t) }
+            let a = try await offThePool { try sharp.renderBytes(at: t) }
+            let b = try await offThePool { try blur.renderBytes(at: t) }
             #expect(a == b, "at \(t)")
         }
     }
@@ -310,7 +310,7 @@ func aSharpWallpaperUnderTheBlurIsReadFromItsMesh() throws {
 private func gpuTimes(
     of frames: [RenderFrame], output: SIMD2<Int>
 ) async throws -> (p50: Double, p95: Double, max: Double, count: Int, completed: Bool) {
-    try await withTemporaryDirectory { dir in try await StageDrawing.offThePool {
+    try await withTemporaryDirectory { dir in try await offThePool {
         let device = try #require(MTLCreateSystemDefaultDevice())
         let compositor = try Compositor(device: device)
         let images = try BackgroundImages(

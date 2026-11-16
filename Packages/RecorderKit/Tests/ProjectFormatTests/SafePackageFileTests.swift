@@ -329,17 +329,16 @@ private func png(width: Int, height: Int, noisy: Bool = false) throws -> Data {
         let path = package.wallpapersDirectory(take: "take-001").appendingPathComponent("display-2.png").path
         #expect(mkfifo(path, 0o644) == 0)
         try FileManager.default.createDirectory(at: package.assetsURL, withIntermediateDirectories: true)
-        #expect(mkfifo(package.assetsURL.appendingPathComponent("\(hash).png").path, 0o644) == 0)
+        let assetPath = package.assetsURL.appendingPathComponent("\(hash).png").path
+        #expect(mkfifo(assetPath, 0o644) == 0)
 
-        // No writer ever opens the other end: a blocking open would wait for one forever.
-        var wallpaper: CGImage?
-        var asset: CGImage?
-        let elapsed = ContinuousClock().measure {
-            wallpaper = package.wallpaper(take: "take-001", displayID: 2)
-            asset = package.asset("assets/\(hash).png")
-        }
+        // No writer ever opens the other end: a blocking open would wait for one until the watchdog opens it, and the
+        // test would fail instead of hanging.
+        let watchdog = FIFOWatchdog(paths: [path, assetPath])
+        let wallpaper = package.wallpaper(take: "take-001", displayID: 2)
+        let asset = package.asset("assets/\(hash).png")
+        #expect(!watchdog.disarm(), "an open of a FIFO waited for its other end")
         #expect(wallpaper == nil && asset == nil)
-        #expect(elapsed < .milliseconds(100))
         // Refused by `fstat` as no regular file, never read as the empty file it would seem.
         #expect(SafePackageFile.read("takes/take-001/wallpapers/display-2.png", in: package, as: .wallpaper) == nil)
         #expect(SafePackageFile.read("assets/\(hash).png", in: package, as: .asset) == nil)

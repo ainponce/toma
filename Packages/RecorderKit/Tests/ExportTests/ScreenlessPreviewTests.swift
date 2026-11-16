@@ -15,14 +15,6 @@ import Testing
 // and the project's mix — works for a take of a camera and a microphone, whose document's clip spans what they recorded
 // (Task 27). The frames are the background with the camera, never black.
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread (drawing decodes, and
-/// blocks while it does).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
 func theEditorsPreviewShowsATakeWithoutAScreen() async throws {
     try await withTemporaryDirectory { dir in

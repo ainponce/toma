@@ -12,15 +12,6 @@ import Testing
 // from outside an Area. The GPU's work runs off the cooperative pool and hands back what it drew: the checks are made in
 // the test's task.
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: these tests wait for
-/// the GPU, which blocks (`offThePool` in DocumentRenderTests). `body` checks nothing itself: it throws, or returns what
-/// the test checks.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// The system's Metal device.
 private func metalDevice() throws -> any MTLDevice {
     guard let device = MTLCreateSystemDefaultDevice() else { throw TestSupportError.missing("Metal device") }

@@ -109,7 +109,7 @@ private final class WriterAttempts: @unchecked Sendable {
             try await builder.addVideoTrack(id: "display-1", source: source, segments: [VideoSegmentSpec(start: start, seconds: 1)])
             Issue.record("the segment was written")
         } catch let TestSupportError.failed(message) {
-            #expect(message.contains("hardware HEVC encoder wrote nothing for 0.5 s"), "\(message)")
+            #expect(message.contains("hardware HEVC encoder still failed 0.5 s after this take's first encoder failure"), "\(message)")
             #expect(message.contains("no hardware encoder session"), "\(message)")
         }
         // It tried again, and gave up only once the timeout passed (how many times it tried depends on the load).
@@ -119,6 +119,7 @@ private final class WriterAttempts: @unchecked Sendable {
         #expect(!FileManager.default.fileExists(atPath: url.path))
 
         let any = try TakeBuilder(in: dir, name: "Any")
+        any.videoEncoder = .any
         let once = WriterAttempts()
         any.makeVideoWriter = { _, _, encoder in
             #expect(encoder == .any)
@@ -129,5 +130,62 @@ private final class WriterAttempts: @unchecked Sendable {
             try await any.addVideoTrack(id: "display-1", source: source, segments: [VideoSegmentSpec(start: start, seconds: 1)])
         }
         #expect(once.count == 1)
+    }
+}
+
+/// A hardware-only segment that fails for another reason than the encoder (here a format the writer refuses) fails at
+/// once: writing it again would only repeat the fault, after waiting the whole timeout for nothing.
+@Test func takeBuilderWritesAHardwareOnlySegmentOnceWhenItFailsForAnotherReason() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir)
+        builder.videoEncoder = .hardwareOnly
+        builder.hardwareEncoderRetryInterval = 0.01
+        let attempts = WriterAttempts()
+        builder.makeVideoWriter = { _, _, _ in
+            _ = attempts.next()
+            throw WriterError.unsupportedFormat
+        }
+        await #expect(throws: WriterError.unsupportedFormat) {
+            try await builder.addVideoTrack(
+                id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1),
+                segments: [VideoSegmentSpec(start: HostTime(nanoseconds: 5_000_000_000_000), seconds: 1)])
+        }
+        #expect(attempts.count == 1)
+        #expect(builder.hardwareEncoderDeadline == nil)
+    }
+}
+
+/// The wait for the hardware encoder is one for the whole take: it starts at the take's first encoder failure and
+/// does not start again with the next segment, so a take of many segments is not given the timeout once per segment.
+@Test func takeBuilderWaitsForTheHardwareEncoderOnceForTheWholeTake() async throws {
+    try await withTemporaryDirectory { dir in
+        let start = HostTime(nanoseconds: 5_000_000_000_000)
+        let builder = try TakeBuilder(in: dir)
+        builder.videoEncoder = .hardwareOnly
+        builder.hardwareEncoderRetryInterval = 0.01
+        let attempts = WriterAttempts()
+        // The first writer of each segment is refused.
+        builder.makeVideoWriter = { url, framesPerSecond, _ in
+            guard attempts.next() % 2 == 0 else { throw WriterError.appendFailed("no hardware encoder session") }
+            return try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: framesPerSecond), realTime: false)
+        }
+        let source = TrackSource(name: "Synthetic Display", displayID: 1)
+        try await builder.addVideoTrack(id: "display-1", source: source, segments: [VideoSegmentSpec(start: start, seconds: 0.5)])
+        let deadline = try #require(builder.hardwareEncoderDeadline)
+        try await builder.addVideoTrack(
+            id: "display-1", source: source, segments: [VideoSegmentSpec(start: start.adding(seconds: 0.5), seconds: 0.5)])
+        #expect(attempts.count == 4)
+        #expect(builder.hardwareEncoderDeadline == deadline)
+    }
+}
+
+/// Without a choice, the fixtures wait for the hardware encoder on a Mac that has one, outside CI.
+@Test func takeBuilderPinsTheHardwareEncoderWhereThereIsOne() throws {
+    try withTemporaryDirectory { dir in
+        let inCI = ProcessInfo.processInfo.environment["TOMA_CI"] == "1"
+        let expected: VideoEncoderChoice = !inCI && TakeBuilder.hasHardwareHEVCEncoder ? .hardwareOnly : .any
+        #expect(TakeBuilder.defaultVideoEncoder == expected)
+        let builder = try TakeBuilder(in: dir)
+        #expect(builder.videoEncoder == expected)
     }
 }

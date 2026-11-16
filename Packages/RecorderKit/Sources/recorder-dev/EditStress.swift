@@ -4,6 +4,7 @@ import Darwin
 import Editing
 import Foundation
 import ProjectFormat
+import Synchronization
 
 // MARK: - edit-stress
 
@@ -30,6 +31,12 @@ struct EditStress: AsyncParsableCommand {
             it names: after-lock (edit.lock taken and the manifest read again, nothing written), after-manifest (the \
             manifest rewritten at version 3) or after-log (the log written with the create and the first step). It \
             exits 1 if the upgrade ends without getting there.
+
+            With --kill-in-compaction, which needs --compact-every, edit-stress kills itself with SIGKILL in the first \
+            compaction of the log (the swap of EditJournal.replaceLog), right after the step it names: after-snapshot \
+            (the snapshot at the log's last seq written, before the new log is), after-temporary (the new log written \
+            and synced next to the old one, before the rename) or after-rename (renamed over the old log, before the \
+            folder is synced).
             """
     )
 
@@ -45,6 +52,9 @@ struct EditStress: AsyncParsableCommand {
     @Option(help: "Kill this process with SIGKILL in the upgrade to version 3: after-lock, after-manifest or after-log.")
     var killInUpgrade: UpgradeKillPoint?
 
+    @Option(help: "Kill this process with SIGKILL in the first compaction: after-snapshot, after-temporary or after-rename.")
+    var killInCompaction: CompactionKillPoint?
+
     @Option(help: "Folder for the project's cache folder. A folder in the temporary directory when omitted.")
     var caches: String?
 
@@ -52,6 +62,9 @@ struct EditStress: AsyncParsableCommand {
         if let compactEvery, compactEvery < 1 { throw ValidationError("--compact-every must be positive.") }
         if compactEvery != nil, killInUpgrade != nil {
             throw ValidationError("--kill-in-upgrade ends with the first step: leave out --compact-every.")
+        }
+        if killInCompaction != nil, compactEvery == nil {
+            throw ValidationError("--kill-in-compaction needs --compact-every: without it the log is never compacted.")
         }
     }
 
@@ -64,6 +77,8 @@ struct EditStress: AsyncParsableCommand {
         let context = EditContext(
             app: editingApp, cachesRoot: cachesRoot, defaultStyle: .toma, now: { Date() },
             makeID: { prefix in prefix + String(format: "%08x", UInt32.random(in: .min ... .max)) }, compaction: compaction,
+            journalIO: killInCompaction.map { journalIO(killing: $0, log: ProjectPackage(url: url).editLogURL.lastPathComponent) }
+                ?? .system,
             upgradeIO: killInUpgrade.map { upgradeIO(killing: $0, in: ProjectPackage(url: url)) } ?? .system)
         let stress = await StressRun(
             url: url, context: context, reopenEvery: compactEvery == nil ? nil : 60, killPoint: killInUpgrade,
@@ -80,6 +95,54 @@ enum UpgradeKillPoint: String, CaseIterable, ExpressibleByArgument, Sendable {
     case afterManifest = "after-manifest"
     /// Step 3 done: the log written with the `create` and the first step, before the journal opens it.
     case afterLog = "after-log"
+}
+
+/// Where `edit-stress --kill-in-compaction` kills itself in the first compaction of the log: the swap of
+/// `EditJournal.replaceLog`, which writes the new log to `<log>.tmp`, full-syncs it, renames it over the log and syncs
+/// the folder, after the snapshot at the log's last seq.
+enum CompactionKillPoint: String, CaseIterable, ExpressibleByArgument, Sendable {
+    /// The snapshot written, the new log not yet: at the first write to the temporary file.
+    case afterSnapshot = "after-snapshot"
+    /// The new log written and full-synced next to the old one, before the rename.
+    case afterTemporary = "after-temporary"
+    /// The new log renamed over the old one, before the folder is synced.
+    case afterRename = "after-rename"
+}
+
+/// The calls of `EditJournalIO.system`, with a SIGKILL of this process at `point` of the first swap of the log named
+/// `log`: the swap's calls are those on the descriptor of `<log>.tmp`, and the folder sync right after its full sync.
+private func journalIO(killing point: CompactionKillPoint, log: String) -> EditJournalIO {
+    let temporary = log + ".tmp"
+    // Whether the temporary file was full-synced: the next folder sync follows its rename.
+    let synced = Mutex(false)
+    @Sendable func isTemporary(_ descriptor: Int32) -> Bool {
+        var path = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        guard fcntl(descriptor, F_GETPATH, &path) != -1 else { return false }
+        return String(decoding: path.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self).hasSuffix("/" + temporary)
+    }
+    let system = EditJournalIO.system
+    return EditJournalIO(
+        open: system.open,
+        write: { descriptor, bytes in
+            if point == .afterSnapshot, isTemporary(descriptor) { killThisProcess() }
+            return try system.write(descriptor, bytes)
+        },
+        fullSync: { descriptor in
+            try system.fullSync(descriptor)
+            guard isTemporary(descriptor) else { return }
+            if point == .afterTemporary { killThisProcess() }
+            synced.withLock { $0 = true }
+        },
+        fsync: { descriptor in
+            try system.fsync(descriptor)
+            guard isTemporary(descriptor) else { return }
+            if point == .afterTemporary { killThisProcess() }
+            synced.withLock { $0 = true }
+        },
+        syncDirectory: { directory in
+            if point == .afterRename, synced.withLock({ $0 }) { killThisProcess() }
+            try system.syncDirectory(directory)
+        })
 }
 
 /// The app the `create` lines of `edit-stress` name, as `synth-record` names it in the manifest.

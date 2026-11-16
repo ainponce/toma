@@ -76,14 +76,6 @@ private func mouseDown(_ button: MouseButton, at seconds: Double) -> InputEvent 
     InputEvent(t: at(seconds), kind: .mouseDown(button, x: 100, y: 100))
 }
 
-/// Runs `body` on a thread of its own: reading the mix decodes, which blocks in `copyNextSampleBuffer`, and many tests
-/// blocking Swift's cooperative pool at once hang the run.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `mix.render` of `frames` (by default the whole mix), read off the cooperative pool.
 private func rendered(_ mix: EditedMix, _ frames: Range<Int64>? = nil) async throws -> [Float] {
     let range = frames ?? 0..<mix.totalFrames

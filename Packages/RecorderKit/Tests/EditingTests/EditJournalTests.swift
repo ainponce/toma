@@ -38,8 +38,6 @@ private final class TestIO: Sendable {
         var directorySyncFailures: [POSIXErrorCode] = []
         /// The first full sync waits for it.
         var firstFullSyncGate: DispatchSemaphore?
-        /// The first full sync takes this long.
-        var firstFullSyncDelay: Duration?
         var isSyncing = false
     }
 
@@ -106,17 +104,16 @@ private final class TestIO: Sendable {
     private func fullSync(_ descriptor: Int32) throws {
         let probe = state.withLock { $0.stateProbe }
         let now = probe?()
-        let (gate, delay, failure) = state.withLock { state in
+        let (gate, failure) = state.withLock { state in
             let first = !state.calls.contains(.fullSync)
             state.calls.append(.fullSync)
             state.isSyncing = true
             if let now { state.statesAtFullSync.append(now) }
             let failure = state.fullSyncFailures.isEmpty ? state.fullSyncError : state.fullSyncFailures.removeFirst()
-            return (first ? state.firstFullSyncGate : nil, first ? state.firstFullSyncDelay : nil, failure)
+            return (first ? state.firstFullSyncGate : nil, failure)
         }
         defer { state.withLock { $0.isSyncing = false } }
         gate?.wait()
-        if let delay { Thread.sleep(forTimeInterval: delay.seconds) }
         if let failure { throw POSIXError(failure) }
         try EditJournalIO.system.fullSync(descriptor)
     }
@@ -173,19 +170,24 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
     }
 }
 
+/// `append` returns while the disk is busy: the first sync waits for a gate that only the test, once both appends
+/// returned, or a watchdog after 30 s, opens. An `append` that waited for the disk would wait for the watchdog, and the
+/// test would fail instead of hanging. Nothing is timed.
 @Test func callerNeverWaits() async throws {
     try await withTemporaryDirectory { directory in
         let io = TestIO()
-        io.state.withLock { $0.firstFullSyncDelay = .seconds(1) }
+        let gate = DispatchSemaphore(value: 0)
+        io.state.withLock { $0.firstFullSyncGate = gate }
+        let watchdog = Watchdog { gate.signal() }
         let journal = try EditJournal(logURL: logURL(in: directory), io: io.io)
-        let clock = ContinuousClock()
-        let first = try clock.measure { try journal.append(line(1)) }
-        #expect(await eventually { io.state.withLock { $0.isSyncing } })
-        // While the journal is in the middle of a sync of a second.
-        let second = try clock.measure { try journal.append(line(2)) }
-        #expect(first < .milliseconds(10))
-        #expect(second < .milliseconds(10))
+        try journal.append(line(1))
+        #expect(await eventually(timeout: .seconds(60)) { io.state.withLock { $0.isSyncing } })
+        // While the journal is in the middle of a sync, which cannot end before the gate opens.
+        try journal.append(line(2))
+        #expect(io.state.withLock { $0.isSyncing })
         #expect(journal.state == .pending(2))
+        #expect(!watchdog.disarm(), "an append waited for the disk")
+        gate.signal()
         #expect(await journal.flushed() == 2)
         await journal.close()
     }
@@ -208,7 +210,9 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         let states = recorder.states
         let failing = try #require(states.firstIndex(of: .failing(.ENOSPC)))
         #expect(states[failing...].contains(.saved))
-        #expect(io.count(.write) == 3)
+        // The two that failed and at least one that wrote: more when an append comes after a retry (the machine is
+        // busy). The contents tell that no line was written twice.
+        #expect(io.count(.write) >= 3)
         #expect(try contents(url) == text(lines))
         #expect(await journal.flushed() == 5)
         await journal.close()
@@ -354,13 +358,13 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         let throughLink = linkedPackage.appending(path: "elsewhere.jsonl")
         #expect(throws: POSIXError(.ENOTDIR)) { try EditJournal(logURL: throughLink) }
 
-        // A FIFO without a reader: refused at once, never stuck.
+        // A FIFO without a reader: refused at once, never stuck (an open that waited for a reader would wait for the
+        // watchdog).
         let fifo = logURL(in: directory)
         #expect(mkfifo(fifo.path, 0o644) == 0)
-        let elapsed = ContinuousClock().measure {
-            #expect(throws: POSIXError(.ENXIO)) { try EditJournal(logURL: fifo) }
-        }
-        #expect(elapsed < .milliseconds(100))
+        let watchdog = FIFOWatchdog(paths: [fifo.path])
+        #expect(throws: POSIXError(.ENXIO)) { try EditJournal(logURL: fifo) }
+        #expect(!watchdog.disarm(), "the open of the FIFO waited for its other end")
     }
 }
 

@@ -15,14 +15,6 @@ private let size = SIMD2(1280, 720)
 
 /// What the zoom and blur tests share: frames drawn by a compositor of the default device over textures made here.
 enum StageDrawing {
-    /// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing a take
-    /// opens its files, which blocks (`offThePool` in DocumentRenderTests).
-    static func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            Thread { continuation.resume(with: Result(catching: body)) }.start()
-        }
-    }
-
     /// A `.bgra8Unorm` texture of `width` × `height` that changes smoothly everywhere: red from left to right, green
     /// from top to bottom, and blue the other way round, opaque. Where it is drawn shows by its colour.
     static func screenTexture(device: any MTLDevice, width: Int = 640, height: Int = 360) throws -> any MTLTexture {
@@ -149,8 +141,8 @@ func depthOneIsNoZoom() async throws {
             })
             let renderer = try FrameRenderer(project: project, document: document, outputSize: size)
             for t in [0.0, 0.5, 1.25, 1.9] {
-                let zoomed = try await StageDrawing.offThePool { try renderer.renderBytes(at: t) }
-                let unzoomed = try await StageDrawing.offThePool { try none.renderBytes(at: t) }
+                let zoomed = try await offThePool { try renderer.renderBytes(at: t) }
+                let unzoomed = try await offThePool { try none.renderBytes(at: t) }
                 #expect(zoomed == unzoomed, "\(focus) at \(t)")
             }
         }

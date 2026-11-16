@@ -181,7 +181,7 @@ func onlyShownScreensAreDecoded() async throws {
         for transition in [GeometryTransition.spring, .none] {
             let renderer = try FrameRenderer(
                 project: project, document: document(project.take, transition: transition), outputSize: [320, 180])
-            let asked = try await StageDrawing.offThePool {
+            let asked = try await offThePool {
                 for n in 0..<120 {
                     _ = try renderer.renderBytes(at: Double(TimeMap.frameTime(n, frameRate: 30)) / 1e9)
                 }

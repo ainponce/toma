@@ -477,19 +477,15 @@ private enum SessionFixture {
         let caches = dir.appending(path: "Caches")
         for name in ["edit-log.jsonl", "edit.json"] {
             let project = try await SessionFixture.package(in: dir, name: name)
-            #expect(mkfifo(project.package.url.appending(path: name).path, 0o644) == 0)
-            // A FIFO that blocked the open would block it for good: the best of three opens tells that apart from the
-            // other tests' load.
-            let clock = ContinuousClock()
-            var times: [Duration] = []
-            for _ in 0..<3 {
-                let start = clock.now
-                let session = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
-                times.append(start.duration(to: clock.now))
-                #expect(session.access == .readOnly(.unsafeEditFiles), "\(name)")
-                await session.close()
-            }
-            #expect(try #require(times.min()) < .milliseconds(100), "\(name): \(times)")
+            let fifo = project.package.url.appending(path: name).path
+            #expect(mkfifo(fifo, 0o644) == 0)
+            // An open that waited for the FIFO's other end would wait for good: the watchdog opens it after 30 s, and
+            // the test fails instead of hanging. Nothing is timed.
+            let watchdog = FIFOWatchdog(paths: [fifo])
+            let session = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
+            #expect(session.access == .readOnly(.unsafeEditFiles), "\(name)")
+            await session.close()
+            #expect(!watchdog.disarm(), "\(name): the open of the FIFO waited for its other end")
             #expect(throws: POSIXError(.EFTYPE), "\(name)") {
                 try EditSession.readDocument(project.package.url, take: nil, context: SessionFixture.context(caches: caches))
             }
@@ -694,13 +690,12 @@ private enum SessionFixture {
         let io = SessionFixture.IO()
         let session = try await SessionFixture.open(project, SessionFixture.context(caches: caches, io: io.io))
         io.holdSyncs()
-        let clock = ContinuousClock()
-        let start = clock.now
+        // The steps never wait for the disk: one that waited for the held syncs would wait for the watchdog.
+        let watchdog = Watchdog { io.releaseSyncs() }
         for value in [0.1, 0.11, 0.12] {
             #expect(session.perform(try SessionFixture.padding(session.document, value)) == .applied)
         }
-        // The steps never wait for the disk.
-        #expect(start.duration(to: clock.now) < .milliseconds(500))
+        #expect(!watchdog.disarm(), "a step waited for the disk")
         #expect(session.hasUnsavedChanges)
         // Past the idle delay, the snapshot is due, but its line is not on disk.
         try await Task.sleep(for: SnapshotPolicy.idleDelay + .milliseconds(700))

@@ -42,16 +42,6 @@ private let cutSequence = [clip(1, from: 0, to: 1), clip(2, from: 2, to: 3)]
     return sample
 }
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread. Drawing decodes,
-/// which blocks in `copyNextSampleBuffer` until AVFoundation's own reads finish: with every thread of the cooperative
-/// pool blocked that way by tests running at once, those reads never run and the whole test run hangs
-/// (`TrackFrameReader`, `readTrack` in RecorderKitTestSupport).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// Whether any pixel of tightly packed BGRA `bytes` is pure red.
 private func containsRed(_ bytes: [UInt8]) -> Bool {
     stride(from: 0, to: bytes.count, by: 4).contains { bytes[$0 + 2] > 250 && bytes[$0 + 1] < 5 && bytes[$0] < 5 }

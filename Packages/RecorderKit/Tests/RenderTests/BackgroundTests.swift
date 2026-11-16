@@ -12,14 +12,6 @@ import Testing
 
 private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing a take
-/// decodes, which blocks (`offThePool` in DocumentRenderTests).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// A take of one second of the synthetic screen.
 private func screenProject(in dir: URL) async throws -> LoadedProject {
     let builder = try TakeBuilder(in: dir)

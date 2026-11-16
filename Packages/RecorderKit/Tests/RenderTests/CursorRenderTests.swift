@@ -19,14 +19,6 @@ private let size = SIMD2(1280, 720)
 private let backgroundColor = RGBA(0.2, 0.4, 0.6, 1)
 private let red: SIMD4<Float> = [0, 0, 255, 255]
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing a take
-/// opens its files, which blocks (`offThePool` in DocumentRenderTests).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// A PNG of `width` × `height` pixels of opaque red.
 private func redPNG(width: Int, height: Int) throws -> Data {
     let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))

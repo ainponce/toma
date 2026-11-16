@@ -19,14 +19,6 @@ private let backgroundBGRA: SIMD4<Float> = [153, 102, 51, 255]
 /// What the screen shows: every frame painted this blue.
 private let screenBGRA: SIMD4<Float> = [255, 0, 0, 255]
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing a take
-/// decodes, which blocks (`offThePool` in DocumentRenderTests).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `sample` painted pure blue.
 @Sendable private func paintingBlue(_ frameIndex: Int, _ sample: CMSampleBuffer) -> CMSampleBuffer {
     let pixelBuffer = CMSampleBufferGetImageBuffer(sample)!
