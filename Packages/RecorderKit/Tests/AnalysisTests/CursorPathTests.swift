@@ -165,7 +165,13 @@ func smoothedCursorIsExactlyOnEachClick(smoothing: CursorSmoothing) throws {
     }
 }
 
-@Test(arguments: [CursorSmoothing.off, fast, medium, smooth])
+/// Springs a document edited by hand can have: a response of 0, negative or not a number, a damping of 100, negative
+/// or not a number.
+private let handEdited: [CursorSmoothing] = [(1, 0), (1, -0.5), (1, .nan), (100, 0.16), (-3, 0.16), (.nan, 0.16)].map {
+    .spring(SpringSpec(damping: $0.0, response: $0.1))
+}
+
+@Test(arguments: [CursorSmoothing.off, fast, medium, smooth] + handEdited)
 func neverNaN(smoothing: CursorSmoothing) {
     // Positions at the same instant, a jump of 10 000 pt between two of them 10 ms apart with a click on each side, a
     // press and its release at the same instant.
@@ -217,6 +223,39 @@ func mediumLagsAbout51msInSteadyMotion(smoothing: CursorSmoothing, lag: Double) 
     #expect(between.step == 1 && abs(between.fraction - 0.5) < 1e-12)
     let early = StepGrid.position(ofOutput: -2_500_000)
     #expect(early.step == -2 && abs(early.fraction - 0.5) < 1e-12)
+}
+
+@Test func stableSpringsStayFinite() {
+    // Every spring of the design is left as it is.
+    let design = [
+        SpringSpec(damping: 1, response: 0.10), SpringSpec(damping: 1, response: 0.16), SpringSpec(damping: 0.92, response: 0.26),
+        SpringSpec(damping: 1, response: 0.06), SpringSpec(damping: 0.70, response: 0.18), SpringSpec(damping: 1, response: 0.45),
+        SpringSpec(damping: 1, response: 0.70), SpringSpec(damping: 1, response: 1.00),
+    ]
+    #expect(design.map(StepGrid.stable) == design)
+    #expect(StepGrid.stable(SpringSpec(damping: 1, response: 0)) == SpringSpec(damping: 1, response: 0.06))
+    #expect(StepGrid.stable(SpringSpec(damping: 1, response: -0.5)) == SpringSpec(damping: 1, response: 0.06))
+    #expect(StepGrid.stable(SpringSpec(damping: 1, response: .nan)) == SpringSpec(damping: 1, response: 0.16))
+    #expect(StepGrid.stable(SpringSpec(damping: 100, response: 0.16)) == SpringSpec(damping: 2, response: 0.16))
+    #expect(StepGrid.stable(SpringSpec(damping: -3, response: 0.16)) == SpringSpec(damping: 0, response: 0.16))
+    #expect(StepGrid.stable(SpringSpec(damping: .nan, response: 0.16)) == SpringSpec(damping: 1, response: 0.16))
+
+    /// The largest distance from 0 over 10 s toward 1000, then 10 s toward −1000.
+    func reach(_ spring: SpringSpec) -> Double {
+        var (x, v, largest) = (0.0, 0.0, 0.0)
+        for step in 0..<12_000 {
+            StepGrid.spring(&x, &v, target: step < 6_000 ? 1000 : -1000, spring)
+            largest = x.isFinite ? max(largest, abs(x)) : .infinity
+        }
+        return largest
+    }
+    // Read as they are, a damping of 100 or a response of 1 ms diverge; read through `stable`, nothing does.
+    #expect(!(reach(SpringSpec(damping: 100, response: 0.16)) < 1e12))
+    #expect(!(reach(SpringSpec(damping: 1, response: 0.001)) < 1e12))
+    let edited = [(1, 0), (1, -0.5), (1, .nan), (100, 0.16), (-3, 0.16), (.nan, 0.16), (100, 0), (0, 0.06), (2, 0.06)]
+    for (damping, response) in edited {
+        #expect(reach(StepGrid.stable(SpringSpec(damping: damping, response: response))) < 10_000, "\(damping) · \(response)")
+    }
 }
 
 @Test func dragFollowsTheRawTightly() throws {
@@ -289,6 +328,42 @@ func deadZoneHoldsAgainstJitter(smoothing: CursorSmoothing) {
     // One before the first clip counts at output 0.
     let early = cursorPath([moveTo(0.95, [300, 200]), moveTo(2, [900, 500])], medium, sequence: [pathClip(1, from: 1, to: 3)])
     #expect(try #require(early.sample(atStep: 0)).position == [300, 200])
+}
+
+/// Clips over source [0, 1.04) s and [3, 12) s: the cut is at output 1.04 s, step 624.
+private let cutAt104 = [pathClip(1, from: 0, to: 1.04), pathClip(2, from: 3, to: 12)]
+
+@Test func aReleaseInACutRulesFromTheNextClip() throws {
+    // Pressed at 1 s and let go at 1.08 s, in the cut, with the pointer still on (300, 300) until 10 s.
+    let point = SIMD2(300.0, 300)
+    let events = [moveTo(0, point), press(1, point), release(1.08, point), moveTo(10, point)]
+    for smoothing in [CursorSmoothing.off, medium] {
+        let path = cursorPath(events, smoothing, hideWhenIdle: true, sequence: cutAt104)
+        #expect(try #require(path.sample(atStep: 623)).pressed)
+        #expect(try #require(path.sample(atStep: 624)).pressed == false)
+        #expect(try #require(path.sample(atOutput: outputTime(1.04))).pressed == false)
+        // Back to its size, and, still since 0 s, hidden 2 s later as nothing holds it any more.
+        #expect(abs(try #require(path.sample(atStep: 624 + 180)).clickScale - 1) <= 0.01)
+        #expect(try #require(path.sample(atStep: 1380)).opacity == 0)
+    }
+}
+
+@Test func aPressInACutRulesFromTheNextClip() throws {
+    // Still on (300, 300) from 0 s; pressed at 1.5 s, in the cut, and let go at 8 s (output 6.04 s).
+    let point = SIMD2(300.0, 300)
+    let events = [moveTo(0, point), press(1.5, point), release(8, point), moveTo(10, point)]
+    for smoothing in [CursorSmoothing.off, medium] {
+        let path = cursorPath(events, smoothing, hideWhenIdle: true, sequence: cutAt104)
+        #expect(path.clicks.isEmpty)
+        #expect(try #require(path.sample(atStep: 623)).pressed == false)
+        #expect(try #require(path.sample(atStep: 624)).pressed)
+        #expect(try #require(path.sample(atOutput: outputTime(1.04))).pressed)
+        if smoothing != .off { #expect(abs(try #require(path.sample(atStep: 624 + 180)).clickScale - 0.85) <= 0.01) }
+        // Never hidden while it is down, though still for far longer than the delay; hidden once let go.
+        let whileDown = stride(from: 0, through: 3624, by: 6).compactMap { path.sample(atStep: $0)?.opacity }
+        #expect(whileDown.count == 605 && whileDown.allSatisfy { $0 == 1 })
+        #expect(try #require(path.sample(atStep: 3624 + 180)).opacity == 0)
+    }
 }
 
 @Test func clicksAreTheKeptPresses() {

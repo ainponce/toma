@@ -24,9 +24,11 @@ public struct CursorSample: Equatable, Sendable {
 ///
 /// The raw positions are the take's `cursor`, `mouseDown` and `mouseUp` events in global points at their output times,
 /// by the rule of the render (`TimeMap.output(ofSampleAt:take:)`): one in a cut between two clips is dropped, one
-/// before the first clip or after the last keeps its time through that clip's mapping. Whether a button is down is
-/// read from all the events, the dropped ones too. The clicks, and the landings on them, are the `mouseDown`s (of any
-/// button) inside a kept clip. There is no cursor before the first raw position.
+/// before the first clip or after the last keeps its time through that clip's mapping. Whether a button is down (any
+/// button) changes at each `mouseDown` and `mouseUp`, placed as every other change (`TimeMap.output(ofChangeAt:take:)`):
+/// one in a cut rules from the first instant kept after it, so a press or a release the cut leaves out holds from the
+/// next clip on, even with the pointer still. The clicks, and the landings on them, are the `mouseDown`s (of any button)
+/// inside a kept clip. There is no cursor before the first raw position.
 ///
 /// - `off`: the cursor of phase 0 and 1a at the exact output time, off the grid: the last raw position at or before
 ///   it, moved toward the next one if that comes within 50 ms; never pressed smaller.
@@ -42,22 +44,25 @@ public struct CursorSample: Equatable, Sendable {
 ///   The whole state is kept every `StepGrid.checkpointEvery` steps; a step is simulated from the checkpoint before
 ///   it, which gives the same bits as from output 0. Off the grid, the samples of the two steps around are mixed
 ///   linearly. After the end of the output the cursor stays as it is on its last step.
-///   A spring is read where the 600 Hz step stays stable: a response of at least 0.06 s (0.16 s if not a number) and
-///   a damping from 0 to 2 (1 if not a number), so a document edited by hand never stops the render.
-/// - With `hideWhenIdle`, the opacity is `IdleVisibility`'s of the raw positions and the clicks after `idleDelay`;
-///   otherwise 1.
+///   The document's spring is read through `StepGrid.stable(_:)`, so a document edited by hand never stops the
+///   render.
+/// - With `hideWhenIdle`, the opacity is `IdleVisibility`'s of the raw positions, the presses and the clicks after
+///   `idleDelay`; otherwise 1.
 public struct CursorPath: Sendable {
     /// The kept `mouseDown`s, in output order: where the click effects and sounds come from.
     public let clicks: [(output: Int64, point: SIMD2<Double>)]
 
     /// The raw positions, in output order.
     private let samples: [Sample]
+    /// Whether a button is down from each change on, in output order.
+    private let buttons: [ButtonChange]
     private let idle: IdleVisibility?
     /// `nil` with `off`.
     private let motion: Motion?
 
     public init(take: TakeRecord, events: [InputEvent], style: CursorStyle, timeMap: TimeMap) {
         var samples: [Sample] = []
+        var buttons: [ButtonChange] = []
         var clicks: [(output: Int64, point: SIMD2<Double>)] = []
         var down = Set<MouseButton>()
         for event in events.sortedByTime() {
@@ -66,24 +71,36 @@ public struct CursorPath: Sendable {
             case let .mouseUp(button, _, _): down.remove(button)
             default: break
             }
+            switch event.kind {
+            case .mouseDown, .mouseUp:
+                // The mapping of changes keeps source order, so these stay in output order.
+                if let output = timeMap.output(ofChangeAt: event.t, take: take.id) {
+                    buttons.append(ButtonChange(output: output, pressed: !down.isEmpty))
+                }
+            default:
+                break
+            }
             guard let point = event.kind.pointerPosition, let output = timeMap.output(ofSampleAt: event.t, take: take.id)
             else { continue }
-            samples.append(Sample(output: output, point: point, pressed: !down.isEmpty))
+            samples.append(Sample(output: output, point: point))
             if case .mouseDown = event.kind, let kept = timeMap.output(atSource: event.t, take: take.id) {
                 clicks.append((kept, point))
             }
         }
         self.samples = samples
+        self.buttons = buttons
         self.clicks = clicks
         idle = style.hideWhenIdle
             ? IdleVisibility(
-                samples: samples.map { ($0.output, $0.point, $0.pressed) }, clicks: clicks.map(\.output), delay: style.idleDelay)
+                positions: samples.map { ($0.output, $0.point) }, presses: Self.presses(buttons), clicks: clicks.map(\.output),
+                delay: style.idleDelay)
             : nil
         switch style.smoothing {
         case .off:
             motion = nil
         case let .spring(spec):
-            motion = Motion(samples: samples, clicks: clicks, spring: Self.stable(spec), duration: timeMap.duration)
+            motion = Motion(
+                samples: samples, buttons: buttons, clicks: clicks, spring: StepGrid.stable(spec), duration: timeMap.duration)
         }
     }
 
@@ -153,7 +170,11 @@ public struct CursorPath: Sendable {
         var output: Int64
         /// In global points.
         var point: SIMD2<Double>
-        /// Whether a button is down from this position on.
+    }
+
+    /// A button went down or up: whether one is down from `output` on.
+    struct ButtonChange: Sendable {
+        var output: Int64
         var pressed: Bool
     }
 
@@ -168,7 +189,8 @@ public struct CursorPath: Sendable {
         let next = Self.firstSample(after: τ, in: samples)
         guard let point = Self.todaysPoint(at: τ, next: next, in: samples) else { return nil }
         return CursorSample(
-            position: point, opacity: idle?.opacity(atOutput: τ) ?? 1, clickScale: 1, pressed: samples[next - 1].pressed)
+            position: point, opacity: idle?.opacity(atOutput: τ) ?? 1, clickScale: 1,
+            pressed: Self.pressed(next: Self.firstChange(after: τ, in: buttons), in: buttons))
     }
 
     /// The raw position at `τ` (as `FrameEvaluator.cursor(at:)` has always placed it), with `next` the index of the
@@ -199,16 +221,40 @@ public struct CursorPath: Sendable {
         return low
     }
 
+    /// The index of the first button change after `τ`.
+    static func firstChange(after τ: Int64, in buttons: [ButtonChange]) -> Int {
+        var low = 0, high = buttons.count
+        while low < high {
+            let mid = (low + high) / 2
+            if buttons[mid].output <= τ { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
+
+    /// Whether a button is down, with `next` the index of the first change after the instant: none before the first.
+    static func pressed(next: Int, in buttons: [ButtonChange]) -> Bool {
+        next > 0 && buttons[next - 1].pressed
+    }
+
+    /// The output ranges during which a button is down, from each press to its release (to `Int64.max` without one);
+    /// never an empty one.
+    static func presses(_ buttons: [ButtonChange]) -> [Range<Int64>] {
+        var presses: [Range<Int64>] = []
+        var start: Int64?
+        for change in buttons {
+            if change.pressed, start == nil { start = change.output }
+            if !change.pressed, let down = start {
+                if down < change.output { presses.append(down..<change.output) }
+                start = nil
+            }
+        }
+        if let down = start, down < .max { presses.append(down..<Int64.max) }
+        return presses
+    }
+
     /// Seconds from output time `b` to `a`, counted as the render has always counted them.
     private static func seconds(_ a: Int64, since b: Int64) -> Double {
         (Double(a) - Double(b)) / 1_000_000_000
-    }
-
-    /// `spec` where the 600 Hz step is stable (see the type's notes).
-    private static func stable(_ spec: SpringSpec) -> SpringSpec {
-        SpringSpec(
-            damping: spec.damping.isNaN ? 1 : min(max(spec.damping, 0), 2),
-            response: spec.response.isNaN ? 0.16 : max(spec.response, landingResponse))
     }
 }
 
@@ -227,11 +273,14 @@ extension CursorPath {
         fileprivate var nextSample: Int
         /// The first click on the step or after it.
         fileprivate var nextClick: Int
+        /// The first button change after the step's output time.
+        fileprivate var nextButton: Int
     }
 
     /// The spring's inputs and its checkpoints.
     struct Motion: Sendable {
         let samples: [Sample]
+        let buttons: [ButtonChange]
         let clicks: [ClickStep]
         let spring: SpringSpec
         /// The step the cursor starts on; `nil` without raw positions.
@@ -241,8 +290,12 @@ extension CursorPath {
         /// The state on every `StepGrid.checkpointEvery`-th step from 0 to `lastStep`; `nil` before the cursor starts.
         private(set) var checkpoints: [State?] = []
 
-        init(samples: [Sample], clicks: [(output: Int64, point: SIMD2<Double>)], spring: SpringSpec, duration: Int64) {
+        init(
+            samples: [Sample], buttons: [ButtonChange], clicks: [(output: Int64, point: SIMD2<Double>)], spring: SpringSpec,
+            duration: Int64
+        ) {
             self.samples = samples
+            self.buttons = buttons
             self.clicks = clicks.map { ClickStep(step: StepGrid.nearestStep(toOutput: $0.output), point: $0.point) }
             self.spring = spring
             firstStep = samples.first.map { StepGrid.firstStep(atOrAfter: $0.output) }
@@ -309,8 +362,10 @@ extension CursorPath {
                 let mid = (low + high) / 2
                 if clicks[mid].step < step { low = mid + 1 } else { high = mid }
             }
-            let nextSample = CursorPath.firstSample(after: StepGrid.outputTime(ofStep: step), in: samples)
-            return Simulation(step: step, state: state, nextSample: nextSample, nextClick: low)
+            let τ = StepGrid.outputTime(ofStep: step)
+            return Simulation(
+                step: step, state: state, nextSample: CursorPath.firstSample(after: τ, in: samples), nextClick: low,
+                nextButton: CursorPath.firstChange(after: τ, in: buttons))
         }
 
         /// Takes `simulation` to the next step: reads the raw position, the buttons and the next click at its time, and
@@ -323,10 +378,13 @@ extension CursorPath {
             while next < samples.count, samples[next].output <= τ { next += 1 }
             simulation.nextSample = next
             while simulation.nextClick < clicks.count, clicks[simulation.nextClick].step < step { simulation.nextClick += 1 }
+            while simulation.nextButton < buttons.count, buttons[simulation.nextButton].output <= τ {
+                simulation.nextButton += 1
+            }
             guard let firstStep, step >= firstStep else { return }
             // From the first step on there is a raw position: at the latest, the first sample is on it.
             let raw = CursorPath.todaysPoint(at: τ, next: next, in: samples) ?? samples[0].point
-            let pressed = next > 0 && samples[next - 1].pressed
+            let pressed = CursorPath.pressed(next: simulation.nextButton, in: buttons)
             let click = simulation.nextClick < clicks.count ? clicks[simulation.nextClick] : nil
 
             guard var current = simulation.state else {

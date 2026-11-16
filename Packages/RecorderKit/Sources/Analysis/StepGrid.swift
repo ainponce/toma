@@ -46,6 +46,17 @@ public enum StepGrid {
         x += v * stepSeconds
     }
 
+    /// `spring` where `spring(_:_:target:_:)` stays stable at 600 Hz: a response of at least 0.06 s (0.16 s if it is
+    /// not a number) and a damping from 0 to 2 (1 if it is not a number); every spring of the design is already there.
+    /// One step multiplies (x, v·h) by a matrix of determinant 1 − 2ζωh and trace 2 − 2ζωh − ω²h² (h = 1/600 s); it is
+    /// stable while 0 ≤ ζωh ≤ 1 − ω²h²/4. A response of 0.06 s makes ωh ≈ 0.175, so a damping of 2 (ζωh ≈ 0.35) has
+    /// room to spare; a response of 0 or a damping of 100 would diverge to infinity and then to NaN.
+    public static func stable(_ spring: SpringSpec) -> SpringSpec {
+        SpringSpec(
+            damping: spring.damping.isNaN ? 1 : min(max(spring.damping, 0), 2),
+            response: spring.response.isNaN ? 0.16 : max(spring.response, 0.06))
+    }
+
     // MARK: - Internal
 
     /// 1/600 s.

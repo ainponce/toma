@@ -26,28 +26,34 @@ public struct IdleVisibility: Sendable {
     /// From where it starts to fade out to where it starts to come back: sorted, apart, never empty.
     private let hidden: [Range<Int64>]
 
-    /// `samples` are the raw positions in output time, each with whether a button is down from it on; `clicks`, the
-    /// output times of the clicks; `delay`, the seconds without moving before it is hidden (one that is negative or
-    /// not a number is 0).
+    /// `samples` are the raw positions in output time, each with whether a button is down from it on (a press lasts
+    /// from the first position that has one down to the next one that has none); `clicks`, the output times of the
+    /// clicks; `delay`, the seconds without moving before it is hidden (one that is negative or not a number is 0).
     public init(samples: [(output: Int64, point: SIMD2<Double>, pressed: Bool)], clicks: [Int64], delay: Double) {
-        let samples = samples.enumerated()
-            .sorted { ($0.element.output, $0.offset) < ($1.element.output, $1.offset) }
-            .map(\.element)
-        let delay = max(TimeMap.outputNanoseconds(seconds: delay), 0)
-
-        // Where it must be shown: around each click, and from before each press to its release.
-        var shown: [Range<Int64>] = clicks.map {
-            $0.subtractingSaturating(Self.returnBeforeClick)..<$0.addingSaturating(Self.shownAfterClick)
-        }
+        let samples = Self.inOutputOrder(samples) { $0.output }
+        var presses: [Range<Int64>] = []
         var pressStart: Int64?
         for sample in samples {
             if sample.pressed, pressStart == nil { pressStart = sample.output }
             if !sample.pressed, let start = pressStart {
-                shown.append(start.subtractingSaturating(Self.returnBeforeClick)..<sample.output)
+                presses.append(start..<sample.output)
                 pressStart = nil
             }
         }
-        if let start = pressStart { shown.append(start.subtractingSaturating(Self.returnBeforeClick)..<Int64.max) }
+        if let start = pressStart { presses.append(start..<Int64.max) }
+        self.init(positions: samples.map { ($0.output, $0.point) }, presses: presses, clicks: clicks, delay: delay)
+    }
+
+    /// `positions` are the raw positions in output time; `presses`, the output ranges during which a button is down,
+    /// from each press to its release (an empty one is none), known apart from the positions (a press can come while
+    /// the pointer stands still); `clicks` and `delay` as in `init(samples:clicks:delay:)`.
+    public init(positions: [(output: Int64, point: SIMD2<Double>)], presses: [Range<Int64>], clicks: [Int64], delay: Double) {
+        let samples = Self.inOutputOrder(positions) { $0.output }
+        let delay = max(TimeMap.outputNanoseconds(seconds: delay), 0)
+
+        // Where it must be shown: around each click, and from before each press to its release.
+        let shown = clicks.map { $0.subtractingSaturating(Self.returnBeforeClick)..<$0.addingSaturating(Self.shownAfterClick) }
+            + presses.filter { !$0.isEmpty }.map { $0.lowerBound.subtractingSaturating(Self.returnBeforeClick)..<$0.upperBound }
         let kept = Self.merged(shown)
 
         // Where it heads for hidden: from `delay` after it stopped to 0.10 s before it moves, outside `kept`.
@@ -92,6 +98,11 @@ public struct IdleVisibility: Sendable {
         let from = fadedOut(after: stretch.upperBound.subtractingSaturating(stretch.lowerBound))
         let back = Double(τ.subtractingSaturating(stretch.upperBound)) / Double(fadeIn)
         return back >= 1 ? 1 : from + (1 - from) * smoothstep(back)
+    }
+
+    /// `items` in the order of their `output`, those at the same instant in the order they have.
+    private static func inOutputOrder<Item>(_ items: [Item], _ output: (Item) -> Int64) -> [Item] {
+        items.enumerated().sorted { (output($0.element), $0.offset) < (output($1.element), $1.offset) }.map(\.element)
     }
 
     /// `3x² − 2x³` of `x` held in [0, 1].
