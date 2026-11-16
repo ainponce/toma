@@ -27,8 +27,10 @@ public struct UndoMenuItem: Equatable, Sendable {
     }
 }
 
-/// What closing an editor's window does (design §5.9): with changes that couldn't be saved, it asks first ("Some changes
-/// couldn't be saved"), one question at a time.
+/// What closing an editor's window does (design §5.9): when a change couldn't be saved and still isn't (the amber
+/// banner's `EditNotice.saveFailed`), it asks first ("Some changes couldn't be saved"), one question at a time. A change
+/// merely on its way to the disk (a line being synced, the move to version 3, a new log being started: unsaved, but
+/// nothing failed) is not asked about: the session saves it as it closes.
 public enum EditorClosing: Equatable, Sendable {
     case close
     /// Asks, with `UnsavedChangesAnswer`.
@@ -36,9 +38,11 @@ public enum EditorClosing: Equatable, Sendable {
     /// Stays open: the question is up already.
     case keepOpen
 
-    public static func decide(hasUnsavedChanges: Bool, isAsking: Bool) -> EditorClosing {
+    /// From the session's `hasUnsavedChanges` and `notices`.
+    public static func decide(hasUnsavedChanges: Bool, notices: [EditNotice], isAsking: Bool) -> EditorClosing {
         if isAsking { return .keepOpen }
-        return hasUnsavedChanges ? .ask : .close
+        let saveFailed = notices.contains { if case .saveFailed = $0 { true } else { false } }
+        return hasUnsavedChanges && saveFailed ? .ask : .close
     }
 }
 

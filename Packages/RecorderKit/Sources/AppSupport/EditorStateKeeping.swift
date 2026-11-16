@@ -32,6 +32,49 @@ public struct EditorStateAutosave: Equatable, Sendable {
     }
 }
 
+/// What an editor shows of its project once the project is open, which its state remembers (design §5.1): the playhead,
+/// the panel's tab, and the timeline's scale and scroll.
+public struct EditorProjectView: Equatable, Sendable {
+    public var playheadFrame: Int
+    public var tab: String
+    /// Points per second; `nil`, the whole sequence fitted to the window.
+    public var timelineScale: Double?
+    public var timelineOffset: Double
+
+    public init(playheadFrame: Int, tab: String, timelineScale: Double?, timelineOffset: Double) {
+        self.playheadFrame = playheadFrame
+        self.tab = tab
+        self.timelineScale = timelineScale
+        self.timelineOffset = timelineOffset
+    }
+
+    /// As `state` remembers it: what the project opens with.
+    public init(remembered state: EditorState) {
+        self.init(
+            playheadFrame: state.playheadFrame, tab: state.tab, timelineScale: state.timelineScale,
+            timelineOffset: state.timelineOffset)
+    }
+}
+
+extension EditorState {
+    /// The state to write: this one, as last remembered, with what the window has now: its frame (`nil`, a window in full
+    /// screen, keeps the remembered one: it would open as large as the screen), its panel, and what it shows of its
+    /// project (`nil` until the project is open keeps the remembered playhead, tab and timeline: a window never writes
+    /// the defaults over values it has not shown yet). The banner's dismissal is kept as remembered.
+    public func remembering(windowFrame: Rect?, panelVisible: Bool, project: EditorProjectView?) -> EditorState {
+        var state = self
+        if let windowFrame { state.windowFrame = windowFrame }
+        state.panelVisible = panelVisible
+        if let project {
+            state.playheadFrame = project.playheadFrame
+            state.tab = project.tab
+            state.timelineScale = project.timelineScale
+            state.timelineOffset = project.timelineOffset
+        }
+        return state
+    }
+}
+
 /// Where an editor's window opens (design §5.1): where it was when its state was last written, if its title bar can still
 /// be reached on a screen; otherwise at its initial size, centered.
 public enum EditorWindowPlacement {

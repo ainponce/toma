@@ -138,7 +138,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     /// there is one (Task 37), collapses or expands.
     @objc func togglePanel(_ sender: Any?) {
         model.panelVisible.toggle()
-        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = model.panelVisible }
         guard let inspector = horizontalSplit.splitViewItems.first(where: { $0.behavior == .inspector }) else { return }
         inspector.animator().isCollapsed = !model.panelVisible
     }
@@ -146,11 +145,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Window
 
     func windowDidBecomeKey(_ notification: Notification) {
-        KeyEditorPanel.shared.isVisible = model.panelVisible
+        KeyEditor.shared.follow(model)
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        KeyEditorPanel.shared.isVisible = nil
+        KeyEditor.shared.stopFollowing(model)
     }
 
     /// The window's least size is `EditorLayout.minimumSize`, its bar included. AppKit keeps it as the content's least
@@ -182,7 +181,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         timeline.stop()
-        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = nil }
+        KeyEditor.shared.stopFollowing(model)
         model.close()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
@@ -236,23 +235,14 @@ private struct EditorPreviewPane: View {
     }
 }
 
-/// The key editor's panel, for the View menu's item: SwiftUI's commands do not see an AppKit window's responder chain.
-/// An `ObservableObject`, which commands follow (`@ObservedObject`).
-@MainActor
-final class KeyEditorPanel: ObservableObject {
-    static let shared = KeyEditorPanel()
-    /// Whether the key editor shows its panel; `nil` while no editor is the key window.
-    @Published var isVisible: Bool?
-}
-
 /// View ▸ Show Panel / Hide Panel (⌥⌘I), in SwiftUI's View menu with the sidebar's commands (`InspectorCommands` is for
 /// SwiftUI's scenes only), sent along the responder chain to the key editor.
 struct EditorCommands: Commands {
-    @ObservedObject var panel = KeyEditorPanel.shared
+    @ObservedObject var editor = KeyEditor.shared
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            let isVisible = panel.isVisible
+            let isVisible = editor.panelVisible
             Button(isVisible == false ? LocalizedStringKey("Show Panel") : LocalizedStringKey("Hide Panel")) {
                 NSApp.sendAction(#selector(EditorWindowController.togglePanel(_:)), to: nil, from: nil)
             }

@@ -16,7 +16,8 @@ final class EditorWindowMemory {
     /// When it is written; `nil` while there is nowhere to write it.
     var autosave: EditorStateAutosave?
     var autosaveTask: Task<Void, Never>?
-    private(set) var isRestored = false
+    /// The window's frame and panel are where the state says: the window can show.
+    var isWindowPlaced = false
     private var reading: Task<Void, Never>?
 
     /// Reads the state of the project at `url` once; a second call waits for the same reading. If its manifest cannot be
@@ -27,7 +28,6 @@ final class EditorWindowMemory {
                 let root = ProjectCaches.defaultRoot
                 let found = await Task.detached { EditorStateFile.caches(ofPackageAt: url, root: root) }.value
                 if let found { await read(found) }
-                isRestored = true
             }
         }
         await reading?.value
@@ -65,12 +65,15 @@ extension EditorModel {
         startAutosave()
     }
 
-    /// Once the project is open: the playhead and the panel's tab where they were left (the Camera tab only if the take
-    /// has a camera).
-    func restorePlayheadAndTab() {
-        let remembered = windowMemory.state
+    /// Once the project is open: the playhead, the panel's tab (Camera only if the take has a camera) and the timeline's
+    /// scale and scroll where they were left. The timeline starts from `timelineScale` and `timelineOffset` and writes them
+    /// back as it changes.
+    func restoreProjectView() {
+        let remembered = EditorProjectView(remembered: windowMemory.state)
         let tab = EditorPanelTab(stateName: remembered.tab) ?? .background
         panelTab = tab == .camera && !hasCamera ? .background : tab
+        timelineScale = remembered.timelineScale
+        timelineOffset = remembered.timelineOffset
         seek(frame: remembered.playheadFrame)
     }
 
@@ -105,34 +108,32 @@ extension EditorModel {
         EditorStateWriter.write(state, to: caches)
     }
 
-    /// The state as it is now. What only an open project has (the playhead, the tab) stays as it was remembered until the
-    /// project is open; the frame of a window in full screen, too (it would open as large as the screen).
+    /// The state as it is now (`EditorState.remembering`): what the project shows (the playhead, the tab, the timeline)
+    /// only once it is open, and the frame unless the window is in full screen.
     private func currentWindowState() -> EditorState {
-        var current = windowMemory.state
-        if let window, !window.styleMask.contains(.fullScreen) {
-            let frame = window.frame
-            current.windowFrame = Rect(x: frame.minX, y: frame.minY, width: frame.width, height: frame.height)
+        let frame = window.flatMap { window -> Rect? in
+            guard !window.styleMask.contains(.fullScreen) else { return nil }
+            return Rect(x: window.frame.minX, y: window.frame.minY, width: window.frame.width, height: window.frame.height)
         }
-        current.panelVisible = panelVisible
-        current.timelineScale = timelineScale
-        current.timelineOffset = timelineOffset
-        if state == .ready {
-            current.playheadFrame = playheadFrame
-            current.tab = panelTab.stateName
-        }
-        return current
+        let project = state == .ready
+            ? EditorProjectView(
+                playheadFrame: playheadFrame, tab: panelTab.stateName, timelineScale: timelineScale, timelineOffset: timelineOffset)
+            : nil
+        return windowMemory.state.remembering(windowFrame: frame, panelVisible: panelVisible, project: project)
     }
 }
 
 extension EditorWindowController {
-    /// The state the window was left in is read and applied: the window can show.
-    var isRestored: Bool { model.windowMemory.isRestored }
+    /// The state the window was left in is read and its frame and panel applied: the window can show.
+    var isRestored: Bool { model.windowMemory.isWindowPlaced }
 
     /// Reads the state the window was left in, and applies what shows before the project opens: the window's frame, if its
     /// title bar can still be reached on a screen (`EditorWindowPlacement`; otherwise it stays centered at its initial
     /// size), and the panel shown or hidden.
     func restoreWindowState() async {
         await model.restoreWindowState()
+        // Only now can a second opening show it: before, it would show where it was made, and stay there.
+        defer { model.windowMemory.isWindowPlaced = true }
         guard let window, !window.isVisible else { return }
         let remembered = model.windowMemory.state
         if let frame = EditorWindowPlacement.frame(

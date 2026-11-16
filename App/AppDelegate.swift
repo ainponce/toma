@@ -306,28 +306,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if editor.isRestored { present(editor) }
             return
         }
+        if let moved = editors[key] {
+            // Its package was moved away while open and another one is at its path now: it stays open, under its
+            // package's place.
+            editors[key] = nil
+            editors[moved.currentPackageURL] = moved
+        }
+        weak var made: EditorWindowController?
         let editor = EditorWindowController(
             packageURL: key, takeID: take, exportGate: exportGate,
             onRecovered: { [weak self] url in self?.recording.noteRecovered(url) }
         ) { [weak self] in
-            guard let self, editors[key]?.window?.isVisible != true else { return }  // shown again meanwhile
-            editors[key] = nil
+            guard let self, let made, made.window?.isVisible != true else { return }  // shown again meanwhile
+            editors = editors.filter { $0.value !== made }
             updateActivationPolicy()
         }
+        made = editor
         editors[key] = editor
         Task {
             await editor.restoreWindowState()
             // Gone meanwhile: nothing to show.
-            guard editors[key] === editor else { return }
+            guard editors.values.contains(where: { $0 === editor }) else { return }
             present(editor)
         }
     }
 
-    /// The editor that has the package at `url` open: the one opened from that path, or one whose package is the same
-    /// folder (`PackageIdentity`).
+    /// The editor that has the package at `url` open: one whose package is that folder (`PackageIdentity`), also through
+    /// a symlink or where it was moved to; by its path only when nothing is there now. The folder comes first: the path an
+    /// editor was opened from may hold another package by now.
     private func openEditor(of url: URL) -> EditorWindowController? {
-        if let editor = editors[url] { return editor }
-        guard let identity = PackageIdentity(url) else { return nil }
+        guard let identity = PackageIdentity(url) else { return editors[url] }
         return editors.values.first { $0.showsPackage(identity) }
     }
 
