@@ -2,7 +2,9 @@
 import AppKit
 import AppSupport
 import Editing
+import Library
 import ProjectFormat
+import QuartzCore
 import Recording
 import os
 
@@ -91,6 +93,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         #if DEBUG
         if let path = Self.editorStructureDumpPath {
             dumpEditorStructure(of: path)
+            return
+        }
+        if let folder = Self.libraryBenchFolder {
+            // Once the app has finished launching (its menu bar item, its scenes): the library opens in a running app.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                MainActor.assumeIsolated { self.runLibraryBench(folder: folder) }
+            }
             return
         }
         #endif
@@ -250,6 +259,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             exit(editor?.structureIsSettled == true ? 0 : 1)
         }
     }
+
+    // MARK: - -TomaLibraryBench
+
+    /// `Toma -TomaLibraryBench <folder>`: the folder the library opens over.
+    private static var libraryBenchFolder: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-TomaLibraryBench"), index + 1 < arguments.count else { return nil }
+        return arguments[index + 1]
+    }
+
+    /// Opens the library window over `folder` with its cached index (`index.json` in it, as `reconcileAndIndexAThousand`
+    /// leaves it, written again by the library as it goes), as the app opens it, without the onboarding, the recovery or
+    /// anything that asks (design §15). Writes to stdout `first-frame <ms>`, from the moment it starts opening until the
+    /// index's cards are laid out, drawn and handed to the window server, and `longest-main-wait <ms>`, the longest the
+    /// main thread stayed busy without going back to wait for events from that frame until the library settled (its walk
+    /// ended and the thumbnails of the cards on the screen were looked for) and a second more; then writes the index and
+    /// quits, with 1 if it did not settle within 60 s, unless `-TomaLibraryBenchKeepOpen` is given too.
+    private func runLibraryBench(folder: String) {
+        let start = ContinuousClock.now
+        let watch = MainThreadWatch()
+        let model = LibraryModel(
+            paths: .bench(folder: URL(filePath: folder, directoryHint: .isDirectory)),
+            host: LibraryHost(open: { [weak self] url in self?.showEditor(for: url, take: nil) }),
+            preferences: LibraryPreferences()
+        ) { _ in }
+        let controller = LibraryWindowController(model: model) {}
+        var firstFrame: Duration?
+        var cards = 0
+        controller.showWhenLoaded { [weak controller] in
+            guard let controller, let window = controller.window else { return }
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate()
+            controller.showWindow(nil)
+            window.makeKeyAndOrderFront(nil)
+            // Laid out, drawn and handed to the window server now.
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.displayIfNeeded()
+            CATransaction.flush()
+            firstFrame = start.duration(to: .now)
+            watch.start()
+            DispatchQueue.main.async { MainActor.assumeIsolated { cards = model.cardsOnScreen } }
+        }
+        Task {
+            let deadline = ContinuousClock.now + .seconds(60)
+            while ContinuousClock.now < deadline, firstFrame == nil || !model.isSettled {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            let settled = firstFrame != nil && model.isSettled
+            try? await Task.sleep(for: .seconds(1))
+            watch.stop()
+            func milliseconds(_ duration: Duration?) -> String {
+                guard let duration else { return "none" }
+                return String(format: "%.1f", Double(duration.components.attoseconds) / 1e15 + Double(duration.components.seconds) * 1e3)
+            }
+            print("first-frame \(milliseconds(firstFrame))")
+            print("longest-main-wait \(milliseconds(watch.longest))")
+            print("projects \(model.counts[.all] ?? 0) cards-on-screen \(cards) settled \(settled)")
+            fflush(stdout)
+            // `-TomaLibraryBenchKeepOpen`: the window stays, for the owner's checks (design §16.2); ⌘Q quits.
+            guard !ProcessInfo.processInfo.arguments.contains("-TomaLibraryBenchKeepOpen") else { return }
+            await model.close()
+            exit(settled ? 0 : 1)
+        }
+        libraryBench = controller
+    }
+
+    /// The window of `-TomaLibraryBench`, kept while it runs.
+    private var libraryBench: LibraryWindowController?
     #endif
 
     // MARK: - Windows
@@ -310,3 +387,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if policy == .regular, activatingIfRegular { NSApp.activate() }
     }
 }
+
+#if DEBUG
+/// How long the main thread stays busy without going back to wait for events (`-TomaLibraryBench`): each stretch from
+/// the run loop waking up until it waits again, the one under way when it starts included.
+@MainActor
+private final class MainThreadWatch {
+    private(set) var longest: Duration = .zero
+    private var busySince: ContinuousClock.Instant?
+    private var observer: CFRunLoopObserver?
+
+    func start() {
+        guard observer == nil else { return }
+        busySince = .now
+        let activities = CFRunLoopActivity.afterWaiting.rawValue | CFRunLoopActivity.beforeWaiting.rawValue
+        let observer = CFRunLoopObserverCreateWithHandler(nil, activities, true, 0) { [weak self] _, activity in
+            MainActor.assumeIsolated { self?.note(activity) }
+        }
+        CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        self.observer = observer
+    }
+
+    func stop() {
+        if let observer { CFRunLoopRemoveObserver(CFRunLoopGetMain(), observer, .commonModes) }
+        observer = nil
+        if let busySince { longest = max(longest, busySince.duration(to: .now)) }
+        busySince = nil
+    }
+
+    private func note(_ activity: CFRunLoopActivity) {
+        if activity == .afterWaiting {
+            busySince = .now
+        } else if let busySince {
+            longest = max(longest, busySince.duration(to: .now))
+            self.busySince = nil
+        }
+    }
+}
+#endif
