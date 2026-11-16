@@ -485,6 +485,13 @@ Una captura de ventana graba en negro las esquinas redondeadas de la ventana, co
 - Medir el radio de las esquinas negras de esa toma: exportarla sin edición y a 1:1 con `recorder-dev export --raw <paquete> <salida.mp4>`, con `--width` igual al ancho en píxeles de la ventana grabada dividido por 0,84 (el margen del legado ocupa el 16 % del ancho), redondeado a par, y `--height` de al menos el alto en píxeles de la ventana más 0,16 veces ese `--width`, también par (así la ventana sale de su tamaño grabado). En un cuadro del video al 100 %, contar los píxeles desde la esquina de la pantalla hasta donde el borde de arriba deja de tener negro, y dividirlos por el `pixelScale` de la pista (en el manifiesto) para pasarlos a puntos.
 - Anotar en la tabla, para cada macOS, el radio en píxeles y en puntos: con eso se ajusta `blackCornerPoints` antes del cierre del hito (más grande si alguno pasa de 26 pt).
 
+**Dos pantallas y cambios de forma** (27)
+
+Un proyecto nuevo cambia de pantalla, y de forma, con un resorte: el rectángulo del video va de la forma vieja a la nueva en unos 0,2 s y, al cambiar de pantalla, el contenido de una se funde en el de la otra en 0,25 s. Mientras se mueve, cada video llena el rectángulo recortado, nunca estirado. Un proyecto de antes del hito 1b sigue saltando, como antes.
+- Con dos pantallas de distinta forma (la de la Mac y un monitor externo, por ejemplo 16:10 y 16:9, o uno vertical), grabar una toma con las dos y pasar el cursor de una a otra, quedándose unos segundos en cada una. En el editor, con el estilo por defecto: la pista Pantalla cambia sola a la pantalla donde está el cursor y, en la vista previa y en el video exportado, el video pasa de una a otra con un movimiento suave, sin un salto ni un cuadro negro ni un video estirado. El cursor aparece en la pantalla nueva en el instante del cambio, sin cruzar el video. Cambiar la pantalla a mano en la pista: pasa igual.
+- Grabar la pantalla completa y, a mitad de la toma, cambiar su resolución a una de otra forma (Ajustes del Sistema ▸ Pantallas, por ejemplo de 16:10 a 4:3, o girar un monitor externo). En el editor, el cambio se anima: el rectángulo pasa suave de una forma a la otra, el video lo llena recortado, sin estirarse, y después queda con la forma nueva entera.
+- En las dos, grabar un Área en lugar de la pantalla completa: durante el movimiento nunca se ve nada de fuera del Área, ni un borde.
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
@@ -493,6 +500,7 @@ Una captura de ventana graba en negro las esquinas redondeadas de la ventana, co
 | 2. Audio con velocidad en macOS 15: deriva, comienzo y determinismo | pendiente | pendiente | pendiente |
 | 2. Micrófonos a 44,1, 24 y 16 kHz en macOS 15: empezar en el medio | pendiente | pendiente | pendiente |
 | 2. Esquinas de las tomas de ventana: ninguna negra con el estilo por defecto; radio de las negras en píxeles y en puntos (macOS 26 y 15) | pendiente | pendiente | pendiente |
+| 2. Dos pantallas y cambios de forma: el cambio de pantalla y el de resolución se animan sin saltos ni estirar; nada fuera del Área | pendiente | pendiente | pendiente |
 
 ## Pendientes del dueño del hito 1c
 

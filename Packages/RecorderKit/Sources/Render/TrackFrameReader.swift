@@ -109,6 +109,7 @@ public final class TrackFrameReader: @unchecked Sendable {
     private var open: OpenReader?
     private var openedReaders = 0
     private var recordedGaps: [Gap] = []
+    private var asked: ClosedRange<HostTime>?
     /// Loads a segment's video track; tests replace it. Called with the lock held.
     var trackLoader: (AVURLAsset) -> TrackLoad = TrackFrameReader.loadFirstVideoTrack(of:)
     /// Wall-clock seconds a segment whose track load timed out is skipped before the next attempt.
@@ -116,6 +117,9 @@ public final class TrackFrameReader: @unchecked Sendable {
 
     /// How many readers have been opened, for tests.
     var openedReaderCount: Int { lock.withLock { openedReaders } }
+
+    /// The earliest and the latest host times a frame was asked for so far (`nil` before the first), for tests.
+    var askedFor: ClosedRange<HostTime>? { lock.withLock { asked } }
 
     /// The spans shown with the frame before them so far, in the order they were found: the segments that are
     /// not `SegmentAvailability.present` from the start, the others as frames were asked for.
@@ -152,7 +156,10 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// A BGRA, IOSurface-backed, Metal-compatible frame: the latest one presented at or before `time`.
     /// `nil` before the first readable frame of the track.
     public func pixelBuffer(at time: HostTime) -> CVPixelBuffer? {
-        lock.withLock { frame(at: time)?.pixelBuffer }
+        lock.withLock {
+            asked = asked.map { min($0.lowerBound, time)...max($0.upperBound, time) } ?? time...time
+            return frame(at: time)?.pixelBuffer
+        }
     }
 
     private func frame(at time: HostTime) -> Frame? {

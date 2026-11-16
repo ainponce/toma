@@ -19,6 +19,10 @@ import os
 /// audio track through the clips, each placed by host time by its own clock, at its gain, with the click sounds; a take
 /// without any audio track or click sound exports without audio.
 ///
+/// A take whose screen recorded no segment exports its background, its camera and its audio for as long as the
+/// document's sequence lasts (design §7.6), unless the document is the legacy one (`EditDocument.legacy(for:)`), which
+/// refuses it as phase 0 and 1a do (`ExportError.noDisplayTrack`).
+///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
 /// existing file in one step. If it fails or is cancelled, the partial file is removed and the
@@ -56,8 +60,9 @@ public final class MP4Exporter: Sendable {
     /// go down and stay below 1, then once more with exactly 1 from the task running the export, once the
     /// file is in place. Cancel that task to stop: the export ends between two frames and throws
     /// `ExportError.cancelled`. One export at a time per destination: they would share the partial file.
-    /// - Throws: `ExportError` (`destinationNotAllowed` before anything is written, `noDisplayTrack`,
-    ///   `writerFailed`, `cancelled`), or the `RenderError` of a frame that could not be drawn.
+    /// - Throws: `ExportError` (`destinationNotAllowed` before anything is written, `noDisplayTrack` for the legacy
+    ///   document of a take without screen segments, `writerFailed`, `cancelled`), or the `RenderError` of a frame that
+    ///   could not be drawn.
     @concurrent @discardableResult
     public func export(to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> ExportSummary {
         guard !Task.isCancelled else { throw ExportError.cancelled }
@@ -65,9 +70,7 @@ public final class MP4Exporter: Sendable {
         guard let destination = Self.canonicalDestination(destination, project: project.package) else {
             throw ExportError.destinationNotAllowed
         }
-        guard ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false else {
-            throw ExportError.noDisplayTrack
-        }
+        guard Self.exports(document, of: project) else { throw ExportError.noDisplayTrack }
         let fps = settings.framesPerSecond
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
 
@@ -125,9 +128,7 @@ public final class MP4Exporter: Sendable {
     /// - Throws: what `export` throws before it writes anything (`noDisplayTrack`, `writerFailed` for a frame rate
     ///   that is not positive), or what reading or mixing the audio throws.
     static func mixSamples(of project: LoadedProject, document: EditDocument, framesPerSecond: Int) async throws -> [Float] {
-        guard ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false else {
-            throw ExportError.noDisplayTrack
-        }
+        guard exports(document, of: project) else { throw ExportError.noDisplayTrack }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
         let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond)
         guard mix.hasSound else { return [] }
@@ -148,6 +149,13 @@ public final class MP4Exporter: Sendable {
             }
             return samples
         }
+    }
+
+    /// Whether `document` of `project` can be exported: when the screen the take shows (`ScreenChoice`) recorded a
+    /// segment, and without one for any document but the legacy one, which refuses it as phase 0 and 1a do.
+    private static func exports(_ document: EditDocument, of project: LoadedProject) -> Bool {
+        ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false
+            || document != .legacy(for: project)
     }
 
     // MARK: - Destination

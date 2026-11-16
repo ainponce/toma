@@ -139,24 +139,28 @@ public enum ShaderSource {
         return float4(color, 1.0) * coverage;
     }
 
+    // The screen (`screenColor`) at `opacity`: 1 opaque, exactly as without it; less while it fades in over the screen
+    // being left.
     fragment float4 screenFragment(QuadOut in [[stage_in]],
                                    constant QuadUniforms &u [[buffer(0)]],
+                                   constant float &opacity [[buffer(1)]],
                                    texture2d<float> source [[texture(0)]],
                                    sampler linearSampler [[sampler(0)]]) {
-        return screenColor(in, u, source, linearSampler);
+        return screenColor(in, u, source, linearSampler) * opacity;
     }
 
-    // The screen sampled trilinear from a mipmapped copy of its frame (`ScreenLayer.mipmapped`), opaque, over
-    // `imageCoverage`. The level is chosen from how fast the coordinates change before a crop clamps them: those clamped
+    // The screen sampled trilinear from a mipmapped copy of its frame (`ScreenLayer.mipmapped`), over `imageCoverage`, at
+    // `opacity`. The level is chosen from how fast the coordinates change before a crop clamps them: those clamped
     // stop changing along the crop's edges, where they would read the full-size level and alias.
     fragment float4 mipmappedScreenFragment(QuadOut in [[stage_in]],
                                             constant QuadUniforms &u [[buffer(0)]],
+                                            constant float &opacity [[buffer(1)]],
                                             texture2d<float> source [[texture(0)]],
                                             sampler trilinearSampler [[sampler(0)]]) {
         float coverage = imageCoverage(in.p, u);
         float2 uv = imageUV(in.uv, u, source);
         float3 color = source.sample(trilinearSampler, uv, gradient2d(dfdx(in.uv), dfdy(in.uv))).rgb;
-        return float4(color, 1.0) * coverage;
+        return float4(color, 1.0) * coverage * opacity;
     }
 
     struct ShadowUniforms {
