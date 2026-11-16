@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import Analysis
 import AppSupport
 import Editing
 import ProjectFormat
@@ -14,6 +15,13 @@ import QuartzCore
 /// (`CATransaction.flush()`) on the main thread: the time each frame takes there is what is printed, for five motions.
 /// With `TOMA_BENCH_TIMELINE_SNAPSHOTS=<folder>`, it also writes there a PNG of the editor's own timeline (the package's
 /// take) and of the hour's at four scales.
+///
+/// Then the main thread's work for each move of a drag and for each edit, on the same hour with an event log of a cursor
+/// moving at 60 Hz all along (216 000 events, as `bench-preview`'s hour), before and after final review D-I3: a trim of a
+/// clip moved 120 times (each move's step applied, and the timeline's content made from it); the overlay's stage points of
+/// an edit with a fixed zoom selected; and "Follow the Cursor" of the screen track. "Before" is what each move or edit did
+/// until then, made of the same calls: the timeline's pass over the events for its markers and the step applied by the
+/// model and the timeline both; `StagePoints` from the events; the planner on the main thread.
 @MainActor
 enum TimelineBench {
     static var isAsked: Bool { ProcessInfo.processInfo.environment["TOMA_BENCH_TIMELINE"] == "1" }
@@ -32,7 +40,8 @@ enum TimelineBench {
         window.orderFrontRegardless()
         let caches = ProjectCaches(root: FileManager.default.temporaryDirectory.appending(path: "toma-timeline-bench"), projectID: "bench")
         view.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
-        view.show(take: project.take, events: project.events, document: document, missing: [600...630, 1800...1802])
+        let markers = TimelineContent.markerTimes(in: project.events)
+        view.show(take: project.take, markers: markers, document: document, missing: [600...630, 1800...1802])
         for id in ["mic", "system-audio"] { view.setWaveform(WaveformLevels(syntheticWaveform()), for: id) }
         view.playhead = 1_234_000_000_000
         view.layoutSubtreeIfNeeded()
@@ -67,6 +76,7 @@ enum TimelineBench {
         }
         report("the playhead alone, every frame", times, layers: view.benchLayerCount)
         paced(view, fit: fit, duration: duration, width: width)
+        measureEdits(view, project: project, document: document, markers: markers)
 
         if let snapshots {
             for (name, scale, offset) in [("fitted", fit, 0.0), ("30", 30.0, 0.0), ("60", 60.0, 69_500.0), ("600", 600.0, 700_000.0)] {
@@ -78,6 +88,69 @@ enum TimelineBench {
         }
         fflush(stdout)
         exit(0)
+    }
+
+    /// The main thread's work for each drag move and edit (final review D-I3), before and after; see the type's notes.
+    private static func measureEdits(
+        _ view: EditorTimelineView, project: LoadedProject, document: EditDocument, markers: [HostTime]
+    ) {
+        print("edits on the hour: \(project.events.count) events, \(document.sequence.count) clips, \(document.zoom.regions.count) zooms")
+        func milliseconds(_ body: () -> Void) -> Double {
+            let start = DispatchTime.now().uptimeNanoseconds
+            body()
+            return Double(DispatchTime.now().uptimeNanoseconds - start) / 1e6
+        }
+        let clip = document.sequence[250]
+        let limits = SequenceCommands.trimLimits(document, clipID: clip.id, edge: .end, take: project.take, events: project.events)
+        let steps = (1...120).compactMap { k in
+            SequenceCommands.trim(document, clipID: clip.id, edge: .end, toSource: clip.end.adding(seconds: -Double(k) / 60), limits: limits)
+        }
+        var before: [Double] = [], after: [Double] = []
+        for step in steps {
+            before.append(milliseconds {
+                // The model's apply for the preview, the timeline's own, and its content with a pass over the events.
+                let applied: EditDocument? = try? document.applying(step.changes)
+                _ = try? document.applying(step.changes) as EditDocument
+                _ = TimelineContent.markerTimes(in: project.events)
+                view.setPreview(applied)
+                view.layoutSubtreeIfNeeded()
+            })
+        }
+        view.setPreview(nil)
+        for step in steps {
+            after.append(milliseconds {
+                // The model's apply, whose document the timeline shows; its markers read once per take.
+                let applied: EditDocument? = try? document.applying(step.changes)
+                view.setPreview(applied)
+                view.layoutSubtreeIfNeeded()
+            })
+        }
+        view.setPreview(nil)
+        let applying = steps.map { step in milliseconds { _ = try? document.applying(step.changes) as EditDocument } }
+        times("a trim drag, each move, before", before)
+        times("a trim drag, each move, after", after)
+        times("  of which the step applied (once a move now, `EditDocument.applying`)", applying)
+
+        let screens = TakeScreens(take: project.take, events: project.events)
+        var stageBefore: [Double] = [], stageAfter: [Double] = []
+        for _ in 0..<20 {
+            stageBefore.append(milliseconds { _ = StagePoints(take: project.take, events: project.events, document: document) })
+            stageAfter.append(milliseconds { _ = StagePoints(take: project.take, document: document, screens: screens) })
+        }
+        times("an edit with a fixed zoom selected, the overlay's stage points, before", stageBefore)
+        times("an edit with a fixed zoom selected, the overlay's stage points, after", stageAfter)
+
+        var follow: [Double] = []
+        for _ in 0..<5 { follow.append(milliseconds { _ = TrackCommands.followCursor(document, project: project) }) }
+        times("Follow the Cursor of the screen track on the main thread, before (after: off it, none)", follow)
+    }
+
+    /// The median, the 95th percentile and the largest of `times`, in milliseconds.
+    private static func times(_ name: String, _ times: [Double]) {
+        let sorted = times.sorted()
+        func at(_ p: Double) -> Double { sorted[min(Int(Double(sorted.count) * p), sorted.count - 1)] }
+        print("  \(name): \(times.count) times, p50 \(String(format: "%.2f", at(0.5))) ms, p95 \(String(format: "%.2f", at(0.95))) ms, "
+            + "max \(String(format: "%.2f", sorted.last ?? 0)) ms")
     }
 
     private static func measure(_ view: EditorTimelineView, _ name: String, _ steps: [(Double, Double)]) {
@@ -147,7 +220,7 @@ enum TimelineBench {
     }
 
     /// A take of an hour from host 1 s, and its document: 500 clips of 7 s with 0.2 s cut between them, 300 zooms, 100
-    /// camera changes and 40 markers.
+    /// camera changes and 40 markers, and a cursor moving at 60 Hz all along.
     private static func makeProject() -> (LoadedProject, EditDocument) {
         let second: UInt64 = 1_000_000_000
         func at(_ seconds: Double) -> HostTime { HostTime(nanoseconds: second + UInt64(seconds * 1e9)) }
@@ -163,7 +236,10 @@ enum TimelineBench {
                 track("display-1", .display, frame: Rect(x: 0, y: 0, width: 1728, height: 1117)), track("camera", .camera),
                 track("mic", .microphone), track("system-audio", .systemAudio),
             ])
-        let events = (0..<40).map { InputEvent(t: at(Double($0) * 90 + 45), kind: .marker) }
+        let cursor = (0..<(3600 * 60)).map { i in
+            InputEvent(t: at(Double(i) / 60), kind: .cursor(x: 800 + 600 * sin(Double(i) / 97), y: 550 + 400 * cos(Double(i) / 61)))
+        }
+        let events = ((0..<40).map { InputEvent(t: at(Double($0) * 90 + 45), kind: .marker) } + cursor).sorted { $0.t < $1.t }
         var document = EditDocument.legacy(take: take, events: events)
         func id(_ prefix: String, _ n: Int) -> String { prefix + String(format: "%08x", n) }
         document.sequence = (0..<500).map { i in

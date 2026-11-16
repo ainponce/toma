@@ -87,11 +87,19 @@ final class EditorUndoManager: UndoManager {
 }
 
 extension EditorModel {
-    /// Closing the window now: whether it asks first (`EditorClosing`, design §5.9).
-    var closing: EditorClosing {
+    /// Closing the window now: whether it asks first (`EditorClosing`, design §5.9): about changes that couldn't be
+    /// saved, and about its export in progress.
+    var closingRule: EditorClosing {
         EditorClosing.decide(
             hasUnsavedChanges: panelSession?.hasUnsavedChanges ?? false, notices: panelSession?.notices ?? [],
-            isAsking: isAskingToClose)
+            isExporting: isExporting, isAsking: isAskingToClose)
+    }
+
+    /// What closing the window asks now, in order.
+    var closingQuestions: [EditorClosing.Question] {
+        EditorClosing.questions(
+            hasUnsavedChanges: panelSession?.hasUnsavedChanges ?? false, notices: panelSession?.notices ?? [],
+            isExporting: isExporting)
     }
 
     /// Project ▸ Frames per Second: an edit, undone like any other.
@@ -109,30 +117,53 @@ extension EditorWindowController {
     }
 
     /// Closing while a change couldn't be saved (the amber banner is up) asks first (design §5.9): "Keep Open", the default,
-    /// or "Close Anyway".
+    /// or "Close Anyway"; while its export runs, whether to cancel it, as quitting asks: "Cancel", the default, or "Close".
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        switch model.closing {
+        switch model.closingRule {
         case .close:
             return true
         case .keepOpen:
             return false
         case .ask:
-            askBeforeClosing(sender)
+            askBeforeClosing(sender, answered: [])
             return false
         }
     }
 
-    private func askBeforeClosing(_ window: NSWindow) {
+    /// Asks the first of the questions closing asks now that was not `answered` yes; closes once none is left. Each
+    /// question is read again after an answer: a save may have gone through, or the export ended, meanwhile.
+    private func askBeforeClosing(_ window: NSWindow, answered: [EditorClosing.Question]) {
+        guard let question = model.closingQuestions.first(where: { !answered.contains($0) }) else {
+            // `close()` does not ask again (`windowShouldClose` is for the window's button and ⌘W).
+            window.close()
+            return
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = String(
-            localized: "Some changes couldn't be saved", comment: "Closing an editor whose last changes are not on the disk")
-        alert.informativeText = String(
-            localized: "If the window is closed now, they're lost.", comment: "Closing an editor whose last changes are not on the disk")
-        let answers = UnsavedChangesAnswer.allCases
-        for answer in answers {
-            let button = alert.addButton(withTitle: Self.title(answer))
-            button.hasDestructiveAction = answer.closesTheWindow
+        let closes: [Bool]
+        switch question {
+        case .unsavedChanges:
+            alert.messageText = String(
+                localized: "Some changes couldn't be saved", comment: "Closing an editor whose last changes are not on the disk")
+            alert.informativeText = String(
+                localized: "If the window is closed now, they're lost.", comment: "Closing an editor whose last changes are not on the disk")
+            let answers = UnsavedChangesAnswer.allCases
+            for answer in answers {
+                let button = alert.addButton(withTitle: Self.title(answer))
+                button.hasDestructiveAction = answer.closesTheWindow
+            }
+            closes = answers.map(\.closesTheWindow)
+        case .cancelExport:
+            alert.messageText = String(
+                localized: "An export is in progress. Close the window and cancel it?",
+                comment: "Closing an editor's window while its export runs")
+            alert.informativeText = String(localized: "The video being exported isn't saved. The project isn't changed.")
+            let answers = ExportClosingAnswer.allCases
+            for answer in answers {
+                let button = alert.addButton(withTitle: Self.title(answer))
+                button.hasDestructiveAction = answer.closesTheWindow
+            }
+            closes = answers.map(\.closesTheWindow)
         }
         model.isAskingToClose = true
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -140,9 +171,8 @@ extension EditorWindowController {
                 guard let self else { return }
                 self.model.isAskingToClose = false
                 let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-                guard answers.indices.contains(index), answers[index].closesTheWindow else { return }
-                // `close()` does not ask again (`windowShouldClose` is for the window's button and ⌘W).
-                self.window?.close()
+                guard closes.indices.contains(index), closes[index] else { return }
+                self.askBeforeClosing(window, answered: answered + [question])
             }
         }
     }
@@ -151,6 +181,13 @@ extension EditorWindowController {
         switch answer {
         case .keepOpen: String(localized: "Keep Open", comment: "Closing with unsaved changes: the window stays open (the default)")
         case .closeAnyway: String(localized: "Close Anyway", comment: "Closing with unsaved changes: the window closes, losing them")
+        }
+    }
+
+    private static func title(_ answer: ExportClosingAnswer) -> String {
+        switch answer {
+        case .cancel: String(localized: "Cancel")
+        case .close: String(localized: "Close")
         }
     }
 

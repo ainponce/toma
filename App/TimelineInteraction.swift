@@ -347,10 +347,7 @@ final class TimelineInteraction {
         guard model.isGesturing else { return nil }
         let map = TimeMap(sequence: document.sequence)
         let project = model.overlayProject
-        let markers = project?.events.compactMap { event -> HostTime? in
-            if case .marker = event.kind { event.t } else { nil }
-        } ?? []
-        let points = EditPoints(document: document, timeMap: map, markers: markers).all
+        let points = EditPoints(document: document, timeMap: map, markers: model.markerTimes).all
         lastStep = nil
         return Base(document: document, map: map, points: points, project: project)
     }
@@ -408,6 +405,7 @@ final class TimelineInteraction {
         let makeID: (String) -> String = { EditorModel.newID($0) }
         var step: EditStep?
         var label: (delta: Int64, position: Int64)?
+        var trimmedZoom: (id: String, edge: ClipEdge, output: Int64)?
         let base: Base
         switch drag {
         case let .trimClip(trimBase, clip, edge, outputStart, limits):
@@ -426,13 +424,8 @@ final class TimelineInteraction {
             base = trimBase
             let τ = snapped(output(at: point), event: event, base: base)
             step = ZoomCommands.trim(base.document, id: id, edge: edge, toOutput: τ)
-            let edgeOutput = edge == .start ? range.lowerBound : range.upperBound
-            if let step, let next = try? base.document.applying(step.changes), let moved = zoomRange(id, in: next) {
-                let now = edge == .start ? moved.lowerBound : moved.upperBound
-                label = (now - edgeOutput, now)
-            } else {
-                label = (0, edgeOutput)
-            }
+            // Placed below, from the document the model applied the step to.
+            trimmedZoom = (id, edge, edge == .start ? range.lowerBound : range.upperBound)
         case let .moveZoom(moveBase, id, range, grab):
             base = moveBase
             let proposed = output(at: point) - grab - range.lowerBound
@@ -460,8 +453,17 @@ final class TimelineInteraction {
         }
         if case .trimClip = drag { NSCursor.resizeLeftRight.set() } else if case .trimZoom = drag { NSCursor.resizeLeftRight.set() }
         lastStep = step
-        model?.updateGesture(step)
-        let preview = step.flatMap { try? base.document.applying($0.changes) as EditDocument }
+        // The step is applied once a move, by the model (design §7.9: the main thread never waits long): the preview, the
+        // timeline and the label all show that document.
+        let preview = model?.updateGesture(step)
+        if let trimmed = trimmedZoom {
+            if let preview, let moved = zoomRange(trimmed.id, in: preview) {
+                let now = trimmed.edge == .start ? moved.lowerBound : moved.upperBound
+                label = (now - trimmed.output, now)
+            } else {
+                label = (0, trimmed.output)
+            }
+        }
         view.setPreview(preview)
         if let label, let total = view.content?.map.duration {
             showLabel(TimelineDragRules.trimLabel(delta: label.delta, position: label.position, total: total, locale: .current), at: point.x)
@@ -827,11 +829,19 @@ extension EditorModel {
         perform(step)
     }
 
-    /// "Follow the Cursor": the screens regenerated.
+    /// "Follow the Cursor": the screens regenerated, planned off the main thread (it reads every event of the take and
+    /// looks at each segment's file), as the automatic zooms are; planned again from the document as it is then if it
+    /// changed meanwhile.
     func followCursor() {
-        guard canEdit, let document, let project = overlayProject else { return }
-        let step = TrackCommands.followCursor(document, project: project)
-        guard !step.changes.isEmpty else { return }
-        perform(step)
+        guard canEdit, followCursorTask == nil else { return }
+        followCursorTask = Task {
+            defer { followCursorTask = nil }
+            while !closed, canEdit, let document, let project = overlayProject {
+                let step = await Task.detached { TrackCommands.followCursor(document, project: project) }.value
+                guard self.document == document else { continue }
+                if !step.changes.isEmpty { perform(step) }
+                break
+            }
+        }
     }
 }

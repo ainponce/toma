@@ -244,6 +244,17 @@
         }
       }
     },
+    "An export is in progress. Close the window and cancel it?" : {
+      "comment" : "Closing an editor's window while its export runs",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay una exportación en curso. ¿Cerrar la ventana y cancelarla?"
+          }
+        }
+      }
+    },
     "An export is in progress. Quit and cancel it?" : {
       "localizations" : {
         "es" : {
@@ -1840,6 +1851,17 @@
         }
       }
     },
+    "If you quit now, they're lost." : {
+      "comment" : "Quitting while an editor's last changes are not on the disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Si se sale ahora, se pierden."
+          }
+        }
+      }
+    },
     "Image" : {
       "localizations" : {
         "es" : {
@@ -2734,6 +2756,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Salir y volver a abrir"
+          }
+        }
+      }
+    },
+    "Quit Anyway" : {
+      "comment" : "Quitting while an editor's last changes are not on the disk: they are lost",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salir igual"
           }
         }
       }

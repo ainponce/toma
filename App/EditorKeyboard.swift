@@ -200,13 +200,10 @@ extension EditorModel {
     /// ↑ and ↓: the edit point before or after the playhead (the edges of the clips and of the zoom blocks, the camera's
     /// and the screens' changes, the take's markers, the start and the end), paused.
     func goToEditPoint(forward: Bool) -> Bool {
-        guard canPlay, let document, let project = overlayProject else { return false }
+        guard canPlay, let document else { return false }
         if isPlaying { pause() }
         let map = TimeMap(sequence: document.sequence)
-        let markers = project.events.compactMap { event -> HostTime? in
-            if case .marker = event.kind { event.t } else { nil }
-        }
-        let points = EditPoints(document: document, timeMap: map, markers: markers).all
+        let points = EditPoints(document: document, timeMap: map, markers: markerTimes).all
         guard let frame = KeyboardCommands.editPointFrame(
             from: playheadFrame, forward: forward, points: points, frameRate: document.frameRate,
             frameCount: map.frameCount(frameRate: document.frameRate))

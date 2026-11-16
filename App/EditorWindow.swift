@@ -187,11 +187,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        closeForQuit()
+        // On the next turn: the window is still closing, and dropping this controller releases it.
+        Task { self.onClose() }
+    }
+
+    /// The window closes, or the app quits with it open: the timeline stops and the model closes (its state written, its
+    /// session closing: `EditorModel.closing`). The window itself stays until the app quits.
+    func closeForQuit() {
         timeline.stop()
         KeyEditor.shared.stopFollowing(model)
         model.close()
-        // On the next turn: the window is still closing, and dropping this controller releases it.
-        Task { self.onClose() }
     }
 
     #if DEBUG

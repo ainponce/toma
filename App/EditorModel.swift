@@ -149,6 +149,14 @@ final class EditorModel {
     /// The automatic zoom's settings that are being planned again off the main thread: the controls show them meanwhile.
     var autoZoomPending: AutoZoomSettings?
     @ObservationIgnored var autoZoomTask: Task<Void, Never>?
+    /// "Follow the Cursor" of the screen track being planned off the main thread.
+    @ObservationIgnored var followCursorTask: Task<Void, Never>?
+    /// The source instants of the take's markers, in order (`TimelineContent.markerTimes(in:)`), found once when the
+    /// project opens, off the main thread: the ruler, ↑ and ↓ and a drag's snapping read them, never the events.
+    @ObservationIgnored private(set) var markerTimes: [HostTime] = []
+    /// Where the take's screens are (`TakeScreens`), read once when the project opens, off the main thread: each
+    /// revision's `StagePoints` for the overlays then reads only what its document names.
+    @ObservationIgnored private(set) var takeScreens: TakeScreens?
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
 
@@ -211,6 +219,9 @@ final class EditorModel {
     @ObservationIgnored private var exportTask: Task<Void, Never>?
     @ObservationIgnored private var exportFinishedTask: Task<Void, Never>?
     @ObservationIgnored private(set) var closed = false
+    /// Once closed: the session closing (its last lines, snapshot and lock) and the export cancelled (its partial file
+    /// removed), which a quit waits for (`waitUntilClosed()`).
+    @ObservationIgnored private(set) var closing: Task<Void, Never>?
 
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Editor")
 
@@ -326,10 +337,13 @@ final class EditorModel {
         let project = currentProject(of: session)
         let size = previewSize(of: document)
         let renderer: FrameRenderer
+        let screens: TakeScreens, markers: [HostTime]
         do {
-            // Builds the motion paths: never on the main thread.
-            renderer = try await Task.detached {
-                try FrameRenderer(project: project, document: document, outputSize: size)
+            // Builds the motion paths, and reads the take's events for what the overlays and the timeline read of them:
+            // never on the main thread.
+            (renderer, screens, markers) = try await Task.detached {
+                let renderer = try FrameRenderer(project: project, document: document, outputSize: size)
+                return (renderer, TakeScreens(take: project.take, events: project.events), TimelineContent.markerTimes(in: project.events))
             }.value
         } catch {
             Self.logger.error("Cannot draw \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -340,6 +354,8 @@ final class EditorModel {
         // Closed, or shown as a project of a newer version or one that can't be read, meanwhile.
         guard !closed, self.session === session, state == .opening else { return }
         self.renderer = renderer
+        takeScreens = screens
+        markerTimes = markers
         let engine = PreviewEngine(renderer: renderer, layer: previewLayer)
         self.engine = engine
         let check = MissingVideoCheck(renderer: renderer) { [weak self] spans in
@@ -393,7 +409,7 @@ final class EditorModel {
             sound.hold(document)
             if shownRevision != revision, let session {
                 // Edited meanwhile: the mix (and scene) of the revision shown, played once built if playing.
-                builder?.build(revision: session.revision, document: session.document, outputSize: previewSize(of: session.document), mix: mix)
+                build(session.document, revision: session.revision)
             } else if isPlaying {
                 startClock(at: clockSeconds())
             }
@@ -524,32 +540,42 @@ final class EditorModel {
     @ObservationIgnored private var gestureStep: EditStep?
     /// What the gesture shows of the document besides its step (the zoom's box shows the frame without zoom).
     @ObservationIgnored private var gestureLook: (EditDocument) -> EditDocument = { $0 }
-    @ObservationIgnored private var gestureBuilds = 0
+    /// A gesture's look the preview keeps after it ended, until `releaseLook()`.
+    @ObservationIgnored private var heldLook: ((EditDocument) -> EditDocument)?
+    /// Which builds of the preview are shown (`PreviewBuilds`): a gesture's while it lasts, never a stale one.
+    @ObservationIgnored private var builds = PreviewBuilds()
 
     /// Starts a gesture. `look` changes what the preview shows while it lasts (never what is logged).
     func beginGesture(look: @escaping (EditDocument) -> EditDocument = { $0 }) {
         guard canEdit, !isGesturing else { return }
         isGesturing = true
+        builds.beginGesture()
         gestureStep = nil
         gestureLook = look
         showGesture()
     }
 
     /// The step the gesture has now: the preview shows the document with its changes applied; if they do not apply, the
-    /// document without them.
-    func updateGesture(_ step: EditStep?) {
-        guard isGesturing else { return }
+    /// document without them. Returns the document with the step applied (without the gesture's look; `nil` without a
+    /// step, or one that does not apply), for what else shows the gesture: applying is not cheap, and is done once a move.
+    @discardableResult
+    func updateGesture(_ step: EditStep?) -> EditDocument? {
+        guard isGesturing else { return nil }
         gestureStep = step
-        showGesture()
+        return showGesture()
     }
 
     /// Ends the gesture with one `perform` of its last step (none if it never had one); whether it changed the document.
+    /// `holdingLook`: the preview keeps the gesture's look until `releaseLook()` (the camera's bubble is the overlay's
+    /// while it is thrown into its place, so it is never drawn twice).
     @discardableResult
-    func endGesture() -> Bool {
+    func endGesture(holdingLook: Bool = false) -> Bool {
         guard isGesturing else { return false }
         isGesturing = false
+        builds.endGesture()
         let step = gestureStep
         gestureStep = nil
+        if holdingLook { heldLook = gestureLook }
         gestureLook = { $0 }
         if let step, perform(step) != .refused { return true }
         showSessionRevision()
@@ -560,25 +586,41 @@ final class EditorModel {
     func cancelGesture() {
         guard isGesturing else { return }
         isGesturing = false
+        builds.endGesture()
         gestureStep = nil
         gestureLook = { $0 }
         showSessionRevision()
     }
 
-    private func showGesture() {
-        guard let document, let builder else { return }
-        var shown = document
-        if let step = gestureStep, let applied: EditDocument = try? document.applying(step.changes) { shown = applied }
-        shown = gestureLook(shown)
-        // Negative revisions are the gestures': no session's revision is one.
-        gestureBuilds += 1
-        builder.build(revision: -gestureBuilds, document: shown, outputSize: previewSize(of: shown), mix: baseMix)
+    /// The look `endGesture(holdingLook: true)` kept is let go: the preview shows the session's document as it is.
+    func releaseLook() {
+        guard heldLook != nil else { return }
+        heldLook = nil
+        showSessionRevision()
+    }
+
+    @discardableResult
+    private func showGesture() -> EditDocument? {
+        guard let document, let session, let builder else { return nil }
+        let applied: EditDocument? = gestureStep.flatMap { try? document.applying($0.changes) }
+        let shown = gestureLook(applied ?? document)
+        let ticket = builds.request(revision: session.revision, ofGesture: true)
+        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix)
+        return applied
     }
 
     /// The preview shows the session's document again.
     private func showSessionRevision() {
-        guard let session, let builder else { return }
-        builder.build(revision: session.revision, document: session.document, outputSize: previewSize(of: session.document), mix: baseMix)
+        guard let session else { return }
+        build(session.document, revision: session.revision)
+    }
+
+    /// Builds the scene and the mix of session revision `revision`, `document`, with the look still held, if one is.
+    private func build(_ document: EditDocument, revision: Int) {
+        guard let builder else { return }
+        let shown = heldLook?(document) ?? document
+        let ticket = builds.request(revision: revision, ofGesture: false)
+        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix)
     }
 
     /// The project as the session has it, for what the overlays place.
@@ -651,7 +693,7 @@ final class EditorModel {
             durationSeconds = TimeMap(sequence: next.sequence).durationSeconds
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
-            builder?.build(revision: session.revision, document: next, outputSize: previewSize(of: next), mix: baseMix)
+            build(next, revision: session.revision)
         }
         updateBanner()
     }
@@ -677,18 +719,22 @@ final class EditorModel {
     /// The scene and the mix of a revision are built: the preview and the sound take them. Playing, the time goes on
     /// in the new revision (the same source instant) and the new sound is heard from there.
     ///
-    /// A build older than the revision the playhead is counted in is dropped: the newer one is on its way.
+    /// Which builds are shown is `PreviewBuilds`': a gesture's while it lasts, and never one older than what is on screen,
+    /// than the revision the playhead is counted in (the newer one is on its way), or of a gesture that ended. Playing, a
+    /// gesture's look is drawn and heard, and the playhead stays counted in the session's document.
     private func revisionBuilt(_ built: RevisionBuilder.Built) {
-        guard let engine, state == .ready, built.revision >= timeline?.revision ?? .min else { return }
+        guard let engine, state == .ready, builds.accepts(built.ticket, playheadRevision: timeline?.revision) else { return }
         engine.setScene(built.scene)
         previewAspect = built.document.aspect
         if let mix = built.mix, let player {
             player.setMix(mix)
             sound.hold(built.document)
         }
-        if isPlaying, let timeline {
+        if isPlaying, built.ticket.gesture != nil {
+            if player != nil, sound.needsPlay { startClock(at: clockSeconds()) }
+        } else if isPlaying, let timeline {
             let seconds = Self.seconds(afterChange: clockSeconds(), from: timeline.document, to: built.document)
-            self.timeline = Timeline(built.document, revision: built.revision)
+            self.timeline = Timeline(built.document, revision: built.ticket.revision)
             // The player plays a new mix only from its next `play` (and what it plays may be an older revision's than
             // the playhead's); the host's clock goes on in the new revision's time.
             if (player != nil && sound.needsPlay) || timeline.document.sequence != built.document.sequence {
@@ -1030,8 +1076,8 @@ final class EditorModel {
 
     // MARK: - Closing
 
-    /// The window closed: its state is written, playback stops, an export in progress is cancelled, and the session closes
-    /// (its snapshot and lock), off the main thread. An "Apply Default Style" waiting for room on a full disk gives up as
+    /// The window closed, or the app quits: its state is written, playback stops, an export in progress is cancelled (the
+    /// window asked first), and the session closes (its last lines, snapshot and lock), off the main thread (`closing`). An "Apply Default Style" waiting for room on a full disk gives up as
     /// the session closes, without applying anything (cancelling its task would apply Toma's gradient instead).
     func close() {
         guard !closed else { return }
@@ -1041,14 +1087,32 @@ final class EditorModel {
         if let preferencesObserver { NotificationCenter.default.removeObserver(preferencesObserver) }
         preferencesObserver = nil
         openTask?.cancel()
-        exportTask?.cancel()
+        followCursorTask?.cancel()
+        let export = exportTask
+        export?.cancel()
         exportFinishedTask?.cancel()
         tearDownPreview()
-        if let session {
-            session.onChange = nil
-            Task { await session.close() }
+        session?.onChange = nil
+        closing = Task { [session] in
+            await session?.close()
+            await export?.value
         }
         session = nil
+    }
+
+    /// Returns once `close()` has closed the session and the export it cancelled has ended.
+    func waitUntilClosed() async {
+        await closing?.value
+    }
+
+    /// Closing the session now would lose edits that couldn't be saved (`EditorClosing.losesEdits`): quitting asks first.
+    var losesEditsIfClosed: Bool {
+        EditorClosing.losesEdits(hasUnsavedChanges: session?.hasUnsavedChanges ?? false, notices: session?.notices ?? [])
+    }
+
+    /// An export of this editor is running.
+    var isExporting: Bool {
+        if case .running = exportState { true } else { false }
     }
 
     private func showAlert(_ message: String, informative: String = "", style: NSAlert.Style) {
@@ -1070,7 +1134,7 @@ final class EditorModel {
 /// read (`MotionPaths.areThePaths(of:)`: a background, a shadow, the corners), which then costs no rebuild.
 private final class RevisionBuilder: Sendable {
     struct Built: Sendable {
-        var revision: Int
+        var ticket: PreviewBuilds.Ticket
         var document: EditDocument
         /// At the export's size.
         var scene: FrameEvaluator
@@ -1079,7 +1143,7 @@ private final class RevisionBuilder: Sendable {
     }
 
     private struct Request: Sendable {
-        var revision: Int
+        var ticket: PreviewBuilds.Ticket
         var document: EditDocument
         var outputSize: SIMD2<Int>
         var mix: EditedMix?
@@ -1111,10 +1175,10 @@ private final class RevisionBuilder: Sendable {
         state.withLock { $0.paths = paths }
     }
 
-    /// Builds `revision` of the document, `document` at `outputSize`, and its mix from `mix` (the project's).
-    func build(revision: Int, document: EditDocument, outputSize: SIMD2<Int>, mix: EditedMix?) {
+    /// Builds the request of `ticket`, `document` at `outputSize`, and its mix from `mix` (the project's).
+    func build(ticket: PreviewBuilds.Ticket, document: EditDocument, outputSize: SIMD2<Int>, mix: EditedMix?) {
         let start = state.withLock { state in
-            state.pending = Request(revision: revision, document: document, outputSize: outputSize, mix: mix)
+            state.pending = Request(ticket: ticket, document: document, outputSize: outputSize, mix: mix)
             defer { state.building = true }
             return !state.building
         }
@@ -1140,7 +1204,7 @@ private final class RevisionBuilder: Sendable {
         }) {
             let paths = paths(of: request.document)
             let result = Built(
-                revision: request.revision, document: request.document,
+                ticket: request.ticket, document: request.document,
                 scene: renderer.makeScene(document: request.document, paths: paths, outputSize: request.outputSize),
                 mix: request.mix?.with(document: request.document, framesPerSecond: request.document.frameRate))
             let built = self.built
