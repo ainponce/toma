@@ -3,7 +3,7 @@ import Foundation
 import Metal
 import ProjectFormat
 
-/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the gradient, the screen, the cursor and the camera, in that
+/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the screen, the cursor and the camera, in that
 /// order, in one render pass that starts by clearing the target, blended premultiplied "over".
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
@@ -13,6 +13,7 @@ public final class Compositor: @unchecked Sendable {
     public static let pixelFormat = MTLPixelFormat.bgra8Unorm
 
     private let gradientPipeline: any MTLRenderPipelineState
+    private let wallpaperPipeline: any MTLRenderPipelineState
     private let screenPipeline: any MTLRenderPipelineState
     private let spritePipeline: any MTLRenderPipelineState
     private let screenSampler: any MTLSamplerState
@@ -47,6 +48,7 @@ public final class Compositor: @unchecked Sendable {
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
         gradientPipeline = try pipeline(vertex: "gradientVertex", fragment: "gradientFragment", blended: false)
+        wallpaperPipeline = try pipeline(vertex: "quadVertex", fragment: "wallpaperFragment", blended: false)
         screenPipeline = try pipeline(vertex: "quadVertex", fragment: "screenFragment", blended: true)
         spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
 
@@ -80,26 +82,22 @@ public final class Compositor: @unchecked Sendable {
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer
     ) {
-        precondition(target.pixelFormat == Self.pixelFormat, "Compositor draws into \(Self.pixelFormat) only, not \(target.pixelFormat)")
-        let pass = MTLRenderPassDescriptor()
-        let attachment = pass.colorAttachments[0]!
-        attachment.texture = target
-        attachment.loadAction = .clear
-        attachment.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
-        attachment.storeAction = .store
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
-            preconditionFailure("Compositor: the command buffer takes no render pass (already committed, or another encoder is open)")
-        }
-        encoder.label = "Compositor"
+        let encoder = renderPass(into: target, commandBuffer: commandBuffer)
         let viewport = SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y))
 
         // 1. Background.
-        let angle = frame.gradientAngleDegrees * .pi / 180
-        var gradient = GradientUniforms(
-            start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), padding: .zero)
-        encoder.setRenderPipelineState(gradientPipeline)
-        encoder.setFragmentBytes(&gradient, length: MemoryLayout<GradientUniforms>.stride, index: 0)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        switch frame.background {
+        case .gradient:
+            let angle = frame.gradientAngleDegrees * .pi / 180
+            drawGradient(start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), encoder: encoder)
+        case let .color(color):
+            // Both ends of that colour: every pixel is `mix(color, color, t)`, the colour itself.
+            drawGradient(start: color, end: color, direction: .zero, encoder: encoder)
+        case let .wallpaper(preset):
+            drawWallpaper(
+                preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), viewport: viewport,
+                encoder: encoder)
+        }
 
         // 2. Screen.
         if let layer = frame.screen, let screen {
@@ -139,6 +137,63 @@ public final class Compositor: @unchecked Sendable {
                 viewport: viewport, encoder: encoder)
         }
         encoder.endEncoding()
+    }
+
+    /// Draws `preset` alone into all of `target` (`.bgra8Unorm`): in one quad as `encode` draws a frame's wallpaper when
+    /// `tileSize` is `nil`, otherwise in one quad per square of `tileSize` pixels (cut at the right and bottom edges). For
+    /// tests: nothing in a wallpaper depends on how its drawing is split.
+    func encodeWallpaper(_ preset: WallpaperPreset, tileSize: Int?, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer) {
+        let encoder = renderPass(into: target, commandBuffer: commandBuffer)
+        let size = SIMD2(target.width, target.height)
+        let viewport = SIMD2<Float>(Float(size.x), Float(size.y))
+        let step = tileSize ?? max(size.x, size.y)
+        precondition(step > 0, "Tiles of \(step) pixels")
+        for y in stride(from: 0, to: size.y, by: step) {
+            for x in stride(from: 0, to: size.x, by: step) {
+                let tile = Rect(x: Double(x), y: Double(y), width: Double(min(step, size.x - x)), height: Double(min(step, size.y - y)))
+                drawWallpaper(preset, in: tile, viewport: viewport, encoder: encoder)
+            }
+        }
+        encoder.endEncoding()
+    }
+
+    /// A render pass into `target` (`.bgra8Unorm`) that starts by clearing it to opaque black.
+    private func renderPass(into target: any MTLTexture, commandBuffer: any MTLCommandBuffer) -> any MTLRenderCommandEncoder {
+        precondition(target.pixelFormat == Self.pixelFormat, "Compositor draws into \(Self.pixelFormat) only, not \(target.pixelFormat)")
+        let pass = MTLRenderPassDescriptor()
+        let attachment = pass.colorAttachments[0]!
+        attachment.texture = target
+        attachment.loadAction = .clear
+        attachment.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        attachment.storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else {
+            preconditionFailure("Compositor: the command buffer takes no render pass (already committed, or another encoder is open)")
+        }
+        encoder.label = "Compositor"
+        return encoder
+    }
+
+    /// Fills the whole target with the gradient from `start` to `end` along `direction` (`gradientFragment`).
+    private func drawGradient(start: SIMD4<Float>, end: SIMD4<Float>, direction: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        var gradient = GradientUniforms(start: start, end: end, direction: direction, padding: .zero)
+        encoder.setRenderPipelineState(gradientPipeline)
+        encoder.setFragmentBytes(&gradient, length: MemoryLayout<GradientUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
+    /// Draws the part `rect` (output pixels) of `preset` over a stage of the whole output (`wallpaperFragment`).
+    private func drawWallpaper(_ preset: WallpaperPreset, in rect: Rect, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        let origin = SIMD2(Float(rect.x), Float(rect.y)), size = SIMD2(Float(rect.width), Float(rect.height))
+        var quad = QuadUniforms(
+            viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
+            uvSize: .one, radius: 0)
+        var wallpaper = WallpaperUniforms(stageSize: viewport, count: UInt32(preset.points.count), padding: 0)
+        encoder.setRenderPipelineState(wallpaperPipeline)
+        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&wallpaper, length: MemoryLayout<WallpaperUniforms>.stride, index: 0)
+        preset.points.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 1) }
+        preset.colors.withUnsafeBytes { encoder.setFragmentBytes($0.baseAddress!, length: $0.count, index: 2) }
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
     /// Draws the part `uvOrigin`, `uvSize` of `texture` into `rect` with rounded corners (`screenFragment`), over a
@@ -187,6 +242,13 @@ private struct GradientUniforms {
     var end: SIMD4<Float>
     var direction: SIMD2<Float>
     var padding: SIMD2<Float>
+}
+
+/// `WallpaperUniforms` in `ShaderSource.metal`: 16 bytes.
+private struct WallpaperUniforms {
+    var stageSize: SIMD2<Float>
+    var count: UInt32
+    var padding: UInt32
 }
 
 /// `QuadUniforms` in `ShaderSource.metal`: 64 bytes.
