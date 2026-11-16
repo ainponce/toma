@@ -23,12 +23,16 @@ public struct EditContext: Sendable {
     public var journalIO: EditJournalIO
     /// The writes and waits of the upgrade of a version 1 or 2 package to version 3.
     public var upgradeIO: PackageUpgradeIO
+    /// The folder of the default style (`DefaultStyleStore.defaultDirectory` in the app), where the image of an image
+    /// background of `defaultStyle` is: a new project copies it into its `assets/`. Without it, a new project with such a
+    /// background gets Toma's.
+    public var styleDirectory: URL?
 
     public init(
         app: AppInfo, cachesRoot: URL, defaultStyle: DefaultStyle, now: @escaping @Sendable () -> Date,
         makeID: @escaping @Sendable (String) -> String,
         compaction: (maxBytes: Int, maxEntries: Int) = (LogCompaction.maxBytes, LogCompaction.maxEntries),
-        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system
+        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system, styleDirectory: URL? = nil
     ) {
         self.app = app
         self.cachesRoot = cachesRoot
@@ -38,6 +42,7 @@ public struct EditContext: Sendable {
         self.compaction = compaction
         self.journalIO = journalIO
         self.upgradeIO = upgradeIO
+        self.styleDirectory = styleDirectory
     }
 }
 
@@ -172,6 +177,8 @@ public final class EditSession {
     private var restartTask: Task<Void, Never>?
     private var isClosed = false
     private var lastKnownURL: URL
+    /// How many times the package was opened again from the disk after another process changed it (Task 12b).
+    private var reopenings = 0
 
     private init(_ opened: Opened, context: EditContext) {
         project = opened.project
@@ -233,7 +240,7 @@ public final class EditSession {
         let files = try EditFiles.read(project.package)
         if let version = files.newerVersion { throw EditDocumentError.newerVersion(version) }
         if let code = files.unsafe { throw POSIXError(code) }
-        return (project, Resolution.of(project, files: files, context: context).document)
+        return (project, Resolution.of(project, files: files, context: context).shown)
     }
 
     /// Where the package is now (`F_GETPATH` of its folder), for what goes by path (importing an asset, the export, the
@@ -317,6 +324,35 @@ public final class EditSession {
         history.record(line)
         change(to: next, seq: line.seq)
         return outcome
+    }
+
+    /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`) and gives its path, as
+    /// the document names it (`assets/<sha>.<ext>`), once it is on the drive: the step that names it comes after. `nil`,
+    /// and nothing written, while the project cannot be edited, or if `BoundedImage` does not decode the file as the
+    /// package's asset reader would (decoded first, on the queue of files).
+    ///
+    /// A version 1 or 2 package moves to version 3 first, with only the `create` of its legacy document
+    /// (`PackageUpgrade.upgrade(first: nil)`) on the queue of files, or after the attempt of the upgrade a step started;
+    /// steps that come meanwhile wait for it, as in `perform`. Nothing is copied into a package that is not at version 3
+    /// yet: if the attempt fails for a moment (it is tried again, as for `perform`), or another process took `edit.lock`
+    /// first or changed the package (the session goes read-only or opens again), this is `nil`.
+    public func importAsset(_ url: URL) async -> String? {
+        guard isEditable, (try? await Self.run(on: files, { AssetImport.decodes(url) })) == true, isEditable else { return nil }
+        let reopened = reopenings
+        if journal == nil, upgrade == nil, let manifest = legacyManifest, var created = pendingCreate {
+            let legacy = created
+            created.logSequence = history.nextSeq
+            let create = EditLogEntry.create(seq: created.logSequence, document: created, app: context.app)
+            guard (try? create.jsonLine()) != nil else { return nil }
+            history.record(create)
+            pendingCreate = nil
+            startUpgrade(manifest, legacy: legacy, first: nil, at: context.now(), lines: [create])
+            change(to: document, seq: create.seq)
+        }
+        while let attempt = upgrade?.attempt { await attempt.value }
+        guard isEditable, journal != nil, reopenings == reopened else { return nil }
+        let package = ProjectPackage(url: packageURL)
+        return try? await Self.run(on: files) { try AssetImport.copy(url, into: package) }
     }
 
     /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every
@@ -532,8 +568,8 @@ public final class EditSession {
         var opened: Manifest
         /// The document as the package has it, which a refused upgrade goes back to.
         var legacy: EditDocument
-        /// The first step and when it was made: the upgrade's clock is that instant.
-        var first: EditStep
+        /// The first step (none for `importAsset`) and when it was made: the upgrade's clock is that instant.
+        var first: EditStep?
         var at: Date
         /// What the upgrade writes: the `create` and the `do` of the first step.
         var written: [EditLogEntry]
@@ -548,9 +584,10 @@ public final class EditSession {
     }
 
     /// Starts moving the package to version 3 with `step`, made at `at`, whose `lines` (`create` and `do`) the upgrade
-    /// writes as `perform` numbered them. Nothing here waits for the lock or the disk.
+    /// writes as `perform` numbered them. Without a step (`importAsset`), only the `create`. Nothing here waits for the
+    /// lock or the disk.
     private func startUpgrade(
-        _ manifest: Manifest, legacy: EditDocument, first step: EditStep, at: Date, lines: [EditLogEntry]
+        _ manifest: Manifest, legacy: EditDocument, first step: EditStep?, at: Date, lines: [EditLogEntry]
     ) {
         assert((try? PackageUpgrade.entries(legacy: legacy, first: step, at: at, app: context.app)) == lines)
         upgrade = PendingUpgrade(opened: manifest, legacy: legacy, first: step, at: at, written: lines)
@@ -581,7 +618,7 @@ public final class EditSession {
     @concurrent
     private nonisolated static func attemptUpgrade(
         _ progress: PackageUpgrade.Progress?, on queue: DispatchQueue, folder: PackageFolder, caches: ProjectCaches,
-        take: String, opened: Manifest, legacy: EditDocument, first: EditStep, upgradeContext: EditContext,
+        take: String, opened: Manifest, legacy: EditDocument, first: EditStep?, upgradeContext: EditContext,
         context: EditContext
     ) async -> UpgradeOutcome {
         let part = try? await run(on: queue) { () -> UpgradeStep in
@@ -689,6 +726,7 @@ public final class EditSession {
         case let .reopened(opened):
             self.upgrade = nil
             adopt(opened)
+            reopenings += 1
             revision += 1
             notices.append(.reopenedAfterOtherApp)
             onChange?()
@@ -890,7 +928,7 @@ private enum Opening {
             throw error
         }
         let resolution = Resolution.of(project, files: files, context: context)
-        opened.document = resolution.document
+        opened.document = resolution.shown
         if resolution.legacyLook { opened.notices = [.legacyLook] }
         opened.baseSeq = resolution.entries.last?.seq ?? 0
         if let refusal = resolution.refusal {
@@ -912,6 +950,11 @@ private enum Opening {
         }
         opened.lock = lock
         opened.journal = journal
+        if resolution.isNewDocument {
+            // Its default style's image goes into the package before the `create` that names it.
+            opened.document.style.background = DefaultStyleStore.background(
+                resolution.document.style.background, from: context.styleDirectory, into: ProjectPackage(url: current))
+        }
 
         var entries = resolution.entries
         var history = UndoHistory(entries: entries)
@@ -968,7 +1011,7 @@ private enum Opening {
         var opened = opened
         let files = try EditFiles.read(opened.project.package)
         let resolution = Resolution.of(opened.project, files: files, context: context)
-        opened.document = resolution.document
+        opened.document = resolution.shown
         if resolution.legacyLook { opened.notices = [.legacyLook] }
         opened.baseSeq = resolution.entries.last?.seq ?? 0
         if case let .newerDocument(version)? = resolution.refusal {
@@ -1138,6 +1181,8 @@ private struct Resolution: Sendable {
     var startsLog = false
     /// `document` is the legacy one: the first edit writes its `create`.
     var createsLogAtFirstEdit = false
+    /// `document` is a `NewDocument`, which `startsLog` writes.
+    var isNewDocument = false
     var recoveredUpTo: Date?
     var legacyLook = false
     /// The `logSequence` of `edit.json`, when it names a line the log keeps.
@@ -1186,7 +1231,7 @@ private struct Resolution: Sendable {
             } else {
                 resolution = Resolution(
                     document: NewDocument.make(project: project, defaultStyle: context.defaultStyle, makeID: context.makeID),
-                    startsLog: true)
+                    startsLog: true, isNewDocument: true)
             }
             if damaged {
                 resolution.rewritesLog = true
@@ -1201,6 +1246,15 @@ private struct Resolution: Sendable {
             resolution.refusal = resolution.refusal ?? .unsafeEditFiles
         }
         return resolution
+    }
+
+    /// `document` as it is shown before anything is written: a new document never with the image of its default style,
+    /// which only an editable opening copies into the package.
+    var shown: EditDocument {
+        guard isNewDocument else { return document }
+        var shown = document
+        shown.style.background = DefaultStyleStore.unsavedBackground(document.style.background)
+        return shown
     }
 
     private static func starting(from snapshot: EditDocument) -> Resolution {
