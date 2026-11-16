@@ -12,11 +12,11 @@ import os
 /// Exports a take as an MP4: H.264 High video tagged Rec.709 and, as one AAC track, the microphone mixed with system
 /// audio.
 ///
-/// Frame `i` is the frame `FrameRenderer` draws at output time `i / framesPerSecond`, the same drawing
-/// the preview shows; the video lasts the renderer's timeline (`FrameEvaluator`: the screen, or an audio track
-/// when it was recorded longer), rounded to whole frames. Every microphone and system audio track is placed by host
-/// time on the same timeline, each by its own clock (`AudioTrackTimeline`), and they are added together (`AudioMix`);
-/// a take without any exports without audio.
+/// Frame `i` is the frame `FrameRenderer` draws of the edit document at output time `TimeMap.frameTime(i, frameRate:)`,
+/// the same drawing the preview shows; the video lasts the document's output (`TimeMap.frameCount(frameRate:)` frames;
+/// for the legacy document, the screen's timeline, or an audio track's when it was recorded longer). Every microphone
+/// and system audio track is placed by host time on the same timeline from the start of the first clip, each by its own
+/// clock (`AudioTrackTimeline`), and they are added together (`AudioMix`); a take without any exports without audio.
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
@@ -31,11 +31,18 @@ public final class MP4Exporter: Sendable {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
     public let project: LoadedProject
+    public let document: EditDocument
     public let settings: ExportSettings
 
-    public init(project: LoadedProject, settings: ExportSettings = .init()) {
+    public init(project: LoadedProject, document: EditDocument, settings: ExportSettings) {
         self.project = project
+        self.document = document
         self.settings = settings
+    }
+
+    /// The export of the legacy document (`EditDocument.legacy(for:)`): what phase 0 and 1a export.
+    public convenience init(project: LoadedProject, settings: ExportSettings = .init()) {
+        self.init(project: project, document: .legacy(for: project), settings: settings)
     }
 
     /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete,
@@ -63,12 +70,10 @@ public final class MP4Exporter: Sendable {
         let fps = settings.framesPerSecond
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
 
-        let renderer = try FrameRenderer(project: project, outputSize: settings.outputSize)
-        let (frameCount, audioFrames) = Self.length(of: renderer.duration, framesPerSecond: fps)
-        let timelineStart = FrameEvaluator(
-            take: project.take, events: project.events, style: StyleV0(), outputSize: settings.outputSize
-        ).timelineStart
-        let audio = try await Self.audioMix(of: project, timelineStart: timelineStart, totalFrames: audioFrames)
+        let renderer = try FrameRenderer(project: project, document: document, outputSize: settings.outputSize)
+        let evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: settings.outputSize)
+        let (frameCount, audioFrames) = Self.length(of: evaluator.timeMap, framesPerSecond: fps)
+        let audio = try await Self.audioMix(of: project, timelineStart: evaluator.timelineStart, totalFrames: audioFrames)
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
@@ -122,16 +127,16 @@ public final class MP4Exporter: Sendable {
         return try AudioMix(timelines: timelines, channels: channels, totalFrames: totalFrames)
     }
 
-    /// The frames of video of a timeline of `duration` seconds at `fps` (at least one), and the frames of audio, at
-    /// 48 kHz, that those frames last.
-    private static func length(of duration: Double, framesPerSecond fps: Int) -> (frames: Int, audioFrames: Int64) {
-        let frames = max(1, Int((duration * Double(fps)).rounded()))
+    /// The frames of video of the output of `timeMap` at `fps` (`TimeMap.frameCount`, at least one), and the frames of
+    /// audio, at 48 kHz, that those frames last.
+    private static func length(of timeMap: TimeMap, framesPerSecond fps: Int) -> (frames: Int, audioFrames: Int64) {
+        let frames = timeMap.frameCount(frameRate: fps)
         return (frames, Int64((Double(frames) / Double(fps) * AudioTrackTimeline.sampleRate).rounded()))
     }
 
-    /// The samples the AAC encoder gets when `project` is exported at `framesPerSecond`: every block of its mix
-    /// (`audioMix`), one after the other, interleaved Float32, over the timeline rounded to whole frames of video;
-    /// empty for a take without audio. The golden mix (`goldenMixMatches`) holds them.
+    /// The samples the AAC encoder gets when the legacy document of `project` is exported at `framesPerSecond`: every
+    /// block of its mix (`audioMix`), one after the other, interleaved Float32, over the timeline rounded to whole frames
+    /// of video; empty for a take without audio. The golden mix (`goldenMixMatches`) holds them.
     /// - Throws: what `export` throws before it writes anything (`noDisplayTrack`, `writerFailed` for a frame rate
     ///   that is not positive), or what loading or mixing the audio throws.
     static func mixSamples(of project: LoadedProject, framesPerSecond: Int = 60) async throws -> [Float] {
@@ -140,8 +145,8 @@ public final class MP4Exporter: Sendable {
         }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
         let evaluator = FrameEvaluator(
-            take: project.take, events: project.events, style: StyleV0(), outputSize: ExportSettings().outputSize)
-        let (_, audioFrames) = length(of: evaluator.duration, framesPerSecond: framesPerSecond)
+            take: project.take, events: project.events, document: .legacy(for: project), outputSize: ExportSettings().outputSize)
+        let (_, audioFrames) = length(of: evaluator.timeMap, framesPerSecond: framesPerSecond)
         guard let mix = try await audioMix(of: project, timelineStart: evaluator.timelineStart, totalFrames: audioFrames) else {
             return []
         }
@@ -425,6 +430,8 @@ private final class ExportSession: @unchecked Sendable {
     }
 
     /// Draws frame `frame` into a buffer of the writer's pool and appends it at `frame / fps`.
+    /// The renderer draws it at `TimeMap.frameTime(frame, frameRate: fps)`: in seconds, which the renderer rounds back to
+    /// those nanoseconds exactly (they are far below 2⁵¹).
     private func append(frame: Int, from pool: CVPixelBufferPool) throws {
         var created: CVPixelBuffer?
         let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &created)
@@ -436,7 +443,7 @@ private final class ExportSession: @unchecked Sendable {
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
         let fps = settings.framesPerSecond
-        try renderer.render(at: Double(frame) / Double(fps), into: pixelBuffer)
+        try renderer.render(at: Double(TimeMap.frameTime(frame, frameRate: fps)) / 1e9, into: pixelBuffer)
         try waitUntilReady(videoInput)  // drawing took time: the writer may have failed meanwhile
         guard adaptor.append(pixelBuffer, withPresentationTime: CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(fps))) else {
             throw failure()

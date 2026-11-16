@@ -75,7 +75,7 @@ private func cursor(_ seconds: Double, x: Double, y: Double) -> InputEvent {
     #expect(e.frame(at: 2).screen?.trackID == trackID)
     // Clamped to [0, duration].
     #expect(e.frame(at: -1).screen?.sourceTime == seconds(10))
-    #expect(e.frame(at: 60).screen?.sourceTime == seconds(15))
+    #expect(e.frame(at: 60).screen?.sourceTime == HostTime(nanoseconds: seconds(15).nanoseconds - 1))
     #expect(e.frame(at: .nan).screen?.sourceTime == seconds(10))
 }
 
@@ -532,9 +532,9 @@ private func styleChange(_ seconds: Double, _ style: CameraStyle) -> InputEvent 
     let settled = try #require(e.frame(at: 4).camera)
     #expect(settled.rect == to.rect && settled.cornerRadius == to.cornerRadius)
     // The timeline on its own, at any output size.
-    let timeline = CameraStyleTimeline(initial: .default, events: [styleChange(2, landscape)])
-    #expect(timeline.frame(at: base.adding(seconds: 1), output: [1920, 1080]) == from)
-    #expect(timeline.frame(at: base.adding(seconds: 9), output: [1280, 720]) == landscape.frame(in: Rect(x: 0, y: 0, width: 1280, height: 720)))
+    let timeline = CameraStyleTimeline(initial: .default, changes: [(t: 2_000_000_000, style: landscape)])
+    #expect(timeline.frame(atOutput: 1_000_000_000, output: [1920, 1080]) == from)
+    #expect(timeline.frame(atOutput: 9_000_000_000, output: [1280, 720]) == landscape.frame(in: Rect(x: 0, y: 0, width: 1280, height: 720)))
 }
 
 @Test func styleTransitionStartsFromTheDisplayedRect() throws {
