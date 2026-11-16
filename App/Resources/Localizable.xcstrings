@@ -86,6 +86,58 @@
         }
       }
     },
+    "%lld projects couldn't be deleted: they're still in the trash." : {
+      "comment" : "The library: deleting for good failed",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld project couldn't be deleted: it's still in the trash."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld projects couldn't be deleted: they're still in the trash."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "No se pudo eliminar %lld proyecto: sigue en la papelera."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "No se pudieron eliminar %lld proyectos: siguen en la papelera."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld projects moved to the trash." : {
+      "comment" : "The library: the notice after several projects went to the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld proyectos se movieron a la papelera."
+          }
+        }
+      }
+    },
     "16:9 Landscape" : {
       "comment" : "A format of the project",
       "localizations" : {
@@ -125,6 +177,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Un archivo no está dentro del proyecto."
+          }
+        }
+      }
+    },
+    "A project with that name already exists." : {
+      "comment" : "The library: beside a name being edited",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya hay un proyecto con ese nombre."
           }
         }
       }
@@ -187,6 +250,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agregar un bloque de disposición"
+          }
+        }
+      }
+    },
+    "Add to Favorites" : {
+      "comment" : "The library: a project's menu, and the star",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar a Favoritos"
           }
         }
       }
@@ -656,6 +730,28 @@
         }
       }
     },
+    "Can't undo: the copy was opened or changed since it was made." : {
+      "comment" : "The library: undoing a duplicate",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede deshacer: la copia se abrió o cambió desde que se hizo."
+          }
+        }
+      }
+    },
+    "Can't: it's open in another app." : {
+      "comment" : "The library: an action on a project another app has open",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede: está abierto en otra app."
+          }
+        }
+      }
+    },
     "Cancel" : {
       "localizations" : {
         "es" : {
@@ -929,6 +1025,17 @@
         }
       }
     },
+    "Couldn't delete “%@”: %@" : {
+      "comment" : "The library: the strip; the project's name and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo eliminar «%1$@»: %2$@"
+          }
+        }
+      }
+    },
     "Couldn't draw the preview." : {
       "localizations" : {
         "es" : {
@@ -939,12 +1046,34 @@
         }
       }
     },
+    "Couldn't duplicate “%@”: %@" : {
+      "comment" : "The library: the strip; the project's name and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo duplicar «%1$@»: %2$@"
+          }
+        }
+      }
+    },
     "Couldn't export the video" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't move “%@” to the trash: %@" : {
+      "comment" : "The library: the strip; the project's name and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo mover «%1$@» a la papelera: %2$@"
           }
         }
       }
@@ -1015,6 +1144,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo recuperar la grabación"
+          }
+        }
+      }
+    },
+    "Couldn't rename “%@”: %@" : {
+      "comment" : "The library: the strip; the project's name and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo renombrar «%1$@»: %2$@"
+          }
+        }
+      }
+    },
+    "Couldn't restore “%@”: %@" : {
+      "comment" : "The library: the strip; the project's name and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo restaurar «%1$@»: %2$@"
           }
         }
       }
@@ -1102,6 +1253,28 @@
         }
       }
     },
+    "Delete" : {
+      "comment" : "The library: the alert's button that deletes for good",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar"
+          }
+        }
+      }
+    },
+    "Delete %lld projects forever (%@)?" : {
+      "comment" : "The library: the alert before deleting projects of the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Eliminar para siempre %1$lld proyectos (%2$@)?"
+          }
+        }
+      }
+    },
     "Delete All Camera Changes" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): all the camera changes of the recording were deleted",
       "localizations" : {
@@ -1135,6 +1308,17 @@
         }
       }
     },
+    "Delete Now…" : {
+      "comment" : "The library: a project's menu, in the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Eliminar ahora…"
+          }
+        }
+      }
+    },
     "Delete Zoom" : {
       "comment" : "The Zoom tab: a button",
       "localizations" : {
@@ -1142,6 +1326,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Borrar el zoom"
+          }
+        }
+      }
+    },
+    "Delete “%@” forever?" : {
+      "comment" : "The library: the alert before deleting a project of the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Eliminar «%@» para siempre?"
           }
         }
       }
@@ -1294,6 +1489,28 @@
         }
       }
     },
+    "Duplicate" : {
+      "comment" : "The library: a project's menu",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicar"
+          }
+        }
+      }
+    },
+    "Duplicate As" : {
+      "comment" : "The library: a project's menu, a copy in another format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duplicar como"
+          }
+        }
+      }
+    },
     "Duration" : {
       "comment" : "The library's list: a column, and an order",
       "localizations" : {
@@ -1354,6 +1571,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Brasa"
+          }
+        }
+      }
+    },
+    "Empty Trash…" : {
+      "comment" : "The library: the trash's button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaciar la papelera…"
+          }
+        }
+      }
+    },
+    "Emptying… %lld of %lld" : {
+      "comment" : "The library's sidebar: deleting projects for good",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaciando… %1$lld de %2$lld"
+          }
+        }
+      }
+    },
+    "Emptying… paused while recording" : {
+      "comment" : "The library's sidebar: deleting for good waits for the take",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vaciando… en pausa mientras se graba"
           }
         }
       }
@@ -1792,6 +2042,17 @@
         }
       }
     },
+    "It can't start with a period." : {
+      "comment" : "The library: beside a name being edited",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No puede empezar con un punto."
+          }
+        }
+      }
+    },
     "It's recording." : {
       "comment" : "The library: a project being recorded does not open",
       "localizations" : {
@@ -1820,6 +2081,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lago"
+          }
+        }
+      }
+    },
+    "Landscape 16:9" : {
+      "comment" : "The library: Duplicate As, a format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Horizontal 16:9"
           }
         }
       }
@@ -2145,6 +2417,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mover el área o cambiar su tamaño."
+          }
+        }
+      }
+    },
+    "Move to Trash" : {
+      "comment" : "The library: a project's menu",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a la papelera"
           }
         }
       }
@@ -2756,6 +3039,17 @@
         }
       }
     },
+    "Portrait 9:16" : {
+      "comment" : "The library: Duplicate As, a format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vertical 9:16"
+          }
+        }
+      }
+    },
     "Position" : {
       "comment" : "The camera's place: the grid of 8 places",
       "localizations" : {
@@ -3074,6 +3368,28 @@
         }
       }
     },
+    "Redo" : {
+      "comment" : "The library: do again what was undone",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rehacer"
+          }
+        }
+      }
+    },
+    "Refresh" : {
+      "comment" : "The library: a project's menu, for Other places: look at it again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Actualizar"
+          }
+        }
+      }
+    },
     "Regenerate Automatic Zooms" : {
       "comment" : "The Zoom tab: a button",
       "localizations" : {
@@ -3101,6 +3417,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quitar el atajo"
+          }
+        }
+      }
+    },
+    "Remove from Favorites" : {
+      "comment" : "The library: a project's menu, and the star",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar de Favoritos"
+          }
+        }
+      }
+    },
+    "Remove from Library" : {
+      "comment" : "The library: a project's menu, for Other places",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar de la biblioteca"
+          }
+        }
+      }
+    },
+    "Rename" : {
+      "comment" : "The library: a project's menu",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Renombrar"
           }
         }
       }
@@ -3154,6 +3503,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "¿Reiniciar la toma? La actual va a la papelera."
+          }
+        }
+      }
+    },
+    "Restore" : {
+      "comment" : "The library: a project of the trash goes back",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar"
           }
         }
       }
@@ -3698,6 +4058,17 @@
         }
       }
     },
+    "Square 1:1" : {
+      "comment" : "The library: Duplicate As, a format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadrado 1:1"
+          }
+        }
+      }
+    },
     "Start Color" : {
       "comment" : "A custom gradient's first colour",
       "localizations" : {
@@ -4126,6 +4497,50 @@
         }
       }
     },
+    "The name can't be empty." : {
+      "comment" : "The library: beside a name being edited",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nombre no puede estar vacío."
+          }
+        }
+      }
+    },
+    "The name can't contain control characters." : {
+      "comment" : "The library: beside a name being edited",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nombre no puede tener caracteres de control."
+          }
+        }
+      }
+    },
+    "The name can't contain “/” or “:”." : {
+      "comment" : "The library: beside a name being edited",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nombre no puede tener «/» ni «:»."
+          }
+        }
+      }
+    },
+    "The name is too long." : {
+      "comment" : "The library: beside a name being edited",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El nombre es demasiado largo."
+          }
+        }
+      }
+    },
     "The operation was canceled." : {
       "localizations" : {
         "es" : {
@@ -4543,6 +4958,17 @@
         }
       }
     },
+    "There's no room to duplicate it: %@ are needed." : {
+      "comment" : "The library: a duplicate on a full disk",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay lugar para duplicarlo: hacen falta %@."
+          }
+        }
+      }
+    },
     "These projects can't be read safely and were left untouched:" : {
       "localizations" : {
         "es" : {
@@ -4590,6 +5016,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta compilación no indica dónde está su código fuente: no la generó el flujo de publicación."
+          }
+        }
+      }
+    },
+    "This can't be undone." : {
+      "comment" : "The library: deleting for good",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede deshacer."
           }
         }
       }
@@ -4976,6 +5413,17 @@
         }
       }
     },
+    "Undo" : {
+      "comment" : "The library: undo the last action, and the trash notice's button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Deshacer"
+          }
+        }
+      }
+    },
     "Unfinished" : {
       "comment" : "The library: a take that did not finish saving",
       "localizations" : {
@@ -5259,6 +5707,17 @@
         }
       }
     },
+    "a project with that name already exists" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ya hay un proyecto con ese nombre"
+          }
+        }
+      }
+    },
     "a recording is missing" : {
       "comment" : "The library: why a part of a project can't be read",
       "localizations" : {
@@ -5288,6 +5747,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Como lista"
+          }
+        }
+      }
+    },
+    "copy" : {
+      "comment" : "The library: what follows a project's name in its copy's name («Demo copia»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "copia"
+          }
+        }
+      }
+    },
+    "copy %lld" : {
+      "comment" : "The library: what follows a project's name in its copy's name, when that is taken («Demo copia 2»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "copia %lld"
           }
         }
       }
@@ -5381,6 +5862,17 @@
         }
       }
     },
+    "it's no longer in the trash" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ya no está en la papelera"
+          }
+        }
+      }
+    },
     "it's too large" : {
       "comment" : "The library: why a part of a project can't be read",
       "localizations" : {
@@ -5388,6 +5880,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "es demasiado grande"
+          }
+        }
+      }
+    },
+    "its editor has changes that couldn't be saved" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "su editor tiene cambios que no se pudieron guardar"
+          }
+        }
+      }
+    },
+    "landscape" : {
+      "comment" : "The library: what follows a project's name in a 16:9 copy's name («Demo horizontal»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "horizontal"
           }
         }
       }
@@ -5419,6 +5933,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    },
+    "portrait" : {
+      "comment" : "The library: what follows a project's name in a 9:16 copy's name («Demo vertical»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "vertical"
           }
         }
       }
@@ -5473,6 +5998,28 @@
         }
       }
     },
+    "square" : {
+      "comment" : "The library: what follows a project's name in a 1:1 copy's name («Demo cuadrado»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "cuadrado"
+          }
+        }
+      }
+    },
+    "the disk didn't allow it" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el disco no lo permitió"
+          }
+        }
+      }
+    },
     "the disk didn't answer" : {
       "comment" : "The library: why a part of a project can't be read",
       "localizations" : {
@@ -5495,6 +6042,28 @@
         }
       }
     },
+    "the disk is full" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el disco está lleno"
+          }
+        }
+      }
+    },
+    "the disk is read-only" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el disco es de solo lectura"
+          }
+        }
+      }
+    },
     "the edit" : {
       "comment" : "The library: what of a project can't be read (its document or its log)",
       "localizations" : {
@@ -5502,6 +6071,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "la edición"
+          }
+        }
+      }
+    },
+    "the name can't be used" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el nombre no se puede usar"
+          }
+        }
+      }
+    },
+    "the name is too long" : {
+      "comment" : "The library: why an action failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el nombre es demasiado largo"
           }
         }
       }
@@ -5575,6 +6166,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lenta"
+          }
+        }
+      }
+    },
+    "“%@” is outside Toma's folder: removing it from the library leaves the file where it is." : {
+      "comment" : "The library: a project of Other places is not moved to the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» está fuera de la carpeta de Toma: quitarlo de la biblioteca deja el archivo donde está."
+          }
+        }
+      }
+    },
+    "“%@” moved to the trash." : {
+      "comment" : "The library: the notice after a project went to the trash",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» se movió a la papelera."
           }
         }
       }

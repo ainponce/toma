@@ -177,6 +177,87 @@ import Testing
         await settle()
         #expect(rig.calls.replies == [false])
     }
+
+    // MARK: - The library's copies (design §6.8)
+
+    /// Stop new library actions, close the take, then wait for the copies (one the take paused goes on once it is
+    /// closed), then reply: a copy is never left half done.
+    @Test func aQuitWhileRecordingWaitsForTheCopiesOnceTheTakeIsClosed() async {
+        let rig = QuitRig(timeLimit: .never)
+        rig.take.close()
+        rig.copies.close()
+        #expect(rig.sequencer.shouldTerminate(.closeTakeFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
+        await waitUntil { rig.calls.closeCalls == 1 }
+        await settle()
+        #expect(rig.calls.events == ["stop", "close"], "the copies are not waited for before the take is closed")
+
+        rig.take.open()
+        await waitUntil { rig.calls.events.contains("copies") }
+        await settle()
+        #expect(rig.calls.replies.isEmpty, "a copy is under way")
+
+        rig.copies.open()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [true])
+        #expect(rig.calls.events == ["stop", "close", "closed", "copies", "copied", "reply"])
+    }
+
+    @Test func aCopyAloneIsWaitedFor() async {
+        let rig = QuitRig(timeLimit: .never)
+        rig.copies.close()
+        #expect(rig.sequencer.shouldTerminate(.finishCopiesFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
+        await waitUntil { rig.calls.events.contains("copies") }
+        await settle()
+        #expect(rig.calls.replies.isEmpty)
+
+        rig.copies.open()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [true])
+        #expect(rig.calls.events == ["stop", "close", "closed", "copies", "copied", "reply"])
+    }
+
+    /// The take did not close within the time limit: the quit goes ahead without waiting for a copy it keeps paused (its
+    /// hidden folder is removed at the next launch).
+    @Test func copiesAreNotWaitedForOnceTheTimeLimitPasses() async {
+        let rig = QuitRig(timeLimit: .alreadyPassed)
+        rig.take.close()
+        rig.copies.close()
+        #expect(rig.sequencer.shouldTerminate(.closeTakeFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [false])
+        #expect(rig.calls.events.first == "stop")
+        #expect(!rig.calls.events.contains("copies"), "the copies were not waited for")
+
+        rig.take.open()
+        await waitUntil { rig.calls.closesEnded == 1 }
+        await settle()
+        #expect(rig.calls.replies == [false], "only the first answer replies")
+    }
+
+    /// An export first, once the user says so: nothing stops while the app keeps running; then stop, cancel the
+    /// export, close the take, wait for the copies, reply.
+    @Test func anExportQuitStopsTheLibraryOnlyOnceConfirmedAndWaitsForTheCopiesLast() async {
+        let rig = QuitRig(timeLimit: .never)
+        #expect(rig.sequencer.shouldTerminate(.confirmCancelExport(alsoClosingTake: false)) { false } == .terminateCancel)
+        await settle()
+        #expect(rig.calls.events.isEmpty, "the app keeps running: its library too")
+
+        rig.exports.close()
+        rig.copies.close()
+        #expect(rig.sequencer.shouldTerminate(.confirmCancelExport(alsoClosingTake: false)) { true } == .terminateLater)
+        await waitUntil { rig.calls.exportCancels == 1 }
+        await settle()
+        #expect(rig.calls.events == ["stop", "cancel"])
+
+        rig.exports.open()
+        await waitUntil { rig.calls.events.contains("copies") }
+        await settle()
+        #expect(rig.calls.replies.isEmpty, "a copy is under way")
+
+        rig.copies.open()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.events == ["stop", "cancel", "close", "closed", "copies", "copied", "reply"])
+    }
 }
 
 /// Nobody is asked: the quit does not ask about the export.
@@ -225,6 +306,9 @@ private enum TimeLimit {
     var exportCancels = 0
     /// `takeClosed` of each reply.
     var replies: [Bool] = []
+    /// What happened, in order: "stop" (new library actions), "cancel" (the exports), "close" and "closed" (the take),
+    /// "copies" and "copied" (the wait for the library's copies), "reply".
+    var events: [String] = []
 }
 
 /// A sequencer whose take closes once `take` lets it, and whose exports end once `exports` does; both are open
@@ -232,24 +316,38 @@ private enum TimeLimit {
 @MainActor private final class QuitRig {
     let take: Gate
     let exports: Gate
+    /// The library's copies, which end once it lets them.
+    let copies: Gate
     let calls: QuitCalls
     let sequencer: QuitSequencer
 
     init(timeLimit: TimeLimit) {
-        let (take, exports, calls) = (Gate(), Gate(), QuitCalls())
-        (self.take, self.exports, self.calls) = (take, exports, calls)
+        let (take, exports, copies, calls) = (Gate(), Gate(), Gate(), QuitCalls())
+        (self.take, self.exports, self.copies, self.calls) = (take, exports, copies, calls)
         sequencer = QuitSequencer(
             closeTake: {
                 calls.closeCalls += 1
+                calls.events.append("close")
                 await take.pass()
                 calls.closesEnded += 1
+                calls.events.append("closed")
             },
             cancelExports: {
                 calls.exportCancels += 1
+                calls.events.append("cancel")
                 await exports.pass()
             },
-            reply: { calls.replies.append($0) },
-            sleep: timeLimit.sleep)
+            reply: {
+                calls.replies.append($0)
+                calls.events.append("reply")
+            },
+            sleep: timeLimit.sleep,
+            stopLibraryOperations: { calls.events.append("stop") },
+            waitForCopies: {
+                calls.events.append("copies")
+                await copies.pass()
+                calls.events.append("copied")
+            })
     }
 }
 

@@ -52,7 +52,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for editor in Array(editors.values) { await editor.cancelExportAndWait() }
         },
         reply: { _ in NSApp.reply(toApplicationShouldTerminate: true) },
-        sleep: { try await Task.sleep(for: $0, clock: .suspending) })
+        sleep: { try await Task.sleep(for: $0, clock: .suspending) },
+        stopLibraryOperations: { LibraryWork.stopNewOperations() },
+        waitForCopies: { await LibraryWork.waitForCopies() })
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
@@ -131,13 +133,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Nothing in progress is lost to a quit (`TerminationDecision`): the take is closed and the exports are
-    /// cancelled first, within `QuitSequencer.quitTimeLimit` for the take; the user is asked before an export
-    /// is cancelled, unless the Mac is powering off. A start that ended without a take counts as a take while Do Not
-    /// Disturb goes off.
+    /// cancelled first, within `QuitSequencer.quitTimeLimit` for the take, and the library's copies are waited for;
+    /// the user is asked before an export is cancelled, unless the Mac is powering off. A start that ended without a
+    /// take counts as a take while Do Not Disturb goes off.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let decision = TerminationDecision.decide(
             isRecording: recording.isRecording || recording.isEndingHooks, isExporting: exportGate.isBusy,
-            isPoweringOff: quit.isPoweringOff)
+            isPoweringOff: quit.isPoweringOff, isCopying: LibraryWork.isCopying)
         return quit.shouldTerminate(decision) { confirmCancellingExport() }
     }
 

@@ -4,6 +4,7 @@ import AppSupport
 import Library
 import ProjectFormat
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// The library's one window (design §6.1): 1100 × 720 pt or 85 % of the visible area, whichever is smaller, at least
 /// 760 × 480, where it was last if that is still on a screen. As the editor's, an AppKit frame around SwiftUI parts: a
@@ -45,6 +46,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
         window.tabbingMode = .disallowed
         window.contentMinSize = LibraryLayout.minimumSize
         super.init(window: window)
+        model.actions.window = window
 
         let toolbar = NSToolbar(identifier: "library")
         toolbar.delegate = self
@@ -290,8 +292,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 }
 
-/// The library's content beside the sidebar (design §6.1): a strip if there is one, then the grid or the list, or what
-/// an empty section says (design §10); and ⌘1, ⌘2, ⌘F, ⌘O and ⌘↓, as the Finder has them.
+/// The library's content beside the sidebar (design §6.1): a strip if there is one, what an action could not do, in the
+/// trash its Vaciar la papelera…, then the grid or the list, or what an empty section says (design §10), with the trash
+/// notice under them; ⌘1, ⌘2, ⌘F, ⌘O and ⌘↓, as the Finder has them, and the actions' ⌘D, ⌘⌫, ⌘Z and ⇧⌘Z (design §6.3).
+/// Packages dropped on it go to Other places, or are shown if they are in the projects folder (design §6.2).
 struct LibraryContentView: View {
     let model: LibraryModel
     /// ⌘F: the toolbar's search field takes the keys.
@@ -301,10 +305,23 @@ struct LibraryContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             LibraryBannerView(model: model)
+            LibraryFailureStrip(actions: model.actions)
+            if model.section == .trash, (model.counts[.trash] ?? 0) > 0 {
+                LibraryTrashBar(model: model)
+            }
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .overlay(alignment: .bottom) {
+            LibraryTrashNoticeView(actions: model.actions)
+        }
         .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: model.banner)
+        .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: model.actions.failure)
+        .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: model.actions.trashNotice)
+        .onDrop(of: [.fileURL], isTargeted: nil) { providers in
+            LibraryActions.loadDropped(providers) { urls in model.perform(.addProjects(urls)) }
+            return true
+        }
         .background { shortcuts }
     }
 
@@ -335,6 +352,32 @@ struct LibraryContentView: View {
             Button(String(localized: "Open", comment: "The library: opens the project")) { model.openSelection() }
                 .keyboardShortcut(.downArrow, modifiers: .command)
                 .disabled(model.selection.selected.isEmpty)
+            Button(LibraryActions.title(.duplicate, items: [])) {
+                guard !LibraryActions.textFieldTakes(nil) else { return }
+                model.perform(.duplicate, on: model.selection.selected)
+            }
+            .keyboardShortcut("d", modifiers: .command)
+            .disabled(model.selection.selected.isEmpty)
+            Button(LibraryActions.title(.moveToTrash, items: [])) {
+                guard !LibraryActions.textFieldTakes(#selector(NSResponder.deleteToBeginningOfLine(_:))) else { return }
+                // In the trash a project is deleted only with Eliminar ahora…, after its alert.
+                guard model.section != .trash else { return }
+                model.perform(.moveToTrash, on: model.selection.selected)
+            }
+            .keyboardShortcut(.delete, modifiers: .command)
+            .disabled(model.selection.selected.isEmpty)
+            Button(LibraryActions.undoTitle) {
+                guard !LibraryActions.textFieldTakes(Selector(("undo:"))) else { return }
+                model.perform(.undo)
+            }
+            .keyboardShortcut("z", modifiers: .command)
+            .disabled(!model.actions.canUndo)
+            Button(LibraryActions.title(.redo, items: [])) {
+                guard !LibraryActions.textFieldTakes(Selector(("redo:"))) else { return }
+                model.perform(.redo)
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!model.actions.canRedo)
         }
         .opacity(0)
         .frame(width: 0, height: 0)
@@ -389,6 +432,96 @@ private struct LibraryBannerView: View {
             String(localized: "The projects folder can't be read.", comment: "The library: a strip")
         case .recording:
             String(localized: "It's recording.", comment: "The library: a project being recorded does not open")
+        }
+    }
+}
+
+/// What an action could not do and why (design §6.3, §10), until it is closed or another failure takes its place.
+private struct LibraryFailureStrip: View {
+    let actions: LibraryActions
+
+    var body: some View {
+        if let failure = actions.failure {
+            VStack(spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(Color.orange)
+                        .accessibilityHidden(true)
+                    Text(verbatim: failure)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Button {
+                        actions.dismissFailure()
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .buttonStyle(.borderless)
+                    .help(Text("Close"))
+                    .accessibilityLabel(Text("Close"))
+                }
+                .font(.callout)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color.orange.opacity(0.18))
+                Divider()
+            }
+            .transition(.opacity)
+            .accessibilityElement(children: .contain)
+        }
+    }
+}
+
+/// The top of the trash (design §6.4): Vaciar la papelera…, which waits while projects are being deleted (the sidebar
+/// says how far it went).
+private struct LibraryTrashBar: View {
+    let model: LibraryModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Spacer()
+                Button(LibraryActions.title(.emptyTrash, items: [])) { model.perform(.emptyTrash) }
+                    .disabled(model.actions.emptying != nil)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 6)
+            Divider()
+        }
+    }
+}
+
+/// "«Demo» se movió a la papelera. · Deshacer" under the content, for 8 s (design §6.3), with `Motion.panelSwap`.
+private struct LibraryTrashNoticeView: View {
+    let actions: LibraryActions
+
+    var body: some View {
+        if let notice = actions.trashNotice {
+            HStack(spacing: 12) {
+                Text(verbatim: notice.text)
+                    .lineLimit(2)
+                if notice.undoes != nil {
+                    Button(LibraryActions.undoTitle) { actions.undoTrashNotice() }
+                        .buttonStyle(.borderless)
+                        .fontWeight(.semibold)
+                }
+                Button {
+                    actions.dismissTrashNotice()
+                } label: {
+                    Image(systemName: "xmark")
+                }
+                .buttonStyle(.borderless)
+                .help(Text("Close"))
+                .accessibilityLabel(Text("Close"))
+            }
+            .font(.callout)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(.regularMaterial, in: Capsule())
+            .overlay { Capsule().strokeBorder(Color.primary.opacity(0.1)) }
+            .shadow(color: .black.opacity(0.15), radius: 8, y: 2)
+            .padding(.bottom, 16)
+            .transition(.opacity.combined(with: .offset(y: Motion.panelSwapRise)))
+            .accessibilityElement(children: .contain)
         }
     }
 }

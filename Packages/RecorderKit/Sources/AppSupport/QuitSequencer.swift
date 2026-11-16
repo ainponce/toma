@@ -2,13 +2,16 @@
 import AppKit
 import os
 
-/// Quits without losing what is in progress (`TerminationDecision`), within `quitTimeLimit`. A take being
-/// recorded is closed first: the quit goes ahead once it is closed (even if closing failed: the take can
-/// still be recovered), or once `quitTimeLimit` has passed if it is not closed by then. An export in progress
-/// is cancelled once the user says so (without asking while powering off), and the quit goes ahead only once
-/// it has ended and removed its partial file; then the take is closed as above (also one started meanwhile),
-/// but the quit goes ahead at once if the time limit has already passed. Powering off starts closing the take
-/// before the system asks the app to quit, and that quit waits for the same close and the same time limit.
+/// Quits without losing what is in progress (`TerminationDecision`), within `quitTimeLimit`. Once a quit is
+/// going ahead (an export's, once the user says so), no new action of the library starts. A take being recorded
+/// is closed first: the quit goes ahead once it is closed (even if closing failed: the take can still be
+/// recovered) and the library's copies are done, or once `quitTimeLimit` has passed if the take is not closed by
+/// then. The copies are waited for only after the take is closed, since a take pauses a copy without clones
+/// (design §6.8), and without a time limit: a copy is never left half done. An export in progress is cancelled
+/// once the user says so (without asking while powering off), and the quit goes ahead only once it has ended and
+/// removed its partial file; then the take is closed and the copies waited for as above (also a take started
+/// meanwhile), but the quit goes ahead at once if the time limit has already passed. Powering off starts closing
+/// the take before the system asks the app to quit, and that quit waits for the same close and the same time limit.
 @MainActor
 public final class QuitSequencer {
     /// How long quitting waits for the take to close.
@@ -29,21 +32,27 @@ public final class QuitSequencer {
     private let cancelExports: @MainActor () async -> Void
     private let reply: @MainActor (_ takeClosed: Bool) -> Void
     private let sleep: @Sendable (Duration) async throws -> Void
+    private let stopLibraryOperations: @MainActor () -> Void
+    private let waitForCopies: @MainActor () async -> Void
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
     /// `closeTake` closes the take, if any, and returns once it is closed; `cancelExports` cancels the
     /// exports in progress and returns once they have ended, their partial files removed; `reply` lets a quit
     /// answered `.terminateLater` go ahead, saying whether the take was closed; `sleep` waits out the time
-    /// limit, and may end early once cancelled (the take closed first).
+    /// limit, and may end early once cancelled (the take closed first); `stopLibraryOperations` keeps any new action
+    /// of the library from starting; `waitForCopies` returns once no copy of the library is being made.
     public init(
         closeTake: @escaping @MainActor () async -> Void, cancelExports: @escaping @MainActor () async -> Void,
-        reply: @escaping @MainActor (_ takeClosed: Bool) -> Void, sleep: @escaping @Sendable (Duration) async throws -> Void
+        reply: @escaping @MainActor (_ takeClosed: Bool) -> Void, sleep: @escaping @Sendable (Duration) async throws -> Void,
+        stopLibraryOperations: @escaping @MainActor () -> Void, waitForCopies: @escaping @MainActor () async -> Void
     ) {
         self.closeTake = closeTake
         self.cancelExports = cancelExports
         self.reply = reply
         self.sleep = sleep
+        self.stopLibraryOperations = stopLibraryOperations
+        self.waitForCopies = waitForCopies
     }
 
     /// The answer to `applicationShouldTerminate` for `decision`; `confirmCancelExport` asks the user whether
@@ -52,21 +61,29 @@ public final class QuitSequencer {
         switch decision {
         case .now:
             return .terminateNow
-        case .closeTakeFirst:
+        case .closeTakeFirst, .finishCopiesFirst:
             if quitTimeLimitPassed {
                 // Closing for a power off already took too long.
                 logQuittingBeforeTheTakeClosed()
                 return .terminateNow
             }
-            Self.logger.notice("Quitting while recording: closing the take first")
+            if decision == .closeTakeFirst {
+                Self.logger.notice("Quitting while recording: closing the take first")
+            } else {
+                Self.logger.notice("Quitting while the library copies a project: waiting for the copy")
+            }
+            stopLibraryOperations()
             terminationPending = true
+            // Without a take, closing returns at once: a take started meanwhile is closed all the same.
             closeTakeWithinTimeLimit()
             return .terminateLater
         case .confirmCancelExport:
             guard confirmCancelExport() else { return .terminateCancel }
+            stopLibraryOperations()
             cancelExportsThenQuit()
             return .terminateLater
         case .cancelExportFirst:
+            stopLibraryOperations()
             cancelExportsThenQuit()
             return .terminateLater
         }
@@ -99,7 +116,8 @@ public final class QuitSequencer {
         }
     }
 
-    /// Starts closing the take, once, with `quitTimeLimit`; whichever ends first answers a pending quit.
+    /// Starts closing the take, once, with `quitTimeLimit`; whichever ends first answers a pending quit. Once the take
+    /// is closed, a pending quit also waits for the library's copies, without a time limit.
     private func closeTakeWithinTimeLimit() {
         guard !closingTake else { return }
         closingTake = true
@@ -114,6 +132,9 @@ public final class QuitSequencer {
             deadline.cancel()
             closingTake = false
             quitTimeLimitPassed = false
+            // A copy the take paused goes on now; it is never left half done (design §6.8). Without a quit pending (a
+            // power off that the system has not followed with a quit yet) this costs nothing: nothing replies.
+            await waitForCopies()
             replyToTermination(takeClosed: true)
         }
     }

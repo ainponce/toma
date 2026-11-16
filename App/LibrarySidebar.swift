@@ -4,8 +4,9 @@ import Library
 import SwiftUI
 
 /// The library's sidebar (design §6.1): All Projects, Favorites, Other Locations and Trash with how many each has; at its
-/// foot, while the first walk finds projects "Buscando proyectos… 340", a disk that is slow to answer, the free space of
-/// the projects folder's disk and, in the trash, what it takes.
+/// foot, while projects are deleted for good "Vaciando… 3 de 12" (design §6.4), while the first walk finds projects
+/// "Buscando proyectos… 340", a disk that is slow to answer, the free space of the projects folder's disk and, in the
+/// trash, what it takes.
 struct LibrarySidebar: View {
     @Bindable var model: LibraryModel
 
@@ -47,6 +48,13 @@ struct LibrarySidebar: View {
 
     private var footerLines: [String] {
         var lines: [String] = []
+        if let emptying = model.actions.emptying {
+            lines.append(
+                emptying.paused
+                    ? String(localized: "Emptying… paused while recording", comment: "The library's sidebar: deleting for good waits for the take")
+                    : String(
+                        localized: "Emptying… \(emptying.done) of \(emptying.total)", comment: "The library's sidebar: deleting projects for good"))
+        }
         if model.isLookingForProjects {
             lines.append(String(localized: "Looking for projects… \(model.projectsFound)", comment: "The library's sidebar: the first walk"))
         }

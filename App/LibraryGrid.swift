@@ -8,10 +8,13 @@ import SwiftUI
 
 /// The library as a grid (design §6.2): columns of 200 to 260 pt, in sections by date when it is sorted by date (their
 /// headings are headings for VoiceOver), each project a `LibraryCard`. Clicks, ⇧-clicks and ⌘-clicks select; the arrows
-/// move the selection (with ⇧ they extend it), ⌘A selects everything, Esc nothing, and a double click or ↩ opens.
+/// move the selection (with ⇧ they extend it), ⌘A selects everything, Esc nothing, a double click or ↩ opens, and "."
+/// adds to the favorites or takes out of them (design §6.3). Cards an action moves settle with `Motion.trackItem`; one
+/// that leaves shrinks to 90 % and fades (design §9).
 struct LibraryGrid: View {
     let model: LibraryModel
     @FocusState private var isFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private static let padding = 20.0
 
@@ -42,12 +45,14 @@ struct LibraryGrid: View {
                                 ) { extending, toggling, isDouble in
                                     isFocused = true
                                     if isDouble {
+                                        model.actions.cancelPendingRename()
                                         model.open([item.summary.identity])
                                     } else {
                                         model.click(item.summary.identity, extending: extending, toggling: toggling)
                                     }
                                 }
                                 .id(item.summary.identity)
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.9).combined(with: .opacity))
                             }
                         } header: {
                             if let title = group.title {
@@ -62,6 +67,9 @@ struct LibraryGrid: View {
                 }
                 .padding(Self.padding)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                // Another order settles as an action does (design §9).
+                .animation(.panel(Motion.trackItem, reduceMotion: reduceMotion), value: model.sort)
+                .animation(.panel(Motion.trackItem, reduceMotion: reduceMotion), value: model.ascending)
             }
             // A click outside the cards selects nothing.
             .background {
@@ -79,6 +87,11 @@ struct LibraryGrid: View {
             .onKeyPress(keys: [.upArrow, .downArrow, .leftArrow, .rightArrow, .return]) { press in
                 handle(press, proxy: proxy)
             }
+            .onKeyPress(".") {
+                guard !LibraryActions.textFieldTakes(nil) else { return .ignored }
+                model.perform(.toggleFavorite, on: model.selection.selected)
+                return .handled
+            }
             .onExitCommand { model.clearSelection() }
             .onCommand(#selector(NSText.selectAll(_:))) { model.selectAll() }
             .accessibilityElement(children: .contain)
@@ -86,8 +99,9 @@ struct LibraryGrid: View {
         }
     }
 
-    /// The arrows, and ↩ (⌘O and ⌘↓ are the window's).
+    /// The arrows, and ↩ (⌘O and ⌘↓ are the window's); none while a name is being edited, whose field takes them.
     private func handle(_ press: KeyPress, proxy: ScrollViewProxy) -> KeyPress.Result {
+        guard !LibraryActions.textFieldTakes(nil) else { return .ignored }
         if press.key == .return {
             model.openSelection()
             return .handled
@@ -127,10 +141,15 @@ struct LibraryCard: View {
         VStack(alignment: .leading, spacing: 6) {
             frame
             VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: item.summary.name)
-                    .font(.body.weight(.medium))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                if model.actions.renaming == id {
+                    LibraryRenameField(model: model, item: item)
+                } else {
+                    Text(verbatim: item.summary.name)
+                        .font(.body.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .onTapGesture(perform: nameClicked)
+                }
                 Text(verbatim: LibraryTexts.subtitle(item, timeOnly: showsTimeOnly))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -153,12 +172,41 @@ struct LibraryCard: View {
             withAnimation(.panel(Motion.hover, reduceMotion: reduceMotion)) { isHovering = hovering }
         }
         .help(Text(verbatim: LibraryTexts.help(item) ?? item.summary.name))
+        .contextMenu {
+            // The selection, if the card is in it; otherwise the card alone.
+            LibraryMenu(model: model, ids: model.selection.selected.contains(id) ? model.selection.selected : [id])
+        }
         .onAppear { model.cardAppeared(id) }
         .onDisappear { model.cardDisappeared(id) }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: LibraryTexts.accessibilityLabel(item)))
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
-        .accessibilityAction(named: Text("Open", comment: "The library: opens the project")) { model.open([id]) }
+        .accessibilityActions {
+            ForEach(LibraryActions.accessibilityCommands(for: item), id: \.self) { command in
+                Button(LibraryActions.title(command, items: [item])) { model.perform(command, on: [id]) }
+            }
+        }
+    }
+
+    /// A click on the name: on the only card selected it edits the name, once it is not the first of a double click
+    /// (which opens); otherwise a click on the card.
+    private func nameClicked() {
+        let event = NSApp.currentEvent
+        let flags = event?.modifierFlags ?? []
+        let isDouble = (event?.clickCount ?? 1) >= 2
+        if !isDouble, isSelected, model.selection.selected.count == 1, !flags.contains(.shift), !flags.contains(.command) {
+            model.actions.renameAfterClick(id)
+        } else {
+            onClick(flags.contains(.shift), flags.contains(.command), isDouble)
+        }
+    }
+
+    /// What a button over the thumbnail offers while the pointer is over the card: Restaurar in the trash, Recuperar for a
+    /// take that did not finish saving (design §6.4, §6.6).
+    private var hoverCommand: LibraryCommand? {
+        if item.summary.place == .trash { return .restore }
+        if item.summary.state == .unfinished, item.live != .recording { return .recover }
+        return nil
     }
 
     /// The thumbnail's frame and what is drawn over it.
@@ -181,18 +229,47 @@ struct LibraryCard: View {
             }
         }
         .overlay(alignment: .topLeading) {
-            if item.favorite || isHovering {
-                Image(systemName: item.favorite ? "star.fill" : "star")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(item.favorite ? Color.yellow : Color.white.opacity(0.85))
-                    .shadow(color: .black.opacity(0.5), radius: 2)
-                    .padding(7)
-                    .transition(.opacity)
+            if item.favorite || isHovering, item.summary.place != .trash {
+                Button {
+                    model.perform(.setFavorite(!item.favorite), on: [id])
+                } label: {
+                    Image(systemName: item.favorite ? "star.fill" : "star")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(item.favorite ? Color.yellow : Color.white.opacity(0.85))
+                        .shadow(color: .black.opacity(0.5), radius: 2)
+                        .padding(7)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(item.favorite ? LibraryActions.removeFromFavoritesTitle : LibraryActions.addToFavoritesTitle)
+                .transition(.opacity)
             }
         }
         .overlay(alignment: .topTrailing) {
             LibraryStateBadge(item: item)
                 .padding(6)
+        }
+        .overlay(alignment: .bottomLeading) {
+            if isHovering, model.actions.busy[id] == nil, let command = hoverCommand {
+                Button(LibraryActions.title(command, items: [item])) { model.perform(command, on: [id]) }
+                    .controlSize(.small)
+                    .padding(6)
+                    .transition(.opacity)
+            }
+        }
+        .overlay {
+            if let work = model.actions.busy[id] {
+                ZStack {
+                    Color.black.opacity(0.35)
+                    if let progress = work.progress {
+                        ProgressView(value: progress)
+                            .progressViewStyle(.circular)
+                    } else {
+                        ProgressView()
+                    }
+                }
+                .controlSize(.small)
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay {
