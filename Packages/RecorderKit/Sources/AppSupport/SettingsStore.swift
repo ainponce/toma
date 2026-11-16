@@ -27,6 +27,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var focusShortcutIdentifier: String?
     /// Whether the desktop's icons are covered with the wallpaper while recording (`DesktopCoverController` in the app).
     public var hideDesktopIcons: Bool = false
+    /// Whether a take notes when keys are typed, never which (`KeyActivityRecorder`), for the zoom while typing.
+    public var noteKeyActivity: Bool = true
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -35,7 +37,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         selection: CaptureSelection? = nil, quick: QuickSettings = QuickSettings(), countdownSeconds: Int = 3,
         hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
         cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
-        focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false
+        focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true
     ) {
         self.selection = selection
         self.quick = quick
@@ -48,6 +50,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.aspectLock = aspectLock
         self.focusShortcutIdentifier = focusShortcutIdentifier
         self.hideDesktopIcons = hideDesktopIcons
+        self.noteKeyActivity = noteKeyActivity
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -67,6 +70,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         focusShortcutIdentifier =
             (try? container.decodeIfPresent(String.self, forKey: .focusShortcutIdentifier)) ?? defaults.focusShortcutIdentifier
         hideDesktopIcons = (try? container.decodeIfPresent(Bool.self, forKey: .hideDesktopIcons)) ?? defaults.hideDesktopIcons
+        noteKeyActivity = (try? container.decodeIfPresent(Bool.self, forKey: .noteKeyActivity)) ?? defaults.noteKeyActivity
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

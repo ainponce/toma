@@ -3,7 +3,8 @@ import ProjectFormat
 
 /// Several input recorders as one: each call goes to every recorder, in the order given, one after the other.
 public final class CompositeInputRecorder: InputRecorder {
-    private let recorders: [any InputRecorder]
+    /// In the order they are called.
+    public let recorders: [any InputRecorder]
 
     public init(_ recorders: [any InputRecorder]) {
         self.recorders = recorders

@@ -675,6 +675,17 @@
         }
       }
     },
+    "For the zoom while typing. Nothing is noted in password fields." : {
+      "comment" : "Under the setting that notes when keys are typed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para el zoom al escribir. En los campos de contraseña no se anota nada."
+          }
+        }
+      }
+    },
     "Free" : {
       "comment" : "An area's proportion: none",
       "localizations" : {
@@ -1127,6 +1138,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Todavía no se pidió"
+          }
+        }
+      }
+    },
+    "Note When Keys Are Typed (Never Which)" : {
+      "comment" : "A setting: a take notes when keys are typed, never which keys",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Anotar cuándo se escribe (nunca qué)"
           }
         }
       }

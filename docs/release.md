@@ -457,10 +457,22 @@ Una sola pasada de fin de hito, contra la app de esta rama, en orden: la prepara
 - Grabando con el cursor quieto, el uso de CPU de Toma (Monitor de Actividad) es a lo sumo 2 puntos más que con la copia del hito 1a en la misma toma: anotar los dos números.
 - Con Accesibilidad ▸ Pantalla ▸ Puntero en el tamaño más grande, o con otros colores del puntero, y con un pincel grande en una app de dibujo, grabar 10 s moviéndolo: ninguna imagen de `cursors/` pasa de 512 px de lado (un cursor de más de 128 pt se guarda a menos de 4 píxeles por punto), el editor muestra el puntero grabado de su tamaño, no la flecha de Toma, y anotar el tamaño en píxeles de las imágenes y si tienen `"kind"`.
 
+**Scroll y actividad del teclado** (17)
+
+Lo de "sin permiso" solo vale con Toma abierta desde Finder: la que se abre desde Terminal o Xcode recibe sus permisos, y la de los agentes también. El registro de la app se lee con `log show --last 10m --predicate 'subsystem == "dev.toma.Toma" AND category == "KeyActivityRecorder"'`.
+- Antes, `tccutil reset ListenEvent dev.toma.Toma`, y abrir Toma desde Finder. Anotar si aparece algún aviso, al abrirla o al grabar (no tiene que aparecer ninguno).
+- En macOS 15 y en macOS 26, sin Monitoreo de entrada otorgado, con "Anotar cuándo se escribe (nunca qué)" prendido (Ajustes, lo está por defecto), escribir en un campo de texto mientras se graba: `events.jsonl` de la toma tiene líneas `{"t":…,"type":"keyActivity"}`, a lo sumo una cada 250 ms, y el registro de la app dice, al empezar la toma, "Input Monitoring is granted" o "not granted" (lo que dio `CGPreflightListenEventAccess`). Si no hay ninguna línea `keyActivity`, anotarlo, con lo que dice el registro: es el plan B, y "Mantener el zoom al escribir" queda deshabilitado con su nota.
+- Mover el mouse sin escribir durante 10 s: ninguna `keyActivity` en ese lapso. Si el registro dice "follows the mouse, not the keyboard", anotarlo: en esa Mac la lectura sigue al mouse y la toma deja de anotar.
+- Escribir en un campo de contraseña de Safari y la contraseña de `sudo` en Terminal: ninguna línea `keyActivity` en ese lapso, ni la del Enter que cierra el campo. Con Terminal ▸ "Secure Keyboard Entry" prendido, ninguna línea mientras se escribe en Terminal.
+- Con "Anotar cuándo se escribe (nunca qué)" apagado, grabar escribiendo: ninguna línea `keyActivity`, y el registro no dice nada de esa toma.
+- Después de grabar, Ajustes del Sistema ▸ Privacidad y seguridad ▸ Monitoreo de entrada: Toma no aparece.
+- Hacer scroll en Safari con el trackpad y con un mouse de rueda de líneas: `events.jsonl` tiene líneas `scroll` con `dx` y `dy` en puntos de un orden razonable (un giro corto de la rueda, unas decenas de puntos; la rueda cuenta 10 pt por línea). Anotar, para cada uno, cuánto se movió la página y qué sumaron los `dy`.
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
 | 2. Imágenes del cursor (macOS 15 y 26) | pendiente | pendiente | pendiente |
+| 2. Scroll y actividad del teclado sin Monitoreo de entrada (macOS 15 y 26) | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

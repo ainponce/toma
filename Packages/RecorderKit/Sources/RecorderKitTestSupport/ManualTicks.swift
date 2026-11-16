@@ -52,6 +52,11 @@ public final class ManualTicks: Sendable {
         state.withLock { $0.sleepers.count { $0.duration == duration } }
     }
 
+    /// Timers of `interval` scheduled and not cancelled.
+    public func timers(every interval: Duration) -> Int {
+        state.withLock { $0.timers.count { $0.interval == interval } }
+    }
+
     /// Runs, on its queue, each timer of `interval` not cancelled, one after the other, and returns once
     /// the last has run.
     public func fire(every interval: Duration) async {
