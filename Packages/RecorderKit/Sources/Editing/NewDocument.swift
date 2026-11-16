@@ -13,10 +13,13 @@ public enum NewDocument {
     /// (with one there are none). The default style's stage, with mipmapped sampling and the spring between shapes, and,
     /// when it shows a window, corners that cover its black ones if the style's do not (`WindowCornerCover`); its cursor,
     /// drawn from the recorded images if the take has any `cursorImage` event and as Toma's arrow if not; its zoom
-    /// settings, with the blocks `autoZoom-1` plans for the document so built. The camera as the take recorded it and
-    /// every audio track at gain 1, as in the legacy document, but through the limiter. 16:9 at 60 frames per second;
+    /// settings, with the blocks `autoZoom-1` plans for the document so built. The camera as the take recorded it with
+    /// the look `cameraLook` gives (mirrored, with a shadow and measured against the output's short side for a new project,
+    /// design §13.3), and every audio track at gain 1, as in the legacy document, but through the limiter. 16:9 at 60 frames per second;
     /// `logSequence` 0.
-    public static func make(project: LoadedProject, defaultStyle: DefaultStyle, makeID: (String) -> String) -> EditDocument {
+    public static func make(
+        project: LoadedProject, defaultStyle: DefaultStyle, makeID: (String) -> String, cameraLook: CameraLook = .newProjects
+    ) -> EditDocument {
         let take = project.take
         let events = project.events
         let legacy = EditDocument.legacy(for: project)
@@ -52,7 +55,7 @@ public enum NewDocument {
             zoom: ZoomPlan(
                 show: defaultStyle.zoomShow, auto: defaultStyle.zoomAuto, spring: defaultStyle.zoomSpring,
                 motionBlur: defaultStyle.zoomMotionBlur, regions: [], suppressed: []),
-            camera: legacy.camera,
+            camera: cameraLook.applied(to: legacy.camera),
             audio: AudioPlan(limiter: true, tracks: legacy.audio.tracks))
         document.style.cornerRadius = max(style.cornerRadius, windowCornerCover(of: document, take: take, events: events))
         document.zoom.regions = AutoZoomPlanner.plan(take: take, events: events, document: document)
