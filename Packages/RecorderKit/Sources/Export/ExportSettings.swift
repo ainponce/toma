@@ -28,8 +28,9 @@ public enum ExportError: Error, Equatable {
     case cancelled
     /// Writing the MP4 failed (`AVAssetWriter`'s error, or the file system's when moving it into place).
     case writerFailed(String)
-    /// The screen the take shows (`ScreenChoice`: a display or a window) recorded no segment, or the take has none:
-    /// there is no screen to export.
+    /// The legacy document (`EditDocument.legacy(for:)`) of a take whose screen (`ScreenChoice`: a display or a window)
+    /// recorded no segment, or that has none: as in phase 0 and 1a, there is no screen to export. An edited document of
+    /// such a take exports its background, its camera and its audio.
     case noDisplayTrack
     /// The destination is a folder, or inside a project package (`*.toma`), which an export never writes into.
     case destinationNotAllowed
