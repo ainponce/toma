@@ -8,12 +8,20 @@ import ProjectFormat
 /// The screen shown at a source instant is the one the render shows (`FrameEvaluator`): the take's track of
 /// `screens.initial`, or of the last `screens.changes` of the take at or before the instant; none without one, or for
 /// a track the take does not have or that is not a screen. What is shown of it, and where, is `ScreenGeometry`; its
-/// rect is `StageLayout.screenRect` inside the document's padding, as the render places it.
+/// rect is `StageLayout.screenRect` inside the document's padding, as the render places it. With a macOS window frame
+/// around the screen (`style.frame`), the window is `StageLayout.windowRect` as the render places it in an output of the
+/// document's aspect 1080 px on its shorter side (the 1920 × 1080 of the preview), the size the bar's 18 px floor is
+/// measured at: the same in every output where the bar is not at its floor.
 public struct StagePoints: Sendable {
+    /// The output the window frame is placed in: the document's aspect, 1080 px on its shorter side.
+    private static let windowFrameShortSide = 1080
+
     /// Width over height of the stage: the document's aspect.
     private let ratio: Double
     /// The document's padding, as a fraction of the stage's width.
     private let padding: Double
+    /// With a macOS window frame, the output its rects are worked out in; `nil` without a frame.
+    private let windowFrameOutput: SIMD2<Double>?
     /// The screen track of the take at its start, and from each of its changes on (in time order).
     private let initialScreen: String?
     private let screenChanges: [(t: HostTime, track: String)]
@@ -23,6 +31,12 @@ public struct StagePoints: Sendable {
     public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
         ratio = document.aspect.ratio
         padding = document.style.padding
+        switch document.style.frame {
+        case .none:
+            windowFrameOutput = nil
+        case .macWindow:
+            windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(aspect: document.aspect, shortSide: Self.windowFrameShortSide))
+        }
         let ordered = events.sortedByTime()
         let initialScreen = document.screens.initial[take.id]
         self.initialScreen = initialScreen
@@ -42,19 +56,21 @@ public struct StagePoints: Sendable {
     public var stageSize: SIMD2<Double> { SIMD2(ratio, 1) }
 
     /// Where `global` (in global points) is on the stage at source instant `host`: placed in the screen's rect as it is
-    /// in the region the screen shows. `nil` off that region (its far edges are out, as for the drawn cursor), while a
-    /// window is not on screen, for a screen without a usable frame, and with no screen shown.
+    /// in the region the screen shows (under the bar, with a window frame). `nil` off that region (its far edges are out,
+    /// as for the drawn cursor), while a window is not on screen, for a screen without a usable frame, and with no screen
+    /// shown.
     public func stagePoint(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>? {
         guard let view = shown(at: host), view.onScreen, let region = view.region else { return nil }
         let point = CGPoint(x: global.x, y: global.y)
         guard CursorGeometry.contains(point, region) else { return nil }
-        let rect = rect(of: view)
+        let rect = rects(of: view).screen
         return SIMD2(rect.x, rect.y) + CursorGeometry.normalized(point, in: region) * SIMD2(rect.width, rect.height)
     }
 
-    /// The rect of the screen shown at source instant `host`, in stage units; `nil` with no screen shown.
+    /// The rect of the screen shown at source instant `host`, in stage units: with a window frame, the whole window, bar
+    /// included (the `R` the zoom's camera keeps to, design §7.4). `nil` with no screen shown.
     public func screenRect(at host: HostTime) -> Rect? {
-        shown(at: host).map(rect(of:))
+        shown(at: host).map { rects(of: $0).window }
     }
 
     /// What is shown of the screen shown at `host`.
@@ -68,8 +84,19 @@ public struct StagePoints: Sendable {
         return screens[track]?.shown(at: host)
     }
 
-    /// The screen's rect for `view`: of the region's aspect (of the whole room inside the padding without a region).
-    private func rect(of view: ShownScreen) -> Rect {
-        StageLayout.screenRect(contentAspect: view.region.map { $0.width / $0.height }, padding: padding, outputSize: stageSize)
+    /// The screen's rect for `view`, of the region's aspect (of the whole room inside the padding without a region), and
+    /// the window's around it: the same rect without a window frame.
+    private func rects(of view: ShownScreen) -> (window: Rect, screen: Rect) {
+        let aspect = view.region.map { $0.width / $0.height }
+        guard let output = windowFrameOutput else {
+            let rect = StageLayout.screenRect(contentAspect: aspect, padding: padding, outputSize: stageSize)
+            return (rect, rect)
+        }
+        let layout = StageLayout.windowRect(contentAspect: aspect, padding: padding, outputSize: output)
+        // Output pixels to stage units: the stage is 1 tall.
+        func units(_ rect: Rect) -> Rect {
+            Rect(x: rect.x / output.y, y: rect.y / output.y, width: rect.width / output.y, height: rect.height / output.y)
+        }
+        return (units(layout.window), units(layout.screen))
     }
 }

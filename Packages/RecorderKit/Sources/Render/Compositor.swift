@@ -3,8 +3,8 @@ import Foundation
 import Metal
 import ProjectFormat
 
-/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the screen, the cursor and the camera, in that
-/// order, in one render pass that starts by clearing the target, blended premultiplied "over".
+/// Draws a `RenderFrame` into a `.bgra8Unorm` target: the background, the window frame, the screen, the cursor and the
+/// camera, in that order, in one render pass that starts by clearing the target, blended premultiplied "over".
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
@@ -12,17 +12,24 @@ public final class Compositor: @unchecked Sendable {
     /// The only target format: preview and export must write the same bytes, so never an `_srgb` format.
     public static let pixelFormat = MTLPixelFormat.bgra8Unorm
 
+    /// The compiled shaders (`ShaderSource`), for what draws into textures of its own (`BackgroundImages`).
+    let library: any MTLLibrary
     private let gradientPipeline: any MTLRenderPipelineState
     private let wallpaperPipeline: any MTLRenderPipelineState
+    private let backgroundImagePipeline: any MTLRenderPipelineState
+    private let blurredWallpaperPipeline: any MTLRenderPipelineState
     private let screenPipeline: any MTLRenderPipelineState
     private let spritePipeline: any MTLRenderPipelineState
+    private let windowBarPipeline: any MTLRenderPipelineState
     private let screenSampler: any MTLSamplerState
     private let spriteSampler: any MTLSamplerState
 
     /// Throws the compiler's error if the shaders do not build, and `RenderError` if Metal cannot make a
     /// pipeline or sampler.
     public init(device: any MTLDevice) throws {
-        precondition(MemoryLayout<QuadUniforms>.stride == 64, "QuadUniforms must keep the layout of the shaders' struct: 64 bytes")
+        precondition(MemoryLayout<QuadUniforms>.stride == 80, "QuadUniforms must keep the layout of the shaders' struct: 80 bytes")
+        precondition(
+            MemoryLayout<WindowBarUniforms>.stride == 112, "WindowBarUniforms must keep the layout of the shaders' struct: 112 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)
@@ -47,10 +54,14 @@ public final class Compositor: @unchecked Sendable {
             }
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
+        self.library = library
         gradientPipeline = try pipeline(vertex: "gradientVertex", fragment: "gradientFragment", blended: false)
         wallpaperPipeline = try pipeline(vertex: "quadVertex", fragment: "wallpaperFragment", blended: false)
+        backgroundImagePipeline = try pipeline(vertex: "gradientVertex", fragment: "backgroundImageFragment", blended: false)
+        blurredWallpaperPipeline = try pipeline(vertex: "gradientVertex", fragment: "blurredWallpaperFragment", blended: false)
         screenPipeline = try pipeline(vertex: "quadVertex", fragment: "screenFragment", blended: true)
         spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
+        windowBarPipeline = try pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blended: true)
 
         let sampler = MTLSamplerDescriptor()
         sampler.minFilter = .linear
@@ -72,64 +83,81 @@ public final class Compositor: @unchecked Sendable {
     /// map onto the whole target (they are in pixels of `frame.outputSize`). The screen is drawn only when
     /// `frame.screen` is set and `screen` is given, its `crop` filling its rect; the cursor only when `frame.cursor`
     /// is set; the camera only when `frame.camera` is set and `camera` is given, filling its rect without stretching
-    /// (cropped, centred, to the rect's shape). `screen`, `camera` and `cursor` must stay alive until `commandBuffer`
-    /// completes.
+    /// (cropped, centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
+    /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn directly
+    /// without `backgroundImage`; with one, its blurred mesh gradient (`BackgroundImages.texture(forWallpaper:…)`), the
+    /// grain is added to it. A window frame's title is `windowTitle`, the texture `TitleTexture` made of it, drawn at the
+    /// bar's pixels (`barPixels`); none without one. `screen`, `camera`, `cursor`, `backgroundImage` and `windowTitle`
+    /// must stay alive until `commandBuffer` completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
         camera: (any MTLTexture)?,
         cursor: any MTLTexture,
+        backgroundImage: (any MTLTexture)? = nil,
+        windowTitle: (any MTLTexture)? = nil,
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer
     ) {
         let encoder = renderPass(into: target, commandBuffer: commandBuffer)
         let viewport = SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y))
+        func drawFramesGradient() {
+            let angle = frame.gradientAngleDegrees * .pi / 180
+            drawGradient(start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), encoder: encoder)
+        }
 
         // 1. Background.
         switch frame.background {
         case .gradient:
-            let angle = frame.gradientAngleDegrees * .pi / 180
-            drawGradient(start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), encoder: encoder)
+            drawFramesGradient()
+        case .image:
+            if let backgroundImage {
+                drawBackgroundImage(backgroundImage, viewport: viewport, encoder: encoder)
+            } else {
+                // The image is missing or cannot be read: the frame carries Toma classic for it.
+                drawFramesGradient()
+            }
         case let .color(color):
             // Both ends of that colour: every pixel is `mix(color, color, t)`, the colour itself.
             drawGradient(start: color, end: color, direction: .zero, encoder: encoder)
-        case let .wallpaper(preset):
-            drawWallpaper(
-                preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), viewport: viewport,
-                encoder: encoder)
+        case let .wallpaper(preset, _):
+            if let backgroundImage {
+                drawBlurredWallpaper(backgroundImage, viewport: viewport, encoder: encoder)
+            } else {
+                drawWallpaper(
+                    preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), viewport: viewport,
+                    encoder: encoder)
+            }
         }
 
-        // 2. Screen.
+        // 2. Window frame: its bar and buttons, then its title.
+        if let window = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
+            drawWindowBar(window, viewport: viewport, encoder: encoder)
+            if let windowTitle {
+                let box = window.barPixels
+                drawSprite(
+                    windowTitle, origin: SIMD2<Double>(box.origin), size: SIMD2<Double>(box.size), viewport: viewport, encoder: encoder)
+            }
+        }
+
+        // 3. Screen, cut by the window around it if there is one.
         if let layer = frame.screen, let screen {
             let crop = layer.crop
             // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
             drawImage(
-                screen, in: layer.rect, cornerRadius: layer.cornerRadius,
+                screen, in: layer.rect, cornerRadius: frame.windowFrame?.cornerRadius ?? layer.cornerRadius,
                 uvOrigin: SIMD2(Float(crop.x), Float(crop.y)), uvSize: SIMD2(Float(crop.width), Float(crop.height)),
-                clampsToCrop: crop != Rect(x: 0, y: 0, width: 1, height: 1), viewport: viewport, encoder: encoder)
+                clampsToCrop: crop != Rect(x: 0, y: 0, width: 1, height: 1), shape: frame.windowFrame?.rect, viewport: viewport,
+                encoder: encoder)
         }
 
-        // 3. Cursor, its hotspot at the cursor position.
+        // 4. Cursor, its hotspot at the cursor position.
         if let layer = frame.cursor, layer.height > 0 {
             let size = SIMD2(layer.height * CursorSprite.aspect, layer.height)
-            let origin = layer.hotspot - CursorSprite.hotspot * size
-            var quad = QuadUniforms(
-                viewport: viewport,
-                origin: SIMD2<Float>(origin),
-                size: SIMD2<Float>(size),
-                contentOrigin: SIMD2<Float>(origin),
-                contentSize: SIMD2<Float>(size),
-                uvOrigin: .zero,
-                uvSize: .one,
-                radius: 0)
-            encoder.setRenderPipelineState(spritePipeline)
-            encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
-            encoder.setFragmentTexture(cursor, index: 0)
-            encoder.setFragmentSamplerState(spriteSampler, index: 0)
-            encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+            drawSprite(cursor, origin: layer.hotspot - CursorSprite.hotspot * size, size: size, viewport: viewport, encoder: encoder)
         }
 
-        // 4. Camera, over everything.
+        // 5. Camera, over everything.
         if let layer = frame.camera, let camera {
             let fill = Self.aspectFill(SIMD2(Double(camera.width), Double(camera.height)), in: layer.rect)
             drawImage(
@@ -181,6 +209,27 @@ public final class Compositor: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
+    /// Fills the whole target with `texture`, a background image made for the stage's size (`backgroundImageFragment`).
+    private func drawBackgroundImage(_ texture: any MTLTexture, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        var stageSize = viewport
+        encoder.setRenderPipelineState(backgroundImagePipeline)
+        encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.setFragmentSamplerState(screenSampler, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
+    /// Fills the whole target with `mesh`, a wallpaper's mesh gradient blurred for the stage's size, and the grain of the
+    /// output pixels (`blurredWallpaperFragment`).
+    private func drawBlurredWallpaper(_ mesh: any MTLTexture, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        var stageSize = viewport
+        encoder.setRenderPipelineState(blurredWallpaperPipeline)
+        encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        encoder.setFragmentTexture(mesh, index: 0)
+        encoder.setFragmentSamplerState(screenSampler, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
     /// Draws the part `rect` (output pixels) of `preset` over a stage of the whole output (`wallpaperFragment`).
     private func drawWallpaper(_ preset: WallpaperPreset, in rect: Rect, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
         let origin = SIMD2(Float(rect.x), Float(rect.y)), size = SIMD2(Float(rect.width), Float(rect.height))
@@ -196,12 +245,55 @@ public final class Compositor: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
+    /// Draws `texture`, premultiplied, into the rect at `origin` of `size` (output pixels), all of it (`spriteFragment`).
+    private func drawSprite(
+        _ texture: any MTLTexture, origin: SIMD2<Double>, size: SIMD2<Double>, viewport: SIMD2<Float>,
+        encoder: any MTLRenderCommandEncoder
+    ) {
+        var quad = QuadUniforms(
+            viewport: viewport,
+            origin: SIMD2<Float>(origin),
+            size: SIMD2<Float>(size),
+            contentOrigin: SIMD2<Float>(origin),
+            contentSize: SIMD2<Float>(size),
+            uvOrigin: .zero,
+            uvSize: .one,
+            radius: 0)
+        encoder.setRenderPipelineState(spritePipeline)
+        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.setFragmentSamplerState(spriteSampler, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+    }
+
+    /// Draws the title bar of `window` with its buttons (`windowBarFragment`), over a quad one pixel larger than the bar
+    /// on every side and one more at the bottom, where the bar goes on one pixel under the screen.
+    private func drawWindowBar(_ window: WindowFrameLayer, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        let rect = window.rect, bar = window.barHeight
+        let origin = SIMD2(Float(rect.x - 1), Float(rect.y - 1)), size = SIMD2(Float(rect.width + 2), Float(bar + 3))
+        var quad = QuadUniforms(
+            viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
+            uvSize: .one, radius: 0)
+        let colors = WindowFrameLayer.buttonColors
+        var uniforms = WindowBarUniforms(
+            barColor: window.barColor, red: colors[0], yellow: colors[1], green: colors[2],
+            windowOrigin: SIMD2(Float(rect.x), Float(rect.y)), windowSize: SIMD2(Float(rect.width), Float(rect.height)),
+            firstButton: SIMD2<Float>(window.firstButton), buttonSpacing: Float(WindowFrameLayer.buttonSpacing * bar),
+            buttonRadius: window.buttons ? Float(WindowFrameLayer.buttonDiameter / 2 * bar) : 0,
+            radius: Float(max(window.cornerRadius, 0)), barBottom: Float(rect.y + bar))
+        encoder.setRenderPipelineState(windowBarPipeline)
+        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WindowBarUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+    }
+
     /// Draws the part `uvOrigin`, `uvSize` of `texture` into `rect` with rounded corners (`screenFragment`), over a
     /// quad one pixel larger on every side so its antialiased edge is drawn whole; with `clampsToCrop`, nothing of
-    /// `texture` outside that part shows, not even blended at the edge. Nothing for an empty rect.
+    /// `texture` outside that part shows, not even blended at the edge. With a `shape`, the rounded rect that cuts it is
+    /// that one (with `cornerRadius`), and `rect`'s own edges are square. Nothing for an empty rect.
     private func drawImage(
         _ texture: any MTLTexture, in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>,
-        clampsToCrop: Bool = false, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
+        clampsToCrop: Bool = false, shape: Rect? = nil, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
         var quad = QuadUniforms(
@@ -213,7 +305,9 @@ public final class Compositor: @unchecked Sendable {
             uvOrigin: uvOrigin,
             uvSize: uvSize,
             radius: Float(max(cornerRadius, 0)),
-            clampsToCrop: clampsToCrop ? 1 : 0)
+            clampsToCrop: clampsToCrop ? 1 : 0,
+            shapeOrigin: shape.map { SIMD2(Float($0.x), Float($0.y)) } ?? .zero,
+            shapeSize: shape.map { SIMD2(Float($0.width), Float($0.height)) } ?? .zero)
         encoder.setRenderPipelineState(screenPipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
@@ -245,13 +339,13 @@ private struct GradientUniforms {
 }
 
 /// `WallpaperUniforms` in `ShaderSource.metal`: 16 bytes.
-private struct WallpaperUniforms {
+struct WallpaperUniforms {
     var stageSize: SIMD2<Float>
     var count: UInt32
     var padding: UInt32
 }
 
-/// `QuadUniforms` in `ShaderSource.metal`: 64 bytes.
+/// `QuadUniforms` in `ShaderSource.metal`: 80 bytes.
 private struct QuadUniforms {
     var viewport: SIMD2<Float>
     var origin: SIMD2<Float>
@@ -262,4 +356,22 @@ private struct QuadUniforms {
     var uvSize: SIMD2<Float>
     var radius: Float
     var clampsToCrop: Float = 0
+    var shapeOrigin: SIMD2<Float> = .zero
+    var shapeSize: SIMD2<Float> = .zero
+}
+
+/// `WindowBarUniforms` in `ShaderSource.metal`: 112 bytes.
+private struct WindowBarUniforms {
+    var barColor: SIMD4<Float>
+    var red: SIMD4<Float>
+    var yellow: SIMD4<Float>
+    var green: SIMD4<Float>
+    var windowOrigin: SIMD2<Float>
+    var windowSize: SIMD2<Float>
+    var firstButton: SIMD2<Float>
+    var buttonSpacing: Float
+    var buttonRadius: Float
+    var radius: Float
+    var barBottom: Float
+    var padding: SIMD2<Float> = .zero
 }

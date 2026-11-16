@@ -145,6 +145,28 @@ extension ActivityFixtures {
             #expect(missing.screenRect(at: at(1)) == nil && missing.stagePoint(global: SIMD2(720, 450), at: at(1)) == nil)
         }
 
+        @Test func framedStageRectIsTheWholeWindow() throws {
+            // With a macOS window around the screen, the screen's rect is the whole window, bar included, as the render
+            // places it in a 1920 × 1080 output (where the bar's 18 px floor is of output pixels), in stage units:
+            // pixels / 1080.
+            var document = makeDocument(padding: 0.08)
+            document.style.frame = .macWindow(appearance: .dark, title: "Demo", buttons: true)
+            let stage = StagePoints(take: makeTake(), events: [], document: document)
+            let layout = StageLayout.windowRect(contentAspect: 1.6, padding: 0.08, outputSize: [1920, 1080])
+            let window = try #require(stage.screenRect(at: at(1)))
+            let expected = layout.window
+            #expect(near(SIMD2(window.x, window.y), SIMD2(expected.x, expected.y) / 1080, 1e-12), "\(window)")
+            #expect(near(SIMD2(window.width, window.height), SIMD2(expected.width, expected.height) / 1080, 1e-12), "\(window)")
+            #expect(window.height > window.width / 1.6 + 0.03)
+            // A click at the screen's top-left corner falls under the bar; one at its centre, at the centre of the screen.
+            let bar = layout.barHeight / 1080
+            #expect(near(try #require(stage.stagePoint(global: SIMD2(0, 0), at: at(1))), SIMD2(window.x, window.y + bar), 1e-12))
+            let screen = layout.screen
+            let centre = SIMD2(screen.x + screen.width / 2, screen.y + screen.height / 2) / 1080
+            #expect(near(try #require(stage.stagePoint(global: SIMD2(720, 450), at: at(1))), centre, 1e-12))
+            #expect(stage.stagePoint(global: SIMD2(1440, 450), at: at(1)) == nil)
+        }
+
         // MARK: - Activity
 
         @Test func doubleClickIsOneClick() {
