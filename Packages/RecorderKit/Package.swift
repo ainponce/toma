@@ -7,7 +7,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .library(
-            name: "RecorderKit", targets: ["ProjectFormat", "Analysis", "Recording", "SyntheticCapture", "Recovery", "Render", "Export"]),
+            name: "RecorderKit", targets: [
+                "ProjectFormat", "Analysis", "Editing", "Recording", "SyntheticCapture", "Recovery", "Render", "Export",
+            ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
     ],
@@ -17,6 +19,7 @@ let package = Package(
     targets: [
         .target(name: "ProjectFormat"),
         .target(name: "Analysis", dependencies: ["ProjectFormat"]),
+        .target(name: "Editing", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Recording", dependencies: ["ProjectFormat"]),
         .target(name: "SyntheticCapture", dependencies: ["Recording", "ProjectFormat"]),
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
@@ -34,6 +37,7 @@ let package = Package(
         ),
         .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(name: "AnalysisTests", dependencies: ["Analysis", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "EditingTests", dependencies: ["Editing", "Analysis", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
             name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),

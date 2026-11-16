@@ -27,10 +27,18 @@ import ProjectFormat
 /// 7. Focus: `.follow` with `follow`; otherwise fixed at the centre of the box, as fractions of the screen's rect at
 ///    the instant of the group's first element.
 /// 8. The user's blocks win: a block over one of the user's blocks (`origin: .user`) of the take keeps what is left
-///    free, each part only if it lasts at least 1.0 s; a block (or part) over a `suppressed` range of the take by half of
-///    its length or more is not made. Both are compared in output time, through `TimeMap.outputRange(ofSource:take:)`.
-/// 9. Each block goes to the source (plan decision 16): its start is the source of its output start, its end the source
-///    of 1 ns before its output end, plus 1 ns. Its id is `regionID`. In start order, never overlapping.
+///    free, each part only if it lasts at least 1.0 s. A block (or part) and a `suppressed` range of the take (where the
+///    user deleted an automatic one) that overlap by half of the range or more, or by half of the block or more, make
+///    nothing: a deleted zoom stays deleted when it would come back longer, and none comes back inside a deletion. Both
+///    are compared in output time, through `TimeMap.outputRange(ofSource:take:)`; a user's block or a deletion with no
+///    output (cut whole, or 0 ns of it kept) takes no room.
+/// 9. Each part goes to the source (plan decision 16): its start is the source of its output start, its end the source
+///    of 1 ns before its output end plus 1 ns, but never past the source shown at its output end in the same clip (below
+///    1× those two are often the same instant), so it ends no later than whatever starts at that output instant. A part
+///    that comes after a user's block in output time starts no earlier than the end of that block (faster than 1×, the
+///    source of the first instant after it can be a nanosecond inside it); a part left empty is not made. Its id is
+///    `regionID`. In start order, never overlapping each other or the user's blocks that have output, in the source or
+///    in output time.
 ///
 /// With `enabled` off, or an output of 0 ns, it makes nothing.
 public enum AutoZoomPlanner {
@@ -54,16 +62,16 @@ public enum AutoZoomPlanner {
         let planner = Planner(settings: document.zoom.auto, stage: stage, timeMap: timeMap, sequence: document.sequence)
         let blocks = planner.neighboursSettled(planner.blocks(of: planner.groups(found)))
 
-        let userRanges = planner.outputRanges(
+        let users = planner.placed(
             document.zoom.regions.filter { $0.origin == .user && $0.take == take.id }.map { ($0.start, $0.end) }, take: take.id)
-        let suppressed = planner.outputRanges(
-            document.zoom.suppressed.filter { $0.take == take.id }.map { ($0.start, $0.end) }, take: take.id)
-        let regions = blocks.flatMap { block in
-            planner.free(block.start..<block.end, from: userRanges)
+        let suppressed = planner.placed(
+            document.zoom.suppressed.filter { $0.take == take.id }.map { ($0.start, $0.end) }, take: take.id).map(\.output)
+        let parts = blocks.flatMap { block in
+            planner.free(block.start..<block.end, from: users.map(\.output))
                 .filter { !planner.isSuppressed($0, by: suppressed) }
-                .compactMap { planner.region(of: block, over: $0, take: take.id) }
+                .map { (block: block, output: $0) }
         }
-        return regions.sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+        return planner.regions(of: parts, beside: users, take: take.id)
     }
 
     /// The id of an automatic block of `take` over the source `[start, end)` (plan decision 10): `z-` and the first 4
@@ -96,6 +104,13 @@ private struct Planner {
         var host: HostTime
         /// The end of what holds it; `last` when nothing does.
         var held: Int64
+    }
+
+    /// A source range of the take, and the output range it is seen in.
+    struct Placed {
+        var start: HostTime
+        var end: HostTime
+        var output: Range<Int64>
     }
 
     struct Block {
@@ -228,13 +243,14 @@ private struct Planner {
         return settled.filter { $0.start < $0.end }
     }
 
-    /// The output ranges of the source ranges `[start, end)` of `take`, without those cut whole or lasting 0 ns.
-    func outputRanges(_ ranges: [(start: HostTime, end: HostTime)], take: String) -> [Range<Int64>] {
+    /// The source ranges `[start, end)` of `take` with their output ranges, without those cut whole or lasting 0 ns.
+    func placed(_ ranges: [(start: HostTime, end: HostTime)], take: String) -> [Placed] {
         ranges.compactMap { range in
-            guard range.start < range.end else { return nil }
-            return timeMap.outputRange(ofSource: range.start..<range.end, take: take)
+            guard range.start < range.end, let output = timeMap.outputRange(ofSource: range.start..<range.end, take: take),
+                !output.isEmpty
+            else { return nil }
+            return Placed(start: range.start, end: range.end, output: output)
         }
-        .filter { !$0.isEmpty }
     }
 
     /// Step 8: what is left of `range` free of `taken`, in order; `range` itself when nothing takes any of it, and
@@ -253,26 +269,46 @@ private struct Planner {
         return overlapped ? parts.filter { $0.upperBound - $0.lowerBound >= AutoZoomPlanner.minimumFreeDuration } : parts
     }
 
-    /// Step 8: whether one of the `suppressed` ranges covers half of `range` or more.
+    /// Step 8: whether `range` and one of the `suppressed` ranges overlap by half of that range or more, or by half of
+    /// `range` or more.
     func isSuppressed(_ range: Range<Int64>, by suppressed: [Range<Int64>]) -> Bool {
-        let length = range.upperBound - range.lowerBound
-        return suppressed.contains { other in
+        suppressed.contains { other in
             let overlap = range.clamped(to: other)
             let covered = overlap.upperBound - overlap.lowerBound
-            return covered >= length - covered
+            /// Whether `covered` is half of `whole` or more.
+            func half(_ whole: Range<Int64>) -> Bool { covered >= whole.upperBound - whole.lowerBound - covered }
+            return covered > 0 && (half(other) || half(range))
         }
     }
 
-    /// Steps 6, 7 and 9: the zoom region of `block` over `output` (all of it, or a part left free), in the source.
-    func region(of block: Block, over output: Range<Int64>, take: String) -> ZoomRegion? {
+    /// Steps 6, 7 and 9: the zoom regions of `parts` (each a block, or a part of it left free), in the source, none
+    /// starting inside the user's blocks `users` that come before it in output time.
+    func regions(of parts: [(block: Block, output: Range<Int64>)], beside users: [Placed], take: String) -> [ZoomRegion] {
+        parts.compactMap { part in
+            guard var range = source(of: part.output, take: take) else { return nil }
+            for user in users where user.output.upperBound <= part.output.lowerBound { range.start = max(range.start, user.end) }
+            guard range.start < range.end else { return nil }
+            let block = part.block
+            return ZoomRegion(
+                id: AutoZoomPlanner.regionID(take: take, start: range.start, end: range.end), take: take, start: range.start,
+                end: range.end, origin: .auto, depth: block.depth == settings.depth ? nil : block.depth, focus: focus(of: block),
+                instant: false)
+        }
+        .sorted { ($0.start, $0.end) < ($1.start, $1.end) }
+    }
+
+    /// Step 9: the source range of `output` of `take` (decision 16, with its end never past the source shown at the
+    /// end of `output` in the same clip); `nil` if an end is not of `take`'s clips.
+    private func source(of output: Range<Int64>, take: String) -> (start: HostTime, end: HostTime)? {
         guard let first = timeMap.source(atOutput: output.lowerBound), let last = timeMap.source(atOutput: output.upperBound - 1),
             sequence[first.clip].take == take, sequence[last.clip].take == take
         else { return nil }
-        let start = first.source, end = HostTime(nanoseconds: last.source.nanoseconds + 1)
-        guard start < end else { return nil }
-        return ZoomRegion(
-            id: AutoZoomPlanner.regionID(take: take, start: start, end: end), take: take, start: start, end: end, origin: .auto,
-            depth: block.depth == settings.depth ? nil : block.depth, focus: focus(of: block), instant: false)
+        var end = HostTime(nanoseconds: last.source.nanoseconds + 1)
+        if output.upperBound < timeMap.duration, let next = timeMap.source(atOutput: output.upperBound), next.clip == last.clip {
+            end = min(end, next.source)
+        }
+        guard first.source < end else { return nil }
+        return (first.source, end)
     }
 
     /// Step 7.
