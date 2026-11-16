@@ -359,7 +359,7 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
 
     /// The camera on step `s` of the grid (held to the steps of the output), placed: read from `kept` when it has the
     /// step, simulated from the checkpoint before it otherwise. The one query, whatever simulated the camera.
-    func state(atStep s: Int, kept: Kept = .none) -> ZoomPlacement {
+    func state(atStep s: Int, kept: Kept = .empty) -> ZoomPlacement {
         let step = clamped(s)
         let camera = kept.camera(atStep: step) ?? camera(atStep: step)
         return placed(logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step))
@@ -367,7 +367,7 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
 
     /// The camera at output time `τ`: the state of its step when `τ` is on the grid (`StepGrid.position(ofOutput:)`),
     /// otherwise the two around it mixed and placed at `τ`; read from `kept` as `state(atStep:kept:)`.
-    func state(atOutput τ: Int64, kept: Kept = .none) -> ZoomPlacement {
+    func state(atOutput τ: Int64, kept: Kept = .empty) -> ZoomPlacement {
         let (s, fraction) = StepGrid.position(ofOutput: τ)
         guard fraction > 0, s >= 0, s < lastStep else { return state(atStep: s, kept: kept) }
         let (a, b) = kept.cameras(atSteps: s) ?? cameras(atSteps: s)
@@ -415,7 +415,7 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         let first: Int
         let cameras: [ZoomCamera]
 
-        static var none: Kept { Kept(first: 0, cameras: []) }
+        static var empty: Kept { Kept(first: 0, cameras: []) }
 
         func camera(atStep s: Int) -> ZoomCamera? {
             cameras.indices.contains(s - first) ? cameras[s - first] : nil

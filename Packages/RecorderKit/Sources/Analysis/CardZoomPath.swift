@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import CoreGraphics
 import Foundation
 import ProjectFormat
 
-/// The zoom inside the screen's card of a split at one instant (1c design §5.4), in fractions of what is shown of the
-/// screen (`StagePoints.screenRect(at:)`: with a macOS window frame, the whole window with its bar, as a fixed focus of
-/// 1b), so it depends neither on where the card is nor on its size.
+/// The zoom inside the screen's card of a split at one instant (1c design §5.4), in fractions of the screen's content: what
+/// the screen shows of the recording (`StagePoints.rects(of:)`'s `screen`), under the bar with a macOS window frame, whose
+/// bar stays still over the content in a card (1c design §14.2). So it depends neither on where the card is nor on its
+/// size.
 public struct CardZoomState: Equatable, Sendable {
     /// `u = ln z`, with `z` the depth: 0 at rest.
     public var logDepth: Double
@@ -16,23 +18,25 @@ public struct CardZoomState: Equatable, Sendable {
         self.center = center
     }
 
-    /// `z`, 1 at rest: the crop shown is `1/z` of the screen on each axis, and a point `p` of the screen (in fractions
-    /// of it) is drawn at `(p − center) × z + 0.5` of the card.
+    /// `z`, 1 at rest: the crop shown is `1/z` of the content on each axis, and a point `p` of the content (in fractions
+    /// of it) is drawn at `(p − center) × z + 0.5` of the content's place in the card.
     public var depth: Double { exp(logDepth) }
 }
 
 /// Where the zoom inside the screen's card of a split looks, and how deep (1c design §5.4, part of `cameraLayout-1`):
-/// the zoom camera of `ZoomCameraPath` over another viewport, the screen in its card, in fractions of what is shown of
-/// it. Its simulation is the same `ZoomSimulation`, so:
+/// the zoom camera of `ZoomCameraPath` over another viewport, the screen's content in its card, in fractions of it. Its
+/// simulation is the same `ZoomSimulation`, so:
 ///
 /// - The same blocks of the take, `zoom.spring`, grid of 600 Hz and checkpoints every 600 steps as the stage's camera,
 ///   and so the same depth on every step; with `zoom.show` off, always at rest.
-/// - The crop is `1/z` of the screen on each axis and its centre stays in `[1/(2z), 1 − 1/(2z)]` (`StageCrop` over the
-///   unit square): the card never shows background.
-/// - `fixed(x, y)` is that point. `follow` starts at the cursor's point in the screen shown (its stage point,
-///   `StagePoints.stagePoint(global:at:)`, as a fraction of `StagePoints.screenRect(at:)`), then moves with the dead
-///   zone, the central box of `ZoomCameraPath.deadZone` of the crop and steps of `followStep` of it. No zone to avoid:
-///   in a split the camera is beside the screen, not over it. `instant` jumps.
+/// - The crop is `1/z` of the content on each axis and its centre stays in `[1/(2z), 1 − 1/(2z)]` (`StageCrop` over the
+///   unit square): the card never shows background, nor, with a window frame, a strip under the bar that is not the
+///   screen.
+/// - `fixed(x, y)` is the point of 1b: at those fractions of `StagePoints.screenRect(at:)` (with a window frame, the
+///   whole window, bar included), taken to the content's fractions and placed. `follow` starts at the cursor's point in
+///   the content (`CursorGeometry.normalized` in the region shown, as `StagePoints.stagePoint(global:at:)` places it),
+///   then moves with the dead zone, the central box of `ZoomCameraPath.deadZone` of the crop and steps of `followStep`
+///   of it. No zone to avoid: in a split the camera is beside the screen, not over it. `instant` jumps.
 ///
 /// The card has the screen's proportion, so the path does not depend on where the card is: it is simulated once for the
 /// whole output, only for a document with a split (the project's layout or a block). Simulated everywhere, also where
@@ -108,24 +112,37 @@ extension CardZoomState {
     }
 }
 
-/// The screen in its card, in fractions of what is shown of it: what `CardZoomPath` looks over. The screen is the whole
-/// viewport, so a fixed focus is its own point and the crop keeps to the unit square; nothing else is kept off the
-/// cursor.
+/// The screen's content in its card, in fractions of it: what `CardZoomPath` looks over. The crop keeps to the unit
+/// square (`size`), the content, even where the window around it is bigger; nothing else is kept off the cursor.
 struct CardViewport: ZoomViewport {
     let size = SIMD2<Double>(1, 1)
     private let stage: StagePoints
+
+    /// The content, and the window where no screen is shown.
+    private static let content = Rect(x: 0, y: 0, width: 1, height: 1)
 
     init(stage: StagePoints) {
         self.stage = stage
     }
 
+    /// The window around the screen shown at `host` (`StagePoints.screenRect(at:)`), in fractions of its content: what a
+    /// fixed focus is a fraction of, as in 1b. Without a window frame, the content itself.
     func screen(at host: HostTime?) -> Rect {
-        Rect(x: 0, y: 0, width: 1, height: 1)
+        guard let host, let view = stage.shownScreen(at: host)?.view else { return Self.content }
+        let (window, content) = stage.rects(of: view)
+        guard content.width > 0, content.height > 0 else { return Self.content }
+        return Rect(
+            x: (window.x - content.x) / content.width, y: (window.y - content.y) / content.height,
+            width: window.width / content.width, height: window.height / content.height)
     }
 
+    /// The cursor at `global` in fractions of the content: where `StagePoints.stagePoint(global:at:)` places it, by the
+    /// same rule (on screen, in the region shown, its far edges out).
     func cursor(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>? {
-        guard let point = stage.stagePoint(global: global, at: host), let rect = stage.screenRect(at: host) else { return nil }
-        return (point - SIMD2(rect.x, rect.y)) / SIMD2(rect.width, rect.height)
+        guard let view = stage.shownScreen(at: host)?.view, view.onScreen, let region = view.region else { return nil }
+        let point = CGPoint(x: global.x, y: global.y)
+        guard CursorGeometry.contains(point, region) else { return nil }
+        return CursorGeometry.normalized(point, in: region)
     }
 
     func cleared(
