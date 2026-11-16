@@ -35,24 +35,56 @@ private func noise(count: Int, seed: UInt64) -> [UInt8] {
     }
 }
 
-/// An opaque sRGB image; with `noisy`, every pixel differs, so it compresses poorly.
-private func image(width: Int, height: Int, noisy: Bool = false) throws -> CGImage {
+/// The color the images that are not `noisy` are filled with, and its 8-bit components.
+private let fill = (red: 0.2, green: 0.5, blue: 0.8)
+private let fillBytes: (red: UInt8, green: UInt8, blue: UInt8) = (51, 128, 204)
+
+/// An opaque sRGB image; with `noisy`, every pixel differs, so it compresses poorly. With 16 bits a component, it
+/// is encoded as a 16-bit PNG.
+private func image(width: Int, height: Int, noisy: Bool = false, bitsPerComponent: Int = 8) throws -> CGImage {
     let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+    let alpha = bitsPerComponent == 16
+        ? CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder16Little.rawValue
+        : CGImageAlphaInfo.noneSkipLast.rawValue
     let context = try #require(CGContext(
-        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
-        space: space, bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue
+        data: nil, width: width, height: height, bitsPerComponent: bitsPerComponent,
+        bytesPerRow: width * 4 * bitsPerComponent / 8, space: space, bitmapInfo: alpha
     ))
     if noisy {
         let pixels = try #require(context.data).bindMemory(to: UInt8.self, capacity: width * height * 4)
         for (index, byte) in noise(count: width * height * 4, seed: 7).enumerated() { pixels[index] = byte }
     } else {
-        context.setFillColor(CGColor(srgbRed: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        context.setFillColor(CGColor(srgbRed: fill.red, green: fill.green, blue: fill.blue, alpha: 1))
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
     }
     return try #require(context.makeImage())
 }
 
-/// `image` encoded as `type` (`public.png`, `public.jpeg`, `public.tiff`) with the image `properties` given.
+/// A gray image, which ImageIO decodes in a gray color space.
+private func grayImage(width: Int, height: Int) throws -> CGImage {
+    let context = try #require(CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width,
+        space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+    ))
+    context.setFillColor(gray: 0.5, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    return try #require(context.makeImage())
+}
+
+/// The bytes of the first pixel of `image`, which must be 8-bit RGBA.
+private func firstPixel(of image: CGImage) throws -> [UInt8] {
+    let data = try #require(image.dataProvider?.data as Data?)
+    return Array(data.prefix(4))
+}
+
+/// Whether `image` is what every reader gives: 8 bits a component, RGBA with premultiplied alpha last, in an RGB
+/// color space.
+private func isEightBitRGBA(_ image: CGImage) -> Bool {
+    image.bitsPerComponent == 8 && image.bitsPerPixel == 32 && image.alphaInfo == .premultipliedLast
+        && image.bitmapInfo.intersection(.byteOrderMask).isEmpty && image.colorSpace?.model == .rgb
+}
+
+/// `image` encoded as `type` (`public.png`, `public.jpeg`, `com.microsoft.bmp`…) with the image `properties` given.
 private func encoded(_ image: CGImage, as type: String, properties: [CFString: Any] = [:]) throws -> Data {
     let data = NSMutableData()
     let destination = try #require(CGImageDestinationCreateWithData(data, type as CFString, 1, nil))
@@ -85,13 +117,15 @@ private func png(width: Int, height: Int, noisy: Bool = false) throws -> Data {
     try withTemporaryDirectory { dir in
         let package = try makePackage(in: dir)
         try put(try png(width: 40, height: 20), at: "takes/take-001/wallpapers/display-69734208.png", in: package)
-        try put(try encoded(try image(width: 30, height: 10), as: "public.tiff"), at: "assets/\(hash).tiff", in: package)
+        try put(try encoded(try image(width: 64, height: 32), as: "public.heic"), at: "assets/\(hash).heic", in: package)
+        try put(try png(width: 30, height: 10), at: "assets/\(otherHash).png", in: package)
 
         let wallpaper = try #require(package.wallpaper(take: "take-001", displayID: 69_734_208))
         #expect(wallpaper.width == 40 && wallpaper.height == 20)
         #expect(package.wallpaper(take: "take-001", displayID: 1) == nil)
-        let asset = try #require(package.asset("assets/\(hash).tiff"))
-        #expect(asset.width == 30 && asset.height == 10)
+        let heic = try #require(package.asset("assets/\(hash).heic"))
+        #expect(heic.width == 64 && heic.height == 32)
+        #expect(package.asset("assets/\(otherHash).png")?.width == 30)
     }
 }
 
@@ -243,6 +277,9 @@ private func png(width: Int, height: Int, noisy: Bool = false) throws -> Data {
     #expect(PackageFileKind.cursorImage.maxBytes == 1_048_576 && PackageFileKind.cursorImage.maxPixelSide == 512)
     #expect(PackageFileKind.wallpaper.maxBytes == 67_108_864 && PackageFileKind.wallpaper.maxPixelSide == 16_384)
     #expect(PackageFileKind.asset.maxBytes == 104_857_600 && PackageFileKind.asset.maxPixelSide == 16_384)
+    #expect(PackageFileKind.cursorImage.imageTypes == ["public.png"])
+    #expect(PackageFileKind.wallpaper.imageTypes == ["public.png"])
+    #expect(PackageFileKind.asset.imageTypes == ["public.png", "public.jpeg", "public.heic"])
 }
 
 @Test func oversizedFilesAreAbsent() throws {
@@ -303,6 +340,9 @@ private func png(width: Int, height: Int, noisy: Bool = false) throws -> Data {
         }
         #expect(wallpaper == nil && asset == nil)
         #expect(elapsed < .milliseconds(100))
+        // Refused by `fstat` as no regular file, never read as the empty file it would seem.
+        #expect(SafePackageFile.read("takes/take-001/wallpapers/display-2.png", in: package, as: .wallpaper) == nil)
+        #expect(SafePackageFile.read("assets/\(hash).png", in: package, as: .asset) == nil)
     }
 }
 
@@ -319,6 +359,105 @@ private func png(width: Int, height: Int, noisy: Bool = false) throws -> Data {
 }
 
 // MARK: - Decoding
+
+@Test func onlyTheKindsFormatsAreDecoded() throws {
+    try withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let picture = try image(width: 16, height: 16)
+        let formats = [
+            "public.jpeg": try encoded(picture, as: "public.jpeg"),
+            "com.compuserve.gif": try encoded(picture, as: "com.compuserve.gif"),
+            "com.microsoft.bmp": try encoded(picture, as: "com.microsoft.bmp"),
+            "public.tiff": try encoded(picture, as: "public.tiff"),
+        ]
+        // Each is an image ImageIO decodes, and reads as the type it is, whatever the file is named.
+        for (type, data) in formats {
+            let source = try #require(CGImageSourceCreateWithData(data as CFData, nil))
+            #expect(CGImageSourceGetType(source) as String? == type)
+            #expect(CGImageSourceCreateImageAtIndex(source, 0, nil) != nil, "\(type)")
+        }
+        let jpeg = try #require(formats["public.jpeg"])
+        let gif = try #require(formats["com.compuserve.gif"])
+        let bmp = try #require(formats["com.microsoft.bmp"])
+        let tiff = try #require(formats["public.tiff"])
+
+        // Cursors and wallpaper photos are PNG only.
+        try put(jpeg, at: "takes/take-001/cursors/\(hash).png", in: package)
+        try put(gif, at: "takes/take-001/cursors/\(otherHash).png", in: package)
+        try put(jpeg, at: "takes/take-001/wallpapers/display-1.png", in: package)
+        try put(gif, at: "takes/take-001/wallpapers/display-2.png", in: package)
+        #expect(package.cursorImage(take: "take-001", hash: hash) == nil)
+        #expect(package.cursorImage(take: "take-001", hash: otherHash) == nil)
+        #expect(package.wallpaper(take: "take-001", displayID: 1) == nil)
+        #expect(package.wallpaper(take: "take-001", displayID: 2) == nil)
+
+        // The user's own images are PNG, JPEG or HEIC: not BMP, GIF or TIFF, even named as one that is allowed.
+        try put(jpeg, at: "assets/\(hash).jpg", in: package)
+        try put(bmp, at: "assets/\(hash).png", in: package)
+        try put(bmp, at: "assets/\(otherHash).jpg", in: package)
+        try put(gif, at: "assets/\(otherHash).png", in: package)
+        try put(tiff, at: "assets/\(hash).tiff", in: package)
+        #expect(package.asset("assets/\(hash).jpg")?.width == 16)
+        #expect(package.asset("assets/\(hash).png") == nil)
+        #expect(package.asset("assets/\(otherHash).jpg") == nil)
+        #expect(package.asset("assets/\(otherHash).png") == nil)
+        #expect(package.asset("assets/\(hash).tiff") == nil)
+
+        // The types are what `decode` is given; by default, the user's own images'.
+        #expect(BoundedImage.decode(jpeg, maxPixelSide: 16)?.width == 16)
+        #expect(BoundedImage.decode(jpeg, maxPixelSide: 16, allowedTypes: PackageFileKind.cursorImage.imageTypes) == nil)
+        #expect(BoundedImage.decode(bmp, maxPixelSide: 16) == nil)
+        #expect(BoundedImage.decode(bmp, maxPixelSide: 16, allowedTypes: ["com.microsoft.bmp"])?.width == 16)
+    }
+}
+
+@Test func decodedImagesAreEightBitRGBA() throws {
+    try withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        // 16-bit PNGs, which ImageIO decodes at 8 bytes a pixel; one a wallpaper as wide as a wallpaper may be.
+        let cursor16 = try encoded(try image(width: 64, height: 64, bitsPerComponent: 16), as: "public.png")
+        let wallpaper16 = try encoded(try image(width: 16_384, height: 16, bitsPerComponent: 16), as: "public.png")
+        let source = try #require(CGImageSourceCreateWithData(wallpaper16 as CFData, nil))
+        #expect(CGImageSourceCreateImageAtIndex(source, 0, nil)?.bitsPerComponent == 16)
+        try put(cursor16, at: "takes/take-001/cursors/\(hash).png", in: package)
+        try put(wallpaper16, at: "takes/take-001/wallpapers/display-1.png", in: package)
+        try put(cursor16, at: "assets/\(hash).png", in: package)
+        try put(try encoded(try grayImage(width: 8, height: 8), as: "public.png"), at: "assets/\(otherHash).png", in: package)
+        try put(try encoded(try image(width: 8, height: 8), as: "public.jpeg"), at: "assets/\(hash).jpg", in: package)
+
+        let cursor = try #require(package.cursorImage(take: "take-001", hash: hash))
+        let wallpaper = try #require(package.wallpaper(take: "take-001", displayID: 1))
+        let asset = try #require(package.asset("assets/\(hash).png"))
+        let gray = try #require(package.asset("assets/\(otherHash).png"))
+        let jpeg = try #require(package.asset("assets/\(hash).jpg"))
+        for decoded in [cursor, wallpaper, asset, gray, jpeg] {
+            #expect(isEightBitRGBA(decoded), "\(decoded.bitsPerComponent) bits, \(decoded.bitsPerPixel) a pixel")
+        }
+
+        // A wallpaper photo is reduced like the user's own images, to 7 680 on its longer side.
+        #expect(wallpaper.width == 7680 && wallpaper.height == 8)
+        #expect(cursor.width == 64 && cursor.height == 64)
+
+        // The pixels are the file's.
+        for decoded in [cursor, wallpaper, asset] {
+            let pixel = try firstPixel(of: decoded)
+            #expect(abs(Int(pixel[0]) - Int(fillBytes.red)) <= 1 && abs(Int(pixel[1]) - Int(fillBytes.green)) <= 1
+                && abs(Int(pixel[2]) - Int(fillBytes.blue)) <= 1 && pixel[3] == 255, "\(pixel)")
+        }
+        let grayPixel = try firstPixel(of: gray)
+        #expect(grayPixel[0] == grayPixel[1] && grayPixel[1] == grayPixel[2] && grayPixel[3] == 255, "\(grayPixel)")
+    }
+}
+
+@Test func wallpaperIsDecodedReduced() throws {
+    try withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        try put(try png(width: 8000, height: 100), at: "takes/take-001/wallpapers/display-1.png", in: package)
+
+        let wallpaper = try #require(package.wallpaper(take: "take-001", displayID: 1))
+        #expect(wallpaper.width == 7680 && wallpaper.height == 96)
+    }
+}
 
 @Test func assetIsDecodedReduced() throws {
     try withTemporaryDirectory { dir in

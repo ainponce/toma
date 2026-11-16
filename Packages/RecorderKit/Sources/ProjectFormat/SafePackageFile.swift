@@ -30,6 +30,17 @@ public enum PackageFileKind: Sendable {
         }
     }
 
+    /// The image formats decoded for this kind, as the uniform type identifiers ImageIO reads from the content:
+    /// PNG for cursors and wallpaper photos, which Toma writes; PNG, JPEG and HEIC for the user's own. A package can
+    /// come from anywhere, so no other decoder of ImageIO is reached from it, whatever a file's name says. An asset
+    /// named `.tiff`, which `isValidName` allows, is not decoded.
+    public var imageTypes: Set<String> {
+        switch self {
+        case .cursorImage, .wallpaper: ["public.png"]
+        case .asset: ["public.png", "public.jpeg", "public.heic"]
+        }
+    }
+
     /// Whether `name`, a file name with no folder, is exactly what this kind's files are called:
     /// `^[0-9a-f]{32}\.png$`, `^display-[0-9]+\.png$` or `^[0-9a-f]{32}\.(png|jpg|heic|tiff)$`, in ASCII.
     public func isValidName(_ name: String) -> Bool {
@@ -139,8 +150,8 @@ public enum SafePackageFile {
 }
 
 extension ProjectPackage {
-    /// The long side `asset(_:)` decodes to: twice the largest output, 4K (3 840).
-    private static let assetLongSide = 2 * 3_840
+    /// The longest side `wallpaper(take:displayID:)` and `asset(_:)` decode to: twice the largest output, 4K (3 840).
+    private static let largestDecodedSide = 2 * 3_840
 
     /// The image `takes/<take>/cursors/<hash>.png`, a `cursorImage` event's, or `nil` if it is absent or breaks the
     /// rules of `PackageFileKind.cursorImage`. `hash` and `take` come from the package and are checked whole before
@@ -149,21 +160,22 @@ extension ProjectPackage {
         image(at: "takes/\(take)/cursors/\(hash).png", as: .cursorImage)
     }
 
-    /// The image `takes/<take>/wallpapers/display-<displayID>.png`, or `nil` if it is absent or breaks the rules of
-    /// `PackageFileKind.wallpaper`.
+    /// The image `takes/<take>/wallpapers/display-<displayID>.png` decoded with its longer side reduced to 7 680 pixels
+    /// at most, or `nil` if it is absent or breaks the rules of `PackageFileKind.wallpaper`.
     public func wallpaper(take: String, displayID: UInt32) -> CGImage? {
-        image(at: "takes/\(take)/wallpapers/display-\(displayID).png", as: .wallpaper)
+        image(at: "takes/\(take)/wallpapers/display-\(displayID).png", as: .wallpaper, reducedTo: Self.largestDecodedSide)
     }
 
     /// The image `file` (`"assets/<sha>.<ext>"`, as the document names it) decoded with its longer side reduced to
     /// 7 680 pixels at most and turned upright by its EXIF orientation, or `nil` if it is absent or breaks the rules
     /// of `PackageFileKind.asset`.
     public func asset(_ file: String) -> CGImage? {
-        image(at: file, as: .asset, reducedTo: Self.assetLongSide)
+        image(at: file, as: .asset, reducedTo: Self.largestDecodedSide)
     }
 
+    /// Each image comes out as `BoundedImage.decode` gives it: 8-bit RGBA with premultiplied alpha.
     private func image(at relativePath: String, as kind: PackageFileKind, reducedTo longSide: Int? = nil) -> CGImage? {
         guard let data = SafePackageFile.read(relativePath, in: self, as: kind) else { return nil }
-        return BoundedImage.decode(data, maxPixelSide: kind.maxPixelSide, reducedTo: longSide)
+        return BoundedImage.decode(data, maxPixelSide: kind.maxPixelSide, reducedTo: longSide, allowedTypes: kind.imageTypes)
     }
 }
