@@ -54,7 +54,7 @@ struct TrackItems<Info> {
 /// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it).
 /// - The ruler's markers: each `marker` event of the take at its instant, if it is kept.
 struct TimelineContent {
-    struct Clip {
+    struct ClipInfo {
         /// Its source's start, in host nanoseconds.
         var start: UInt64
         /// `ClipSpeed.clamped`.
@@ -81,10 +81,10 @@ struct TimelineContent {
 
     let layout: TimelineLayout
     let map: TimeMap
-    /// Every clip of the sequence, by its index (`TimeMap.source(atOutput:)`).
+    /// The document's sequence, which `map` maps.
     let sequence: [Clip]
     /// The clips that last any output.
-    let clips: TrackItems<Clip>
+    let clips: TrackItems<ClipInfo>
     let screens: TrackItems<Screen>
     let zooms: TrackItems<Zoom>
     let cameraChanges: TrackItems<Void>
@@ -105,12 +105,13 @@ struct TimelineContent {
         layout = TimelineLayout(take: take, document: document)
         self.map = map
 
-        let sequence = document.sequence.map { Clip(start: $0.start.nanoseconds, speed: ClipSpeed.clamped($0.speed)) }
-        self.sequence = sequence
+        sequence = document.sequence
         clips = TrackItems(document.sequence.indices.compactMap { k in
             let clip = document.sequence[k], start = map.clipOutputStarts[k], length = TimeMap.outputDuration(of: clip)
             guard length > 0 else { return nil }
-            return .init(id: clip.id, output: start..<(start + length), info: sequence[k])
+            return .init(
+                id: clip.id, output: start..<(start + length),
+                info: ClipInfo(start: clip.start.nanoseconds, speed: ClipSpeed.clamped(clip.speed)))
         })
 
         let changes = document.screens.changes.filter { $0.take == takeID }.sorted { $0.t < $1.t }
@@ -303,10 +304,11 @@ final class SpanLayer: CALayer {
 /// item in sight, taken from a pool and given back when it leaves it, so scrolling and scaling an hour with hundreds of
 /// clips and blocks touches only what is in sight.
 ///
-/// Thumbnails are of the output, not of each clip: tiles as wide as a thumbnail across the track, each showing the frame
-/// at its left edge (rounded down, within its clip, to a step that is a power of two of nanoseconds of output as long as
-/// a tile at most, so a pinch asks again for few of them), seen only inside the clips. They come from the
-/// `ThumbnailCache`, which makes them off the main thread; the last 400 are kept here.
+/// Thumbnails: each clip has its own grid of tiles (`TimelineLayout.thumbnailTiles`), from its start a power of two of
+/// nanoseconds of output apart, each showing the frame of its clip at its left edge. While the scale changes within a
+/// power of two the tiles keep their frames and slide with the clip (across one, half of them do), and an edit that moves
+/// a clip moves its tiles with the same frames. They come from the `ThumbnailCache`, which makes them off the main
+/// thread; the last 400 are kept here, and a tile that leaves the sight before its thumbnail is made cancels it.
 @MainActor
 final class TimelineTracks {
     /// The rows, scrolled up and down; its frame is the tracks' area under the ruler.
@@ -343,6 +345,8 @@ final class TimelineTracks {
     private static let keptThumbnails = 400
     /// Clips faster than this are silent (`SpeedStretch.maximumSpeed` of the export): their waveform is flat.
     private static let fastestHeard = 4.0
+    /// The narrowest piece of a thumbnail drawn: under it, the clip's color.
+    private static let narrowestThumbnail = 16.0
 
     init() {
         layer.masksToBounds = true
@@ -357,8 +361,9 @@ final class TimelineTracks {
             return hatch
         }
         tiles = LayerPool(parent: thumbnailStrip) {
+            // At its own size (it is made as tall as the tile), from the tile's left; a tile's last piece cuts it.
             let tile = CALayer()
-            tile.contentsGravity = .resizeAspectFill
+            tile.contentsGravity = .left
             tile.masksToBounds = true
             return tile
         }
@@ -508,42 +513,32 @@ final class TimelineTracks {
         }
     }
 
-    /// The tiles of thumbnails in sight, each showing the thumbnail of the frame at its left edge, or the clip's color
-    /// until it arrives.
-    private func layOutThumbnails(_ content: TimelineContent, _ geometry: TimelineGeometry, height: Double, _ wanted: inout Set<ThumbnailKey>) {
-        guard let cache = thumbnailCache, content.map.duration > 0, height > 0 else { return }
-        let width = (height * content.screenAspect).rounded()
+    /// The thumbnail tiles in sight, each showing the frame at its left edge from its left, cut at its clip's end, or the
+    /// clip's color until it arrives (never a frame of another time).
+    private func layOutThumbnails(
+        _ content: TimelineContent, _ geometry: TimelineGeometry, height: Double, _ wanted: inout Set<ThumbnailKey>
+    ) {
+        guard let cache = thumbnailCache, height > 0 else { return }
         let pixels = min(max(Int((height * geometry.backingScale).rounded()), 1), 512)
-        // The output a tile covers, and the step its time is rounded down to: a power of two of nanoseconds, at most that.
-        let period = width / geometry.scale * 1e9
-        guard period.isFinite, period >= 1 else { return }
-        let step = Double(1 << Int(log2(period)))
-        let contentWidth = Double(content.map.duration) * geometry.scale / 1e9
-        let first = max(Int((geometry.offset / width).rounded(.down)), 0)
-        let last = Int(((min(geometry.offset + geometry.areaWidth, contentWidth)) / width).rounded(.up))
-        guard first < last else { return }
-        for i in first..<last {
-            let τ = Int64((Double(i) * period).rounded(.down))
-            guard τ < content.map.duration, let (k, source) = content.map.source(atOutput: τ) else { continue }
-            let clip = content.sequence[k]
-            // Within the clip, so the step's frames are its own and stay when an edit moves the clip.
-            let sourceStep = max(step * clip.speed, 1)
-            let into = Double(source.nanoseconds - clip.start)
-            let rounded = clip.start + UInt64((into / sourceStep).rounded(.down) * sourceStep)
-            guard let track = content.screenTrack(atSource: rounded) else { continue }
-            let key = ThumbnailKey(track: track, source: rounded, height: pixels)
+        let (lower, upper) = geometry.visibleOutput
+        let inSight = TimelineLayout.thumbnailTiles(
+            sequence: content.sequence, map: content.map, visible: lower..<max(upper, lower), scale: geometry.scale,
+            tileWidth: (height * content.screenAspect).rounded(), minimumWidth: Self.narrowestThumbnail)
+        for tile in inSight {
+            guard let track = content.screenTrack(atSource: tile.source.nanoseconds) else { continue }
+            let key = ThumbnailKey(track: track, source: tile.source.nanoseconds, height: pixels)
             wanted.insert(key)
-            let id = "\(i)"
-            let (tile, isNew) = tiles.layer(id)
-            if isNew { tile.contentsScale = geometry.backingScale }
-            tile.frame = CGRect(x: Double(i) * width - geometry.offset, y: 0, width: width, height: height)
-            // Another frame for the tile: the clip's color until it arrives, never a frame of another time.
+            let id = "\(content.sequence[tile.clip].id) \(tile.index)"
+            let (layer, isNew) = tiles.layer(id)
+            if isNew { layer.contentsScale = geometry.backingScale }
+            let minX = geometry.snapped(geometry.x(tile.output)), maxX = geometry.snapped(geometry.x(tile.end))
+            layer.frame = CGRect(x: minX, y: 0, width: maxX - minX, height: height)
             if isNew || tileKeys[id] != key {
                 tileKeys[id] = key
-                tile.contents = nil
+                layer.contents = nil
             }
             if let made = thumbnails[key] {
-                if tile.contents == nil, let made { tile.contents = made }
+                if layer.contents == nil, let made { layer.contents = made }
             } else {
                 request(key, from: cache)
             }

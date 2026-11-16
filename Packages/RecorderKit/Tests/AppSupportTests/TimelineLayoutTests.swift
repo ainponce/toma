@@ -97,6 +97,111 @@ import Testing
     }
 }
 
+extension TimelineLayoutTests {
+    /// The bench's hour: 500 clips of 7 s of source with 0.2 s cut between them, one in ten at 2×, from host 1 s.
+    private static func hour() -> [Clip] {
+        (0..<500).map { i in
+            let start = UInt64(1_000_000_000) + UInt64(i) * 7_200_000_000
+            return Clip(
+                id: "c-" + String(format: "%08x", i), take: "take-001", start: HostTime(nanoseconds: start),
+                end: HostTime(nanoseconds: start + 7_000_000_000), speed: i % 10 == 3 ? 2 : 1)
+        }
+    }
+
+    /// The tiles in sight of `sequence` at `scale` with the middle of the output at the middle of a 1352 pt area, as the
+    /// pairs (clip, source) they show.
+    private static func shown(_ sequence: [Clip], scale: Double, middle: Double) -> Set<String> {
+        let map = TimeMap(sequence: sequence)
+        let offset = middle * scale - 676
+        let lower = Int64(offset / scale * 1e9), upper = Int64((offset + 1352) / scale * 1e9)
+        let tiles = TimelineLayout.thumbnailTiles(
+            sequence: sequence, map: map, visible: lower..<upper, scale: scale, tileWidth: 80, minimumWidth: 16)
+        return Set(tiles.map { "\(sequence[$0.clip].id) \($0.source.nanoseconds)" })
+    }
+
+    @Test func fitAnchorKeepsBothEnds() {
+        let layout = Self.layout([Self.track("display-1", .display)])
+        let (duration, width) = (3465.0, 1352.0)
+        let fit = TimelineLayout.fitScale(duration: duration, width: width)
+        for (scale, offset) in [(60.0, 70_000.0), (600.0, 2_077_000.0), (fit * 1.5, 100.0), (4.0, 0.0)] {
+            let τ = TimelineLayout.fitAnchor(scale: scale, offset: offset, duration: duration, width: width)
+            // The instant is where it is now and where it is fitted: scaling around it starts at this view and ends fitted.
+            let now = layout.x(ofOutput: τ, scale: scale, offset: offset), fitted = layout.x(ofOutput: τ, scale: fit, offset: 0)
+            #expect(abs(now - fitted) < 1e-6, "scale \(scale), offset \(offset)")
+            let start = Double(τ) * scale / 1e9 - (fitted - TimelineLayout.headerWidth)
+            let end = Double(τ) * fit / 1e9 - (fitted - TimelineLayout.headerWidth)
+            #expect(abs(start - offset) < 1e-6 && abs(end) < 1e-9)
+            #expect(τ >= 0 && Double(τ) <= duration * 1e9)
+        }
+        // Already fitted, or closer than it can be: the start.
+        #expect(TimelineLayout.fitAnchor(scale: fit, offset: 0, duration: duration, width: width) == 0)
+        #expect(TimelineLayout.fitAnchor(scale: 600, offset: 0, duration: 1, width: width) == 0)
+    }
+
+    @Test func thumbnailTilesFollowTheirClip() {
+        let sequence = Self.hour()
+        let map = TimeMap(sequence: sequence)
+        let tiles = TimelineLayout.thumbnailTiles(
+            sequence: sequence, map: map, visible: 0..<map.duration, scale: 10, tileWidth: 80, minimumWidth: 16)
+        // Each clip's tiles start at the clip, a power of two of nanoseconds apart (40 to 80 pt), never past its end, and
+        // show its own source.
+        let step = Int64(1) << 32
+        #expect(Double(step) * 10 / 1e9 > 40 && Double(step) * 10 / 1e9 <= 80)
+        for tile in tiles {
+            let start = map.clipOutputStarts[tile.clip], clip = sequence[tile.clip]
+            let end = start + TimeMap.outputDuration(of: clip)
+            #expect(tile.output == start + Int64(tile.index) * step)
+            #expect(tile.end == min(tile.output + step, end))
+            #expect(tile.source >= clip.start && tile.source < clip.end)
+            #expect(Double(tile.end - tile.output) * 10 / 1e9 >= 16)
+        }
+        // The 2× clip: two tiles' worth of source per tile.
+        let fast = tiles.filter { $0.clip == 3 }
+        #expect(fast.map { $0.source.nanoseconds - sequence[3].start.nanoseconds } == fast.map { UInt64($0.index) * 2 * UInt64(step) })
+    }
+
+    @Test func aSmallScaleStepKeepsTheThumbnails() {
+        let sequence = Self.hour()
+        for scale in [3.9, 10.0, 60.0, 300.0] {
+            let before = Self.shown(sequence, scale: scale, middle: 1700), after = Self.shown(sequence, scale: scale * 1.02, middle: 1700)
+            #expect(!after.isEmpty)
+            // Within the octave the grid stays: only the tiles at the edges come and go.
+            #expect(Double(after.intersection(before).count) >= 0.8 * Double(after.count), "\(scale) pt/s")
+        }
+    }
+
+    @Test func aCutBeforeTheViewKeepsTheThumbnailsAfterIt() {
+        let sequence = Self.hour()
+        var cut = sequence
+        cut.remove(at: 10)
+        for scale in [10.0, 60.0] {
+            let map = TimeMap(sequence: sequence), cutMap = TimeMap(sequence: cut)
+            let all = TimelineLayout.thumbnailTiles(
+                sequence: sequence, map: map, visible: 0..<map.duration, scale: scale, tileWidth: 80, minimumWidth: 16)
+            let after = TimelineLayout.thumbnailTiles(
+                sequence: cut, map: cutMap, visible: 0..<cutMap.duration, scale: scale, tileWidth: 80, minimumWidth: 16)
+            // Every clip after the cut has the same tiles, moved with it.
+            func tiles(_ list: [TimelineLayout.ThumbnailTile], _ clips: [Clip], from first: Int) -> [String] {
+                list.filter { $0.clip >= first }.map { "\(clips[$0.clip].id) \($0.index) \($0.source.nanoseconds)" }
+            }
+            #expect(tiles(all, sequence, from: 11) == tiles(after, cut, from: 10))
+            #expect(!tiles(after, cut, from: 10).isEmpty)
+        }
+    }
+
+    @Test func clipsNarrowerThanATileOfMinimumWidthShowNone() {
+        let sequence = Self.hour()
+        let map = TimeMap(sequence: sequence)
+        let fit = TimelineLayout.fitScale(duration: map.durationSeconds, width: 1352)
+        // Fitted, the clips are under 3 pt wide: no thumbnail.
+        #expect(TimelineLayout.thumbnailTiles(
+            sequence: sequence, map: map, visible: 0..<map.duration, scale: fit, tileWidth: 80, minimumWidth: 16).isEmpty)
+        // Out of sight, none either.
+        #expect(TimelineLayout.thumbnailTiles(
+            sequence: sequence, map: map, visible: map.duration..<(map.duration + 1), scale: 60, tileWidth: 80, minimumWidth: 16).isEmpty)
+    }
+}
+
 /// SplitMix64: random numbers that depend only on the seed.
 private struct SplitMix64 {
     var state: UInt64
