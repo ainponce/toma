@@ -96,7 +96,7 @@ Calibración (dueño, desde Terminal.app con los permisos de Grabación de panta
 
 1. `recorder-dev record <carpeta> --duration 300 --display <principal> --display <secundaria> --camera default` (60 fps, el valor por defecto de `--fps`), con las dos pantallas en movimiento (un video o una animación en cada una).
 2. `recorder-dev verify <paquete> --max-drop-ratio 0.005`: anotar el porcentaje de cuadros perdidos de cada pista.
-3. Si alguna pista supera el 0,5 %, bajar `defaultBudgetPixelsPerSecond` hasta la carga medida × 0,8 (la carga medida es la suma de ancho × alto × fps de las tres pistas, con el tamaño de cada segmento) y anotar el valor nuevo y por qué.
+3. Anotar en la tabla la carga medida (la suma de ancho × alto × fps de las tres pistas, con el tamaño de cada segmento) y los cuadros perdidos. Si alguna pista supera el 0,5 %, un agente baja `defaultBudgetPixelsPerSecond` hasta la carga medida × 0,8 con lo anotado, y escribe el valor nuevo y por qué.
 
 | Medición | Valor |
 |---|---|

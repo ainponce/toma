@@ -101,8 +101,9 @@ enum CameraLeaseRules {
 /// its format and rate are checked then, and set again if they changed.
 ///
 /// The session is configured, started and stopped on a serial queue of its own: `startRunning()` blocks.
-/// `@unchecked Sendable`: the session, its input, its output and the preview layers' connections are only touched on
-/// that queue, and the state is in a `Mutex`.
+/// `@unchecked Sendable`: the session, its input and its output are only touched on that queue, and the state is in a
+/// `Mutex`. The preview layers' connections are not confined to it: the app mirrors a preview layer's connection on
+/// the main thread (`SharedCameraPreview`, as Apple's AVCam does); mirroring does not reconfigure the device.
 public final class CameraSessionHost: @unchecked Sendable {
     /// Configured only on `queue`.
     let session = AVCaptureSession()

@@ -11,7 +11,7 @@ Lo que la revisión final de la fase 0 decidió no corregir todavía, con el mot
 
 ## Lo que deja abierto el hito 1a
 
-Lo que la captura completa (hito 1a) deja para hitos o fases posteriores. Los dos últimos dependen de comprobaciones del dueño que todavía no se hicieron: no son trabajo decidido.
+Lo que la captura completa (hito 1a) deja para hitos o fases posteriores. Los dos últimos de esta lista dependen de pruebas que todavía no se hicieron: no son trabajo decidido.
 
 - **Animación de los cambios de geometría.** Cuando la pantalla o la ventana grabada cambia de marco a mitad de toma (eventos `displayGeometry` y `windowGeometry`), el render pasa al marco nuevo sin transición. *Cuándo:* hito 1b, con el editor con estilo.
 - **Pista "Pantalla" editable.** Con varias pantallas, el render muestra toda la toma la que contiene el primer cursor (`ScreenChoice`); elegir en la línea de tiempo qué pantalla se ve en cada tramo es del editor. *Cuándo:* hito 1b.
@@ -24,8 +24,44 @@ Lo que la captura completa (hito 1a) deja para hitos o fases posteriores. Los do
 - **Confirmar las claves de `CGSCopyManagedDisplaySpaces` con cada macOS nuevo** (`SpacesReader`, la excepción de APIs privadas). Si cambian, no hay lista de escritorios y la isla muestra ← → y Mission Control. *Cuándo:* con cada beta de macOS.
 - **Una pista de audio del sistema por app.** Hoy "Por app" graba las apps elegidas en una sola pista `system-audio`. *Cuándo:* fase 3.
 - **El limitador de la mezcla.** El export suma las pistas de audio a ganancia 1 y recorta a [−1, 1]; el limitador y el volumen por pista llegan con la pestaña Audio del editor. *Cuándo:* con la pestaña Audio.
-- **Quitar el marcador del audio del sistema por app** — *pendiente de la comprobación del dueño en `docs/release.md`* (Task 10, "Lista vacía"). Mientras ninguna app elegida está abierta, `SystemAudioSelection.targets` nombra el proceso propio (`.only([ownObjectID])`) y `ProcessTapSource` graba silencio, porque no se sabe si Core Audio acepta un tap sin procesos (`.only([])`). *Cuándo:* solo si esa comprobación muestra que `[]` funciona.
-- **Tap con la salida como sub-dispositivo, o audio del sistema con ScreenCaptureKit como respaldo** — *pendiente de la comprobación del dueño en `docs/release.md`* (Task 10, el último punto: el agregado sin sub-dispositivo). Si el agregado sin sub-dispositivo no entrega audio con el permiso dado, el respaldo de `ProcessTapSource`: la salida por defecto como sub-dispositivo principal, tomando del IOProc solo el búfer del stream del tap, y un cambio de la salida por defecto termina la corrida. Si las taps no sirven en esa Mac, el audio del sistema con ScreenCaptureKit, con lo observado. *Cuándo:* solo si esa comprobación lo pide.
+- **Quitar el marcador del audio del sistema por app** — *pendiente de una prueba*: un agente prepara una rama de prueba con `SystemAudioSelection.targets` en `.only([])` y el dueño graba `--system-audio com.google.Chrome` con Chrome cerrado, anotando si la toma arranca y graba silencio. Mientras ninguna app elegida está abierta, `SystemAudioSelection.targets` nombra el proceso propio (`.only([ownObjectID])`) y `ProcessTapSource` graba silencio, porque no se sabe si Core Audio acepta un tap sin procesos (`.only([])`). *Cuándo:* solo si esa comprobación muestra que `[]` funciona.
+- **Tap con la salida como sub-dispositivo, o audio del sistema con ScreenCaptureKit como respaldo** — *pendiente de las comprobaciones del dueño en `docs/release.md`* ("Pendientes del dueño del hito 1a", Desde Terminal: si `verify` dice que `system-audio` no tiene medios con el permiso dado). Si el agregado sin sub-dispositivo no entrega audio con el permiso dado, el respaldo de `ProcessTapSource`: la salida por defecto como sub-dispositivo principal, tomando del IOProc solo el búfer del stream del tap, y un cambio de la salida por defecto termina la corrida. Si las taps no sirven en esa Mac, el audio del sistema con ScreenCaptureKit, con lo observado. *Cuándo:* solo si esa comprobación lo pide.
+
+### Lo que el usuario ve y el hito 1a deja así
+
+- **Las esquinas transparentes toman clics.** Fuera del círculo o del rectángulo redondeado de la burbuja, y en las cuñas de las esquinas redondeadas de la isla, un clic llega a Toma (arrastra la burbuja) en lugar de a la app de abajo (decisión 22: el marco es la forma visible, salvo esas esquinas). *Cuándo:* si el dueño lo anota como molesto.
+- **La tapa de "Ocultar íconos" se ve un poco más apagada en pantallas P3:** se dibuja desde una captura en sRGB (el video y el PNG no cambian). *Cuándo:* con la comprobación del dueño.
+- **⌘Q y ⌘W con la isla abierta se reconocen por el carácter** (`charactersIgnoringModifiers`), así que en un teclado no latino pueden no cerrar la isla ni dejar de salir. *Arreglo barato:* comparar los `keyCode` 12 y 13.
+- **La burbuja de una ventana de otro escritorio** se muestra sobre el escritorio actual, en el marco que la ventana tiene en el suyo, flotando sobre contenido que no se graba. *Cuándo:* cuando se pida.
+
+### Grabación y pruebas del hito 1a
+
+- **Una toma de varias pantallas que las pierde todas sigue sin ninguna y no reintenta** (`RestartPolicy`, `isSoleScreen` se fija al arrancar). La spec (§7) dice que, sin pantalla, la toma se pausa y sigue al volver; hoy una pausa y reanudación del usuario devuelve las pistas perdidas. *Arreglo:* que la última pantalla no perdida siga reintentando, preguntando al coordinador cuántas quedan vivas.
+- **Una prueba de integración del filtro de pantalla** (`RECORDER_INTEGRATION=1`): una `NSWindow` propia de un color único sobre la pantalla grabada no sale en el cuadro, y sí sale incluida por `includedWindowIDs` (las tapas). Hoy lo cubren las funciones puras y las comprobaciones del dueño.
+- **El lector de `wallpapers/` del hito 1b** tiene que abrir cada `display-<id>.png` con `O_NOFOLLOW`: `checkLayout` comprueba la carpeta, no los archivos, y el editor no llama a `checkLayout`.
+
+### Menores diferidos del hito 1a que pueden esperar
+
+Los que las revisiones finales marcaron "can wait", uno por línea.
+
+- *Ciclo de la toma (AppSupport):* ninguna prueba fija el drenaje de `warnings`; `diskAutoStopRacingUserStopOpensEditorOnce` no fuerza su intercalado; `removeIfUnused` corre en el actor principal; `AwaitPoint` sigue a nivel de módulo; `RecordingController.swift` volvió a crecer (más de 700 líneas); un stop durante el pedido del micrófono espera la respuesta; cuatro setters quedaron `internal(set)`; `// MARK: - Microphone level` duplicado en sus pruebas.
+- *Avisos (AppSupport):* los avisos del arranque se muestran desde `.starting`; un reinicio que falla no dice que la toma anterior quedó; un `stopped` sin stop espera detrás de los ámbar; un `closedWithError` en espera se pierde si no hay vista guardada.
+- *No Molestar:* faltan pruebas de un reinicio cuyo arranque falla y de Cmd-Q con el gancho suspendido; `theShortcutNeverRunsTwiceAtOnce` usa una espera fija de 100 ms para lo que no pasa.
+- *Escritorios:* un salto que no publica nada rearma la gracia de `SpaceSwitchGrace` o corta su ventana de 1 s; una línea larga en la doc de `SpaceJump.swift`; el observador de `DesktopsModel` no se quita (una sola instancia).
+- *Salida (5b):* las ramas del export con el plazo de salida están probadas a medias; `settle()` de 10 cesiones en las pruebas; `isPoweringOff` no se reinicia si se cancela el cierre de sesión; un Stop del usuario en curso con "Abrir el editor" abre el editor durante la salida (Ruling: dejarlo así).
+- *Ventana:* `WindowCatalog` arma un grupo sin nombre para ventanas sin app y junta dos apps del mismo nombre; `windowMoved()` asigna la región sin `CameraBubbleLayout.region` (hoy da lo mismo).
+- *Foto del fondo (17b):* una captura colgada queda abandonada (una tarea trabada por cada vencimiento); la prueba de exFAT monta una imagen con `hdiutil` en `make test` sin compuerta.
+- *App:* el aviso "appintentsmetadataprocessor … Metadata extraction skipped" en `make build`; el ciclo `CADisplayLink` ↔ `IslandPanel` y observadores que no se sueltan (viven lo que la app); VoiceOver lee "Sin señal" dos veces; la isla abierta puede caer en la pantalla que el puntero acaba de dejar dentro del fundido de 100 ms; la cápsula cuelga 2 s bajo una píldora escondida al volver al reposo en pantallas sin notch; `ProgressView` gira con "Reducir movimiento" (control del sistema); el alto de la vista "guardada" en barras de menús de 38 pt (comprobación del dueño); `mic.slash` un instante en las alas con la cuenta en 0.
+- *Teleprompter:* las teclas escritas durante los 170 ms del fundido al editar se pierden; `observe()` sigue todo `setting.value` (reinicia fundidos); "\(size) pt" de VoiceOver sin localizar; `TeleprompterPanel.swift` largo.
+- *Tamaño de archivos:* `IslandPanel.swift`, `CameraBubblePanel.swift` (con su ayudante de `CASpringAnimation`) e `IslandOpenPanel.swift` son largos.
+- *Herramientas:* `DEBUG_SIGN_IDENTITY ?=` del `Makefile` corre `security find-identity` dos veces por build (solo lectura; `:=` lo resuelve).
+- *Captura:* las `static let` de `FragmentedTrackWriter` entre propiedades de instancia; la doc de `RecordingTicks.every` no dice que el handler corre en un bloque de dispatch de la cola; la aserción de snapshot de `RecordingCoordinatorTests` puede pasar vacía y la suite creció (partirla); la versión del paquete se mira después del chequeo de disco; el orden de los imports.
+- *Cámara:* la comparación exacta de `CMTime` y del formato al chequear la deriva; un lease que solo corrige la deriva falla si otro proceso tiene el lock del dispositivo (toma sin cámara, con su aviso); los cuadros que AVFoundation descarta no se cuentan en `droppedFrames`; el log de `enforceConfiguration` dice "as the session started" también desde `attach`; `setOnCameraChange` guarda un solo manejador (hay un cliente); los errores de la sesión compartida no se oyen cuando solo la tiene la burbuja; `.points` mantiene `captureResolution = .best` (lo decide la comprobación de rendimiento).
+- *Audio del sistema:* la guarda de búfer vacío del catálogo de procesos nunca dispara; los saltos del IOProc no tienen tope mientras el pipeline está trabado (unos 0,4 MB/s, acotado por la espera del escritor); el literal del `trackID` duplicado.
+- *Pantallas:* un doble `stopCapture` estrecho solo deja un log; la notificación y el KVO de `runningApplications` refrescan los dos el filtro (es idempotente).
+- *Formato y pruebas (Tasks 2 y 4):* `MetalCondition.isAvailable || isRequired` repetido en cada prueba de Metal; los guards de `TakeBuilder` sin prueba; ayudantes duplicados entre las pruebas de Export y Render; `removeEventLog` fija `take-001`; `classify` usa `lstat` e `inspect` usa `stat` (un enlace colgado se ve distinto antes de recuperar); `TakeBuilder` ordena en línea en vez de `sortedByTime()`; `ProjectFormat` importa AVFoundation por `SegmentMedia`.
+- *Export (Task 13):* `channelCount` vuelve a abrir cada segmento e ignora la cancelación; ninguna prueba comprueba que los huecos del micrófono llevan la pista `"mic"`; el caso 3 del crash test recupera unos 9 s de 10 (dentro de un fragmento).
+- *Render:* `ScreenChoice` puede elegir una pantalla cuyos segmentos no se pueden leer en vez de otra legible (la pista "Pantalla" editable de 1b lo resuelve).
 
 ## Editor y export
 
@@ -38,7 +74,7 @@ Lo que la captura completa (hito 1a) deja para hitos o fases posteriores. Los do
 - **Endurecer el feed.** Que `release.yml` se niegue (o deje en borrador) cuando `SUFeedURL` es `localhost`; que `IdentityTests` y `release.sh` exijan https salvo para `localhost`; `SURequireSignedFeed` y `SUVerifyUpdateBeforeExtraction`. *Por qué después:* el feed `localhost` de la fase 0 es una decisión documentada (`docs/release.md`, "Feed de la fase 0"). *Cuándo:* al elegir la URL del feed público.
 - **Reproducibilidad de `release.sh`.** Fallar con `git status --porcelain` salvo `ALLOW_DIRTY=1`, no pisar un DMG que ya existe, cambiar `dist/` de forma atómica, y exigir que el número de build supere el `sparkle:version` más alto del appcast. *Por qué después:* solo afecta el camino local (los checkouts de CI están limpios y traen el historial de los Releases); el registro ya los guardaba. *Cuándo:* antes del primer release público.
 
-## Del registro de las tareas 1 a 13
+## Del registro de las tareas 1 a 13 de la fase 0
 
 - Cada línea "minor (deferred)" del registro que la revisión de calidad de las pruebas marcó **KEEP**, y las que marcó **RESOLVED**, quedan como estaban, con los motivos de esa revisión. Sus cuatro **FIX** entraron en la revisión final: cantidades impares de canales (F24), la ventana del cursor (F13), el texto de `MissingAudio.end` (F22) y la clave de la release ad hoc (F8).
 

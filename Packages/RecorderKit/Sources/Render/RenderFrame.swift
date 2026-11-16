@@ -8,7 +8,9 @@ public struct RenderFrame: Equatable, Sendable {
     public var gradientStart: SIMD4<Float>
     public var gradientEnd: SIMD4<Float>
     public var gradientAngleDegrees: Float
-    /// `nil` when the take has no screen track, and when no part of its area is on the display.
+    /// `nil` when the take has no screen track, and when its area cannot be shown: no part of it is on the display, or
+    /// it cannot be placed (a `captureArea` with a size that is not usable, or a display without a usable
+    /// `globalFrame`).
     public var screen: ScreenLayer?
     /// `nil` when the cursor's position is unknown or off what is shown of the screen.
     public var cursor: CursorLayer?

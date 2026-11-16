@@ -18,8 +18,9 @@ import ProjectFormat
 /// on screen). What is shown of it is the display's `captureArea`, or all of it. The area is kept where it was on
 /// the display when the take started: its offset from the display's corner is measured from `globalFrame`, so it
 /// follows the display when the display moves, and it is clamped to the display's current size. When no part of it
-/// is on the display (or it cannot be placed, without a `globalFrame`), neither the screen nor the cursor is drawn,
-/// never what the user left out of the area. The screen's rect has the shape of what is shown; the cursor is placed
+/// is on the display, or it cannot be placed (a `captureArea` with a value that is not finite or a size that is not
+/// positive, or a display without a finite `globalFrame` of positive size), neither the screen nor the cursor is
+/// drawn, never what the user left out of the area. The screen's rect has the shape of what is shown; the cursor is placed
 /// on it, hidden off it, and hidden while a window is not on screen. A take of version 1 has one `displayGeometry`
 /// per display, at its start and equal to its `globalFrame`, and no area: it is drawn as in phase 0.
 ///
