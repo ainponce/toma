@@ -17,11 +17,25 @@ public enum TakeTimeline {
         return (screen, start, max(end, start))
     }
 
-    /// `[start, end)` of `bounds` cut at each pause: from a `paused` event to the next `resumed`, in time order, is
-    /// left out. A `resumed` without a pause before it, and a `paused` while paused, change nothing; a pause never
-    /// resumed ends the last span. Empty spans are left out, so a take of 0 s has none.
+    /// The source times an editable document can show of the take (design §7.6, plan decisions 6 and 18): `bounds` when
+    /// its screen has segments; without them, from the earliest start to the latest end (the start, for a segment still
+    /// open) of its audio tracks, where `bounds` has 0 s, so a take without a screen can be edited and exported over the
+    /// background. With neither, `bounds`. The legacy document keeps `bounds`, so an old project without a screen does
+    /// not change. `screen` is `bounds`' in every case; `end` is never before `start`.
+    public static func editableBounds(take: TakeRecord, events: [InputEvent]) -> (screen: TrackRecord?, start: HostTime, end: HostTime) {
+        let bounds = bounds(take: take, events: events)
+        guard bounds.screen?.segments.isEmpty ?? true else { return bounds }
+        let audio = take.tracks.filter { !$0.kind.isVideo }.flatMap(\.segments)
+        guard let start = audio.map(\.startHostTime).min() else { return bounds }
+        let end = audio.map { $0.endHostTime ?? $0.startHostTime }.max() ?? start
+        return (bounds.screen, start, max(end, start))
+    }
+
+    /// `[start, end)` of `editableBounds` (with a screen, `bounds`) cut at each pause: from a `paused` event to the next
+    /// `resumed`, in time order, is left out. A `resumed` without a pause before it, and a `paused` while paused, change
+    /// nothing; a pause never resumed ends the last span. Empty spans are left out, so a take of 0 s has none.
     public static func recordedSpans(take: TakeRecord, events: [InputEvent]) -> [Range<HostTime>] {
-        let (_, start, end) = bounds(take: take, events: events)
+        let (_, start, end) = editableBounds(take: take, events: events)
         func clamped(_ t: HostTime) -> HostTime { min(max(t, start), end) }
         var spans: [Range<HostTime>] = []
         // The start of the span being recorded; `nil` while paused.

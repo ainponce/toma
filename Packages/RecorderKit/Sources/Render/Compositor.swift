@@ -5,8 +5,8 @@ import ProjectFormat
 import Synchronization
 
 /// Draws a `RenderFrame` into a `.bgra8Unorm` target: the stage (the background, the shadow, the window frame, the screen
-/// and the cursor), the click effects and the camera, in that order, blended premultiplied "over"; before it, for a
-/// screen sampled with mipmaps, a blit pass that makes them.
+/// — over the one being left during a change of screen — and the cursor), the click effects and the camera, in that
+/// order, blended premultiplied "over"; before it, for a screen sampled with mipmaps, a blit pass that makes them.
 ///
 /// - Without a motion blur, in one render pass that starts by clearing the target: the stage through the frame's zoom
 ///   camera (`RenderFrame.stage`), exactly as without a zoom when it has none or is at rest.
@@ -143,25 +143,28 @@ public final class Compositor: @unchecked Sendable {
     /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame` map onto the
     /// whole target (they are in pixels of `frame.outputSize`; a background that is not a gradient is read at the stage
     /// point under each of the target's pixels, its grain of the target's pixels). The screen is drawn only when
-    /// `frame.screen` is set and `screen` is given, its `crop` filling its rect: with `mipmapped`, trilinear from a
-    /// copy with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even its mipmaps
-    /// hold anything outside an Area; nothing for a crop that is not finite. The shadow (`frame.shadow`) only with it,
-    /// under it and the window frame. The cursor only when `frame.cursor` is set, shown (opacity above 0) and of some
-    /// size, with `cursor` the texture of its image (`CursorImages`), which every cursor of the frame (its subframes',
-    /// its samples) is drawn with; the click effects over it (`frame.clickEffects`); the camera only when
-    /// `frame.camera` is set and `camera` is given, filling its rect without stretching (cropped, centred, to the
-    /// rect's shape). An `.image` background is `backgroundImage`, the texture `BackgroundImages` made of it for this
-    /// size, or the frame's gradient without one. A `.wallpaper` is drawn directly without `backgroundImage`; with one,
-    /// its mesh gradient, blurred or not (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A
-    /// window frame's title is `windowTitle`, the texture `TitleTexture` made of it at the frame's title scale
-    /// (`TitleTexture.scale(for:)`), drawn at those bar's pixels (`barPixels`) through the stage; none without one. The
-    /// stage is drawn through `frame.stage`, and blurred with `frame.subframes` or `frame.cursorSamples` (see the
-    /// type's notes). Throws `RenderError.metalResourceUnavailable`, having encoded nothing, when Metal cannot make the
-    /// screen's copy or the blur's tile memory: a frame is never drawn some other way. `screen`, `camera`, `cursor`,
+    /// `frame.screen` is set and `screen` is given, its `crop` filling its rect at its `opacity`: with `mipmapped`,
+    /// trilinear from a copy with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even
+    /// its mipmaps hold anything outside an Area; nothing for a crop that is not finite. The screen being left during a
+    /// change of screen (`frame.previousScreen`, with `previousScreen` its frame) is drawn the same way under it. The
+    /// shadow (`frame.shadow`) only with the screen, under it and the window frame. The cursor only when `frame.cursor`
+    /// is set, shown (opacity above 0) and of some size, with `cursor` the texture of its image (`CursorImages`), which
+    /// every cursor of the frame (its subframes', its samples) is drawn with; the click effects over it
+    /// (`frame.clickEffects`); the camera only when `frame.camera` is set and `camera` is given, filling its rect without
+    /// stretching (cropped, centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
+    /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn
+    /// directly without `backgroundImage`; with one, its mesh gradient, blurred or not
+    /// (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A window frame's title is `windowTitle`,
+    /// the texture `TitleTexture` made of it at the frame's title scale (`TitleTexture.scale(for:)`), drawn at those
+    /// bar's pixels (`barPixels`) through the stage; none without one. The stage is drawn through `frame.stage`, and
+    /// blurred with `frame.subframes` or `frame.cursorSamples` (see the type's notes). Throws
+    /// `RenderError.metalResourceUnavailable`, having encoded nothing, when Metal cannot make the screen's copy or the
+    /// blur's tile memory: a frame is never drawn some other way. `screen`, `previousScreen`, `camera`, `cursor`,
     /// `backgroundImage` and `windowTitle` must stay alive until `commandBuffer` completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
+        previousScreen: (any MTLTexture)? = nil,
         camera: (any MTLTexture)?,
         cursor: any MTLTexture,
         backgroundImage: (any MTLTexture)? = nil,
@@ -171,8 +174,8 @@ public final class Compositor: @unchecked Sendable {
     ) throws {
         var counts = DrawCounts()
         try encode(
-            frame, screen: screen, camera: camera, cursor: cursor, backgroundImage: backgroundImage, windowTitle: windowTitle,
-            into: target, commandBuffer: commandBuffer, counts: &counts)
+            frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
+            windowTitle: windowTitle, into: target, commandBuffer: commandBuffer, counts: &counts)
     }
 
     /// `encode(_:screen:camera:cursor:backgroundImage:windowTitle:into:commandBuffer:)`, counting what it draws in
@@ -180,6 +183,7 @@ public final class Compositor: @unchecked Sendable {
     func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
+        previousScreen: (any MTLTexture)? = nil,
         camera: (any MTLTexture)?,
         cursor: any MTLTexture,
         backgroundImage: (any MTLTexture)? = nil,
@@ -188,13 +192,18 @@ public final class Compositor: @unchecked Sendable {
         commandBuffer: any MTLCommandBuffer,
         counts: inout DrawCounts
     ) throws {
-        // The blur's tile memory, then what the screen is sampled from, its copy with mipmaps made before the render pass.
+        // The blur's tile memory, then what the screens are sampled from, their copies with mipmaps made before the render
+        // pass.
         let tileMemory = frame.subframes.isEmpty && frame.cursorSamples.isEmpty ? nil : try blurTileMemory(like: target)
         let screenImage = try frame.screen.flatMap { layer in
             try screen.flatMap { try image(of: layer, in: $0, commandBuffer: commandBuffer) }
         }
+        let previousImage = try frame.previousScreen.flatMap { layer in
+            try previousScreen.flatMap { try image(of: layer, in: $0, commandBuffer: commandBuffer) }
+        }
         let textures = StageTextures(
-            screen: screenImage, cursor: cursor, backgroundImage: backgroundImage, windowTitle: windowTitle)
+            screen: screenImage, previousScreen: previousImage, cursor: cursor, backgroundImage: backgroundImage,
+            windowTitle: windowTitle)
         let targetSize = SIMD2(target.width, target.height)
         let stage = Self.moving(frame.stage, outputSize: frame.outputSize)
         if let tileMemory {
@@ -361,11 +370,13 @@ public final class Compositor: @unchecked Sendable {
         return encoder
     }
 
-    /// Draws the stage of `frame` with `pipelines`: the background, the shadow, the window frame, the screen and
-    /// `cursorLayer` (design §7.2, steps 1 to 5), through `stage` (as they are when `nil`). With `culling`, the background
-    /// and the shadow are drawn only around where the screen (and its window) covers the target opaquely, clipped by
-    /// scissor rects: every pixel drawn is the one it would be, and an opaque one does not show what is under it (the
-    /// motion blur's subsamples, which draw the stage up to 16 times). The screen is opaque: it is drawn at full opacity.
+    /// Draws the stage of `frame` with `pipelines`: the background, the shadow, the window frame, the screen (over the one
+    /// being left, during a change of screen) and `cursorLayer` (design §7.2, steps 1 to 5), through `stage` (as they are
+    /// when `nil`). With `culling`, the background and the shadow are drawn only around where the screen (and its window)
+    /// covers the target opaquely, clipped by scissor rects: every pixel drawn is the one it would be, and an opaque one
+    /// does not show what is under it (the motion blur's subsamples, which draw the stage up to 16 times). Only while the
+    /// screen is drawn alone at full opacity: a screen fading in over the one being left, or at any lower opacity, draws
+    /// everything under it.
     private func drawStage(
         _ frame: RenderFrame, through stage: StageTransform?, cursor cursorLayer: CursorLayer?, textures: StageTextures,
         pipelines: StagePipelines, culling: Bool = false, targetSize: SIMD2<Int>, encoder: any MTLRenderCommandEncoder,
@@ -378,7 +389,9 @@ public final class Compositor: @unchecked Sendable {
         let shadow = frame.shadow.map { stage?.drawn($0, outputSize: size) ?? $0 }
         let window = frame.windowFrame.map { stage?.drawn($0, outputSize: size) ?? $0 }
         let screenLayer = frame.screen.map { stage?.drawn($0, outputSize: size) ?? $0 }
-        let bands = (culling && textures.screen != nil ? Self.opaqueInterior(screen: screenLayer, window: window) : nil).map {
+        let previousLayer = frame.previousScreen.map { stage?.drawn($0, outputSize: size) ?? $0 }
+        let opaque = frame.previousScreen == nil && frame.screen.map { $0.opacity >= 1 } ?? true
+        let bands = (culling && opaque && textures.screen != nil ? Self.opaqueInterior(screen: screenLayer, window: window) : nil).map {
             Self.scissorBands(around: $0, outputSize: size, targetSize: targetSize)
         }
 
@@ -410,16 +423,17 @@ public final class Compositor: @unchecked Sendable {
             }
         }
 
-        // 4. Screen, cut by the window around it if there is one.
-        if let layer = screenLayer, let screenImage = textures.screen {
+        // 4. Screen, cut by the window around it if there is one: the one being left first, then the one coming over it.
+        for (layer, screenImage) in [(previousLayer, textures.previousScreen), (screenLayer, textures.screen)] {
+            guard let layer, let screenImage, layer.opacity > 0 else { continue }
             // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
             drawImage(
                 screenImage.texture, in: layer.rect, cornerRadius: window?.cornerRadius ?? layer.cornerRadius,
                 uvOrigin: screenImage.uvOrigin, uvSize: screenImage.uvSize,
                 clampsToCrop: layer.crop != Rect(x: 0, y: 0, width: 1, height: 1),
                 shape: window.map { ($0.rect, bottomRadius: $0.bottomCornerRadius, imageTopRadius: $0.screenTopCornerRadius) },
-                mipmapped: layer.mipmapped, pipeline: layer.mipmapped ? pipelines.mipmappedScreen : pipelines.screen,
-                viewport: viewport, encoder: encoder)
+                mipmapped: layer.mipmapped, opacity: layer.opacity,
+                pipeline: layer.mipmapped ? pipelines.mipmappedScreen : pipelines.screen, viewport: viewport, encoder: encoder)
             counts.screens += 1
         }
 
@@ -727,11 +741,12 @@ public final class Compositor: @unchecked Sendable {
     /// blend in at its edge; `mipmapped`, trilinear from `texture`'s mipmaps (`mipmappedScreenFragment`), where only a
     /// `texture` made of that part's whole pixels alone keeps all of what is outside it out (`image(of:in:commandBuffer:)`).
     /// With a `shape`, the rounded rect that cuts it is that one (with `cornerRadius` at its top and `bottomRadius` at its
-    /// bottom), and `rect`'s own edges are square but for its top corners of `imageTopRadius`. Nothing for an empty rect.
+    /// bottom), and `rect`'s own edges are square but for its top corners of `imageTopRadius`. At `opacity` (0 to 1; at 1
+    /// exactly as opaque as ever): a screen's while it fades in. Nothing for an empty rect.
     private func drawImage(
         _ texture: any MTLTexture, in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>,
         clampsToCrop: Bool = false, shape: (rect: Rect, bottomRadius: Double, imageTopRadius: Double)? = nil,
-        mipmapped: Bool = false, pipeline: any MTLRenderPipelineState, viewport: SIMD2<Float>,
+        mipmapped: Bool = false, opacity: Double = 1, pipeline: any MTLRenderPipelineState, viewport: SIMD2<Float>,
         encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
@@ -749,9 +764,11 @@ public final class Compositor: @unchecked Sendable {
             shapeSize: shape.map { SIMD2(Float($0.rect.width), Float($0.rect.height)) } ?? .zero,
             shapeBottomRadius: shape.map { Float(max($0.bottomRadius, 0)) } ?? 0,
             topRadius: shape.map { Float(max($0.imageTopRadius, 0)) } ?? 0)
+        var alpha = Float(min(max(opacity, 0), 1))
         encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&alpha, length: MemoryLayout<Float>.stride, index: 1)
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentSamplerState(mipmapped ? trilinearSampler : screenSampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -834,6 +851,8 @@ private struct ScreenImage {
 /// The textures a stage is drawn with.
 private struct StageTextures {
     var screen: ScreenImage?
+    /// The screen being left, during a change of screen.
+    var previousScreen: ScreenImage?
     var cursor: any MTLTexture
     var backgroundImage: (any MTLTexture)?
     var windowTitle: (any MTLTexture)?

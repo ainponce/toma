@@ -19,14 +19,24 @@ import simd
 ///   without a display, draw the classic gradient (`Background.tomaClassic`), as an image does that is missing or
 ///   unreadable (`Compositor`).
 /// - Screen: the one the stage shows at the source instant (`StagePoints.shownScreen(at:)`: the take's track of
-///   `screens.initial`, or of the last `screens.changes` of the take at or before it; it jumps); none without one, or
-///   for a track the take does not have. What is shown of it is `ScreenGeometry`; its rect is `StageLayout.screenRect`
-///   inside the document's padding, at the output's own size, with the document's corners. With a macOS window frame
+///   `screens.initial`, or of the last `screens.changes` of the take at or before it); none without one, or for a track
+///   the take does not have. What is shown of it is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the
+///   document's padding, at the output's own size, with the document's corners. With a macOS window frame
 ///   (`style.frame`), the window is `StageLayout.windowRect` there, with those corners but never more than 1.3 times
 ///   its bar's height (`windowCornerBars`), so they never cut its first button, and the screen fills it under its bar,
 ///   square there (`WindowFrameLayer`). Around a window the take recorded, the bar does not limit the window's bottom
 ///   corners, and the screen's top ones under it are as round, the bar behind them: the capture's black corners are
 ///   covered there too. It is sampled with mipmaps with `style.screenSampling` `mipmapped`.
+/// - Screen and geometry changes (`style.geometryTransition`, design §7.6): with `none` the screen, its rect and its
+///   window jump at a change, as in phase 0 and 1a. With `spring`, at a change of screen or of the shape where it goes (a
+///   `displayGeometry` or `windowGeometry` that changes its region's aspect, mid-take), the rects (screen, window and bar)
+///   go from the old ones to the new ones along `GeometryTransitions.progress` of the output time since it
+///   (`ScreenTransitions`), and the screen fills the rect it passes through, its crop and region cut to the rect's shape
+///   (never past its crop: nothing outside an Area), until it is where it goes. A change of screen crossfades over
+///   `GeometryTransitions.crossfade`: the screen being left is `previousScreen`, at the same instant of the source, in the
+///   same rect and filling it, under the new one at an opacity from 0 to 1. The cursor and the click effects are on the
+///   new screen from the change on, placed on the part of its region shown. Where each screen is shown, the one being
+///   left included, is `screenRanges`: the renderer's missing video lists a screen's gaps only there.
 /// - Shadow (`style.shadow`, `s` clamped to 0...1, design §7.3): under the screen's rect, or the whole window with a
 ///   frame, with its (bottom) corners: opacity `0.55·s`, σ `(0.004 + 0.016·s) ×` the output width, `0.010·s ×` the
 ///   width down. None at 0, and none without a screen.
@@ -92,8 +102,13 @@ public struct FrameEvaluator: Sendable {
     private let paths: MotionPaths
     /// The video tracks a frame can show: the screens of `paths.stage`, then the camera when it is shown.
     let videoTrackIDs: [String]
+    /// The output ranges in which each of `paths.stage`'s screens is shown (`ScreenTransitions.shownRanges`): the plan's
+    /// screen, and the one being left while a change of screen crossfades. In order and apart.
+    var screenRanges: [String: [Range<Int64>]] { transitions.shownRanges }
     /// The take's tracks that recorded a window.
     private let windowTrackIDs: Set<String>
+    /// The changes of the screen's shape and of the screen shown, and where each screen is shown.
+    private let transitions: ScreenTransitions
     /// `nil` when no camera is drawn.
     private let bubble: CameraBubble?
     /// The take's `cursorImage` events, in time order.
@@ -127,6 +142,10 @@ public struct FrameEvaluator: Sendable {
         bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
         windowTrackIDs = Set(take.tracks.filter { $0.kind == .window }.map(\.id))
+        let style = document.style, stageSize = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        transitions = ScreenTransitions(take: take, events: events, document: document, timeMap: timeMap, stage: paths.stage) {
+            Self.placement(of: $0, style: style, outputSize: stageSize)
+        }
         cursorImages = events.sortedByTime().compactMap { event in
             guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
             return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
@@ -182,34 +201,42 @@ public struct FrameEvaluator: Sendable {
         /// Where the cursor is placed and what it is drawn with, while it is shown.
         var cursorPlace: CursorPlace?
         if case let (trackID, view)? = paths.stage.shownScreen(at: source) {
-            let aspect = view.region.map { $0.width / $0.height }, style = document.style
+            let style = document.style
+            let transition = transitions.state(atOutput: output)
+            // Where the screen is: where it goes, or on the way there while a change moves it.
+            let settled = Self.placement(of: view, style: style, outputSize: size)
+            let placement = transition.placement ?? settled
+            let rect = placement.screen
             var cornerRadius = style.cornerRadius * size.x
-            let rect: Rect
-            switch style.frame {
-            case .none:
-                rect = StageLayout.screenRect(contentAspect: aspect, padding: style.padding, outputSize: size)
-            case let .macWindow(appearance, title, buttons):
-                let window = StageLayout.windowRect(contentAspect: aspect, padding: style.padding, outputSize: size)
-                rect = window.screen
-                let top = min(cornerRadius, Self.windowCornerBars * window.barHeight)
+            if case let .macWindow(appearance, title, buttons) = style.frame {
+                let top = min(cornerRadius, Self.windowCornerBars * placement.barHeight)
                 // A recorded window keeps the style's corners where there are no buttons: the window's bottom ones, and
                 // its screen's top ones under the bar.
                 let recordedWindow = windowTrackIDs.contains(trackID)
                 if !recordedWindow { cornerRadius = top }
                 frame.windowFrame = WindowFrameLayer(
-                    rect: window.window, barHeight: window.barHeight, appearance: appearance, title: title, buttons: buttons,
+                    rect: placement.window, barHeight: placement.barHeight, appearance: appearance, title: title, buttons: buttons,
                     cornerRadius: top, bottomCornerRadius: cornerRadius, screenTopCornerRadius: recordedWindow ? cornerRadius : 0)
             }
+            // Out of its own place, each screen fills the rect, cut to its shape.
+            let filled = Self.fill(view, settled: settled, into: placement)
+            if let previous = transition.previous, let left = transitions.view(of: previous.track, at: source) {
+                let leftSettled = Self.placement(of: left, style: style, outputSize: size)
+                frame.previousScreen = ScreenLayer(
+                    trackID: previous.track, sourceTime: source, rect: rect, cornerRadius: cornerRadius,
+                    crop: Self.fill(left, settled: leftSettled, into: placement).view.crop, mipmapped: style.screenSampling == .mipmapped)
+            }
             frame.screen = ScreenLayer(
-                trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: view.crop,
-                mipmapped: style.screenSampling == .mipmapped)
+                trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: filled.view.crop,
+                mipmapped: style.screenSampling == .mipmapped,
+                opacity: frame.previousScreen == nil ? 1 : transition.previous?.opacity ?? 1)
             let shadow = style.shadow.isNaN ? 0 : min(max(style.shadow, 0), 1)
             if shadow > 0 {
                 frame.shadow = ShadowLayer(
                     rect: frame.windowFrame?.rect ?? rect, cornerRadius: cornerRadius, opacity: 0.55 * shadow,
                     sigma: (0.004 + 0.016 * shadow) * size.x, offsetY: 0.010 * shadow * size.x)
             }
-            if document.cursor.show, view.onScreen, let region = view.region {
+            if document.cursor.show, view.onScreen, let region = filled.view.region {
                 let sample = cursorSpan?.sample(atOutput: output) ?? paths.cursor.sample(atOutput: output)
                 // The image is looked up only for a cursor drawn: at `t`, or blurred from somewhere in the shutter.
                 if sample.map({ CursorGeometry.contains(CGPoint(x: $0.position.x, y: $0.position.y), region) }) == true
@@ -223,12 +250,18 @@ public struct FrameEvaluator: Sendable {
                 frame.clickEffects = try ClickEffects.layers(
                     atOutput: output, clicks: clicks, releases: paths.cursor.releases, effect: document.cursor.clickEffect
                 ) { index in
-                    // As the cursor was drawn at the click, on this frame's rect.
+                    // As the cursor was drawn at the click, on this frame's rect (on the part of the region it fills).
                     guard let click = clickPlaces[index], click.track == trackID else { return nil }
                     let look = try look(at: click.source, cursorImageIsReadable: cursorImageIsReadable)
+                    var point = click.point, regionHeight = click.regionHeight
+                    if let part = filled.part {
+                        point = (point - SIMD2(part.x, part.y)) / SIMD2(part.width, part.height)
+                        regionHeight *= part.height
+                        guard point.x >= 0, point.x < 1, point.y >= 0, point.y < 1 else { return nil }
+                    }
                     return (
-                        SIMD2(rect.x, rect.y) + click.point * SIMD2(rect.width, rect.height),
-                        document.cursor.scale * look.pointHeight * rect.height / click.regionHeight)
+                        SIMD2(rect.x, rect.y) + point * SIMD2(rect.width, rect.height),
+                        document.cursor.scale * look.pointHeight * rect.height / regionHeight)
                 }
             }
         }
@@ -315,6 +348,38 @@ public struct FrameEvaluator: Sendable {
         return [SIMD2(0, 0), SIMD2(size.x, 0), SIMD2(0, size.y), size].map { corner in
             simd_length(b.outputPoint(ofStage: corner, outputSize: outputSize) - a.outputPoint(ofStage: corner, outputSize: outputSize))
         }.max() ?? 0
+    }
+
+    /// Where the screen of `view` goes, settled, in an output of `outputSize` with `style` (design §7.3): the rect of its
+    /// region's aspect inside the padding (`StageLayout.screenRect`); with a macOS window frame, under the bar of the window
+    /// around it (`StageLayout.windowRect`).
+    private static func placement(of view: ShownScreen, style: StageStyle, outputSize: SIMD2<Double>) -> ScreenPlacement {
+        let aspect = view.region.map { $0.width / $0.height }
+        switch style.frame {
+        case .none:
+            let rect = StageLayout.screenRect(contentAspect: aspect, padding: style.padding, outputSize: outputSize)
+            return ScreenPlacement(screen: rect, window: rect, barHeight: 0)
+        case .macWindow:
+            let window = StageLayout.windowRect(contentAspect: aspect, padding: style.padding, outputSize: outputSize)
+            return ScreenPlacement(screen: window.screen, window: window.window, barHeight: window.barHeight)
+        }
+    }
+
+    /// What is shown of `view`, which goes to `settled`, in the rect of `placement`: all of it there; anywhere else (a
+    /// change on its way), the part that fills the rect without stretching (`GeometryTransitions.aspectFill`, of its
+    /// region's aspect), its crop and its region cut to it, with that `part` as fractions of the region. Never anything
+    /// outside its crop, so nothing outside an Area. A view without a region, whose aspect is unknown, is shown whole.
+    private static func fill(
+        _ view: ShownScreen, settled: ScreenPlacement, into placement: ScreenPlacement
+    ) -> (view: ShownScreen, part: Rect?) {
+        guard let region = view.region, settled != placement else { return (view, nil) }
+        let part = GeometryTransitions.aspectFill(aspect: region.width / region.height, in: placement.screen)
+        func cut(_ rect: Rect) -> Rect {
+            Rect(
+                x: rect.x + part.x * rect.width, y: rect.y + part.y * rect.height, width: part.width * rect.width,
+                height: part.height * rect.height)
+        }
+        return (ShownScreen(crop: cut(view.crop), region: cut(region), onScreen: view.onScreen), part)
     }
 
     /// The largest corners of a window frame, in heights of its bar. Corners of about 1.37 bars touch the first button's

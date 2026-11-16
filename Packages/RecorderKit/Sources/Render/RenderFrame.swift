@@ -41,6 +41,9 @@ public struct RenderFrame: Equatable, Sendable {
     /// drawn once through `stage` and these cursors, averaged, over it instead of `cursor`. In stage coordinates, like
     /// `cursor`, each with its own position, opacity and press and the image of `cursor`.
     public var cursorSamples: [CursorLayer]
+    /// During a change of screen with `GeometryTransitions.spring` (design §7.6), the screen going away: drawn under
+    /// `screen`, in its rect and cut as it is, while `screen` fades in over it (`ScreenLayer.opacity`). `nil` otherwise.
+    public var previousScreen: ScreenLayer?
 
     public init(
         outputSize: SIMD2<Int>,
@@ -56,7 +59,8 @@ public struct RenderFrame: Equatable, Sendable {
         shadow: ShadowLayer? = nil,
         stage: StageTransform? = nil,
         subframes: [StageSubframe] = [],
-        cursorSamples: [CursorLayer] = []
+        cursorSamples: [CursorLayer] = [],
+        previousScreen: ScreenLayer? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -72,6 +76,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.stage = stage
         self.subframes = subframes
         self.cursorSamples = cursorSamples
+        self.previousScreen = previousScreen
     }
 }
 
@@ -161,7 +166,7 @@ public struct StageSubframe: Equatable, Sendable {
 }
 
 /// The recorded screen: the `crop` of the frame of track `trackID` shown at host time `sourceTime`, drawn into
-/// `rect`. Inside a window frame (`RenderFrame.windowFrame`), the window's rounded rect cuts it, square along its top
+/// `rect` at `opacity`. Inside a window frame (`RenderFrame.windowFrame`), the window's rounded rect cuts it, square along its top
 /// edge, under the bar (but for a recorded window's, `WindowFrameLayer.screenTopCornerRadius`).
 public struct ScreenLayer: Equatable, Sendable {
     public var trackID: String
@@ -176,10 +181,13 @@ public struct ScreenLayer: Equatable, Sendable {
     /// Sampled trilinear from mipmaps made of each frame (`ScreenSampling.mipmapped`), which does not alias the frame
     /// drawn much smaller than recorded; bilinear, as in phase 0 and 1a, otherwise.
     public var mipmapped: Bool
+    /// 1 opaque, as the recorded video always is; below it while it fades in over the screen going away
+    /// (`RenderFrame.previousScreen`), 0 not drawn.
+    public var opacity: Double
 
     public init(
         trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double, crop: Rect = Rect(x: 0, y: 0, width: 1, height: 1),
-        mipmapped: Bool = false
+        mipmapped: Bool = false, opacity: Double = 1
     ) {
         self.trackID = trackID
         self.sourceTime = sourceTime
@@ -187,6 +195,7 @@ public struct ScreenLayer: Equatable, Sendable {
         self.cornerRadius = cornerRadius
         self.crop = crop
         self.mipmapped = mipmapped
+        self.opacity = opacity
     }
 }
 

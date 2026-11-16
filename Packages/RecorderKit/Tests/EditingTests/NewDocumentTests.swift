@@ -229,3 +229,32 @@ private enum NewDocumentFixture {
         #expect(abs(lateDocument.style.cornerRadius - cover(800, 600)) <= 1e-12)
     }
 }
+
+@Test func screenlessTakeGetsAnEditableSequence() async throws {
+    try await withTemporaryDirectory { dir in
+        let base = NewDocumentFixture.base
+        let builder = try TakeBuilder(in: dir, name: "Screenless")
+        let mic = TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic")
+        try await builder.addAudioTrack(id: "mic", source: mic, segments: [AudioSegmentSpec(start: base, seconds: 2)])
+        let project = try builder.write()
+        let take = project.take, events = project.events
+        // No screen: the take's timeline is its audio's, 2 s from the microphone's start.
+        let bounds = TakeTimeline.editableBounds(take: take, events: events)
+        #expect(bounds.screen == nil && bounds.start == base && bounds.end == base.adding(seconds: 2))
+        #expect(TakeTimeline.recordedSpans(take: take, events: events) == [base..<base.adding(seconds: 2)])
+        let document = NewDocument.make(project: project, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
+        #expect(document.sequence == [Clip(id: "c-00000001", take: take.id, start: base, end: base.adding(seconds: 2), speed: 1)])
+        #expect(TimeMap(sequence: document.sequence).durationSeconds == 2)
+        // Its edges go as far as that timeline, and no farther.
+        let start = SequenceCommands.trimLimits(document, clipID: "c-00000001", edge: .start, take: take, events: events)
+        let end = SequenceCommands.trimLimits(document, clipID: "c-00000001", edge: .end, take: take, events: events)
+        #expect(start.lowerBound == bounds.start && end.upperBound == bounds.end)
+        #expect(start.upperBound < bounds.end && end.lowerBound > bounds.start)
+        // The legacy document does not change: one clip of 0 s, as phase 0 and 1a see the take.
+        let legacy = EditDocument.legacy(for: project)
+        let phaseZero = TakeTimeline.bounds(take: take, events: events)
+        #expect(phaseZero.start == HostTime(nanoseconds: 0) && phaseZero.end == HostTime(nanoseconds: 0))
+        #expect(legacy.sequence.count == 1 && TimeMap(sequence: legacy.sequence).duration == 0)
+        #expect(legacy.sequence.first?.start == phaseZero.start && legacy.sequence.first?.end == phaseZero.end)
+    }
+}
