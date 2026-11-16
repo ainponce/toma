@@ -53,7 +53,7 @@ let package = Package(
         .testTarget(
             name: "AppSupportTests",
             dependencies: ["AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport"]),
-        .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )
