@@ -61,7 +61,8 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// recording. The take's `cameraStyle` is how it looked before the first one.
         case cameraStyle(CameraStyle)
         /// macOS shows this cursor from `t` on (version 3). Its image is `takes/<take>/cursors/<hash>.png`, drawn at 4
-        /// times its size in points; `hash` is 32 hex digits of SHA-256 of the image. `hotspot` is where the pointer is
+        /// times its size in points; `hash` is 32 lowercase hex digits of SHA-256 of that image's width, height and
+        /// hotspot and its RGBA pixels at 4×, so the name is its content. `hotspot` is where the pointer is
         /// in the image, as a fraction of it from its top left; `size` is the cursor's width (`x`) and height (`y`) in
         /// points. `kind`: the system cursor whose pixels it has, if it is one of them (`nil` otherwise, or a `kind`
         /// this version does not know).
