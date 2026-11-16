@@ -28,11 +28,12 @@ public final class LibraryWatcher: Sendable {
         let reference: FSEventStreamRef
     }
 
+    /// `fileSystem` tells, on `start()`, whether the folder is on a local internal volume.
     public init(
         folder: URL, latency: Double = 0.3, recordingPackage: @escaping @Sendable () -> URL?,
-        onPackages: @escaping @Sendable ([URL]) -> Void
+        onPackages: @escaping @Sendable ([URL]) -> Void, fileSystem: any LibraryFileSystem = SystemFileSystem()
     ) {
-        handler = Handler(folder: folder, recordingPackage: recordingPackage, onPackages: onPackages)
+        handler = Handler(folder: folder, recordingPackage: recordingPackage, onPackages: onPackages, fileSystem: fileSystem)
         self.latency = latency
     }
 
@@ -108,6 +109,7 @@ private final class Handler: Sendable {
     let queue = DispatchQueue(label: "dev.toma.Toma.LibraryWatcher", qos: .utility)
     private let recordingPackage: @Sendable () -> URL?
     private let onPackages: @Sendable ([URL]) -> Void
+    private let fileSystem: any LibraryFileSystem
     /// The folder's path components as given and, if it differs, as the disk names it (FSEvents gives real paths:
     /// `/private/var/…` for `/var/…`).
     private let roots = Mutex<[[String]]>([])
@@ -123,10 +125,14 @@ private final class Handler: Sendable {
         var generation = 0
     }
 
-    init(folder: URL, recordingPackage: @escaping @Sendable () -> URL?, onPackages: @escaping @Sendable ([URL]) -> Void) {
+    init(
+        folder: URL, recordingPackage: @escaping @Sendable () -> URL?, onPackages: @escaping @Sendable ([URL]) -> Void,
+        fileSystem: any LibraryFileSystem
+    ) {
         self.folder = URL(filePath: folder.standardizedFileURL.path, directoryHint: .isDirectory)
         self.recordingPackage = recordingPackage
         self.onPackages = onPackages
+        self.fileSystem = fileSystem
         queue.setSpecific(key: Self.queueKey, value: ObjectIdentifier(self))
     }
 
@@ -134,7 +140,7 @@ private final class Handler: Sendable {
     func isOnALocalInternalVolume() -> Bool {
         var url = folder
         while true {
-            if let volume = try? SystemFileSystem().volume(of: url) { return volume.isLookedAtAlone }
+            if let volume = try? fileSystem.volume(of: url) { return volume.isLookedAtAlone }
             guard url.path != "/" else { return false }
             url = url.deletingLastPathComponent()
         }

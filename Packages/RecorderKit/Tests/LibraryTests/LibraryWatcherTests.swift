@@ -44,6 +44,18 @@ private final class RecordingPackage: Sendable {
     }
 }
 
+/// Waits until `notices` names a change made in `folder`: the watcher's stream has started (FSEvents tells only what
+/// happens after that). It writes in `<folder>/Ready.toma/` until a notice names that package.
+private func ready(_ folder: URL, _ notices: Notices) async throws -> Bool {
+    let package = folder.appending(path: "Ready.toma", directoryHint: .isDirectory)
+    try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+    for attempt in 0..<40 {
+        try Data("\(attempt)".utf8).write(to: package.appending(path: "ready", directoryHint: .notDirectory))
+        if await eventually(timeout: .milliseconds(250), { notices.first(naming: package) != nil }) { return true }
+    }
+    return false
+}
+
 @Suite struct LibraryWatcherTests {
     @Test func finderChangesArriveWithinASecond() async throws {
         try await withTemporaryDirectory { dir in
@@ -53,8 +65,7 @@ private final class RecordingPackage: Sendable {
             let watcher = LibraryWatcher(folder: folder, recordingPackage: { nil }, onPackages: notices.append)
             watcher.start()
             defer { watcher.stop() }
-            // FSEvents watches from when the stream starts: give it a moment.
-            try await Task.sleep(for: .milliseconds(500))
+            #expect(try await ready(folder, notices))
             let clock = ContinuousClock()
 
             // Made, as a recording makes one: its folder, then a file inside.
@@ -63,7 +74,7 @@ private final class RecordingPackage: Sendable {
             try FileManager.default.createDirectory(at: made, withIntermediateDirectories: false)
             try Data("{}".utf8).write(to: made.appending(path: "manifest.json"))
             #expect(await eventually(timeout: .seconds(3)) { notices.first(naming: made) != nil })
-            #expect(start.duration(to: try #require(notices.first(naming: made))) <= .seconds(1))
+            #expect(start.duration(to: try #require(notices.first(naming: made))) <= soon(.seconds(1)))
 
             // Renamed by another app: the old path and the new one.
             let renamed = folder.appending(path: "Renamed.toma", directoryHint: .isDirectory)
@@ -71,7 +82,7 @@ private final class RecordingPackage: Sendable {
             let before = notices.all.count
             try FileManager.default.moveItem(at: made, to: renamed)
             #expect(await eventually(timeout: .seconds(3)) { notices.first(naming: renamed) != nil })
-            #expect(start.duration(to: try #require(notices.first(naming: renamed))) <= .seconds(1))
+            #expect(start.duration(to: try #require(notices.first(naming: renamed))) <= soon(.seconds(1)))
             #expect(notices.all.dropFirst(before).contains { $0.packages.contains { $0.path == made.path } })
 
             // Deleted.
@@ -79,7 +90,7 @@ private final class RecordingPackage: Sendable {
             let count = notices.naming(renamed).count
             try FileManager.default.removeItem(at: renamed)
             #expect(await eventually(timeout: .seconds(3)) { notices.naming(renamed).count > count })
-            #expect(start.duration(to: try #require(notices.naming(renamed).last).at) <= .seconds(1))
+            #expect(start.duration(to: try #require(notices.naming(renamed).last).at) <= soon(.seconds(1)))
 
             // A file inside a package names the package; a subfolder renamed names the folders; hidden ones and loose
             // files name nothing.
@@ -96,10 +107,56 @@ private final class RecordingPackage: Sendable {
             try FileManager.default.moveItem(at: sub, to: clients)
             #expect(await eventually(timeout: .seconds(3)) { notices.first(naming: clients) != nil })
             #expect(notices.first(naming: sub) != nil)
-            try await Task.sleep(for: .milliseconds(500))
+            // Once a last change reaches it, every one before it has.
+            let last = folder.appending(path: "Last.toma", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: last, withIntermediateDirectories: false)
+            #expect(await eventually(timeout: .seconds(3)) { notices.first(naming: last) != nil })
             let named = Set(notices.all.flatMap(\.packages).map(\.path))
             #expect(!named.contains { $0.contains("/.hidden") || $0.hasSuffix("notes.txt") || $0.contains("/takes") })
             #expect(named.allSatisfy { $0.hasPrefix(folder.path + "/") })
+        }
+    }
+
+    @Test func watchesOnlyALocalInternalFolder() async throws {
+        try await withTemporaryDirectory { dir in
+            let folder = dir.appending(path: "Projects", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            // The same folder, said to be on a removable disk to one watcher and on the Mac's disk to another.
+            let removable = CountingFileSystem(
+                base: DelayingFileSystem(volumes: [
+                    .init(
+                        root: folder,
+                        info: DelayingFileSystem.volumeInfo(uuid: "USB", name: "USB", isInternal: false, isRemovable: true))
+                ]))
+            let local = DelayingFileSystem(volumes: [
+                .init(root: folder, info: DelayingFileSystem.volumeInfo(uuid: "DISK", name: "Macintosh HD"))
+            ])
+            let refused = Notices()
+            let watched = Notices()
+            let outside = LibraryWatcher(
+                folder: folder, recordingPackage: { nil }, onPackages: refused.append, fileSystem: removable)
+            let inside = LibraryWatcher(folder: folder, recordingPackage: { nil }, onPackages: watched.append, fileSystem: local)
+            outside.start()
+            inside.start()
+            defer {
+                outside.stop()
+                inside.stop()
+            }
+            #expect(try await ready(folder, watched))
+
+            // Two changes, one after the other: once the second reaches the watcher on the Mac's disk, the first would
+            // have reached the other one, had it a stream.
+            for name in ["One.toma", "Two.toma"] {
+                let package = folder.appending(path: name, directoryHint: .isDirectory)
+                try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+                #expect(await eventually(timeout: .seconds(3)) { watched.first(naming: package) != nil })
+            }
+            #expect(refused.all.isEmpty)
+            // Once `stop()` returns, what `start()` did on the watcher's queue is done. It asked where the folder is, and
+            // nothing else.
+            outside.stop()
+            #expect(removable.accesses.map(\.url.path) == [folder.path])
+            #expect(removable.accesses.map(\.operation) == [.volume])
         }
     }
 
@@ -117,7 +174,7 @@ private final class RecordingPackage: Sendable {
             let watcher = LibraryWatcher(folder: folder, recordingPackage: { recording.current }, onPackages: notices.append)
             watcher.start()
             defer { watcher.stop() }
-            try await Task.sleep(for: .milliseconds(500))
+            #expect(try await ready(folder, notices))
             let clock = ContinuousClock()
 
             // 100 writes in a second, as the recorder writes its segments and events.
@@ -146,7 +203,7 @@ private final class RecordingPackage: Sendable {
             #expect(
                 times.count <= Int((elapsed / .seconds(2)).rounded(.up)) + 1, "\(times.count) in \(elapsed), writing \(writing)")
             // Another package written meanwhile is not held back.
-            #expect(start.duration(to: try #require(notices.first(naming: other))) <= .seconds(2))
+            #expect(start.duration(to: try #require(notices.first(naming: other))) <= soon(.seconds(2)))
             #expect(notices.all.allSatisfy { notice in Set(notice.packages.map(\.path)).count == notice.packages.count })
 
             // Once the take ends, its package is a package like any other.
@@ -155,7 +212,7 @@ private final class RecordingPackage: Sendable {
             let ended = clock.now
             try Data("{}".utf8).write(to: recorded.appending(path: "manifest.json"))
             #expect(await eventually(timeout: .seconds(3)) { notices.naming(recorded).count > count })
-            #expect(ended.duration(to: try #require(notices.naming(recorded).last).at) <= .seconds(1))
+            #expect(ended.duration(to: try #require(notices.naming(recorded).last).at) <= soon(.seconds(1)))
         }
     }
 }

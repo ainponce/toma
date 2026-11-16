@@ -8,26 +8,34 @@ import Synchronization
 /// What a `LibraryScanner` tells the library (design §6.8, §10).
 public enum LibraryUpdate: Equatable, Sendable {
     /// What the library knows of a project now: one it had not seen, one that changed, moved or was renamed, one of
-    /// Other places that a look did not find (`.unavailable`), or one whose size was summed. It replaces the summary of
-    /// the same identity.
+    /// Other places that a look did not find (`.unavailable`) or could not look at (`.needsRepair`), or one whose size
+    /// was summed. It replaces the summary of the same identity.
     case summary(ProjectSummary)
-    /// A project of the projects folder or its trash that is no longer there (plan decision 25). Never one of Other
-    /// places: those never leave the list by themselves.
+    /// A project of the projects folder or its trash that a look did not find there (plan decision 25). Never one of
+    /// Other places: those never leave the list by themselves. It may not be for good: a project moved while a walk was
+    /// under way (restored from the trash, say) is told again with a `.summary` of the same identity once it is seen.
+    /// So what is kept by identity (favorites, where a project of the trash came from) is never dropped on `.removed`.
     case removed(PackageIdentity)
     /// How many projects the walk of `reconcile` found so far: "Buscando proyectos… 340".
     case progress(found: Int)
-    /// An access to the disk of that name took longer than `LibraryScanner.slowAccess`: "Esperando al disco «X»…".
-    /// Its cards keep what the index had until it answers.
+    /// An access to the disk of that name (or to a synced location, by its name) took longer than
+    /// `LibraryScanner.slowAccess`: "Esperando al disco «X»…". Its cards keep what the index had until it answers.
     case waiting(volume: String)
     /// That disk answered an access in less than `slowAccess`, or has nothing left to do.
     case waitingEnded(volume: String)
+    /// The projects folder is there but cannot be read (no permission, a disk that fails): "No se puede leer la carpeta
+    /// de proyectos." (design §10). Told before the `.finished` of that `reconcile`, or on a look in it that finds so
+    /// (at the folder itself, or where its volume cannot be found); what the library knew stays. A `.finished` without
+    /// it: the folder was read, is not there yet (no projects), or is not one to look at by itself.
+    case projectsFolderUnreadable
     /// A `reconcile` walked the whole projects folder, or found it is not one to look at by itself. Sizes come later.
     case finished
 }
 
 /// Keeps what the library knows of the projects in step with the disk (design §6.5, §6.8), off the caller's thread:
-/// every method returns at once, and every access to a disk happens on a serial queue of that disk's own, so a slow disk
-/// holds up only its own cards. Updates come through `onUpdate`, from those queues (several at once).
+/// every method returns at once, and every access to a disk happens on a serial queue of that disk's own (and of each
+/// synced location's own, apart from the disk it is on), so a slow disk or a download holds up only its own cards.
+/// Updates come through `onUpdate`, from those queues (several at once).
 ///
 /// - `reconcile(from:)` walks the projects folder, by itself, only if it is on a local internal volume: up to
 ///   `maxDepth` folders down, never into `Trash/` (listed apart), a hidden folder or a package, never following a link
@@ -50,6 +58,8 @@ public final class LibraryScanner: Sendable {
     static let recordingRecheck: Duration = .seconds(1)
     /// The least time between two `.progress` updates.
     static let progressInterval: Duration = .milliseconds(100)
+    /// The name a wait in iCloud Drive says (a synced location outside `~/Library/CloudStorage`), as Finder names it.
+    static let iCloudDrive = "iCloud Drive"
 
     private let projectsFolder: URL
     /// The projects folder's path components, standardized, to tell what is in it.
@@ -60,23 +70,16 @@ public final class LibraryScanner: Sendable {
     /// is never called: locks are probed only right before a destructive action (design §6.6), never by the scanner.
     private let isLockHeld: @Sendable (URL) -> Bool
     private let context: EditContext
-    private let isRecording: @Sendable () -> Bool
     private let onUpdate: @Sendable (LibraryUpdate) -> Void
+    private let queues: VolumeQueues
     private let state = Mutex(State())
-    /// Where slow accesses are noticed while they last.
-    private let watchdog = DispatchQueue(label: "dev.toma.Toma.LibraryScanner.watchdog", qos: .utility)
-    /// Where `.waiting` and `.waitingEnded` are told, in the order they happened.
-    private let notices = DispatchQueue(label: "dev.toma.Toma.LibraryScanner.notices", qos: .utility)
 
     private struct State {
         /// What the library knows, by identity, as the scanner last told it (or the index said).
         var known: [PackageIdentity: ProjectSummary] = [:]
         var byPath: [String: PackageIdentity] = [:]
-        var queues: [String: VolumeQueue] = [:]
         /// The projects folder's volume, as last found.
         var projectsVolume: VolumeInfo?
-        /// The disks, by name, that said `.waiting` and not `.waitingEnded` yet.
-        var waiting: Set<String> = []
     }
 
     /// `readDocument` is `ProjectReader`'s, by default `EditSession.readDocumentWithDiskVersion` with `context`;
@@ -90,49 +93,36 @@ public final class LibraryScanner: Sendable {
         self.projectsFolder = URL(filePath: projectsFolder.standardizedFileURL.path, directoryHint: .isDirectory)
         self.projectsComponents = projectsFolder.standardizedFileURL.pathComponents
         self.fileSystem = fileSystem
-        self.readDocument =
-            readDocument ?? { url in
-                let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(
-                    url, take: nil, context: context)
-                return (project, document, diskVersion)
-            }
+        self.readDocument = readDocument ?? ProjectReader.defaultReadDocument(context: context)
         self.isLockHeld = isLockHeld
         self.context = context
-        self.isRecording = isRecording
         self.onUpdate = onUpdate
+        queues = VolumeQueues(isRecording: isRecording, onUpdate: onUpdate)
     }
 
     // MARK: - What the library asks
 
     /// Starts from `index` (what the library showed from its cache) and walks the projects folder, if it is on a local
     /// internal volume, telling what changed, what is new and what is gone, then `.finished`; then the sizes it lacks.
-    /// On any other volume, or if the folder cannot be found, only `.finished`: the index stays as it was, and a project
-    /// is looked at only with `look(at:)`. An entry of the index with no identity (`.unavailable(.notFound)` of a
-    /// package that was not there) is dropped.
+    /// On any other volume, or if the folder is not there, only `.finished`: the index stays as it was, and a project is
+    /// looked at only with `look(at:)`. A folder that is there but cannot be read says `.projectsFolderUnreadable`
+    /// first. An entry of the index with no identity (`.unavailable(.notFound)` of a package that was not there) is
+    /// dropped.
     public func reconcile(from index: LibraryIndex) {
-        withProjectsVolume(refresh: true) { volume in
-            guard let volume, volume.isLookedAtAlone else {
+        withProjectsVolume(refresh: true) { result in
+            guard case .success(let volume) = result, volume.isLookedAtAlone else {
                 self.start(from: index)
+                if case .failure(let error) = result, !ProjectReader.isMissing(error) {
+                    self.onUpdate(.projectsFolderUnreadable)
+                }
                 self.onUpdate(.finished)
                 return
             }
-            let queue = self.volumeQueue(for: volume)
-            self.enqueue(on: queue) {
+            let queue = self.volumeQueue(for: volume, at: self.projectsFolder)
+            self.queues.enqueue(on: queue) {
                 // On the walk's queue: a walk under way ends with what it started from.
                 self.start(from: index)
                 self.walkEverything(volume: volume, queue: queue)
-            }
-        }
-    }
-
-    /// What the scanner knows becomes `index`'s, without the entries that have no identity.
-    private func start(from index: LibraryIndex) {
-        state.withLock { state in
-            state.known = [:]
-            state.byPath = [:]
-            for summary in index.projects where summary.identity.file != 0 {
-                state.known[summary.identity] = summary
-                state.byPath[summary.path] = summary.identity
             }
         }
     }
@@ -142,8 +132,9 @@ public final class LibraryScanner: Sendable {
     /// - a package or a folder in the projects folder: what it holds by the rules of the walk (a folder is walked, the
     ///   projects folder itself or its trash too), and what the library knew there and is gone is `.removed`, unless
     ///   one of `urls` shows it moved;
-    /// - a package anywhere else, as one of Other places: what it is now, or `.unavailable` (with its disk's name if
-    ///   the disk is not connected) if it was known and is not found.
+    /// - a package anywhere else, as one of Other places: what it is now; if it was known, `.unavailable` (with its
+    ///   disk's name if the disk is not connected) when it is not there, and `.needsRepair` saying why when it cannot be
+    ///   looked at.
     /// Every package looked at is read again. Its size comes after, except on the network or in a synced location.
     public func look(at urls: [URL]) {
         var inProjectsFolder: [URL] = []
@@ -157,25 +148,31 @@ public final class LibraryScanner: Sendable {
         }
         let inside = inProjectsFolder
         if !inside.isEmpty {
-            withProjectsVolume(refresh: false) { volume in
-                guard let volume else { return }
-                let queue = self.volumeQueue(for: volume)
-                self.enqueue(on: queue) { self.lookInside(inside, volume: volume, queue: queue) }
+            withProjectsVolume(refresh: false) { result in
+                switch result {
+                case .success(let volume):
+                    let queue = self.volumeQueue(for: volume, at: self.projectsFolder)
+                    self.queues.enqueue(on: queue) { self.lookInside(inside, volume: volume, queue: queue) }
+                case .failure(let error):
+                    if !ProjectReader.isMissing(error) { self.onUpdate(.projectsFolderUnreadable) }
+                }
             }
         }
         for url in outside.values {
             let resolver = self.resolver(for: url, isProjectsFolder: false)
-            enqueue(on: resolver) {
+            queues.enqueue(on: resolver) {
                 switch self.findVolume(of: url, on: resolver) {
                 case .success(let volume):
-                    let queue = self.volumeQueue(for: volume)
-                    self.enqueue(on: queue) { self.lookElsewhere(url, volume: volume, queue: queue) }
+                    let queue = self.volumeQueue(for: volume, at: url)
+                    self.queues.enqueue(on: queue) { self.lookElsewhere(url, volume: volume, queue: queue) }
                 case .failure(let error):
-                    if Self.isMissing(error) {
-                        let fileSystem = TimedFileSystem(base: self.fileSystem, scanner: self, queue: resolver)
+                    if ProjectReader.isMissing(error) {
+                        let fileSystem = TimedFileSystem(base: self.fileSystem, queues: self.queues, queue: resolver)
                         self.markUnavailable(url, fileSystem: fileSystem)
+                    } else {
+                        self.markUnreadable(url, state: ProjectReader.cannotBeLookedAt(error))
                     }
-                    self.endWaiting(named: resolver.name)
+                    self.queues.endWaiting(named: resolver.name)
                 }
             }
         }
@@ -185,8 +182,8 @@ public final class LibraryScanner: Sendable {
     /// projects takes, telling it with their summary. Only those the scanner looks at by itself: of the projects folder
     /// (or its trash) on a local internal volume. The others are left as they are.
     public func accountSizes(of identities: [PackageIdentity]) {
-        withProjectsVolume(refresh: false) { volume in
-            guard let volume, volume.isLookedAtAlone else { return }
+        withProjectsVolume(refresh: false) { result in
+            guard case .success(let volume) = result, volume.isLookedAtAlone else { return }
             let mine = self.state.withLock { state in
                 identities.filter { identity in
                     guard let summary = state.known[identity] else { return false }
@@ -194,7 +191,19 @@ public final class LibraryScanner: Sendable {
                     return true
                 }
             }
-            self.scheduleSizes(of: mine, on: self.volumeQueue(for: volume), volume: volume)
+            self.scheduleSizes(of: mine, on: self.volumeQueue(for: volume, at: self.projectsFolder), volume: volume)
+        }
+    }
+
+    /// What the scanner knows becomes `index`'s, without the entries that have no identity.
+    private func start(from index: LibraryIndex) {
+        state.withLock { state in
+            state.known = [:]
+            state.byPath = [:]
+            for summary in index.projects where summary.identity.file != 0 {
+                state.known[summary.identity] = summary
+                state.byPath[summary.path] = summary.identity
+            }
         }
     }
 
@@ -215,13 +224,20 @@ public final class LibraryScanner: Sendable {
         var lastProgress: ContinuousClock.Instant?
     }
 
+    private func pass(volume: VolumeInfo, queue: VolumeQueue, reportsProgress: Bool) -> Pass {
+        Pass(
+            volume: volume, fileSystem: TimedFileSystem(base: fileSystem, queues: queues, queue: queue),
+            reportsProgress: reportsProgress)
+    }
+
     /// The walk of `reconcile`, on the queue of the projects folder's volume.
     private func walkEverything(volume: VolumeInfo, queue: VolumeQueue) {
-        var pass = Pass(
-            volume: volume, fileSystem: TimedFileSystem(base: fileSystem, scanner: self, queue: queue), reportsProgress: true)
+        var pass = pass(volume: volume, queue: queue, reportsProgress: true)
         if walk(projectsFolder, depth: 0, subfolder: "", &pass) {
             removeMissing(everywhere: true, under: [], pass)
             reportProgress(&pass, final: true)
+        } else if !pass.unreadable.isEmpty {
+            onUpdate(.projectsFolderUnreadable)
         }
         onUpdate(.finished)
         scheduleSizes(of: pass.sizes, on: queue, volume: volume)
@@ -237,7 +253,7 @@ public final class LibraryScanner: Sendable {
         do {
             entries = try pass.fileSystem.list(folder)
         } catch {
-            if !Self.isMissing(error) { pass.unreadable.append(folder.standardizedFileURL.path) }
+            if !ProjectReader.isMissing(error) { pass.unreadable.append(folder.standardizedFileURL.path) }
             return false
         }
         var folders: [(url: URL, subfolder: String)] = []
@@ -266,7 +282,7 @@ public final class LibraryScanner: Sendable {
         do {
             entries = try pass.fileSystem.list(trash)
         } catch {
-            if !Self.isMissing(error) { pass.unreadable.append(trash.standardizedFileURL.path) }
+            if !ProjectReader.isMissing(error) { pass.unreadable.append(trash.standardizedFileURL.path) }
             return
         }
         for entry in entries {
@@ -285,7 +301,7 @@ public final class LibraryScanner: Sendable {
         do {
             folder = try fileSystem.stat(url, withAddedDate: false)
         } catch {
-            if !Self.isMissing(error) { pass.unreadable.append(path) }
+            if !ProjectReader.isMissing(error) { pass.unreadable.append(path) }
             return
         }
         guard folder.kind == .directory else { return }
@@ -321,17 +337,21 @@ public final class LibraryScanner: Sendable {
         case read(ProjectSummary)
         /// The package is not there.
         case gone
-        /// It cannot be looked at for now (a disk that fails): what the library knew of it stays.
-        case unreadable
+        /// It cannot be looked at for now (a disk that fails), as `state` says: what the library knew of it stays.
+        case unreadable(ProjectState)
     }
 
     /// Reads the package at `url` and tells it, keeping its size until it is summed again and its thumbnail key if its
     /// files did not change. Telling nothing if it is not there, or cannot be looked at (`ProjectReader` gives those an
-    /// identity of file 0, which is never told).
-    private func read(_ url: URL, place: Place, fileSystem: any LibraryFileSystem) -> Reading {
+    /// identity of file 0, which is never told). `readDocument` is timed as an access to the same disk.
+    private func read(_ url: URL, place: Place, fileSystem: TimedFileSystem) -> Reading {
+        let readDocument = self.readDocument
+        let timedRead: @Sendable (URL) throws -> (LoadedProject, EditDocument, Int) = { url in
+            try fileSystem.timed { try readDocument(url) }
+        }
         var summary = ProjectReader.summary(
-            of: url, place: place, fileSystem: fileSystem, readDocument: readDocument, context: context, now: context.now())
-        if summary.identity.file == 0 { return summary.state == .unavailable(.notFound) ? .gone : .unreadable }
+            of: url, place: place, fileSystem: fileSystem, readDocument: timedRead, context: context, now: context.now())
+        if summary.identity.file == 0 { return summary.state == .unavailable(.notFound) ? .gone : .unreadable(summary.state) }
         if let previous = state.withLock({ $0.known[summary.identity] }) {
             summary.size = previous.size
             if previous.manifest == summary.manifest, previous.edit == summary.edit, previous.log == summary.log {
@@ -344,15 +364,20 @@ public final class LibraryScanner: Sendable {
 
     /// Looks at `urls`, all in the projects folder, as one: what one of them shows moved is not gone from another.
     private func lookInside(_ urls: [URL], volume: VolumeInfo, queue: VolumeQueue) {
-        var pass = Pass(
-            volume: volume, fileSystem: TimedFileSystem(base: fileSystem, scanner: self, queue: queue), reportsProgress: false)
+        var pass = pass(volume: volume, queue: queue, reportsProgress: false)
         var everywhere = false
         var scopes: [String] = []
         for url in urls {
             switch item(at: url) {
             case .projectsFolder:
+                let unreadable = pass.unreadable.count
                 if !walk(projectsFolder, depth: 0, subfolder: "", &pass) {
-                    pass.unreadable.append(projectsFolder.standardizedFileURL.path)
+                    if pass.unreadable.count > unreadable {
+                        onUpdate(.projectsFolderUnreadable)
+                    } else {
+                        // Not there: what the library knew of it stays, as `reconcile` keeps it.
+                        pass.unreadable.append(projectsFolder.standardizedFileURL.path)
+                    }
                 }
                 everywhere = true
             case .trash(let trash):
@@ -372,34 +397,46 @@ public final class LibraryScanner: Sendable {
         scheduleSizes(of: pass.sizes, on: queue, volume: volume)
     }
 
-    /// Looks at `url`, one of Other places, on its volume's queue.
+    /// Looks at `url`, one of Other places, on its volume's queue: always on an action of the user.
     private func lookElsewhere(_ url: URL, volume: VolumeInfo, queue: VolumeQueue) {
         let fileSystem = TimedFileSystem(
-            base: fileSystem, scanner: self, queue: queue, resolved: (url.standardizedFileURL.path, volume))
+            base: fileSystem, queues: queues, queue: queue, resolved: (url.standardizedFileURL.path, volume))
         switch read(url, place: .elsewhere, fileSystem: fileSystem) {
         case .read(let summary): scheduleSizes(of: [summary.identity], on: queue, volume: volume)
         case .gone: markUnavailable(url, fileSystem: fileSystem)
-        case .unreadable: break
+        case .unreadable(let state): markUnreadable(url, state: state)
         }
+    }
+
+    /// The project of Other places known at `url`, if any.
+    private func knownElsewhere(at url: URL) -> ProjectSummary? {
+        let path = url.standardizedFileURL.path
+        guard let summary = state.withLock({ state in state.byPath[path].flatMap { state.known[$0] } }),
+            case .elsewhere = summary.place
+        else { return nil }
+        return summary
     }
 
     /// Tells the project of Other places known at `url` as `.unavailable`: its disk's name if `url` is on a volume of
     /// `/Volumes` that is not there, `.notFound` otherwise. Nothing for one that was not known, nor for one of the
     /// projects folder (those are `.removed`).
     private func markUnavailable(_ url: URL, fileSystem: any LibraryFileSystem) {
-        let path = url.standardizedFileURL.path
-        guard var summary = state.withLock({ state in state.byPath[path].flatMap { state.known[$0] } }),
-            case .elsewhere = summary.place
-        else { return }
+        guard var summary = knownElsewhere(at: url) else { return }
         let components = url.standardizedFileURL.pathComponents
         var reason = Unavailable.notFound
-        if components.count > 3, components[1] == "Volumes",
-            (try? fileSystem.stat(URL(filePath: "/Volumes/" + components[2], directoryHint: .isDirectory), withAddedDate: false))
-                == nil
-        {
-            reason = .diskNotConnected(components[2])
+        if components.count > 3, components[1] == "Volumes" {
+            let disk = URL(filePath: "/Volumes/" + components[2], directoryHint: .isDirectory)
+            if (try? fileSystem.stat(disk, withAddedDate: false)) == nil { reason = .diskNotConnected(components[2]) }
         }
         summary.state = .unavailable(reason)
+        publish(summary)
+    }
+
+    /// Tells the project of Other places known at `url`, which an action of the user could not look at, with `state`
+    /// (`.needsRepair` saying why); the rest of what the library knew of it stays, its "seen" date too.
+    private func markUnreadable(_ url: URL, state: ProjectState) {
+        guard var summary = knownElsewhere(at: url) else { return }
+        summary.state = state
         publish(summary)
     }
 
@@ -485,13 +522,13 @@ public final class LibraryScanner: Sendable {
     private func scheduleSizes(of identities: [PackageIdentity], on queue: VolumeQueue, volume: VolumeInfo) {
         guard volume.readsSizes else { return }
         for identity in identities {
-            enqueueSize(of: identity, on: queue) { self.sumSize(of: identity, queue: queue) }
+            queues.enqueueSize(of: identity, on: queue) { self.sumSize(of: identity, queue: queue) }
         }
     }
 
     private func sumSize(of identity: PackageIdentity, queue: VolumeQueue) {
         guard let path = state.withLock({ $0.known[identity]?.path }) else { return }
-        let fileSystem = TimedFileSystem(base: fileSystem, scanner: self, queue: queue)
+        let fileSystem = TimedFileSystem(base: fileSystem, queues: queues, queue: queue)
         guard let size = try? fileSystem.allocatedSize(of: URL(filePath: path, directoryHint: .isDirectory)) else { return }
         let summary = state.withLock { state -> ProjectSummary? in
             guard var summary = state.known[identity], summary.path == path, summary.size != size else { return nil }
@@ -502,35 +539,36 @@ public final class LibraryScanner: Sendable {
         if let summary { onUpdate(.summary(summary)) }
     }
 
-    // MARK: - Queues
+    // MARK: - Volumes
 
     /// Runs `then` with the projects folder's volume: the one found last unless `refresh`, or found now on the projects
-    /// folder's own queue; `nil` if it cannot be found.
-    private func withProjectsVolume(refresh: Bool, _ then: @escaping @Sendable (VolumeInfo?) -> Void) {
+    /// folder's own finding queue; or why it could not be found.
+    private func withProjectsVolume(refresh: Bool, _ then: @escaping @Sendable (Result<VolumeInfo, any Error>) -> Void) {
         if !refresh, let volume = state.withLock({ $0.projectsVolume }) {
-            then(volume)
+            then(.success(volume))
             return
         }
         let resolver = resolver(for: projectsFolder, isProjectsFolder: true)
-        enqueue(on: resolver) {
-            let volume = try? self.findVolume(of: self.projectsFolder, on: resolver).get()
-            if let volume {
-                self.state.withLock { $0.projectsVolume = volume }
-            } else {
-                self.endWaiting(named: resolver.name)
+        queues.enqueue(on: resolver) {
+            let result = self.findVolume(of: self.projectsFolder, on: resolver)
+            switch result {
+            case .success(let volume): self.state.withLock { $0.projectsVolume = volume }
+            case .failure: self.queues.endWaiting(named: resolver.name)
             }
-            then(volume)
+            then(result)
         }
     }
 
-    /// The volume of `url`, asked on `resolver`. One that took longer than `slowAccess` says `.waiting` with the name it
-    /// gave, which its volume's queue ends; a wait `resolver` said under another name (its folder in `/Volumes`) ends.
+    /// The volume of `url`, asked on `resolver`. One that took longer than `slowAccess` says `.waiting` with the name its
+    /// queue's waits say, which that queue ends; a wait `resolver` said under another name (its folder in `/Volumes`)
+    /// ends.
     private func findVolume(of url: URL, on resolver: VolumeQueue) -> Result<VolumeInfo, any Error> {
         let start = ContinuousClock.now
-        let volume = Result { try timed(resolver) { try fileSystem.volume(of: url) } }
+        let volume = Result { try queues.timed(resolver) { try fileSystem.volume(of: url) } }
         if case .success(let volume) = volume {
-            if start.duration(to: .now) >= Self.slowAccess { startWaiting(named: volume.name) }
-            if resolver.name != volume.name { endWaiting(named: resolver.name) }
+            let name = Self.queueKey(for: volume, at: url).name
+            if start.duration(to: .now) >= Self.slowAccess { queues.startWaiting(named: name) }
+            if resolver.name != name { queues.endWaiting(named: resolver.name) }
         }
         return volume
     }
@@ -542,249 +580,29 @@ public final class LibraryScanner: Sendable {
         let components = url.standardizedFileURL.pathComponents
         let mounted = components.count > 2 && components[1] == "Volumes" ? components[2] : nil
         let key = isProjectsFolder ? "projects" : mounted.map { "/Volumes/" + $0 } ?? "/"
-        return queue(key: "find:" + key, name: mounted, endsWaiting: false)
+        return queues.queue(key: "find:" + key, name: mounted, endsWaiting: false)
     }
 
-    private func volumeQueue(for volume: VolumeInfo) -> VolumeQueue {
-        queue(key: "volume:" + volume.uuid, name: volume.name, endsWaiting: true)
+    /// The queue of the work at `url`, on `volume`.
+    private func volumeQueue(for volume: VolumeInfo, at url: URL) -> VolumeQueue {
+        let (key, name) = Self.queueKey(for: volume, at: url)
+        return queues.queue(key: key, name: name, endsWaiting: true)
     }
 
-    private func queue(key: String, name: String?, endsWaiting: Bool) -> VolumeQueue {
-        state.withLock { state in
-            if let queue = state.queues[key] { return queue }
-            let queue = VolumeQueue(label: key, name: name, endsWaiting: endsWaiting)
-            state.queues[key] = queue
-            return queue
+    /// The queue key of the work at `url`, on `volume`, and the name its waits say: the volume's, by its UUID and name;
+    /// but a synced location has its own, apart from the disk it is on, so a look that downloads holds up only its own
+    /// projects and its wait names the location: each File Provider's folder of `~/Library/CloudStorage` by that
+    /// folder's name, and the rest (iCloud Drive, a folder iCloud syncs) as `iCloudDrive`.
+    static func queueKey(for volume: VolumeInfo, at url: URL) -> (key: String, name: String) {
+        guard volume.isSynced else { return ("volume:" + volume.uuid, volume.name) }
+        let cloudStorage =
+            FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL.pathComponents + ["Library", "CloudStorage"]
+        let components = url.standardizedFileURL.pathComponents
+        if components.count > cloudStorage.count, components.starts(with: cloudStorage) {
+            let provider = components[cloudStorage.count]
+            return ("synced:\(volume.uuid):CloudStorage/\(provider)", provider)
         }
-    }
-
-    private func enqueue(on queue: VolumeQueue, _ job: @escaping @Sendable () -> Void) {
-        queue.pending.withLock { $0.reads.append(job) }
-        startDraining(queue)
-    }
-
-    /// Queues `job`, the size of `identity`, unless one is waiting already.
-    private func enqueueSize(of identity: PackageIdentity, on queue: VolumeQueue, _ job: @escaping @Sendable () -> Void) {
-        let added = queue.pending.withLock { pending in
-            guard pending.sizeKeys.insert(identity).inserted else { return false }
-            pending.sizes.append((identity, job))
-            return true
-        }
-        if added { startDraining(queue) }
-    }
-
-    private func startDraining(_ queue: VolumeQueue) {
-        let start = queue.pending.withLock { pending in
-            guard !pending.isDraining else { return false }
-            pending.isDraining = true
-            return true
-        }
-        if start { queue.queue.async { self.drain(queue) } }
-    }
-
-    /// Runs the jobs of `queue`, reads first, until none is left or only sizes are and something is being recorded
-    /// (then it asks again every `recordingRecheck`).
-    private func drain(_ queue: VolumeQueue) {
-        enum Next {
-            case job(@Sendable () -> Void)
-            case sizes
-            case idle
-        }
-        while true {
-            let next = queue.pending.withLock { pending -> Next in
-                if !pending.reads.isEmpty { return .job(pending.reads.removeFirst()) }
-                if pending.sizes.isEmpty {
-                    pending.isDraining = false
-                    return .idle
-                }
-                return .sizes
-            }
-            switch next {
-            case .job(let job):
-                job()
-            case .idle:
-                endWaiting(queue)
-                return
-            case .sizes:
-                if isRecording() {
-                    let (paused, recheck) = queue.pending.withLock { pending -> (Bool, Bool) in
-                        guard pending.reads.isEmpty else { return (false, false) }
-                        pending.isDraining = false
-                        defer { pending.isRecheckScheduled = true }
-                        return (true, !pending.isRecheckScheduled)
-                    }
-                    guard paused else { continue }
-                    if recheck {
-                        queue.queue.asyncAfter(deadline: .now() + Self.recordingRecheck.dispatchInterval) {
-                            queue.pending.withLock { $0.isRecheckScheduled = false }
-                            self.startDraining(queue)
-                        }
-                    }
-                    endWaiting(queue)
-                    return
-                }
-                let job = queue.pending.withLock { pending -> (@Sendable () -> Void)? in
-                    guard !pending.sizes.isEmpty else { return nil }
-                    let (identity, job) = pending.sizes.removeFirst()
-                    pending.sizeKeys.remove(identity)
-                    return job
-                }
-                job?()
-            }
-        }
-    }
-
-    // MARK: - Slow disks
-
-    /// Runs `body`, an access to the disk of `queue`, timing it: past `slowAccess` (while it lasts, if the disk's name
-    /// is known, or when it ends) the disk is `.waiting`; one that ends sooner ends the wait.
-    fileprivate func timed<T>(_ queue: VolumeQueue, _ body: () throws -> T) rethrows -> T {
-        let start = ContinuousClock.now
-        let arm = queue.pending.withLock { pending -> Bool in
-            pending.accesses += 1
-            pending.access = (pending.accesses, start)
-            guard queue.name != nil, !pending.isCheckArmed else { return false }
-            pending.isCheckArmed = true
-            return true
-        }
-        if arm { armCheck(queue, from: start) }
-        defer {
-            queue.pending.withLock { $0.access = nil }
-            if start.duration(to: .now) >= Self.slowAccess {
-                startWaiting(named: queue.name)
-            } else {
-                endWaiting(queue)
-            }
-        }
-        return try body()
-    }
-
-    /// Looks, `slowAccess` after `start`, at the access under way on `queue`.
-    private func armCheck(_ queue: VolumeQueue, from start: ContinuousClock.Instant) {
-        let delay = max(.zero, Self.slowAccess - start.duration(to: .now))
-        watchdog.asyncAfter(deadline: .now() + delay.dispatchInterval) {
-            enum Verdict {
-                case slow
-                case later(ContinuousClock.Instant)
-                case done
-            }
-            let verdict = queue.pending.withLock { pending -> Verdict in
-                guard let access = pending.access else {
-                    pending.isCheckArmed = false
-                    return .done
-                }
-                guard access.start.duration(to: .now) >= Self.slowAccess else { return .later(access.start) }
-                pending.isCheckArmed = false
-                return .slow
-            }
-            switch verdict {
-            case .slow: self.startWaiting(named: queue.name)
-            case .later(let start): self.armCheck(queue, from: start)
-            case .done: break
-            }
-        }
-    }
-
-    /// Whether `error` says nothing is there: `ENOENT`, `ENOTDIR` (a folder on the way is not one) or Foundation's "no
-    /// such file", itself or as its underlying error (as `ProjectReader` tells a missing package).
-    private static func isMissing(_ error: any Error) -> Bool {
-        var error: NSError? = error as NSError
-        while let current = error {
-            if current.domain == NSPOSIXErrorDomain { return current.code == Int(ENOENT) || current.code == Int(ENOTDIR) }
-            if current.domain == NSCocoaErrorDomain,
-                [CocoaError.fileNoSuchFile.rawValue, CocoaError.fileReadNoSuchFile.rawValue].contains(current.code)
-            {
-                return true
-            }
-            error = current.userInfo[NSUnderlyingErrorKey] as? NSError
-        }
-        return false
-    }
-
-    private func startWaiting(named name: String?) {
-        guard let name else { return }
-        state.withLock { state in
-            guard state.waiting.insert(name).inserted else { return }
-            notices.async { self.onUpdate(.waiting(volume: name)) }
-        }
-    }
-
-    /// Ends the wait of `queue`'s disk, if it is a volume's queue (finding a volume never ends it: the volume's queue
-    /// goes on with the same disk).
-    private func endWaiting(_ queue: VolumeQueue) {
-        if queue.endsWaiting { endWaiting(named: queue.name) }
-    }
-
-    private func endWaiting(named name: String?) {
-        guard let name else { return }
-        state.withLock { state in
-            guard state.waiting.remove(name) != nil else { return }
-            notices.async { self.onUpdate(.waitingEnded(volume: name)) }
-        }
-    }
-}
-
-/// A serial queue for one volume (or for finding volumes before their work goes to theirs): one access to that disk at
-/// a time, reads before sizes.
-private final class VolumeQueue: Sendable {
-    struct Pending {
-        var reads: [@Sendable () -> Void] = []
-        var sizes: [(PackageIdentity, @Sendable () -> Void)] = []
-        var sizeKeys: Set<PackageIdentity> = []
-        var isDraining = false
-        var isRecheckScheduled = false
-        /// The access under way, by number, and when it began.
-        var access: (number: Int, start: ContinuousClock.Instant)?
-        var accesses = 0
-        /// A check of the access under way is due.
-        var isCheckArmed = false
-    }
-
-    /// The disk's name for `.waiting`, if known.
-    let name: String?
-    /// A volume's queue ends the wait of its disk; a queue that finds volumes does not.
-    let endsWaiting: Bool
-    let queue: DispatchQueue
-    let pending = Mutex(Pending())
-
-    init(label: String, name: String?, endsWaiting: Bool) {
-        self.name = name
-        self.endsWaiting = endsWaiting
-        queue = DispatchQueue(label: "dev.toma.Toma.LibraryScanner." + label, qos: .utility)
-    }
-}
-
-/// `base`, with every access timed on `queue`; the volume of the one URL `resolved` names is answered without asking
-/// the disk again.
-private struct TimedFileSystem: LibraryFileSystem {
-    let base: any LibraryFileSystem
-    let scanner: LibraryScanner
-    let queue: VolumeQueue
-    var resolved: (path: String, volume: VolumeInfo)?
-
-    func list(_ directory: URL) throws -> [URL] {
-        try scanner.timed(queue) { try base.list(directory) }
-    }
-
-    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat {
-        try scanner.timed(queue) { try base.stat(url, withAddedDate: withAddedDate) }
-    }
-
-    func volume(of url: URL) throws -> VolumeInfo {
-        if let resolved, url.standardizedFileURL.path == resolved.path { return resolved.volume }
-        return try scanner.timed(queue) { try base.volume(of: url) }
-    }
-
-    func read(_ url: URL, maxBytes: Int) throws -> Data {
-        try scanner.timed(queue) { try base.read(url, maxBytes: maxBytes) }
-    }
-
-    func allocatedSize(of package: URL) throws -> Int64 {
-        try scanner.timed(queue) { try base.allocatedSize(of: package) }
-    }
-
-    func freeSpace(of url: URL) throws -> Int64 {
-        try scanner.timed(queue) { try base.freeSpace(of: url) }
+        return ("synced:\(volume.uuid):iCloud", iCloudDrive)
     }
 }
 
@@ -802,6 +620,8 @@ enum PackageNames {
     }
 
     /// `Trash` (`ProjectTrash.folderName`), in any case, as the volume takes it.
+    // TODO(Task 33): use `ProjectTrash.folderName` once Task 33 moves `ProjectTrash` to ProjectFormat (Library cannot see
+    // AppSupport).
     static func isTrash(_ name: String) -> Bool {
         name.caseInsensitiveCompare("Trash") == .orderedSame
     }
