@@ -590,8 +590,22 @@ private final class SegmentDecoder {
         }
         if tail.count > tailSamples { tail.removeFirst(tail.count - tailSamples) }
         if onTime, let check, let first = origin {
-            onTime = Int64(reference.count / channels) == Int64(check.frames.count)
-                && (try? AudioTrackTimeline.startsExactly(segment, channels: channels, origin: first, at: check.start, reference: reference)) == true
+            // Why a reader cannot start it in the middle, if it cannot: each seek then decodes it from its start.
+            let reason: String?
+            if Int64(reference.count / channels) != Int64(check.frames.count) {
+                reason = "it ended before the frames compared"
+            } else {
+                do {
+                    let exact = try AudioTrackTimeline.startsExactly(segment, channels: channels, origin: first, at: check.start, reference: reference)
+                    reason = exact ? nil : "started at frame \(check.start), the resampler gave other samples"
+                } catch {
+                    reason = "starting it at frame \(check.start) failed (\(String(describing: error)))"
+                }
+            }
+            if let reason {
+                onTime = false
+                logger.info("Audio segment \(segment.file, privacy: .public) at \(segment.sourceRate, privacy: .public) Hz: \(reason, privacy: .public); each seek decodes it from its start")
+            }
         }
         return (frames, decoder.failure, onTime ? origin : nil, tail)
     }

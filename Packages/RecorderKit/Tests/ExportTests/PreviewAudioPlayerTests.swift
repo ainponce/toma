@@ -12,14 +12,17 @@ import Testing
 
 private func at(_ seconds: Double) -> HostTime { base.adding(seconds: seconds) }
 
-/// A take of the display and a microphone of noise, `seconds` long, with system audio of 1 kHz in stereo when
-/// `systemAudio`.
-private func take(in dir: URL, name: String, seconds: Double, systemAudio: Bool = false, events: [InputEvent] = []) async throws -> LoadedProject {
+/// A take of the display and a microphone of noise (of a 440 Hz tone at 1/4 of full scale with `tone`), `seconds`
+/// long, with system audio of 1 kHz in stereo when `systemAudio`.
+private func take(
+    in dir: URL, name: String, seconds: Double, tone: Bool = false, systemAudio: Bool = false, events: [InputEvent] = []
+) async throws -> LoadedProject {
     let builder = try TakeBuilder(in: dir, name: name)
     try await builder.addVideoTrack(
         id: displayID, source: displaySource,
         segments: [VideoSegmentSpec(start: base, seconds: seconds, framesPerSecond: 10, width: 320, height: 180)])
-    try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: seconds, transform: noise)])
+    try await builder.addAudioTrack(
+        id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: seconds, transform: tone ? nil : noise)])
     if systemAudio {
         try await builder.addAudioTrack(
             id: systemAudioID, kind: .systemAudio, source: systemAudioSource,
@@ -186,7 +189,8 @@ private nonisolated(nonsending) func pull(
 // MARK: - The mix
 
 /// At 1×, the preview gives the export's samples: an edited document (cuts, gains, click sounds and the limiter) in
-/// stereo, played from its start for 2 s and from the middle for 1 s, is `EditedMix.render` of the export bit for bit.
+/// stereo, played from its start for 2 s and, after a pause, from the middle for 1 s, is `EditedMix.render` of the
+/// export bit for bit.
 @Test func oneTimesPreviewEqualsExport() async throws {
     try await withTemporaryDirectory { dir in
         let clicks = [0.3, 1.2, 1.9, 2.8].map { InputEvent(t: at($0), kind: .mouseDown(.left, x: 100, y: 100)) }
@@ -207,6 +211,7 @@ private nonisolated(nonsending) func pull(
         let reference = try await rendered(export.with(document: document, framesPerSecond: 60), 0..<96_000)
         #expect(reference.contains { $0 != 0 })
         #expect(bits(fromTheStart) == bits(reference))
+        player.stop()
         try await player.play(fromSeconds: 1.25)
         let fromTheMiddle = try await pull(48_000, from: engine, of: player)
         let middle = try await rendered(export.with(document: document, framesPerSecond: 60), 60_000..<108_000)
@@ -307,5 +312,88 @@ private nonisolated(nonsending) func pull(
         player.setMix(mix.with(document: .legacy(for: project), framesPerSecond: 60))
         player.stop()
         #expect(player.clock.seconds(atHost: hostSeconds()) >= 0.5)
+    }
+}
+
+/// A seek while playing (the same for another mix) keeps the engine running and swaps what it plays: from where the
+/// output is, the old sound fades out over 4 ms, silence follows until the new run starts `skipFrames` later, and the new
+/// one fades in over 4 ms, then goes on as the export's frames from where it was asked to start. No step from one
+/// sample to the next is larger than the tone's own and a fade's, and the gap is within that preroll.
+@Test func aSeekWhilePlayingSwapsTheSoundWithShortFades() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(in: dir, name: "seek", seconds: 6, tone: true)
+        let mix = try await EditedMix.make(project: project, document: .legacy(for: project), framesPerSecond: 60)
+        let reference = try await rendered(mix.with(document: .legacy(for: project), framesPerSecond: 60), 0..<288_000)
+        let engine = try manualEngine(channels: 1)
+        let player = PreviewAudioPlayer(mix: mix, engine: engine)
+        try await player.play(fromSeconds: 0)
+        let starts = player.engineStarts
+        let before = try await pull(20_000, from: engine, of: player)
+        try await player.play(fromSeconds: 3)
+        #expect(player.engineStarts == starts && engine.isRunning)
+        let after = try await pull(30_000, from: engine, of: player)
+        player.stop()
+        #expect(bits(before) == bits(reference[..<20_000]))
+        let fade = AudioRingBuffer.fadeFrames, skip = PreviewAudioPlayer.skipFrames, start = 144_000
+        // The old sound fades out from where the output was, the new one fades in where its run starts.
+        for k in 0..<fade {
+            #expect(abs(after[k] - reference[20_000 + k] * (Float(fade - 1 - k) / Float(fade))) <= 1e-7, "fade out at \(k)")
+            #expect(abs(after[skip + k] - reference[start + k] * (Float(k) / Float(fade))) <= 1e-7, "fade in at \(k)")
+        }
+        #expect(after[fade..<skip].allSatisfy { $0 == 0 })
+        #expect(bits(after[(skip + fade)...]) == bits(reference[(start + fade)..<(start + 30_000 - skip)]))
+        func steepest(_ samples: some Collection<Float>) -> Float {
+            zip(samples, samples.dropFirst()).map { abs($1 - $0) }.max() ?? 0
+        }
+        let toneStep = steepest(reference)
+        #expect(steepest(before + after) <= toneStep + 0.25 / Float(fade) + 1e-6, "\(steepest(before + after)) vs \(toneStep)")
+    }
+}
+
+/// The clock never goes back within a run, though the output's own count would: when the output stops pulling for
+/// 0.3 s and then goes on, the frames it counts are behind the host's time, and the clock holds where it was going.
+@Test func thePlayersClockNeverGoesBack() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(in: dir, name: "monotonic", seconds: 3)
+        let mix = try await EditedMix.make(project: project, document: .legacy(for: project), framesPerSecond: 60)
+        let engine = try manualEngine(channels: 1)
+        let player = PreviewAudioPlayer(mix: mix, engine: engine)
+        try await player.play(fromSeconds: 0)
+        _ = try await pull(4_096, from: engine, of: player, chunk: 4_096)
+        try await Task.sleep(for: .milliseconds(300))
+        let stalled = player.clock.seconds(atHost: hostSeconds())
+        #expect(stalled >= 0.3)
+        _ = try await pull(512, from: engine, of: player)
+        let again = player.clock.seconds(atHost: hostSeconds())
+        #expect(again >= stalled, "\(stalled) → \(again)")
+        player.stop()
+    }
+}
+
+/// A mix of other channels than the last (a revision that adds system audio to a take with the microphone alone) plays
+/// on a new node and ring of its channels, the engine started again: mono, then stereo, each the export's bits.
+@Test func aMixOfOtherChannelsPlaysOnANodeOfItsOwn() async throws {
+    try await withTemporaryDirectory { dir in
+        let mono = try await take(in: dir, name: "mono", seconds: 2)
+        let stereo = try await take(in: dir, name: "stereo", seconds: 2, systemAudio: true)
+        let monoMix = try await EditedMix.make(project: mono, document: .legacy(for: mono), framesPerSecond: 60)
+        let stereoMix = try await EditedMix.make(project: stereo, document: .legacy(for: stereo), framesPerSecond: 60)
+        #expect(monoMix.channels == 1 && stereoMix.channels == 2)
+        let monoReference = try await rendered(monoMix.with(document: .legacy(for: mono), framesPerSecond: 60), 0..<8_192)
+        let stereoReference = try await rendered(stereoMix.with(document: .legacy(for: stereo), framesPerSecond: 60), 0..<8_192)
+        let engine = try manualEngine(channels: 2)
+        let player = PreviewAudioPlayer(mix: monoMix, engine: engine)
+        try await player.play(fromSeconds: 0)
+        let starts = player.engineStarts
+        let first = try await pull(8_192, from: engine, of: player)
+        // The mixer gives a mono node to both channels at unity.
+        #expect(bits(stride(from: 0, to: first.count, by: 2).map { first[$0] }) == bits(monoReference))
+        #expect(bits(stride(from: 1, to: first.count, by: 2).map { first[$0] }) == bits(monoReference))
+        player.setMix(stereoMix)
+        try await player.play(fromSeconds: 0)
+        #expect(player.engineStarts == starts + 1 && player.ring?.channels == 2)
+        let second = try await pull(8_192, from: engine, of: player)
+        #expect(bits(second) == bits(stereoReference))
+        player.stop()
     }
 }

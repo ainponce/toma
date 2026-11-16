@@ -125,3 +125,37 @@ private func onAThread<T: Sendable>(_ body: @escaping @Sendable () -> T) async -
     ring.read(into: list, frames: 2, hostTime: 5_678)
     #expect(ring.lastRead == AudioRingBuffer.Reading(framesBefore: 5, hostTime: 5_678) && ring.readPosition == 7)
 }
+
+/// A swap, for a seek while the output goes on (`swap(after:)`): the frames written past where the new run starts are
+/// dropped; from where reading is, the old frames fade out over `fadeFrames` (4 ms), then silence, then the new run's
+/// frames fade in over as many, from where it starts.
+@Test func aSwapFadesTheOldFramesOutAndTheNewOnesIn() {
+    let ring = AudioRingBuffer(capacityFrames: 2_048, channels: 1)
+    let ones = [Float](repeating: 1, count: 1_500)
+    #expect(ones.withUnsafeBufferPointer { ring.write($0) } == 1_500)
+    var head = [Float](repeating: .nan, count: 100)
+    _ = head.withUnsafeMutableBufferPointer { ring.read(into: $0) }
+    #expect(ring.swap(after: 500) == 600)
+    #expect(ring.writePosition == 600 && ring.readPosition == 100)
+    let twos = [Float](repeating: 2, count: 1_000)
+    #expect(twos.withUnsafeBufferPointer { ring.write($0) } == 1_000)
+    var rest = [Float](repeating: .nan, count: 1_000)
+    _ = rest.withUnsafeMutableBufferPointer { ring.read(into: $0) }
+    let fade = AudioRingBuffer.fadeFrames
+    #expect(fade == 192)
+    let expected: [Float] = (100..<1_100).map { p in
+        if p >= 600 { return p - 600 < fade ? 2 * (Float(p - 600) / Float(fade)) : 2 }
+        return p - 100 < fade ? 1 * (Float(fade - 1 - (p - 100)) / Float(fade)) : 0
+    }
+    #expect(rest == expected)
+    // A swap with the writer behind the reader: silence up to the new run, which fades in.
+    ring.reset()
+    var ahead = [Float](repeating: .nan, count: 300)
+    _ = ahead.withUnsafeMutableBufferPointer { ring.read(into: $0) }
+    #expect(ring.swap(after: 200) == 500)
+    #expect(twos.withUnsafeBufferPointer { ring.write(UnsafeBufferPointer(rebasing: $0[..<400])) } == 400)
+    var after = [Float](repeating: .nan, count: 600)
+    _ = after.withUnsafeMutableBufferPointer { ring.read(into: $0) }
+    #expect(after[..<200].allSatisfy { $0 == 0 })
+    #expect(after[200] == 0 && after[201] == 2 * (1 / Float(fade)) && after[200 + fade] == 2 && after[599] == 2)
+}

@@ -18,6 +18,8 @@ public struct PlaybackClock: Equatable, Sendable {
     private var frames = 0
     private var latency = 0.0
     private var deliveredBy: Double?
+    /// The least `offset` it gives: that of the clocks before it of the same playback (`hold(atLeast:)`).
+    private var floor: Double?
 
     /// A clock at `startSeconds`, with nothing delivered yet: it stays there until the first delivery.
     public init(startSeconds: Double, sampleRate: Double) {
@@ -36,8 +38,21 @@ public struct PlaybackClock: Equatable, Sendable {
     /// The output time being heard at host time `host`: the frames delivered, less the latency, and the host time since
     /// the last delivery; never before `startSeconds`, where it waits until the first frame is heard.
     public func seconds(atHost host: Double) -> Double {
-        guard let deliveredBy else { return startSeconds }
-        return max(startSeconds, startSeconds + Double(frames) / sampleRate - latency + (host - deliveredBy))
+        guard let offset else { return startSeconds }
+        return max(startSeconds, offset + host)
+    }
+
+    /// What it gives at a host time, less that host time, once anything was delivered (or a floor was set): the
+    /// seconds heard at host time 0, as it goes on by the host's.
+    var offset: Double? {
+        let own = deliveredBy.map { startSeconds + Double(frames) / sampleRate - latency - $0 }
+        guard let floor else { return own }
+        return max(own ?? floor, floor)
+    }
+
+    /// Never gives less than a clock of `offset` would: what keeps the clocks of one playback from going back.
+    mutating func hold(atLeast offset: Double) {
+        floor = max(floor ?? offset, offset)
     }
 }
 
@@ -52,13 +67,17 @@ public struct PlaybackClock: Equatable, Sendable {
 ///   jump into the middle, settles from 1 s before it, which gives the export's samples but for a peak's inaudible
 ///   trace, `EditedMix`).
 /// - The engine starts off the main thread (`play`; with Bluetooth it can take hundreds of milliseconds), after the
-///   feeder has filled `primeFrames`. If the feeder falls behind the output, the output plays silence and its frames go
-///   on counting; the feeder then skips to `skipFrames` past where the output is, so the sound keeps time with the
-///   clock instead of playing late.
+///   feeder has filled `primeFrames`. A `play` while it runs (a seek, or the mix of another revision) does not stop it:
+///   the node goes on, and what it plays swaps `skipFrames` (85 ms) past where the output is, the old sound fading out
+///   over 4 ms from there and the new one fading in over 4 ms (`AudioRingBuffer.swap(after:)`). The engine starts again
+///   only for a mix of other channels (on a node of its own) and when the output changes.
+/// - If the feeder falls behind the output, the output plays silence and its frames go on counting; the feeder then
+///   skips to `skipFrames` past where the output is, so the sound keeps time with the clock instead of playing late.
 /// - When the output changes (`AVAudioEngineConfigurationChange`: other headphones, another device), the engine stops
 ///   itself; the player starts again from where the clock is. If it cannot, the clock goes on by the host's.
-/// - The clock counts the frames the node gives, at 48 kHz, not the hardware's: from where `play` started, every frame,
-///   the silence of a skip included, so the frame being heard is the mix's frame at that place.
+/// - The clock counts the frames the node gives, at 48 kHz, not the hardware's: from the first frame of what `play`
+///   started, every frame, the silence of a skip included, so the frame being heard is the mix's frame at that place.
+///   Within one `play` it never goes back.
 ///
 /// `setMix` rules from the next `play`: the editor gives it the mix of each revision (`EditedMix.with`). Scrubbing makes
 /// no sound (design §5.5): the editor does not play while the playhead is dragged.
@@ -93,9 +112,11 @@ public final class PreviewAudioPlayer {
         core.setMix(mix)
     }
 
-    /// Plays the mix from output time `fromSeconds`, stopping what was playing: fills the first blocks and starts the
-    /// engine, off the main thread, and returns once the output is running. The clock waits at `fromSeconds` until the
-    /// first frame is heard.
+    /// Plays the mix from output time `fromSeconds` instead of what was playing: fills the first blocks and, off the main
+    /// thread, starts the engine, or swaps what it plays if it is running. Returns once the output is running, or, also
+    /// without an error, once a later `play`, a `stop` or a change of the output has overtaken it: returning is not
+    /// proof that it plays (the caller's own play state says that). The clock waits at `fromSeconds` until the first
+    /// frame is heard.
     /// - Throws: what `AVAudioEngine.start` throws; the player is then stopped.
     public nonisolated(nonsending) func play(fromSeconds: Double) async throws {
         try await core.play(fromSeconds: fromSeconds)
@@ -116,6 +137,8 @@ public final class PreviewAudioPlayer {
     var ring: AudioRingBuffer? { core.ring }
     /// The number of what is playing (each `play` and each start after the output changed has its own), for the tests.
     var runGeneration: Int? { core.runGeneration }
+    /// The times the engine has started, for the tests.
+    var engineStarts: Int { core.engineStarts.load(ordering: .relaxed) }
 
     /// The node's render block: it only copies the frames from `ring` into the node's buffers (silence for any not
     /// filled) and notes the host time of the reading. It captures nothing else, and neither allocates, locks nor
@@ -164,9 +187,14 @@ private final class Core: @unchecked Sendable {
         /// The node's ring, or none when the engine could not start again after the output changed (the clock then goes
         /// on by the host's from `startHost`).
         var ring: AudioRingBuffer?
+        /// The ring position of the run's first frame: 0 when the engine started with it, a little past where the
+        /// output was when it swapped what plays (`AudioRingBuffer.swap(after:)`).
+        var base: Int
         var start: Double
         var startHost: Double
         var latency: Double
+        /// The greatest `PlaybackClock.offset` given so far: the clock never goes back within a run.
+        var floor: Double?
     }
 
     private struct State {
@@ -182,19 +210,31 @@ private final class Core: @unchecked Sendable {
         /// The feeder of the last `play`, to stop it at once.
         var feeder: Feeder?
 
-        func clock() -> PlaybackClock {
+        /// The clock of the run: from the frames the node has read of it, never behind a clock given before in it
+        /// (the output's count can fall behind the host's by a few microseconds between two readings, or by a stall
+        /// when the output stops asking for frames without saying so).
+        mutating func clock() -> PlaybackClock {
             let sampleRate = AudioTrackTimeline.sampleRate
-            guard let run else { return PlaybackClock(startSeconds: position, sampleRate: sampleRate) }
+            guard var run else { return PlaybackClock(startSeconds: position, sampleRate: sampleRate) }
             var clock = PlaybackClock(startSeconds: run.start, sampleRate: sampleRate)
-            guard let ring = run.ring else {
+            if let ring = run.ring {
+                let reading = ring.lastRead
+                if reading.hostTime != 0 {
+                    let host = PreviewAudioPlayer.seconds(ofHostTime: reading.hostTime)
+                    if reading.framesBefore >= run.base {
+                        clock.delivered(frames: reading.framesBefore - run.base, latency: run.latency, hostSeconds: host)
+                    } else {
+                        // The output has not got to the run yet: its first frame goes out when the frames before it have.
+                        let ahead = Double(run.base - reading.framesBefore) / sampleRate
+                        clock.delivered(frames: 0, latency: run.latency, hostSeconds: host + ahead)
+                    }
+                }
+            } else {
                 clock.delivered(frames: 0, latency: 0, hostSeconds: run.startHost)
-                return clock
             }
-            let reading = ring.lastRead
-            if reading.hostTime != 0 {
-                clock.delivered(
-                    frames: reading.framesBefore, latency: run.latency, hostSeconds: PreviewAudioPlayer.seconds(ofHostTime: reading.hostTime))
-            }
+            if let floor = run.floor { clock.hold(atLeast: floor) }
+            run.floor = clock.offset
+            self.run = run
             return clock
         }
     }
@@ -208,6 +248,8 @@ private final class Core: @unchecked Sendable {
     private var nodeRing: AudioRingBuffer?
     private var feeder: Feeder?
     private var observer: (any NSObjectProtocol)?
+    /// The times `engine.start()` succeeded.
+    let engineStarts = Atomic(0)
 
     init(mix: EditedMix, engine: AVAudioEngine) {
         state = Mutex(State(mix: mix))
@@ -265,12 +307,23 @@ private final class Core: @unchecked Sendable {
 
     // MARK: - On the queue
 
-    /// Plays `mix` from `seconds` for `play` number `generation`, unless another came after it.
+    /// Plays `mix` from `seconds` for `play` number `generation`, unless another came after it: while the engine runs
+    /// with a node of the mix's channels, it swaps what the node plays, with the engine going on; otherwise it starts
+    /// the engine, on a new node if the channels changed.
     private func start(_ generation: Int, mix: EditedMix, from seconds: Double) throws {
-        halt()
-        let ring = prepareNode(channels: mix.channels)
-        ring.reset()
-        let feeder = Feeder(mix: mix, ring: ring, first: PreviewAudioPlayer.frame(ofSeconds: seconds))
+        let ring: AudioRingBuffer, base: Int
+        if engine.isRunning, let nodeRing, nodeRing.channels == mix.channels {
+            stopFeeder()
+            guard isCurrent(generation) else { return }
+            ring = nodeRing
+            base = ring.swap(after: PreviewAudioPlayer.skipFrames)
+        } else {
+            halt()
+            ring = prepareNode(channels: mix.channels)
+            ring.reset()
+            base = 0
+        }
+        let feeder = Feeder(mix: mix, ring: ring, first: PreviewAudioPlayer.frame(ofSeconds: seconds), at: base)
         let current = state.withLock { state in
             guard state.generation == generation else { return false }
             state.feeder = feeder
@@ -280,11 +333,12 @@ private final class Core: @unchecked Sendable {
         self.feeder = feeder
         feeder.start()
         feeder.waitUntilPrimed()
-        guard isCurrent(generation) else { return halt() }
+        guard isCurrent(generation) else { return stopFeeder() }
         if !engine.isRunning {
             do {
                 engine.prepare()
                 try engine.start()
+                engineStarts.add(1, ordering: .relaxed)
             } catch {
                 halt()
                 throw error
@@ -294,18 +348,22 @@ private final class Core: @unchecked Sendable {
         let host = PreviewAudioPlayer.hostSeconds()
         state.withLock { state in
             guard state.generation == generation else { return }
-            state.run = Run(generation: generation, mix: mix, ring: ring, start: seconds, startHost: host, latency: latency)
+            state.run = Run(generation: generation, mix: mix, ring: ring, base: base, start: seconds, startHost: host, latency: latency)
         }
     }
 
     /// Stops the feeder, waiting for it to finish its block, and pauses the engine.
     private func halt() {
-        if let feeder {
-            feeder.cancel()
-            feeder.join()
-            self.feeder = nil
-        }
+        stopFeeder()
         if engine.isRunning { engine.pause() }
+    }
+
+    /// Stops the feeder, waiting for it to finish its block; the engine plays on what it has filled.
+    private func stopFeeder() {
+        guard let feeder else { return }
+        feeder.cancel()
+        feeder.join()
+        self.feeder = nil
     }
 
     private func isCurrent(_ generation: Int) -> Bool {
@@ -360,29 +418,32 @@ private final class Core: @unchecked Sendable {
             state.withLock { state in
                 guard state.generation == restarting.generation else { return }
                 state.run = Run(
-                    generation: restarting.generation, mix: restarting.mix, ring: nil, start: restarting.position,
+                    generation: restarting.generation, mix: restarting.mix, ring: nil, base: 0, start: restarting.position,
                     startHost: PreviewAudioPlayer.hostSeconds(), latency: 0)
             }
         }
     }
 }
 
-/// Fills a player's ring with its mix from frame `first` (ring position 0), on a thread of its own, until cancelled:
-/// a block of `blockFrames` whenever the ring has room for it, the first and each after a skip with `jumpPreroll`.
+/// Fills a player's ring with its mix from frame `first`, at ring position `origin` on, on a thread of its own, until
+/// cancelled: a block of `blockFrames` whenever the ring has room for it, the first and each after a skip with
+/// `jumpPreroll`.
 private final class Feeder: Sendable {
     private let mix: EditedMix
     private let ring: AudioRingBuffer
     private let first: Int64
+    private let origin: Int
     private let cancelled = Atomic(false)
     /// Signalled to wake the thread from waiting for room; once it has filled `primeFrames` (or stopped); once it ends.
     private let wake = DispatchSemaphore(value: 0)
     private let primed = DispatchSemaphore(value: 0)
     private let finished = DispatchSemaphore(value: 0)
 
-    init(mix: EditedMix, ring: AudioRingBuffer, first: Int64) {
+    init(mix: EditedMix, ring: AudioRingBuffer, first: Int64, at origin: Int) {
         self.mix = mix
         self.ring = ring
         self.first = first
+        self.origin = origin
     }
 
     func start() {
@@ -402,7 +463,7 @@ private final class Feeder: Sendable {
         finished.wait()
     }
 
-    /// Waits until the ring holds `primeFrames`, or the thread ended, for at most 2 s.
+    /// Waits until it has filled `primeFrames`, or the thread ended, for at most 2 s.
     func waitUntilPrimed() {
         _ = primed.wait(timeout: .now() + .seconds(2))
     }
@@ -416,7 +477,7 @@ private final class Feeder: Sendable {
         let block = PreviewAudioPlayer.blockFrames
         var samples: [Float] = []
         // The ring position of the next frame written, and whether it does not follow on from the last block.
-        var next = 0
+        var next = origin
         var jumped = true
         while !cancelled.load(ordering: .relaxed) {
             let read = ring.readPosition
@@ -430,11 +491,11 @@ private final class Feeder: Sendable {
                 _ = wake.wait(timeout: .now() + .milliseconds(5))
                 continue
             }
-            let from = first + Int64(next)
+            let from = first + Int64(next - origin)
             mix.render(outputFrames: from..<(from + Int64(block)), into: &samples, preroll: jumped ? PreviewAudioPlayer.jumpPreroll : 0)
             jumped = false
             next += samples.withUnsafeBufferPointer { ring.write($0) }
-            if !isPrimed, next >= PreviewAudioPlayer.primeFrames {
+            if !isPrimed, next - origin >= PreviewAudioPlayer.primeFrames {
                 isPrimed = true
                 primed.signal()
             }
