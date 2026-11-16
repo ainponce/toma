@@ -844,6 +844,9 @@ struct BenchGIF: AsyncParsableCommand {
     @Flag(help: "Export with the benchmarks' document, everything on, instead of the package's edit.")
     var allOn = false
 
+    @Flag(help: "Time the export sheet's preview (3 s from the middle) and then its estimate, instead of the export.")
+    var estimate = false
+
     @Option(help: "The longer side of the GIF, in pixels.")
     var longSide = 800
 
@@ -869,6 +872,21 @@ struct BenchGIF: AsyncParsableCommand {
         defer { try? FileManager.default.removeItem(at: folder) }
         let range = ExportRange.whole(TimeMap(sequence: document.sequence))
         let settings = GIFSettings(longSide: longSide, fps: fps, range: range)
+        if estimate {
+            let load = loadAverage()
+            let started = Date()
+            let preview = try await GIFEstimate.preview(
+                project: project, document: document, settings: settings, playhead: (range.end - range.start) / 2)
+            let previewed = Date().timeIntervalSince(started)
+            let result = try await GIFEstimate.estimate(project: project, document: document, settings: settings, preview: preview)
+            let elapsed = Date().timeIntervalSince(started)
+            print(String(
+                format: "preview %.2f s (%d bytes), then estimate: both in %.2f s; estimate %d bytes for %.1f s, %d frames, warnings %@",
+                previewed, preview.count, elapsed, result.bytes, result.seconds, result.frames, String(describing: result.warnings)))
+            print("peak memory: \(peakFootprint().map { "\($0 >> 20) MB" } ?? "unknown")")
+            print(String(format: "load average: %.2f", load))
+            return
+        }
         let exporter = GIFExporter(project: project, document: document, settings: settings)
         let load = loadAverage()
         let started = Date()
@@ -904,7 +922,9 @@ struct BenchGIF: AsyncParsableCommand {
             printError("error: synth-record printed no package")
             throw ExitCode.failure
         }
-        print(try runThisTool(["bench-gif", take, "--all-on", "--long-side", String(longSide), "--fps", String(fps)]), terminator: "")
+        var arguments = ["bench-gif", take, "--all-on", "--long-side", String(longSide), "--fps", String(fps)]
+        if estimate { arguments.append("--estimate") }
+        print(try runThisTool(arguments), terminator: "")
     }
 }
 
