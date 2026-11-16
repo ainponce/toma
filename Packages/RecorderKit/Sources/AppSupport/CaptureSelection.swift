@@ -47,6 +47,9 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
     public var displayIDs: [UInt32]
     /// The window recorded in `.window` mode.
     public var windowID: UInt32?
+    /// The app of `windowID`, saved with it: a saved window is restored only if it is still that app's
+    /// (`WindowOwner.restored`).
+    public var windowOwner: WindowOwner?
     /// The rectangle recorded in `.area` mode.
     public var area: AreaChoice?
     public var camera: DeviceChoice
@@ -57,6 +60,7 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
         mode: CaptureMode,
         displayIDs: [UInt32],
         windowID: UInt32? = nil,
+        windowOwner: WindowOwner? = nil,
         area: AreaChoice? = nil,
         camera: DeviceChoice,
         microphone: DeviceChoice,
@@ -65,6 +69,7 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
         self.mode = mode
         self.displayIDs = displayIDs
         self.windowID = windowID
+        self.windowOwner = windowOwner
         self.area = area
         self.camera = camera
         self.microphone = microphone
@@ -74,6 +79,32 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
     /// The display alone with the system's microphone: no camera, no system audio.
     public static func mainDisplay(_ displayID: UInt32) -> CaptureSelection {
         CaptureSelection(mode: .display, displayIDs: [displayID], camera: .off, microphone: .systemDefault, systemAudio: .off)
+    }
+}
+
+/// The app whose window Window mode chose (`CaptureSelection.windowOwner`). A `CGWindowID` is never used again while
+/// the user is logged in, but the numbers start over after logging out or restarting: the saved number can then be
+/// another app's window, the menu bar's or one of this app's own.
+public struct WindowOwner: Codable, Equatable, Sendable {
+    /// The app's bundle ID; `nil` for a process without one.
+    public var bundleID: String?
+    /// The app's name, as the window server says it (`WindowCandidate.ownerName`).
+    public var name: String
+
+    public init(bundleID: String?, name: String) {
+        self.bundleID = bundleID
+        self.name = name
+    }
+
+    /// `window`, the window the window server has now with the saved number, if it is still one to record of the
+    /// app saved (`owner`): an app's ordinary window (layer 0), not this app's (`ownPID`), whose app has the saved
+    /// bundle ID (`bundleID` is the one of `window`'s app now) or, for an app without one, the saved name. `nil`
+    /// otherwise, also without an owner saved: the window has to be chosen again. Its title is not compared: it
+    /// changes with what the window shows.
+    public static func restored(_ window: WindowCandidate?, bundleID: String?, saved owner: WindowOwner?, ownPID: Int32) -> WindowCandidate? {
+        guard let window, let owner, window.layer == 0, window.ownerPID != ownPID else { return nil }
+        let sameApp = owner.bundleID.map { $0 == bundleID } ?? (bundleID == nil && owner.name == window.ownerName)
+        return sameApp ? window : nil
     }
 }
 

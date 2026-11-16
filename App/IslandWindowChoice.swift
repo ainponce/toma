@@ -31,6 +31,24 @@ enum WindowList {
         candidates(CGWindowListCopyWindowInfo([.optionIncludingWindow], CGWindowID(id))).first { $0.windowID == id }
     }
 
+    /// The window of `selection` saved last time, if it is still the one chosen (`WindowOwner.restored`): the number
+    /// alone can be another window after the user logged out or the Mac restarted.
+    static func restored(_ selection: CaptureSelection) -> WindowCandidate? {
+        let window = selection.windowID.flatMap(window)
+        return WindowOwner.restored(
+            window, bundleID: window.flatMap { bundleID(of: $0.ownerPID) }, saved: selection.windowOwner,
+            ownPID: ProcessInfo.processInfo.processIdentifier)
+    }
+
+    /// The app of `window`, saved with it when it is chosen.
+    static func owner(of window: WindowCandidate) -> WindowOwner {
+        WindowOwner(bundleID: bundleID(of: window.ownerPID), name: window.ownerName)
+    }
+
+    private static func bundleID(of pid: Int32) -> String? {
+        NSRunningApplication(processIdentifier: pid)?.bundleIdentifier
+    }
+
     private static func candidates(_ list: CFArray?) -> [WindowCandidate] {
         (list as? [[String: Any]] ?? []).compactMap(WindowCandidate.init(windowInfo:))
     }
@@ -69,6 +87,7 @@ extension OpenPanelModel {
     func choose(window: WindowCandidate) {
         chosenWindow = window
         selection.windowID = window.windowID
+        selection.windowOwner = WindowList.owner(of: window)
     }
 
     func choose(window: ShareableWindow) {

@@ -14,7 +14,7 @@ import Testing
             #expect(!store.settings.hideDesktopIcons)
 
             let selection = CaptureSelection(
-                mode: .area, displayIDs: [2, 1], windowID: 42,
+                mode: .area, displayIDs: [2, 1], windowID: 42, windowOwner: WindowOwner(bundleID: "com.apple.Safari", name: "Safari"),
                 area: AreaChoice(displayID: 2, rect: Rect(x: -1920, y: 0, width: 640, height: 360)),
                 camera: .device(uniqueID: "camera-1"), microphone: .off, systemAudio: .applications(["com.example.app"]))
             let settings = RecorderSettings(
@@ -71,6 +71,39 @@ import Testing
             try save(saved, in: defaults, changing: "quick") { $0["cameraPreset"] = "p4320" }
             #expect(store.settings.quick == QuickSettings(
                 framesPerSecondByDisplay: [1: 30, 2: 120], displayScale: .points, windowFramesPerSecond: 24, cameraFramesPerSecond: 60))
+        }
+    }
+
+    @Test func frameRatesThatAreNotPositiveTakeTheirDefaults() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            let saved = RecorderSettings(
+                selection: .mainDisplay(1),
+                quick: QuickSettings(framesPerSecondByDisplay: [1: 30], windowFramesPerSecond: 24, cameraFramesPerSecond: 60))
+            for value in [0, -30] {
+                try save(saved, in: defaults, changing: "quick") { quick in
+                    quick["windowFramesPerSecond"] = value
+                    quick["cameraFramesPerSecond"] = value
+                }
+                // Never a frame interval of 1/0 s: the defaults, and the rest is kept.
+                #expect(store.settings.quick == QuickSettings(framesPerSecondByDisplay: [1: 30]), "\(value)")
+            }
+        }
+    }
+
+    @Test func aWindowSavedWithoutItsAppHasNone() throws {
+        try withDefaults { defaults in
+            let store = SettingsStore(defaults: defaults)
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.mode = .window
+            selection.windowID = 42
+            selection.windowOwner = WindowOwner(bundleID: "com.apple.Safari", name: "Safari")
+            try save(RecorderSettings(selection: selection), in: defaults, changing: "selection") {
+                #expect($0.removeValue(forKey: "windowOwner") != nil)
+            }
+            // Read as saved by a version that did not save the window's app: the island chooses no window for it.
+            selection.windowOwner = nil
+            #expect(store.settings.selection == selection)
         }
     }
 

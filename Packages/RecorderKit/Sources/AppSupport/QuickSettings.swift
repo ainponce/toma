@@ -25,16 +25,19 @@ public struct QuickSettings: Codable, Equatable, Sendable {
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
-    /// cannot read (a value from another version), takes its default; the others are kept.
+    /// cannot read (a value from another version), takes its default; the others are kept. A frame rate that is not
+    /// positive is not one: the window's and the camera's take their default, as a display's does.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = QuickSettings()
         framesPerSecondByDisplay = (try? container.decodeIfPresent([UInt32: Int].self, forKey: .framesPerSecondByDisplay))
             ?? defaults.framesPerSecondByDisplay
         displayScale = (try? container.decodeIfPresent(CaptureScale.self, forKey: .displayScale)) ?? defaults.displayScale
-        windowFramesPerSecond = (try? container.decodeIfPresent(Int.self, forKey: .windowFramesPerSecond)) ?? defaults.windowFramesPerSecond
+        windowFramesPerSecond = (try? container.decodeIfPresent(Int.self, forKey: .windowFramesPerSecond)).flatMap { $0 > 0 ? $0 : nil }
+            ?? defaults.windowFramesPerSecond
         cameraPreset = (try? container.decodeIfPresent(CameraPreset.self, forKey: .cameraPreset)) ?? defaults.cameraPreset
-        cameraFramesPerSecond = (try? container.decodeIfPresent(Int.self, forKey: .cameraFramesPerSecond)) ?? defaults.cameraFramesPerSecond
+        cameraFramesPerSecond = (try? container.decodeIfPresent(Int.self, forKey: .cameraFramesPerSecond)).flatMap { $0 > 0 ? $0 : nil }
+            ?? defaults.cameraFramesPerSecond
     }
 
     /// The frame rate to record `display` at: 60 unless another positive one was chosen.

@@ -70,7 +70,8 @@ final class OpenPanelModel {
 
     /// The saved selection, with what is no longer there left out: the displays that are not connected (the
     /// display the island is on when none is left), an area of a display that is not connected, a window that is
-    /// closed. The camera is on only if it is allowed: what the panel shows is what is recorded.
+    /// closed or is no longer the one chosen (`WindowList.restored`; Window mode then has no window chosen). The
+    /// camera is on only if it is allowed: what the panel shows is what is recorded.
     init(
         recording: RecordingController, store: SettingsStore, countdown: CountdownSetting, afterStop: AfterStopSetting,
         hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, teleprompter: TeleprompterSetting,
@@ -99,8 +100,11 @@ final class OpenPanelModel {
         selection.displayIDs = selection.displayIDs.filter(connected.contains)
         if selection.displayIDs.isEmpty { selection.displayIDs = [islandDisplayID] }
         if let area = selection.area, !connected.contains(area.displayID) { selection.area = nil }
-        let window = selection.windowID.flatMap(WindowList.window)
-        if window == nil { selection.windowID = nil }
+        let window = WindowList.restored(selection)
+        if window == nil {
+            selection.windowID = nil
+            selection.windowOwner = nil
+        }
         chosenWindow = window
         self.selection = selection
         camera.refreshPermission()
