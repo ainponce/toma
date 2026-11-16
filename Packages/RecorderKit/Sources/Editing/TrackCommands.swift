@@ -35,10 +35,15 @@ public enum TrackCommands {
         guard let shown = shownInstant(doc, atOutput, timeMap) else {
             return (nil, doc.sequence.first.flatMap { doc.camera.initial[$0.take] } ?? .default)
         }
-        if let k = rulingChange(doc, take: shown.take, at: shown.source) {
-            return (doc.camera.changes[k].id, doc.camera.changes[k].style)
-        }
-        return (nil, doc.camera.initial[shown.take] ?? .default)
+        return rulingCameraStyle(doc, take: shown.take, atSource: shown.source)
+    }
+
+    /// The camera style that rules the bubble of take `take` at its source instant `t`: of the take's last change whose
+    /// `t` is at or before it, with its id; without one, the take's initial style (`CameraStyle.default` if it has none)
+    /// and `nil`.
+    static func rulingCameraStyle(_ doc: EditDocument, take: String, atSource t: HostTime) -> (changeID: String?, style: CameraStyle) {
+        if let k = rulingChange(doc, take: take, at: t) { return (doc.camera.changes[k].id, doc.camera.changes[k].style) }
+        return (nil, doc.camera.initial[take] ?? .default)
     }
 
     /// Edits the style that rules at output instant `atOutput` (`rulingCameraStyle`): the take's initial one, or that change,

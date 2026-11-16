@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import ProjectFormat
 
 /// The instants of the output that ↑ and ↓ move the playhead to and that edges snap to (design §5.5 and §5.7): the
-/// edges of the clips and of the zoom blocks, the camera and the screen changes, the take's markers, and the start and
-/// the end, all in output time.
+/// edges of the clips, of the zoom blocks and of the camera's layout blocks (1c design §5.5), the camera and the screen
+/// changes, the take's markers, and the start and the end, all in output time.
 ///
-/// Each one is where the output shows it (`TimeMap`): a zoom block from its first kept instant to the end of its last
-/// one, with the cuts inside it closed (`outputRange(ofSource:take:)`); a change or a marker at its own instant if it is
-/// kept. What is cut is not a point: a change in a cut rules from the start of the next clip, which is one already.
+/// Each one is where the output shows it (`TimeMap`): a block from its first kept instant to the end of its last one,
+/// with the cuts inside it closed (`outputRange(ofSource:take:)`), a layout block as the preview places it
+/// (`LayoutTimeline.blockOutputs(of:timeMap:)`: two at most 1 ns apart touch, so they make one point); a change or a
+/// marker at its own instant if it is kept. What is cut is not a point: a change in a cut rules from the start of the
+/// next clip, which is one already.
 public struct EditPoints: Sendable {
     /// In order, without repeats, from 0 to the output's duration.
     public private(set) var all: [Int64]
@@ -19,6 +22,9 @@ public struct EditPoints: Sendable {
             if let range = timeMap.outputRange(ofSource: region.start..<region.end, take: region.take) {
                 points += [range.lowerBound, range.upperBound]
             }
+        }
+        for case let range? in LayoutTimeline.blockOutputs(of: document, timeMap: timeMap) {
+            points += [range.lowerBound, range.upperBound]
         }
         points += document.camera.changes.compactMap { timeMap.output(atSource: $0.t, take: $0.take) }
         points += document.screens.changes.compactMap { timeMap.output(atSource: $0.t, take: $0.take) }

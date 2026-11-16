@@ -66,12 +66,16 @@ public struct LayoutInputs: Sendable {
 ///
 /// - The spans: the take's blocks of `camera.layouts` in their output ranges (`TimeMap.outputRange(ofSource:take:)`, cuts
 ///   closed, as the zoom's blocks: plan decision 9), so a block entirely in a cut is not shown and comes back with its
-///   source; the project's layout (`camera.layout`) in the gaps. They cover the output, in order. Blocks do not overlap
-///   (the track does not let them); in a document edited by hand, one that starts inside the one before it starts where
-///   that one ends. Two blocks at most 1 ns apart touch, and a block that ends at most 1 ns before the end of the output
-///   reaches it: a block's end goes back to the source as the source of its last nanosecond and 1 ns more (plan decision
-///   9), which at a speed above 1 maps back 1 ns short. With `camera.show` off, or a camera that cannot be read (plan
-///   decision 40), every span whose layout needs the camera is `screenOnly`; the blocks stay in the document.
+///   source; the project's layout (`camera.layout`) in the gaps. They cover the output, in order. Blocks can overlap: the
+///   track stops a new block, a move or a trim at the blocks it shows, but a block hidden whole in a cut takes no room
+///   there (as on the Zoom track), so a block placed across the closed cut can hold its source and overlap it once the
+///   stretch is recovered; and so can blocks in a document edited by hand. Where blocks overlap, the one that starts
+///   first rules: one that starts inside the one before it starts where that one ends, and one entirely inside it is not
+///   shown. Two blocks at most 1 ns apart touch, and a block that ends at most 1 ns before the end of the output reaches
+///   it: a block's end goes back to the source as the source of its last nanosecond and 1 ns more (plan decision 9),
+///   which at a speed above 1 maps back 1 ns short. This placement is `placedBlocks(of:take:timeMap:)`, which the
+///   editor's Camera track uses too. With `camera.show` off, or a camera that cannot be read (plan decision 40), every
+///   span whose layout needs the camera is `screenOnly`; the blocks stay in the document.
 /// - The borders: the start of every span but the first, in output time. A block that starts at output 0 is in place on
 ///   the first frame and one that ends at the output's end never leaves. At a border, what is shown goes from what was
 ///   shown to the new span's geometry along `p`, the step response of `camera.spring` (with the design's 0.95 and 0.5 s,
@@ -109,31 +113,8 @@ public struct LayoutTimeline: Sendable {
         let showsCamera = camera.show && cameraReadable
         func shown(_ kind: LayoutKind) -> LayoutKind { showsCamera ? kind : .screenOnly }
         let end = max(timeMap.duration, 0)
-
-        // The take's blocks in the output, in order (the document's among those that start together), placed as the
-        // type's notes say.
-        var placed: [(output: Range<Int64>, block: LayoutBlock)] = []
-        for block in camera.layouts where block.take == take.id && block.start < block.end {
-            guard let output = timeMap.outputRange(ofSource: block.start..<block.end, take: take.id) else { continue }
-            let clamped = max(output.lowerBound, 0)..<min(max(output.upperBound, 0), end)
-            if !clamped.isEmpty { placed.append((clamped, block)) }
-        }
-        placed = placed.enumerated()
-            .sorted { ($0.element.output.lowerBound, $0.offset) < ($1.element.output.lowerBound, $1.offset) }
-            .map(\.element)
-        var kept: [(output: Range<Int64>, block: LayoutBlock)] = []
-        for var entry in placed {
-            if let last = kept.last {
-                let start = max(entry.output.lowerBound, last.output.upperBound)
-                guard start < entry.output.upperBound else { continue }
-                entry.output = start..<entry.output.upperBound
-                if start - last.output.upperBound <= Self.touching { kept[kept.count - 1].output = last.output.lowerBound..<start }
-            }
-            kept.append(entry)
-        }
-        if let last = kept.last, end - last.output.upperBound <= Self.touching {
-            kept[kept.count - 1].output = last.output.lowerBound..<end
-        }
+        let kept = Self.placedBlocks(of: document, take: take.id, timeMap: timeMap)
+            .map { (output: $0.output, block: camera.layouts[$0.index]) }
 
         let project = { (range: Range<Int64>) in
             LayoutSpan(kind: shown(camera.layout.kind), split: camera.layout.split, instant: false, output: range)
@@ -155,6 +136,46 @@ public struct LayoutTimeline: Sendable {
         takeID = take.id
         self.timeMap = timeMap
         response = StepResponse(camera.spring)
+    }
+
+    /// The blocks of take `take` of `document` where the output shows them, as the type's notes place them: each one's index
+    /// in `camera.layouts` and its output range, in output order (the document's among those that start together), never
+    /// overlapping. A block that shows nothing (in a cut, or entirely inside the one before it) is not there.
+    public static func placedBlocks(
+        of document: EditDocument, take: String, timeMap: TimeMap
+    ) -> [(index: Int, output: Range<Int64>)] {
+        let end = max(timeMap.duration, 0)
+        var placed: [(index: Int, output: Range<Int64>)] = []
+        for (index, block) in document.camera.layouts.enumerated() where block.take == take && block.start < block.end {
+            guard let output = timeMap.outputRange(ofSource: block.start..<block.end, take: take) else { continue }
+            let clamped = max(output.lowerBound, 0)..<min(max(output.upperBound, 0), end)
+            if !clamped.isEmpty { placed.append((index, clamped)) }
+        }
+        placed.sort { ($0.output.lowerBound, $0.index) < ($1.output.lowerBound, $1.index) }
+        var kept: [(index: Int, output: Range<Int64>)] = []
+        for var entry in placed {
+            if let last = kept.last {
+                let start = max(entry.output.lowerBound, last.output.upperBound)
+                guard start < entry.output.upperBound else { continue }
+                entry.output = start..<entry.output.upperBound
+                if start - last.output.upperBound <= touching { kept[kept.count - 1].output = last.output.lowerBound..<start }
+            }
+            kept.append(entry)
+        }
+        if let last = kept.last, end - last.output.upperBound <= touching {
+            kept[kept.count - 1].output = last.output.lowerBound..<end
+        }
+        return kept
+    }
+
+    /// Where the output shows each block of `camera.layouts` of `document`, every take's, as `placedBlocks(of:take:timeMap:)`
+    /// places them, in the order of the document; `nil` for one that shows nothing.
+    public static func blockOutputs(of document: EditDocument, timeMap: TimeMap) -> [Range<Int64>?] {
+        var outputs = [Range<Int64>?](repeating: nil, count: document.camera.layouts.count)
+        for take in Set(document.camera.layouts.map(\.take)) {
+            for placed in placedBlocks(of: document, take: take, timeMap: timeMap) { outputs[placed.index] = placed.output }
+        }
+        return outputs
     }
 
     /// The span that rules at output time `τ`: the first one before the output, the last one from its end on.
