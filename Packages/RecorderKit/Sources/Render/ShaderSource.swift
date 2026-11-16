@@ -49,6 +49,8 @@ public enum ShaderSource {
         float clampsToCrop;     // 1: sample only inside uvOrigin...uvOrigin + uvSize (a crop), 0: as given
         float2 shapeOrigin;     // top-left corner of the rounded rect that cuts the image (a window frame's)
         float2 shapeSize;       // its size; 0: none, the image's own corners are rounded
+        float shapeBottomRadius;   // the shape's bottom corners (`radius` its top ones)
+        float topRadius;           // with a shape, the image's own top corners (0: square)
     };
 
     struct QuadOut {
@@ -74,9 +76,17 @@ public enum ShaderSource {
         return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     }
 
+    // The same with corners of topRadius along its top edge and bottomRadius along its bottom one (y grows down), each at
+    // most half its shorter side.
+    static float roundedRectDistance(float2 p, float2 halfSize, float topRadius, float bottomRadius) {
+        float most = min(halfSize.x, halfSize.y);
+        return roundedRectDistance(p, halfSize, min(p.y < 0.0 ? topRadius : bottomRadius, most));
+    }
+
     // How much of the pixel at p the screen or the camera covers: its rect with antialiased rounded corners. Inside a
-    // window frame, the window's rounded rect (the shape) cuts the screen instead, and its own rect, square, along the
-    // edge it does not share with the window: the top one, under the bar.
+    // window frame, the window's rounded rect (the shape, its top and bottom corners each its own) cuts the screen
+    // instead, and its own rect along the edge it does not share with the window: the top one, under the bar, square or
+    // with corners of topRadius (a window take's, the bar showing behind them).
     static float imageCoverage(float2 p, constant QuadUniforms &u) {
         float2 halfSize = u.contentSize * 0.5;
         float radius = min(u.radius, min(halfSize.x, halfSize.y));
@@ -84,9 +94,8 @@ public enum ShaderSource {
         float coverage = clamp(0.5 - d, 0.0, 1.0);
         if (u.shapeSize.x > 0.0) {
             float2 halfShape = u.shapeSize * 0.5;
-            float shapeRadius = min(u.radius, min(halfShape.x, halfShape.y));
-            float shape = roundedRectDistance(p - (u.shapeOrigin + halfShape), halfShape, shapeRadius);
-            float rect = roundedRectDistance(p - (u.contentOrigin + halfSize), halfSize, 0.0);
+            float shape = roundedRectDistance(p - (u.shapeOrigin + halfShape), halfShape, u.radius, u.shapeBottomRadius);
+            float rect = roundedRectDistance(p - (u.contentOrigin + halfSize), halfSize, u.topRadius, 0.0);
             coverage = clamp(0.5 - max(shape, rect), 0.0, 1.0);
         }
         return coverage;
@@ -196,20 +205,21 @@ public enum ShaderSource {
         float2 firstButton;     // the first button's centre
         float buttonSpacing;    // between the buttons' centres
         float buttonRadius;     // 0: no buttons
-        float radius;           // the window's corners
+        float radius;           // the window's top corners
         float barBottom;        // where the bar meets the screen
-        float2 padding;
+        float bottomRadius;     // the window's bottom corners
+        float below;            // how far under the screen's top edge the bar goes on: its round top corners, or 0
     };
 
     // A window frame's title bar (`WindowFrameLayer`), over a quad around it: the window's rounded rect down to one pixel
-    // under the screen's top edge, so the screen, drawn over it, leaves no seam of background where they meet; in the
-    // bar's colour, with the buttons' antialiased circles. Opaque, premultiplied by how much of the pixel it covers.
+    // under the screen's top edge (and behind the screen's round top corners), so the screen, drawn over it, leaves no
+    // seam of background where they meet; in the bar's colour, with the buttons' antialiased circles. Opaque,
+    // premultiplied by how much of the pixel it covers.
     fragment float4 windowBarFragment(QuadOut in [[stage_in]],
                                       constant WindowBarUniforms &u [[buffer(0)]]) {
         float2 halfSize = u.windowSize * 0.5;
-        float radius = min(u.radius, min(halfSize.x, halfSize.y));
-        float window = roundedRectDistance(in.p - (u.windowOrigin + halfSize), halfSize, radius);
-        float bar = in.p.y - (u.barBottom + 1.0);
+        float window = roundedRectDistance(in.p - (u.windowOrigin + halfSize), halfSize, u.radius, u.bottomRadius);
+        float bar = in.p.y - (u.barBottom + 1.0 + u.below);
         float coverage = clamp(0.5 - max(window, bar), 0.0, 1.0);
         float3 color = u.barColor.rgb;
         if (u.buttonRadius > 0.0) {

@@ -60,14 +60,20 @@ private enum NewDocumentFixture {
         return try builder.write()
     }
 
-    /// A take of 2 s of one window, `width` × 600 pt.
-    static func window(in dir: URL, name: String, width: Double) async throws -> LoadedProject {
+    /// A take of 2 s of one window, `width` × 600 pt (no usable frame with `width` `nil`), its frame changing to each of
+    /// `frames` at its time in seconds from the start.
+    static func window(
+        in dir: URL, name: String, width: Double?, frames: [(seconds: Double, frame: Rect)] = []
+    ) async throws -> LoadedProject {
         let builder = try TakeBuilder(in: dir, name: name)
         let source = TrackSource(
-            name: "Synthetic Window", globalFrame: Rect(x: 100, y: 80, width: width, height: 600), pixelScale: 2, windowID: 7)
+            name: "Synthetic Window", globalFrame: width.map { Rect(x: 100, y: 80, width: $0, height: 600) }, pixelScale: 2, windowID: 7)
         try await builder.addVideoTrack(
             id: "window-1", kind: .window, source: source,
             segments: [VideoSegmentSpec(start: base, seconds: 2, framesPerSecond: 10)])
+        try builder.addEvents(frames.map {
+            InputEvent(t: base.adding(seconds: $0.seconds), kind: .windowGeometry(track: "window-1", frame: $0.frame, onScreen: true))
+        })
         return try builder.write()
     }
 
@@ -194,5 +200,32 @@ private enum NewDocumentFixture {
         // Nothing to cover in a window of no usable size.
         #expect(WindowCornerCover.cornerRadius(windowWidthPoints: 0, screenRectWidth: rect.width, outputWidth: output.x) == 0)
         #expect(WindowCornerCover.cornerRadius(windowWidthPoints: .nan, screenRectWidth: rect.width, outputWidth: output.x) == 0)
+    }
+}
+
+@Test func windowCornersCoverTheWindowWhereverItIsShown() async throws {
+    try await withTemporaryDirectory { dir in
+        let output = SIMD2<Double>(1920, 1080)
+        func cover(_ width: Double, _ height: Double) -> Double {
+            let rect = StageLayout.screenRect(contentAspect: width / height, padding: 0.08, outputSize: output)
+            return WindowCornerCover.cornerRadius(windowWidthPoints: width, screenRectWidth: rect.width, outputWidth: output.x)
+        }
+        // 800 × 600 pt, then 800 × 300 at 1 s: drawn larger, so its 26 pt are more of the output.
+        let resized = try await NewDocumentFixture.window(
+            in: dir, name: "resized", width: 800, frames: [(1, Rect(x: 100, y: 80, width: 800, height: 300))])
+        let document = NewDocument.make(project: resized, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
+        #expect(cover(800, 300) > cover(800, 600) && cover(800, 600) > 0.012)
+        #expect(abs(document.style.cornerRadius - cover(800, 300)) <= 1e-12)
+        // The other way, the corners the window needs as the take starts.
+        let grown = try await NewDocumentFixture.window(
+            in: dir, name: "grown", width: 800, frames: [(1, Rect(x: 100, y: 80, width: 1600, height: 600))])
+        let grownDocument = NewDocument.make(project: grown, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
+        #expect(abs(grownDocument.style.cornerRadius - cover(800, 600)) <= 1e-12)
+        // Without a usable frame as it starts, those of its first one.
+        let late = try await NewDocumentFixture.window(
+            in: dir, name: "late", width: nil, frames: [(0.5, Rect(x: 100, y: 80, width: 800, height: 600))])
+        let lateDocument = NewDocument.make(project: late, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
+        #expect(lateDocument.screens.initial == ["take-001": "window-1"])
+        #expect(abs(lateDocument.style.cornerRadius - cover(800, 600)) <= 1e-12)
     }
 }
