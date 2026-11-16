@@ -32,14 +32,16 @@ public struct ClickEffectLayer: Equatable, Sendable {
 }
 
 /// The click effects of the cursor's `clickEffect` at one instant of the output (design §7.5), each frozen with its id.
-/// `h` is the drawn cursor's height (`CursorLayer.height`, before its press); times are output times.
+/// `h` is the height of the cursor drawn at the click (`CursorLayer.height`, before its press); times are output times.
 ///
 /// - `ripple-1`: for 0.5 s from each click, τ seconds after it, a ring of radius `h × (0.25 + 1.35 × easeOutCubic(τ /
 ///   0.5))` and `0.08 h` across, white at opacity `0.55 × (1 − τ / 0.5)²`, with a 1 px outline of black at 25 % at the
-///   click, fading with the white (`outlineOpacity(of:)`).
-/// - `circle-1`: from each click until its release, a white disc at 22 % of radius `0.9 h`, which enters scaling
-///   linearly from 0.6 to 1 over its first 0.12 s; from the release on, its opacity goes down linearly to 0 over
-///   0.20 s.
+///   click that fades with the white (`outlineOpacity(of:)`). The fading outline is part of `ripple-1`'s look, frozen
+///   with it: a constant 25 % would leave a dark ring alone once the white is gone, and vanish at 0.5 s.
+/// - `circle-1`: from each click until its press ends, a white disc at 22 % of radius `0.9 h`, which enters scaling
+///   linearly from 0.6 to 1 over its first 0.12 s; from the end of the press on, its opacity goes down linearly to 0
+///   over 0.20 s. A press ends at the first release at or after its click, or at the next click if that comes first: a
+///   release the events lost never holds a circle past the next click.
 /// - `none`, and an id this version does not know: nothing.
 public enum ClickEffects {
     static let rippleID = "ripple-1"
@@ -47,6 +49,7 @@ public enum ClickEffects {
 
     static let rippleDuration: Int64 = 500_000_000
     static let rippleOpacity = 0.55
+    /// At the click; it fades with the white (`ripple-1`'s look).
     static let rippleOutline = 0.25
     static let circleOpacity = 0.22
     static let circleGrowth: Int64 = 120_000_000
@@ -55,55 +58,69 @@ public enum ClickEffects {
     /// The effects shown at output time `τ`, in click order (the latest drawn last).
     ///
     /// - Parameters:
-    ///   - clicks: the kept clicks, in output order (`CursorPath.clicks`), each where it went down; one for which `place`
-    ///     has no point has no effect.
-    ///   - releases: when a button goes up and none is down any more, in output order; a click is pressed until the
-    ///     first of them at or after it, or to the end without one.
+    ///   - clicks: the output times of the kept clicks, in output order (`CursorPath.clicks`).
+    ///   - releases: when a button goes up and none is down any more, in output order (`CursorPath.releases`).
     ///   - effect: the document's `cursor.clickEffect`.
-    ///   - cursorHeight: `h`, in output pixels; nothing without a positive, finite one.
-    ///   - place: where a click's point is on the stage, in output pixels; `nil` off what is shown of the screen.
+    ///   - place: where the effect of the click at an index of `clicks` is on the frame drawn, in output pixels, and
+    ///     its `h` there, both as the click was (its point and its cursor at its own instant); `nil` when it is not
+    ///     shown (not on the screen shown). Called only for the clicks whose effect is under way; one without a
+    ///     placement, or with an `h` that is not positive and finite, has no effect.
     public static func layers(
-        atOutput τ: Int64, clicks: [(output: Int64, point: SIMD2<Double>)], releases: [Int64], effect: String,
-        cursorHeight: Double, place: (SIMD2<Double>) -> SIMD2<Double>?
-    ) -> [ClickEffectLayer] {
-        guard cursorHeight > 0, cursorHeight.isFinite else { return [] }
-        let h = cursorHeight
-        // The clicks at or before `τ`, from the latest back while they are still shown.
-        var index = partitionPoint(clicks.count) { clicks[$0].output > τ }
-        var layers: [ClickEffectLayer] = []
+        atOutput τ: Int64, clicks: [Int64], releases: [Int64], effect: String,
+        place: (_ click: Int) throws -> (center: SIMD2<Double>, cursorHeight: Double)?
+    ) rethrows -> [ClickEffectLayer] {
+        // The clicks whose effect is under way at `τ` are `start..<end`: effects begin in click order and end in click
+        // order too (a ripple 0.5 s after its click, a circle 0.20 s after its press, and presses end in click order).
+        let end = partitionPoint(clicks.count) { clicks[$0] > τ }
+        let kind: ClickEffectLayer.Kind, start: Int
         switch effect {
         case rippleID:
-            while index > 0, τ - clicks[index - 1].output < rippleDuration {
-                index -= 1
-                guard let center = place(clicks[index].point) else { continue }
-                let progress = seconds(τ - clicks[index].output) / seconds(rippleDuration)
+            kind = .ripple
+            start = partitionPoint(end) { τ - clicks[$0] < rippleDuration }
+        case circleID:
+            kind = .circle
+            start = partitionPoint(end) { i in
+                pressEnd(of: i, clicks: clicks, releases: releases).map { τ - $0 < circleFade } ?? true
+            }
+        default:
+            return []
+        }
+        guard start < end else { return [] }
+        var layers: [ClickEffectLayer] = []
+        layers.reserveCapacity(end - start)
+        for i in start..<end {
+            guard let (center, h) = try place(i), h > 0, h.isFinite else { continue }
+            let since = seconds(τ - clicks[i])
+            switch kind {
+            case .ripple:
+                let progress = since / seconds(rippleDuration)
                 let eased = 1 - (1 - progress) * (1 - progress) * (1 - progress)
                 let fade = (1 - progress) * (1 - progress)
                 layers.append(ClickEffectLayer(
                     kind: .ripple, center: center, radius: h * (0.25 + 1.35 * eased), thickness: 0.08 * h,
                     opacity: rippleOpacity * fade))
-            }
-        case circleID:
-            while index > 0 {
-                index -= 1
-                let click = clicks[index].output
-                let first = partitionPoint(releases.count) { releases[$0] >= click }
-                let release = first < releases.count ? releases[first] : nil
+            case .circle:
                 var opacity = circleOpacity
-                if let release, τ >= release {
-                    // A click before this one is released at or before this one's release: out by now too.
-                    guard τ - release < circleFade else { break }
-                    opacity *= 1 - seconds(τ - release) / seconds(circleFade)
+                if let pressEnd = pressEnd(of: i, clicks: clicks, releases: releases), τ >= pressEnd {
+                    opacity *= 1 - seconds(τ - pressEnd) / seconds(circleFade)
                 }
-                guard let center = place(clicks[index].point) else { continue }
-                let scale = 0.6 + 0.4 * min(seconds(τ - click) / seconds(circleGrowth), 1)
+                let scale = 0.6 + 0.4 * min(since / seconds(circleGrowth), 1)
                 layers.append(
                     ClickEffectLayer(kind: .circle, center: center, radius: 0.9 * h * scale, thickness: 0, opacity: opacity))
             }
-        default:
-            return []
         }
-        return layers.reversed()
+        return layers
+    }
+
+    /// When the press of click `i` ends: at the first of `releases` at or after it, or at the next click if that comes
+    /// first; `nil` while it is held to the end. In click order, since both are: an earlier click's press never ends
+    /// after a later one's.
+    private static func pressEnd(of i: Int, clicks: [Int64], releases: [Int64]) -> Int64? {
+        let first = partitionPoint(releases.count) { releases[$0] >= clicks[i] }
+        let release = first < releases.count ? releases[first] : nil
+        let next = i + 1 < clicks.count ? clicks[i + 1] : nil
+        guard let release else { return next }
+        return next.map { min($0, release) } ?? release
     }
 
     /// The opacity of the 1 px black outline of `layer`: a ripple's is 25 % at the click and fades with its white

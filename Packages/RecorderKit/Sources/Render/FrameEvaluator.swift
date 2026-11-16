@@ -34,11 +34,14 @@ import ProjectFormat
 ///     without images (takes before 1b), the arrow.
 ///   It is `scale × its height in points × the screen's rect height / the region's height` tall: in `toma`, 24 pt,
 ///   whatever it is drawn with; in `system`, a recorded image's `size.height` (and the arrow's 24 pt).
-/// - Click effects (`cursor.clickEffect`, `ClickEffects`), with the cursor shown, their `h` its height: those of the
-///   cursor path's clicks (the `mouseDown`s inside a kept clip, `CursorPath.clicks`), placed as the cursor is, and only
-///   while that point is in the region the screen shows; none while a window is not on screen. A click is pressed until
-///   no button is down any more, at each `mouseUp` that leaves none down, placed as the cursor's press reads it
-///   (`TimeMap.output(ofChangeAt:take:)`: one in a cut, from the next clip on).
+/// - Click effects (`cursor.clickEffect`, `ClickEffects`), with the cursor shown: those of the cursor path's clicks
+///   (the `mouseDown`s inside a kept clip, `CursorPath.clicks`), each as it was at its own instant (the source instant
+///   its output time shows): on the screen shown then, at its point in the region that screen showed, and of the
+///   height of the cursor drawn then, `h`, as a fraction of the screen's rect. A frame draws it on its screen's rect,
+///   so it stays on the clicked point however the region moves after it, and keeps its size when the cursor's image
+///   changes; none for a click off that region or while its window was not on screen, nor while another screen is
+///   shown or the window is not on screen. A click's press ends when no button is down any more
+///   (`CursorPath.releases`).
 /// - Camera (`camera.show`): the camera's bubble (`CameraBubble`, the zoom's rule too): the first camera track with a
 ///   segment, from the start of its first segment on, at the `CameraStyleTimeline` of the take's `camera.initial` and
 ///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
@@ -67,8 +70,9 @@ public struct FrameEvaluator: Sendable {
     private let bubble: CameraBubble?
     /// The take's `cursorImage` events, in time order.
     private let cursorImages: [RecordedCursor]
-    /// When no button is down any more, in output order: where the click effects' presses end.
-    private let releases: [Int64]
+    /// The output times of the cursor path's clicks, and where each was at its own instant (`nil`: none shown).
+    private let clicks: [Int64]
+    private let clickPlaces: [ClickPlace?]
 
     /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`.
     public init(
@@ -86,12 +90,14 @@ public struct FrameEvaluator: Sendable {
         self.paths = paths
         bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
-        let ordered = events.sortedByTime()
-        cursorImages = ordered.compactMap { event in
+        cursorImages = events.sortedByTime().compactMap { event in
             guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
             return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
         }
-        releases = Self.releases(in: ordered, take: take.id, timeMap: timeMap)
+        clicks = paths.cursor.clicks.map(\.output)
+        clickPlaces = paths.cursor.clicks.map { click in
+            ClickPlace(click, take: take.id, sequence: document.sequence, timeMap: timeMap, stage: paths.stage)
+        }
     }
 
     /// The legacy document of the take (`EditDocument.legacy(take:events:)`) with the gradient, the padding and the
@@ -142,18 +148,18 @@ public struct FrameEvaluator: Sendable {
             }
             frame.screen = ScreenLayer(trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: view.crop)
             if document.cursor.show, view.onScreen, let region = view.region {
-                // A point in global points, placed on the rect where it is in the region; `nil` off the region.
-                func place(_ global: SIMD2<Double>) -> SIMD2<Double>? {
-                    let point = CGPoint(x: global.x, y: global.y)
-                    guard CursorGeometry.contains(point, region) else { return nil }
-                    return SIMD2(rect.x, rect.y) + CursorGeometry.normalized(point, in: region) * SIMD2(rect.width, rect.height)
+                frame.cursor = try cursor(
+                    at: output, source: source, in: region, shownIn: rect, cursorImageIsReadable: cursorImageIsReadable)
+                frame.clickEffects = try ClickEffects.layers(
+                    atOutput: output, clicks: clicks, releases: paths.cursor.releases, effect: document.cursor.clickEffect
+                ) { index in
+                    // As the cursor was drawn at the click, on this frame's rect.
+                    guard let click = clickPlaces[index], click.track == trackID else { return nil }
+                    let look = try look(at: click.source, cursorImageIsReadable: cursorImageIsReadable)
+                    return (
+                        SIMD2(rect.x, rect.y) + click.point * SIMD2(rect.width, rect.height),
+                        document.cursor.scale * look.pointHeight * rect.height / click.regionHeight)
                 }
-                let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
-                let height = document.cursor.scale * look.pointHeight * rect.height / region.height
-                frame.cursor = cursor(at: output, look: look, height: height, place: place)
-                frame.clickEffects = ClickEffects.layers(
-                    atOutput: output, clicks: paths.cursor.clicks, releases: releases, effect: document.cursor.clickEffect,
-                    cursorHeight: height, place: place)
             }
         }
         frame.camera = camera(at: source, output: output)
@@ -215,33 +221,50 @@ public struct FrameEvaluator: Sendable {
         }
     }
 
-    /// The drawn cursor at output time `τ`, drawn with `look` and `height` tall: where the cursor path is then, placed
-    /// by `place`. `nil` before the path's first position and where `place` has no point for it.
+    /// The drawn cursor at output time `τ` (one `source(atOutput:)` shows, at source instant `source`): where the cursor
+    /// path is then, placed on `rect` where it is in `region`. `nil` before the path's first position and off `region`.
     private func cursor(
-        at τ: Int64, look: Look, height: Double, place: (SIMD2<Double>) -> SIMD2<Double>?
-    ) -> CursorLayer? {
-        guard let sample = paths.cursor.sample(atOutput: τ), let hotspot = place(sample.position) else { return nil }
+        at τ: Int64, source: HostTime, in region: Rect, shownIn rect: Rect, cursorImageIsReadable: (String) throws -> Bool
+    ) rethrows -> CursorLayer? {
+        guard let sample = paths.cursor.sample(atOutput: τ) else { return nil }
+        let global = CGPoint(x: sample.position.x, y: sample.position.y)
+        guard CursorGeometry.contains(global, region) else { return nil }
+        let normalized = CursorGeometry.normalized(global, in: region)
+        let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
         return CursorLayer(
-            hotspot: hotspot, height: height, image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect,
-            opacity: sample.opacity, clickScale: sample.clickScale)
+            hotspot: SIMD2(rect.x, rect.y) + normalized * SIMD2(rect.width, rect.height),
+            height: document.cursor.scale * look.pointHeight * rect.height / region.height,
+            image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect, opacity: sample.opacity,
+            clickScale: sample.clickScale)
     }
 
-    /// When no button is down any more in `events` (in time order): at each `mouseUp` that leaves none down, from where
-    /// it starts to rule (`TimeMap.output(ofChangeAt:take:)`, as `CursorPath` reads the buttons), in output order.
-    private static func releases(in events: [InputEvent], take: String, timeMap: TimeMap) -> [Int64] {
-        var down = Set<MouseButton>(), releases: [Int64] = []
-        for event in events {
-            switch event.kind {
-            case let .mouseDown(button, _, _):
-                down.insert(button)
-            case let .mouseUp(button, _, _):
-                down.remove(button)
-                if down.isEmpty, let output = timeMap.output(ofChangeAt: event.t, take: take) { releases.append(output) }
-            default:
-                break
-            }
+    /// A click as its effect keeps it: what the frame at its output time showed of it, as the cursor is placed there.
+    private struct ClickPlace: Sendable {
+        /// The screen shown.
+        var track: String
+        /// Where the click is in the region that screen showed: 0, 0 is its top-left corner, 1, 1 its bottom-right one.
+        var point: SIMD2<Double>
+        /// That region's height, in points.
+        var regionHeight: Double
+        /// The source instant shown: the cursor drawn then gives the effect's size.
+        var source: HostTime
+
+        /// `nil` when that frame showed no screen of `take`, or the window was not on screen, or the click is off the
+        /// region.
+        init?(
+            _ click: (output: Int64, point: SIMD2<Double>), take: String, sequence: [Clip], timeMap: TimeMap,
+            stage: StagePoints
+        ) {
+            guard let shown = timeMap.source(atOutput: click.output), sequence[shown.clip].take == take,
+                  case let (track, view)? = stage.shownScreen(at: shown.source), view.onScreen, let region = view.region
+            else { return nil }
+            let global = CGPoint(x: click.point.x, y: click.point.y)
+            guard CursorGeometry.contains(global, region) else { return nil }
+            self.track = track
+            point = CursorGeometry.normalized(global, in: region)
+            regionHeight = region.height
+            source = shown.source
         }
-        return releases
     }
 
     /// What the cursor is drawn with at source instant `source`, by the document's `cursor.style` (see the type's notes).

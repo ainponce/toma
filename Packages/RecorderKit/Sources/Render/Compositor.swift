@@ -296,6 +296,8 @@ public final class Compositor: @unchecked Sendable {
     private func drawClickEffects(
         _ layers: [ClickEffectLayer], viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
+        guard !layers.isEmpty else { return }
+        encoder.setRenderPipelineState(clickEffectPipeline)
         for layer in layers {
             guard layer.opacity > 0, layer.opacity.isFinite, layer.radius > 0, layer.radius.isFinite, layer.center.x.isFinite,
                   layer.center.y.isFinite
@@ -312,7 +314,6 @@ public final class Compositor: @unchecked Sendable {
                 center: SIMD2<Float>(layer.center), radius: Float(layer.radius), thickness: Float(thickness),
                 opacity: Float(min(layer.opacity, 1)), outline: Float(min(ClickEffects.outlineOpacity(of: layer), 1)),
                 ring: ring ? 1 : 0)
-            encoder.setRenderPipelineState(clickEffectPipeline)
             encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ClickEffectUniforms>.stride, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
