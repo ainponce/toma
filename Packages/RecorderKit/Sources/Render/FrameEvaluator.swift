@@ -10,7 +10,8 @@ import ProjectFormat
 /// background. The legacy document (`EditDocument.legacy`) is one clip at 1× over `TakeTimeline.bounds`, so it shows
 /// what phase 0 and 1a show at every time before the end, with the same arithmetic.
 ///
-/// - Background: the document's `gradient` (any other background draws the classic one, until the render has it).
+/// - Background: the document's gradient, colour or wallpaper (`WallpaperPreset`). A wallpaper this version does not
+///   know, an image and the desktop draw the classic gradient (`Background.tomaClassic`) until the render has them.
 /// - Screen: the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before the
 ///   source instant (it jumps); none without one, or for a track the take does not have. What is shown of it, and
 ///   where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, with the
@@ -39,7 +40,9 @@ public struct FrameEvaluator: Sendable {
 
     private let takeID: String
     private let outputSize: SIMD2<Int>
-    private let gradient: (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float)
+    private let background: BackgroundLayer
+    /// The gradient of a `.gradient` background; the classic one with any other.
+    private let gradient: Gradient
     /// The screen track of the take at its start, and from each of its changes on (in time order).
     private let initialScreen: String?
     private let screenChanges: [(t: HostTime, track: String)]
@@ -63,7 +66,7 @@ public struct FrameEvaluator: Sendable {
         duration = timeMap.durationSeconds
         takeID = take.id
         self.outputSize = outputSize
-        gradient = Self.gradient(of: document.style.background)
+        (background, gradient) = Self.background(of: document.style.background)
         let ordered = events.sortedByTime()
         let placement = OutputPlacement(sequence: document.sequence, timeMap: timeMap, take: take.id)
 
@@ -113,7 +116,8 @@ public struct FrameEvaluator: Sendable {
 
     public func frame(at outputTime: Double) -> RenderFrame {
         var frame = RenderFrame(
-            outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle)
+            outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle,
+            background: background)
         let τ = TimeMap.outputNanoseconds(seconds: outputTime)
         guard let shown = timeMap.source(atOutput: τ), document.sequence[shown.clip].take == takeID else { return frame }
         let source = shown.source
@@ -133,11 +137,24 @@ public struct FrameEvaluator: Sendable {
         return frame
     }
 
-    /// The gradient of `background`, as the shader takes it; the classic one for a background that is not a gradient.
-    private static func gradient(of background: Background) -> (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float) {
-        guard case let .gradient(start, end, angle) = background else { return gradient(of: .tomaClassic) }
+    /// A gradient as the shader takes it.
+    private typealias Gradient = (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float)
+
+    /// What the compositor draws for `background`, and the gradient it draws with `.gradient`: that of a gradient, the
+    /// classic one otherwise. An unknown wallpaper, an image and the desktop are the classic gradient.
+    private static func background(of background: Background) -> (layer: BackgroundLayer, gradient: Gradient) {
         func floats(_ color: RGBA) -> SIMD4<Float> { SIMD4(Float(color.r), Float(color.g), Float(color.b), Float(color.a)) }
-        return (floats(start), floats(end), Float(angle))
+        func classic() -> Gradient { Self.background(of: .tomaClassic).gradient }
+        switch background {
+        case let .gradient(start, end, angle):
+            return (.gradient, (floats(start), floats(end), Float(angle)))
+        case let .color(color):
+            return (.color(floats(color)), classic())
+        case let .wallpaper(id):
+            return (WallpaperPreset.preset(id: id).map(BackgroundLayer.wallpaper) ?? .gradient, classic())
+        case .image, .desktop:
+            return (.gradient, classic())
+        }
     }
 
     /// The screen track shown at `source`: the last change at or before it, or the initial one.
