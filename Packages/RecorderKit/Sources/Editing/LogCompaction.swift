@@ -3,11 +3,12 @@ import Foundation
 import ProjectFormat
 
 /// The compaction of `edit-log.jsonl` (design §6.5): a shorter log that replays to the same document, with the same undo
-/// and redo stacks and the same last `seq`. It only computes the lines; the session writes them (a temporary file,
-/// `F_FULLFSYNC`, `rename(2)` and a sync of the folder) after the snapshot of the current state, and only while no
-/// `EditJournal` has the log open: at opening, after reading and replaying it and before opening the journal; at
-/// closing, after the journal closed with every line on disk. A `rename` over a log the journal holds would leave its
-/// `O_APPEND` descriptor on the old file, by then without a name, and every later line would go to a file that is gone.
+/// and redo stacks and the same last `seq`. It only computes the lines; the session writes them after the snapshot of
+/// the current state, through the journal that holds the log: `EditJournal.replaceLog(with:)` takes its turn after every
+/// line appended before it, refuses while one of them is not on disk, puts the new log in place (a temporary file,
+/// `F_FULLFSYNC`, `renameat` and a sync of the folder) and goes on appending to it. Nothing else renames a log over one
+/// a journal holds: its `O_APPEND` descriptor would stay on the old file, by then without a name (the journal notices
+/// and confirms no later line, but they stay in memory and the state stays `.failing`).
 public enum LogCompaction {
     public static let maxBytes = 8 * 1_048_576
     public static let maxEntries = 20_000
