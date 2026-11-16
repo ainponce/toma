@@ -17,7 +17,8 @@ public struct RenderFrame: Equatable, Sendable {
     public var cursor: CursorLayer?
     /// `nil` when the take has no camera, and before its first frame.
     public var camera: CameraLayer?
-    /// What is drawn behind everything: the gradient above (today's), a colour or a wallpaper.
+    /// What is drawn behind everything: the gradient above (today's), a colour, a wallpaper or an image (with the
+    /// gradient above, Toma classic, when it cannot be read).
     public var background: BackgroundLayer
 
     public init(

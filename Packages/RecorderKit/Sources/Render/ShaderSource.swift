@@ -142,6 +142,58 @@ public enum ShaderSource {
         return float4(saturate(sum / total + grain), 1.0);
     }
 
+    // A background image (`BackgroundImages`), over the whole target: its texture is the stage's size, the image
+    // already covering it and blurred, so the output pixel reads the texel of the stage point under it. The stage point
+    // is the output pixel until something transforms the stage.
+    fragment float4 backgroundImageFragment(GradientOut in [[stage_in]],
+                                            constant float2 &stageSize [[buffer(0)]],
+                                            texture2d<float> image [[texture(0)]],
+                                            sampler linearSampler [[sampler(0)]]) {
+        float2 stage = in.position.xy;
+        return float4(image.sample(linearSampler, stage / stageSize).rgb, 1.0);
+    }
+
+    struct CoverUniforms {
+        float2 targetSize;   // the target, in pixels
+        float2 uvOrigin;     // texture coordinates at the target's top-left corner
+        float2 uvSize;       // texture coordinates across the target
+        float2 padding;
+    };
+
+    // An image covering the whole target (`BackgroundImages`): the part uvOrigin...uvOrigin + uvSize of it, trilinear
+    // from its mipmaps, so an image larger than the target is reduced without aliasing. Opaque.
+    fragment float4 coverFragment(GradientOut in [[stage_in]],
+                                  constant CoverUniforms &u [[buffer(0)]],
+                                  texture2d<float> image [[texture(0)]],
+                                  sampler mipSampler [[sampler(0)]]) {
+        float2 uv = u.uvOrigin + in.position.xy / u.targetSize * u.uvSize;
+        return float4(image.sample(mipSampler, uv).rgb, 1.0);
+    }
+
+    struct BlurUniforms {
+        float2 direction;   // one texel along the pass: (1, 0) or (0, 1)
+        float sigma;        // in texels, > 0
+        int radius;         // texels read on each side of the pixel's own: ceil(3σ)
+    };
+
+    // One pass of a separable Gaussian blur of σ texels (`BackgroundImages`, where Metal Performance Shaders cannot run),
+    // from a source the target's size. A texel past the edge is the edge's (clamp to edge), so nothing dark comes in
+    // from outside the image; the weights are normalized over the taps read.
+    fragment float4 blurFragment(GradientOut in [[stage_in]],
+                                 constant BlurUniforms &u [[buffer(0)]],
+                                 texture2d<float> source [[texture(0)]]) {
+        constexpr sampler edge(coord::pixel, address::clamp_to_edge, filter::nearest);
+        float2 centre = in.position.xy;
+        float4 sum = 0.0;
+        float total = 0.0;
+        for (int i = -u.radius; i <= u.radius; i++) {
+            float weight = exp(-float(i * i) / (2.0 * u.sigma * u.sigma));
+            sum += source.sample(edge, centre + u.direction * float(i)) * weight;
+            total += weight;
+        }
+        return sum / total;
+    }
+
     // The cursor sprite, already premultiplied.
     fragment float4 spriteFragment(QuadOut in [[stage_in]],
                                    texture2d<float> sprite [[texture(0)]],

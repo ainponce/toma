@@ -37,7 +37,9 @@ public enum RenderError: Error, Equatable {
 ///
 /// Decoding is synchronous, on the caller's thread: the first frame read from each segment loads its
 /// track and decodes from the keyframe before it, and so does every scrub (a step back, or a jump of
-/// 2 s or more). Reading forward frame by frame only decodes the frames in between.
+/// 2 s or more). Reading forward frame by frame only decodes the frames in between. So is a background image's: the
+/// first frame that shows it decodes it (unless another renderer holds it already) and covers and blurs it, waiting
+/// for the GPU (`BackgroundImages`); the frames after it reuse that.
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
@@ -51,6 +53,8 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The reader of each track read so far, by track ID, made the first time a frame (or `missingVideo`) needs it.
     private let readers = Mutex<[String: TrackFrameReader]>([:])
     private let compositor: Compositor
+    /// The textures of the frames' background images; used with `lock` held.
+    let backgroundImages: BackgroundImages
     private let cursorTexture: any MTLTexture
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
@@ -110,6 +114,7 @@ public final class FrameRenderer: @unchecked Sendable {
         self.commandQueue = commandQueue
         textureCache = cache
         compositor = try Compositor(device: device)
+        backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
         cursorTexture = try CursorSprite.makeTexture(device: device)
         evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: outputSize)
         package = project.package
@@ -127,7 +132,18 @@ public final class FrameRenderer: @unchecked Sendable {
             let frame = evaluator.frame(at: outputTime)
             let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
-            compositor.encode(frame, screen: screen, camera: camera, cursor: cursorTexture, into: target, commandBuffer: commandBuffer)
+            var backgroundImage: (any MTLTexture)?
+            if case let .image(image) = frame.background {
+                backgroundImage = try backgroundImages.texture(for: image, outputSize: outputSize)
+                // Another background may replace it in `backgroundImages` before the GPU is done with this frame.
+                if let backgroundImage {
+                    let kept = KeptTexture(backgroundImage)
+                    commandBuffer.addCompletedHandler { _ in withExtendedLifetime(kept) {} }
+                }
+            }
+            compositor.encode(
+                frame, screen: screen, camera: camera, cursor: cursorTexture, backgroundImage: backgroundImage, into: target,
+                commandBuffer: commandBuffer)
         }
     }
 
@@ -222,6 +238,15 @@ public final class FrameRenderer: @unchecked Sendable {
             throw RenderError.textureCreationFailed(status)
         }
         return CachedTexture(cvTexture: created, pixelBuffer: pixelBuffer, texture: texture)
+    }
+}
+
+/// A texture held until the GPU is done with a frame that draws it.
+private final class KeptTexture: @unchecked Sendable {
+    let texture: any MTLTexture
+
+    init(_ texture: any MTLTexture) {
+        self.texture = texture
     }
 }
 
