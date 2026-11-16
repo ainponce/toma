@@ -23,9 +23,11 @@ public enum JournalState: Equatable, Sendable {
 /// `EventLogIO`). Each throws a `POSIXError`.
 public struct EditJournalIO: Sendable {
     /// Opens the file `name` of the folder `directory` for appending with `O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW |
-    /// O_NONBLOCK | O_CLOEXEC`: never through a symlink (`ELOOP`), and never blocking (a FIFO without a reader gives
-    /// `ENXIO`). Gives the descriptor and whether it created the file.
-    public var open: @Sendable (_ directory: Int32, _ name: String) throws -> (descriptor: Int32, created: Bool)
+    /// O_NONBLOCK | O_CLOEXEC` (without `O_CREAT` when `create` is false: a file that is gone gives `ENOENT`): never
+    /// through a symlink (`ELOOP`), and never blocking (a FIFO without a reader gives `ENXIO`). Gives the descriptor and
+    /// whether it created the file.
+    public var open:
+        @Sendable (_ directory: Int32, _ name: String, _ create: Bool) throws -> (descriptor: Int32, created: Bool)
     /// Writes some of the bytes, retrying `EINTR`, and returns how many it wrote.
     public var write: @Sendable (_ descriptor: Int32, _ bytes: UnsafeRawBufferPointer) throws -> Int
     /// `F_FULLFSYNC`: the file down to the drive's permanent storage.
@@ -36,7 +38,9 @@ public struct EditJournalIO: Sendable {
     public var syncDirectory: @Sendable (_ directory: Int32) throws -> Void
 
     public init(
-        open: @escaping @Sendable (_ directory: Int32, _ name: String) throws -> (descriptor: Int32, created: Bool),
+        open: @escaping @Sendable (
+            _ directory: Int32, _ name: String, _ create: Bool
+        ) throws -> (descriptor: Int32, created: Bool),
         write: @escaping @Sendable (_ descriptor: Int32, _ bytes: UnsafeRawBufferPointer) throws -> Int,
         fullSync: @escaping @Sendable (_ descriptor: Int32) throws -> Void,
         fsync: @escaping @Sendable (_ descriptor: Int32) throws -> Void,
@@ -50,8 +54,13 @@ public struct EditJournalIO: Sendable {
     }
 
     public static let system = EditJournalIO(
-        open: { directory, name in
+        open: { directory, name, create in
             let flags = O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC
+            while !create {
+                let existing = openat(directory, name, flags & ~O_CREAT)
+                if existing >= 0 { return (existing, false) }
+                guard errno == EINTR else { throw POSIXError(.current) }
+            }
             // `O_EXCL` first, to know whether it is a new file; without `O_CREAT` if it is there (the same flags
             // otherwise), and from the top if it went away between the two.
             while true {
@@ -88,12 +97,15 @@ public struct EditJournalIO: Sendable {
 /// meanwhile. A line is confirmed (`flushed()`, `.saved`) only after that sync and, for a log the journal created,
 /// after a sync of its folder, without which a power loss can take the whole file.
 ///
-/// A write or sync that fails keeps the lines in memory, in order, and is retried every `retryInterval`, going on with
-/// a line from the byte where a write stopped, so lines stay whole and none is written twice. After `ENXIO`, `EIO` or
-/// `EBADF` (a volume that was ejected) the descriptor is dead: each retry opens the log again, by its name in the
-/// package folder or, if that folder's descriptor died too, by the folder's last known path, and goes on only if the
-/// file still ends with the bytes of the last line it confirmed (plus any it wrote after it); otherwise it stays
-/// `.failing(.ESTALE)`.
+/// A write or sync that fails keeps the lines in memory, in order, and is retried every `retryInterval`. After a write
+/// that failed, the retry goes on with a line from the byte where the write stopped, so lines stay whole and none is
+/// written twice. After a sync that failed it trusts none of the batch to be on its way to the disk (a failed writeback
+/// can leave its pages clean, and syncing them again would succeed without writing them): it cuts the file back to the
+/// last line confirmed and writes the whole batch again. After `ENXIO`, `EIO` or `EBADF` (a volume that was ejected)
+/// the descriptor is dead: each retry opens the log again, by its name in the package folder or, if that folder's
+/// descriptor died too, by the folder's last known path, and goes on only if the file still ends with the bytes of the
+/// last line it confirmed (plus any it wrote after it); otherwise it stays `.failing(.ESTALE)`. Once a line is
+/// confirmed it opens the log without `O_CREAT`: a log removed meanwhile is `.failing(.ENOENT)`, not a new empty file.
 ///
 /// Everything goes through the descriptor of the package folder, so a package that is renamed or moved in the Finder
 /// while open keeps receiving its lines. After each sync the journal checks that the log's name in that folder is still
@@ -167,6 +179,10 @@ public final class EditJournal: Sendable {
         /// A new file, or one renamed into place, whose entry in the folder is not synced yet: nothing is confirmed
         /// until it is.
         var needsDirectorySync: Bool
+        /// A sync failed after the batch was written: the bytes the kernel holds for it may never reach the disk, and a
+        /// later sync could succeed without writing them (a failed writeback can leave the pages clean). The next
+        /// attempt cuts the file back to `confirmedSize` and writes the whole batch again.
+        var mustRewrite = false
         var retryPending = false
         var isClosed = false
     }
@@ -186,7 +202,7 @@ public final class EditJournal: Sendable {
         let size: off_t
         let tail: [UInt8]
         do {
-            (descriptor, created) = try Self.openLog(name, in: directory, io: io)
+            (descriptor, created) = try Self.openLog(name, in: directory, create: true, io: io)
             do {
                 (size, tail) = try Self.lastLine(of: descriptor, named: name, in: directory)
                 guard size == 0 || tail.last == newline else { throw POSIXError(.EILSEQ) }
@@ -226,13 +242,13 @@ public final class EditJournal: Sendable {
         shared.withLock { $0.handler = handler }
     }
 
-    /// Adds `line` (one line of the log, without its line break) to what goes to disk next, and returns at once. Does
-    /// nothing after `close()`.
-    public func append(_ line: String) {
+    /// Adds `line` (one line of the log, without its line break) to what goes to disk next, and returns at once.
+    /// Throws `EBADF` after `close()`, when nothing would write the line any more.
+    public func append(_ line: String) throws {
         var bytes = Array(line.utf8)
         bytes.append(newline)
-        let schedules = shared.withLock { shared -> Bool in
-            guard !shared.isClosed else { return false }
+        let outcome = shared.withLock { shared -> Bool? in
+            guard !shared.isClosed else { return nil }
             shared.items.append(.line(bytes))
             shared.appended += 1
             // While failing, the line waits for the next retry, and the state stays what keeps it from the disk.
@@ -242,6 +258,7 @@ public final class EditJournal: Sendable {
             shared.isDraining = true
             return true
         }
+        guard let schedules = outcome else { throw POSIXError(.EBADF) }
         if schedules {
             queue.async { self.drain() }
         }
@@ -296,7 +313,7 @@ public final class EditJournal: Sendable {
     }
 
     /// Makes one last attempt to put every line on disk, without waiting for the retry interval, and closes the log.
-    /// Later calls to `append` do nothing. A line that is still not on disk is lost with the journal, and not in
+    /// Later calls to `append` throw `EBADF`. A line that is still not on disk is lost with the journal, and not in
     /// silence: the state stays `.failing`. Sudden termination is enabled again: nothing can save that line any more,
     /// and the session asks before closing with lines that are not saved (design §5.9).
     nonisolated(nonsending) public func close() async {
@@ -415,17 +432,26 @@ public final class EditJournal: Sendable {
     private func attempt(_ file: inout FileSide) -> POSIXErrorCode? {
         if file.descriptor == nil, let code = reopen(&file) { return code }
         guard let descriptor = file.descriptor else { return .EBADF }
+        if file.mustRewrite {
+            guard ftruncate(descriptor, file.confirmedSize) == 0 else { return died(.current, &file) }
+            file.written = 0
+            file.mustRewrite = false
+        }
         // A write cut short goes on from where it stopped next time.
         if let code = write(file.batch, from: &file.written, to: descriptor) { return died(code, &file) }
         if file.needsDirectorySync {
             do {
                 try io.syncDirectory(file.directory)
             } catch {
+                file.mustRewrite = true
                 return died(Self.code(error), &file)
             }
             file.needsDirectorySync = false
         }
-        if let code = sync(descriptor) { return died(code, &file) }
+        if let code = sync(descriptor) {
+            file.mustRewrite = true
+            return died(code, &file)
+        }
         if let code = Self.stillNamed(descriptor, name, in: file.directory) {
             closeDescriptor(&file)
             return code
@@ -491,7 +517,8 @@ public final class EditJournal: Sendable {
         }
         let opened: (descriptor: Int32, created: Bool)
         do {
-            opened = try Self.openLog(name, in: directory, io: io)
+            // Once a line is confirmed, a log that is gone is an error, not a new empty file.
+            opened = try Self.openLog(name, in: directory, create: file.confirmedSize == 0, io: io)
         } catch {
             if directory != file.directory { Darwin.close(directory) }
             return Self.code(error)
@@ -512,22 +539,24 @@ public final class EditJournal: Sendable {
 
     /// Whether the file `descriptor` opened in `directory` ends with the last line confirmed and then some of the
     /// batch, as the file the journal was writing does after an error: it goes on from where that file ends. `ESTALE`
-    /// if not.
+    /// if not. After a failed sync (`mustRewrite`) what follows the last line confirmed is not checked: it is cut and
+    /// written again.
     private func verify(_ descriptor: Int32, in directory: Int32, _ file: inout FileSide) -> POSIXErrorCode? {
         var info = stat()
         guard fstat(descriptor, &info) == 0 else { return .current }
         let extra = info.st_size - file.confirmedSize
         guard extra >= 0, extra <= off_t(file.batch.count) else { return .ESTALE }
-        let expected = file.confirmedTail + file.batch[..<Int(extra)]
+        let kept = file.mustRewrite ? 0 : extra
+        let expected = file.confirmedTail + file.batch[..<Int(kept)]
         do {
             let reader = try Self.openForReading(descriptor, named: name, in: directory)
             defer { Darwin.close(reader) }
             let start = file.confirmedSize - off_t(file.confirmedTail.count)
-            guard try Self.read(reader, start..<info.st_size) == expected else { return .ESTALE }
+            guard try Self.read(reader, start..<(file.confirmedSize + kept)) == expected else { return .ESTALE }
         } catch {
             return Self.code(error)
         }
-        file.written = Int(extra)
+        file.written = Int(kept)
         return nil
     }
 
@@ -630,9 +659,9 @@ public final class EditJournal: Sendable {
     /// `io.open`, checked to be a regular file (`EFTYPE` if not), with `O_NONBLOCK` cleared again: it only kept a FIFO
     /// from blocking the open.
     private static func openLog(
-        _ name: String, in directory: Int32, io: EditJournalIO
+        _ name: String, in directory: Int32, create: Bool, io: EditJournalIO
     ) throws -> (descriptor: Int32, created: Bool) {
-        let opened = try io.open(directory, name)
+        let opened = try io.open(directory, name, create)
         var info = stat()
         guard fstat(opened.descriptor, &info) == 0 else {
             let error = POSIXError(.current)

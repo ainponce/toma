@@ -17,6 +17,10 @@ private final class TestIO: Sendable {
 
     struct State {
         var calls: [Call] = []
+        /// Every call of `open`, also those that failed.
+        var openAttempts = 0
+        /// What each write wrote.
+        var written: [Int] = []
         /// The next writes throw these, one each.
         var writeFailures: [POSIXErrorCode] = []
         /// Every write throws this while it is set.
@@ -25,6 +29,11 @@ private final class TestIO: Sendable {
         var halfNextWrite = false
         /// Every full sync throws this.
         var fullSyncError: POSIXErrorCode?
+        /// The next full syncs throw these, one each.
+        var fullSyncFailures: [POSIXErrorCode] = []
+        /// Asked at each full sync, before it syncs; its answers go to `statesAtFullSync`.
+        var stateProbe: (@Sendable () -> JournalState?)?
+        var statesAtFullSync: [JournalState] = []
         /// The next folder syncs throw these, one each.
         var directorySyncFailures: [POSIXErrorCode] = []
         /// The first full sync waits for it.
@@ -38,16 +47,15 @@ private final class TestIO: Sendable {
 
     func count(_ call: Call) -> Int { state.withLock { $0.calls.filter { $0 == call }.count } }
 
-    var opens: Int {
-        state.withLock { $0.calls.filter { if case .open = $0 { true } else { false } }.count }
-    }
+    var opens: Int { state.withLock { $0.openAttempts } }
 
     var calls: [Call] { state.withLock { $0.calls } }
 
     var io: EditJournalIO {
         EditJournalIO(
-            open: { [self] directory, name in
-                let opened = try EditJournalIO.system.open(directory, name)
+            open: { [self] directory, name, create in
+                state.withLock { $0.openAttempts += 1 }
+                let opened = try EditJournalIO.system.open(directory, name, create)
                 state.withLock { $0.calls.append(.open(created: opened.created)) }
                 return opened
             },
@@ -88,16 +96,23 @@ private final class TestIO: Sendable {
         case .half:
             let half = UnsafeRawBufferPointer(rebasing: bytes.prefix(bytes.count / 2))
             return try EditJournalIO.system.write(descriptor, half)
-        case .normal: return try EditJournalIO.system.write(descriptor, bytes)
+        case .normal:
+            let count = try EditJournalIO.system.write(descriptor, bytes)
+            state.withLock { $0.written.append(count) }
+            return count
         }
     }
 
     private func fullSync(_ descriptor: Int32) throws {
+        let probe = state.withLock { $0.stateProbe }
+        let now = probe?()
         let (gate, delay, failure) = state.withLock { state in
             let first = !state.calls.contains(.fullSync)
             state.calls.append(.fullSync)
             state.isSyncing = true
-            return (first ? state.firstFullSyncGate : nil, first ? state.firstFullSyncDelay : nil, state.fullSyncError)
+            if let now { state.statesAtFullSync.append(now) }
+            let failure = state.fullSyncFailures.isEmpty ? state.fullSyncError : state.fullSyncFailures.removeFirst()
+            return (first ? state.firstFullSyncGate : nil, first ? state.firstFullSyncDelay : nil, failure)
         }
         defer { state.withLock { $0.isSyncing = false } }
         gate?.wait()
@@ -148,7 +163,7 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         io.state.withLock { $0.firstFullSyncGate = gate }
         let journal = try EditJournal(logURL: url, io: io.io)
         let lines = (1...5).map(line)
-        for line in lines { journal.append(line) }
+        for line in lines { try journal.append(line) }
         gate.signal()
         #expect(await journal.flushed() == 5)
         #expect(io.count(.fullSync) <= 2)
@@ -164,10 +179,10 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         io.state.withLock { $0.firstFullSyncDelay = .seconds(1) }
         let journal = try EditJournal(logURL: logURL(in: directory), io: io.io)
         let clock = ContinuousClock()
-        let first = clock.measure { journal.append(line(1)) }
+        let first = try clock.measure { try journal.append(line(1)) }
         #expect(await eventually { io.state.withLock { $0.isSyncing } })
         // While the journal is in the middle of a sync of a second.
-        let second = clock.measure { journal.append(line(2)) }
+        let second = try clock.measure { try journal.append(line(2)) }
         #expect(first < .milliseconds(10))
         #expect(second < .milliseconds(10))
         #expect(journal.state == .pending(2))
@@ -187,13 +202,13 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         let recorder = StateRecorder()
         recorder.listen(to: journal)
         let lines = (1...5).map(line)
-        for line in lines { journal.append(line) }
+        for line in lines { try journal.append(line) }
         #expect(await eventually { journal.state == .saved })
         #expect(await eventually { recorder.states.last == .saved })
         let states = recorder.states
         let failing = try #require(states.firstIndex(of: .failing(.ENOSPC)))
         #expect(states[failing...].contains(.saved))
-        #expect(io.count(.write) >= 3)
+        #expect(io.count(.write) == 3)
         #expect(try contents(url) == text(lines))
         #expect(await journal.flushed() == 5)
         await journal.close()
@@ -212,7 +227,7 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         let recorder = StateRecorder()
         recorder.listen(to: journal)
         let whole = #"{"line":1,"padding":"\#(String(repeating: "x", count: 101))"}"#
-        journal.append(whole)
+        try journal.append(whole)
         #expect(await eventually { journal.state == .saved })
         #expect(await eventually { recorder.states == [.pending(1), .failing(.ENOSPC), .saved] })
         #expect(try contents(url) == text([whole]))
@@ -229,10 +244,10 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
             let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
             let recorder = StateRecorder()
             recorder.listen(to: journal)
-            journal.append(line(1))
+            try journal.append(line(1))
             #expect(await journal.flushed() == 1)
             io.state.withLock { $0.writeFailures = [code] }
-            journal.append(line(2))
+            try journal.append(line(2))
             // The attempt failed: the line is in memory, not on disk.
             #expect(await journal.flushed() == 1)
             #expect(await eventually { journal.state == .saved })
@@ -260,10 +275,10 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
             let url = logURL(in: directory)
             let io = TestIO()
             let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
-            journal.append(line(1))
+            try journal.append(line(1))
             #expect(await journal.flushed() == 1)
             io.state.withLock { $0.failingWrites = .EIO }
-            journal.append(line(2))
+            try journal.append(line(2))
             #expect(await journal.flushed() == 1)
             try damage(url)
             let damaged = try contents(url)
@@ -287,7 +302,7 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         let url = logURL(in: directory)
         let io = TestIO()
         let journal = try EditJournal(logURL: url, io: io.io)
-        journal.append(line(1))
+        try journal.append(line(1))
         #expect(await journal.flushed() == 1)
         await journal.close()
         let calls = io.calls
@@ -299,7 +314,7 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         // A log that was there: its folder is not synced.
         let again = TestIO()
         let reopened = try EditJournal(logURL: url, io: again.io)
-        reopened.append(line(2))
+        try reopened.append(line(2))
         #expect(await reopened.flushed() == 1)
         await reopened.close()
         #expect(again.calls.first == .open(created: false))
@@ -313,7 +328,7 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         let io = TestIO()
         io.state.withLock { $0.directorySyncFailures = [.EIO] }
         let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
-        journal.append(line(1))
+        try journal.append(line(1))
         #expect(await journal.flushed() == 0)
         #expect(await eventually { journal.state == .saved })
         #expect(io.count(.syncDirectory) == 2)
@@ -364,7 +379,7 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
             let io = TestIO()
             io.state.withLock { $0.fullSyncError = code }
             let journal = try EditJournal(logURL: url, io: io.io)
-            journal.append(line(1))
+            try journal.append(line(1))
             #expect(await journal.flushed() == 1)
             #expect(io.count(.fsync) == 1)
             #expect(journal.state == .saved)
@@ -381,17 +396,17 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
         let io = TestIO()
         let journal = try EditJournal(logURL: logURL(in: package), io: io.io, retryInterval: .milliseconds(20))
-        journal.append(line(1))
+        try journal.append(line(1))
         #expect(await journal.flushed() == 1)
         try FileManager.default.moveItem(at: package, to: moved)
-        journal.append(line(2))
+        try journal.append(line(2))
         #expect(await journal.flushed() == 2)
         #expect(journal.state == .saved)
         #expect(try contents(logURL(in: moved)) == text([line(1), line(2)]))
 
         // Opening the log again after an error follows the moved package too.
         io.state.withLock { $0.writeFailures = [.EIO] }
-        journal.append(line(3))
+        try journal.append(line(3))
         #expect(await eventually { journal.state == .saved })
         #expect(io.opens == 2)
         #expect(try contents(logURL(in: moved)) == text([line(1), line(2), line(3)]))
@@ -400,60 +415,26 @@ private func fileNumber(_ url: URL) throws -> UInt64 {
     }
 }
 
-/// A disk image of the test's own, to eject while the journal has its files open and to mount again where it was.
-private struct EjectableVolume {
-    let image: URL
-    let mountPoint: URL
-
-    init(in directory: URL) throws {
-        image = directory.appending(path: "volume.dmg")
-        mountPoint = directory.appending(path: "volume", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: mountPoint, withIntermediateDirectories: false)
-        try Self.hdiutil(["create", "-size", "10m", "-fs", "APFS", "-volname", "TomaJournalTest", image.path])
-        try mount()
-    }
-
-    func mount() throws { try Self.hdiutil(["attach", "-nobrowse", "-mountpoint", mountPoint.path, image.path]) }
-
-    /// Unmounts it with files open on it, as when a disk is pulled out: their descriptors die.
-    func eject() throws { try Self.hdiutil(["detach", "-force", mountPoint.path]) }
-
-    private static func hdiutil(_ arguments: [String]) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/hdiutil")
-        process.arguments = arguments
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = pipe
-        try process.run()
-        let output = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else {
-            throw TestSupportError.failed("hdiutil \(arguments.joined(separator: " ")): \(output)")
-        }
-    }
-}
-
 @Test func ejectedVolumeComesBackAndTheLogGoesOn() async throws {
     try await withTemporaryDirectory { directory in
-        let volume = try EjectableVolume(in: directory)
-        defer { try? volume.eject() }
-        let package = volume.mountPoint.appending(path: "Project.toma")
+        let disk = try DiskImage.attach(sizeMegabytes: 10, fileSystem: .apfs, in: directory)
+        defer { try? disk.detach(force: true) }
+        let package = disk.mountPoint.appending(path: "Project.toma")
         try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
         let url = logURL(in: package)
         let journal = try EditJournal(logURL: url, retryInterval: .milliseconds(50))
-        journal.append(line(1))
+        try journal.append(line(1))
         #expect(await journal.flushed() == 1)
-        try volume.eject()
-        journal.append(line(2))
+        // Pulled out with the journal's files open: both of its descriptors die.
+        try disk.detach(force: true)
+        try journal.append(line(2))
         #expect(await journal.flushed() == 1)
-        #expect(await eventually { if case .failing = journal.state { true } else { false } })
-        // The retries while it is away find no package at its path, and create nothing there.
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(journal.state != .saved)
+        // A retry while it is away opens the package's path again, where the empty mount point is now: no package
+        // there (`ENOENT`), and nothing is created.
+        #expect(await eventually { journal.state == .failing(.ENOENT) })
         #expect(!FileManager.default.fileExists(atPath: package.path))
-        // Both descriptors died with the volume: the log is opened again by the package's path once it is back.
-        try volume.mount()
+        // Once it is back, the log is opened again by the package's path.
+        try disk.reattach()
         #expect(await eventually { journal.state == .saved })
         #expect(await journal.flushed() == 2)
         await journal.close()
@@ -477,14 +458,14 @@ private func padding(_ seq: Int, group: Int, _ before: Double, _ after: Double) 
         try Data(text(try read.map { try $0.jsonLine() }).utf8).write(to: url)
         let journal = try EditJournal(logURL: url)
         let appended = [try padding(3, group: 2, 0.1, 0.12), .undo(seq: 4, group: 2), .redo(seq: 5, group: 2)]
-        for entry in appended { journal.append(try entry.jsonLine()) }
+        for entry in appended { try journal.append(entry.jsonLine()) }
         let compacted = LogCompaction.compact(read + appended)
         #expect(compacted.count < read.count + appended.count)
         let before = try fileNumber(url)
         try await journal.replaceLog(with: try compacted.map { try $0.jsonLine() })
         #expect(try fileNumber(url) != before)
         let later = [try padding(6, group: 6, 0.12, 0.2), .undo(seq: 7, group: 6)]
-        for entry in later { journal.append(try entry.jsonLine()) }
+        for entry in later { try journal.append(entry.jsonLine()) }
         #expect(await journal.flushed() == 5)
         #expect(journal.state == .saved)
         await journal.close()
@@ -507,10 +488,10 @@ private func padding(_ seq: Int, group: Int, _ before: Double, _ after: Double) 
         let url = logURL(in: directory)
         let io = TestIO()
         let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
-        journal.append(line(1))
+        try journal.append(line(1))
         #expect(await journal.flushed() == 1)
         io.state.withLock { $0.failingWrites = .ENOSPC }
-        journal.append(line(2))
+        try journal.append(line(2))
         let onDisk = try Data(contentsOf: url)
         // Before or after its attempt failed: either way the log is not replaced while a line waits.
         await #expect(throws: POSIXError(.ENOSPC)) { try await journal.replaceLog(with: [line(9)]) }
@@ -523,7 +504,7 @@ private func padding(_ seq: Int, group: Int, _ before: Double, _ after: Double) 
         io.state.withLock { $0.writeFailures = [.ENOSPC] }
         await #expect(throws: POSIXError(.ENOSPC)) { try await journal.replaceLog(with: [line(9)]) }
         #expect(!FileManager.default.fileExists(atPath: url.path + ".tmp"))
-        journal.append(line(3))
+        try journal.append(line(3))
         #expect(await journal.flushed() == 3)
         #expect(try contents(url) == text([line(1), line(2), line(3)]))
         await journal.close()
@@ -534,13 +515,14 @@ private func padding(_ seq: Int, group: Int, _ before: Double, _ after: Double) 
 @Test func aLogReplacedUnderTheJournalIsNeverConfirmed() async throws {
     try await withTemporaryDirectory { directory in
         let url = logURL(in: directory)
-        let journal = try EditJournal(logURL: url, retryInterval: .milliseconds(20))
-        journal.append(line(1))
+        let io = TestIO()
+        let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
+        try journal.append(line(1))
         #expect(await journal.flushed() == 1)
 
         // The same bytes renamed over the log: the journal finds its last line there and follows the new file.
         try DurableFile.writeAtomically(try Data(contentsOf: url), to: url)
-        journal.append(line(2))
+        try journal.append(line(2))
         #expect(await eventually { journal.state == .saved })
         #expect(await journal.flushed() == 2)
         #expect(try contents(url) == text([line(1), line(2)]))
@@ -549,15 +531,75 @@ private func padding(_ seq: Int, group: Int, _ before: Double, _ after: Double) 
         // that lost its name, nor written blind after the new one.
         let other = text([#"{"other":1}"#])
         try DurableFile.writeAtomically(Data(other.utf8), to: url)
-        journal.append(line(3))
+        try journal.append(line(3))
         #expect(await journal.flushed() == 2)
         #expect(await eventually { journal.state == .failing(.ESTALE) })
-        try await Task.sleep(for: .milliseconds(100))
+        let opens = io.opens
+        #expect(await eventually { io.opens >= opens + 3 })
         #expect(journal.state == .failing(.ESTALE))
         #expect(await journal.flushed() == 2)
         #expect(try contents(url) == other)
         await journal.close()
         #expect(journal.state == .failing(.ESTALE))
+        // After closing, an edit is refused out loud rather than dropped.
+        #expect(throws: POSIXError(.EBADF)) { try journal.append(line(4)) }
+    }
+}
+
+@Test func failedSyncRewritesTheBatch() async throws {
+    // A sync that failed can leave the batch's pages clean, and syncing them again would succeed with nothing written:
+    // the retry cuts the file back to the last line confirmed and writes the whole batch again before it syncs.
+    for code in [POSIXErrorCode.EIO, .ENOSPC] {
+        try await withTemporaryDirectory { directory in
+            let url = logURL(in: directory)
+            let io = TestIO()
+            let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
+            io.state.withLock { $0.stateProbe = { [weak journal] in journal?.state } }
+            let recorder = StateRecorder()
+            recorder.listen(to: journal)
+            try journal.append(line(1))
+            #expect(await journal.flushed() == 1)
+            io.state.withLock { state in
+                state.calls = []
+                state.written = []
+                state.statesAtFullSync = []
+                state.fullSyncFailures = [code]
+            }
+            try journal.append(line(2))
+            #expect(await eventually { journal.state == .saved })
+            let calls = io.calls
+            let syncs = calls.indices.filter { calls[$0] == .fullSync }
+            try #require(syncs.count == 2)
+            #expect(calls[syncs[0]..<syncs[1]].contains(.write))
+            let batch = text([line(2)]).utf8.count
+            #expect(io.state.withLock { $0.written } == [batch, batch])
+            // `.saved` came after the second sync, not from the first.
+            #expect(io.state.withLock { $0.statesAtFullSync } == [.pending(1), .failing(code)])
+            #expect(await eventually { recorder.states.count == 5 })
+            #expect(recorder.states == [.pending(1), .saved, .pending(1), .failing(code), .saved])
+            #expect(try contents(url) == text([line(1), line(2)]))
+            await journal.close()
+        }
+    }
+}
+
+@Test func deletedLogIsAnErrorNotANewEmptyFile() async throws {
+    try await withTemporaryDirectory { directory in
+        let url = logURL(in: directory)
+        let io = TestIO()
+        let journal = try EditJournal(logURL: url, io: io.io, retryInterval: .milliseconds(20))
+        try journal.append(line(1))
+        #expect(await journal.flushed() == 1)
+        try FileManager.default.removeItem(at: url)
+        try journal.append(line(2))
+        // The line went to the file that lost its name: not confirmed, and each retry finds no log.
+        #expect(await eventually { journal.state == .failing(.ENOENT) })
+        let opens = io.opens
+        #expect(await eventually { io.opens >= opens + 3 })
+        #expect(journal.state == .failing(.ENOENT))
+        #expect(!FileManager.default.fileExists(atPath: url.path))
+        #expect(await journal.flushed() == 1)
+        await journal.close()
     }
 }
 
@@ -575,7 +617,7 @@ private func padding(_ seq: Int, group: Int, _ before: Double, _ after: Double) 
         for (index, line) in lines.enumerated() {
             let failure: POSIXErrorCode? = index % 4 == 1 ? .ENOSPC : index % 4 == 3 ? .EIO : nil
             if let failure { io.state.withLock { $0.writeFailures = [failure] } }
-            journal.append(line)
+            try journal.append(line)
             expected.append(.pending(1))
             if let failure { expected.append(.failing(failure)) }
             expected.append(.saved)
