@@ -11,10 +11,11 @@ import ProjectFormat
 /// what phase 0 and 1a show at every time before the end, with the same arithmetic.
 ///
 /// - Background: the document's gradient, colour, wallpaper (`WallpaperPreset`), image or desktop picture
-///   (`BackgroundImage`, blurred by σ = `backgroundBlur` × 0.04 × the output width, with `backgroundBlur` clamped to
-///   0...1). The desktop is the photo of the display of `screens.initial`, the first screen shown, as the take started;
-///   a window has none. A wallpaper this version does not know, and a desktop without a display, draw the classic
-///   gradient (`Background.tomaClassic`), as an image does that is missing or unreadable (`Compositor`).
+///   (`BackgroundImage`); a wallpaper, an image and the desktop are blurred by σ = `backgroundBlur` × 0.04 × the output
+///   width, with `backgroundBlur` clamped to 0...1. The desktop is the photo of the display of `screens.initial`, the
+///   first screen shown, as the take started; a window has none. A wallpaper this version does not know, and a desktop
+///   without a display, draw the classic gradient (`Background.tomaClassic`), as an image does that is missing or
+///   unreadable (`Compositor`).
 /// - Screen: the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before the
 ///   source instant (it jumps); none without one, or for a track the take does not have. What is shown of it, and
 ///   where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, with the
@@ -154,17 +155,16 @@ public struct FrameEvaluator: Sendable {
             guard case let .gradient(start, end, angle) = Background.tomaClassic else { preconditionFailure("Toma classic is a gradient") }
             return (floats(start), floats(end), Float(angle))
         }
-        func image(_ source: BackgroundImage.Source) -> BackgroundLayer {
-            let blur = style.backgroundBlur.isNaN ? 0 : min(max(style.backgroundBlur, 0), 1)
-            return .image(BackgroundImage(source: source, blurSigma: blur * 0.04 * Double(outputSize.x)))
-        }
+        let blur = style.backgroundBlur.isNaN ? 0 : min(max(style.backgroundBlur, 0), 1)
+        let sigma = blur * 0.04 * Double(outputSize.x)
+        func image(_ source: BackgroundImage.Source) -> BackgroundLayer { .image(BackgroundImage(source: source, blurSigma: sigma)) }
         switch style.background {
         case let .gradient(start, end, angle):
             return (.gradient, (floats(start), floats(end), Float(angle)))
         case let .color(color):
             return (.color(floats(color)), classic())
         case let .wallpaper(id):
-            return (WallpaperPreset.preset(id: id).map(BackgroundLayer.wallpaper) ?? .gradient, classic())
+            return (WallpaperPreset.preset(id: id).map { .wallpaper($0, blurSigma: sigma) } ?? .gradient, classic())
         case let .image(file):
             return (image(.asset(file)), classic())
         case .desktop:

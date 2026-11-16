@@ -39,7 +39,8 @@ public enum RenderError: Error, Equatable {
 /// track and decodes from the keyframe before it, and so does every scrub (a step back, or a jump of
 /// 2 s or more). Reading forward frame by frame only decodes the frames in between. So is a background image's: the
 /// first frame that shows it decodes it (unless another renderer holds it already) and covers and blurs it, waiting
-/// for the GPU (`BackgroundImages`); the frames after it reuse that.
+/// for the GPU (`BackgroundImages`); the frames after it reuse that. A blurred wallpaper is drawn and blurred the same
+/// way, once.
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
@@ -132,14 +133,14 @@ public final class FrameRenderer: @unchecked Sendable {
             let frame = evaluator.frame(at: outputTime)
             let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
-            var backgroundImage: (any MTLTexture)?
-            if case let .image(image) = frame.background {
+            let backgroundImage: (any MTLTexture)?
+            switch frame.background {
+            case let .image(image):
                 backgroundImage = try backgroundImages.texture(for: image, outputSize: outputSize)
-                // Another background may replace it in `backgroundImages` before the GPU is done with this frame.
-                if let backgroundImage {
-                    let kept = KeptTexture(backgroundImage)
-                    commandBuffer.addCompletedHandler { _ in withExtendedLifetime(kept) {} }
-                }
+            case let .wallpaper(preset, sigma) where sigma.isFinite && sigma > 0:
+                backgroundImage = try backgroundImages.texture(forWallpaper: preset, blurSigma: sigma, outputSize: outputSize)
+            default:
+                backgroundImage = nil
             }
             compositor.encode(
                 frame, screen: screen, camera: camera, cursor: cursorTexture, backgroundImage: backgroundImage, into: target,
@@ -238,15 +239,6 @@ public final class FrameRenderer: @unchecked Sendable {
             throw RenderError.textureCreationFailed(status)
         }
         return CachedTexture(cvTexture: created, pixelBuffer: pixelBuffer, texture: texture)
-    }
-}
-
-/// A texture held until the GPU is done with a frame that draws it.
-private final class KeptTexture: @unchecked Sendable {
-    let texture: any MTLTexture
-
-    init(_ texture: any MTLTexture) {
-        self.texture = texture
     }
 }
 
