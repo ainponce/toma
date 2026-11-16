@@ -24,7 +24,7 @@ final class ExportGate {
 @MainActor
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
-    private let model: EditorModel
+    let model: EditorModel
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
@@ -60,6 +60,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
         super.init(window: window)
+        // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
+        // the content's views ask for it. Its delegate's (`windowWillReturnUndoManager`) is Edit ▸ Undo's.
+        window.delegate = self
 
         let preview = NSHostingController(rootView: EditorPreviewPane(model: model) { [weak self] in self?.togglePanel(nil) })
         preview.sceneBridgingOptions = [.toolbars, .title]
@@ -98,7 +101,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(
             NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height),
             display: false)
-        window.delegate = self
         keepTimelineHeight(EditorLayout.timelineHeight)
         model.window = window
         model.load()

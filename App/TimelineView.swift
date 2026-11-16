@@ -184,7 +184,9 @@ enum TimelineText {
 /// - Scale: from the whole sequence in the width to 600 pt per second; ⌘+ and ⌘− double and halve it with
 ///   `Motion.timelineZoom` around the playhead (or the middle, when it is out of sight), a pinch on the trackpad follows
 ///   the fingers 1:1 without animation, ⌥ and the scroll wheel too, and ⇧Z fits the sequence to the width again. It opens
-///   fitted, and stays fitted as the window or the sequence changes until it is scaled.
+///   at the scale and the scroll the window was left with (its remembered state: `restoredScaleAndScroll`, followed by
+///   `onScaleAndScrollChange`), fitted the first time; fitted, it stays so as the window or the sequence changes until it
+///   is scaled.
 /// - Scrolling: sideways with the trackpad or the wheel, up and down when the rows are taller than the timeline. While
 ///   playing, a page at a time with `Motion.timelineScroll` when the playhead reaches the right edge
 ///   (`TimelineLayout.autoscrollOffset`), unless it was scrolled away by hand, until the playhead is in sight again.
@@ -223,6 +225,11 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     var onSnappingChange: () -> Void = {}
     /// The scale changed (the bar's slider follows it).
     var onScaleChange: () -> Void = {}
+    /// The scale (`nil`: fitted) and the scroll to start from when there is something to show (the window's remembered
+    /// state), read once the area has a width.
+    var restoredScaleAndScroll: () -> (scale: Double?, offset: Double) = { (nil, 0) }
+    /// The scale (`nil`: fitted) or the scroll changed, once they were restored: the window's state remembers them.
+    var onScaleAndScrollChange: (_ scale: Double?, _ offset: Double) -> Void = { _, _ in }
     /// The mouse's editing of the timeline: its drags, hover and menus.
     private(set) lazy var interaction = TimelineInteraction(view: self)
 
@@ -246,6 +253,10 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private(set) var verticalOffset = 0.0
     /// The whole sequence is in the width, and stays so.
     private var fitted = true
+    /// The scale and the scroll are restored (`restoredScaleAndScroll`) at the next layout with something to show.
+    private var needsRestore = true
+    /// The scale and the scroll last given to `onScaleAndScrollChange`.
+    private var reportedScaleAndScroll: (scale: Double?, offset: Double)?
     /// ⌘+, ⌘− or ⇧Z under way: the scale's spring (`Self.springValue(ofScale:)`), the scale it goes to, and the output
     /// time that stays at `anchorX`.
     private var zoomAnimation: (spring: SpringValue, target: Double, anchor: Int64, anchorX: Double)?
@@ -374,6 +385,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         content = nil
         itemsCache = nil
         fitted = true
+        needsRestore = true
+        reportedScaleAndScroll = nil
         stopAnimations()
         makeHeaders()
         needsLayout = true
@@ -437,6 +450,11 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
             (notifiedScale, notifiedFit) = (scale, fit)
             onScaleChange()
         }
+        let now = (scale: fitted ? nil : scale, offset: offset)
+        if !needsRestore, reportedScaleAndScroll.map({ $0.scale != now.scale || $0.offset != now.offset }) ?? true {
+            reportedScaleAndScroll = now
+            onScaleAndScrollChange(now.scale, now.offset)
+        }
     }
 
     func geometry() -> TimelineGeometry? {
@@ -454,6 +472,16 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     /// The scale within its range (fitted while it is), and the scrolls within the content.
     private func keepScaleAndScroll() {
         let fit = TimelineLayout.fitScale(duration: durationSeconds, width: areaWidth)
+        if needsRestore, content != nil, areaWidth > 0 {
+            needsRestore = false
+            let restored = restoredScaleAndScroll()
+            // A scale the window is now wide enough to fit at is fitted.
+            if let restoredScale = restored.scale, restoredScale > fit {
+                (fitted, scale, offset) = (false, restoredScale, restored.offset)
+            } else {
+                (fitted, offset) = (true, 0)
+            }
+        }
         if fitted, zoomAnimation == nil {
             scale = fit
             offset = 0
@@ -1027,6 +1055,11 @@ final class TimelineViewController: NSViewController {
         timeline.onScrub = { [weak model] τ in model?.scrub(toSeconds: Double(τ) / 1e9) }
         timeline.onScrubEnd = { [weak model] in model?.endScrub() }
         timeline.onMute = { [weak self] track, muted in self?.setMuted(track, muted) }
+        timeline.restoredScaleAndScroll = { [weak model] in (model?.timelineScale, model?.timelineOffset ?? 0) }
+        timeline.onScaleAndScrollChange = { [weak model] scale, offset in
+            model?.timelineScale = scale
+            model?.timelineOffset = offset
+        }
         timeline.interaction.model = model
         wireBar()
         followContent()
