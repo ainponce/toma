@@ -18,22 +18,79 @@ tsan:
 crash-test:
 	bash scripts/test-crash-recovery.sh
 
-# The golden files of milestone 1b (plan decision 3): the frames and the mix of v1 and v2 projects without edits,
-# recorded from Task 1's commit before any render change, outside git (their bytes depend on the GPU, the system's
-# Metal compiler and VideoToolbox), with VERSION, the fingerprint of the system that recorded them, next to them.
-GOLDEN ?= build/golden-1b/frames.bin
+# The golden files of milestone 1b (plan decision 3): the frames and the mix of v1 and v2 projects without edits
+# (frames.bin and frames.bin.mix), recorded once from Task 1's commit before any render change, outside git (their bytes
+# depend on the GPU, the system's Metal compiler and VideoToolbox), with VERSION, the fingerprint of the system that
+# recorded them, and COMMIT, the commit they were recorded from. They live in the main checkout (the parent of git's
+# common dir), so every worktree, build/golden-src included, compares against the same files and none records its own.
+GOLDEN_ROOT := $(dir $(shell git rev-parse --path-format=absolute --git-common-dir 2>/dev/null))
+GOLDEN ?= $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-1b/frames.bin
+GOLDEN_FILE = $(abspath $(GOLDEN))
+GOLDEN_DIR = $(patsubst %/,%,$(dir $(GOLDEN_FILE)))
+GOLDEN_SRC = $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-src
 GOLDEN_TESTS = swift test --package-path Packages/RecorderKit --filter 'goldenFramesMatch|goldenMixMatches'
+# Sets $$commit to the commit the golden files were recorded from.
+GOLDEN_COMMIT = commit=$$(cat "$(GOLDEN_DIR)/COMMIT" 2>/dev/null || echo "<Task 1's last commit>")
+# Records them from $$commit, in a worktree of that commit.
+GOLDEN_RECORD_AGAIN = git worktree add '$(GOLDEN_SRC)' $$commit && make -C '$(GOLDEN_SRC)' golden-record GOLDEN='$(GOLDEN_FILE)' \
+	&& git worktree remove '$(GOLDEN_SRC)'
+# Whether both golden tests ran and passed, from the output of GOLDEN_TESTS in file $(1): a filter that matches no test
+# exits with 0 too.
+GOLDEN_RAN = { grep -qF 'goldenFramesMatch() passed' "$(1)" && grep -qF 'goldenMixMatches() passed' "$(1)" \
+	|| { echo "goldenFramesMatch and goldenMixMatches did not both run and pass: nothing was compared" >&2; false; }; }
+
+golden golden-record: SHELL := /bin/bash
 
 golden:
-	@bash scripts/golden-system.sh | cmp -s - "$(dir $(GOLDEN))VERSION" || { \
-		echo "the system changed since the golden files were recorded: record them again from Task 1's commit (git worktree add build/golden-src <sha>, then make golden-record there), never from later code" >&2; \
-		exit 1; }
-	TOMA_GOLDEN_FILE="$(abspath $(GOLDEN))" $(GOLDEN_TESTS)
+	@$(GOLDEN_COMMIT); \
+	if [ ! -f "$(GOLDEN_FILE)" ] || [ ! -f "$(GOLDEN_FILE).mix" ]; then \
+		echo "no golden files at $(GOLDEN_FILE) and $(GOLDEN_FILE).mix: record them from Task 1's commit, never from later code (plan decision 3):" >&2; \
+		echo "  $(GOLDEN_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	if [ ! -f "$(GOLDEN_DIR)/VERSION" ]; then \
+		echo "no $(GOLDEN_DIR)/VERSION, the fingerprint of the system the golden files were recorded on: they cannot be compared without it; record them again from $$commit, never from later code (plan decision 3):" >&2; \
+		echo "  mv '$(GOLDEN_DIR)' '$(GOLDEN_DIR).old' && $(GOLDEN_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	now=$$(mktemp -t toma-golden); \
+	bash scripts/golden-system.sh > "$$now" || { rm -f "$$now"; echo "scripts/golden-system.sh failed: no fingerprint of this system to compare" >&2; exit 1; }; \
+	if ! cmp -s "$(GOLDEN_DIR)/VERSION" "$$now"; then \
+		echo "the system changed since the golden files in $(GOLDEN_DIR) were recorded (< then, > now):" >&2; \
+		diff "$(GOLDEN_DIR)/VERSION" "$$now" >&2; \
+		rm -f "$$now"; \
+		echo "record them again from the commit they were recorded from, $$commit, never from later code (plan decision 3):" >&2; \
+		echo "  mv '$(GOLDEN_DIR)' '$(GOLDEN_DIR).old' && $(GOLDEN_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	rm -f "$$now"
+	@set -o pipefail; log=$$(mktemp -t toma-golden); \
+	TOMA_GOLDEN_FILE="$(GOLDEN_FILE)" $(GOLDEN_TESTS) 2>&1 | tee "$$log" && $(call GOLDEN_RAN,$$log); \
+	status=$$?; rm -f "$$log"; exit $$status
 
+# Records into $(GOLDEN_DIR).partial and moves that into place only once both tests passed and VERSION and COMMIT are
+# written: the golden files are there whole or not at all.
 golden-record:
-	mkdir -p "$(dir $(GOLDEN))"
-	TOMA_GOLDEN_FILE="$(abspath $(GOLDEN))" TOMA_GOLDEN_RECORD=1 $(GOLDEN_TESTS)
-	bash scripts/golden-system.sh > "$(dir $(GOLDEN))VERSION"
+	@$(GOLDEN_COMMIT); \
+	if [ -e "$(GOLDEN_DIR)" ]; then \
+		echo "$(GOLDEN_DIR) is already there: the golden files are recorded once, from Task 1's commit, never over others (plan decision 3)." >&2; \
+		echo "To record them again from the commit they were recorded from ($$commit): mv '$(GOLDEN_DIR)' '$(GOLDEN_DIR).old' && $(GOLDEN_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi
+	@test -z "$$(git status --porcelain)" || { echo "this checkout has uncommitted changes: the golden files are recorded from a commit, which they name in COMMIT" >&2; exit 1; }
+	@set -o pipefail; log=$$(mktemp -t toma-golden); \
+	rm -rf "$(GOLDEN_DIR).partial" && mkdir -p "$(GOLDEN_DIR).partial" && \
+	TOMA_GOLDEN_FILE="$(GOLDEN_DIR).partial/$(notdir $(GOLDEN_FILE))" TOMA_GOLDEN_RECORD=1 $(GOLDEN_TESTS) 2>&1 | tee "$$log" && \
+	$(call GOLDEN_RAN,$$log) && \
+	bash scripts/golden-system.sh > "$(GOLDEN_DIR).partial/VERSION" && git rev-parse HEAD > "$(GOLDEN_DIR).partial/COMMIT" && \
+	test ! -e "$(GOLDEN_DIR)" && mv "$(GOLDEN_DIR).partial" "$(GOLDEN_DIR)"; \
+	status=$$?; rm -f "$$log"; \
+	if [ $$status -eq 0 ]; then \
+		echo "recorded $(GOLDEN_DIR) from $$(cat "$(GOLDEN_DIR)/COMMIT")"; \
+	else \
+		rm -rf "$(GOLDEN_DIR).partial"; echo "nothing recorded in $(GOLDEN_DIR)" >&2; \
+	fi; \
+	exit $$status
 
 # Debug signs with the project's identity when this Mac has it (scripts/create-signing-cert.sh, the owner's keychain),
 # so macOS keeps the app's permissions across rebuilds; without it, ad hoc.
