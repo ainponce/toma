@@ -80,15 +80,20 @@ public struct LibraryUndo: Sendable {
 
     /// The next step to redo (the one `popUndoStep` just moved there) as it was undone: `actions` replace it, in the
     /// order they were done, each as it is now; those that could not be undone are left out. With none left, it is
-    /// forgotten. Nothing happens if there is nothing to redo.
-    public mutating func amendNextRedo(_ actions: [LibraryAction]) {
+    /// forgotten. `stillToUndo`, the actions the undo did not reach (a take started meanwhile), in the order they were
+    /// done, stay the next step to undo. Nothing happens if there is nothing to redo.
+    public mutating func amendNextRedo(_ actions: [LibraryAction], stillToUndo: [LibraryAction] = []) {
+        guard !redoStack.isEmpty else { return }
         Self.amendLast(of: &redoStack, actions)
+        if !stillToUndo.isEmpty { undoStack.append(stillToUndo) }
     }
 
     /// The next step to undo (the one `popRedoStep` just moved there) as it was done again: `actions` replace it, as
-    /// `amendNextRedo` says.
-    public mutating func amendNextUndo(_ actions: [LibraryAction]) {
+    /// `amendNextRedo` says; `stillToRedo`, those it did not reach, stay the next step to redo.
+    public mutating func amendNextUndo(_ actions: [LibraryAction], stillToRedo: [LibraryAction] = []) {
+        guard !undoStack.isEmpty else { return }
         Self.amendLast(of: &undoStack, actions)
+        if !stillToRedo.isEmpty { redoStack.append(stillToRedo) }
     }
 
     public var canUndo: Bool { !undoStack.isEmpty }

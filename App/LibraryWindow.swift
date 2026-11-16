@@ -360,8 +360,7 @@ struct LibraryContentView: View {
             .disabled(model.selection.selected.isEmpty)
             Button(LibraryActions.title(.moveToTrash, items: [])) {
                 guard !LibraryActions.textFieldTakes(#selector(NSResponder.deleteToBeginningOfLine(_:))) else { return }
-                // In the trash a project is deleted only with Eliminar ahora…, after its alert.
-                guard model.section != .trash else { return }
+                // In the trash it reaches nothing: a project is deleted only with Eliminar ahora…, after its alert.
                 model.perform(.moveToTrash, on: model.selection.selected)
             }
             .keyboardShortcut(.delete, modifiers: .command)
@@ -497,9 +496,9 @@ private struct LibraryTrashNoticeView: View {
     var body: some View {
         if let notice = actions.trashNotice {
             HStack(spacing: 12) {
-                Text(verbatim: notice.text)
+                Text(verbatim: notice)
                     .lineLimit(2)
-                if notice.undoes != nil {
+                if actions.trashNoticeUndoes {
                     Button(LibraryActions.undoTitle) { actions.undoTrashNotice() }
                         .buttonStyle(.borderless)
                         .fontWeight(.semibold)

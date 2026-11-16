@@ -12,6 +12,17 @@
         }
       }
     },
+    "%@ (and %lld more)" : {
+      "comment" : "The library's strip: the first failure, and how many more",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@ (y %2$lld más)"
+          }
+        }
+      }
+    },
     "%@ (details: %@)" : {
       "comment" : "A damaged project: its name, and recovery's technical reason",
       "localizations" : {
@@ -1021,6 +1032,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esquinas"
+          }
+        }
+      }
+    },
+    "Couldn't change the format of “%@”: %@" : {
+      "comment" : "The library: the strip after Duplicate As; the copy's name and why its format stayed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo cambiar el formato de «%1$@»: %2$@"
           }
         }
       }
@@ -6009,6 +6031,39 @@
         }
       }
     },
+    "the change couldn't be saved" : {
+      "comment" : "The library: why Duplicate As kept the format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo guardar el cambio"
+          }
+        }
+      }
+    },
+    "the copy can't be edited" : {
+      "comment" : "The library: why Duplicate As kept the format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la copia no se puede editar"
+          }
+        }
+      }
+    },
+    "the copy can't be opened" : {
+      "comment" : "The library: why Duplicate As kept the format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "la copia no se puede abrir"
+          }
+        }
+      }
+    },
     "the disk didn't allow it" : {
       "comment" : "The library: why an action failed",
       "localizations" : {
@@ -6166,6 +6221,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lenta"
+          }
+        }
+      }
+    },
+    "“%@” is in a folder inside the trash: the library doesn't show it." : {
+      "comment" : "The library: a package dropped on it that it does not list",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» está en una carpeta dentro de la papelera: la biblioteca no lo muestra."
+          }
+        }
+      }
+    },
+    "“%@” is in a hidden folder: the library doesn't show it." : {
+      "comment" : "The library: a package dropped on it that it does not list",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» está en una carpeta oculta: la biblioteca no lo muestra."
+          }
+        }
+      }
+    },
+    "“%@” is inside another project: the library doesn't show it." : {
+      "comment" : "The library: a package dropped on it that it does not list",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» está dentro de otro proyecto: la biblioteca no lo muestra."
+          }
+        }
+      }
+    },
+    "“%@” is more than four folders inside the projects folder: the library doesn't show it." : {
+      "comment" : "The library: a package dropped on it that it does not list",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» está a más de cuatro carpetas de la de proyectos: la biblioteca no lo muestra."
           }
         }
       }

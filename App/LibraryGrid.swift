@@ -181,7 +181,7 @@ struct LibraryCard: View {
         .accessibilityLabel(Text(verbatim: LibraryTexts.accessibilityLabel(item)))
         .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : .isButton)
         .accessibilityActions {
-            ForEach(LibraryActions.accessibilityCommands(for: item), id: \.self) { command in
+            ForEach(LibraryActionRules.accessibilityCommands(for: item), id: \.self) { command in
                 Button(LibraryActions.title(command, items: [item])) { model.perform(command, on: [id]) }
             }
         }
@@ -200,13 +200,6 @@ struct LibraryCard: View {
         }
     }
 
-    /// What a button over the thumbnail offers while the pointer is over the card: Restaurar in the trash, Recuperar for a
-    /// take that did not finish saving (design §6.4, §6.6).
-    private var hoverCommand: LibraryCommand? {
-        if item.summary.place == .trash { return .restore }
-        if item.summary.state == .unfinished, item.live != .recording { return .recover }
-        return nil
-    }
 
     /// The thumbnail's frame and what is drawn over it.
     private var frame: some View {
@@ -249,7 +242,7 @@ struct LibraryCard: View {
                 .padding(6)
         }
         .overlay(alignment: .bottomLeading) {
-            if isHovering, model.actions.busy[id] == nil, let command = hoverCommand {
+            if isHovering, let command = LibraryActionRules.hoverCommand(for: item, busy: model.actions.busy[id] != nil) {
                 Button(LibraryActions.title(command, items: [item])) { model.perform(command, on: [id]) }
                     .controlSize(.small)
                     .padding(6)

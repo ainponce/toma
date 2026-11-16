@@ -36,14 +36,23 @@ public struct LibraryChanges: Equatable, Sendable {
     public var status = false
     /// A walk of the projects folder ended.
     public var walkFinished = false
+    /// A card shown from the records (`LibraryCatalog.keep`) whose project the scanner told: what was kept by its
+    /// identity (a favorite, its last opening) goes to the project's.
+    public var replaced: [PackageIdentity: PackageIdentity] = [:]
+    /// The paths of the projects of Other places that are not any more (moved into the projects folder): their entries of
+    /// `places` go, or the records would show them again.
+    public var leftOtherPlaces: [String] = []
 
     public init(
-        projects: Bool = false, thumbnails: Set<PackageIdentity> = [], status: Bool = false, walkFinished: Bool = false
+        projects: Bool = false, thumbnails: Set<PackageIdentity> = [], status: Bool = false, walkFinished: Bool = false,
+        replaced: [PackageIdentity: PackageIdentity] = [:], leftOtherPlaces: [String] = []
     ) {
         self.projects = projects
         self.thumbnails = thumbnails
         self.status = status
         self.walkFinished = walkFinished
+        self.replaced = replaced
+        self.leftOtherPlaces = leftOtherPlaces
     }
 }
 
@@ -86,8 +95,9 @@ public struct LibrarySections: Equatable, Sendable {
 ///   from) stays, since a `.summary` of the same identity may follow (a project moved during a walk).
 /// - `.projectsFolderUnreadable` holds until a walk ends without saying it again (`.finished`); a walk started again
 ///   (`walkStarted()`) does not hide it before it ends.
-/// - A place of `library.json` the index lost is shown from what the records know (`keep`), and a summary of Other
-///   places that the scanner tells at its path takes its place.
+/// - A place of `library.json` the index lost is shown from what the records know (`keep`), and a summary the scanner
+///   tells at its path takes its place (`replaced`), wherever that is now; one of Other places now in the projects
+///   folder says its old path (`leftOtherPlaces`).
 public struct LibraryCatalog: Sendable {
     public private(set) var summaries: [PackageIdentity: ProjectSummary] = [:]
     /// There was no index, and the first walk is still finding projects: "Buscando proyectos… N".
@@ -121,13 +131,17 @@ public struct LibraryCatalog: Sendable {
             switch update {
             case .summary(var summary):
                 guard summary.identity.file != 0 else { continue }
-                if summary.place == .elsewhere, !Self.isFromTheRecords(summary.identity) {
+                if !Self.isFromTheRecords(summary.identity) {
                     // What a place of the records is now, once the scanner looked at it: shown once.
-                    let shownFromTheRecords = summaries.values.filter { Self.isFromTheRecords($0.identity) && $0.path == summary.path }
-                    for stale in shownFromTheRecords { summaries[stale.identity] = nil }
-                    if !shownFromTheRecords.isEmpty { changes.projects = true }
+                    for stale in summaries.values where Self.isFromTheRecords(stale.identity) && stale.path == summary.path {
+                        summaries[stale.identity] = nil
+                        changes.projects = true
+                        changes.replaced[stale.identity] = summary.identity
+                        if stale.place == .elsewhere, summary.place != .elsewhere { changes.leftOtherPlaces.append(stale.path) }
+                    }
                 }
                 let old = summaries[summary.identity]
+                if let old, old.place == .elsewhere, summary.place != .elsewhere { changes.leftOtherPlaces.append(old.path) }
                 if summary.thumbnailKey == nil, let old, Self.sameFiles(old, summary) {
                     summary.thumbnailKey = old.thumbnailKey
                 }

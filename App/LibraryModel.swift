@@ -170,6 +170,8 @@ final class LibraryModel {
     @ObservationIgnored private var watcher: LibraryWatcher?
     @ObservationIgnored private var thumbnails: LibraryThumbnails?
     @ObservationIgnored private var context: EditContext?
+    /// The context being made, for who needs it before it is (`madeContext()`).
+    @ObservationIgnored private var contextTask: Task<EditContext, Never>?
     /// The projects folder's volume, once found; `nil` while it is not there.
     @ObservationIgnored private var projectsVolume: VolumeInfo?
     /// The projects folder's volume was looked for once.
@@ -247,6 +249,7 @@ final class LibraryModel {
         // `LibraryRecordsStore` reads its file as it is made: never on the main thread.
         let store = Task.detached(priority: .userInitiated) { LibraryRecordsStore(url: paths.records) }
         let context = Task.detached(priority: .utility) { Self.makeContext() }
+        contextTask = context
         let volume = Task.detached(priority: .utility) { Self.lookAtVolume(of: paths.projectsFolder, fileSystem) }
         Task {
             let index = await index.value
@@ -518,6 +521,14 @@ final class LibraryModel {
         }
         guard !closed else { return }
         let changes = catalog.apply(updates)
+        if !changes.replaced.isEmpty || !changes.leftOtherPlaces.isEmpty {
+            // What a records-only card kept goes to its project; a place that left Other places is forgotten.
+            let (replaced, left) = (changes.replaced, changes.leftOtherPlaces)
+            var followed = records
+            if followed.follow(replaced: replaced, leftOtherPlaces: left) {
+                changeRecords { $0.follow(replaced: replaced, leftOtherPlaces: left) }
+            }
+        }
         if changes.status { showStatus() }
         if changes.projects {
             refresh()
@@ -814,8 +825,19 @@ extension LibraryModel {
         return { shared.isRecording }
     }
 
-    /// The context documents are read and edited with, once it is made ("Duplicar como"'s first edit).
-    var editContext: EditContext? { context }
+    /// The context documents are read and edited with, waited for if it is still being made ("Duplicar como"'s first
+    /// edit); `nil` once the window closed.
+    func madeContext() async -> EditContext? {
+        if let context { return context }
+        guard let contextTask, !closed else { return nil }
+        let made = await contextTask.value
+        return closed ? nil : made
+    }
+
+    /// Every project of the trash, as Vaciar la papelera… takes them (not only those the search shows).
+    var trashedItems: [LibraryItem] {
+        trashedSummaries.map { LibraryItem(summary: $0, favorite: records.favorites.contains($0.identity.string)) }
+    }
 
     /// Whether an editor of this app has the package at `url` open, as the app last said.
     func isOpenHere(_ url: URL) -> Bool {
@@ -878,7 +900,15 @@ extension LibraryModel {
     /// The project `id` is now at `url`, in `place` (`LibraryCatalog.move`): shown so at once, before the scanner looks
     /// at it again.
     func showMoved(_ id: Library.PackageIdentity, to url: URL, place: Place) {
+        let old = catalog.summaries[id]
         guard catalog.move(id, to: url.standardizedFileURL.path, place: place, now: Date()) else { return }
+        // One of Other places renamed in its folder: its entry follows it.
+        if let old, old.place == .elsewhere, place == .elsewhere, old.path != url.standardizedFileURL.path {
+            let (from, to) = (old.path, url.standardizedFileURL.path)
+            changeRecords { records in
+                for index in records.places.indices where records.places[index].path == from { records.places[index].path = to }
+            }
+        }
         refresh()
         scheduleIndexSave()
     }

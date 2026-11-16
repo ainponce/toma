@@ -119,3 +119,25 @@ private func renamed(_ number: Int) -> LibraryAction {
     #expect(big.popUndoStep() == many)
     #expect(!big.canUndo)
 }
+
+/// An undo or a redo that stopped half way (a take started) keeps what it did not reach where it was.
+@Test func whatAnUndoDidNotReachStays() {
+    var undo = LibraryUndo()
+    undo.record([renamed(1), renamed(2), renamed(3)])
+    _ = undo.popUndoStep()
+    // 3 was undone, then a take started: 1 and 2 are still done.
+    undo.amendNextRedo([renamed(3)], stillToUndo: [renamed(1), renamed(2)])
+    #expect(undo.popUndoStep() == [renamed(1), renamed(2)])
+    #expect(undo.popRedoStep() == [renamed(1), renamed(2)])
+    #expect(undo.popRedoStep() == [renamed(3)])
+
+    var redo = LibraryUndo()
+    redo.record([renamed(1), renamed(2), renamed(3)])
+    _ = redo.popUndoStep()
+    _ = redo.popRedoStep()
+    // 1 was done again, then a take started: 2 and 3 are still undone.
+    redo.amendNextUndo([renamed(1)], stillToRedo: [renamed(2), renamed(3)])
+    #expect(redo.popRedoStep() == [renamed(2), renamed(3)])
+    #expect(redo.popUndoStep() == [renamed(2), renamed(3)])
+    #expect(redo.popUndoStep() == [renamed(1)])
+}

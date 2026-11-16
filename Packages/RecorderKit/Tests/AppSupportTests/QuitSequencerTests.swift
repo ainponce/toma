@@ -180,40 +180,60 @@ import Testing
 
     // MARK: - The library's copies (design §6.8)
 
-    /// Stop new library actions, close the take, then wait for the copies (one the take paused goes on once it is
-    /// closed), then reply: a copy is never left half done.
+    /// Stop new library actions, close the take (a copy does not hold it up: a take pauses a copy without clones), then
+    /// wait for the copies, then reply: a copy is never left half done.
     @Test func aQuitWhileRecordingWaitsForTheCopiesOnceTheTakeIsClosed() async {
         let rig = QuitRig(timeLimit: .never)
         rig.take.close()
-        rig.copies.close()
+        rig.work.beginCopy()
         #expect(rig.sequencer.shouldTerminate(.closeTakeFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
+        #expect(rig.work.isStopped)
         await waitUntil { rig.calls.closeCalls == 1 }
         await settle()
-        #expect(rig.calls.events == ["stop", "close"], "the copies are not waited for before the take is closed")
+        #expect(rig.calls.events == ["close"], "closing the take does not wait for the copy")
 
         rig.take.open()
-        await waitUntil { rig.calls.events.contains("copies") }
+        await waitUntil { rig.calls.closesEnded == 1 }
         await settle()
         #expect(rig.calls.replies.isEmpty, "a copy is under way")
 
-        rig.copies.open()
+        rig.copyEnds()
         await waitUntil { !rig.calls.replies.isEmpty }
         #expect(rig.calls.replies == [true])
-        #expect(rig.calls.events == ["stop", "close", "closed", "copies", "copied", "reply"])
+        #expect(rig.calls.events == ["close", "closed", "copy ended", "close", "closed", "reply"])
     }
 
     @Test func aCopyAloneIsWaitedFor() async {
         let rig = QuitRig(timeLimit: .never)
-        rig.copies.close()
+        rig.work.beginCopy()
         #expect(rig.sequencer.shouldTerminate(.finishCopiesFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
-        await waitUntil { rig.calls.events.contains("copies") }
+        #expect(rig.work.isStopped)
+        await waitUntil { rig.calls.closesEnded == 1 }
         await settle()
         #expect(rig.calls.replies.isEmpty)
 
-        rig.copies.open()
+        rig.copyEnds()
         await waitUntil { !rig.calls.replies.isEmpty }
         #expect(rig.calls.replies == [true])
-        #expect(rig.calls.events == ["stop", "close", "closed", "copies", "copied", "reply"])
+    }
+
+    /// A take started while the copies were waited for (during a copy's last step) is closed before the reply.
+    @Test func aTakeStartedWhileTheCopiesAreWaitedForIsClosedFirst() async {
+        let rig = QuitRig(timeLimit: .never)
+        rig.work.beginCopy()
+        #expect(rig.sequencer.shouldTerminate(.finishCopiesFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
+        await waitUntil { rig.calls.closesEnded == 1 }
+        rig.take.close()  // a take starts, and takes a while to close
+
+        rig.copyEnds()
+        await waitUntil { rig.calls.closeCalls == 2 }
+        await settle()
+        #expect(rig.calls.replies.isEmpty, "the take started meanwhile is still closing")
+
+        rig.take.open()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [true])
+        #expect(rig.calls.closesEnded == 2)
     }
 
     /// The take did not close within the time limit: the quit goes ahead without waiting for a copy it keeps paused (its
@@ -221,12 +241,11 @@ import Testing
     @Test func copiesAreNotWaitedForOnceTheTimeLimitPasses() async {
         let rig = QuitRig(timeLimit: .alreadyPassed)
         rig.take.close()
-        rig.copies.close()
+        rig.work.beginCopy()
         #expect(rig.sequencer.shouldTerminate(.closeTakeFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
         await waitUntil { !rig.calls.replies.isEmpty }
         #expect(rig.calls.replies == [false])
-        #expect(rig.calls.events.first == "stop")
-        #expect(!rig.calls.events.contains("copies"), "the copies were not waited for")
+        #expect(rig.work.isCopying, "the copy was not waited for")
 
         rig.take.open()
         await waitUntil { rig.calls.closesEnded == 1 }
@@ -240,23 +259,53 @@ import Testing
         let rig = QuitRig(timeLimit: .never)
         #expect(rig.sequencer.shouldTerminate(.confirmCancelExport(alsoClosingTake: false)) { false } == .terminateCancel)
         await settle()
-        #expect(rig.calls.events.isEmpty, "the app keeps running: its library too")
+        #expect(!rig.work.isStopped && rig.calls.events.isEmpty, "the app keeps running: its library too")
 
         rig.exports.close()
-        rig.copies.close()
+        rig.work.beginCopy()
         #expect(rig.sequencer.shouldTerminate(.confirmCancelExport(alsoClosingTake: false)) { true } == .terminateLater)
+        #expect(rig.work.isStopped)
         await waitUntil { rig.calls.exportCancels == 1 }
         await settle()
-        #expect(rig.calls.events == ["stop", "cancel"])
+        #expect(rig.calls.events == ["cancel"])
 
         rig.exports.open()
-        await waitUntil { rig.calls.events.contains("copies") }
+        await waitUntil { rig.calls.closesEnded == 1 }
         await settle()
         #expect(rig.calls.replies.isEmpty, "a copy is under way")
 
-        rig.copies.open()
+        rig.copyEnds()
         await waitUntil { !rig.calls.replies.isEmpty }
-        #expect(rig.calls.events == ["stop", "cancel", "close", "closed", "copies", "copied", "reply"])
+        #expect(rig.calls.events == ["cancel", "close", "closed", "copy ended", "close", "closed", "reply"])
+    }
+}
+
+/// The library's copies and its gate (`LibraryWork`).
+@MainActor @Suite struct LibraryWorkTests {
+    @Test func copiesAreCountedAndWaitedFor() async {
+        let work = LibraryWork()
+        #expect(!work.isCopying && !work.isStopped)
+        await work.waitForCopies()  // none: at once
+
+        work.beginCopy()
+        work.beginCopy()
+        var waited = false
+        let waiting = Task {
+            await work.waitForCopies()
+            waited = true
+        }
+        await settle()
+        work.endCopy()
+        await settle()
+        #expect(!waited && work.isCopying, "one copy is still under way")
+        work.endCopy()
+        await waiting.value
+        #expect(waited && !work.isCopying)
+        work.endCopy()
+        #expect(work.copies == 0, "an end without a beginning counts nothing")
+
+        work.stopNewOperations()
+        #expect(work.isStopped)
     }
 }
 
@@ -306,8 +355,8 @@ private enum TimeLimit {
     var exportCancels = 0
     /// `takeClosed` of each reply.
     var replies: [Bool] = []
-    /// What happened, in order: "stop" (new library actions), "cancel" (the exports), "close" and "closed" (the take),
-    /// "copies" and "copied" (the wait for the library's copies), "reply".
+    /// What happened, in order: "cancel" (the exports), "close" and "closed" (the take), "copy ended" (the test ends the
+    /// library's copy), "reply".
     var events: [String] = []
 }
 
@@ -316,14 +365,20 @@ private enum TimeLimit {
 @MainActor private final class QuitRig {
     let take: Gate
     let exports: Gate
-    /// The library's copies, which end once it lets them.
-    let copies: Gate
+    /// The library's copies and gate, the rig's own.
+    let work = LibraryWork()
     let calls: QuitCalls
     let sequencer: QuitSequencer
 
+    /// The library's copy ends.
+    func copyEnds() {
+        calls.events.append("copy ended")
+        work.endCopy()
+    }
+
     init(timeLimit: TimeLimit) {
-        let (take, exports, copies, calls) = (Gate(), Gate(), Gate(), QuitCalls())
-        (self.take, self.exports, self.copies, self.calls) = (take, exports, copies, calls)
+        let (take, exports, calls) = (Gate(), Gate(), QuitCalls())
+        (self.take, self.exports, self.calls) = (take, exports, calls)
         sequencer = QuitSequencer(
             closeTake: {
                 calls.closeCalls += 1
@@ -341,13 +396,7 @@ private enum TimeLimit {
                 calls.replies.append($0)
                 calls.events.append("reply")
             },
-            sleep: timeLimit.sleep,
-            stopLibraryOperations: { calls.events.append("stop") },
-            waitForCopies: {
-                calls.events.append("copies")
-                await copies.pass()
-                calls.events.append("copied")
-            })
+            sleep: timeLimit.sleep, libraryWork: work)
     }
 }
 

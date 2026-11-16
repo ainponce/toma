@@ -127,6 +127,28 @@ public struct LibraryRecords: Codable, Equatable, Sendable {
         return false
     }
 
+    /// What `LibraryChanges` of a catalog say: what was kept by the identity of a card shown from these records
+    /// (`replaced`: a favorite, its last opening) goes to its project's, and the places that are not Other places any
+    /// more (`leftOtherPlaces`) go, or they would be shown again. Whether anything changed.
+    @discardableResult
+    public mutating func follow(replaced: [PackageIdentity: PackageIdentity], leftOtherPlaces: [String]) -> Bool {
+        var changed = false
+        for (old, new) in replaced {
+            if favorites.remove(old.string) != nil {
+                favorites.insert(new.string)
+                changed = true
+            }
+            if let opened = lastOpened.removeValue(forKey: old.string) {
+                lastOpened[new.string] = max(opened, lastOpened[new.string] ?? opened)
+                changed = true
+            }
+        }
+        let left = Set(leftOtherPlaces)
+        let count = places.count
+        places.removeAll { left.contains($0.path) }
+        return changed || places.count != count
+    }
+
     /// The JSON of design §13.4, with `ProjectJSON.encoder()`'s rules and the favorites in order: the same records are
     /// the same bytes.
     public func encoded() throws -> Data {

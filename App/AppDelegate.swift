@@ -52,9 +52,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for editor in Array(editors.values) { await editor.cancelExportAndWait() }
         },
         reply: { _ in NSApp.reply(toApplicationShouldTerminate: true) },
-        sleep: { try await Task.sleep(for: $0, clock: .suspending) },
-        stopLibraryOperations: { LibraryWork.stopNewOperations() },
-        waitForCopies: { await LibraryWork.waitForCopies() })
+        sleep: { try await Task.sleep(for: $0, clock: .suspending) })
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
 
@@ -139,7 +137,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let decision = TerminationDecision.decide(
             isRecording: recording.isRecording || recording.isEndingHooks, isExporting: exportGate.isBusy,
-            isPoweringOff: quit.isPoweringOff, isCopying: LibraryWork.isCopying)
+            isPoweringOff: quit.isPoweringOff, isCopying: LibraryWork.shared.isCopying)
         return quit.shouldTerminate(decision) { confirmCancellingExport() }
     }
 

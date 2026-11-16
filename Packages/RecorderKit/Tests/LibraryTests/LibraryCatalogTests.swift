@@ -82,12 +82,47 @@ private enum Catalog {
             #expect(apply([.summary(unavailable)]).projects)
             #expect(catalog.summaries[identity]?.state == .unavailable(.diskNotConnected("Trabajo")))
         }
-        // A look that finds it: what it is now takes its place, once.
+        // A look that finds it: what it is now takes its place, once, and what was kept by the card's identity (a
+        // favorite set on it) goes to the project's.
         var real = Catalog.summary(8, name: "Demo", place: .elsewhere)
         real.path = demo.path
-        #expect(apply([.summary(real)]).projects)
+        let found = apply([.summary(real)])
+        #expect(found.projects && found.leftOtherPlaces.isEmpty)
+        #expect(identity.map { found.replaced == [$0: real.identity] } == true)
         #expect(catalog.summaries.values.filter { $0.path == demo.path } == [real])
         #expect(catalog.summaries.count == 2)
+
+        // One of Other places the walk finds in the projects folder (moved there in Finder): not one any more, and its
+        // entry of `places` goes, or it would come back from the records.
+        var movedIn = known
+        movedIn.path = "/p/Projects/Known.toma"
+        movedIn.place = .projectsFolder(subfolder: "")
+        #expect(apply([.summary(movedIn)]).leftOtherPlaces == [known.path])
+        // A records-only card whose project is found in the projects folder, at the path the card had followed.
+        var ghost = LibraryCatalog(index: LibraryIndex())
+        let moving = OtherPlace(added: added, bookmark: Data([3]), path: "/p/Projects/Moved.toma")
+        _ = ghost.keep([moving])
+        var inFolder = Catalog.summary(9, name: "Moved")
+        inFolder.path = moving.path
+        let replaced = ghost.apply([.summary(inFolder)])
+        #expect(replaced.leftOtherPlaces == [moving.path] && replaced.replaced.count == 1)
+        #expect(ghost.summaries.values.map(\.identity) == [inFolder.identity], "shown once")
+    }
+
+    /// What the records kept by a records-only card's identity follows its project; a place that left Other places goes.
+    @Test func theRecordsFollowWhatTheCatalogSays() {
+        let ghost = PackageIdentity(volume: "library.json", file: 5), real = PackageIdentity(volume: "V", file: 8)
+        let added = Date(timeIntervalSince1970: 1_794_000_000)
+        var records = LibraryRecords(
+            favorites: [ghost.string, "V:1"], lastOpened: [ghost.string: added],
+            places: [OtherPlace(added: added, bookmark: Data([1]), path: "/a/A.toma"), OtherPlace(added: added, bookmark: Data([2]), path: "/b/B.toma")])
+        let changed = records.follow(replaced: [ghost: real], leftOtherPlaces: ["/b/B.toma"])
+        #expect(changed)
+        #expect(records.favorites == [real.string, "V:1"])
+        #expect(records.lastOpened == [real.string: added])
+        #expect(records.places.map(\.path) == ["/a/A.toma"])
+        let unchanged = records.follow(replaced: [:], leftOtherPlaces: [])
+        #expect(!unchanged)
     }
 
     /// What an action took out (deleted for good, out of the library) comes back on undo, unless something newer of it
