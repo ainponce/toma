@@ -32,34 +32,32 @@ public enum EditChange: Codable, Equatable, Sendable {
         case op, path, before, after, collection, index, value, id
     }
 
-    private enum Op: String, Codable {
+    private enum Op: String, Encodable {
         case set, insert, remove, replace
     }
 
     public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        switch try container.decode(Op.self, forKey: .op) {
-        case .set:
-            self = .set(
-                path: try container.decode(JSONPointer.self, forKey: .path),
-                before: try container.decode(JSONValue.self, forKey: .before),
-                after: try container.decode(JSONValue.self, forKey: .after))
-        case .insert:
+        try self.init(json: JSONValue(from: decoder))
+    }
+
+    /// The change `json` holds, as it is written: `init(from:)` and the edit log's reader read it so.
+    init(json: JSONValue) throws {
+        let members = try JSONMembers(json)
+        switch try members.string(CodingKeys.op.rawValue) {
+        case Op.set.rawValue:
+            self = .set(path: try members.pointer("path"), before: try members.value("before"), after: try members.value("after"))
+        case Op.insert.rawValue:
             self = .insert(
-                collection: try container.decode(JSONPointer.self, forKey: .collection),
-                index: try container.decode(Int.self, forKey: .index),
-                value: try container.decode(JSONValue.self, forKey: .value))
-        case .remove:
+                collection: try members.pointer("collection"), index: try members.int("index"), value: try members.value("value"))
+        case Op.remove.rawValue:
             self = .remove(
-                collection: try container.decode(JSONPointer.self, forKey: .collection),
-                index: try container.decode(Int.self, forKey: .index),
-                value: try container.decode(JSONValue.self, forKey: .value))
-        case .replace:
+                collection: try members.pointer("collection"), index: try members.int("index"), value: try members.value("value"))
+        case Op.replace.rawValue:
             self = .replace(
-                collection: try container.decode(JSONPointer.self, forKey: .collection),
-                id: try container.decode(String.self, forKey: .id),
-                before: try container.decode(JSONValue.self, forKey: .before),
-                after: try container.decode(JSONValue.self, forKey: .after))
+                collection: try members.pointer("collection"), id: try members.string("id"), before: try members.value("before"),
+                after: try members.value("after"))
+        case let op:
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: "No op \"\(op)\"."))
         }
     }
 
@@ -206,15 +204,12 @@ extension EditDocument {
     /// it. Throws `invalidDocument` if the result does not decode as an edit document, or decodes without something the
     /// changes wrote (a key it has no place for, a `null` optional): undoing such a change would no longer match.
     public func applying(_ changes: [EditChange]) throws(EditChangeError) -> EditDocument {
-        try Self.applying(changes, to: jsonValue()).document
+        try Self.holding(jsonValue().applying(changes)).document
     }
 
-    /// The document `changes` give applied to `json`, the JSON of a document, and the JSON of the result: the edit
-    /// log's replay applies the next line to it without encoding the document again.
-    static func applying(
-        _ changes: [EditChange], to json: JSONValue
-    ) throws(EditChangeError) -> (document: EditDocument, json: JSONValue) {
-        let value = try json.applying(changes)
+    /// The document `value` encodes, if it holds all of `value`, and its JSON: the edit log's replay applies its lines
+    /// to the JSON and decodes the document only once.
+    static func holding(_ value: JSONValue) throws(EditChangeError) -> (document: EditDocument, json: JSONValue) {
         let data: Data
         let document: EditDocument
         do {

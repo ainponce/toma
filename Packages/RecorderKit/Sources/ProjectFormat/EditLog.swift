@@ -40,12 +40,32 @@ public enum EditLogEntry: Equatable, Sendable {
         try self.init(jsonLineData: Data(jsonLine.utf8))
     }
 
+    /// The line is parsed once, with `JSONValue(parsing:)`, and its fields read from that, only those of its `type`.
     init(jsonLineData: Data) throws {
-        self = try ProjectJSON.decoder().decode(Line.self, from: jsonLineData).entry
+        let members = try JSONMembers(JSONValue(parsing: jsonLineData))
+        let seq = try members.int("seq")
+        switch try members.string("type") {
+        case Line.Kind.create.rawValue:
+            self = .create(
+                seq: seq, document: try members.decoded("document", as: EditDocument.self),
+                app: try members.decoded("app", as: AppInfo.self))
+        case Line.Kind.do.rawValue:
+            self = .do(
+                seq: seq, group: try members.int("group"), label: try members.string("label"),
+                changes: try members.array("changes").map(EditChange.init(json:)), at: try members.decoded("at", as: Date.self))
+        case Line.Kind.undo.rawValue:
+            self = .undo(seq: seq, group: try members.int("group"))
+        case Line.Kind.redo.rawValue:
+            self = .redo(seq: seq, group: try members.int("group"))
+        case Line.Kind.migrate.rawValue:
+            self = .migrate(seq: seq, from: try members.int("from"), to: try members.int("to"))
+        case let type:
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: [], debugDescription: "No entry type \"\(type)\"."))
+        }
     }
 
-    /// The coding of an entry, which decodes only the fields of its `type`.
-    private struct Line: Codable {
+    /// The encoding of an entry, with the fields of its `type`.
+    private struct Line: Encodable {
         var entry: EditLogEntry
 
         init(entry: EditLogEntry) {
@@ -56,32 +76,8 @@ public enum EditLogEntry: Equatable, Sendable {
             case type, seq, document, app, group, label, changes, at, from, to
         }
 
-        private enum Kind: String, Codable {
+        fileprivate enum Kind: String, Encodable {
             case create, `do`, undo, redo, migrate
-        }
-
-        init(from decoder: any Decoder) throws {
-            let container = try decoder.container(keyedBy: CodingKeys.self)
-            let seq = try container.decode(Int.self, forKey: .seq)
-            switch try container.decode(Kind.self, forKey: .type) {
-            case .create:
-                entry = .create(
-                    seq: seq, document: try container.decode(EditDocument.self, forKey: .document),
-                    app: try container.decode(AppInfo.self, forKey: .app))
-            case .do:
-                entry = .do(
-                    seq: seq, group: try container.decode(Int.self, forKey: .group),
-                    label: try container.decode(String.self, forKey: .label),
-                    changes: try container.decode([EditChange].self, forKey: .changes),
-                    at: try container.decode(Date.self, forKey: .at))
-            case .undo:
-                entry = .undo(seq: seq, group: try container.decode(Int.self, forKey: .group))
-            case .redo:
-                entry = .redo(seq: seq, group: try container.decode(Int.self, forKey: .group))
-            case .migrate:
-                entry = .migrate(
-                    seq: seq, from: try container.decode(Int.self, forKey: .from), to: try container.decode(Int.self, forKey: .to))
-            }
         }
 
         func encode(to encoder: any Encoder) throws {
@@ -138,7 +134,8 @@ public struct EditLogRead: Sendable {
 public enum EditLogReader {
     /// Reads from a descriptor opened with `SafeRead.regularFile(at:)`: never through a symlink (`ELOOP`) and never
     /// stuck on a FIFO or anything else that is not a regular file (`EFTYPE`). Throws if the file cannot be read, and
-    /// `EditDocumentError.newerVersion` if its `create` holds a document newer than this app's, which is not damage.
+    /// `EditDocumentError.newerVersion` if its `create` holds a document newer than this app's or a `migrate` goes to
+    /// one: a newer app wrote it, so it is not damage.
     public static func read(_ url: URL) throws -> EditLogRead {
         let data = try SafeRead.regularFile(at: url)
         var read = EditLogRead(entries: [], droppedTruncatedTail: false)
@@ -204,6 +201,9 @@ public enum EditLogReader {
         } catch {
             return nil
         }
+        if case let .migrate(_, _, to) = entry, to > EditDocument.currentVersion {
+            throw EditDocumentError.newerVersion(to)
+        }
         let isCreate = if case .create = entry { true } else { false }
         guard let previous else { return isCreate ? entry : nil }
         return !isCreate && entry.seq > previous.seq ? entry : nil
@@ -211,7 +211,7 @@ public enum EditLogReader {
 
     /// Whether `bytes` is one complete JSON object: no strict prefix of one is.
     private static func isWholeObject(_ bytes: Data) -> Bool {
-        if case .object? = try? JSONDecoder().decode(JSONValue.self, from: bytes) { true } else { false }
+        if case .object? = try? JSONValue(parsing: bytes) { true } else { false }
     }
 }
 
@@ -282,6 +282,11 @@ public struct EditReplay: Sendable {
     /// applied, a `redo` of one that is not undone (a `do` of a new group ends what could be redone: history is
     /// linear) and a `migrate`, since documentVersion 1 has no migrations, so every one names a version this app does
     /// not know. Nothing before a `migrate` can be undone or redone.
+    ///
+    /// The lines are applied to the document's JSON, each change checking what it replaces, and the document is
+    /// decoded once, at the end: a replay costs one decoding, not one per line. If the end is no document, or one
+    /// without something a line wrote (`EditDocument.applying` refuses both), the first line that leaves it so is found
+    /// and the replay stops there; a line whose damage a later line undoes is not found.
     public static func replay(snapshot: EditDocument?, entries: [EditLogEntry]) -> EditReplay? {
         let start: Int
         let document: EditDocument
@@ -292,25 +297,87 @@ public struct EditReplay: Sendable {
         } else {
             return nil
         }
-        var replay = EditReplay(document: document, lastAppliedSeq: entries[start].seq)
-        // The document's JSON, which each line is applied to; `nil` if it cannot be encoded, so nothing applies.
-        var json = try? document.jsonValue()
-        var groups = Groups()
-        for (index, entry) in entries.enumerated() {
-            if index > start {
-                guard let changes = groups.changes(for: entry), let current = json,
-                    let next = try? EditDocument.applying(changes, to: current)
-                else {
-                    replay.mismatchSeq = entry.seq
-                    break
-                }
-                (replay.document, json) = (next.document, next.json)
-                replay.lastAppliedSeq = entry.seq
-            }
-            groups.record(entry)
+        let (steps, unfollowed) = steps(of: entries, after: start)
+        var replay = apply(steps, to: document, from: entries[start].seq)
+        if replay.mismatchSeq == nil {
+            replay.mismatchSeq = unfollowed
         }
         replay.document.logSequence = replay.lastAppliedSeq
         return replay
+    }
+
+    /// A line after the start: its `seq` and what it applies.
+    private typealias Step = (seq: Int, changes: [EditChange])
+
+    /// What each line after `start` applies, up to the first one that does not follow the lines before it, whose `seq`
+    /// is `unfollowed`.
+    private static func steps(of entries: [EditLogEntry], after start: Int) -> (steps: [Step], unfollowed: Int?) {
+        var groups = Groups()
+        var steps: [Step] = []
+        for (index, entry) in entries.enumerated() {
+            if index > start {
+                guard let changes = groups.changes(for: entry) else { return (steps, entry.seq) }
+                steps.append((entry.seq, changes))
+            }
+            groups.record(entry)
+        }
+        return (steps, nil)
+    }
+
+    /// `steps` applied to `document`, whose line is `seq`, until one does not match.
+    private static func apply(_ steps: [Step], to document: EditDocument, from seq: Int) -> EditReplay {
+        guard let start = try? document.jsonValue() else {
+            // Nothing can be applied to a document that cannot be encoded (a non-finite number).
+            return EditReplay(document: document, lastAppliedSeq: seq, mismatchSeq: steps.first?.seq)
+        }
+        var json = start
+        var applied = 0
+        var mismatch: Int?
+        for step in steps {
+            guard let next = try? json.applying(step.changes) else {
+                mismatch = step.seq
+                break
+            }
+            json = next
+            applied += 1
+        }
+        guard applied > 0 else { return EditReplay(document: document, lastAppliedSeq: seq, mismatchSeq: mismatch) }
+        if let end = try? EditDocument.holding(json) {
+            return EditReplay(document: end.document, lastAppliedSeq: steps[applied - 1].seq, mismatchSeq: mismatch)
+        }
+        return firstInvalidStep(in: steps[..<applied], after: (document, start, seq))
+    }
+
+    /// The replay up to the first of `steps` that leaves no document, when after the last one there is none: each of
+    /// them matched, and the state before the first one, `good`, is a document. It decodes about 2√n times: at every
+    /// √nth step until one is no document, then at each step after the last good one.
+    private static func firstInvalidStep(
+        in steps: ArraySlice<Step>, after good: (document: EditDocument, json: JSONValue, seq: Int)
+    ) -> EditReplay {
+        var good = good
+        let stride = max(1, Int(Double(steps.count).squareRoot().rounded(.up)))
+        var chunkStart = steps.startIndex
+        while chunkStart < steps.endIndex {
+            let chunk = steps[chunkStart..<min(chunkStart + stride, steps.endIndex)]
+            if let end = try? EditDocument.holding(reapplied(chunk, to: good.json)) {
+                good = (end.document, end.json, chunk.last?.seq ?? good.seq)
+            } else {
+                for step in chunk {
+                    guard let next = try? EditDocument.holding(reapplied([step], to: good.json)) else {
+                        return EditReplay(document: good.document, lastAppliedSeq: good.seq, mismatchSeq: step.seq)
+                    }
+                    good = (next.document, next.json, step.seq)
+                }
+            }
+            chunkStart = chunk.endIndex
+        }
+        // Not reached: the last step leaves no document.
+        return EditReplay(document: good.document, lastAppliedSeq: good.seq)
+    }
+
+    /// `steps`, which all matched before, applied to `json` again.
+    private static func reapplied(_ steps: some Sequence<Step>, to json: JSONValue) -> JSONValue {
+        steps.reduce(json) { json, step in (try? json.applying(step.changes)) ?? json }
     }
 
     /// The `do` lines of each group and whether they are applied, as the replay goes through the log.
@@ -349,12 +416,14 @@ public struct EditReplay: Sendable {
             switch entry {
             case .create:
                 break
-            case let .do(_, group, _, changes, _):
-                if groups[group] == nil {
-                    close { $0 == .undone }
-                }
-                groups[group, default: Group(state: .applied, changes: [])].changes += changes
             // Before the start, lines are not checked: one that does not follow changes nothing.
+            case let .do(_, group, _, changes, _):
+                if let existing = groups[group] {
+                    if existing.state == .applied { groups[group]?.changes += changes }
+                } else {
+                    close { $0 == .undone }
+                    groups[group] = Group(state: .applied, changes: changes)
+                }
             case let .undo(_, group):
                 if groups[group]?.state == .applied { groups[group]?.state = .undone }
             case let .redo(_, group):

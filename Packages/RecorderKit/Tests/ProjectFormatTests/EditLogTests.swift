@@ -251,6 +251,18 @@ private enum SmallDocument {
         // Thrown, never read as damage, which would be repaired: a newer app wrote it.
         try Data((newer + "\n").utf8).write(to: url)
         #expect(throws: EditDocumentError.newerVersion(2)) { try EditLogReader.read(url) }
+
+        // The same for a `migrate` to a newer documentVersion; one to this app's is a line like any other.
+        let padding = try doLine(2, group: 2, try set("/style/padding", 0.08, 0.1)).jsonLine()
+        for (to, refused) in [(2, true), (1, false)] {
+            let migrate = try EditLogEntry.migrate(seq: 3, from: 1, to: to).jsonLine()
+            try Data([line, padding, migrate].map { $0 + "\n" }.joined().utf8).write(to: url)
+            if refused {
+                #expect(throws: EditDocumentError.newerVersion(2)) { try EditLogReader.read(url) }
+            } else {
+                #expect(try EditLogReader.read(url).entries.count == 3)
+            }
+        }
     }
 }
 
@@ -427,4 +439,195 @@ private enum SmallDocument {
     let afterMigrate = try replay(migrated, from: at(3, padded))
     #expect(afterMigrate.document == at(3, padded))
     #expect(afterMigrate.mismatchSeq == 4)
+}
+
+@Test func aDoOfAnUndoneGroupBeforeTheStartChangesNothing() throws {
+    // A line the app never writes: before the start lines are not checked, and one that does not follow is not kept.
+    let start = DesignExample.document
+    let entries: [EditLogEntry] = [
+        .create(seq: 1, document: start, app: app),
+        doLine(2, group: 2, try set("/style/padding", 0.08, 0.1)),
+        .undo(seq: 3, group: 2),
+        doLine(4, group: 2, try set("/style/shadow", 0.6, 0.5)),
+        .redo(seq: 5, group: 2),
+    ]
+    var snapshot = start
+    snapshot.style.shadow = 0.5
+    var expected = snapshot
+    expected.style.padding = 0.1
+    // The redo applies the padding alone: with the shadow too, its `before` (0.6) would not match.
+    let replayed = try replay(entries, from: at(4, snapshot))
+    #expect(replayed.mismatchSeq == nil)
+    #expect(replayed.document == at(5, expected))
+}
+
+@Test func sessionAndReplayAgreeOnLongDecimals() throws {
+    try withTemporaryDirectory { dir in
+        // Three steps through the public API, as a session takes them, each reading the document again.
+        var document = DesignExample.document
+        document.zoom.regions[1].focus = .fixed(x: 7.0 / 267, y: 1.0 / 86)
+        let created = document
+        let padding = try #require(document.setChange("/style/padding", 0.1))
+        document = try document.applying([padding])
+        let shadow = try #require(document.setChange("/style/shadow", 0.5))
+        document = try document.applying([shadow])
+        var region = document.zoom.regions[1]
+        region.depth = 1.7
+        let depth = try #require(document.replaceChange(.zoomRegions, id: region.id, with: region))
+        document = try document.applying([depth])
+
+        let entries: [EditLogEntry] = [
+            .create(seq: 1, document: created, app: app),
+            .do(seq: 2, group: 2, label: "style.padding", changes: [padding], at: date),
+            .do(seq: 3, group: 3, label: "style.shadow", changes: [shadow], at: date),
+            .do(seq: 4, group: 4, label: "zoom.change", changes: [depth], at: date),
+        ]
+        let url = dir.appending(path: "edit-log.jsonl")
+        try Data(try entries.map { try $0.jsonLine() + "\n" }.joined().utf8).write(to: url)
+        let replayed = try replay(try EditLogReader.read(url).entries)
+        #expect(replayed.mismatchSeq == nil)
+        #expect(replayed.lastAppliedSeq == 4)
+        #expect(replayed.document == at(4, document))
+        #expect(try canonical(replayed.document) == canonical(at(4, document)))
+        #expect(replayed.document.zoom.regions[1].focus == .fixed(x: 7.0 / 267, y: 1.0 / 86))
+    }
+}
+
+@Test func randomDoublesInvertAndReplayExactly() throws {
+    let values = randomDoubles(600, seed: 17)
+    for index in stride(from: 0, to: values.count, by: 2) {
+        var document = DesignExample.document
+        document.zoom.regions[1].focus = .fixed(x: values[index], y: 0.5)
+        let change = try #require(document.setChange("/style/padding", values[index + 1]))
+        let changed = try document.applying([change])
+        #expect(changed.zoom.regions[1].focus == .fixed(x: values[index], y: 0.5), "x = \(values[index])")
+        #expect(changed.style.padding.bitPattern == values[index + 1].bitPattern, "padding = \(values[index + 1])")
+        #expect(try canonical(changed.applying([change.inverse])) == canonical(document), "x = \(values[index])")
+        // Through the lines, as the log holds them.
+        let entries = try [EditLogEntry.create(seq: 1, document: document, app: app), doLine(2, group: 2, change)].map {
+            try EditLogEntry(jsonLine: $0.jsonLine())
+        }
+        let replayed = try replay(entries)
+        #expect(replayed.mismatchSeq == nil, "x = \(values[index])")
+        #expect(try canonical(replayed.document) == canonical(at(2, changed)), "x = \(values[index])")
+    }
+}
+
+@Test func aBrokenLineInALongLogIsFoundBySeq() throws {
+    // The lines are applied to the JSON and the document is decoded once at the end; when the end is no document, the
+    // first line that left none is found, among 300.
+    let start = DesignExample.document
+    func padding(_ k: Int) -> Double { 0.08 + Double(k) / 10_000 }
+    /// Padding lines, each from the padding the one before left, with `change` at `broken` (and `repair` after it).
+    func log(breakingAt broken: Int, with change: EditChange, repairedBy repair: EditChange? = nil) throws -> [EditLogEntry] {
+        var entries: [EditLogEntry] = [.create(seq: 1, document: start, app: app)]
+        var steps = 0
+        for seq in 2...301 {
+            if seq == broken {
+                entries.append(doLine(seq, group: seq, change))
+            } else if seq == broken + 1, let repair {
+                entries.append(doLine(seq, group: seq, repair))
+            } else {
+                entries.append(doLine(seq, group: seq, try set("/style/padding", padding(steps), padding(steps + 1))))
+                steps += 1
+            }
+        }
+        return entries
+    }
+    let aspect = EditChange.set(path: try JSONPointer("/aspect"), before: .string("16:9"), after: .string("4:3"))
+    var region = try JSONValue(encoding: start.zoom.regions[0])
+    if case var .object(members) = region {
+        members["extra"] = .bool(true)
+        region = .object(members)
+    }
+    let lossy = EditChange.insert(collection: try JSONPointer("/zoom/regions"), index: 2, value: region)
+    for (broken, change) in [(157, aspect), (2, aspect), (301, lossy), (200, lossy)] {
+        // Every line matches what is there: only the document after `broken` is none.
+        let replayed = try replay(log(breakingAt: broken, with: change))
+        var expected = start
+        expected.style.padding = padding(broken - 2)
+        #expect(replayed.mismatchSeq == broken)
+        #expect(replayed.lastAppliedSeq == broken - 1)
+        #expect(replayed.document == at(broken - 1, expected), "broken at \(broken)")
+    }
+    // A line whose damage the next line undoes is not found: the document is checked at the end.
+    let repaired = try replay(log(breakingAt: 100, with: aspect, repairedBy: aspect.inverse))
+    #expect(repaired.mismatchSeq == nil)
+    #expect(repaired.document.aspect == .landscape)
+    #expect(repaired.lastAppliedSeq == 301)
+}
+
+@Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
+func largeDocumentReplaysItsTailFast() throws {
+    // The review's document: 400 zooms with a fixed focus and 100 clips, about 147 KB indented (design §7.9 takes 1 h,
+    // 500 clips and 300 zooms as its reference).
+    var big = DesignExample.document
+    let origin: UInt64 = 81_000_000_000_000
+    big.zoom.regions = []
+    for i in 0..<400 {
+        let start = origin + UInt64(i) * 9_000_000_000
+        let focus = ZoomFocus.fixed(x: Double(i % 97) / 97, y: Double(i % 89) / 89)
+        big.zoom.regions.append(ZoomRegion(
+            id: String(format: "z-%08x", i), take: "take-001", start: ns(start), end: ns(start + 4_000_000_000), origin: .auto,
+            focus: focus, instant: false))
+    }
+    big.sequence = []
+    for i in 0..<100 {
+        let start = origin + UInt64(i) * 36_000_000_000
+        big.sequence.append(
+            Clip(id: String(format: "c-%08x", i), take: "take-001", start: ns(start), end: ns(start + 30_000_000_000), speed: 1))
+    }
+    let bytes = try ProjectJSON.encoder().encode(big).count
+    var entries: [EditLogEntry] = [.create(seq: 1, document: big, app: app)]
+    func padding(_ k: Int) -> Double { 0.08 + Double(k) / 10_000 }
+    for seq in 2...2_001 {
+        entries.append(doLine(seq, group: seq, try set("/style/padding", padding(seq - 2), padding(seq - 1))))
+    }
+    let clock = ContinuousClock()
+    var snapshot = big
+    snapshot.style.padding = padding(1_800)
+    let started = clock.now
+    let tail = try replay(entries, from: at(1_801, snapshot))
+    let tailTime = clock.now - started
+    #expect(tail.mismatchSeq == nil)
+    #expect(tail.lastAppliedSeq == 2_001)
+    #expect(tailTime < .seconds(1))
+
+    let fullStart = clock.now
+    let full = try replay(entries)
+    let fullTime = clock.now - fullStart
+    #expect(full.mismatchSeq == nil)
+    #expect(full.document == tail.document)
+
+    let change = try #require(big.setChange("/style/shadow", 0.5))
+    let applyStart = clock.now
+    for _ in 0..<20 { _ = try big.applying([change]) }
+    let applyTime = (clock.now - applyStart) / 20
+    print("BENCH document \(bytes) bytes: replay of the 200-line tail \(tailTime), of 2,000 lines from create \(fullTime)")
+    print("BENCH one applying \(applyTime)")
+
+    // The review's read: 20,001 lines of the design example's log, sets and replaces of a clip.
+    try withTemporaryDirectory { dir in
+        let small = DesignExample.document
+        var lines = [try EditLogEntry.create(seq: 1, document: small, app: app).jsonLine()]
+        var clip = small.sequence[0]
+        for i in 0..<20_000 {
+            if i % 2 == 0 {
+                lines.append(try doLine(i + 2, group: i + 2, try set("/style/padding", 0.08, 0.1)).jsonLine())
+            } else {
+                let before = try JSONValue(encoding: clip)
+                clip.end = ns(clip.end.nanoseconds - 1)
+                let replace = EditChange.replace(
+                    collection: try JSONPointer("/sequence"), id: clip.id, before: before, after: try JSONValue(encoding: clip))
+                lines.append(try doLine(i + 2, group: i + 2, replace).jsonLine())
+            }
+        }
+        let url = dir.appending(path: "edit-log.jsonl")
+        let data = Data((lines.joined(separator: "\n") + "\n").utf8)
+        try data.write(to: url)
+        let readStart = clock.now
+        let read = try EditLogReader.read(url)
+        print("BENCH read of \(read.entries.count) entries, \(data.count) bytes: \(clock.now - readStart)")
+        #expect(read.entries.count == 20_001)
+    }
 }

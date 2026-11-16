@@ -32,11 +32,11 @@ private func value(_ encodable: some Encodable) throws -> JSONValue { try JSONVa
 }
 
 @Test func integersAreReadExactly() throws {
-    let text = #"[1, -3, 1.0, 9007199254740993, 18446744073709551615, 0.1, 2.5e300, true, null, "x", {"a": []}]"#
+    let text = #"[1, -3, 1.0, 9007199254740993, 18446744073709551615, 0.1, 2.5e300, -0, true, null, "x", {"a": []}]"#
     let decoded = try JSONDecoder().decode(JSONValue.self, from: Data(text.utf8))
     let expected: [JSONValue] = [
         .integer(1), .integer(-3), .integer(1), .integer(9_007_199_254_740_993), .unsigned(.max), .number(0.1), .number(2.5e300),
-        .bool(true), .null, .string("x"), .object(["a": .array([])]),
+        .number(-0.0), .bool(true), .null, .string("x"), .object(["a": .array([])]),
     ]
     // Each case on its own, not through `==`, which compares numbers across cases.
     #expect(identical(decoded, .array(expected)), "\(decoded)")
@@ -66,10 +66,13 @@ private func identical(_ a: JSONValue, _ b: JSONValue) -> Bool {
     var document = DesignExample.document
     document.sequence[0].start = ns((1 << 60) + 1)
     document.sequence[0].end = ns(.max)
-    document.style.padding = -0.0
     document.style.shadow = 1e-7
+    document.zoom.regions[1].focus = .fixed(x: 1.0 / 86, y: 7.0 / 267)
+    var negativeZero = document
+    negativeZero.style.padding = -0.0
     let values: [any Encodable] = [
-        document, [1.0, 100, 2.5, 1e19, 1e20, -1, 0, -0.0, 0.1], [Int64.min, Int64.max], UInt64.max, true, "x/y", [String: Int](),
+        document, negativeZero, [1.0, 100, 2.5, 1e19, 1e20, -1, 0, 0.1, 1.0 / 86, 7.0 / 267], [-0.0, 1.0 / 86],
+        [Int64.min, Int64.max], UInt64.max, true, "x/y", [String: Int](),
     ]
     for value in values {
         let serialized = try JSONValue(encoding: value)
@@ -77,6 +80,131 @@ private func identical(_ a: JSONValue, _ b: JSONValue) -> Bool {
         #expect(identical(serialized, decoded), "\(serialized) and \(decoded)")
     }
     #expect(identical(try JSONValue(encoding: [1e19, 1e20]), .array([.unsigned(10_000_000_000_000_000_000), .number(1e20)])))
+}
+
+/// Doubles of every kind, the same ones for a seed: any finite bit pattern, from 0 to 1, fractions like a pixel over a
+/// width (the shape of a focus or a position), and 1/86 and 7/267, which `NSDecimalNumber` read a few ulp off.
+func randomDoubles(_ count: Int, seed: UInt64) -> [Double] {
+    var generator = SplitMix64(seed: seed)
+    var values = [1.0 / 86, 7.0 / 267]
+    while values.count < count {
+        switch values.count % 3 {
+        case 0:
+            let value = Double(bitPattern: generator.next())
+            if value.isFinite, value != 0 { values.append(value) }
+        case 1:
+            values.append(Double.random(in: 0..<1, using: &generator))
+        default:
+            values.append(Double(Int.random(in: 0...4_000, using: &generator)) / Double(Int.random(in: 1...4_000, using: &generator)))
+        }
+    }
+    return values
+}
+
+/// SplitMix64: a seeded generator, so a failure can be run again.
+private struct SplitMix64: RandomNumberGenerator {
+    private var state: UInt64
+
+    init(seed: UInt64) {
+        state = seed
+    }
+
+    mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
+    }
+}
+
+/// `document` as `edit.json` holds it.
+func canonical(_ document: EditDocument) throws -> String {
+    String(decoding: try ProjectJSON.encoder().encode(document), as: UTF8.self)
+}
+
+@Test func everyDoubleReadsBackBitForBit() throws {
+    let values = randomDoubles(20_000, seed: 9)
+    // Each one alone: back bit for bit, and as a log line reads the same text (`init(from:)`).
+    var wrong: [Double] = []
+    for value in values {
+        let read = try JSONValue(encoding: value)
+        let line = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(value))
+        if try read.decoded(as: Double.self).bitPattern != value.bitPattern || !identical(read, line) { wrong.append(value) }
+    }
+    #expect(wrong.isEmpty, "\(wrong.count) of \(values.count) differ, the first \(wrong.prefix(5))")
+
+    // Together, without −0.0 or an integral one past 2⁵³: all of them read with `JSONSerialization`, long decimals too.
+    let fast = values.filter { $0.rounded(.towardZero) != $0 || $0.magnitude < 0x1p53 }
+    #expect(fast.count > 10_000)
+    guard case let .array(read) = try JSONValue(encoding: fast),
+        case let .array(lines) = try JSONDecoder().decode(JSONValue.self, from: JSONEncoder().encode(fast))
+    else {
+        Issue.record("not arrays")
+        return
+    }
+    wrong = []
+    for (index, value) in fast.enumerated() where try read[index].decoded(as: Double.self).bitPattern != value.bitPattern
+        || !identical(read[index], lines[index])
+    {
+        wrong.append(value)
+    }
+    #expect(wrong.isEmpty, "\(wrong.count) of \(fast.count) differ, the first \(wrong.prefix(5))")
+}
+
+@Test func longDecimalsSurviveEveryEditAndItsInverse() throws {
+    var original = DesignExample.document
+    original.zoom.regions[1].focus = .fixed(x: 1.0 / 86, y: 7.0 / 267)
+    original.style.padding = 0.011627906976744186
+    var region = original.zoom.regions[0]
+    region.depth = 1.7
+    let changes = [
+        try #require(original.setChange("/style/shadow", 0.5)),
+        try #require(original.setChange("/style/cornerRadius", 7.0 / 267)),
+        try #require(original.replaceChange(.zoomRegions, id: region.id, with: region)),
+        original.insertChange(.zoomSuppressed, at: 0, SourceRange(take: "take-001", start: ns(1), end: ns(2))),
+        try #require(original.removeChange(.zoomRegions, at: 0)),
+    ]
+    let bytes = try canonical(original)
+    for change in changes {
+        let changed = try original.applying([change])
+        // What the change does not touch stays bit for bit.
+        #expect(changed.style.padding.bitPattern == original.style.padding.bitPattern)
+        #expect(changed.zoom.regions.last?.focus == .fixed(x: 1.0 / 86, y: 7.0 / 267))
+        #expect(try canonical(changed.applying([change.inverse])) == bytes)
+        #expect(try canonical(original.applying([change, change.inverse])) == bytes)
+    }
+    // Each edit reads the document again: three in a row, then their inverses, leave it as it was.
+    var document = original
+    var applied: [EditChange] = []
+    for (path, value) in [("/style/shadow", 0.5), ("/style/backgroundBlur", 0.25), ("/style/shadow", 0.4)] {
+        let change = try #require(document.setChange(path, value))
+        document = try document.applying([change])
+        applied.append(change)
+    }
+    #expect(document.zoom.regions[1].focus == .fixed(x: 1.0 / 86, y: 7.0 / 267))
+    for change in applied.reversed() {
+        document = try document.applying([change.inverse])
+    }
+    #expect(try canonical(document) == bytes)
+}
+
+@Test func negativeZeroKeepsItsSign() throws {
+    #expect(identical(try value(-0.0), .number(-0.0)))
+    #expect(identical(try value([-0.0, 0.0, -0.5]), .array([.number(-0.0), .integer(0), .number(-0.5)])))
+    let line = try JSONDecoder().decode(JSONValue.self, from: Data("[-0, -0.0, 0]".utf8))
+    #expect(identical(line, .array([.number(-0.0), .number(-0.0), .integer(0)])))
+    #expect(try JSONValue.number(-0.0).decoded(as: Double.self).sign == .minus)
+    // A `-0` inside a string is not a number.
+    #expect(identical(try value(["take-0", "a-0.5", "-0"]), .array([.string("take-0"), .string("a-0.5"), .string("-0")])))
+
+    var document = DesignExample.document
+    document.style.padding = -0.0
+    let shadow = try #require(document.setChange("/style/shadow", 0.5))
+    let changed = try document.applying([shadow])
+    #expect(changed.style.padding.sign == .minus)
+    #expect(try canonical(changed).contains(#""padding" : -0,"#))
+    #expect(try canonical(changed.applying([shadow.inverse])) == canonical(document))
 }
 
 @Test func integersCompareAsIntegers() {
