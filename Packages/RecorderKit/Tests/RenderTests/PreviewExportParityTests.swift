@@ -6,6 +6,7 @@ import MetalKit
 import ProjectFormat
 import QuartzCore
 import RecorderKitTestSupport
+import Recording
 @testable import Render
 import SyntheticCapture
 import Testing
@@ -179,7 +180,7 @@ func goldenFramesMatch() async throws {
     // Every check is a `#require`: when recording, nothing is written unless they all passed.
     try await withTemporaryDirectory { dir in
         for golden in GoldenProjects.cases where !golden.times.isEmpty {
-            let project = try await GoldenProjects.make(golden.name, in: dir)
+            let project = try await GoldenProjects.make(golden.name, in: dir, videoEncoder: GoldenProjects.goldenFramesEncoder)
             try #require(project.manifest.formatVersion == (golden.name == "phaseZero" ? 1 : 2), "\(golden.name) is a v1 or v2 project")
             let renderer = try FrameRenderer(project: project, outputSize: size)
             try #require(
@@ -208,6 +209,78 @@ func goldenFramesMatch() async throws {
         the render of a v1 or v2 project changed. Never record the golden frames again from this code, only from Task 1's \
         commit when the system changed (plan decision 3)
         """)
+}
+
+/// Makes video writers as VideoToolbox does while the media engine takes no more hardware encoder sessions (other
+/// processes hold them), for the first `busyWriters` writers asked for: one free to use any encoder writes with the
+/// software encoder, one that must use the hardware encoder cannot be made. The writers after those are
+/// `TakeBuilder`'s own.
+private final class BusyMediaEngine: @unchecked Sendable {
+    private let lock = NSLock()
+    private var busyWriters: Int
+    private var counts = (fellBack: 0, refused: 0)
+    var fellBack: Int { lock.withLock { counts.fellBack } }
+    var refused: Int { lock.withLock { counts.refused } }
+
+    init(busyWriters: Int) {
+        self.busyWriters = busyWriters
+    }
+
+    func makeWriter(url: URL, framesPerSecond: Int, encoder: VideoEncoderChoice) throws -> FragmentedTrackWriter {
+        let busy = lock.withLock { () -> Bool in
+            guard busyWriters > 0 else { return false }
+            busyWriters -= 1
+            return true
+        }
+        let media = TrackMedia.video(framesPerSecond: framesPerSecond)
+        guard busy, encoder != .softwareOnly else {
+            return try FragmentedTrackWriter(url: url, media: media, realTime: false, videoEncoder: encoder)
+        }
+        if encoder == .hardwareOnly {
+            lock.withLock { counts.refused += 1 }
+            throw WriterError.appendFailed("the media engine takes no more hardware encoder sessions")
+        }
+        lock.withLock { counts.fellBack += 1 }
+        return try FragmentedTrackWriter(url: url, media: media, realTime: false, videoEncoder: .softwareOnly)
+    }
+}
+
+/// What made `make golden` fail now and then with "bytes differ" while other checkouts ran their tests: the cases'
+/// video is written again on every run, and while the media engine takes no more hardware encoder sessions,
+/// VideoToolbox writes it with its software encoder, whose bitstream decodes to other pixels. The golden frames are
+/// drawn from the hardware encoder's video whatever the media engine is doing (`GoldenProjects.goldenFramesEncoder`):
+/// `phaseZero` written while the engine is busy for its first video writer draws the frames of `phaseZero` written
+/// while it is free. Not in CI: a virtual machine need not have a hardware HEVC encoder.
+@Test(.enabled(if: MetalCondition.isAvailable && !MetalCondition.isRequired))
+func goldenFramesAreDrawnFromTheHardwareEncodersVideo() async throws {
+    try await withTemporaryDirectory { dir in
+        let size = SIMD2(1280, 720)
+        let times = try #require(GoldenProjects.cases.first { $0.name == "phaseZero" }).times
+        func make(in name: String, makeVideoWriter: TakeBuilder.VideoWriterFactory? = nil) async throws -> [[UInt8]] {
+            let folder = dir.appendingPathComponent(name, isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+            let project = try await GoldenProjects.make(
+                "phaseZero", in: folder, videoEncoder: GoldenProjects.goldenFramesEncoder, makeVideoWriter: makeVideoWriter)
+            let renderer = try FrameRenderer(project: project, outputSize: size)
+            return try await goldenOffThePool { try times.map { try renderer.renderBytes(at: $0) } }
+        }
+        let free = try await make(in: "free")
+        let engine = BusyMediaEngine(busyWriters: 1)
+        let busy = try await make(in: "busy", makeVideoWriter: engine.makeWriter)
+        #expect(engine.fellBack + engine.refused == 1)
+        #expect(engine.fellBack == 0, "\(engine.fellBack) segment written by the software encoder")
+        for (k, t) in times.enumerated() {
+            let differing = zip(busy[k], free[k]).filter { $0 != $1 }.count
+            #expect(differing == 0, "\(differing) bytes of the frame at \(t) s differ")
+        }
+    }
+}
+
+/// Runs `body` on a thread of its own: decoding blocks, and must not hold a Swift concurrency thread.
+private func goldenOffThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        Thread { continuation.resume(with: Result(catching: body)) }.start()
+    }
 }
 
 /// Plan ruling R3: a golden frame sees a cursor sample from before `timelineStart`. The cursor of `windowMoving` starts
