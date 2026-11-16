@@ -1,0 +1,731 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import AppKit
+import AppSupport
+import Editing
+import ProjectFormat
+import QuartzCore
+
+/// The items of one track in output time, in the order of their start, and which of them are in sight: a binary search
+/// and a walk over those, never the whole list.
+struct TrackItems<Info> {
+    struct Item {
+        var id: String
+        /// An empty range is an instant (a camera change).
+        var output: Range<Int64>
+        var info: Info
+    }
+
+    let items: [Item]
+    /// The latest end of the items up to each one: the first that can reach a time is found by it.
+    private let reach: [Int64]
+
+    init(_ items: [Item]) {
+        self.items = items.sorted { ($0.output.lowerBound, $0.output.upperBound) < ($1.output.lowerBound, $1.output.upperBound) }
+        var latest = Int64.min
+        reach = self.items.map { item in
+            latest = max(latest, item.output.upperBound)
+            return latest
+        }
+    }
+
+    /// Calls `body` with each item that touches `lower...upper`, in order.
+    func forEach(from lower: Int64, to upper: Int64, _ body: (Item) -> Void) {
+        var (low, high) = (0, reach.count)
+        while low < high {
+            let middle = low + (high - low) / 2
+            if reach[middle] < lower { low = middle + 1 } else { high = middle }
+        }
+        var i = low
+        while i < items.count, items[i].output.lowerBound <= upper {
+            if items[i].output.upperBound >= lower { body(items[i]) }
+            i += 1
+        }
+    }
+}
+
+/// What the timeline shows of one revision of the document (design §5.5), in output time: what is cut is not there.
+///
+/// - Video: each clip of the sequence that lasts any output, with its speed.
+/// - Screen: from 0 the screen the take starts on, and each change of screen from the first instant it rules
+///   (`TimeMap.output(ofChangeAt:take:)`); a change whose stretch lasts nothing (in a cut, with another one after it in
+///   the same cut) is not seen.
+/// - Zoom: each block over the output its kept source is seen in (`TimeMap.outputRange(ofSource:take:)`: the cuts
+///   inside it closed); a block all in a cut is not seen, and comes back if that part is brought back by a trim.
+/// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it).
+/// - The ruler's markers: each `marker` event of the take at its instant, if it is kept.
+struct TimelineContent {
+    struct Clip {
+        /// Its source's start, in host nanoseconds.
+        var start: UInt64
+        /// `ClipSpeed.clamped`.
+        var speed: Double
+    }
+
+    struct Zoom {
+        var depth: Double
+        var automatic: Bool
+    }
+
+    struct Screen {
+        var name: String
+    }
+
+    struct AudioTrack {
+        var key: String
+        var isMicrophone: Bool
+        var gain: Double
+        var muted: Bool
+        /// The host time of pair 0 of its waveform: its earliest segment's start (`Waveform`).
+        var origin: UInt64
+    }
+
+    let layout: TimelineLayout
+    let map: TimeMap
+    /// Every clip of the sequence, by its index (`TimeMap.source(atOutput:)`).
+    let sequence: [Clip]
+    /// The clips that last any output.
+    let clips: TrackItems<Clip>
+    let screens: TrackItems<Screen>
+    let zooms: TrackItems<Zoom>
+    let cameraChanges: TrackItems<Void>
+    /// In order.
+    let markers: [Int64]
+    /// The spans of the screen or the camera that could not be read (`MissingVideo`), in order.
+    let missing: [Range<Int64>]
+    let audio: [String: AudioTrack]
+    /// The width of the screen the take starts on over its height: the thumbnails' shape.
+    let screenAspect: Double
+    /// The screen shown from each source instant on: the take's first, then its changes in time order.
+    private let initialScreen: String?
+    private let screenChanges: [(t: UInt64, track: String)]
+
+    init(take: TakeRecord, events: [InputEvent], document: EditDocument, missing: [ClosedRange<Double>]) {
+        let map = TimeMap(sequence: document.sequence)
+        let takeID = document.sequence.first?.take ?? take.id
+        layout = TimelineLayout(take: take, document: document)
+        self.map = map
+
+        let sequence = document.sequence.map { Clip(start: $0.start.nanoseconds, speed: ClipSpeed.clamped($0.speed)) }
+        self.sequence = sequence
+        clips = TrackItems(document.sequence.indices.compactMap { k in
+            let clip = document.sequence[k], start = map.clipOutputStarts[k], length = TimeMap.outputDuration(of: clip)
+            guard length > 0 else { return nil }
+            return .init(id: clip.id, output: start..<(start + length), info: sequence[k])
+        })
+
+        let changes = document.screens.changes.filter { $0.take == takeID }.sorted { $0.t < $1.t }
+        initialScreen = document.screens.initial[takeID]
+        screenChanges = changes.map { ($0.t.nanoseconds, $0.track) }
+        var spans: [(id: String, track: String?, start: Int64)] = [("initial", initialScreen, 0)]
+        for change in changes {
+            guard let rules = map.output(ofChangeAt: change.t, take: takeID) else { continue }
+            spans.append((change.id, change.track, min(max(rules, 0), map.duration)))
+        }
+        var screenItems: [TrackItems<Screen>.Item] = []
+        for (i, span) in spans.enumerated() {
+            let end = i + 1 < spans.count ? spans[i + 1].start : map.duration
+            guard let track = span.track, span.start < end else { continue }
+            screenItems.append(.init(id: span.id, output: span.start..<end, info: Screen(name: take.track(track)?.source.name ?? track)))
+        }
+        screens = TrackItems(screenItems)
+
+        zooms = TrackItems(document.zoom.regions.compactMap { region in
+            guard region.start < region.end, let output = map.outputRange(ofSource: region.start..<region.end, take: region.take),
+                !output.isEmpty
+            else { return nil }
+            return .init(
+                id: region.id, output: output,
+                info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
+        })
+        cameraChanges = TrackItems(document.camera.changes.compactMap { change in
+            map.output(atSource: change.t, take: change.take).map { .init(id: change.id, output: $0..<$0, info: ()) }
+        })
+        markers = events.compactMap { event in
+            guard case .marker = event.kind else { return nil }
+            return map.output(atSource: event.t, take: takeID)
+        }.sorted()
+        self.missing = missing.map { TimeMap.outputNanoseconds(seconds: $0.lowerBound)..<TimeMap.outputNanoseconds(seconds: $0.upperBound) }
+            .filter { !$0.isEmpty }
+            .sorted { $0.lowerBound < $1.lowerBound }
+
+        var audio: [String: AudioTrack] = [:]
+        for track in take.tracks where !track.kind.isVideo {
+            guard let origin = track.segments.map(\.startHostTime.nanoseconds).min() else { continue }
+            let key = AudioPlan.key(take: take.id, track: track.id)
+            let gain = document.audio.tracks[key]
+            audio[track.id] = AudioTrack(
+                key: key, isMicrophone: track.kind == .microphone, gain: gain?.gain ?? 1, muted: gain?.muted ?? false, origin: origin)
+        }
+        self.audio = audio
+
+        let first = initialScreen.flatMap(take.track)
+        let frame = first?.source.captureArea ?? first?.source.globalFrame
+        screenAspect = frame.map { $0.height > 0 ? min(max($0.width / $0.height, 0.5), 3) : 16.0 / 9 } ?? 16.0 / 9
+    }
+
+    /// The screen track shown at source instant `t` of the take: the last change at or before it, or the first screen.
+    func screenTrack(atSource t: UInt64) -> String? {
+        var (low, high) = (0, screenChanges.count)
+        while low < high {
+            let middle = low + (high - low) / 2
+            if screenChanges[middle].t <= t { low = middle + 1 } else { high = middle }
+        }
+        return low > 0 ? screenChanges[low - 1].track : initialScreen
+    }
+}
+
+/// A waveform (`Waveform`, a minimum and a maximum every 10 ms) and its reductions by every power of two, so a column
+/// of the timeline as wide as an hour reads a handful of values.
+struct WaveformLevels: Sendable {
+    /// `levels[n]`: each value covers 2ⁿ pairs.
+    private let levels: [[SIMD2<Float>]]
+
+    init(_ waveform: Waveform) {
+        var levels = [waveform.pairs]
+        while let last = levels.last, last.count > 1 {
+            levels.append(stride(from: 0, to: last.count, by: 2).map { i in
+                i + 1 < last.count ? SIMD2(min(last[i].x, last[i + 1].x), max(last[i].y, last[i + 1].y)) : last[i]
+            })
+        }
+        self.levels = levels
+    }
+
+    /// The minimum and maximum of pairs `a ..< b` (fractions of a pair count as the pair), read from the level whose
+    /// values are about as wide as that; `nil` if none of them is in the waveform.
+    func range(fromPair a: Double, toPair b: Double) -> SIMD2<Float>? {
+        guard let pairs = levels.first?.count, pairs > 0, b > 0, a < Double(pairs), b > a else { return nil }
+        let count = max(b - a, 1)
+        let level = min(max(Int(log2(count)), 0), levels.count - 1)
+        let width = Double(1 << level)
+        let values = levels[level]
+        let first = max(Int(a / width), 0), last = min(Int((b - 1e-9) / width), values.count - 1)
+        guard first <= last else { return nil }
+        var low = Float.infinity, high = -Float.infinity
+        for i in first...last {
+            low = min(low, values[i].x)
+            high = max(high, values[i].y)
+        }
+        return SIMD2(low, high)
+    }
+}
+
+/// "2×", "1,5×", "0,25×": a speed or a zoom's depth, with the decimals it has (two at most) in the user's language.
+@MainActor
+enum TimelineFormat {
+    private static let formatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 2
+        formatter.usesGroupingSeparator = false
+        return formatter
+    }()
+
+    static func multiplier(_ value: Double) -> String {
+        (formatter.string(from: NSNumber(value: value)) ?? String(value)) + "×"
+    }
+}
+
+// MARK: - Drawing
+
+/// A clip of the Video track: its outline (1 pt with Increase Contrast) and, if it is not at 1×, its speed.
+final class ClipLayer: CALayer {
+    let badge = CATextLayer()
+    var badgeText: String?
+
+    override init() {
+        super.init()
+        cornerRadius = 4
+        badge.cornerRadius = 3
+        badge.alignmentMode = .center
+        TimelineText.setUp(badge, size: 10, weight: .semibold)
+        addSublayer(badge)
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
+/// A zoom block: filled, its depth written on it, and an automatic one lighter, with a dotted border and an "A".
+final class BlockLayer: CAShapeLayer {
+    let label = CATextLayer()
+    var labelText: String?
+    var drawnSize = CGSize.zero
+    var automatic: Bool?
+
+    override init() {
+        super.init()
+        lineWidth = 1
+        TimelineText.setUp(label, size: 10, weight: .semibold)
+        addSublayer(label)
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
+/// A stretch of the Screen track, with the screen's name.
+final class SpanLayer: CALayer {
+    let label = CATextLayer()
+    var labelText: String?
+
+    override init() {
+        super.init()
+        cornerRadius = 4
+        TimelineText.setUp(label, size: 10, weight: .medium)
+        addSublayer(label)
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
+/// Draws the rows of the timeline under the ruler (design §5.5): Video, with thumbnails of the screen, its clips and the
+/// hatching where the video could not be read; Screen; Zoom; Camera; and a waveform for each audio track. One layer per
+/// item in sight, taken from a pool and given back when it leaves it, so scrolling and scaling an hour with hundreds of
+/// clips and blocks touches only what is in sight.
+///
+/// Thumbnails are of the output, not of each clip: tiles as wide as a thumbnail across the track, each showing the frame
+/// at its left edge (rounded down, within its clip, to a step that is a power of two of nanoseconds of output as long as
+/// a tile at most, so a pinch asks again for few of them), seen only inside the clips. They come from the
+/// `ThumbnailCache`, which makes them off the main thread; the last 400 are kept here.
+@MainActor
+final class TimelineTracks {
+    /// The rows, scrolled up and down; its frame is the tracks' area under the ruler.
+    let layer = CALayer()
+    private let rows = CALayer()
+    private let separators = CAShapeLayer()
+    private let thumbnailStrip = CALayer()
+    private let clipMask = CAShapeLayer()
+    private let clipLayers: LayerPool<ClipLayer>
+    private let tiles: LayerPool<CALayer>
+    private let hatches: LayerPool<CAShapeLayer>
+    private let blocks: LayerPool<BlockLayer>
+    private let spans: LayerPool<SpanLayer>
+    private let diamonds: LayerPool<CALayer>
+    private var waveforms: [String: CAShapeLayer] = [:]
+
+    /// The thumbnails, and the waveforms worked out so far by audio track.
+    var thumbnailCache: ThumbnailCache?
+    var waveformLevels: [String: WaveformLevels] = [:]
+    /// Called once a thumbnail arrived, to draw it.
+    var thumbnailArrived: () -> Void = {}
+
+    private struct ThumbnailKey: Hashable {
+        var track: String
+        var source: UInt64
+        var height: Int
+    }
+    /// What was made, `nil` when there is none (the source is in no segment that can be read), oldest first.
+    private var thumbnails: [ThumbnailKey: CGImage?] = [:]
+    private var thumbnailOrder: [ThumbnailKey] = []
+    private var loading: [ThumbnailKey: Task<Void, Never>] = [:]
+    /// The thumbnail each tile shows, or is waiting for.
+    private var tileKeys: [String: ThumbnailKey] = [:]
+    private static let keptThumbnails = 400
+    /// Clips faster than this are silent (`SpeedStretch.maximumSpeed` of the export): their waveform is flat.
+    private static let fastestHeard = 4.0
+
+    init() {
+        layer.masksToBounds = true
+        layer.addSublayer(rows)
+        thumbnailStrip.mask = clipMask
+        rows.addSublayer(thumbnailStrip)
+        clipLayers = LayerPool(parent: rows) { ClipLayer() }
+        hatches = LayerPool(parent: rows) {
+            let hatch = CAShapeLayer()
+            hatch.lineWidth = 1
+            hatch.masksToBounds = true
+            return hatch
+        }
+        tiles = LayerPool(parent: thumbnailStrip) {
+            let tile = CALayer()
+            tile.contentsGravity = .resizeAspectFill
+            tile.masksToBounds = true
+            return tile
+        }
+        spans = LayerPool(parent: rows) { SpanLayer() }
+        blocks = LayerPool(parent: rows) { BlockLayer() }
+        diamonds = LayerPool(parent: rows) {
+            let diamond = CALayer()
+            diamond.setAffineTransform(CGAffineTransform(rotationAngle: .pi / 4))
+            return diamond
+        }
+        layer.addSublayer(separators)
+        separators.lineWidth = 1
+        separators.fillColor = nil
+    }
+
+    /// Lays out what is in sight of `content` at `geometry`; called inside a transaction without actions.
+    func update(_ content: TimelineContent, _ geometry: TimelineGeometry, _ palette: TimelinePalette) {
+        layer.isHidden = false
+        rows.frame = CGRect(x: 0, y: -geometry.verticalOffset, width: geometry.areaWidth, height: geometry.rowsHeight)
+        separators.frame = layer.bounds
+        separators.strokeColor = palette.separator
+        let lines = CGMutablePath()
+        for row in geometry.rows {
+            let y = (row.top + row.height - geometry.verticalOffset).rounded() - 0.5
+            lines.move(to: CGPoint(x: 0, y: y))
+            lines.addLine(to: CGPoint(x: geometry.areaWidth, y: y))
+        }
+        separators.path = lines
+
+        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, diamonds.begin] { pool() }
+        var wanted: Set<ThumbnailKey> = []
+        var shownWaveforms: Set<String> = []
+        for row in geometry.rows {
+            switch row.track {
+            case .ruler: break
+            case .video: layOutVideo(content, row, geometry, palette, &wanted)
+            case .screen: layOutScreens(content, row, geometry, palette)
+            case .zoom: layOutZooms(content, row, geometry, palette)
+            case .camera: layOutCamera(content, row, geometry, palette)
+            case let .audio(id):
+                layOutWaveform(id, content, row, geometry, palette)
+                shownWaveforms.insert(id)
+            }
+        }
+        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, diamonds.end] { pool() }
+        for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
+            waveform.removeFromSuperlayer()
+            waveforms[id] = nil
+        }
+        // What is no longer in sight is not made.
+        for (key, task) in loading where !wanted.contains(key) {
+            task.cancel()
+            loading[key] = nil
+        }
+    }
+
+    /// Nothing to show (the project is opening, or cannot be shown).
+    func clear() {
+        layer.isHidden = true
+        for task in loading.values { task.cancel() }
+        loading = [:]
+    }
+
+    /// Forgets the layers, so the next update makes them again with new colors.
+    func reset() {
+        for pool in [clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, diamonds.removeAll] {
+            pool()
+        }
+        tileKeys = [:]
+        for waveform in waveforms.values { waveform.removeFromSuperlayer() }
+        waveforms = [:]
+    }
+
+    /// Forgets the thumbnails (another project, or the package moved).
+    func forgetThumbnails() {
+        for task in loading.values { task.cancel() }
+        loading = [:]
+        thumbnails = [:]
+        thumbnailOrder = []
+        tileKeys = [:]
+        tiles.removeAll()
+    }
+
+    /// How many layers the rows have in sight now, for the benchmark.
+    var layerCount: Int {
+        clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
+            + diamonds.shownCount + waveforms.count
+    }
+
+    // MARK: - Video
+
+    private func layOutVideo(
+        _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette,
+        _ wanted: inout Set<ThumbnailKey>
+    ) {
+        let top = row.top + 2, height = row.height - 4
+        thumbnailStrip.frame = CGRect(x: 0, y: top, width: geometry.areaWidth, height: height)
+        thumbnailStrip.backgroundColor = palette.clipFill
+        clipMask.frame = thumbnailStrip.bounds
+        let mask = CGMutablePath()
+        let (lower, upper) = geometry.visibleOutput
+        content.clips.forEach(from: lower, to: upper) { item in
+            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
+            let radius = min(4, rect.width / 2)
+            mask.addRoundedRect(in: CGRect(x: rect.minX, y: 0, width: rect.width, height: height), cornerWidth: radius, cornerHeight: radius)
+            let (clip, isNew) = clipLayers.layer(item.id)
+            if isNew {
+                clip.badge.backgroundColor = palette.badgeFill
+                clip.badge.foregroundColor = palette.badgeText
+                clip.borderColor = palette.contrastBorder
+                clip.badge.contentsScale = geometry.backingScale
+            }
+            clip.frame = rect
+            clip.borderWidth = palette.increaseContrast ? 1 : 0
+            let text = item.info.speed == 1 ? nil : TimelineFormat.multiplier(item.info.speed)
+            if clip.badgeText != text {
+                clip.badgeText = text
+                clip.badge.string = text
+            }
+            let badgeWidth = CGFloat((text?.count ?? 0) * 6 + 8)
+            clip.badge.isHidden = text == nil || rect.width < badgeWidth + 6
+            clip.badge.frame = CGRect(x: max(3, -rect.minX + 3), y: 3, width: badgeWidth, height: 14)
+        }
+        clipMask.path = mask
+
+        layOutThumbnails(content, geometry, height: height, &wanted)
+
+        for (i, span) in content.missing.enumerated() where span.upperBound >= lower && span.lowerBound <= upper {
+            guard let rect = geometry.itemRect(span, top: top, height: height, gap: 0) else { continue }
+            let (hatch, isNew) = hatches.layer("\(i)")
+            if isNew {
+                hatch.strokeColor = palette.hatchStroke
+                hatch.backgroundColor = palette.hatchFill
+                hatch.fillColor = nil
+            }
+            // Stripes every 6 pt from the span's start, so they move with it when only a part of it is in sight.
+            let stripes = CGMutablePath()
+            let phase = (geometry.x(span.lowerBound) - rect.minX).truncatingRemainder(dividingBy: 6)
+            var x = phase - (rect.height / 6).rounded(.up) * 6
+            while x < rect.width {
+                stripes.move(to: CGPoint(x: x, y: rect.height))
+                stripes.addLine(to: CGPoint(x: x + rect.height, y: 0))
+                x += 6
+            }
+            hatch.path = stripes
+            hatch.frame = rect
+        }
+    }
+
+    /// The tiles of thumbnails in sight, each showing the thumbnail of the frame at its left edge, or the clip's color
+    /// until it arrives.
+    private func layOutThumbnails(_ content: TimelineContent, _ geometry: TimelineGeometry, height: Double, _ wanted: inout Set<ThumbnailKey>) {
+        guard let cache = thumbnailCache, content.map.duration > 0, height > 0 else { return }
+        let width = (height * content.screenAspect).rounded()
+        let pixels = min(max(Int((height * geometry.backingScale).rounded()), 1), 512)
+        // The output a tile covers, and the step its time is rounded down to: a power of two of nanoseconds, at most that.
+        let period = width / geometry.scale * 1e9
+        guard period.isFinite, period >= 1 else { return }
+        let step = Double(1 << Int(log2(period)))
+        let contentWidth = Double(content.map.duration) * geometry.scale / 1e9
+        let first = max(Int((geometry.offset / width).rounded(.down)), 0)
+        let last = Int(((min(geometry.offset + geometry.areaWidth, contentWidth)) / width).rounded(.up))
+        guard first < last else { return }
+        for i in first..<last {
+            let τ = Int64((Double(i) * period).rounded(.down))
+            guard τ < content.map.duration, let (k, source) = content.map.source(atOutput: τ) else { continue }
+            let clip = content.sequence[k]
+            // Within the clip, so the step's frames are its own and stay when an edit moves the clip.
+            let sourceStep = max(step * clip.speed, 1)
+            let into = Double(source.nanoseconds - clip.start)
+            let rounded = clip.start + UInt64((into / sourceStep).rounded(.down) * sourceStep)
+            guard let track = content.screenTrack(atSource: rounded) else { continue }
+            let key = ThumbnailKey(track: track, source: rounded, height: pixels)
+            wanted.insert(key)
+            let id = "\(i)"
+            let (tile, isNew) = tiles.layer(id)
+            if isNew { tile.contentsScale = geometry.backingScale }
+            tile.frame = CGRect(x: Double(i) * width - geometry.offset, y: 0, width: width, height: height)
+            // Another frame for the tile: the clip's color until it arrives, never a frame of another time.
+            if isNew || tileKeys[id] != key {
+                tileKeys[id] = key
+                tile.contents = nil
+            }
+            if let made = thumbnails[key] {
+                if tile.contents == nil, let made { tile.contents = made }
+            } else {
+                request(key, from: cache)
+            }
+        }
+    }
+
+    private func request(_ key: ThumbnailKey, from cache: ThumbnailCache) {
+        guard loading[key] == nil else { return }
+        loading[key] = Task { [weak self] in
+            let image = await cache.thumbnail(track: key.track, source: HostTime(nanoseconds: key.source), height: key.height)
+            guard !Task.isCancelled, let self else { return }
+            self.loading[key] = nil
+            self.keep(key, image)
+            self.thumbnailArrived()
+        }
+    }
+
+    private func keep(_ key: ThumbnailKey, _ image: CGImage?) {
+        if thumbnails.updateValue(image, forKey: key) == nil { thumbnailOrder.append(key) }
+        if thumbnailOrder.count > Self.keptThumbnails {
+            let dropped = thumbnailOrder.removeFirst()
+            thumbnails[dropped] = nil
+        }
+    }
+
+    // MARK: - Screen, Zoom, Camera
+
+    private func layOutScreens(
+        _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
+    ) {
+        let top = row.top + 2, height = row.height - 4
+        let (lower, upper) = geometry.visibleOutput
+        content.screens.forEach(from: lower, to: upper) { item in
+            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
+            let (span, isNew) = spans.layer(item.id)
+            if isNew {
+                span.backgroundColor = palette.screenFill
+                span.borderColor = palette.contrastBorder
+                span.label.foregroundColor = palette.screenText
+                span.label.contentsScale = geometry.backingScale
+            }
+            span.frame = rect
+            span.borderWidth = palette.increaseContrast ? 1 : 0
+            if span.labelText != item.info.name {
+                span.labelText = item.info.name
+                span.label.string = item.info.name
+            }
+            // The name stays at the left of what is in sight.
+            let left = max(6, -rect.minX + 6)
+            span.label.frame = CGRect(x: left, y: (height - 13) / 2, width: max(rect.width - left - 4, 0), height: 13)
+            span.label.isHidden = rect.width < 24
+        }
+    }
+
+    private func layOutZooms(
+        _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
+    ) {
+        let top = row.top + 3, height = row.height - 6
+        let (lower, upper) = geometry.visibleOutput
+        content.zooms.forEach(from: lower, to: upper) { item in
+            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
+            let (block, isNew) = blocks.layer(item.id)
+            if isNew { block.label.contentsScale = geometry.backingScale }
+            let automatic = item.info.automatic
+            if block.automatic != automatic || isNew {
+                block.automatic = automatic
+                block.fillColor = automatic ? palette.zoomAutoFill : palette.zoomFill
+                block.lineDashPattern = automatic ? [3, 2] : nil
+                block.label.foregroundColor = automatic ? palette.zoomAutoText : palette.zoomText
+            }
+            block.strokeColor = automatic ? palette.zoomStroke : (palette.increaseContrast ? palette.contrastBorder : nil)
+            block.frame = rect
+            if block.drawnSize != rect.size {
+                block.drawnSize = rect.size
+                let radius = min(5, rect.width / 2, rect.height / 2)
+                block.path = CGPath(
+                    roundedRect: CGRect(origin: .zero, size: rect.size).insetBy(dx: 0.5, dy: 0.5), cornerWidth: max(radius - 0.5, 0),
+                    cornerHeight: max(radius - 0.5, 0), transform: nil)
+            }
+            let text = (automatic ? "A " : "") + TimelineFormat.multiplier(item.info.depth)
+            if block.labelText != text {
+                block.labelText = text
+                block.label.string = text
+            }
+            let left = max(5, -rect.minX + 5)
+            block.label.frame = CGRect(x: left, y: (height - 13) / 2, width: max(rect.width - left - 3, 0), height: 13)
+            block.label.isHidden = rect.width < 22
+        }
+    }
+
+    private func layOutCamera(
+        _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
+    ) {
+        let side = 9.0
+        // An instant is in sight while its diamond is.
+        let margin = Int64(side / geometry.scale * 1e9)
+        let (lower, upper) = geometry.visibleOutput
+        content.cameraChanges.forEach(from: lower - margin, to: upper + margin) { item in
+            let (diamond, isNew) = diamonds.layer(item.id)
+            if isNew {
+                diamond.backgroundColor = palette.camera
+                diamond.borderColor = palette.contrastBorder
+            }
+            diamond.borderWidth = palette.increaseContrast ? 1 : 0
+            diamond.bounds = CGRect(x: 0, y: 0, width: side, height: side)
+            diamond.position = CGPoint(x: geometry.snapped(geometry.x(item.output.lowerBound)), y: row.top + row.height / 2)
+        }
+    }
+
+    // MARK: - Audio
+
+    /// The waveform of audio track `id` across what is in sight: for each point of width, the lowest and highest sample
+    /// of the source its output shows (none of a clip faster than 4×, which is silent), times the track's gain, and flat
+    /// when it is muted.
+    private func layOutWaveform(
+        _ id: String, _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
+    ) {
+        let shape: CAShapeLayer
+        if let existing = waveforms[id] {
+            shape = existing
+        } else {
+            shape = CAShapeLayer()
+            rows.addSublayer(shape)
+            waveforms[id] = shape
+        }
+        let track = content.audio[id]
+        shape.fillColor = track?.isMicrophone == false ? palette.systemAudio : palette.microphone
+        shape.opacity = track?.muted == true ? 0.5 : 1
+        let height = row.height - 4
+        shape.frame = CGRect(x: 0, y: row.top + 2, width: geometry.areaWidth, height: height)
+        guard let track, let levels = waveformLevels[id] else {
+            shape.path = nil
+            return
+        }
+        let gain = Float(track.muted ? 0 : min(max(track.gain, 0), 2))
+        let middle = height / 2, half = height / 2
+        let clips = content.clips.items
+        let columns = Int(geometry.areaWidth.rounded(.up))
+        var tops: [CGPoint] = []
+        var bottoms: [CGPoint] = []
+        tops.reserveCapacity(columns + 1)
+        bottoms.reserveCapacity(columns + 1)
+        var k = 0
+        let duration = content.map.duration
+        for column in 0...columns {
+            let x = Double(column)
+            let a = geometry.output(atX: x), b = geometry.output(atX: x + 1)
+            guard b > 0, a < duration else { continue }
+            let from = max(a, 0), to = min(b, duration)
+            while k < clips.count, clips[k].output.upperBound <= from { k += 1 }
+            var low = Float.infinity, high = -Float.infinity
+            var t = from, j = k
+            while t < to, j < clips.count {
+                let clip = clips[j]
+                let end = min(to, clip.output.upperBound)
+                if clip.info.speed <= Self.fastestHeard {
+                    let start = Double(clip.info.start) - Double(track.origin)
+                    let sa = start + Double(t - clip.output.lowerBound) * clip.info.speed
+                    let sb = start + Double(end - clip.output.lowerBound) * clip.info.speed
+                    if let range = levels.range(fromPair: sa / 1e7, toPair: sb / 1e7) {
+                        low = min(low, range.x)
+                        high = max(high, range.y)
+                    }
+                }
+                t = end
+                j += 1
+            }
+            if low > high { (low, high) = (0, 0) }
+            low = min(max(low * gain, -1), 1)
+            high = min(max(high * gain, -1), 1)
+            // At least half a point, so silence is a line.
+            let topY = middle - Double(high) * half, bottomY = max(middle - Double(low) * half, topY + 0.5)
+            tops.append(CGPoint(x: x, y: topY))
+            bottoms.append(CGPoint(x: x, y: bottomY))
+        }
+        guard !tops.isEmpty else {
+            shape.path = nil
+            return
+        }
+        let path = CGMutablePath()
+        path.addLines(between: tops + bottoms.reversed())
+        path.closeSubpath()
+        shape.path = path
+    }
+}

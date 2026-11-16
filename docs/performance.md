@@ -203,3 +203,35 @@ Cómo se llega:
 - *El recorrido de una ráfaga de cambios de forma por cuadro* (Task 27): evaluar un cuadro al final de una ráfaga de 600 cambios de forma (10 s de una ventana que cambia de forma en cada cuadro) cuesta 5,8 µs en Release (1,8 µs sin ráfaga; 258 µs en Debug): no hace falta otra estructura.
 - *La copia con mipmaps de un recorte que cambia de tamaño* (Tasks 22 y 27): la midió Task 27 (1,84 ms de GPU por cuadro mientras el resorte cambia el recorte, 0,39 ms reusando una copia, el doble en un fundido cruzado, hasta 6 copias libres de unos 45 MB a 4K). **La memoria, arreglada:** el compositor guarda solo las copias de los dos últimos tamaños pedidos (la pantalla y la que se deja en un fundido cruzado) y suelta las demás, así que mientras un resorte mueve el recorte no se juntan copias de tamaños viejos (`mipmappedCopiesOfOldSizesAreLetGo`). **Postergado (decisión del controlador): reusar copias entre tamaños** (en cubetas de tamaño, o una caché por pista e instante, sin que ningún texel de fuera del recorte llegue a ningún nivel de mipmap). Cuesta unos 1,5 ms de GPU de más por cuadro, solo mientras dura un resorte de geometría (a lo sumo 1,5 s); el p95 de la vista previa a 4K de arriba queda de 8 a 13 ms, dentro de los 16,7.
 - *Abrir un registro de edición largo* (Task 13): reproducir el registro ya no recorre todos los grupos por cada grupo nuevo (`replayIsLinearInTheGroups`): pasar las líneas antes de la instantánea de 10 000 grupos tardaba 1,21 s y 20 000, 4,75 s (cuadrático, Debug); ahora, los dos juntos con su armado, 0,1 s.
+
+### La línea de tiempo (Task 40)
+
+```
+make build
+swift run --package-path Packages/RecorderKit recorder-dev synth-record "$TMPDIR/bench-timeline" --duration 3
+TOMA_BENCH_TIMELINE=1 build/Build/Products/Debug/Toma.app/Contents/MacOS/Toma -TomaDumpEditorStructure "$TMPDIR/bench-timeline/"*.toma
+```
+
+Solo en Debug. Abre el paquete en el editor (como `-TomaDumpEditorStructure`, sin la incorporación ni avisos), dice cuánto mide su línea de tiempo (`editor timeline:`) y, en una ventana propia de 1440 pt de ancho (1352 pt de pistas), muestra una toma de una hora armada en código: una pantalla, una cámara, un micrófono y el audio del sistema; 500 tramos de 7 s con 0,2 s cortados entre ellos (uno de cada diez a 2× y algunos a 0,5×: 3465 s de salida); 300 zooms de 3 s, la mitad automáticos; 100 cambios de la cámara; 40 marcadores; dos partes rayadas, y la forma de onda de una hora en las dos pistas de audio. Para cada cuadro arma lo que está a la vista y lo manda al servidor de render (`CATransaction.flush()`) en el hilo principal, y mide eso, en cinco movimientos de 600 cuadros: ajustada a la ventana cambiando la escala (los 500 tramos y los 300 zooms a la vista), un pellizco de ajustada a 600 pt/s y de vuelta, y desplazarla 40 pt por cuadro a 3,9, 60 y 600 pt/s; y mover solo el cabezal. Después, durante 4 s, un pellizco al ritmo del display link de la vista (`paced pinch`): cuántos refrescos hubo y cuántos llegaron más de 1,5 períodos después del anterior. Con `TOMA_BENCH_TIMELINE_SNAPSHOTS=<carpeta>` deja además un PNG de la línea de tiempo del editor y de la de una hora a cuatro escalas.
+
+Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026, compilación Debug, sobre `1b/t40`. Entre paréntesis, la carga de la Mac (promedio de 1 min) al empezar cada corrida: había pruebas de otros agentes. p50 / p95 / máximo del cuadro en el hilo principal, en ms.
+
+| Movimiento | Corrida 1 (8,07) | Corrida 2 (9,08) | Corrida 3 (8,80) | Capas de elementos a la vista |
+|---|---|---|---|---|
+| Ajustada, todo a la vista, cambiando la escala | 4,48 / 4,76 / 16,65 | 4,54 / 4,84 / 17,16 | 4,37 / 4,62 / 15,90 | hasta 921 |
+| Pellizco de ajustada (0,39 pt/s) a 600 pt/s y de vuelta | 3,26 / 4,40 / 4,92 | 3,34 / 4,39 / 5,44 | 3,14 / 4,10 / 5,00 | hasta 921 |
+| Desplazar a 3,9 pt/s | 3,18 / 3,52 / 4,74 | 3,22 / 3,54 / 4,86 | 3,03 / 3,26 / 4,90 | hasta 113 |
+| Desplazar a 60 pt/s | 3,13 / 3,47 / 4,24 | 2,94 / 3,26 / 4,02 | 2,93 / 3,17 / 4,21 | hasta 29 |
+| Desplazar a 600 pt/s | 2,31 / 2,58 / 3,84 | 2,26 / 2,48 / 3,30 | 2,17 / 2,30 / 3,05 | hasta 23 |
+| Solo el cabezal | 0,03 / 0,03 / 0,21 | 0,03 / 0,04 / 0,22 | 0,03 / 0,03 / 0,46 | — |
+
+La meta (diseño §7.9) es 120 fps en esta Mac (8,33 ms por cuadro) y 60 fps en la M1 (16,7 ms): el p95 del hilo principal, en Debug y con la Mac cargada, queda entre 2,3 y 4,8 ms, y el máximo pasa de 8,33 ms solo en el primer cuadro con la secuencia entera a la vista, cuando se crean sus capas (de 16 a 17 ms, una vez: al abrir un proyecto así). Una compilación Release es más rápida.
+
+**Sin medir acá: la frecuencia real de la pantalla.** La pantalla de esta Mac estaba apagada y el display link no llamó ni una vez (`paced pinch: the display did not refresh`), así que no se midió lo que compone el servidor de render por cuadro ni si se pierde algún refresco: queda para el dueño (`docs/release.md`, "La línea de tiempo (40)"), con la pantalla encendida, en su Mac y en la M1.
+
+Cómo se llega:
+
+- **Una capa por elemento a la vista, reciclada.** Tramos, bloques, tramos de pantalla, rombos, rayados, mosaicos de miniaturas y etiquetas de la regla salen de un pozo por pista: el elemento que sale de la vista le deja su capa al que entra, que solo cambia de lugar, de texto y de color; nada se crea ni se destruye al desplazar. Los elementos a la vista se encuentran con una búsqueda binaria sobre la lista ordenada (con el fin más lejano hasta cada uno, por si se superponen), así que una hora con 500 tramos no cuesta más que lo que se ve.
+- **El cabezal es una capa aparte.** Reproduciendo, en cada refresco solo cambia su posición (0,03 ms); la página pasa sola cuando llega al borde derecho.
+- **Miniaturas de la salida, no de cada tramo.** Mosaicos del ancho de una miniatura a lo largo de la pista, cada uno con el cuadro de su borde izquierdo redondeado hacia abajo, dentro de su tramo, a un paso que es una potencia de dos de nanosegundos: un pellizco vuelve a pedir pocas, y una edición que corre un tramo no las cambia. Se ven solo dentro de los tramos (una máscara con sus rectángulos). Las hace `ThumbnailCache` fuera del hilo principal, una a la vez; las que salen de la vista antes de hacerse se cancelan.
+- **Formas de onda por columna de un punto.** La de cada pista se reduce una vez, fuera del hilo principal, a mínimos y máximos de cada potencia de dos de sus pares de 10 ms: cada columna lee unos pocos valores, a cualquier escala, y la pista entera es un solo trazado.

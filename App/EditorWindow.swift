@@ -15,11 +15,12 @@ final class ExportGate {
 }
 
 /// The editor's window of one project (design §5.1): a unified toolbar with the bar (`EditorToolbar`) and, as content,
-/// a vertical split whose top is a horizontal split of the preview (`PreviewArea`) and the panel's place (Task 37 adds
-/// the system's inspector, `NSSplitViewItem(inspectorWithViewController:)`, `EditorPanel`), and whose bottom is the timeline's place
-/// (Task 40, its divider between `EditorLayout.timelineHeightRange`). Each part is SwiftUI in an `NSHostingController`
-/// whose view has the part's identifier (`preview`, `inspector`, `timeline`); the preview's bridges its `.toolbar` and
-/// title to the window (`sceneBridgingOptions`), without which the bar would not appear.
+/// a vertical split whose top is a horizontal split of the preview (`PreviewArea`) and the panel (the system's
+/// inspector, `NSSplitViewItem(inspectorWithViewController:)`, `EditorPanel`), and whose bottom is the timeline
+/// (`TimelineViewController`, its divider between `EditorLayout.timelineHeightRange`). The preview and the panel are
+/// SwiftUI in an `NSHostingController`, the timeline AppKit; each part's view has its identifier (`preview`,
+/// `inspector`, `timeline`). The preview's bridges its `.toolbar` and title to the window (`sceneBridgingOptions`),
+/// without which the bar would not appear.
 @MainActor
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
@@ -34,6 +35,9 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private let horizontalSplit = NSSplitViewController()
     /// Follows the window's toolbar, which SwiftUI gives it after it is made.
     private var toolbarObservation: NSKeyValueObservation?
+    /// The timeline, under the preview and the panel.
+    private let timeline: TimelineViewController
+    private var timelineItem: NSSplitViewItem?
 
     init(
         packageURL: URL, takeID: String?, exportGate: ExportGate, onRecovered: @escaping (URL) -> Void,
@@ -43,6 +47,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         self.onClose = onClose
         model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
         model.onRecovered = onRecovered
+        timeline = TimelineViewController(model: model)
         let visible = NSScreen.main?.visibleFrame ?? NSRect(origin: .zero, size: EditorLayout.minimumSize)
         let size = EditorLayout.initialSize(visible: visible.size)
         let window = NSWindow(
@@ -76,6 +81,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         horizontalSplit.addSplitViewItem(inspector)
         verticalSplit.splitView.isVertical = false
         verticalSplit.addSplitViewItem(NSSplitViewItem(viewController: horizontalSplit))
+        // The timeline: 236 pt, its divider between 180 pt and half the window; it keeps its height as the window
+        // changes size (the preview takes the rest).
+        timeline.view.identifier = NSUserInterfaceItemIdentifier("timeline")
+        let timelineItem = NSSplitViewItem(viewController: timeline)
+        timelineItem.minimumThickness = EditorLayout.timelineHeightRange(windowHeight: size.height).lowerBound
+        timelineItem.holdingPriority = NSLayoutConstraint.Priority(rawValue: NSLayoutConstraint.Priority.defaultLow.rawValue + 1)
+        verticalSplit.addSplitViewItem(timelineItem)
+        self.timelineItem = timelineItem
         window.contentViewController = verticalSplit
         keepMinimumSize()
         toolbarObservation = window.observe(\.toolbar) { [weak self] _, _ in
@@ -86,8 +99,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
             NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height),
             display: false)
         window.delegate = self
+        keepTimelineHeight(EditorLayout.timelineHeight)
         model.window = window
         model.load()
+        #if DEBUG
+        if TimelineBench.isAsked {
+            // Once the take's thumbnails and waveforms had time to arrive; from a timer of the run loop, not a block of the
+            // main queue, so the main actor's work goes on while the benchmark runs the run loop.
+            let editor = timeline.view
+            Timer.scheduledTimer(withTimeInterval: 4, repeats: false) { _ in MainActor.assumeIsolated { TimelineBench.run(editor: editor) } }
+        }
+        #endif
     }
 
     @available(*, unavailable)
@@ -138,7 +160,26 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.contentMinSize = NSSize(width: minimum.width, height: minimum.height - max(decoration, 0))
     }
 
+    /// The timeline is at most half the window: as the window changes size, so does the most it can be, and a timeline
+    /// taller than that shrinks to it.
+    func windowDidResize(_ notification: Notification) {
+        guard let window, let timelineItem else { return }
+        let range = EditorLayout.timelineHeightRange(windowHeight: window.frame.height)
+        timelineItem.maximumThickness = range.upperBound
+        if timeline.view.frame.height > range.upperBound { keepTimelineHeight(range.upperBound) }
+    }
+
+    /// Puts the timeline's divider `height` points above the bottom of the window.
+    private func keepTimelineHeight(_ height: Double) {
+        guard let window else { return }
+        timelineItem?.maximumThickness = EditorLayout.timelineHeightRange(windowHeight: window.frame.height).upperBound
+        let split = verticalSplit.splitView
+        split.layoutSubtreeIfNeeded()
+        split.setPosition(split.bounds.height - split.dividerThickness - height, ofDividerAt: 0)
+    }
+
     func windowWillClose(_ notification: Notification) {
+        timeline.stop()
         if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = nil }
         model.close()
         // On the next turn: the window is still closing, and dropping this controller releases it.
@@ -150,7 +191,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     /// The project opened, or could not be, and the bar has its items.
     var structureIsSettled: Bool {
-        model.state != .opening && model.state != .recovering && !toolbarIdentifiers.isEmpty
+        !TimelineBench.isAsked && model.state != .opening && model.state != .recovering && !toolbarIdentifiers.isEmpty
     }
 
     /// The identifiers of the editor's items of the bar, from left to right as they are shown (AppKit lists the centered
