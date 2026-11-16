@@ -27,7 +27,8 @@ public enum RenderError: Error, Equatable {
 /// Renders frames of a take: the one drawing path behind the editor preview and the MP4 export.
 ///
 /// A frame is a function of the project, its edit document and the output time alone (`FrameEvaluator`), drawn by
-/// `Compositor` over the screen and camera frames that a `TrackFrameReader` of each track decodes for that time.
+/// `Compositor` over the screen and camera frames that a `TrackFrameReader` of each track decodes for that time: of each
+/// screen track only while it is shown (and both screens while a change of screen crossfades).
 /// Every way to draw — `render(at:into:)`, `renderBytes(at:)` and `PreviewRenderer` — goes through
 /// `encode(at:into:commandBuffer:)`.
 ///
@@ -76,25 +77,43 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The spans of the screen and of the camera shown with the frame before them so far, because a segment could
     /// not be decoded there (`TrackFrameReader`), in output seconds within `[0, duration]`, in time order (by start, end
     /// and track): each span of the source through `TimeMap.outputRange(ofSource:take:)`, with the cuts inside it closed,
-    /// and none that is all cut. The tracks are those the document shows (its screens, and the camera unless it is
-    /// hidden), so the segments that cannot be used at all are listed before a frame is drawn. After drawing every frame
-    /// of the timeline in order (an export), it lists every such span of the output.
+    /// and none that is all cut; of a screen, only where it is shown (the plan's screen, and the one being left while a
+    /// change of screen crossfades: `FrameEvaluator.screenRanges`), one span for each stretch of it. The tracks are those
+    /// the document shows (its screens, and the camera unless it is hidden), so the segments that cannot be used at all
+    /// are listed before a frame is drawn. After drawing every frame of the timeline in order (an export), it lists every
+    /// such span of the output.
     public var missingVideo: [MissingVideo] {
-        let timeMap = evaluator.timeMap, takeID = take.id
+        let timeMap = evaluator.timeMap, takeID = take.id, shown = evaluator.screenRanges
         return evaluator.videoTrackIDs
             .compactMap(reader(for:))
             .flatMap { reader in reader.gaps.map { (reader.trackID, $0) } }
-            .compactMap { track, gap -> MissingVideo? in
+            .flatMap { track, gap -> [MissingVideo] in
                 // A span of no source (a read that timed out at one instant) is listed where that instant is shown.
                 let output = gap.start < gap.end
                     ? timeMap.outputRange(ofSource: gap.start..<gap.end, take: takeID)
                     : timeMap.output(atSource: gap.start, take: takeID).map { $0..<$0 }
-                guard let output else { return nil }
-                return MissingVideo(
-                    track: track, file: gap.file, start: Double(output.lowerBound) / 1e9, end: Double(output.upperBound) / 1e9,
-                    reason: gap.reason)
+                guard let output else { return [] }
+                let parts = shown[track].map { Self.parts(of: output, shownIn: $0, duration: timeMap.duration) } ?? [output]
+                return parts.map { part in
+                    MissingVideo(
+                        track: track, file: gap.file, start: Double(part.lowerBound) / 1e9, end: Double(part.upperBound) / 1e9,
+                        reason: gap.reason)
+                }
             }
             .sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
+    }
+
+    /// The parts of output range `range` inside `shown` (ranges in order and apart) of an output `duration` long: an
+    /// empty range (one instant) where it is in one of them, its end included at the output's end.
+    static func parts(of range: Range<Int64>, shownIn shown: [Range<Int64>], duration: Int64) -> [Range<Int64>] {
+        guard !range.isEmpty else {
+            let t = range.lowerBound
+            return shown.contains { $0.contains(t) || (t == $0.upperBound && t == duration) } ? [range] : []
+        }
+        return shown.compactMap { span in
+            let lower = max(range.lowerBound, span.lowerBound), upper = min(range.upperBound, span.upperBound)
+            return lower < upper ? lower..<upper : nil
+        }
     }
 
     /// The legacy document's frames (`EditDocument.legacy(for:)`): what phase 0 and 1a draw.
@@ -150,15 +169,21 @@ public final class FrameRenderer: @unchecked Sendable {
         try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
             let frame = try evaluator.frame(at: outputTime) { try cursorImages.isReadable($0) }
+            // Only the screens shown are decoded: the one of the frame, and the one being left during a change.
             let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
+            let previousScreen = try frame.previousScreen.flatMap {
+                try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer)
+            }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: outputSize)
-            let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0, scale: TitleTexture.scale(for: frame)) }
+            let windowTitle = try TitleTexture.source(for: frame).flatMap {
+                try titleTexture.texture(for: $0, scale: TitleTexture.scale(for: frame))
+            }
             // Every cursor of the frame, blurred or not, is drawn with the image of its time.
             let image = frame.cursor?.image ?? frame.subframes.lazy.compactMap(\.cursor).first?.image ?? frame.cursorSamples.first?.image
             let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))
             try compositor.encode(
-                frame, screen: screen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
+                frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
                 windowTitle: windowTitle, into: target, commandBuffer: commandBuffer)
         }
     }
@@ -236,6 +261,12 @@ public final class FrameRenderer: @unchecked Sendable {
         guard commandBuffer.status == .completed else {
             throw RenderError.gpuFailed(commandBuffer.error.map { String(describing: $0) } ?? "status \(commandBuffer.status.rawValue)")
         }
+    }
+
+    /// The earliest and the latest source instants a frame was asked of track `trackID` so far (`nil` before the first,
+    /// and for a track without a reader yet), for tests.
+    func askedFor(track trackID: String) -> ClosedRange<HostTime>? {
+        readers.withLock { $0[trackID] }?.askedFor
     }
 
     /// The reader of track `trackID` of the take, made the first time it is asked for; `nil` for a track the take does

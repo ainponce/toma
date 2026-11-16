@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Dispatch
 import Foundation
+import ProjectFormat
 import Synchronization
 
 /// Free space on a volume, in bytes.
@@ -131,31 +132,11 @@ public enum VolumeEligibility: Sendable, Equatable {
     case syncedFolder
 
     public static func check(_ url: URL) throws -> VolumeEligibility {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        let synced = ["Library/Mobile Documents", "Library/CloudStorage"].map {
-            normalizedPath(home.appending(path: $0, directoryHint: .isDirectory))
-        }
-        let path = normalizedPath(url)
-        if synced.contains(where: { path == $0 || path.hasPrefix($0 + "/") }) {
+        if SyncedFolders.contains(url) {
             return .syncedFolder
         }
         let values = try existingAncestor(of: url).resourceValues(forKeys: [.volumeIsLocalKey])
         return values.volumeIsLocal == false ? .networkVolume : .allowed
-    }
-
-    /// Lowercased on purpose: a conservative choice for default (case-insensitive) APFS.
-    /// Standardized, lowercased path with symlinks resolved on the nearest existing ancestor, so
-    /// that a location that does not exist yet still compares correctly.
-    private static func normalizedPath(_ url: URL) -> String {
-        var existing = url.standardizedFileURL
-        var rest: [String] = []
-        while !FileManager.default.fileExists(atPath: existing.path), existing.path != "/" {
-            rest.insert(existing.lastPathComponent, at: 0)
-            existing = existing.deletingLastPathComponent()
-        }
-        var resolved = existing.resolvingSymlinksInPath()
-        for component in rest { resolved.append(path: component) }
-        return resolved.standardizedFileURL.path.lowercased()
     }
 }
 

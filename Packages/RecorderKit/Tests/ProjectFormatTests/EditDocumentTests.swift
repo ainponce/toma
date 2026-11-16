@@ -604,9 +604,15 @@ private func encoded(_ document: EditDocument) throws -> String {
     #expect(bounds.screen == nil)
     #expect(bounds.start == ns(0))
     #expect(bounds.end == ns(0))
-    #expect(TakeTimeline.recordedSpans(take: take, events: []) == [])
+    // A document's timeline is what the take recorded (`editableBounds`), the legacy one's too: never from host time 0.
+    let editable = TakeTimeline.editableBounds(take: take, events: [])
+    #expect(editable.screen == nil && editable.start == ns(1_000) && editable.end == ns(9_000))
+    #expect(TakeTimeline.recordedSpans(take: take, events: []) == [ns(1_000)..<ns(9_000)])
+    let silent = TakeRecord(id: "take-001", status: .complete, startedAt: Date(timeIntervalSince1970: 0), tracks: [])
+    #expect(TakeTimeline.editableBounds(take: silent, events: []).end == ns(0))
+    #expect(TakeTimeline.recordedSpans(take: silent, events: []) == [])
     let document = EditDocument.legacy(take: take, events: [])
-    #expect(document.sequence == [Clip(id: "c-00000001", take: "take-001", start: ns(0), end: ns(0), speed: 1)])
+    #expect(document.sequence == [Clip(id: "c-00000001", take: "take-001", start: ns(1_000), end: ns(9_000), speed: 1)])
     #expect(document.screens.initial.isEmpty)
     #expect(document.audio.tracks == ["take-001/mic": TrackGain(gain: 1, muted: false)])
 }

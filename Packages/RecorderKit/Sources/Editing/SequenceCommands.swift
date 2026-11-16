@@ -19,8 +19,9 @@ public enum SequenceError: Error, Equatable {
 ///   and a trim or a speed moves every clip after it.
 /// - No clip is left shorter than one output frame at the document's `frameRate` (plan decision 24): a command that
 ///   would leave one does nothing, except a range deletion, which takes a sliver of an edge clip with the range.
-/// - A clip's edge goes as far as the clip next to it in the source, or the start or the end of the take's timeline
-///   (`TakeTimeline.bounds`); a pause is no limit, its frozen frame shows (plan decision 6).
+/// - A clip's edge goes as far as the clip next to it in the source, or the start or the end of the take's editable
+///   timeline (`TakeTimeline.editableBounds`: its screen's, or the audio and camera it recorded without a screen); a pause
+///   is no limit, its frozen frame shows (plan decision 6).
 /// - Every clip a command writes has its speed in its range, as `ClipSpeed.clamped(_:)` reads it.
 /// - The changes are built from the clips they touch, never from the whole document encoded again for each one.
 /// - The `target` of a step, which joins a burst of steps into one undo group, is the id of the clip it acts on; for
@@ -121,13 +122,14 @@ public enum SequenceCommands {
     }
 
     /// The source instants `edge` of clip `clipID` can go to (plan decisions 6 and 24): back to the edge of the clip of
-    /// the same take before or after it in the source, or to the start or the end of `TakeTimeline.bounds` of `take` (the
-    /// clip's take), pauses included; forward while at least a frame of the clip is left. Always holds where the edge
-    /// is now. Without a clip `clipID`, the take's bounds.
+    /// the same take before or after it in the source, or to the start or the end of `TakeTimeline.editableBounds` of
+    /// `take` (the clip's take: its screen's timeline, or what it recorded without a screen), pauses included; forward
+    /// while at least a frame of the clip is left. Always holds where the edge is now. Without a clip `clipID`, the take's
+    /// editable bounds.
     public static func trimLimits(
         _ doc: EditDocument, clipID: String, edge: ClipEdge, take: TakeRecord, events: [InputEvent]
     ) -> ClosedRange<HostTime> {
-        let bounds = TakeTimeline.bounds(take: take, events: events)
+        let bounds = TakeTimeline.editableBounds(take: take, events: events)
         guard let k = doc.sequence.firstIndex(where: { $0.id == clipID }) else { return bounds.start...bounds.end }
         let clip = doc.sequence[k]
         // The other clips of the take that show anything.
