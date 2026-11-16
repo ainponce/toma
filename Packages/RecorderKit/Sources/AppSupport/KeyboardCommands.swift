@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import ProjectFormat
 
 /// A key pressed in the editor, as the app reads it from an `NSEvent`: `key` is the letter or the sign the key types
 /// without modifiers, in lowercase (`"c"`, `","`, `"+"`, `"1"`), or a key without one: `"←"`, `"→"`, `"↑"`, `"↓"`,
@@ -77,6 +78,9 @@ public enum EditorCommand: Equatable, Sendable {
     case togglePanel
     case export
     case open
+    /// ⌥1 … ⌥5: Bubble, Screen Only, Split Screen, Camera Only, Full-Screen Camera (design §5.8): changes the selected block or
+    /// makes one.
+    case layout(LayoutKind)
 
     /// Whether holding the key does it again with each repeat: only what moves the playhead, the selection or the scale
     /// by a step. The rest happens once a press (held L does not run up to 8×).
@@ -148,6 +152,11 @@ public struct KeyboardCommands {
         }
     }
 
+    /// The layout each of ⌥1 … ⌥5 picks, in the order of the Layout tiles.
+    private static let layoutKeys: [String: LayoutKind] = [
+        "1": .bubble, "2": .screenOnly, "3": .split, "4": .cameraOnly, "5": .cameraFull,
+    ]
+
     /// A key without ⌘, other than J, K, L and Space.
     private static func letterKey(_ key: EditorKey) -> EditorCommand? {
         switch (key.key, key.modifiers) {
@@ -170,6 +179,7 @@ public struct KeyboardCommands {
         case (".", []): .nudge(frames: 1)
         case (",", [.shift]): .nudge(frames: -10)
         case (".", [.shift]): .nudge(frames: 10)
+        case let (digit, [.option]) where Self.layoutKeys[digit] != nil: .layout(Self.layoutKeys[digit]!)
         case ("z", []): .addZoom
         case ("n", []): .toggleSnapping
         case ("z", [.shift]): .fitTimeline

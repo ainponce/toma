@@ -61,4 +61,40 @@ public enum LayoutTrackRules {
     public static func cameraReadable(take: TakeRecord, availability: (SegmentRecord) -> SegmentAvailability) -> Bool {
         take.tracks.contains { $0.kind == .camera && $0.segments.contains { availability($0) == .present } }
     }
+
+    // MARK: - The preview and the keys
+
+    /// What ⌥1…⌥5 do (design §5.8).
+    public enum ShortcutAction: Equatable, Sendable {
+        /// Change the layout of the selected block.
+        case change(id: String)
+        /// Make a block at the playhead, or over the marked range.
+        case create
+    }
+
+    /// The action of a layout shortcut: the selected block's layout changes, if it is still in the document; without one, a
+    /// block is made.
+    public static func shortcutAction(selectedBlock: String?, in doc: EditDocument) -> ShortcutAction {
+        guard let selectedBlock, doc.camera.layouts.contains(where: { $0.id == selectedBlock }) else { return .create }
+        return .change(id: selectedBlock)
+    }
+
+    /// What the preview's bubble overlay edits at output instant `atOutput` (design §5.7).
+    public enum BubbleTarget: Equatable, Sendable {
+        /// No bubble: the layout that rules is not Bubble.
+        case none
+        /// The take's bubble (1b), the project's layout ruling and being Bubble.
+        case take
+        /// The own style of the Bubble block `id`.
+        case block(id: String)
+    }
+
+    /// Which bubble the overlay shows and drags at the playhead: the Bubble block's own inside a block (none inside another
+    /// layout's), and outside the blocks the take's when the project's layout is Bubble.
+    public static func bubbleTarget(_ doc: EditDocument, atOutput: Int64, timeMap: TimeMap) -> BubbleTarget {
+        if let block = LayoutCommands.block(atOutput: atOutput, in: doc, timeMap: timeMap) {
+            return block.kind == .bubble && block.bubble != nil ? .block(id: block.id) : .none
+        }
+        return doc.camera.layout.kind == .bubble ? .take : .none
+    }
 }

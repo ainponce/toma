@@ -677,6 +677,15 @@ Hace falta un proyecto con cámara y, para ver la división, uno con la cámara 
 - **Cámara ilegible.** En una copia de un proyecto a la que se le borró a mano el archivo de la cámara dentro del paquete, la fila Cámara dice "No se puede leer la cámara: se ve solo la pantalla."
 - **VoiceOver.** Cada bloque es un elemento: "Disposición Pantalla dividida, de 0:12 a 0:31", con las acciones Borrar, Recortar el comienzo y el final hasta el cabezal y "Cambiar la disposición" (abre el menú de los cinco). El encabezado "Cámara" es un botón.
 
+**La vista previa con la división y los atajos de disposición** (17)
+
+Hace falta un proyecto con cámara, con un bloque (o el layout del proyecto) en Pantalla dividida, y el cabezal dentro de él.
+- **La manija.** Al pasar el puntero por la separación entre las dos tarjetas aparece una manija (una barrita blanca) y el cursor cambia a flechas izquierda-derecha (en 9:16 y 1:1, arriba-abajo). Arrastrarla cambia el tamaño de la cámara: la separación sigue al puntero sin desfase, con la etiqueta "34 %" junto a ella, y nunca baja del 25 % ni pasa del 60 %. Al soltar, un solo ⌘Z deshace el cambio entero; en la pestaña Cámara, "Tamaño de la cámara" ya no está en Automático y su barra dice lo mismo que la etiqueta. Con el cabezal en un bloque, cambia el tamaño de ese bloque; fuera de los bloques, el de la disposición del proyecto.
+- **Volver a Automático.** Doble clic en la manija: el tamaño vuelve a Automático (un solo paso de deshacer) y la cámara recupera la parte que le da la pantalla.
+- **La burbuja de un bloque.** Con el cabezal dentro de un bloque Burbuja, arrastrar la burbuja de la vista previa cambia el estilo de ese bloque (lugar) y no los rombos de la toma: la barra de la pista no suma ningún rombo y fuera del bloque la burbuja sigue donde estaba. Con el cabezal dentro de un bloque de otra disposición, o fuera de los bloques con otra disposición en el proyecto, no hay burbuja que arrastrar.
+- **El recuadro del zoom en una división.** Con un zoom de foco fijo seleccionado y el cabezal en una división, el recuadro se dibuja sobre la tarjeta de la pantalla y no sale de ella; moverlo y cambiar su profundidad (las esquinas) sigue funcionando.
+- **⌥1 a ⌥5.** Con el foco en la vista previa o en la línea de tiempo: ⌥1 Burbuja, ⌥2 Solo pantalla, ⌥3 Pantalla dividida, ⌥4 Solo cámara, ⌥5 Cámara a pantalla completa. Con un bloque seleccionado, cambia su disposición (un solo ⌘Z); sin selección, crea un bloque en el cabezal (3 s), o sobre el rango marcado con I y O, con esa disposición. Con el cursor dentro de un campo de texto del panel, no hacen nada.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

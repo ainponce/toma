@@ -72,3 +72,44 @@ import ProjectFormat
         #expect(!LayoutTrackRules.cameraReadable(take: take([.display]), availability: { _ in .present }))
     }
 }
+
+@Suite struct LayoutPreviewRulesTests {
+    private static let base = HostTime(nanoseconds: 5_000_000_000_000)
+    private static func at(_ seconds: Double) -> HostTime { base.adding(seconds: seconds) }
+
+    private func document(project: LayoutKind = .bubble, blocks: [LayoutBlock] = []) -> EditDocument {
+        let take = TakeRecord(id: "take-001", status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: [])
+        var doc = EditDocument.legacy(take: take, events: [])
+        doc.sequence = [Clip(id: "c-00000001", take: "take-001", start: Self.base, end: Self.at(20), speed: 1)]
+        doc.camera.layout = CameraLayout(kind: project)
+        doc.camera.layouts = blocks
+        return doc
+    }
+
+    private func block(_ id: String, _ kind: LayoutKind, from: Double, to: Double) -> LayoutBlock {
+        LayoutBlock(
+            id: id, take: "take-001", start: Self.at(from), end: Self.at(to), kind: kind, instant: false,
+            bubble: kind == .bubble ? BubbleLayout(style: .default) : nil)
+    }
+
+    @Test func aShortcutChangesTheSelectedBlockOrMakesOne() {
+        let doc = document(blocks: [block("l-00000001", .split, from: 2, to: 6)])
+        #expect(LayoutTrackRules.shortcutAction(selectedBlock: "l-00000001", in: doc) == .change(id: "l-00000001"))
+        #expect(LayoutTrackRules.shortcutAction(selectedBlock: nil, in: doc) == .create)
+        // A selection the document no longer has is none.
+        #expect(LayoutTrackRules.shortcutAction(selectedBlock: "l-gone", in: doc) == .create)
+    }
+
+    @Test func theBubbleOverlayEditsWhatRulesAtThePlayhead() {
+        let second: Int64 = 1_000_000_000
+        let doc = document(blocks: [block("l-0000000b", .bubble, from: 2, to: 6), block("l-0000000c", .split, from: 8, to: 12)])
+        let map = TimeMap(sequence: doc.sequence)
+        #expect(LayoutTrackRules.bubbleTarget(doc, atOutput: 3 * second, timeMap: map) == .block(id: "l-0000000b"))
+        #expect(LayoutTrackRules.bubbleTarget(doc, atOutput: 9 * second, timeMap: map) == LayoutTrackRules.BubbleTarget.none)
+        #expect(LayoutTrackRules.bubbleTarget(doc, atOutput: 7 * second, timeMap: map) == .take)
+        // With another layout for the project, outside the blocks there is no bubble either.
+        let other = document(project: .screenOnly, blocks: [block("l-0000000b", .bubble, from: 2, to: 6)])
+        #expect(LayoutTrackRules.bubbleTarget(other, atOutput: 7 * second, timeMap: map) == LayoutTrackRules.BubbleTarget.none)
+        #expect(LayoutTrackRules.bubbleTarget(other, atOutput: 3 * second, timeMap: map) == .block(id: "l-0000000b"))
+    }
+}

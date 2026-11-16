@@ -47,6 +47,20 @@ extension EditorModel {
         return true
     }
 
+    /// ⌥1 … ⌥5: the selected block takes the layout, or, without one, a block of it is made at the playhead or over the
+    /// marked range (`LayoutTrackRules.shortcutAction`). Whether there was anything to do: a take without a camera has none.
+    @discardableResult
+    func applyLayoutShortcut(_ kind: LayoutKind) -> Bool {
+        guard canEdit, hasCamera, let document else { return false }
+        switch LayoutTrackRules.shortcutAction(selectedBlock: selectedLayoutBlock, in: document) {
+        case let .change(id):
+            setLayoutKind(kind, target: .block(id: id, output: 0))
+            return true
+        case .create:
+            return addLayoutBlock(kind: kind)
+        }
+    }
+
     /// The edge of block `id` brought to the playhead (VoiceOver's "trim"), in one step.
     @discardableResult
     func trimLayoutBlock(_ id: String, edge: ClipEdge) -> Bool {
@@ -120,6 +134,6 @@ extension EditorModel {
     /// The layouts' timeline of the document, for what the list of changes says of the blocks (`hiddenBy`).
     var layoutTimeline: LayoutTimeline? {
         guard let document, let map = panelTimeMap, let take = panelSession?.project.take else { return nil }
-        return LayoutTimeline(document: document, take: take, timeMap: map, cameraReadable: true)
+        return LayoutTimeline(document: document, take: take, timeMap: map, cameraReadable: !cameraUnreadable)
     }
 }

@@ -165,6 +165,9 @@ final class EditorKeyboard {
         case .open:
             open()
             return true
+        case let .layout(kind):
+            // The selected block's layout, or a block at the playhead or over the marked range.
+            return model.applyLayoutShortcut(kind)
         }
     }
 

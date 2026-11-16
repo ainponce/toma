@@ -148,7 +148,9 @@ final class TimelineViewController: NSViewController {
                 LayoutTrackRules.cameraReadable(take: take) { SegmentAvailability.classify($0, in: package) }
             }.value
             guard !Task.isCancelled else { return }
-            self?.timeline.cameraUnreadable = !readable && take.tracks.contains { $0.kind == .camera }
+            let unreadable = !readable && take.tracks.contains { $0.kind == .camera }
+            self?.timeline.cameraUnreadable = unreadable
+            self?.model.cameraUnreadable = unreadable
         }
         timeline.tracks.forgetThumbnails()
         timeline.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
