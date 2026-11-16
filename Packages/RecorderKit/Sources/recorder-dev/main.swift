@@ -747,8 +747,11 @@ struct BenchPreview: AsyncParsableCommand {
             - paths: the time to build the motion paths of the take, and of an hour of take made by repeating its \
               cursor and clicks with a zoom block of 4 s every 10 s, half following the cursor (design §7.9: rebuilding \
               an hour's paths);
-            - playing: from each request to the end of the GPU's work on the frame it asked for, p50 and p95 \
-              ("frame"), the late frames and the frames of the grid skipped;
+            - source: the size and frames per second of the take's screen;
+            - playing: the size the frames were drawn at (the export's, until the preview falls behind and draws at \
+              half the side: PreviewQuality), and from each request to the end of the GPU's work on the frame it asked \
+              for, p50 and p95 ("frame"), the late frames and the frames of the grid skipped; when the size changed, the \
+              same for the frames after the change too;
             - main thread: the longest a request took on the main thread;
             - scrubbing: the new frames shown per second while the playhead is dragged back and forth over the take;
             - release: from the pause asked for at the end of each drag to its exact frame done, the median and the \
@@ -756,10 +759,11 @@ struct BenchPreview: AsyncParsableCommand {
               a hand does, and are released there; "released moving" is the same with drags that keep their speed to \
               the end and are released at once, the worst case.
 
-            The frames are drawn at the export's size, --width × --height (the synthetic take's size; 3840 × 2160 by \
-            default), at --fps. --synthetic records a synthetic take of 10 s with a camera (as bench-export --synthetic \
-            does) in a temporary folder and benchmarks it with --all-on (bench-export's document, everything on) in a \
-            process of its own, then removes it. With TOMA_BENCH_VERBOSE=1 in the environment it also prints each \
+            The frames are drawn at the export's size, --width × --height (3840 × 2160 by default), at --fps. \
+            --synthetic records a synthetic take of 10 s with a camera (as bench-export --synthetic does), its screen \
+            --source-width × --source-height (3840 × 2160 by default, whatever the size drawn: design §7.9 plays a 4K60 \
+            source) at --fps, in a temporary folder, and benchmarks it with --all-on (bench-export's document, everything \
+            on) in a process of its own, then removes it. With TOMA_BENCH_VERBOSE=1 in the environment it also prints each \
             drag's release.
             """
     )
@@ -773,14 +777,20 @@ struct BenchPreview: AsyncParsableCommand {
     @Flag(help: "Play the benchmark's document, everything on, instead of the package's edit.")
     var allOn = false
 
-    @Option(help: "Width of the frames drawn (and of the synthetic take), in pixels.")
+    @Option(help: "Width of the frames drawn (the export's size), in pixels.")
     var width = 3840
 
-    @Option(help: "Height of the frames drawn (and of the synthetic take), in pixels.")
+    @Option(help: "Height of the frames drawn (the export's size), in pixels.")
     var height = 2160
 
     @Option(help: "Frames per second of the frames drawn (and of the synthetic take).")
     var fps = 60
+
+    @Option(help: "With --synthetic, the width of the synthetic take's screen, in pixels.")
+    var sourceWidth = 3840
+
+    @Option(help: "With --synthetic, the height of the synthetic take's screen, in pixels.")
+    var sourceHeight = 2160
 
     @Option(help: "Width of the layer the preview is shown in, in pixels.")
     var viewWidth = 2560
@@ -789,8 +799,8 @@ struct BenchPreview: AsyncParsableCommand {
     var viewHeight = 1440
 
     func validate() throws {
-        guard width > 0, height > 0, fps > 0, viewWidth > 0, viewHeight > 0 else {
-            throw ValidationError("--width, --height, --fps, --view-width and --view-height must be positive.")
+        guard width > 0, height > 0, fps > 0, viewWidth > 0, viewHeight > 0, sourceWidth > 0, sourceHeight > 0 else {
+            throw ValidationError("--width, --height, --fps, --source-width, --source-height, --view-width and --view-height must be positive.")
         }
         guard synthetic != (package != nil) else { throw ValidationError("Give a package or --synthetic, not both.") }
     }
@@ -804,6 +814,12 @@ struct BenchPreview: AsyncParsableCommand {
         let (project, edit) = try readProject(package, raw: false)
         let document = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: false) : edit
         print(String(format: "load average: %.2f", loadAverage()))
+        if let screen = project.take.tracks.first(where: { $0.kind.isScreen }), let file = screen.segments.first?.file,
+           let track = try await AVURLAsset(url: project.package.fileURL(file)).loadTracks(withMediaType: .video).first
+        {
+            let (size, rate) = try await track.load(.naturalSize, .nominalFrameRate)
+            print(String(format: "source: %d × %d at %.2f fps (%@)", Int(size.width), Int(size.height), rate, screen.id))
+        }
 
         // The motion paths: of the take, and of an hour.
         let clock = ContinuousClock()
@@ -843,14 +859,24 @@ struct BenchPreview: AsyncParsableCommand {
         let playing = try await driveFromTheMainThread(for: duration, log: log) { elapsed in
             .playing(seconds: elapsed)
         } engine: { engine }
-        let latencies = log.latencies(ofPlayingFrom: playing.start, through: playing.end, fps: fps)
-        let presentedWhilePlaying = log.presented(from: playing.start, through: playing.end)
-        let late = presentedWhilePlaying.filter(\.late).count
-        let distinct = Set(presentedWhilePlaying.map(\.seconds)).count
-        print(String(
-            format: "playing: %d frames of %d shown in %.2f s (%.1f per second), %d late; frame p50 %.2f ms, p95 %.2f ms, max %.2f ms",
-            distinct, frames, playing.end - playing.start, Double(distinct) / (playing.end - playing.start), late,
-            percentile(latencies, 0.5) * 1000, percentile(latencies, 0.95) * 1000, (latencies.max() ?? 0) * 1000))
+        func describe(_ size: SIMD2<Int>) -> String { "\(size.x) × \(size.y)" }
+        let sizes = playing.sizes.enumerated().map { k, change in
+            k == 0 ? describe(change.size) : String(format: "%@ from %.2f s", describe(change.size), change.time)
+        }
+        print("playing at " + (sizes.isEmpty ? "no size: nothing drawn" : sizes.joined(separator: ", then ")))
+        func printPlaying(_ name: String, from start: Double, through end: Double) {
+            let latencies = log.latencies(ofPlayingFrom: start, through: end, fps: fps)
+            let presented = log.presented(from: start, through: end)
+            let distinct = Set(presented.map(\.seconds)).count
+            print(String(
+                format: "%@: %d frames shown in %.2f s (%.1f per second), %d late; frame p50 %.2f ms, p95 %.2f ms, max %.2f ms",
+                name, distinct, end - start, Double(distinct) / (end - start), presented.filter(\.late).count,
+                percentile(latencies, 0.5) * 1000, percentile(latencies, 0.95) * 1000, (latencies.max() ?? 0) * 1000))
+        }
+        printPlaying("playing (\(frames) frames)", from: playing.start, through: playing.end)
+        if playing.sizes.count > 1, let last = playing.sizes.last {
+            printPlaying("playing at \(describe(last.size))", from: playing.start + last.time, through: playing.end)
+        }
 
         // Scrubbing: dragged back and forth over the take, 1.5 s each way, then released at a frame of the grid: slowing
         // down to the end as a hand does, and keeping the speed to the end.
@@ -899,7 +925,7 @@ struct BenchPreview: AsyncParsableCommand {
     private func driveFromTheMainThread(
         for seconds: Double, log: PresentLog, _ request: @escaping @Sendable (Double) -> PreviewRequest,
         engine: @escaping @Sendable () -> PreviewEngine
-    ) async throws -> (start: Double, end: Double, longestRequest: Double) {
+    ) async throws -> DisplayTicks.Run {
         let ticks = DisplayTicks(seconds: seconds, log: log, request: request, engine: engine())
         return await ticks.run()
     }
@@ -910,10 +936,10 @@ struct BenchPreview: AsyncParsableCommand {
         let folder = FileManager.default.temporaryDirectory.appending(path: "bench-preview-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        print("recording a synthetic take of \(Int(BenchDocument.seconds)) s, \(width) × \(height) at \(fps) fps, with a camera")
+        print("recording a synthetic take of \(Int(BenchDocument.seconds)) s, \(sourceWidth) × \(sourceHeight) at \(fps) fps, with a camera, to draw at \(width) × \(height)")
         let recorded = try runThisTool([
-            "synth-record", folder.path, "--duration", String(BenchDocument.seconds), "--width", String(width), "--height",
-            String(height), "--fps", String(fps), "--camera",
+            "synth-record", folder.path, "--duration", String(BenchDocument.seconds), "--width", String(sourceWidth), "--height",
+            String(sourceHeight), "--fps", String(fps), "--camera",
         ])
         guard let take = recorded.split(separator: "\n").first.map(String.init), take.hasSuffix(".toma") else {
             printError("error: synth-record printed no package")
@@ -988,6 +1014,16 @@ private final class DisplayTicks: @unchecked Sendable {
     private let engine: PreviewEngine
     private let lock = NSLock()
     private var longest = 0.0
+    private var sizes: [(time: Double, size: SIMD2<Int>)] = []
+
+    /// When the ticks started and ended (`CACurrentMediaTime`), the longest a request took, and the sizes the frames were
+    /// drawn at, each with the seconds after the start it was first seen.
+    struct Run {
+        var start: Double
+        var end: Double
+        var longestRequest: Double
+        var sizes: [(time: Double, size: SIMD2<Int>)]
+    }
 
     init(seconds: Double, log: PresentLog, request: @escaping @Sendable (Double) -> PreviewRequest, engine: PreviewEngine) {
         self.seconds = seconds
@@ -996,8 +1032,8 @@ private final class DisplayTicks: @unchecked Sendable {
         self.engine = engine
     }
 
-    func run() async -> (start: Double, end: Double, longestRequest: Double) {
-        await withCheckedContinuation { (continuation: CheckedContinuation<(start: Double, end: Double, longestRequest: Double), Never>) in
+    func run() async -> Run {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Run, Never>) in
             let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
             let start = CACurrentMediaTime()
             timer.schedule(deadline: .now(), repeating: .nanoseconds(16_666_667), leeway: .nanoseconds(0))
@@ -1005,14 +1041,19 @@ private final class DisplayTicks: @unchecked Sendable {
                 let elapsed = CACurrentMediaTime() - start
                 guard elapsed < seconds else {
                     timer.cancel()
-                    continuation.resume(returning: (start, CACurrentMediaTime(), lock.withLock { longest }))
+                    let end = CACurrentMediaTime()
+                    continuation.resume(returning: lock.withLock { Run(start: start, end: end, longestRequest: longest, sizes: sizes) })
                     return
                 }
                 let request = request(elapsed)
                 let before = CACurrentMediaTime()
                 _ = log.ask(request, seconds: elapsed, engine: engine)
                 let took = CACurrentMediaTime() - before
-                lock.withLock { longest = max(longest, took) }
+                let drawn = engine.drawnSize
+                lock.withLock {
+                    longest = max(longest, took)
+                    if let drawn, sizes.last?.size != drawn { sizes.append((elapsed, drawn)) }
+                }
             }
             timer.resume()
         }

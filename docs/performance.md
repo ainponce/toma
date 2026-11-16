@@ -160,11 +160,11 @@ Cómo se llega:
 
 ```
 swift build --package-path Packages/RecorderKit -c release --product recorder-dev
-Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic                                 # 4K60
-Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic --width 1920 --height 1080      # 1080p60
+Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic                                 # fuente 4K60, dibujada a 4K
+Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic --width 1920 --height 1080      # fuente 4K60, dibujada a 1080p (la medida del piso M1)
 ```
 
-`bench-preview --synthetic` graba la misma toma sintética de `bench-export --synthetic` (10 s, la pantalla al tamaño pedido a 60 fps y una cámara de 1280 × 720 a 30 fps) y la muestra, en otro proceso, con el documento de las medidas (todo prendido, como el export de arriba) en un `PreviewEngine` que dibuja a una `CAMetalLayer` de 2560 × 1440 píxeles (`--view-width`, `--view-height`; ninguna ventana la muestra), pidiéndole cuadros desde el hilo principal 60 veces por segundo, como un display link: reproduce la toma entera, después la arrastra 12 veces de punta a punta (1,5 s cada vez) y la suelta. Mide:
+`bench-preview --synthetic` graba la misma toma sintética de `bench-export --synthetic` (10 s, la pantalla en 4K a 60 fps, o el tamaño de `--source-width` y `--source-height`, y una cámara de 1280 × 720 a 30 fps) y la muestra al tamaño de `--width` y `--height` (el del export; dice `source:` y `playing at`), en otro proceso, con el documento de las medidas (todo prendido, como el export de arriba) en un `PreviewEngine` que dibuja a una `CAMetalLayer` de 2560 × 1440 píxeles (`--view-width`, `--view-height`; ninguna ventana la muestra), pidiéndole cuadros desde el hilo principal 60 veces por segundo, como un display link: reproduce la toma entera, después la arrastra 12 veces de punta a punta (1,5 s cada vez) y la suelta. Mide:
 
 - **reproduciendo**: los cuadros distintos que se vieron (y los tarde) y, para cada uno, desde el primer pedido que lo pidió hasta que la GPU terminó de dibujarlo (el "cuadro": el trabajo del motor, el dibujo y la reducción al tamaño de la capa);
 - **el hilo principal**: lo más que tardó un pedido en volver;
@@ -173,15 +173,17 @@ Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic --wid
 
 Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026; Release; con los cambios de Task 31 sobre `6822cd7`. Entre paréntesis, la carga de la Mac (promedio de 1 min) al empezar: había pruebas de otros agentes corriendo.
 
-| Caso | 4K60 (3840 × 2160): tres corridas (8,9), (12,5), (8,8) | 1080p60 (1920 × 1080, capa de 1920 × 1080) (5,9) | Meta, la Mac del dueño (diseño §7.9) |
+| Caso | Fuente 4K60 dibujada a 4K (3840 × 2160): tres corridas (8,9), (12,5), (8,8) | Fuente 4K60 dibujada a 1080p (1920 × 1080, capa de 1920 × 1080) (7,4) | Meta, la Mac del dueño (diseño §7.9) |
 |---|---|---|---|
-| Reproduciendo, todo prendido: cuadros vistos | 609 de 609, 608 de 608, 613 de 613 (60,0 por segundo), ninguno tarde | 607 de 607 (60,0 por segundo), ninguno tarde | 60 fps a 4K |
-| Reproduciendo: el cuadro, p50 / p95 / máximo | 12,07 / 13,06 / 28,60 ms; 9,67 / 10,39 / 23,62 ms; 7,51 / 8,11 / 14,65 ms | 6,04 / 8,67 / 14,10 ms | p95 ≤ 16,7 ms |
-| La espera más larga del hilo principal | 1,540 ms; 0,199 ms; 0,318 ms | 0,074 ms | ninguna > 4 ms |
+| Reproduciendo, todo prendido: cuadros vistos | 609 de 609, 608 de 608, 613 de 613 (60,0 por segundo), ninguno tarde | 609 de 609 (60,0 por segundo), ninguno tarde | 60 fps a 4K |
+| Reproduciendo: el cuadro, p50 / p95 / máximo | 12,07 / 13,06 / 28,60 ms; 9,67 / 10,39 / 23,62 ms; 7,51 / 8,11 / 14,65 ms | 6,51 / 7,72 / 12,00 ms | p95 ≤ 16,7 ms |
+| La espera más larga del hilo principal | 1,540 ms; 0,199 ms; 0,318 ms | 0,418 ms | ninguna > 4 ms |
 | Arrastrando: cuadros nuevos por segundo | 59,7; 59,9; 60,0 | 60,0 | ≥ 30 |
-| Al soltar (arrastre que frena): el exacto, mediana y máximo de 6 | 11,7 y 37,7 ms; 9,9 y 13,8 ms; 7,6 y 8,4 ms | 6,0 y 6,3 ms | ≤ 80 ms |
-| Al soltar a toda velocidad (el peor caso), mediana y máximo de 6 | 40,5 y 148,4 ms; 36,2 y 146,4 ms; 43,0 y 169,1 ms | 29,1 y 44,9 ms | — |
-| Memoria máxima del proceso | 457, 471, 481 MB | 314 MB | acotada |
+| Al soltar (arrastre que frena): el exacto, mediana y máximo de 6 | 11,7 y 37,7 ms; 9,9 y 13,8 ms; 7,6 y 8,4 ms | 6,5 y 8,5 ms | ≤ 80 ms |
+| Al soltar a toda velocidad (el peor caso), mediana y máximo de 6 | 40,5 y 148,4 ms; 36,2 y 146,4 ms; 43,0 y 169,1 ms | 69,2 y 137,0 ms | ≤ 80 ms: **no se cumple** soltando hacia atrás a toda velocidad (146 a 169 ms a 4K) |
+| Memoria máxima del proceso | 457, 471, 481 MB | 392 MB | acotada |
+
+Una cuarta corrida a 4K, después de los cambios de la revisión (carga 7,1), dio lo mismo: 609 de 609 cuadros (8 tarde: ninguna medio segundo seguido, así que no bajó de tamaño: `playing at 3840 × 2160`), p95 12,21 ms, arrastre 59,8, al soltar 9,0 y 11,1 ms, a toda velocidad 52,5 y 148,1 ms.
 
 Soltar a toda velocidad hacia adelante cae siempre en lo decodificado (de 5 a 12 ms); los máximos son de soltar a toda velocidad hacia atrás, donde el exacto se decodifica desde su cuadro clave (hasta un grupo de cuadros entero: unos 60 cuadros de 4K).
 
@@ -197,7 +199,7 @@ Cómo se llega:
 
 **Pendientes medidos de tareas anteriores**
 
-- *Rearmar los caminos de movimiento de una hora* (diseño §7.9, ≤ 20 ms en esta Mac; Tasks 18 y 19): `bench-preview` construye `MotionPaths` de una hora hecha repitiendo el cursor y los clics de la toma sintética (222 953 eventos) con un bloque de zoom de 4 s cada 10 s, la mitad siguiendo al cursor: 116 a 134 ms en cinco corridas (119,7; 134,1; 125,4; 116,3 ms con carga de 6 a 12, y 109,6 a 115,0 ms con carga de 1 a 5) (lo mejor de 3). **No llega a la meta**, y pasa los 50 ms por hora con los que Task 18 pedía rehacer solo desde el primer instante afectado. Lo que se hizo: una revisión que no cambia nada de lo que los caminos leen (el fondo, la sombra, las esquinas, el desenfoque del fondo, el muestreo) se queda con los caminos de la anterior (`MotionPaths.areThePaths(of:)`, 0 ms); el editor (Task 34) arma la escena con ellos. Una edición que sí los cambia (un corte, un zoom, el cursor, el margen) los rehace enteros: el rearmado incremental desde el primer instante afectado (diseño §8.6) queda pendiente.
+- *Rearmar los caminos de movimiento de una hora* (diseño §7.9, ≤ 20 ms en esta Mac; Tasks 18 y 19): `bench-preview` construye `MotionPaths` de una hora hecha repitiendo el cursor y los clics de la toma sintética (222 953 eventos) con un bloque de zoom de 4 s cada 10 s, la mitad siguiendo al cursor: de 110 a 162 ms (lo mejor de 3 en cada corrida: 119,7; 134,1; 125,4; 116,3; 118,5 ms con carga de 6 a 12, una de 162,0 ms con carga 7, y de 109,6 a 115,0 ms con carga de 1 a 5). **No llega a la meta**, y pasa los 50 ms por hora con los que Task 18 pedía rehacer solo desde el primer instante afectado. Lo que se hizo: una revisión que no cambia nada de lo que los caminos leen (el fondo, la sombra, las esquinas, el desenfoque del fondo, el muestreo) se queda con los caminos de la anterior (`MotionPaths.areThePaths(of:)`, 0 ms); el editor (Task 34) arma la escena con ellos. **Seguido, pendiente:** una edición que sí los cambia (un corte, un zoom, el cursor, el margen) en una toma de 1 h los rehace enteros, en 116 a 134 ms (de 110 a 162 ms según la carga; meta ≤ 20 ms). El rearmado incremental desde el primer instante afectado (diseño §8.6) pasa al hito 1c, donde Task 8 ya separó el motor de `ZoomCameraPath` (hacerlo acá sería portarlo dos veces; decisión del controlador).
 - *El recorrido de una ráfaga de cambios de forma por cuadro* (Task 27): evaluar un cuadro al final de una ráfaga de 600 cambios de forma (10 s de una ventana que cambia de forma en cada cuadro) cuesta 5,8 µs en Release (1,8 µs sin ráfaga; 258 µs en Debug): no hace falta otra estructura.
-- *La copia con mipmaps de un recorte que cambia de tamaño* (Tasks 22 y 27): la midió Task 27 (1,84 ms de GPU por cuadro mientras el resorte cambia el recorte, 0,39 ms reusando una copia, el doble en un fundido cruzado, hasta 6 copias libres de unos 45 MB a 4K). Con el cuadro de 4K de arriba (p95 de 8 a 13 ms) entra en los 16,7 ms, y la memoria del export 4K queda debajo de 1,5 GB (medida de Task 30); no se cambió, para no tocar la regla de privacidad del Área.
+- *La copia con mipmaps de un recorte que cambia de tamaño* (Tasks 22 y 27): la midió Task 27 (1,84 ms de GPU por cuadro mientras el resorte cambia el recorte, 0,39 ms reusando una copia, el doble en un fundido cruzado, hasta 6 copias libres de unos 45 MB a 4K). **La memoria, arreglada:** el compositor guarda solo las copias de los dos últimos tamaños pedidos (la pantalla y la que se deja en un fundido cruzado) y suelta las demás, así que mientras un resorte mueve el recorte no se juntan copias de tamaños viejos (`mipmappedCopiesOfOldSizesAreLetGo`). **Postergado (decisión del controlador): reusar copias entre tamaños** (en cubetas de tamaño, o una caché por pista e instante, sin que ningún texel de fuera del recorte llegue a ningún nivel de mipmap). Cuesta unos 1,5 ms de GPU de más por cuadro, solo mientras dura un resorte de geometría (a lo sumo 1,5 s); el p95 de la vista previa a 4K de arriba queda de 8 a 13 ms, dentro de los 16,7.
 - *Abrir un registro de edición largo* (Task 13): reproducir el registro ya no recorre todos los grupos por cada grupo nuevo (`replayIsLinearInTheGroups`): pasar las líneas antes de la instantánea de 10 000 grupos tardaba 1,21 s y 20 000, 4,75 s (cuadrático, Debug); ahora, los dos juntos con su armado, 0,1 s.

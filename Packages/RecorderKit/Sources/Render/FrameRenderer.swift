@@ -269,16 +269,6 @@ public final class FrameRenderer: @unchecked Sendable {
         try lock.withLock { try draw(frame, into: target, commandBuffer: commandBuffer, decoded: decoded) }
     }
 
-    /// The frame of track `trackID` at source instant `time`, decoded now as `encode(at:into:commandBuffer:)` decodes it
-    /// (`TrackFrameReader.pixelBuffer(at:)`), as a texture; `nil` before the track's first readable frame and for a track
-    /// the take does not have. Blocks while it decodes: never on a Swift concurrency thread.
-    func decodedFrame(track trackID: String, at time: HostTime) throws -> CachedTexture? {
-        try lock.withLock {
-            CVMetalTextureCacheFlush(textureCache, 0)
-            return try reader(for: trackID)?.pixelBuffer(at: time).map(metalTexture(for:))
-        }
-    }
-
     /// Throws unless `target` is `.bgra8Unorm` and `size` big.
     private func check(_ target: any MTLTexture, size: SIMD2<Int>) throws {
         let actual = SIMD2(target.width, target.height)

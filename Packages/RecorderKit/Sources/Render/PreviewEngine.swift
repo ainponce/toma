@@ -23,12 +23,15 @@ public enum PreviewRequest: Equatable, Sendable {
 /// shows, draws it through the renderer (the export's one drawing path) and presents it. While a frame is being drawn
 /// only the latest request is kept: those in between are never drawn.
 ///
-/// - `.paused(frame:)`: frame `n` of the scene given (`setScene(_:)`, at the export's size: plan decision 11), decoded
-///   exactly as the export decodes it (`FrameRenderer.decodedFrame(track:at:)`); the bytes are the export's. The frames a
-///   pause decoded are kept, so pausing on it again, or playing from it, decodes nothing.
+/// - `.paused(frame:)`: frame `n` of the scene given (`setScene(_:)`, at the export's size: plan decision 11), its videos
+///   decoded exactly as the export decodes them (`TrackFrameReader`, through each track's `FramePrefetcher`, the tracks
+///   at once); the bytes are the export's. The frames a pause decoded are kept, so pausing on it again, or playing from
+///   it, decodes nothing.
 /// - `.scrubbing(seconds:)` (plan decision 32): the key frame at or before the instant of each video it shows, alone
 ///   (`FramePrefetcher.keyFrame(atSource:)`, no `AVAssetReader`), with the stage, the cursor and the zoom of the exact
-///   instant; releasing asks for `.paused(frame:)`, which decodes the exact frame.
+///   instant; releasing asks for `.paused(frame:)`, which shows the exact frame. Meanwhile each track's prefetcher decodes
+///   the exact frames nearest the playhead in the background, as the export does (its reader opens `AVAssetReader`s for
+///   that), so the release finds its frame decoded.
 /// - `.playing(seconds:)`: the frame of the scene's grid at or before the instant, its videos decoded ahead by each
 ///   track's `FramePrefetcher` (the frames of the grid after it are scheduled as it goes); a frame not decoded in time
 ///   leaves the one before it on screen, and the frame is late. Late for `PreviewQuality.lateWindow` seconds in a row, the
@@ -68,6 +71,8 @@ public final class PreviewEngine: @unchecked Sendable {
         var scene: FrameEvaluator
         var sceneNumber = 0
         var onPresented: (@Sendable (_ seconds: Double, _ late: Bool) -> Void)?
+        /// The size of the last frame drawn.
+        var drawnSize: SIMD2<Int>?
         /// Tests and the benchmark.
         var hooks = Hooks()
     }
@@ -150,7 +155,7 @@ public final class PreviewEngine: @unchecked Sendable {
 
     /// Shows `request`, from any thread: returns at once, the frame being drawn on the engine's queue. While a frame is
     /// being drawn, only the latest request is kept. A drag released pauses on the frame of the grid nearest its last
-    /// instant, `Int((seconds × frameRate).rounded())`: the one decoded ahead while scrubbing.
+    /// instant, `Int((seconds × frameRate).rounded())`, or the one before it: those are decoded ahead while scrubbing.
     public func request(_ request: PreviewRequest) {
         let start = shared.withLock { shared in
             shared.pending = request
@@ -175,6 +180,10 @@ public final class PreviewEngine: @unchecked Sendable {
         }
         if start { queue.async { self.drain() } }
     }
+
+    /// The size of the last frame drawn (`nil` before the first): the export's while paused or scrubbing, and while
+    /// playing the one `PreviewQuality` gives.
+    public var drawnSize: SIMD2<Int>? { shared.withLock { $0.drawnSize } }
 
     var hooks: Hooks {
         get { shared.withLock { $0.hooks } }
@@ -209,6 +218,9 @@ public final class PreviewEngine: @unchecked Sendable {
                 // Here rather than on the caller's thread: the renderer may be busy decoding on this queue.
                 renderer.setScene(scene)
                 drawing.sceneNumber = number
+                // It dropped what was decoded ahead: a scrub schedules the exact frames again.
+                drawing.decodingAhead = []
+                drawing.lastScrub = nil
             }
             hooks.beforeDrawing?(request)
             do {
@@ -321,25 +333,23 @@ public final class PreviewEngine: @unchecked Sendable {
 
     /// The frames of `keys`, decoded exactly as the export decodes them (`TrackFrameReader.pixelBuffer(at:)`, through each
     /// track's prefetcher), the tracks at once: a frame decoded ahead while scrubbing is taken as it is, one being decoded
-    /// is waited for. Blocks this queue, never a Swift concurrency thread.
+    /// is waited for. Blocks this queue while the prefetchers decode on theirs; no Swift concurrency thread takes part.
     private func exactFrames(of keys: [DecodedKey]) throws -> [DecodedKey: CachedTexture?] {
-        let decoded = Mutex<[DecodedKey: Result<CachedTexture?, any Error>]>([:])
+        let decoded = DecodedFrames()
         let group = DispatchGroup()
         for key in keys {
             guard let prefetcher = try renderer.prefetcher(for: key.trackID) else {
-                decoded.withLock { $0[key] = .success(nil) }
+                decoded.set(key, .success(nil))
                 continue
             }
             group.enter()
-            // Suspended while the prefetcher decodes, on its own queue: no thread of the pool waits.
-            Task.detached(priority: .userInitiated) {
-                let result = await Result { try await prefetcher.frame(atSource: key.time) }
-                decoded.withLock { $0[key] = result }
+            prefetcher.frame(atSource: key.time) { result in
+                decoded.set(key, result)
                 group.leave()
             }
         }
         group.wait()
-        return try decoded.withLock { $0 }.mapValues { try $0.get() }
+        return try decoded.all.mapValues { try $0.get() }
     }
 
     /// While scrubbing, the frame of the grid nearest `seconds` (the one a release there pauses on) and the one before it
@@ -417,7 +427,10 @@ public final class PreviewEngine: @unchecked Sendable {
             commandBuffer.present(drawable)
         }
         drawing.shown.merge(shown) { $1 }
-        let onPresented = shared.withLock { $0.onPresented }
+        let onPresented = shared.withLock { shared in
+            shared.drawnSize = frame.outputSize
+            return shared.onPresented
+        }
         let videos = shown.compactMapValues { $0?.pixelBuffer }
         let drawn = DrawnFrame(request: request, frame: frame, duration: 0, late: late, videos: videos)
         commandBuffer.addCompletedHandler { [inFlight, weak self] commandBuffer in
@@ -556,4 +569,16 @@ public final class PreviewEngine: @unchecked Sendable {
     private func drawingReported(_ description: String) -> Bool {
         reportedErrors.withLock { $0.insert(description).inserted }
     }
+}
+
+/// The frames `exactFrames(of:)` gathers from the prefetchers' queues.
+private final class DecodedFrames: @unchecked Sendable {
+    private let lock = NSLock()
+    private var frames: [DecodedKey: Result<CachedTexture?, RenderError>] = [:]
+
+    func set(_ key: DecodedKey, _ frame: Result<CachedTexture?, RenderError>) {
+        lock.withLock { frames[key] = frame }
+    }
+
+    var all: [DecodedKey: Result<CachedTexture?, RenderError>] { lock.withLock { frames } }
 }

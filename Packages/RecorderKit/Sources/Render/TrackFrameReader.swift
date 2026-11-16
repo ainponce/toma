@@ -15,7 +15,8 @@ import os
 /// longer jump opens a new reader at the frame presented at or before the time, which its file's sample cursor finds
 /// (`AVSampleCursor`), so it hands over that frame first and decodes no more than its group of pictures up to it; for
 /// a file that has no sample cursor, `preroll` before the time. At most one `AVAssetReader` reads at a time: the one
-/// it leaves is cancelled on a queue of its own, without waiting for it.
+/// it leaves is cancelled on a queue of its own, without waiting for it, and at most `maxClosing` of the process wind
+/// down at once.
 ///
 /// When decoding stops with an error partway through a segment, the next time asked for after the last
 /// frame decoded opens a reader again right after that frame; if it stops at the same frame again, each
@@ -377,17 +378,26 @@ public final class TrackFrameReader: @unchecked Sendable {
     }
 
     /// Lets the open reader go. Cancelling a reader waits for what it is decoding ahead, tens of milliseconds at 4K, so
-    /// it is cancelled on a queue of its own: a jump opens its new reader at once, while the old one winds down.
+    /// it is cancelled on a queue of its own: a jump opens its new reader at once, while the old one winds down. At most
+    /// `maxClosing` readers of the process wind down at a time; past that, this waits for one to finish, so a long run
+    /// of jumps never leaves more decoders and their buffers behind.
     private func close() {
         if let reader = open?.reader {
             let closing = ClosingReader(reader)
-            Self.closingQueue.async { closing.reader.cancelReading() }
+            Self.closingSlots.wait()
+            Self.closingQueue.async {
+                closing.reader.cancelReading()
+                Self.closingSlots.signal()
+            }
         }
         open = nil
     }
 
-    /// Where readers let go are cancelled.
+    /// Readers let go and still winding down, at most, in the process.
+    static let maxClosing = 2
+    /// Where readers let go are cancelled, one after the other.
     private static let closingQueue = DispatchQueue(label: "dev.toma.TrackFrameReader.close", qos: .userInitiated)
+    private static let closingSlots = DispatchSemaphore(value: maxClosing)
 
     private func markUnusable(_ k: Int, _ reason: MissingVideo.Reason) {
         segments[k].usable = false
