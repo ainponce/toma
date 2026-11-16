@@ -222,7 +222,132 @@ func missingVideoListsOnlyTheScreenShown() throws {
             MissingVideo(track: display2ID, file: file2, start: 3, end: 5.25, reason: .fileMissing),
             MissingVideo(track: trackID, file: file1, start: 5, end: 6, reason: .fileMissing),
         ])
+        // Trimmed past the change, display 1 is never shown: none of its gaps is.
+        var trimmed = document(project.take, changes: [(3, display2ID)], transition: .none)
+        trimmed.sequence = [clip(1, from: 4, to: 6)]
+        #expect(try FrameRenderer(project: project, document: trimmed, outputSize: [320, 180]).missingVideo == [
+            MissingVideo(track: display2ID, file: file2, start: 0, end: 2, reason: .fileMissing),
+        ])
+        // Display 1 left at 3 s, display 2 at 3.1 s for display 3: display 1 is drawn under display 2 only until then, and
+        // listed only that long.
+        let display3 = "display-3", file3 = "takes/\(takeID)/display-3/seg-0001.mov"
+        let three = makeProject(package, take: makeTake(tracks: twoDisplays().tracks + [
+            displayTrack(
+                id: display3, displayID: 3, globalFrame: Rect(x: 1120, y: 0, width: 640, height: 360),
+                segments: [segment(track: display3, start: base, end: base.adding(seconds: 6))]),
+        ]))
+        let quick = document(three.take, changes: [(3, display2ID), (3.1, display3)], transition: .spring)
+        let evaluator = FrameEvaluator(take: three.take, events: [], document: quick, outputSize: [320, 180])
+        #expect(evaluator.frame(at: 3.05).previousScreen?.trackID == trackID)
+        #expect(evaluator.frame(at: 3.15).previousScreen?.trackID == display2ID)
+        #expect(try FrameRenderer(project: three, document: quick, outputSize: [320, 180]).missingVideo == [
+            MissingVideo(track: trackID, file: file1, start: 0, end: 3.1, reason: .fileMissing),
+            MissingVideo(track: display2ID, file: file2, start: 3, end: 3.35, reason: .fileMissing),
+            MissingVideo(track: display3, file: file3, start: 3.1, end: 6, reason: .fileMissing),
+        ])
     }
+}
+
+/// Clip `number` of the take over its seconds `[from, to)`.
+private func clip(_ number: Int, from: Double, to: Double) -> Clip {
+    Clip(id: String(format: "c-%08x", number), take: takeID, start: base.adding(seconds: from), end: base.adding(seconds: to), speed: 1)
+}
+
+@Test func changesInACutAreOneAndOneBeforeTheFirstClipIsUnderWay() throws {
+    let take = twoDisplays()
+    func evaluator(_ changes: [(Double, String)], _ sequence: [Clip], _ transition: GeometryTransition = .spring) -> FrameEvaluator {
+        var doc = document(take, changes: changes, transition: transition)
+        doc.sequence = sequence
+        return FrameEvaluator(take: take, events: [], document: doc, outputSize: size)
+    }
+    // The second second is cut out, from 2 s to 4 s of the take: what changes in it changes where the cut closes, 2 s out.
+    let cut = [clip(1, from: 0, to: 2), clip(2, from: 4, to: 6)]
+    // To display 2 and back inside the cut: nothing changes there.
+    let back = evaluator([(2.5, display2ID), (3.5, trackID)], cut)
+    for t in [1.9, 2, 2.1, 2.3] {
+        #expect(back.frame(at: t) == evaluator([(2.5, display2ID), (3.5, trackID)], cut, .none).frame(at: t), "at \(t) s")
+        #expect(back.frame(at: t).screen?.trackID == trackID && back.frame(at: t).previousScreen == nil, "at \(t) s")
+    }
+    // To display 2, back and to display 2 again: one change, from display 1, shown before the cut.
+    let jumps = evaluator([(2.5, display2ID), (3.5, trackID), (3.7, display2ID)], cut, .none)
+    let from = try #require(jumps.frame(at: 1.9).screen), to = try #require(jumps.frame(at: 2.5).screen)
+    let again = evaluator([(2.5, display2ID), (3.5, trackID), (3.7, display2ID)], cut).frame(at: 2.125)
+    let screen = try #require(again.screen)
+    #expect(screen.trackID == display2ID && screen.opacity == 0.5 && again.previousScreen?.trackID == trackID)
+    #expect(abs(along(from.rect.width, to.rect.width, screen.rect.width) - GeometryTransitions.progress(seconds: 0.125)) < 1e-9)
+
+    // The start trimmed 0.1 s after the change: at output 0 it is 0.1 s under way.
+    let trimmed = evaluator([(3, display2ID)], [clip(1, from: 3.1, to: 6)])
+    let start = trimmed.frame(at: 0)
+    let first = try #require(start.screen)
+    #expect(first.trackID == display2ID && start.previousScreen?.trackID == trackID && abs(first.opacity - 0.4) < 1e-12)
+    #expect(abs(along(from.rect.width, to.rect.width, first.rect.width) - GeometryTransitions.progress(seconds: 0.1)) < 1e-9)
+    #expect(trimmed.frame(at: 0.15).previousScreen == nil && trimmed.frame(at: 0.15).screen?.opacity == 1)
+    #expect(trimmed.frame(at: 1.4) == evaluator([(3, display2ID)], [clip(1, from: 3.1, to: 6)], .none).frame(at: 1.4))
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func aSpringOfTheWindowDrawsItsTitleAFewTimes() throws {
+    let take = twoDisplays()
+    // In a macOS window frame with a title, display 1 goes from 16:9 to 1:1 at 1.5 s, and back at 3.5 s.
+    let square = Rect(x: 0, y: 0, width: 480, height: 480)
+    let events = [
+        InputEvent(t: base.adding(seconds: 1.5), kind: .displayGeometry(displayID: 1, frame: square, scale: 1)),
+        InputEvent(t: base.adding(seconds: 3.5), kind: .displayGeometry(displayID: 1, frame: display1, scale: 1)),
+    ]
+    let outputSize = SIMD2(1280, 720)
+    var doc = document(take, events, changes: [], transition: .spring)
+    doc.style.frame = .macWindow(appearance: .light, title: "Toma Toma Toma", buttons: true)
+    let evaluator = FrameEvaluator(take: take, events: events, document: doc, outputSize: outputSize)
+    let drawer = try StageDrawing.Drawer()
+    let titles = TitleTexture(device: drawer.device)
+    var moving = 0
+    for n in 60..<330 {
+        let frame = evaluator.frame(at: Double(TimeMap.frameTime(n, frameRate: 60)) / 1e9)
+        let window = try #require(frame.windowFrame)
+        if frame.settledWindowFrame != nil { moving += 1 }
+        let source = try #require(TitleTexture.source(for: frame))
+        let texture = try #require(try titles.texture(for: source, scale: TitleTexture.scale(for: frame)))
+        // Never magnified: at least as many texels across as the bar has pixels now.
+        #expect(Double(texture.width) >= window.rect.width.rounded(.down), "frame \(n)")
+    }
+    // Two springs of 1.5 s, every frame moving, and only a few titles: from where the window goes, a step of √2 at a time.
+    #expect(moving > 150)
+    #expect(titles.drawCount <= 6, "\(titles.drawCount) titles")
+    // Settled, the title is the window's own, one texel per pixel.
+    let settled = evaluator.frame(at: 3.2)
+    #expect(settled.settledWindowFrame == nil && TitleTexture.scale(for: settled) == 1)
+
+    // Mid-way, the title is drawn where the window's own would be.
+    let frame = evaluator.frame(at: 1.6)
+    let window = try #require(frame.windowFrame)
+    var own = frame
+    own.settledWindowFrame = nil
+    func ink(_ frame: RenderFrame, title: any MTLTexture) throws -> (x: ClosedRange<Int>, y: ClosedRange<Int>) {
+        let target = try StageDrawing.target(device: drawer.device, size: outputSize)
+        let commandBuffer = try #require(drawer.queue.makeCommandBuffer())
+        try drawer.compositor.encode(
+            frame, screen: drawer.screen, camera: nil, cursor: drawer.cursor, windowTitle: title, into: target, commandBuffer: commandBuffer)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        let bytes = StageDrawing.bytes(of: target)
+        var xs: [Int] = [], ys: [Int] = []
+        for y in Int(window.rect.y)..<Int(window.rect.y + window.barHeight) {
+            for x in Int(window.rect.x)..<Int(window.rect.x + window.rect.width) {
+                let p = pixel(bytes, width: outputSize.x, x: x, y: y)
+                if p.x < 160, p.y < 160, p.z < 160 { xs.append(x); ys.append(y) }
+            }
+        }
+        return (try #require(xs.min())...(try #require(xs.max())), try #require(ys.min())...(try #require(ys.max())))
+    }
+    let source = try #require(TitleTexture.source(for: frame))
+    let drawn = try ink(frame, title: try #require(try titles.texture(for: source, scale: TitleTexture.scale(for: frame))))
+    let exact = try ink(own, title: try #require(try titles.texture(for: window, scale: 1)))
+    // Centred on the same pixel, in the same rows, and as wide within 5 %: the glyphs' advances are whole pixels at each
+    // size, so a title made larger and drawn smaller is not exactly as wide as one made at its size.
+    #expect(abs((drawn.x.lowerBound + drawn.x.upperBound) - (exact.x.lowerBound + exact.x.upperBound)) <= 2, "\(drawn) against \(exact)")
+    #expect(abs(drawn.y.lowerBound - exact.y.lowerBound) <= 1 && abs(drawn.y.upperBound - exact.y.upperBound) <= 1, "\(drawn) against \(exact)")
+    #expect(abs(Double(drawn.x.count) / Double(exact.x.count) - 1) <= 0.05, "\(drawn) against \(exact)")
 }
 
 /// A `.bgra8Unorm` texture `width` × `height` of the opaque BGRA colour `inside`, but `outside` (BGRA) out of `area` (whole

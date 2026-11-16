@@ -6,15 +6,16 @@ import ProjectFormat
 /// recorded project opens, with the default style of that moment.
 public enum NewDocument {
     /// One clip at 1× for each span the take recorded between a `paused` and the next `resumed`
-    /// (`TakeTimeline.recordedSpans`: the pauses are closed), each with an id of `makeID("c-")`: of its screen's timeline,
-    /// or of its audio's for a take without a screen (`TakeTimeline.editableBounds`), which is so exported over the
-    /// background. A take with no span (0 s) keeps the legacy document's single clip, so there is always one. The screen the take starts on and the
-    /// changes of `screenFollow-1`, named as their planner only with two or more screens (with one there are none). The
-    /// default style's stage, with mipmapped sampling and the spring between shapes, and, when it shows a window, corners
-    /// that cover its black ones if the style's do not (`WindowCornerCover`); its cursor, drawn from the recorded images
-    /// if the take has any `cursorImage` event and as Toma's arrow if not; its zoom settings, with the blocks
-    /// `autoZoom-1` plans for the document so built. The camera as the take recorded it and every audio track at gain
-    /// 1, as in the legacy document, but through the limiter. 16:9 at 60 frames per second; `logSequence` 0.
+    /// (`TakeTimeline.recordedSpans`: the pauses are closed), each with an id of `makeID("c-")`: of the screen's timeline,
+    /// or, for a take without a screen, of the audio and camera it recorded (`TakeTimeline.editableBounds`), exported over
+    /// the background. A take with no span (0 s) keeps the legacy document's single clip, so there is always one. The
+    /// screen the take starts on and the changes of `screenFollow-1`, named as their planner only with two or more screens
+    /// (with one there are none). The default style's stage, with mipmapped sampling and the spring between shapes, and,
+    /// when it shows a window, corners that cover its black ones if the style's do not (`WindowCornerCover`); its cursor,
+    /// drawn from the recorded images if the take has any `cursorImage` event and as Toma's arrow if not; its zoom
+    /// settings, with the blocks `autoZoom-1` plans for the document so built. The camera as the take recorded it and
+    /// every audio track at gain 1, as in the legacy document, but through the limiter. 16:9 at 60 frames per second;
+    /// `logSequence` 0.
     public static func make(project: LoadedProject, defaultStyle: DefaultStyle, makeID: (String) -> String) -> EditDocument {
         let take = project.take
         let events = project.events

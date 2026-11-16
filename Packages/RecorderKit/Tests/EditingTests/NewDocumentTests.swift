@@ -236,25 +236,34 @@ private enum NewDocumentFixture {
         let builder = try TakeBuilder(in: dir, name: "Screenless")
         let mic = TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic")
         try await builder.addAudioTrack(id: "mic", source: mic, segments: [AudioSegmentSpec(start: base, seconds: 2)])
+        // The camera goes on half a second past the microphone.
+        let camera = TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera")
+        try await builder.addVideoTrack(
+            id: "camera", kind: .camera, source: camera,
+            segments: [VideoSegmentSpec(start: base.adding(seconds: 0.5), seconds: 2, framesPerSecond: 10)])
         let project = try builder.write()
         let take = project.take, events = project.events
-        // No screen: the take's timeline is its audio's, 2 s from the microphone's start.
+        // No screen: the take's timeline is what it recorded, from the microphone's start to the camera's end.
+        let span = base..<base.adding(seconds: 2.5)
         let bounds = TakeTimeline.editableBounds(take: take, events: events)
-        #expect(bounds.screen == nil && bounds.start == base && bounds.end == base.adding(seconds: 2))
-        #expect(TakeTimeline.recordedSpans(take: take, events: events) == [base..<base.adding(seconds: 2)])
+        #expect(bounds.screen == nil && bounds.start == span.lowerBound && bounds.end == span.upperBound)
+        #expect(TakeTimeline.recordedSpans(take: take, events: events) == [span])
         let document = NewDocument.make(project: project, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
-        #expect(document.sequence == [Clip(id: "c-00000001", take: take.id, start: base, end: base.adding(seconds: 2), speed: 1)])
-        #expect(TimeMap(sequence: document.sequence).durationSeconds == 2)
+        #expect(document.sequence == [Clip(id: "c-00000001", take: take.id, start: span.lowerBound, end: span.upperBound, speed: 1)])
+        #expect(TimeMap(sequence: document.sequence).durationSeconds == 2.5)
         // Its edges go as far as that timeline, and no farther.
         let start = SequenceCommands.trimLimits(document, clipID: "c-00000001", edge: .start, take: take, events: events)
         let end = SequenceCommands.trimLimits(document, clipID: "c-00000001", edge: .end, take: take, events: events)
         #expect(start.lowerBound == bounds.start && end.upperBound == bounds.end)
         #expect(start.upperBound < bounds.end && end.lowerBound > bounds.start)
-        // The legacy document does not change: one clip of 0 s, as phase 0 and 1a see the take.
-        let legacy = EditDocument.legacy(for: project)
+        // The legacy document's clip is that span too, never from host time 0, though phase 0's timeline is 0 s there: once
+        // edited, an old project exports the whole take, and its edges stop where the take does.
         let phaseZero = TakeTimeline.bounds(take: take, events: events)
         #expect(phaseZero.start == HostTime(nanoseconds: 0) && phaseZero.end == HostTime(nanoseconds: 0))
-        #expect(legacy.sequence.count == 1 && TimeMap(sequence: legacy.sequence).duration == 0)
-        #expect(legacy.sequence.first?.start == phaseZero.start && legacy.sequence.first?.end == phaseZero.end)
+        let legacy = EditDocument.legacy(for: project)
+        #expect(legacy.sequence == [Clip(id: "c-00000001", take: take.id, start: span.lowerBound, end: span.upperBound, speed: 1)])
+        let legacyStart = SequenceCommands.trimLimits(legacy, clipID: "c-00000001", edge: .start, take: take, events: events)
+        let legacyEnd = SequenceCommands.trimLimits(legacy, clipID: "c-00000001", edge: .end, take: take, events: events)
+        #expect(legacyStart.lowerBound == span.lowerBound && legacyEnd.upperBound == span.upperBound)
     }
 }

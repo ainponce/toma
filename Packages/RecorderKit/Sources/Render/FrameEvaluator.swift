@@ -9,8 +9,8 @@ import simd
 ///
 /// The output is the document's clips one after the other (`TimeMap`, design §6.6): output time `t` shows the source
 /// instant `timeMap.source(atOutput:)` of `t` in nanoseconds, clamped to `[0, D)`; an output of 0 s shows only the
-/// background. The legacy document (`EditDocument.legacy`) is one clip at 1× over `TakeTimeline.bounds`, so it shows
-/// what phase 0 and 1a show at every time before the end, with the same arithmetic.
+/// background. The legacy document (`EditDocument.legacy`) is one clip at 1× over `TakeTimeline.editableBounds` (with a
+/// screen, `bounds`), so it shows what phase 0 and 1a show at every time before the end, with the same arithmetic.
 ///
 /// - Background: the document's gradient, colour, wallpaper (`WallpaperPreset`), image or desktop picture
 ///   (`BackgroundImage`); a wallpaper, an image and the desktop are blurred by σ = `backgroundBlur` × 0.04 × the output
@@ -207,16 +207,24 @@ public struct FrameEvaluator: Sendable {
             let settled = Self.placement(of: view, style: style, outputSize: size)
             let placement = transition.placement ?? settled
             let rect = placement.screen
-            var cornerRadius = style.cornerRadius * size.x
+            let styleCorners = style.cornerRadius * size.x
+            var cornerRadius = styleCorners
             if case let .macWindow(appearance, title, buttons) = style.frame {
-                let top = min(cornerRadius, Self.windowCornerBars * placement.barHeight)
                 // A recorded window keeps the style's corners where there are no buttons: the window's bottom ones, and
                 // its screen's top ones under the bar.
                 let recordedWindow = windowTrackIDs.contains(trackID)
-                if !recordedWindow { cornerRadius = top }
-                frame.windowFrame = WindowFrameLayer(
-                    rect: placement.window, barHeight: placement.barHeight, appearance: appearance, title: title, buttons: buttons,
-                    cornerRadius: top, bottomCornerRadius: cornerRadius, screenTopCornerRadius: recordedWindow ? cornerRadius : 0)
+                func window(_ placement: ScreenPlacement) -> (layer: WindowFrameLayer, cornerRadius: Double) {
+                    let top = min(styleCorners, Self.windowCornerBars * placement.barHeight)
+                    let bottom = recordedWindow ? styleCorners : top
+                    return (WindowFrameLayer(
+                        rect: placement.window, barHeight: placement.barHeight, appearance: appearance, title: title, buttons: buttons,
+                        cornerRadius: top, bottomCornerRadius: bottom, screenTopCornerRadius: recordedWindow ? bottom : 0), bottom)
+                }
+                let moving = window(placement)
+                frame.windowFrame = moving.layer
+                cornerRadius = moving.cornerRadius
+                // Its title is drawn from where it goes while it moves.
+                if placement != settled { frame.settledWindowFrame = window(settled).layer }
             }
             // Out of its own place, each screen fills the rect, cut to its shape.
             let filled = Self.fill(view, settled: settled, into: placement)

@@ -4,14 +4,15 @@ extension EditDocument {
     /// The document of a project of version 1 or 2 without edits (or of version 3 with `upgradedFrom` and no edit log),
     /// the "Legacy" column of design §6.7: what phase 0 and 1a draw and play, so it renders the same bytes as they do.
     ///
-    /// One clip at 1× over `TakeTimeline.bounds`, pauses included (shown as the frozen frame), with the ID
-    /// `c-00000001`; the screen `ScreenChoice` picks, without changes; the classic gradient with phase 0's padding
+    /// One clip at 1× over `TakeTimeline.editableBounds` (`bounds` with a screen; without one, the media the take
+    /// recorded, which it exports only once edited: `MP4Exporter`), pauses included (shown as the frozen frame), with the
+    /// ID `c-00000001`; the screen `ScreenChoice` picks, without changes; the classic gradient with phase 0's padding
     /// and corners and nothing else on the stage; Toma's 24 pt arrow, interpolated as recorded; the zoom on but with
     /// no blocks and the automatic one off; the camera as the take recorded it, each `cameraStyle` event a change in
     /// time order with the ID `k-` and its number from 1 in 8 hex (plan decision 17); every audio track at gain 1,
     /// without the limiter. It is never written until the first edit, so its IDs are fixed, not random.
     public static func legacy(take: TakeRecord, events: [InputEvent]) -> EditDocument {
-        let bounds = TakeTimeline.bounds(take: take, events: events)
+        let bounds = TakeTimeline.editableBounds(take: take, events: events)
         var zoomAuto = DefaultStyle.toma.zoomAuto
         zoomAuto.enabled = false
         let cameraStyles = events.sortedByTime().compactMap { event -> (t: HostTime, style: CameraStyle)? in

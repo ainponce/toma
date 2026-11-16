@@ -44,6 +44,10 @@ public struct RenderFrame: Equatable, Sendable {
     /// During a change of screen with `GeometryTransitions.spring` (design §7.6), the screen going away: drawn under
     /// `screen`, in its rect and cut as it is, while `screen` fades in over it (`ScreenLayer.opacity`). `nil` otherwise.
     public var previousScreen: ScreenLayer?
+    /// While a change moves the window frame (design §7.6), the window where it goes: its title is drawn from there, a
+    /// step of √2 at a time (`TitleTexture.scale(for:)`), onto `windowFrame`'s bar. `nil` otherwise: the title is
+    /// `windowFrame`'s own.
+    public var settledWindowFrame: WindowFrameLayer?
 
     public init(
         outputSize: SIMD2<Int>,
@@ -60,7 +64,8 @@ public struct RenderFrame: Equatable, Sendable {
         stage: StageTransform? = nil,
         subframes: [StageSubframe] = [],
         cursorSamples: [CursorLayer] = [],
-        previousScreen: ScreenLayer? = nil
+        previousScreen: ScreenLayer? = nil,
+        settledWindowFrame: WindowFrameLayer? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -77,6 +82,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.subframes = subframes
         self.cursorSamples = cursorSamples
         self.previousScreen = previousScreen
+        self.settledWindowFrame = settledWindowFrame
     }
 }
 
@@ -165,8 +171,8 @@ public struct StageSubframe: Equatable, Sendable {
     }
 }
 
-/// The recorded screen: the `crop` of the frame of track `trackID` shown at host time `sourceTime`, drawn into
-/// `rect` at `opacity`. Inside a window frame (`RenderFrame.windowFrame`), the window's rounded rect cuts it, square along its top
+/// The recorded screen: the `crop` of the frame of track `trackID` shown at host time `sourceTime`, drawn into `rect` at
+/// `opacity`. Inside a window frame (`RenderFrame.windowFrame`), the window's rounded rect cuts it, square along its top
 /// edge, under the bar (but for a recorded window's, `WindowFrameLayer.screenTopCornerRadius`).
 public struct ScreenLayer: Equatable, Sendable {
     public var trackID: String

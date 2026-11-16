@@ -176,7 +176,9 @@ public final class FrameRenderer: @unchecked Sendable {
             }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: outputSize)
-            let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0, scale: TitleTexture.scale(for: frame)) }
+            let windowTitle = try TitleTexture.source(for: frame).flatMap {
+                try titleTexture.texture(for: $0, scale: TitleTexture.scale(for: frame))
+            }
             // Every cursor of the frame, blurred or not, is drawn with the image of its time.
             let image = frame.cursor?.image ?? frame.subframes.lazy.compactMap(\.cursor).first?.image ?? frame.cursorSamples.first?.image
             let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))

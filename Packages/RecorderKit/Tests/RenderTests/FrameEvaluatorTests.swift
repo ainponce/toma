@@ -35,10 +35,13 @@ private func cursor(_ seconds: Double, x: Double, y: Double) -> InputEvent {
     // An open mic segment counts up to its start.
     let open = evaluate([display, microphone([segment(start: base.adding(seconds: 3), end: nil, reason: nil)])])
     #expect(abs(open.duration - 3) < 1e-9)
-    // A shorter mic changes nothing; without a screen segment the mic does not make a timeline.
+    // A shorter mic changes nothing. Without a screen segment, phase 0's timeline has 0 s (`TakeTimeline.bounds`), and the
+    // legacy document's clip is what the take recorded (`TakeTimeline.editableBounds`): exported only once edited.
     #expect(evaluate([display, microphone([segment(start: base, end: base.adding(seconds: 1))])]).duration == 2)
-    let screenless = evaluate([displayTrack(globalFrame: nil, segments: []), microphone([segment(start: base, end: base.adding(seconds: 6))])])
-    #expect(screenless.duration == 0)
+    let screenlessTracks = [displayTrack(globalFrame: nil, segments: []), microphone([segment(start: base, end: base.adding(seconds: 6))])]
+    #expect(TakeTimeline.bounds(take: makeTake(tracks: screenlessTracks), events: []).end == HostTime(nanoseconds: 0))
+    let screenless = evaluate(screenlessTracks)
+    #expect(screenless.timelineStart == base && abs(screenless.duration - 6) < 1e-9)
 }
 
 @Test func systemAudioRecordedPastTheScreenExtendsTheTimeline() {

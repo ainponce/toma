@@ -68,3 +68,33 @@ func legacyTakeWithoutScreenStillFails() async throws {
         #expect(try partialFiles(in: dir).isEmpty)
     }
 }
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func editedOldTakeWithoutScreenExportsAllItRecorded() async throws {
+    try await withTemporaryDirectory { dir in
+        // The microphone for 2 s and the camera from 0.5 s to 2.5 s: the legacy document's clip is all of it.
+        let builder = try TakeBuilder(in: dir)
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [AudioSegmentSpec(start: base, seconds: 2)])
+        let camera = TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera")
+        try await builder.addVideoTrack(
+            id: "camera", kind: .camera, source: camera, segments: [VideoSegmentSpec(start: base.adding(seconds: 0.5), seconds: 2)])
+        let project = try builder.write()
+        var document = EditDocument.legacy(for: project)
+        #expect(document.sequence.map { $0.start..<$0.end } == [base..<base.adding(seconds: 2.5)])
+        // Edited, it is no longer the legacy document, and exports the whole take.
+        document.style.background = .color(RGBA(0.2, 0.3, 0.4, 1))
+        let destination = dir.appending(path: "out.mp4")
+        let settings = ExportSettings(outputSize: [320, 180], framesPerSecond: 30)
+        _ = try await MP4Exporter(project: project, document: document, settings: settings).export(to: destination) { _ in }
+        let video = try #require(try await AVURLAsset(url: destination).loadTracks(withMediaType: .video).first)
+        let seconds = try await video.load(.timeRange).duration.seconds
+        #expect(abs(seconds - 2.5) <= 1.0 / 30 + 1e-6, "\(seconds) s of video")
+        let (start, samples) = try await decodedAudio(of: destination)
+        #expect(abs(Double(samples.count) / 48_000 - 2.5) <= 0.05, "\(samples.count) samples")
+        #expect(toneAmplitude(samples, start: start, frequency: 440, from: 0.2, to: 1.8) > 0.2)
+        // Untouched, it still refuses the take, as phase 0 and 1a do.
+        await #expect(throws: ExportError.noDisplayTrack) {
+            try await MP4Exporter(project: project, settings: settings).export(to: dir.appending(path: "legacy.mp4")) { _ in }
+        }
+    }
+}

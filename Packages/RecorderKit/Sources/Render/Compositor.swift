@@ -410,13 +410,19 @@ public final class Compositor: @unchecked Sendable {
         if bands != nil { encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: targetSize.x, height: targetSize.y)) }
 
         // 3. Window frame: its bar and buttons, then its title, made for the bar's pixels at the frame's title scale
-        // (`TitleTexture.scale(for:)`): those pixels, brought back to the stage, through it.
+        // (`TitleTexture.scale(for:)`): those pixels, brought back to the stage, through it. While the window moves, the
+        // title is made where it goes (`TitleTexture.source(for:)`) and stretched from there onto its bar now.
         if let window, let unzoomed = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
             drawWindowBar(window, viewport: viewport, pipelines: pipelines, encoder: encoder)
             if let windowTitle = textures.windowTitle {
-                let scale = TitleTexture.scale(for: frame)
-                let box = (scale == 1 ? unzoomed : TitleTexture.scaled(unzoomed, by: scale)).barPixels
-                let origin = SIMD2<Double>(box.origin) / scale, boxSize = SIMD2<Double>(box.size) / scale
+                let scale = TitleTexture.scale(for: frame), source = frame.settledWindowFrame ?? unzoomed
+                let box = (scale == 1 ? source : TitleTexture.scaled(source, by: scale)).barPixels
+                var origin = SIMD2<Double>(box.origin) / scale, boxSize = SIMD2<Double>(box.size) / scale
+                if let settled = frame.settledWindowFrame {
+                    let stretch = SIMD2(unzoomed.rect.width / settled.rect.width, unzoomed.barHeight / settled.barHeight)
+                    origin = SIMD2(unzoomed.rect.x, unzoomed.rect.y) + (origin - SIMD2(settled.rect.x, settled.rect.y)) * stretch
+                    boxSize *= stretch
+                }
                 drawSprite(
                     windowTitle, origin: stage?.outputPoint(ofStage: origin, outputSize: size) ?? origin,
                     size: boxSize * (stage?.depth ?? 1), pipeline: pipelines.sprite, viewport: viewport, encoder: encoder)

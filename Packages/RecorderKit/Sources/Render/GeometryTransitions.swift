@@ -93,6 +93,19 @@ struct ScreenTransitions: Sendable {
         var output: Int64
         var from: Shown?
         var to: Shown?
+
+        /// From one screen to another: it crossfades.
+        var changesScreen: Bool {
+            guard let from, let to else { return false }
+            return from.track != to.track
+        }
+
+        /// The same screen before and after, only somewhere else: a crossfade under way goes on through it. Any other
+        /// change ends it (another screen comes, or none is shown).
+        var keepsScreen: Bool {
+            guard let from, let to else { return false }
+            return from.track == to.track
+        }
     }
 
     /// What a frame shows of a change under way.
@@ -107,9 +120,10 @@ struct ScreenTransitions: Sendable {
     private let changes: [Change]
     /// Where each of the document's screen tracks is, to show the one being left; only with the spring.
     private let geometries: [String: ScreenGeometry]
-    /// The output ranges in which each of the document's screen tracks is shown (`StagePoints.screenTrackIDs`): from the
-    /// change of the plan to it to the next change away from it (from 0 for the take's initial screen, to the output's end
-    /// for the last), and on through a crossfade away from it; in order, merged where they touch.
+    /// The output ranges in which each of the document's screen tracks is shown (`StagePoints.screenTrackIDs`), every one
+    /// of them (none for a screen never shown): from the change of the plan to it to the next change away from it (from 0
+    /// for the take's initial screen, to the output's end for the last), and on while it is drawn under the next screen,
+    /// through the crossfade until another change of screen (or none shown) ends it; in order, merged where they touch.
     let shownRanges: [String: [Range<Int64>]]
 
     /// `placement` says where the screen of a view goes, settled, at the output's size.
@@ -165,14 +179,15 @@ struct ScreenTransitions: Sendable {
         }
         guard low > 0 else { return State() }
         var state = State()
-        // The crossfade of the last change of screen, while it lasts.
+        // The crossfade of the last change of screen, while it lasts and only changes of shape come after it.
         for k in stride(from: low - 1, through: 0, by: -1) {
             let since = τ - changes[k].output
             guard since < GeometryTransitions.crossfade else { break }
-            if let from = changes[k].from, let to = changes[k].to, from.track != to.track {
+            if changes[k].changesScreen, let from = changes[k].from {
                 state.previous = (from.track, Double(since) / Double(GeometryTransitions.crossfade))
                 break
             }
+            guard changes[k].keepsScreen else { break }
         }
         // The rect: a change made once the one before it had settled starts from what it changed exactly, so go back to
         // the first change of the burst that ends at `τ`, and play the burst forward from there.
@@ -214,7 +229,7 @@ struct ScreenTransitions: Sendable {
         take: TakeRecord, document: EditDocument, timeMap: TimeMap, stage: StagePoints, changes: [Change]
     ) -> [String: [Range<Int64>]] {
         let screens = Set(stage.screenTrackIDs), end = timeMap.duration
-        var ranges: [String: [Range<Int64>]] = [:]
+        var ranges = Dictionary(uniqueKeysWithValues: screens.map { ($0, [Range<Int64>]()) })
         func add(_ track: String?, _ from: Int64, _ to: Int64) {
             let range = max(from, 0)..<min(max(to, from, 0), end)
             guard let track, screens.contains(track), !range.isEmpty else { return }
@@ -231,9 +246,10 @@ struct ScreenTransitions: Sendable {
             (current, from) = (change.track, max(output, from))
         }
         add(current, from, end)
-        for change in changes {
-            guard let left = change.from, let to = change.to, left.track != to.track else { continue }
-            add(left.track, change.output, change.output + GeometryTransitions.crossfade)
+        for (k, change) in changes.enumerated() where change.changesScreen {
+            // As `state(atOutput:)` draws it: until the crossfade is over, or a change that ends it.
+            let ending = changes[(k + 1)...].first { !$0.keepsScreen }?.output ?? .max
+            add(change.from?.track, change.output, min(change.output + GeometryTransitions.crossfade, ending))
         }
         return ranges.mapValues { spans in
             spans.sorted { $0.lowerBound < $1.lowerBound }.reduce(into: []) { merged, span in
