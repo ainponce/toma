@@ -615,6 +615,11 @@ final class CachedTexture: @unchecked Sendable {
     let cvTexture: CVMetalTexture
     let pixelBuffer: CVPixelBuffer
     let texture: any MTLTexture
+    /// The cache that made `cvTexture`, which a `CVMetalTexture` does not retain. Declared last, so released after it:
+    /// a texture released on one thread while its cache is finalized on another crashes in Core Video
+    /// (`CVMetalTextureCache::bufferBackingNotInUse`), as the last frame of an export did when the renderer's queue let
+    /// go of it while the export, done, released the renderer. With this, a cache outlives every texture it made.
+    private let cache: CVMetalTextureCache
 
     /// `pixelBuffer` as a `.bgra8Unorm` texture sharing its memory, made by `cache`.
     /// - Throws: `RenderError.textureCreationFailed` when Core Video cannot make it (a pixel buffer that is not backed by
@@ -630,5 +635,6 @@ final class CachedTexture: @unchecked Sendable {
         cvTexture = created
         self.pixelBuffer = pixelBuffer
         self.texture = texture
+        self.cache = cache
     }
 }
