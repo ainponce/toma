@@ -8,8 +8,13 @@ import os
 ///
 /// - A run is the clips of one take at one speed that go on one from the other in the source (a clip split without a
 ///   cut): it is stretched as one stream, so the split is not heard. Its output frame `o` plays the source from about
-///   `source + (o − output.lowerBound) × speed`. Past the run's source the effect is fed the source that follows when
-///   that is what is heard right after the run, silence otherwise, so it never takes in what was cut.
+///   `source + (o − output.lowerBound) × speed`.
+/// - The effect is fed only the source heard in one go with the run (`heard`: the run's own, and that of the clips
+///   before and after it that go on with it, at any speed), silence outside it, so it never takes in what was cut, not
+///   even after a clip after the run shorter than its window. When the clip before goes on into the run, a stream from
+///   the run's start starts `warmUpInput` frames of that source before it, the output of which is dropped: the stretch
+///   is under way at the seam instead of rising from silence over its first 10 to 20 ms. (After a cut there is nothing
+///   heard to start on, and the rise follows the fade in.)
 /// - The effect's latency (`AVAudioUnit.latency` or its audio unit's, the larger) is made up for: the first
 ///   `round(latency × 48 000)` frames it gives are dropped, and it is fed on past the run's end as far as it asks, so the
 ///   stretched sound keeps time with the picture and the clicks and keeps the run's tail. (Both read 0 on macOS 26, and
@@ -37,13 +42,11 @@ struct SpeedStretch {
         var output: Range<Int64>
         /// The timeline frame of the source at the run's first output frame.
         var source: Int64
-        /// The timeline frame where the run's source ends.
-        var sourceEnd: Int64
+        /// The timeline frames of the source heard in one go with the run, which contain its own: the effect is fed
+        /// silence outside them.
+        var heard: Range<Int64>
         /// The speed as `TimeMap` reads it (`ClipSpeed.clamped(_:)`): not 1, at most `maximumSpeed`.
         var speed: Double
-        /// Whether what is heard right after the run is the source after `sourceEnd` (the next clip goes on with it, at
-        /// another speed): the effect is fed it past the run's end, or silence if not.
-        var followedBySource = false
     }
 
     /// The fastest a clip is heard at: faster, it is silent.
@@ -55,6 +58,9 @@ struct SpeedStretch {
     static let hopFrames = 256
     /// `AVAudioUnitTimePitch.overlap`, its default, set so the hop stays `hopFrames`.
     static let overlap: Float = 8
+    /// The frames of the source heard before a run that a stream from its start takes in first, about twice what the
+    /// effect takes to come up to level from silence (up to 2 700 frames of input, at 4×).
+    static let warmUpInput = 6_144
 
     fileprivate static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
@@ -132,8 +138,8 @@ private final class Stream {
     /// The blocks rendered, and the input frames the effect's hops took over them.
     private var blocks: Int64 = 0
     private var taken: Int64 = 0
-    /// The frames still to drop of what the effect gives first: its latency.
-    private var latency: Int
+    /// The frames still to drop of what the effect gives first: its latency, and the warm-up before the run.
+    private var dropping: Int
     /// Rendering failed: silence from there.
     private var stopped = false
 
@@ -149,8 +155,12 @@ private final class Stream {
         let blockFrames = AVAudioFrameCount(SpeedStretch.blockFrames)
         engine = AVAudioEngine()
         try engine.enableManualRenderingMode(.offline, format: format, maximumFrameCount: blockFrames)
+        // From the run's start, with what is heard before it, the stream starts on that source: its output is dropped.
+        let warmUp = first == run.output.lowerBound && run.heard.lowerBound < run.source
+            ? Int((Double(SpeedStretch.warmUpInput) / run.speed).rounded(.up)) : 0
         let input = run.source + Int64((Double(first - run.output.lowerBound) * run.speed).rounded())
-        let feed = Feed(reader: reader, channels: channels, from: input, silenceFrom: run.followedBySource ? nil : run.sourceEnd)
+            - Int64((Double(warmUp) * run.speed).rounded())
+        let feed = Feed(reader: reader, channels: channels, from: input, heard: run.heard)
         let node = AVAudioSourceNode(format: format) { _, _, count, list in
             feed.fill(Int(count), into: list)
             return noErr
@@ -163,7 +173,7 @@ private final class Stream {
         engine.connect(node, to: effect, format: format)
         engine.connect(effect, to: engine.outputNode, format: format)
         try engine.start()
-        latency = Int((max(effect.latency, effect.auAudioUnit.latency) * AudioTrackTimeline.sampleRate).rounded())
+        dropping = Int((max(effect.latency, effect.auAudioUnit.latency) * AudioTrackTimeline.sampleRate).rounded()) + warmUp
         guard let buffer = AVAudioPCMBuffer(pcmFormat: engine.manualRenderingFormat, frameCapacity: blockFrames) else {
             throw StretchError.noBuffer
         }
@@ -198,7 +208,7 @@ private final class Stream {
     private var available: Int { (pending.count - handedOut) / channels }
 
     /// Renders the next block, at the rate that keeps the input taken on `speed` times the output (see `SpeedStretch`),
-    /// into `pending`, less what is left of the latency.
+    /// into `pending`, less what is left to drop.
     private func render() {
         pending.removeSubrange(0..<handedOut)
         handedOut = 0
@@ -218,8 +228,8 @@ private final class Stream {
             guard status == .success, Int(buffer.frameLength) == blockFrames, let data = buffer.floatChannelData else {
                 throw StretchError.rendering(status, frames: buffer.frameLength)
             }
-            let kept = blockFrames - min(latency, blockFrames)
-            latency -= blockFrames - kept
+            let kept = blockFrames - min(dropping, blockFrames)
+            dropping -= blockFrames - kept
             pending.reserveCapacity(pending.count + kept * channels)
             for frame in (blockFrames - kept)..<blockFrames {
                 for channel in 0..<channels { pending.append(data[channel][frame]) }
@@ -232,34 +242,34 @@ private final class Stream {
     }
 }
 
-/// What the effect takes in: the track's stream from a frame on, read as it asks for it, and silence from `silenceFrom`.
+/// What the effect takes in: the track's stream from a frame on, read as it asks for it, silence outside `heard`.
 private final class Feed {
     private let reader: AudioTrackTimeline.Reader
     private let channels: Int
     /// The timeline frame of the next frame the effect takes.
     private var position: Int64
-    private let silenceFrom: Int64?
+    private let heard: Range<Int64>
     private var frames: [Float] = []
 
-    init(reader: AudioTrackTimeline.Reader, channels: Int, from position: Int64, silenceFrom: Int64?) {
+    init(reader: AudioTrackTimeline.Reader, channels: Int, from position: Int64, heard: Range<Int64>) {
         self.reader = reader
         self.channels = channels
         self.position = position
-        self.silenceFrom = silenceFrom
+        self.heard = heard
     }
 
     /// Writes the next `count` frames into the effect's buffers, one per channel.
     func fill(_ count: Int, into list: UnsafeMutablePointer<AudioBufferList>) {
-        var heard = count
-        if let silenceFrom { heard = silenceFrom <= position ? 0 : Int(min(Int64(count), silenceFrom - position)) }
-        if heard > 0 { reader.read(position..<(position + Int64(heard)), into: &frames) }
+        let read = (position..<(position + Int64(count))).clamped(to: heard)
+        if !read.isEmpty { reader.read(read, into: &frames) }
+        // The frames of the buffers that are read.
+        let first = Int(read.lowerBound - position), last = first + read.count
         let buffers = UnsafeMutableAudioBufferListPointer(list)
         for c in 0..<buffers.count {
             buffers[c].mDataByteSize = UInt32(count * MemoryLayout<Float>.size)
             guard let data = buffers[c].mData?.assumingMemoryBound(to: Float.self) else { continue }
             let channel = min(c, channels - 1)
-            for i in 0..<heard { data[i] = frames[i * channels + channel] }
-            for i in heard..<count { data[i] = 0 }
+            for i in 0..<count { data[i] = i >= first && i < last ? frames[(i - first) * channels + channel] : 0 }
         }
         position += Int64(count)
     }

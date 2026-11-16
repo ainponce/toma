@@ -468,11 +468,17 @@ Lo de "sin permiso" solo vale con Toma abierta desde Finder: la que se abre desd
 - Después de grabar, Ajustes del Sistema ▸ Privacidad y seguridad ▸ Monitoreo de entrada: Toma no aparece.
 - Hacer scroll en Safari con el trackpad y con un mouse de rueda de líneas: `events.jsonl` tiene líneas `scroll` con `dx` y `dy` en puntos de un orden razonable (un giro corto de la rueda, unas decenas de puntos; la rueda cuenta 10 pt por línea). Anotar, para cada uno, cuánto se movió la página y qué sumaron los `dy`.
 
+**El audio con velocidad en macOS 15** (29)
+
+El estirador (`AVAudioUnitTimePitch`) solo se midió en macOS 26: ahí avanza su entrada de a `round(256 × rate)` cuadros por salto, que es lo que corrige Toma para que el audio no se corra del video, y su latencia es 0. Ningún agente tiene una Mac con macOS 15.
+- En una Mac con macOS 15 (mejor la del piso M1), en una copia de esta rama con Xcode, correr `swift test --package-path Packages/RecorderKit --filter 'aLongClipAtAnUnevenSpeedDoesNotDrift|stretchedOnsetIsAligned|stretchIsDeterministic'`: las tres pasan (`stretchedOnsetIsAligned` con sus 4 casos, a 0,25×, 0,7×, 2× y 4×). Anotar la versión exacta de macOS y, si alguna falla, el mensaje entero: en `aLongClipAtAnUnevenSpeedDoesNotDrift` dice cuánto se corrió el sonido (el salto del efecto es otro), en `stretchedOnsetIsAligned` cuánto antes o después empieza (una latencia que el efecto no informa) y en `stretchIsDeterministic` qué rango dio otros bits.
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
 | 2. Imágenes del cursor (macOS 15 y 26) | pendiente | pendiente | pendiente |
 | 2. Scroll y actividad del teclado sin Monitoreo de entrada (macOS 15 y 26) | pendiente | pendiente | pendiente |
+| 2. Audio con velocidad en macOS 15: deriva, comienzo y determinismo | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

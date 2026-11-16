@@ -299,23 +299,31 @@ public final class EditedMix: Sendable {
         var runs: [SpeedStretch.Run] = []
         // The clip of the last piece.
         var previous: Clip?
+        // Where the source heard in one go up to the last piece starts (the clips before it that it goes on from, at any
+        // speed), and the runs in that stretch of source, whose effects are fed it: none after a silent piece.
+        var heardFrom: Int64?
+        var heardRuns: [Int] = []
         for (k, clip) in sequence.enumerated() {
             let start = starts[k], end = k + 1 < starts.count ? starts[k + 1] : contentFrames
             guard start < end else { continue }
             // Read as `TimeMap` reads it, which gives the clip its frames: the picture and the sound agree on it.
             let clipSpeed = ClipSpeed.clamped(clip.speed)
             let from = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.start))
+            let to = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.end))
             var piece = Piece(start: start, end: end, sound: .silent, fadesIn: false, fadesOut: false)
             if clip.take == source.takeID, clipSpeed == 1 {
                 piece.sound = .source(from)
             } else if clip.take == source.takeID, clipSpeed <= SpeedStretch.maximumSpeed {
                 piece.sound = .stretched(run: runs.count)
-                runs.append(SpeedStretch.Run(
-                    output: start..<end, source: from, sourceEnd: frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.end)),
-                    speed: clipSpeed))
+                runs.append(SpeedStretch.Run(output: start..<end, source: from, heard: from..<to, speed: clipSpeed))
             }
+            let followsOn = previous.map { clip.take == $0.take && clip.start == $0.end } ?? false
+            if !followsOn || pieces.last?.sound == .silent || piece.sound == .silent {
+                heardFrom = nil
+                heardRuns = []
+            }
+            if piece.sound != .silent, heardFrom == nil { heardFrom = from }
             if let previous, let last = pieces.indices.last {
-                let followsOn = clip.take == previous.take && clip.start == previous.end
                 let goesOn = followsOn && clipSpeed == ClipSpeed.clamped(previous.speed)
                 switch (pieces[last].sound, piece.sound) {
                 case (.source(let before), .source) where goesOn:
@@ -324,15 +332,19 @@ public final class EditedMix: Sendable {
                 case (.stretched(let run), .stretched) where goesOn:
                     // The same stretch goes on, so the seam is not there either.
                     runs[run].output = runs[run].output.lowerBound..<end
-                    runs[run].sourceEnd = runs[runs.count - 1].sourceEnd
                     runs.removeLast()
                     piece.sound = .stretched(run: run)
                 default:
                     piece.fadesIn = true
                     pieces[last].fadesOut = true
-                    if case .stretched(let run) = pieces[last].sound { runs[run].followedBySource = followsOn && piece.sound != .silent }
                 }
             }
+            // A stretch is fed the source heard in one go with it, from where that starts to where this clip ends.
+            if case .stretched(let run) = piece.sound, !heardRuns.contains(run) {
+                heardRuns.append(run)
+                runs[run].heard = (heardFrom ?? from)..<to
+            }
+            for run in heardRuns { runs[run].heard = runs[run].heard.lowerBound..<max(runs[run].heard.lowerBound, to) }
             pieces.append(piece)
             previous = clip
         }

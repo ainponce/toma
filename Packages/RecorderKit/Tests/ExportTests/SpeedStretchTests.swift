@@ -166,17 +166,23 @@ private func onset(in samples: [Float], frequency: Double = 1000, near time: Dou
     }
 }
 
-/// A burst of 1 kHz at 0.5 s of the source, in a clip at 2× from the source's start, begins at 0.25 s of the output
-/// within 1 ms: the stretched sound keeps time with the picture and the clicks. A burst, not an impulse: the effect
-/// spreads an impulse over some 50 ms each way, its peak up to 6 ms from where it belongs depending on where the impulse
-/// falls between the effect's hops, which says nothing about the stretch's timing.
-@Test func stretchedOnsetIsAligned() async throws {
+/// A burst of 1 kHz at 0.5 s of the source, in a clip from the source's start, begins at `0.5 / speed` s of the output
+/// within what the effect allows: the stretched sound keeps time with the picture and the clicks. A burst, not an
+/// impulse: the effect spreads an impulse over some 50 ms each way, its peak up to 6 ms from where it belongs depending
+/// on where the impulse falls between the effect's hops, which says nothing about the stretch's timing.
+///
+/// The tolerances are what the effect does with bursts at 12 places between its hops: within 1 ms at 0.7× (0 to
+/// +0.5 ms) and at 2× (−0.75 to +0.25 ms, the brief's case); at 4× within 4 ms (±2.25 ms, of a burst 50 ms long once
+/// sped up); at 0.25× within 6 ms (−4.5 to −3.75 ms: slowed down, the burst's rise spreads over the effect's window,
+/// while the centre of its energy stays where it belongs). A latency the effect left unaccounted would show here.
+@Test(arguments: [(0.25, 0.05, 0.006), (0.7, 0.05, 0.001), (2, 0.05, 0.001), (4, 0.2, 0.004)])
+func stretchedOnsetIsAligned(speed: Double, burstSeconds: Double, tolerance: Double) async throws {
     try await withTemporaryDirectory { dir in
-        let project = try await take(in: dir, name: "onset", seconds: 2, mic: burst(at: 0.5, takeSeconds: 2))
-        let mix = try await EditedMix.make(project: project, document: edited(project, [(0, 2, 2)]), framesPerSecond: 60)
+        let project = try await take(in: dir, name: "onset", seconds: 2, mic: burst(at: 0.5, seconds: burstSeconds, takeSeconds: 2))
+        let mix = try await EditedMix.make(project: project, document: edited(project, [(0, 2, speed)]), framesPerSecond: 60)
         let samples = try await rendered(mix)
-        let begins = try onset(in: samples, near: 0.25)
-        #expect(abs(begins - 0.25) <= 0.001, "the burst begins at \(begins) s")
+        let begins = try onset(in: samples, near: 0.5 / speed, window: 0.05)
+        #expect(abs(begins - 0.5 / speed) <= tolerance, "\(speed)×: the burst begins at \(begins) s, for \(0.5 / speed) s")
     }
 }
 
@@ -212,6 +218,43 @@ private func onset(in samples: [Float], frequency: Double = 1000, near time: Dou
         let cut = toneAmplitude(samples, start: 0, frequency: 1000, from: 0.45, to: 0.5)
         #expect(cut < 1e-3, "1000 Hz at the end of the first clip: \(cut)")
         #expect(toneAmplitude(samples, start: 0, frequency: 440, from: 0.1, to: 0.4) > 0.2)
+    }
+}
+
+/// After a stretched clip, a clip that goes on with its source can be shorter than the effect's window: the effect is
+/// fed that clip's source and no further, so a loud tone in the cut after it never reaches the stretched clip, not even
+/// at −90 dB, at 2× or at 4×.
+@Test func nothingCutAfterAShortClipIsStretchedIn() async throws {
+    try await withTemporaryDirectory { dir in
+        // Silence, but 1000 Hz at 0.9 of full scale from 1.005 s.
+        let loud = toneBurst(at: at(1.005), start: base, skewPPM: 0, frequency: 1000, channels: 1, amplitude: 0.9, seconds: 1.5)
+        let project = try await take(in: dir, name: "short", mic: [AudioSegmentSpec(start: base, seconds: 3, amplitude: 0, transform: loud)])
+        let mix = try await EditedMix.make(project: project, document: edited(project, [(0, 3, 1)]), framesPerSecond: 60)
+        #expect(try await rendered(mix).contains { abs($0) > 0.8 }, "the tone is there to cut")
+        for speed in [2.0, 4] {
+            // The clip at `speed`, then 5 ms of the source after it at 1×, then the cut.
+            let samples = try await rendered(mix.with(document: edited(project, [(0, 1, speed), (1, 1.005, 1)]), framesPerSecond: 60))
+            let peak = samples.map(abs).max() ?? 0
+            #expect(peak < 3.2e-5, "\(speed)×: the cut tone at \(20 * log10(Double(peak))) dB")
+        }
+    }
+}
+
+/// A stretched clip that goes on with the source of the clip before is under way at the seam: past the fade in, each
+/// 2 ms of its first 20 ms is at its level within 1 dB, at 0.5×, 2× and 4×, instead of rising from silence. (2 ms hold
+/// less than a period of 440 Hz, so even a steady tone reads up to ±0.57 dB in them.)
+@Test func aStretchGoingOnFromTheClipBeforeIsUnderWayAtTheSeam() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(in: dir, name: "seam", seconds: 4)
+        let mix = try await EditedMix.make(project: project, document: edited(project, [(0, 1, 1)]), framesPerSecond: 60)
+        for speed in [0.5, 2, 4] {
+            let samples = try await rendered(mix.with(document: edited(project, [(0, 1, 1), (1, 3, speed)]), framesPerSecond: 60))
+            let seam = 48_000 + Int(EditedMix.fadeFrames)
+            for window in stride(from: seam, to: seam + 960, by: 96) {
+                let level = 20 * log10(rms(samples, window..<(window + 96)) / (0.25 / 2.0.squareRoot()))
+                #expect(abs(level) < 1, "\(speed)×: \(level) dB at \(window - 48_000) frames from the seam")
+            }
+        }
     }
 }
 
@@ -368,7 +411,7 @@ private func onset(in samples: [Float], frequency: Double = 1000, near time: Dou
         let project = try await take(in: dir, name: "streams", seconds: 6)
         let track = try #require(project.take.tracks.first { $0.id == micID })
         let timeline = try await AudioTrackTimeline.load(project, track: track, origin: base, channels: 1)
-        let run = SpeedStretch.Run(output: 0..<144_000, source: 0, sourceEnd: 288_000, speed: 2)
+        let run = SpeedStretch.Run(output: 0..<144_000, source: 0, heard: 0..<288_000, speed: 2)
         let steps: [(frames: Range<Int64>, preroll: Int64)] = [
             (72_000..<76_096, 9_600), (76_096..<80_192, 0), (85_000..<86_000, 9_600), (100_000..<101_000, 9_600),
             (110_000..<111_000, 0), (130_000..<131_000, 0), (5_000..<6_000, 9_600),
@@ -385,3 +428,4 @@ private func onset(in samples: [Float], frequency: Double = 1000, near time: Dou
         #expect(streams == [[1, 62_400], [1, 62_400], [1, 62_400], [2, 90_400], [3, 0], [3, 0], [4, 0]])
     }
 }
+
