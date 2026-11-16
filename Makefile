@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 VERSION ?=
 
-.PHONY: project test tsan crash-test build install release
+.PHONY: project test tsan crash-test golden golden-record build install release
 
 project:
 	xcodegen generate
@@ -17,6 +17,23 @@ tsan:
 
 crash-test:
 	bash scripts/test-crash-recovery.sh
+
+# The golden files of milestone 1b (plan decision 3): the frames and the mix of v1 and v2 projects without edits,
+# recorded from Task 1's commit before any render change, outside git (their bytes depend on the GPU, the system's
+# Metal compiler and VideoToolbox), with VERSION, the fingerprint of the system that recorded them, next to them.
+GOLDEN ?= build/golden-1b/frames.bin
+GOLDEN_TESTS = swift test --package-path Packages/RecorderKit --filter 'goldenFramesMatch|goldenMixMatches'
+
+golden:
+	@bash scripts/golden-system.sh | cmp -s - "$(dir $(GOLDEN))VERSION" || { \
+		echo "the system changed since the golden files were recorded: record them again from Task 1's commit (git worktree add build/golden-src <sha>, then make golden-record there), never from later code" >&2; \
+		exit 1; }
+	TOMA_GOLDEN_FILE="$(abspath $(GOLDEN))" $(GOLDEN_TESTS)
+
+golden-record:
+	mkdir -p "$(dir $(GOLDEN))"
+	TOMA_GOLDEN_FILE="$(abspath $(GOLDEN))" TOMA_GOLDEN_RECORD=1 $(GOLDEN_TESTS)
+	bash scripts/golden-system.sh > "$(dir $(GOLDEN))VERSION"
 
 # Debug signs with the project's identity when this Mac has it (scripts/create-signing-cert.sh, the owner's keychain),
 # so macOS keeps the app's permissions across rebuilds; without it, ad hoc.

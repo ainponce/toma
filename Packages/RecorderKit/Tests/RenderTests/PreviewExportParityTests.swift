@@ -151,29 +151,12 @@ func windowSegmentsAtAnotherScaleFillTheWindow() async throws {
     }
 }
 
-/// The take of `previewAndExportPathsMatchBitForBit` as the phase 0 recorder left it: a version 1 package, the
-/// display's `displayGeometry` logged as the take starts (its `globalFrame`), the moving cursor and a microphone.
-private func phaseZeroProject(in dir: URL) async throws -> LoadedProject {
-    let builder = try TakeBuilder(in: dir, formatVersion: 1)
-    try await builder.addVideoTrack(
-        id: trackID, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 3)])
-    try await builder.addAudioTrack(
-        id: "mic", source: TrackSource(name: "Synthetic Microphone", deviceUniqueID: "synthetic-mic"),
-        segments: [AudioSegmentSpec(start: base, seconds: 3)])
-    try builder.addEvents([
-        InputEvent(t: base.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: screenFrame, scale: 1)),
-    ])
-    try builder.addEvents(cursorEvents(from: base, seconds: 3, across: screenFrame))
-    let project = try builder.write()
-    #expect(project.manifest.formatVersion == 1)
-    return project
-}
-
-/// A project of version 1 draws the same bytes from one version of the render to the next. It runs only with
-/// `TOMA_GOLDEN_FILE` set: the frames at 0, 0.5 and 1.7 s, one after the other, must equal that file byte for byte.
-/// With `TOMA_GOLDEN_RECORD=1` as well, it writes them to that file instead (run it so on the code to compare
-/// against), and never over a file already there. Without the file and without the switch it fails: it never
-/// passes without comparing.
+/// Projects of version 1 and 2 without edits draw the same bytes from one version of the render to the next (plan
+/// decision 3). It runs only with `TOMA_GOLDEN_FILE` set: the frames of every case of `GoldenProjects` that has times,
+/// drawn by `FrameRenderer` at 1280 × 720 at those times, one after the other in the order of the cases, must equal
+/// that file byte for byte. With `TOMA_GOLDEN_RECORD=1` as well, it writes them to that file instead (run it so on the
+/// code to compare against: `make golden-record`), and never over a file already there. Without the file and without
+/// the switch it fails: it never passes without comparing.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_GOLDEN_FILE"] != nil))
 func goldenFramesMatch() async throws {
     let environment = ProcessInfo.processInfo.environment
@@ -186,19 +169,35 @@ func goldenFramesMatch() async throws {
         try #require(
             exists, "No golden frames at \(url.path): record them first, with TOMA_GOLDEN_RECORD=1, on the code to compare against")
     }
+    let size = SIMD2(1280, 720)
+    var bytes: [UInt8] = []
+    // The case and the time of each frame in `bytes`.
+    var frames: [(name: String, time: Double)] = []
     try await withTemporaryDirectory { dir in
-        let renderer = try FrameRenderer(project: try await phaseZeroProject(in: dir), outputSize: [1280, 720])
-        var bytes: [UInt8] = []
-        for t in [0, 0.5, 1.7] { bytes += try renderer.renderBytes(at: t) }
-        if recording {
-            try Data(bytes).write(to: url, options: .withoutOverwriting)
-            return
+        for golden in GoldenProjects.cases where !golden.times.isEmpty {
+            let renderer = try FrameRenderer(project: try await GoldenProjects.make(golden.name, in: dir), outputSize: size)
+            try #require(
+                renderer.duration >= 3 && golden.times.allSatisfy { $0 < renderer.duration },
+                "\(golden.name) lasts \(renderer.duration) s, its times are \(golden.times)")
+            for t in golden.times {
+                bytes += try renderer.renderBytes(at: t)
+                frames.append((golden.name, t))
+            }
+            #expect(renderer.missingVideo.isEmpty, "\(golden.name): \(renderer.missingVideo)")
         }
-        let golden = [UInt8](try Data(contentsOf: url))
-        try #require(golden.count == bytes.count, "\(golden.count) bytes in \(url.path), \(bytes.count) drawn")
-        let differing = golden.indices.filter { golden[$0] != bytes[$0] }
-        #expect(differing.isEmpty, "\(differing.count) bytes differ, the first at \(differing.first ?? 0)")
     }
+    if recording {
+        try Data(bytes).write(to: url, options: .withoutOverwriting)
+        return
+    }
+    let golden = try Data(contentsOf: url)
+    try #require(golden.count == bytes.count, "\(golden.count) bytes in \(url.path), \(bytes.count) drawn")
+    guard golden != Data(bytes) else { return }
+    let first = try #require(golden.indices.first { golden[$0] != bytes[$0] })
+    let frameBytes = size.x * size.y * 4
+    let frame = frames[first / frameBytes]
+    let differing = zip(golden, bytes).reduce(0) { $0 + ($1.0 != $1.1 ? 1 : 0) }
+    Issue.record("\(differing) bytes differ, the first in \(frame.name) at \(frame.time) s (byte \(first % frameBytes) of its frame)")
 }
 
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))

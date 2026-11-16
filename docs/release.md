@@ -438,6 +438,22 @@ En Terminal.app, con los permisos de la preparación (punto 5).
 | 3. Audio del sistema con `recorder-dev` | pendiente | pendiente | pendiente |
 | 3. Pantallas, ventana y área con `recorder-dev` | pendiente | pendiente | pendiente |
 
+## Pendientes del dueño del hito 1b
+
+Una sola pasada de fin de hito, contra la app de esta rama, en orden: la preparación, el recorrido completo y el detalle por área. Cada comprobación dice qué se tiene que ver. Si se ve otra cosa, o algo molesta, anotar lo que se ve (con la versión exacta de macOS) en la tabla del final: los agentes trabajan con esas notas. Ninguna comprobación pide cambiar código. Entre paréntesis, la tarea de origen.
+
+### 0. Preparación
+
+1. **Abrir la copia de prueba.** La arma el controlador después de unir la rama: `open build/prueba/Toma.app`. `codesign -dv build/prueba/Toma.app 2>&1 | grep Authority` dice `Authority=Toma Project Signing` cuando salió firmada con el certificado (paso 1 de la preparación del hito 1a); si no, es ad hoc.
+2. Si se creó el certificado de firma después de recibir la copia de prueba, pedir una copia nueva: la anterior quedó ad hoc y macOS no conserva sus permisos.
+3. **Permisos.** Los mismos del hito 1a (paso 3 de su preparación): Toma pide cada uno cuando hace falta.
+
+### 2. Detalle por área
+
+| Comprobación | Fecha | macOS | Resultado |
+|---|---|---|---|
+| 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

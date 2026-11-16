@@ -64,11 +64,10 @@ public final class MP4Exporter: Sendable {
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
 
         let renderer = try FrameRenderer(project: project, outputSize: settings.outputSize)
-        let frameCount = max(1, Int((renderer.duration * Double(fps)).rounded()))
+        let (frameCount, audioFrames) = Self.length(of: renderer.duration, framesPerSecond: fps)
         let timelineStart = FrameEvaluator(
             take: project.take, events: project.events, style: StyleV0(), outputSize: settings.outputSize
         ).timelineStart
-        let audioFrames = Int64((Double(frameCount) / Double(fps) * AudioTrackTimeline.sampleRate).rounded())
         let audio = try await Self.audioMix(of: project, timelineStart: timelineStart, totalFrames: audioFrames)
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
@@ -121,6 +120,44 @@ public final class MP4Exporter: Sendable {
                 project, track: track, timelineStart: timelineStart, totalFrames: totalFrames, channels: channels))
         }
         return try AudioMix(timelines: timelines, channels: channels, totalFrames: totalFrames)
+    }
+
+    /// The frames of video of a timeline of `duration` seconds at `fps` (at least one), and the frames of audio, at
+    /// 48 kHz, that those frames last.
+    private static func length(of duration: Double, framesPerSecond fps: Int) -> (frames: Int, audioFrames: Int64) {
+        let frames = max(1, Int((duration * Double(fps)).rounded()))
+        return (frames, Int64((Double(frames) / Double(fps) * AudioTrackTimeline.sampleRate).rounded()))
+    }
+
+    /// The samples the AAC encoder gets when `project` is exported at `framesPerSecond`: every block of its mix
+    /// (`audioMix`), one after the other, interleaved Float32, over the timeline rounded to whole frames of video;
+    /// empty for a take without audio. The golden mix (`goldenMixMatches`) holds them.
+    /// - Throws: what `export` throws before it writes anything (`noDisplayTrack`, `writerFailed` for a frame rate
+    ///   that is not positive), or what loading or mixing the audio throws.
+    static func mixSamples(of project: LoadedProject, framesPerSecond: Int = 60) async throws -> [Float] {
+        guard ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false else {
+            throw ExportError.noDisplayTrack
+        }
+        guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
+        let evaluator = FrameEvaluator(
+            take: project.take, events: project.events, style: StyleV0(), outputSize: ExportSettings().outputSize)
+        let (_, audioFrames) = length(of: evaluator.duration, framesPerSecond: framesPerSecond)
+        guard let mix = try await audioMix(of: project, timelineStart: evaluator.timelineStart, totalFrames: audioFrames) else {
+            return []
+        }
+        var samples: [Float] = []
+        samples.reserveCapacity(Int(audioFrames) * mix.channels)
+        while let block = try mix.nextBlock() {
+            guard let data = CMSampleBufferGetDataBuffer(block) else { throw ExportError.writerFailed("an audio block without data") }
+            let byteCount = CMBlockBufferGetDataLength(data)
+            var floats = [Float](repeating: 0, count: byteCount / MemoryLayout<Float>.size)
+            let status = floats.withUnsafeMutableBytes {
+                CMBlockBufferCopyDataBytes(data, atOffset: 0, dataLength: byteCount, destination: $0.baseAddress!)
+            }
+            guard status == noErr else { throw ExportError.writerFailed("cannot read an audio block (OSStatus \(status))") }
+            samples += floats
+        }
+        return samples
     }
 
     // MARK: - Destination

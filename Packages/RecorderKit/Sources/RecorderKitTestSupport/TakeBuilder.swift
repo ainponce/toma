@@ -100,6 +100,9 @@ public final class TakeBuilder {
     public let package: ProjectPackage
     /// The writers of the segments written with `leaveOpen`, alive as long as the builder is.
     public private(set) var openWriters: [any TrackWriting] = []
+    /// The take's `cameraStyle`, written with it: how the camera looks from the start. `nil`, as in a take without a
+    /// camera or of version 1.
+    public var cameraStyle: CameraStyle?
 
     private let takeID = "take-001"
     private var tracks: [TrackRecord] = []
@@ -214,7 +217,8 @@ public final class TakeBuilder {
         try FileManager.default.createDirectory(at: package.takeDirectory(takeID), withIntermediateDirectories: true)
         var tracks = tracks
         for i in tracks.indices { tracks[i].segments.sort { $0.index < $1.index } }
-        let take = TakeRecord(id: takeID, status: status, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks)
+        let take = TakeRecord(
+            id: takeID, status: status, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks, cameraStyle: cameraStyle)
         try ManifestStore(package: package).update { $0.takes.append(take) }
         let log = try EventLogWriter(url: package.eventsURL(take: takeID))
         let ordered = events.enumerated().sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
