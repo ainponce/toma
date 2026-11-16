@@ -12,13 +12,16 @@ import Recovery
 import Synchronization
 import SyntheticCapture
 
-/// Development tool: records, recovers, verifies and exports takes from the command line, for the crash
-/// and endurance scripts in `scripts/`.
+/// Development tool: records, recovers, verifies and exports takes from the command line, and edits them at random
+/// and checks their edit, for the crash and endurance scripts in `scripts/`.
 struct RecorderDev: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "recorder-dev",
-        abstract: "Records, recovers, verifies and exports Toma takes from the command line.",
-        subcommands: [SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self]
+        abstract: "Records, recovers, verifies, exports and stresses the editing of Toma takes from the command line.",
+        subcommands: [
+            SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, EditStress.self,
+            EditCheck.self,
+        ]
     )
 }
 
@@ -621,7 +624,7 @@ private func summary(of track: TrackRecord) -> String {
         + "dropped \(dropped), last ended \(last)"
 }
 
-private func printError(_ message: String) {
+func printError(_ message: String) {
     FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
