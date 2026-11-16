@@ -111,21 +111,36 @@ public struct CursorPath: Sendable {
 
     /// The cursor on step `s` of the grid; `nil` before the first raw position (with a spring, before step 0 too).
     public func sample(atStep s: Int) -> CursorSample? {
-        guard let motion else { return todaysSample(at: StepGrid.outputTime(ofStep: s)) }
-        guard let state = motion.state(atStep: s) else { return nil }
-        return sample(state, atStep: motion.clamped(s))
+        var steps = FromCheckpoint()
+        return sample(atStep: s, from: &steps)
     }
 
     /// The cursor at output time `τ`: with `off`, at `τ` itself; with a spring, the sample of its step when `τ` is on
     /// the grid (`StepGrid.position(ofOutput:)`), otherwise the two around it mixed. `nil` before the first raw
     /// position.
     public func sample(atOutput τ: Int64) -> CursorSample? {
+        var steps = FromCheckpoint()
+        return sample(atOutput: τ, from: &steps)
+    }
+
+    /// `sample(atStep:)`, the spring's state read from `steps`: the one query, whatever simulated it.
+    fileprivate func sample(atStep s: Int, from steps: inout some CursorSteps) -> CursorSample? {
+        guard let motion else { return todaysSample(at: StepGrid.outputTime(ofStep: s)) }
+        guard let step = motion.started(s), let state = steps.state(atStep: step, of: motion) else { return nil }
+        return sample(state, atStep: step)
+    }
+
+    /// `sample(atOutput:)`, the spring's states read from `steps`: the one query, whatever simulated them.
+    fileprivate func sample(atOutput τ: Int64, from steps: inout some CursorSteps) -> CursorSample? {
         guard let motion else { return todaysSample(at: τ) }
         let (step, fraction) = StepGrid.position(ofOutput: τ)
-        guard fraction > 0 else { return sample(atStep: step) }
-        guard let (before, after) = motion.states(atSteps: step) else { return nil }
-        let a = sample(before, atStep: motion.clamped(step))
-        let b = sample(after, atStep: motion.clamped(step + 1))
+        guard fraction > 0 else { return sample(atStep: step, from: &steps) }
+        guard let s = motion.started(step) else { return nil }
+        let next = motion.clamped(step + 1)
+        let (first, second) = steps.states(atStep: s, next: next, of: motion)
+        guard let before = first else { return nil }
+        // Once started, the cursor never stops.
+        let a = sample(before, atStep: s), b = sample(second ?? before, atStep: next)
         return CursorSample(
             position: a.position + (b.position - a.position) * fraction,
             opacity: a.opacity + (b.opacity - a.opacity) * fraction,
@@ -313,25 +328,16 @@ extension CursorPath {
             min(max(s, 0), lastStep)
         }
 
+        /// `s` held to `0...lastStep`, the step the queries read; `nil` before step 0 and before the cursor starts.
+        func started(_ s: Int) -> Int? {
+            guard let firstStep, s >= 0, clamped(s) >= firstStep else { return nil }
+            return clamped(s)
+        }
+
         /// The state on step `s` (the last one's after the end), from the checkpoint before it; `nil` before the
         /// cursor starts and before step 0.
         func state(atStep s: Int) -> State? {
-            guard let firstStep, s >= 0, clamped(s) >= firstStep else { return nil }
-            var simulation = simulation(toward: clamped(s))
-            while simulation.step < clamped(s) { advance(&simulation) }
-            return simulation.state
-        }
-
-        /// The states on steps `s` and `s + 1` (held to `lastStep`), from the checkpoint before `s`; `nil` when the
-        /// first of them is.
-        func states(atSteps s: Int) -> (State, State)? {
-            guard let firstStep, s >= 0, clamped(s) >= firstStep else { return nil }
-            var simulation = simulation(toward: clamped(s))
-            while simulation.step < clamped(s) { advance(&simulation) }
-            guard let before = simulation.state else { return nil }
-            if simulation.step < clamped(s + 1) { advance(&simulation) }
-            // Once started, the cursor never stops.
-            return (before, simulation.state ?? before)
+            started(s).flatMap { FromCheckpoint().state(atStep: $0, of: self) }
         }
 
         /// The state on step `s` (in `0...lastStep`) simulated from output 0, without the checkpoints.
@@ -428,31 +434,68 @@ extension CursorPath {
     }
 }
 
+/// Where `CursorPath`'s queries read the spring's simulation from: one from the checkpoint before the step asked for
+/// (`FromCheckpoint`), one that goes forward with the steps asked for (`Forward`, the `Reader`'s), or the steps a `Span`
+/// kept. Every source gives the same bits. The steps asked for are of the output (`0...lastStep`), at or after the
+/// cursor's first.
+private protocol CursorSteps {
+    /// The state on step `s`.
+    mutating func state(atStep s: Int, of motion: CursorPath.Motion) -> CursorPath.State?
+    /// The states on step `s` and on `next`, which is `s` itself or the step after it.
+    mutating func states(atStep s: Int, next: Int, of motion: CursorPath.Motion) -> (CursorPath.State?, CursorPath.State?)
+}
+
 extension CursorPath {
+    /// The spring simulated from the checkpoint before the step.
+    fileprivate struct FromCheckpoint: CursorSteps {
+        func state(atStep s: Int, of motion: Motion) -> State? {
+            var simulation = motion.simulation(from: s)
+            motion.advance(&simulation, to: s)
+            return simulation.state
+        }
+
+        func states(atStep s: Int, next: Int, of motion: Motion) -> (State?, State?) {
+            var simulation = motion.simulation(from: s)
+            motion.advance(&simulation, to: s)
+            let before = simulation.state
+            motion.advance(&simulation, to: next)
+            return (before, simulation.state)
+        }
+    }
+
+    /// The spring going forward from the step asked for before, when the next one asked for is not before it and that
+    /// step is not before the next one's checkpoint; from that checkpoint otherwise.
+    fileprivate struct Forward: CursorSteps {
+        private var simulation: Simulation?
+
+        mutating func state(atStep s: Int, of motion: Motion) -> State? {
+            let checkpoint = s / StepGrid.checkpointEvery * StepGrid.checkpointEvery
+            var current = simulation.flatMap { $0.step <= s && $0.step >= checkpoint ? $0 : nil } ?? motion.simulation(from: s)
+            motion.advance(&current, to: s)
+            simulation = current
+            return current.state
+        }
+
+        mutating func states(atStep s: Int, next: Int, of motion: Motion) -> (State?, State?) {
+            let before = state(atStep: s, of: motion)
+            return (before, state(atStep: next, of: motion))
+        }
+    }
+
     /// The cursor read step after step, as the zoom camera reads it (design §8.6: on each step, first the cursor, then
-    /// the camera): `sample(atStep:)` with the same bits, from one simulation that goes forward with the steps asked
-    /// for instead of one from the checkpoint before each of them.
+    /// the camera): `sample(atStep:)`, the same query over a simulation that goes forward with the steps asked for
+    /// instead of one from the checkpoint before each of them.
     struct Reader: Sendable {
         private let path: CursorPath
-        private var simulation: Simulation?
+        private var steps = Forward()
 
         init(_ path: CursorPath) {
             self.path = path
         }
 
-        /// `sample(atStep: s)`: going forward from the step asked for before when `s` is not before it and that step is
-        /// not before the checkpoint of `s`; from that checkpoint otherwise.
+        /// `sample(atStep: s)`.
         mutating func sample(atStep s: Int) -> CursorSample? {
-            guard let motion = path.motion else { return path.sample(atStep: s) }
-            guard let firstStep = motion.firstStep, s >= 0, motion.clamped(s) >= firstStep else { return nil }
-            let step = motion.clamped(s)
-            let checkpoint = step / StepGrid.checkpointEvery * StepGrid.checkpointEvery
-            var current = simulation.flatMap { $0.step <= step && $0.step >= checkpoint ? $0 : nil }
-                ?? motion.simulation(from: step)
-            motion.advance(&current, to: step)
-            simulation = current
-            // From the first step on, the cursor is there.
-            return current.state.map { path.sample($0, atStep: step) }
+            path.sample(atStep: s, from: &steps)
         }
     }
 }
@@ -466,5 +509,67 @@ extension CursorPath.Motion {
     /// `simulation` taken forward to step `s`.
     fileprivate func advance(_ simulation: inout CursorPath.Simulation, to s: Int) {
         while simulation.step < s { advance(&simulation) }
+    }
+}
+
+extension CursorPath {
+    /// The states a span kept, from its first step on; the others simulated from their checkpoint.
+    fileprivate struct Kept: CursorSteps {
+        let first: Int
+        let states: [State?]
+
+        func state(atStep s: Int, of motion: Motion) -> State? {
+            guard let kept = kept(s) else { return FromCheckpoint().state(atStep: s, of: motion) }
+            return kept
+        }
+
+        func states(atStep s: Int, next: Int, of motion: Motion) -> (State?, State?) {
+            guard let before = kept(s), let after = kept(next) else {
+                return FromCheckpoint().states(atStep: s, next: next, of: motion)
+            }
+            return (before, after)
+        }
+
+        /// The state kept on step `s` (`.some(nil)` before the cursor starts); `nil` out of the span.
+        private func kept(_ s: Int) -> State?? {
+            states.indices.contains(s - first) ? .some(states[s - first]) : .none
+        }
+    }
+
+    /// The cursor over a short span of output time, from one simulation (the motion blur's subsamples, design §7.5):
+    /// `sample(atOutput:)`, the same query over the steps kept, so with the same bits at every time of the span, without
+    /// simulating from a checkpoint for each.
+    public struct Span: Sendable {
+        private let path: CursorPath
+        private let steps: Kept
+
+        fileprivate init(path: CursorPath, steps: Kept) {
+            self.path = path
+            self.steps = steps
+        }
+
+        /// `sample(atOutput: τ)`: from the steps kept for a time of the span, worked out on its own otherwise.
+        public func sample(atOutput τ: Int64) -> CursorSample? {
+            var steps = steps
+            return path.sample(atOutput: τ, from: &steps)
+        }
+    }
+
+    /// The cursor from the step of `start` to the one after the step of `end` (held to the output's steps), simulated
+    /// once from the checkpoint before them, every step kept: for spans of a few frames. With `off`, nothing is
+    /// simulated.
+    public func span(from start: Int64, through end: Int64) -> Span {
+        guard let motion else { return Span(path: self, steps: Kept(first: 0, states: [])) }
+        let low = motion.clamped(StepGrid.position(ofOutput: min(start, end)).step)
+        let high = motion.clamped(StepGrid.position(ofOutput: max(start, end)).step + 1)
+        var simulation = motion.simulation(from: low)
+        motion.advance(&simulation, to: low)
+        var states = [simulation.state]
+        states.reserveCapacity(high - low + 1)
+        while simulation.step < high {
+            motion.advance(&simulation, to: simulation.step + 1)
+            states.append(simulation.state)
+        }
+        return Span(path: self, steps: Kept(first: low, states: states))
     }
 }

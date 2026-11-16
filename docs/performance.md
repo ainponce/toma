@@ -105,3 +105,27 @@ Calibración (dueño, desde Terminal.app con los permisos de Grabación de panta
 | Carga medida (píxeles/s) | pendiente |
 | Cuadros perdidos por pista (`verify --max-drop-ratio 0.005`) | pendiente |
 | Presupuesto resultante | 800 000 000 (sin calibrar) |
+
+## Medidas del agente (M5 Pro)
+
+Esta Mac es el modelo de la del dueño (M5 Pro), así que las metas de esa columna de diseño §7.9 las mide un agente (Tasks 26, 30 y 31); al dueño le queda el piso M1. Puede haber pruebas de otros agentes corriendo en la misma Mac a la vez: cada medida dice la carga de ese momento.
+
+### El zoom con desenfoque de movimiento a 4K (Task 26)
+
+```
+TOMA_BENCH=1 swift test --package-path Packages/RecorderKit --filter sixteenSubsamplesAt4KFitTheFrameBudget
+```
+
+Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026, sobre `a1dbb5d` (el árbol de `hito-1b` en `7723be0`) con los cambios de Task 26 (el commit `feat(render): the zoom camera over the stage, with motion blur of the camera and the cursor`); Debug; carga de 4 a 9, dos corridas con los mismos números (±0,03 ms). Tiempo de GPU de cada cuadro (`gpuEndTime − gpuStartTime` de su command buffer), 120 cuadros seguidos después de 8 para calentar, cada uno esperado antes del siguiente. La escena: 3840 × 2160; la pantalla, una textura de 3840 × 2160 con mipmaps hechos en cada cuadro; el fondo de pantalla `aurora-1` (su malla en una textura del tamaño de la salida, como la da `FrameRenderer` bajo el desenfoque); sombra 0,6; marco de macOS con título; el cursor de Toma suavizado, rápido; los obturadores de la cámara y del cursor de un cuadro entero.
+
+| Caso | Submuestras | p50 | p95 | Máximo | Meta |
+|---|---|---|---|---|---|
+| La cámara que nunca para: bloques de 0,25 s a profundidad 3 entre dos puntos lejanos | 16 en los 120 cuadros | 4,01 ms | 4,02 ms | 4,06 ms | p95 ≤ 16,7 ms |
+| Entrar a un zoom desde el reposo (profundidad 1 → 2): el fondo y la sombra se ven alrededor de la ventana | 16 en los primeros ~50, después la cámara se queda quieta y es 1 | 0,47 ms | 4,06 ms | 7,63 ms | p95 ≤ 16,7 ms |
+
+Cómo se llega:
+
+- **Un solo pase de render** para todas las submuestras (diseño §7.2, revisión del plan I10): la submuestra (`.bgra8Unorm`) y la suma (`rgba16Float`) son adjuntos `memoryless` que viven en la memoria de los tiles; un dibujo de pantalla completa suma cada submuestra × 1/N leyendo `[[color(0)]]` y `[[color(1)]]` (mezcla programable) y otro escribe el promedio al destino. Entre submuestras no va nada a la memoria.
+- **Lo que tapa la pantalla no se dibuja:** en cada submuestra, el fondo y la sombra se dibujan solo fuera de lo que la pantalla (con su ventana) cubre opaca, recortados con *scissor rects*: cada píxel dibujado es el mismo que sin recorte y uno opaco no deja ver lo de abajo, así que los bytes no cambian (`whatTheScreenHidesIsNotDrawnAndNothingShows`). Sin esto (medido con carga de 30 a 45), el mismo caso de la cámara que nunca para daba p50 39,4 ms, casi todo del fondo de pantalla calculado 16 veces (ver abajo) y de la sombra, unos 12 ms.
+- **La malla del fondo de pantalla, una vez:** bajo el desenfoque, cada submuestra lee la malla de una textura del tamaño de la salida (la que ya se hace para un fondo de pantalla desenfocado) en lugar de calcularla otra vez en cada píxel. Calcularla 16 veces sobre toda la salida a 4K cuesta 22,5 ms de GPU (16 dibujos de `encodeWallpaper` en un command buffer, p50 de 30, carga 3); sin esto, el peor cuadro al entrar a un zoom era de 17,8 ms (con esto, 7,63 ms).
+- **Una sola simulación por cuadro** para la cámara y el cursor de las submuestras (`ZoomCameraPath.span`, `CursorPath.span`): evaluar un cuadro desenfocado cuesta 0,027 ms en Release (0,57 ms en Debug), contra 0,365 ms (8,1 ms) simulando desde el punto de control para cada una de las 16 submuestras.

@@ -98,21 +98,27 @@ public struct ZoomCameraPath: Sendable {
 
     /// The camera on step `s` of the grid (held to the steps of the output), placed.
     public func state(atStep s: Int) -> ZoomCameraState {
-        let step = clamped(s)
-        let camera = camera(atStep: step)
-        return placed(logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step))
+        state(atStep: s, from: FromCheckpoint())
     }
 
     /// The camera at output time `τ`: the state of its step when `τ` is on the grid (`StepGrid.position(ofOutput:)`),
     /// otherwise the two around it mixed and placed at `τ`.
     public func state(atOutput τ: Int64) -> ZoomCameraState {
+        state(atOutput: τ, from: FromCheckpoint())
+    }
+
+    /// `state(atStep:)`, the camera read from `steps`: the one query, whatever simulated it.
+    fileprivate func state(atStep s: Int, from steps: some ZoomCameraSteps) -> ZoomCameraState {
+        let step = clamped(s)
+        let camera = steps.camera(atStep: step, of: self)
+        return placed(logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step))
+    }
+
+    /// `state(atOutput:)`, the cameras read from `steps`: the one query, whatever simulated them.
+    fileprivate func state(atOutput τ: Int64, from steps: some ZoomCameraSteps) -> ZoomCameraState {
         let (s, fraction) = StepGrid.position(ofOutput: τ)
-        guard fraction > 0, s >= 0, s < lastStep else { return state(atStep: s) }
-        var simulation = simulation(toward: s)
-        while simulation.step < s { advance(&simulation) }
-        let a = simulation.camera
-        advance(&simulation)
-        let b = simulation.camera
+        guard fraction > 0, s >= 0, s < lastStep else { return state(atStep: s, from: steps) }
+        let (a, b) = steps.cameras(atSteps: s, of: self)
         return placed(
             logDepth: a.logDepth + (b.logDepth - a.logDepth) * fraction, center: a.center + (b.center - a.center) * fraction,
             atOutput: τ)
@@ -396,5 +402,84 @@ public struct ZoomCameraPath: Sendable {
         var moved = target
         moved[axis] += (shown[axis] - goal) / depth
         return moved
+    }
+}
+
+/// Where `ZoomCameraPath`'s queries read the simulated camera from: a simulation from the checkpoint before the step
+/// asked for (`FromCheckpoint`), or the steps a `Span` kept. Every source gives the same bits.
+private protocol ZoomCameraSteps {
+    /// The camera on step `s`, in `0...lastStep`.
+    func camera(atStep s: Int, of path: ZoomCameraPath) -> ZoomCameraPath.Camera
+    /// The cameras on steps `s` and `s + 1`, `s` in `0..<lastStep`.
+    func cameras(atSteps s: Int, of path: ZoomCameraPath) -> (ZoomCameraPath.Camera, ZoomCameraPath.Camera)
+}
+
+extension ZoomCameraPath {
+    /// The camera simulated from the checkpoint before the step.
+    fileprivate struct FromCheckpoint: ZoomCameraSteps {
+        func camera(atStep s: Int, of path: ZoomCameraPath) -> Camera {
+            path.camera(atStep: s)
+        }
+
+        func cameras(atSteps s: Int, of path: ZoomCameraPath) -> (Camera, Camera) {
+            var simulation = path.simulation(toward: s)
+            while simulation.step < s { path.advance(&simulation) }
+            let a = simulation.camera
+            path.advance(&simulation)
+            return (a, simulation.camera)
+        }
+    }
+
+    /// The cameras a span kept, from its first step on; the others simulated from their checkpoint.
+    fileprivate struct Kept: ZoomCameraSteps {
+        let first: Int
+        let cameras: [Camera]
+
+        func camera(atStep s: Int, of path: ZoomCameraPath) -> Camera {
+            kept(s) ?? FromCheckpoint().camera(atStep: s, of: path)
+        }
+
+        func cameras(atSteps s: Int, of path: ZoomCameraPath) -> (Camera, Camera) {
+            guard let a = kept(s), let b = kept(s + 1) else { return FromCheckpoint().cameras(atSteps: s, of: path) }
+            return (a, b)
+        }
+
+        private func kept(_ s: Int) -> Camera? {
+            cameras.indices.contains(s - first) ? cameras[s - first] : nil
+        }
+    }
+
+    /// The camera over a short span of output time, from one simulation (the motion blur's subsamples, design §7.4):
+    /// `state(atOutput:)`, the same query over the steps kept, so with the same bits at every time of the span, without
+    /// simulating from a checkpoint for each.
+    public struct Span: Sendable {
+        private let path: ZoomCameraPath
+        private let steps: Kept
+
+        fileprivate init(path: ZoomCameraPath, steps: Kept) {
+            self.path = path
+            self.steps = steps
+        }
+
+        /// `state(atOutput: τ)`: from the steps kept for a time of the span, simulated on its own otherwise.
+        public func state(atOutput τ: Int64) -> ZoomCameraState {
+            path.state(atOutput: τ, from: steps)
+        }
+    }
+
+    /// The camera from the step of `start` to the one after the step of `end` (held to the output's steps), simulated
+    /// once from the checkpoint before them, every step kept: for spans of a few frames.
+    public func span(from start: Int64, through end: Int64) -> Span {
+        let low = clamped(StepGrid.position(ofOutput: min(start, end)).step)
+        let high = clamped(StepGrid.position(ofOutput: max(start, end)).step + 1)
+        var simulation = simulation(toward: low)
+        while simulation.step < low { advance(&simulation) }
+        var cameras = [simulation.camera]
+        cameras.reserveCapacity(high - low + 1)
+        while simulation.step < high {
+            advance(&simulation)
+            cameras.append(simulation.camera)
+        }
+        return Span(path: self, steps: Kept(first: low, cameras: cameras))
     }
 }

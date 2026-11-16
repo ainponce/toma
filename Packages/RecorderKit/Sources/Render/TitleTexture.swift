@@ -16,7 +16,12 @@ import ProjectFormat
 /// draw the same. The system font itself changes from one macOS to another, and its bytes with it.
 ///
 /// Drawn the first time a title is asked for and kept while the frames ask for the same: only another title, appearance,
-/// rect, bar or buttons draws it again (the corners do not change it). An empty title, or one with no room, has none.
+/// rect, bar, buttons or scale draws it again (the corners do not change it), and the last two are kept. An empty title,
+/// or one with no room, has none.
+///
+/// Under the zoom camera the title is drawn again at the size it is drawn (design §7.3), at a `scale` of the bar's pixels
+/// unzoomed (`scale(for:)`): the frame's deepest depth rounded up to a power of √2, so it is never magnified and a moving
+/// zoom draws it again only at each step of √2. At rest the scale is 1, one texel per pixel.
 ///
 /// Not thread-safe: `FrameRenderer` uses it with its lock held.
 final class TitleTexture {
@@ -24,8 +29,10 @@ final class TitleTexture {
     private(set) var drawCount = 0
 
     private let device: any MTLDevice
-    /// The title last asked for, and its texture (`nil` when it has none).
-    private var drawn: (key: Key, texture: (any MTLTexture)?)?
+    /// The titles last asked for, the latest last, and their textures (`nil` when they have none): two at most.
+    private var drawn: [(key: Key, scale: Double, texture: (any MTLTexture)?)] = []
+    /// How many titles are kept.
+    private static let kept = 2
 
     /// What a title's texture depends on: everything of its layer but the corners.
     private struct Key: Equatable {
@@ -44,16 +51,54 @@ final class TitleTexture {
         self.device = device
     }
 
-    /// The texture of `layer`'s title, `layer.barPixels.size` big; `nil` for an empty title or one with no room.
+    /// The texture of `layer`'s title at `scale` (`scale(for:)`): `layer.barPixels.size` big at 1, the bar's pixels of
+    /// `layer` scaled by `scale` (`scaled(_:by:)`) otherwise; `nil` for an empty title or one with no room.
     /// - Throws: `RenderError.metalResourceUnavailable` if CoreGraphics or Metal cannot make what it needs.
-    func texture(for layer: WindowFrameLayer) throws -> (any MTLTexture)? {
+    func texture(for layer: WindowFrameLayer, scale: Double = 1) throws -> (any MTLTexture)? {
         let key = Key(layer)
-        if let drawn, drawn.key == key { return drawn.texture }
-        // The previous title's memory goes before the next one is drawn.
-        drawn = nil
-        let texture = try draw(layer)
-        drawn = (key, texture)
+        if let index = drawn.firstIndex(where: { $0.key == key && $0.scale == scale }) {
+            let found = drawn.remove(at: index)
+            drawn.append(found)
+            return found.texture
+        }
+        // The oldest title's memory goes before the next one is drawn.
+        if drawn.count >= Self.kept { drawn.removeFirst() }
+        let texture = try draw(scale == 1 ? layer : Self.scaled(layer, by: scale))
+        drawn.append((key, scale, texture))
         return texture
+    }
+
+    /// The most pixels across a title's texture: past it, a deep zoom magnifies the title.
+    static let maxSide = 8192
+
+    /// The scale `frame`'s title is drawn at (see the type's notes): 1 at rest and without a window frame; otherwise the
+    /// deepest depth of the stage's transforms (its subframes' too) rounded up to √2^k, at most what keeps the texture
+    /// within `maxSide` pixels. `Compositor` and `FrameRenderer` both read it here.
+    static func scale(for frame: RenderFrame) -> Double {
+        guard let window = frame.windowFrame else { return 1 }
+        let depth = frame.subframes.map(\.stage.depth).reduce(frame.stage?.depth ?? 1, max)
+        guard depth > 1, depth.isFinite else { return 1 }
+        let side = Double(max(window.barPixels.size.x, window.barPixels.size.y, 1))
+        var level = Int(min((2 * log2(depth)).rounded(.up), 64))
+        while level > 0, side * pow(2, Double(level) / 2) > Double(maxSide) { level -= 1 }
+        return pow(2, Double(level) / 2)
+    }
+
+    /// The system's window-title font at `size` points (one point a pixel of the texture). `CTFontCreateUIFontForLanguage`
+    /// gives the window-title font at its own size whatever size it is asked for (13 pt on macOS 26), so the size is set
+    /// on a copy of it.
+    static func font(size: Double) -> CTFont? {
+        guard size > 0, size.isFinite, let font = CTFontCreateUIFontForLanguage(.windowTitle, 0, nil) else { return nil }
+        return CTFontCreateCopyWithAttributes(font, size, nil, nil)
+    }
+
+    /// `layer` as it is at `scale`: its rect and its bar `scale` times as large, from the stage's origin.
+    static func scaled(_ layer: WindowFrameLayer, by scale: Double) -> WindowFrameLayer {
+        var scaled = layer
+        let rect = layer.rect
+        scaled.rect = Rect(x: rect.x * scale, y: rect.y * scale, width: rect.width * scale, height: rect.height * scale)
+        scaled.barHeight = layer.barHeight * scale
+        return scaled
     }
 
     /// `layer`'s title drawn into a new texture; `nil` when it has nothing to draw.
@@ -61,7 +106,7 @@ final class TitleTexture {
         let box = layer.barPixels
         let room = layer.rect.width - 2 * layer.titleInset
         guard !layer.title.isEmpty, box.size.x > 0, box.size.y > 0, room > 0, layer.barHeight > 0,
-              let font = CTFontCreateUIFontForLanguage(.windowTitle, layer.barHeight * 13 / 28, nil)
+              let font = Self.font(size: layer.barHeight * 13 / 28)
         else { return nil }
         let white: CGFloat = layer.appearance == .light ? 0 : 1
         let color = CGColor(srgbRed: white, green: white, blue: white, alpha: 0.85)

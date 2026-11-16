@@ -30,6 +30,17 @@ public struct RenderFrame: Equatable, Sendable {
     /// The shadow under `screen`, or under the whole window with `windowFrame`; `nil` without a shadow (`style.shadow`
     /// 0) and when no screen is shown.
     public var shadow: ShadowLayer?
+    /// The zoom camera at the frame's time (design §7.4): how the stage is drawn without `subframes`, and how the click
+    /// effects always are. `nil`, like an identity, draws the stage as it is, as without a zoom.
+    public var stage: StageTransform?
+    /// The motion blur of the zoom camera (design §7.2 and §7.4): with any, the stage is drawn once for each, through its
+    /// transform and with its cursor instead of `stage` and `cursor`, and they are averaged in their order before the
+    /// click effects and the camera are drawn. Empty: the stage drawn once, directly into the target, as without a blur.
+    public var subframes: [StageSubframe]
+    /// The motion blur of the cursor with the zoom camera still (design §7.5): without `subframes`, with any, the stage is
+    /// drawn once through `stage` and these cursors, averaged, over it instead of `cursor`. In stage coordinates, like
+    /// `cursor`, each with its own position, opacity and press and the image of `cursor`.
+    public var cursorSamples: [CursorLayer]
 
     public init(
         outputSize: SIMD2<Int>,
@@ -42,7 +53,10 @@ public struct RenderFrame: Equatable, Sendable {
         background: BackgroundLayer = .gradient,
         windowFrame: WindowFrameLayer? = nil,
         clickEffects: [ClickEffectLayer] = [],
-        shadow: ShadowLayer? = nil
+        shadow: ShadowLayer? = nil,
+        stage: StageTransform? = nil,
+        subframes: [StageSubframe] = [],
+        cursorSamples: [CursorLayer] = []
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -55,6 +69,94 @@ public struct RenderFrame: Equatable, Sendable {
         self.windowFrame = windowFrame
         self.clickEffects = clickEffects
         self.shadow = shadow
+        self.stage = stage
+        self.subframes = subframes
+        self.cursorSamples = cursorSamples
+    }
+}
+
+/// The zoom camera's transform of the stage (design §7.4): a point `p` of the stage, in its coordinates (output pixels
+/// with the stage unzoomed), is drawn at `(p − center) × depth + (W, H) / 2` of an output `W × H` big.
+public struct StageTransform: Equatable, Sendable {
+    /// `z`: 1 at rest, larger zoomed in.
+    public var depth: Double
+    /// The centre of the crop shown, in stage coordinates: the stage's at rest.
+    public var center: SIMD2<Double>
+
+    public init(depth: Double, center: SIMD2<Double>) {
+        self.depth = depth
+        self.center = center
+    }
+
+    /// At rest: depth 1, centred on an output of `outputSize`.
+    public static func identity(outputSize: SIMD2<Int>) -> StageTransform {
+        StageTransform(depth: 1, center: SIMD2<Double>(outputSize) / 2)
+    }
+
+    /// Where stage point `p` is drawn in an output of `outputSize`.
+    public func outputPoint(ofStage p: SIMD2<Double>, outputSize: SIMD2<Int>) -> SIMD2<Double> {
+        (p - center) * depth + SIMD2<Double>(outputSize) / 2
+    }
+
+    /// `rect` of the stage as it is drawn in an output of `outputSize`.
+    func outputRect(ofStage rect: Rect, outputSize: SIMD2<Int>) -> Rect {
+        let origin = outputPoint(ofStage: SIMD2(rect.x, rect.y), outputSize: outputSize)
+        return Rect(x: origin.x, y: origin.y, width: rect.width * depth, height: rect.height * depth)
+    }
+}
+
+extension StageTransform {
+    // The stage's layers as they are drawn in an output of `outputSize` through the transform: every position moved and
+    // every length scaled by `depth`, so the whole stage is zoomed, edges and all.
+
+    func drawn(_ layer: ScreenLayer, outputSize: SIMD2<Int>) -> ScreenLayer {
+        var drawn = layer
+        drawn.rect = outputRect(ofStage: layer.rect, outputSize: outputSize)
+        drawn.cornerRadius = layer.cornerRadius * depth
+        return drawn
+    }
+
+    func drawn(_ layer: ShadowLayer, outputSize: SIMD2<Int>) -> ShadowLayer {
+        ShadowLayer(
+            rect: outputRect(ofStage: layer.rect, outputSize: outputSize), cornerRadius: layer.cornerRadius * depth,
+            opacity: layer.opacity, sigma: layer.sigma * depth, offsetY: layer.offsetY * depth)
+    }
+
+    func drawn(_ layer: WindowFrameLayer, outputSize: SIMD2<Int>) -> WindowFrameLayer {
+        var drawn = layer
+        drawn.rect = outputRect(ofStage: layer.rect, outputSize: outputSize)
+        drawn.barHeight = layer.barHeight * depth
+        drawn.cornerRadius = layer.cornerRadius * depth
+        drawn.bottomCornerRadius = layer.bottomCornerRadius * depth
+        drawn.screenTopCornerRadius = layer.screenTopCornerRadius * depth
+        return drawn
+    }
+
+    func drawn(_ layer: CursorLayer, outputSize: SIMD2<Int>) -> CursorLayer {
+        var drawn = layer
+        drawn.hotspot = outputPoint(ofStage: layer.hotspot, outputSize: outputSize)
+        drawn.height = layer.height * depth
+        return drawn
+    }
+
+    func drawn(_ layer: ClickEffectLayer, outputSize: SIMD2<Int>) -> ClickEffectLayer {
+        var drawn = layer
+        drawn.center = outputPoint(ofStage: layer.center, outputSize: outputSize)
+        drawn.radius = layer.radius * depth
+        drawn.thickness = layer.thickness * depth
+        return drawn
+    }
+}
+
+/// One subsample of the zoom camera's motion blur: the stage through `stage`, with `cursor` (none: no cursor in it).
+public struct StageSubframe: Equatable, Sendable {
+    public var stage: StageTransform
+    /// In stage coordinates, like `RenderFrame.cursor`.
+    public var cursor: CursorLayer?
+
+    public init(stage: StageTransform, cursor: CursorLayer? = nil) {
+        self.stage = stage
+        self.cursor = cursor
     }
 }
 

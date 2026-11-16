@@ -2,6 +2,7 @@
 import Analysis
 import CoreGraphics
 import ProjectFormat
+import simd
 
 /// Works out what an output frame shows at an output time: a pure function of the take, its events, the edit
 /// document and the output size.
@@ -53,6 +54,25 @@ import ProjectFormat
 ///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
 ///   first clip keeps its time through that clip's mapping (it is under way at output 0, as it always was), and one
 ///   after the last never rules.
+/// - Zoom camera (design §7.4): the stage is drawn through the zoom camera's path (`ZoomCameraPath.state(atOutput:)`) at
+///   the output time, in this output's pixels (`RenderFrame.stage`, `nil` at rest), its centre placed again with
+///   `StageCrop` over the screen's rect at this size (the window's with a frame; the stage without a screen): the path
+///   places the window at `StagePoints`' 1080 px reference, a few pixels off below it, and this keeps a deep zoom from
+///   ever showing a strip of background beside it.
+/// - Motion blur (`zoom.motionBlur` and `cursor.motionBlur`, shutters of `σ` frames of the frame rate given, the
+///   document's by default, read from 0 to 1; design §7.4 and §7.5): with the camera's shutter, `N_z` is
+///   `MotionBlurPlan.sampleCount` of how far the stage's corner that moves most goes in output pixels between the ends of
+///   the shutter, `t ± σ_z / 2`; with the cursor's, `N_c` of how far the cursor goes, times the depth at `t`. Every
+///   subsample is at an output time (`MotionBlurPlan.sampleTimes`, held to the output), which the paths are in, so none
+///   reads what a cut left out; the screen's content, the cursor's image and the click effects are those of `t`.
+///   - `N_z > 1`: `N = max(N_z, N_c)` subframes (`RenderFrame.subframes`), the stage of subframe `j` at the `j`-th of `N`
+///     times over the camera's shutter and its cursor at the `j`-th of `N` over the cursor's (the cursor of `t` when it
+///     does not blur).
+///   - Otherwise, `N_c > 1`: the camera is still, so the stage is drawn once and the cursor `N_c` times
+///     (`RenderFrame.cursorSamples`), one hidden where there is none.
+///   - Otherwise, nothing blurs: one drawing of the frame, as without a blur.
+///   The camera and the cursor of the subsamples are read from one simulation of the span of the shutter
+///   (`ZoomCameraPath.span(from:through:)`, `CursorPath.span(from:through:)`), not from a checkpoint for each.
 ///
 /// The motion paths (`MotionPaths`: the screens, the cursor's path) are the document's revision's, given or built.
 public struct FrameEvaluator: Sendable {
@@ -81,10 +101,18 @@ public struct FrameEvaluator: Sendable {
     /// The output times of the cursor path's clicks, and where each was at its own instant (`nil`: none shown).
     private let clicks: [Int64]
     private let clickPlaces: [ClickPlace?]
+    /// A frame's duration in output nanoseconds, which the shutters are fractions of; 0 (no blur) for a frame rate that
+    /// is not positive.
+    private let frameDuration: Int64
+    /// `zoom.motionBlur` and `cursor.motionBlur`, from 0 to 1 (0 if not a number).
+    private let zoomShutter: Double
+    private let cursorShutter: Double
 
-    /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`.
+    /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`. `frameRate`: the frames per
+    /// second the output is drawn at, whose frame the motion blur's shutters are fractions of; the document's when `nil`.
     public init(
-        take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>, paths: MotionPaths? = nil
+        take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>, paths: MotionPaths? = nil,
+        frameRate: Int? = nil
     ) {
         let timeMap = TimeMap(sequence: document.sequence)
         self.document = document
@@ -107,6 +135,11 @@ public struct FrameEvaluator: Sendable {
         clickPlaces = paths.cursor.clicks.map { click in
             ClickPlace(click, take: take.id, sequence: document.sequence, timeMap: timeMap, stage: paths.stage)
         }
+        let rate = frameRate ?? document.frameRate
+        frameDuration = rate > 0 ? TimeMap.frameTime(1, frameRate: rate) : 0
+        func shutter(_ value: Double) -> Double { value.isNaN ? 0 : min(max(value, 0), 1) }
+        zoomShutter = shutter(document.zoom.motionBlur)
+        cursorShutter = shutter(document.cursor.motionBlur)
     }
 
     /// The legacy document of the take (`EditDocument.legacy(take:events:)`) with the gradient, the padding and the
@@ -141,6 +174,13 @@ public struct FrameEvaluator: Sendable {
         // The output time shown, as `source(atOutput:)` clamps it.
         let output = min(max(τ, 0), timeMap.duration - 1)
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        // The ends of each shutter, and the paths over them, from which `t` is read too: one simulation for each.
+        let zoomEnds = shutterEnds(zoomShutter, at: output)
+        let cursorEnds = document.cursor.show ? shutterEnds(cursorShutter, at: output) : [output]
+        let zoomSpan = zoomEnds.count > 1 ? paths.zoom.span(from: zoomEnds[0], through: zoomEnds[1]) : nil
+        let cursorSpan = cursorEnds.count > 1 ? paths.cursor.span(from: cursorEnds[0], through: cursorEnds[1]) : nil
+        /// Where the cursor is placed and what it is drawn with, while it is shown.
+        var cursorPlace: CursorPlace?
         if case let (trackID, view)? = paths.stage.shownScreen(at: source) {
             let aspect = view.region.map { $0.width / $0.height }, style = document.style
             var cornerRadius = style.cornerRadius * size.x
@@ -170,8 +210,16 @@ public struct FrameEvaluator: Sendable {
                     sigma: (0.004 + 0.016 * shadow) * size.x, offsetY: 0.010 * shadow * size.x)
             }
             if document.cursor.show, view.onScreen, let region = view.region {
-                frame.cursor = try cursor(
-                    at: output, source: source, in: region, shownIn: rect, cursorImageIsReadable: cursorImageIsReadable)
+                let sample = cursorSpan?.sample(atOutput: output) ?? paths.cursor.sample(atOutput: output)
+                // The image is looked up only for a cursor drawn: at `t`, or blurred from somewhere in the shutter.
+                if sample.map({ CursorGeometry.contains(CGPoint(x: $0.position.x, y: $0.position.y), region) }) == true
+                    || cursorSpan != nil
+                {
+                    let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
+                    let place = CursorPlace(look: look, region: region, rect: rect)
+                    frame.cursor = cursorLayer(sample, place)
+                    cursorPlace = place
+                }
                 frame.clickEffects = try ClickEffects.layers(
                     atOutput: output, clicks: clicks, releases: paths.cursor.releases, effect: document.cursor.clickEffect
                 ) { index in
@@ -184,8 +232,89 @@ public struct FrameEvaluator: Sendable {
                 }
             }
         }
+        let screenRect = frame.windowFrame?.rect ?? frame.screen?.rect
+        let stage = stageTransform(zoomSpan?.state(atOutput: output) ?? paths.zoom.state(atOutput: output), screen: screenRect)
+        frame.stage = stage.depth > 1 ? stage : nil
+        if let zoomSpan {
+            blur(&frame, at: output, zoom: (zoomSpan, zoomEnds), screen: screenRect, cursor: cursorPlace.flatMap { place in
+                cursorSpan.map { (span: $0, ends: cursorEnds, place: place) }
+            })
+        } else if let cursorPlace, let cursorSpan {
+            blur(&frame, at: output, zoom: nil, screen: screenRect, cursor: (cursorSpan, cursorEnds, cursorPlace))
+        }
         frame.camera = camera(at: source, output: output)
         return frame
+    }
+
+    /// The output times of the ends of a shutter of `shutter` frames about `output`, held to the output; only `output`
+    /// without a shutter.
+    private func shutterEnds(_ shutter: Double, at output: Int64) -> [Int64] {
+        sampleTimes(shutter, count: 2, at: output)
+    }
+
+    /// `MotionBlurPlan.sampleTimes` of `count` subsamples of the frame at `output`, held to the output.
+    private func sampleTimes(_ shutter: Double, count: Int, at output: Int64) -> [Int64] {
+        MotionBlurPlan.sampleTimes(at: output, shutter: shutter, frameDuration: frameDuration, count: count)
+            .map { min(max($0, 0), timeMap.duration - 1) }
+    }
+
+    /// The zoom camera's `state` (stage units) as the transform of this output's stage: its centre in output pixels,
+    /// placed again with `StageCrop` over `screen` (the screen's rect at this size, the window's with a frame; the whole
+    /// stage when `nil`). An identity at a depth of 1 or less, or one that is not a number.
+    private func stageTransform(_ state: ZoomCameraState, screen: Rect?) -> StageTransform {
+        let depth = state.depth
+        guard depth > 1, depth.isFinite else { return .identity(outputSize: outputSize) }
+        let size = SIMD2<Double>(outputSize)
+        let center = state.center / paths.stage.stageSize * size
+        let room = screen ?? Rect(x: 0, y: 0, width: size.x, height: size.y)
+        return StageTransform(depth: depth, center: StageCrop.clamp(center: center, depth: depth, stage: size, screen: room))
+    }
+
+    /// Adds the motion blur of the frame at output time `output` to `frame`, whose `stage` and `cursor` are those of
+    /// `output` (see the type's notes): its `subframes`, or its `cursorSamples`, or nothing. `zoom` is the camera over
+    /// its shutter, whose ends are `ends`; `cursor`, the cursor over its own and how it is placed (`nil` while the cursor
+    /// is not shown or does not blur); `screen`, the rect the camera is placed over.
+    private func blur(
+        _ frame: inout RenderFrame, at output: Int64, zoom: (span: ZoomCameraPath.Span, ends: [Int64])?, screen: Rect?,
+        cursor: (span: CursorPath.Span, ends: [Int64], place: CursorPlace)?
+    ) {
+        var zoomSamples = 1
+        if let zoom {
+            zoomSamples = MotionBlurPlan.sampleCount(travelPixels: Self.cornerTravel(
+                stageTransform(zoom.span.state(atOutput: zoom.ends[0]), screen: screen),
+                stageTransform(zoom.span.state(atOutput: zoom.ends[1]), screen: screen), outputSize: outputSize))
+        }
+        var cursorSamples = 1
+        if let cursor, let a = cursorLayer(cursor.span.sample(atOutput: cursor.ends[0]), cursor.place),
+           let b = cursorLayer(cursor.span.sample(atOutput: cursor.ends[1]), cursor.place)
+        {
+            cursorSamples = MotionBlurPlan.sampleCount(travelPixels: simd_length(b.hotspot - a.hotspot) * (frame.stage?.depth ?? 1))
+        }
+        if let zoom, zoomSamples > 1 {
+            let count = max(zoomSamples, cursorSamples)
+            let stageTimes = sampleTimes(zoomShutter, count: count, at: output)
+            let cursorTimes = cursorSamples > 1 ? sampleTimes(cursorShutter, count: count, at: output) : nil
+            frame.subframes = stageTimes.indices.map { j in
+                let stage = stageTransform(zoom.span.state(atOutput: stageTimes[j]), screen: screen)
+                guard let cursor, let cursorTimes else { return StageSubframe(stage: stage, cursor: frame.cursor) }
+                return StageSubframe(stage: stage, cursor: cursorLayer(cursor.span.sample(atOutput: cursorTimes[j]), cursor.place))
+            }
+        } else if let cursor, cursorSamples > 1 {
+            let layers = sampleTimes(cursorShutter, count: cursorSamples, at: output).map {
+                cursorLayer(cursor.span.sample(atOutput: $0), cursor.place)
+            }
+            guard var hidden = layers.lazy.compactMap({ $0 }).first else { return }
+            hidden.opacity = 0
+            frame.cursorSamples = layers.map { $0 ?? hidden }
+        }
+    }
+
+    /// How far, in output pixels, the corner of the stage that moves most goes from `a` to `b`.
+    private static func cornerTravel(_ a: StageTransform, _ b: StageTransform, outputSize: SIMD2<Int>) -> Double {
+        let size = SIMD2<Double>(outputSize)
+        return [SIMD2(0, 0), SIMD2(size.x, 0), SIMD2(0, size.y), size].map { corner in
+            simd_length(b.outputPoint(ofStage: corner, outputSize: outputSize) - a.outputPoint(ofStage: corner, outputSize: outputSize))
+        }.max() ?? 0
     }
 
     /// The largest corners of a window frame, in heights of its bar. Corners of about 1.37 bars touch the first button's
@@ -247,19 +376,24 @@ public struct FrameEvaluator: Sendable {
         }
     }
 
-    /// The drawn cursor at output time `τ` (one `source(atOutput:)` shows, at source instant `source`): where the cursor
-    /// path is then, placed on `rect` where it is in `region`. `nil` before the path's first position and off `region`.
-    private func cursor(
-        at τ: Int64, source: HostTime, in region: Rect, shownIn rect: Rect, cursorImageIsReadable: (String) throws -> Bool
-    ) rethrows -> CursorLayer? {
-        guard let sample = paths.cursor.sample(atOutput: τ) else { return nil }
+    /// How a frame places its cursor: drawn with `look`, at its place on `rect` where it is in `region`.
+    private struct CursorPlace {
+        var look: Look
+        var region: Rect
+        var rect: Rect
+    }
+
+    /// The drawn cursor where `sample` of the cursor path is (`nil` before the path's first position), placed as
+    /// `place` says; `nil` off its region.
+    private func cursorLayer(_ sample: CursorSample?, _ place: CursorPlace) -> CursorLayer? {
+        guard let sample else { return nil }
         let global = CGPoint(x: sample.position.x, y: sample.position.y)
-        guard CursorGeometry.contains(global, region) else { return nil }
-        let normalized = CursorGeometry.normalized(global, in: region)
-        let look = try look(at: source, cursorImageIsReadable: cursorImageIsReadable)
+        guard CursorGeometry.contains(global, place.region) else { return nil }
+        let normalized = CursorGeometry.normalized(global, in: place.region)
+        let rect = place.rect, look = place.look
         return CursorLayer(
             hotspot: SIMD2(rect.x, rect.y) + normalized * SIMD2(rect.width, rect.height),
-            height: document.cursor.scale * look.pointHeight * rect.height / region.height,
+            height: document.cursor.scale * look.pointHeight * rect.height / place.region.height,
             image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect, opacity: sample.opacity,
             clickScale: sample.clickScale)
     }
