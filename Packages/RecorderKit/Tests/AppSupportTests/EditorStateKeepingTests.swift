@@ -31,6 +31,54 @@ import Testing
     #expect(autosave.due(EditorState(tab: "audio")) == nil)
 }
 
+// MARK: - What the state remembers
+
+private let remembered = EditorState(
+    windowFrame: Rect(x: 120, y: 90, width: 1100, height: 760), playheadFrame: 42, timelineScale: 120, timelineOffset: 340,
+    tab: "zoom", panelVisible: false, legacyBannerDismissed: true)
+
+@Test func aProjectOpensWithWhatWasRemembered() {
+    #expect(EditorProjectView(remembered: remembered) == EditorProjectView(playheadFrame: 42, tab: "zoom", timelineScale: 120, timelineOffset: 340))
+    #expect(EditorProjectView(remembered: EditorState()) == EditorProjectView(playheadFrame: 0, tab: "background", timelineScale: nil, timelineOffset: 0))
+}
+
+@Test func nothingChangedWritesTheSameState() {
+    // Opened with what was remembered, and nothing touched: the same state, the timeline's scale and offset included.
+    let opened = EditorProjectView(remembered: remembered)
+    #expect(remembered.remembering(windowFrame: remembered.windowFrame, panelVisible: false, project: opened) == remembered)
+}
+
+@Test func whatIsNotShownYetKeepsItsRememberedValue() {
+    // The project not open yet: the playhead, the tab and the timeline stay as remembered, never the defaults.
+    let moved = Rect(x: 0, y: 0, width: 1300, height: 800)
+    #expect(remembered.remembering(windowFrame: moved, panelVisible: true, project: nil) == EditorState(
+        windowFrame: moved, playheadFrame: 42, timelineScale: 120, timelineOffset: 340, tab: "zoom", panelVisible: true,
+        legacyBannerDismissed: true))
+    // In full screen (no frame): the frame stays.
+    #expect(remembered.remembering(windowFrame: nil, panelVisible: false, project: nil) == remembered)
+}
+
+@Test func whatTheWindowShowsNowIsWritten() {
+    // The timeline fitted to the window again and scrolled back, the playhead and the tab moved.
+    let shown = EditorProjectView(playheadFrame: 7, tab: "audio", timelineScale: nil, timelineOffset: 0)
+    #expect(remembered.remembering(windowFrame: remembered.windowFrame, panelVisible: false, project: shown) == EditorState(
+        windowFrame: remembered.windowFrame, playheadFrame: 7, timelineScale: nil, timelineOffset: 0, tab: "audio",
+        panelVisible: false, legacyBannerDismissed: true))
+}
+
+@Test func theStateRoundTripsThroughItsFile() throws {
+    try withTemporaryDirectory { dir in
+        let caches = ProjectCaches(root: dir, projectID: "0123456789abcdef0123456789abcdef")
+        remembered.save(caches)
+        // Read back as a window opens, shown, and written again unchanged.
+        let read = EditorState.load(caches)
+        #expect(read == remembered)
+        let again = read.remembering(windowFrame: read.windowFrame, panelVisible: read.panelVisible, project: EditorProjectView(remembered: read))
+        again.save(caches)
+        #expect(EditorState.load(caches) == remembered)
+    }
+}
+
 // MARK: - Where the window opens
 
 /// The visible frame of a 1440 × 900 pt screen without its 25 pt menu bar, and one of 1920 × 1080 to its right.

@@ -122,7 +122,8 @@ final class EditorModel {
     /// The panel's tab.
     var panelTab = EditorPanelTab.background
     /// The timeline's scale, in points per second (`nil`: the whole sequence fitted to the window), and how far it is
-    /// scrolled, in points: remembered with the window's state for the timeline to start from.
+    /// scrolled, in points: restored with the window's state when the project opens, for the timeline to start from and
+    /// write back as it changes.
     var timelineScale: Double?
     var timelineOffset = 0.0
     /// The image the background is being imported from (the panel's "Choose Image…").
@@ -352,7 +353,7 @@ final class EditorModel {
         previewAspect = document.aspect
         durationSeconds = timeline?.map.durationSeconds ?? 0
         state = .ready
-        restorePlayheadAndTab()
+        restoreProjectView()
         // The session may have changed while the renderer was made.
         sessionChanged()
         makeMix(of: project, document: document, revision: revision)

@@ -15,6 +15,26 @@ import SwiftUI
 /// undone as one.
 final class EditorUndoManager: UndoManager {
     private weak var model: EditorModel?
+    /// What each item was found to offer, for the session's state it was found in: validating an item asks for its title
+    /// and whether it is enabled, and finding out applies the document again (`EditSession.canUndo`).
+    private var found = Found()
+
+    /// What the items' offers depend on: the session, its document and history (its revision and labels: a new log
+    /// clears the labels without a new revision), whether it can be changed, and a drag under way.
+    private struct SessionState: Equatable {
+        var session: ObjectIdentifier
+        var revision: Int
+        var access: EditAccess
+        var undoLabel: EditLabel?
+        var redoLabel: EditLabel?
+        var isGesturing: Bool
+    }
+
+    private struct Found {
+        var state: SessionState?
+        var undo: UndoMenuItem?
+        var redo: UndoMenuItem?
+    }
 
     init(model: EditorModel) {
         self.model = model
@@ -29,9 +49,6 @@ final class EditorUndoManager: UndoManager {
     override var undoMenuItemTitle: String { editMenuUndoTitle(undoItem) }
     override var redoMenuItemTitle: String { editMenuRedoTitle(redoItem) }
 
-    private var undoItem: UndoMenuItem { model?.undoMenuItem ?? .unavailable }
-    private var redoItem: UndoMenuItem { model?.redoMenuItem ?? .unavailable }
-
     override func undo() {
         model?.undo()
     }
@@ -39,23 +56,43 @@ final class EditorUndoManager: UndoManager {
     override func redo() {
         model?.redo()
     }
-}
 
-extension EditorModel {
     /// What Edit ▸ Undo offers now: nothing until the session opens, or while a drag is under way.
-    var undoMenuItem: UndoMenuItem {
-        guard let session = panelSession else { return .unavailable }
-        return UndoMenuItem(label: session.undoLabel, sessionWouldDoIt: session.canUndo, isGesturing: isGesturing)
+    private var undoItem: UndoMenuItem {
+        guard let (session, state) = sessionState() else { return .unavailable }
+        if let undo = found.undo { return undo }
+        let undo = UndoMenuItem(label: state.undoLabel, sessionWouldDoIt: session.canUndo, isGesturing: state.isGesturing)
+        found.undo = undo
+        return undo
     }
 
     /// What Edit ▸ Redo offers now.
-    var redoMenuItem: UndoMenuItem {
-        guard let session = panelSession else { return .unavailable }
-        return UndoMenuItem(label: session.redoLabel, sessionWouldDoIt: session.canRedo, isGesturing: isGesturing)
+    private var redoItem: UndoMenuItem {
+        guard let (session, state) = sessionState() else { return .unavailable }
+        if let redo = found.redo { return redo }
+        let redo = UndoMenuItem(label: state.redoLabel, sessionWouldDoIt: session.canRedo, isGesturing: state.isGesturing)
+        found.redo = redo
+        return redo
     }
 
-    /// Some change is not on disk yet: closing the window now loses it (design §5.9).
-    var hasUnsavedChanges: Bool { panelSession?.hasUnsavedChanges ?? false }
+    /// The session and its state now; what was found for another state is forgotten.
+    private func sessionState() -> (EditSession, SessionState)? {
+        guard let model, let session = model.panelSession else { return nil }
+        let state = SessionState(
+            session: ObjectIdentifier(session), revision: session.revision, access: session.access,
+            undoLabel: session.undoLabel, redoLabel: session.redoLabel, isGesturing: model.isGesturing)
+        if found.state != state { found = Found(state: state) }
+        return (session, state)
+    }
+}
+
+extension EditorModel {
+    /// Closing the window now: whether it asks first (`EditorClosing`, design §5.9).
+    var closing: EditorClosing {
+        EditorClosing.decide(
+            hasUnsavedChanges: panelSession?.hasUnsavedChanges ?? false, notices: panelSession?.notices ?? [],
+            isAsking: isAskingToClose)
+    }
 
     /// Project ▸ Frames per Second: an edit, undone like any other.
     func setFrameRate(_ fps: Int) {
@@ -71,9 +108,10 @@ extension EditorWindowController {
         model.undoManager
     }
 
-    /// Closing with changes that couldn't be saved asks first (design §5.9): "Keep Open", the default, or "Close Anyway".
+    /// Closing while a change couldn't be saved (the amber banner is up) asks first (design §5.9): "Keep Open", the default,
+    /// or "Close Anyway".
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        switch EditorClosing.decide(hasUnsavedChanges: model.hasUnsavedChanges, isAsking: model.isAskingToClose) {
+        switch model.closing {
         case .close:
             return true
         case .keepOpen:
@@ -119,15 +157,21 @@ extension EditorWindowController {
     /// Whether this editor has the package `identity` open: its package where it is now (it may have been moved while
     /// open), or the path it was opened from until its session opens.
     func showsPackage(_ identity: PackageIdentity) -> Bool {
-        PackageIdentity(model.panelSession?.packageURL ?? packageURL) == identity
+        PackageIdentity(currentPackageURL) == identity
+    }
+
+    /// Where its package is now: the session follows it when it is moved while open.
+    var currentPackageURL: URL {
+        (model.panelSession?.packageURL ?? packageURL).standardizedFileURL
     }
 }
 
 // MARK: - The app's menus
 
 /// The editor whose window is key, for the app's menus (SwiftUI's commands do not see an AppKit window's responder chain):
-/// its project as the Project menu shows it, followed through the model's observation. An `ObservableObject`, which
-/// commands follow (`@ObservedObject`).
+/// whether it shows its panel (View ▸ Show Panel / Hide Panel) and its project as the Project menu shows it, followed
+/// through the model's observation. Its window's delegate says when it becomes key and stops being key. An
+/// `ObservableObject`, which commands follow (`@ObservedObject`).
 @MainActor
 final class KeyEditor: ObservableObject {
     static let shared = KeyEditor()
@@ -139,27 +183,25 @@ final class KeyEditor: ObservableObject {
         var canEdit: Bool
     }
 
+    /// Whether the key editor shows its panel; `nil` while no editor is the key window.
+    @Published private(set) var panelVisible: Bool?
     /// The key editor's project; `nil` while no editor is the key window or its project is not open.
     @Published private(set) var project: Project?
     private weak var model: EditorModel?
     /// Grows with each editor followed: an observation of the one before is not renewed.
     private var generation = 0
-    private var observers: [any NSObjectProtocol] = []
 
-    private init() {
-        let center = NotificationCenter.default
-        observers.append(center.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                self?.follow((NSApp.keyWindow?.windowController as? EditorWindowController)?.model)
-            }
-        })
-        observers.append(center.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated {
-                // The editor followed is not key any more (it closed, or a sheet or another window is key now).
-                guard let self, let model = self.model, model.window?.isKeyWindow != true else { return }
-                self.follow(nil)
-            }
-        })
+    private init() {}
+
+    /// `model`'s window became key.
+    func follow(_ model: EditorModel) {
+        follow(Optional(model))
+    }
+
+    /// `model`'s window is not key any more (it closed, or a sheet or another window is key now).
+    func stopFollowing(_ model: EditorModel) {
+        guard self.model === model else { return }
+        follow(nil)
     }
 
     func setAspect(_ aspect: Aspect) {
@@ -176,17 +218,18 @@ final class KeyEditor: ObservableObject {
         track(generation)
     }
 
-    /// Reads the followed model's project, and reads it again when what was read changes.
+    /// Reads the followed model's panel and project, and reads them again when what was read changes.
     private func track(_ generation: Int) {
         guard generation == self.generation else { return }
-        let next = withObservationTracking {
-            model.flatMap { model in
+        let (panel, next) = withObservationTracking {
+            (model?.panelVisible, model.flatMap { model in
                 model.document.map { Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit) }
-            }
+            })
         } onChange: { [weak self] in
             // Before the change: read once it is made.
             Task { @MainActor in self?.track(generation) }
         }
+        if panelVisible != panel { panelVisible = panel }
         if project != next { project = next }
     }
 }
