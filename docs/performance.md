@@ -215,3 +215,49 @@ Cómo se llega:
 - *Abrir un registro de edición largo* (Task 13): reproducir el registro ya no recorre todos los grupos por cada grupo nuevo (`replayIsLinearInTheGroups`): pasar las líneas antes de la instantánea de 10 000 grupos tardaba 1,21 s y 20 000, 4,75 s (cuadrático, Debug); ahora, los dos juntos con su armado, 0,1 s.
 | 33 | Renombrar, mandar a la papelera y restaurar un proyecto (`LibraryOperations.rename`, `moveToTrash`, `restore`) en el disco interno: un paquete con una toma de 8 MB en una subcarpeta de la carpeta de proyectos, cinco veces cada una, cada vez un proyecto nuevo; de la llamada a la respuesta, con la consulta de sus locks, el bookmark de su carpeta y `trashOrigins`. Debug, sobre `955ac1b` (Task 31) con los cambios de Task 33 | `TOMA_BENCH=1 swift test --package-path Packages/RecorderKit --filter renameTrashAndRestoreAreQuick` | renombrar 0,32 a 0,55 ms; a la papelera 8,5 a 9,1 ms y 24,9 ms la primera (que además crea `Trash/`); restaurar 7,4 a 9,0 ms | ≤ 100 ms cada una (diseño §15) | 5,8 a 5,9 |
 | 32 | La biblioteca con 1 000 proyectos `.synthetic` de `LibraryFixtures` (los de Task 31 después de su arreglo: manifiesto, `events.jsonl` de unas 61 líneas por segundo, 30 s en promedio, y registro de edición), en el disco interno: indexar sin índice (`reconcile` desde un índice vacío hasta `.finished`; los tamaños después) y reconciliar sin cambios con el índice que dejó. Para separar el recorrido de la lectura, la prueba mide además las mismas 1 000 lecturas de `ProjectReader.summary` solas, una tras otra en el hilo de la prueba. Con `TOMA_BENCH_DIR`, los 1 000 y su `index.json` quedan en esa carpeta (Task 36) | `TOMA_BENCH=1 swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter reconcileAndIndexAThousand`; en Debug, el de la tarea sin `-c release` | Release (6 corridas): indexar **3,06 a 3,41 s**, lo mismo que las lecturas solas (3,04 a 3,23 s; el recorrido, de −3 a +6 %); los tamaños de los 1 000 terminan 64 a 79 ms después; reconciliar sin cambios **18 a 20 ms**. Debug: indexar 3,65 y 3,72 s con carga 4,6 y 4,7 (las lecturas solas 3,67 s; reconciliar 21 y 23 ms), y 6,4 y 10,1 s con más carga (las lecturas solas 5,3 y 3,8 s): las colas de la biblioteca son `.utility`, que el sistema corre sobre todo en los núcleos de eficiencia y posterga con la Mac cargada. De cada proyecto, decodificar su `events.jsonl` entero (`EditSession.readDocumentWithDiskVersion` → `LoadedProject.load`) es unos 2,6 de los 3,2 ms que cuesta leerlo (perfil de 300, Release): sin eso serían unos 0,6 ms por proyecto. Indexar **no llega a la meta**; con grabaciones reales, de registros mucho más largos, tardaría más | Indexar ≤ 2 s; reconciliar ≤ 0,4 s (diseño §15, Mac del dueño) | 4,9 a 8,0 en Release; 4,6 a 15 en Debug |
+
+
+### La línea de tiempo (Task 40)
+
+```
+make build
+swift run --package-path Packages/RecorderKit recorder-dev synth-record "$TMPDIR/bench-timeline" --duration 3
+TOMA_BENCH_TIMELINE=1 build/Build/Products/Debug/Toma.app/Contents/MacOS/Toma -TomaDumpEditorStructure "$TMPDIR/bench-timeline/"*.toma
+```
+
+Solo en Debug. Abre el paquete en el editor (como `-TomaDumpEditorStructure`, sin la incorporación ni avisos), dice cuánto mide su línea de tiempo (`editor timeline:`) y, en una ventana propia de 1440 pt de ancho (1352 pt de pistas), muestra una toma de una hora armada en código: una pantalla, una cámara, un micrófono y el audio del sistema; 500 tramos de 7 s con 0,2 s cortados entre ellos (uno de cada diez a 2× y algunos a 0,5×: 3465 s de salida); 300 zooms de 3 s, la mitad automáticos; 100 cambios de la cámara; 40 marcadores; dos partes rayadas, y la forma de onda de una hora en las dos pistas de audio. Para cada cuadro arma lo que está a la vista y lo manda al servidor de render (`CATransaction.flush()`) en el hilo principal, y mide eso, en cinco movimientos de 600 cuadros: ajustada a la ventana cambiando la escala (los 500 tramos y los 300 zooms a la vista), un pellizco de ajustada a 600 pt/s y de vuelta, y desplazarla 40 pt por cuadro a 3,9, 60 y 600 pt/s; y mover solo el cabezal. Después, durante 4 s, un pellizco al ritmo del display link de la vista (`paced pinch`): cuántos refrescos hubo y cuántos llegaron más de 1,5 períodos después del anterior. Con `TOMA_BENCH_TIMELINE_SNAPSHOTS=<carpeta>` deja además un PNG de la línea de tiempo del editor y de la de una hora a cuatro escalas.
+
+Apple M5 Pro, macOS 26.6.2, 16 de noviembre de 2026, compilación Debug, sobre `1b/t40`. Entre paréntesis, la carga de la Mac (promedio de 1 min) al empezar cada corrida: había pruebas de otros agentes. p50 / p95 / máximo del cuadro en el hilo principal, en ms.
+
+| Movimiento | Corrida 1 (8,07) | Corrida 2 (9,08) | Corrida 3 (8,80) | Capas de elementos a la vista |
+|---|---|---|---|---|
+| Ajustada, todo a la vista, cambiando la escala | 4,48 / 4,76 / 16,65 | 4,54 / 4,84 / 17,16 | 4,37 / 4,62 / 15,90 | hasta 921 |
+| Pellizco de ajustada (0,39 pt/s) a 600 pt/s y de vuelta | 3,26 / 4,40 / 4,92 | 3,34 / 4,39 / 5,44 | 3,14 / 4,10 / 5,00 | hasta 921 |
+| Desplazar a 3,9 pt/s | 3,18 / 3,52 / 4,74 | 3,22 / 3,54 / 4,86 | 3,03 / 3,26 / 4,90 | hasta 113 |
+| Desplazar a 60 pt/s | 3,13 / 3,47 / 4,24 | 2,94 / 3,26 / 4,02 | 2,93 / 3,17 / 4,21 | hasta 29 |
+| Desplazar a 600 pt/s | 2,31 / 2,58 / 3,84 | 2,26 / 2,48 / 3,30 | 2,17 / 2,30 / 3,05 | hasta 23 |
+| Solo el cabezal | 0,03 / 0,03 / 0,21 | 0,03 / 0,04 / 0,22 | 0,03 / 0,03 / 0,46 | — |
+
+La meta (diseño §7.9) es 120 fps en esta Mac (8,33 ms por cuadro) y 60 fps en la M1 (16,7 ms): el p95 del hilo principal, en Debug y con la Mac cargada, queda entre 2,3 y 4,8 ms, y el máximo pasa de 8,33 ms solo en el primer cuadro con la secuencia entera a la vista, cuando se crean sus capas (de 16 a 17 ms, una vez: al abrir un proyecto así). Una compilación Release es más rápida.
+
+**Sin medir acá: la frecuencia real de la pantalla.** La pantalla de esta Mac estaba apagada y el display link no llamó ni una vez (`paced pinch: the display did not refresh`), así que no se midió lo que compone el servidor de render por cuadro ni si se pierde algún refresco: queda para el dueño (`docs/release.md`, "La línea de tiempo (40)"), con la pantalla encendida, en su Mac y en la M1.
+
+Cómo se llega:
+
+- **Una capa por elemento a la vista, reciclada.** Tramos, bloques, tramos de pantalla, rombos, rayados, mosaicos de miniaturas y etiquetas de la regla salen de un pozo por pista: el elemento que sale de la vista le deja su capa al que entra, que solo cambia de lugar, de texto y de color; nada se crea ni se destruye al desplazar. Los elementos a la vista se encuentran con una búsqueda binaria sobre la lista ordenada (con el fin más lejano hasta cada uno, por si se superponen), así que una hora con 500 tramos no cuesta más que lo que se ve.
+- **El cabezal es una capa aparte.** Reproduciendo, en cada refresco solo cambia su posición (0,03 ms); la página pasa sola cuando llega al borde derecho.
+- **Miniaturas en la grilla de cada tramo.** Cada tramo tiene sus mosaicos desde su comienzo, a un paso que es una potencia de dos de nanosegundos de salida (de media a una miniatura de ancho), cada uno con el cuadro de su tramo en su borde izquierdo y cortado en el final del tramo (`TimelineLayout.thumbnailTiles`). Mientras la escala cambia dentro de una potencia de dos, los mosaicos conservan su cuadro y se corren con el tramo (al pasar una, la mitad lo conserva), y una edición que corre un tramo no los cambia (`aSmallScaleStepKeepsTheThumbnails`, `aCutBeforeTheViewKeepsTheThumbnailsAfterIt`). Un pedazo de menos de 16 pt no muestra miniatura: con la hora entera ajustada (tramos de menos de 3 pt), ninguna. Se ven solo dentro de los tramos (una máscara con sus rectángulos). Las hace `ThumbnailCache` fuera del hilo principal, una a la vez; las que salen de la vista antes de hacerse se cancelan. (Hasta la revisión de Task 40 los mosaicos seguían una grilla de toda la salida y cambiaban de cuadro con casi cualquier cambio de escala y con cualquier corte anterior; las corridas de la tabla de arriba son de esa versión.)
+- **Formas de onda por columna de un punto.** La de cada pista se reduce una vez, fuera del hilo principal, a mínimos y máximos de cada potencia de dos de sus pares de 10 ms: cada columna lee unos pocos valores, a cualquier escala, y la pista entera es un solo trazado.
+
+Con los arreglos de la revisión (las miniaturas en la grilla de cada tramo; ⇧Z escala alrededor del instante que queda en el mismo lugar, `TimelineLayout.fitAnchor`), el mismo comando, tres corridas con carga 3,60, 3,29 y 4,31 (p50 / p95 / máximo en ms):
+
+| Movimiento | Corrida 1 (3,60) | Corrida 2 (3,29) | Corrida 3 (4,31) | Capas de elementos a la vista |
+|---|---|---|---|---|
+| Ajustada, todo a la vista, cambiando la escala | 3,62 / 3,78 / 13,93 | 3,67 / 3,79 / 13,13 | 3,55 / 3,64 / 13,33 | hasta 904 (ninguna miniatura) |
+| Pellizco de ajustada a 600 pt/s y de vuelta | 2,59 / 3,37 / 4,14 | 2,67 / 3,71 / 7,13 | 2,53 / 3,37 / 4,04 | hasta 904 |
+| Desplazar a 3,9 pt/s | 2,48 / 2,68 / 3,78 | 2,76 / 3,16 / 6,01 | 2,52 / 2,71 / 3,75 | hasta 141 |
+| Desplazar a 60 pt/s | 2,41 / 2,57 / 3,42 | 2,76 / 3,08 / 5,24 | 2,41 / 2,56 / 3,45 | hasta 36 |
+| Desplazar a 600 pt/s | 1,79 / 1,93 / 2,54 | 2,06 / 2,40 / 3,67 | 1,78 / 2,00 / 2,63 | hasta 40 |
+| Solo el cabezal | 0,02 / 0,03 / 0,45 | 0,03 / 0,03 / 0,24 | 0,02 / 0,03 / 0,55 | — |
+
+Con menos carga que la primera vez, todo queda debajo de los 8,33 ms salvo el primer cuadro con la secuencia entera a la vista (13 a 14 ms, una vez). La frecuencia de la pantalla sigue sin medirse (`paced pinch: the display did not refresh`).
