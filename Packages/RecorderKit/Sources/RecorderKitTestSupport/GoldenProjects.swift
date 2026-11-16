@@ -21,7 +21,7 @@ public enum GoldenProjects {
     /// In the order of their frames in the golden file.
     public static let cases: [Case] = [
         Case(name: "phaseZero", times: [0, 0.5, 1.7]),
-        Case(name: "windowMoving", times: [0.5, 1.5, 2.5]),
+        Case(name: "windowMoving", times: [0, 0.5, 1.5, 2.5]),
         Case(name: "areaOnDisplay", times: [0.5, 1.5]),
         Case(name: "cameraWithStyleChanges", times: [0.9, 1.25, 2.0]),
         Case(name: "geometryChange", times: [1.0, 2.0]),
@@ -61,8 +61,10 @@ public enum GoldenProjects {
         return try builder.write()
     }
 
-    /// A window that moves 200 pt right at 1 s and leaves the screen at 2 s, with the cursor moving from 0.05 s before
-    /// its first segment, so a frame sees the sample before `timelineStart`.
+    /// A window that moves 200 pt right at 1 s and leaves the screen at 2 s, with the cursor moving from 0.045 s before
+    /// its first segment (plan ruling R3): off the 1/120 s grid of its samples, so that the cursor of the frame at 0 is
+    /// drawn from the sample 3.3 ms before `timelineStart` (moved toward the one 5 ms after it), and without the samples
+    /// before the take that frame would have no cursor (`goldenFramesSeeTheCursorBeforeTheTake`).
     private static func windowMoving(in dir: URL, formatVersion: Int) async throws -> LoadedProject {
         let window = "window-4242"
         let frame = Rect(x: 100, y: 100, width: 800, height: 600)
@@ -78,7 +80,7 @@ public enum GoldenProjects {
             InputEvent(t: base.adding(seconds: 1), kind: .windowGeometry(track: window, frame: moved, onScreen: true)),
             InputEvent(t: base.adding(seconds: 2), kind: .windowGeometry(track: window, frame: moved, onScreen: false)),
         ])
-        try builder.addEvents(cursorEvents(from: base.adding(seconds: -0.05), seconds: 3, across: frame))
+        try builder.addEvents(cursorEvents(from: base.adding(seconds: -0.045), seconds: 3, across: frame))
         return try builder.write()
     }
 
