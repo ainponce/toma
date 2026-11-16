@@ -10,8 +10,12 @@ import ProjectFormat
 /// background. The legacy document (`EditDocument.legacy`) is one clip at 1× over `TakeTimeline.bounds`, so it shows
 /// what phase 0 and 1a show at every time before the end, with the same arithmetic.
 ///
-/// - Background: the document's gradient, colour or wallpaper (`WallpaperPreset`). A wallpaper this version does not
-///   know, an image and the desktop draw the classic gradient (`Background.tomaClassic`) until the render has them.
+/// - Background: the document's gradient, colour, wallpaper (`WallpaperPreset`), image or desktop picture
+///   (`BackgroundImage`); a wallpaper, an image and the desktop are blurred by σ = `backgroundBlur` × 0.04 × the output
+///   width, with `backgroundBlur` clamped to 0...1. The desktop is the photo of the display of `screens.initial`, the
+///   first screen shown, as the take started; a window has none. A wallpaper this version does not know, and a desktop
+///   without a display, draw the classic gradient (`Background.tomaClassic`), as an image does that is missing or
+///   unreadable (`Compositor`).
 /// - Screen: the take's track of `screens.initial`, or of the last `screens.changes` of the take at or before the
 ///   source instant (it jumps); none without one, or for a track the take does not have. What is shown of it, and
 ///   where, is `ScreenGeometry`; its rect is `StageLayout.screenRect` inside the document's padding, with the
@@ -66,7 +70,7 @@ public struct FrameEvaluator: Sendable {
         duration = timeMap.durationSeconds
         takeID = take.id
         self.outputSize = outputSize
-        (background, gradient) = Self.background(of: document.style.background)
+        (background, gradient) = Self.background(of: document.style, take: take, outputSize: outputSize, screens: document.screens)
         let ordered = events.sortedByTime()
 
         initialScreen = document.screens.initial[take.id]
@@ -141,20 +145,32 @@ public struct FrameEvaluator: Sendable {
     /// A gradient as the shader takes it.
     private typealias Gradient = (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float)
 
-    /// What the compositor draws for `background`, and the gradient it draws with `.gradient`: that of a gradient, the
-    /// classic one otherwise. An unknown wallpaper, an image and the desktop are the classic gradient.
-    private static func background(of background: Background) -> (layer: BackgroundLayer, gradient: Gradient) {
+    /// What the compositor draws for the background of `style`, and the gradient it draws with `.gradient` (or for an
+    /// image it cannot read): that of a gradient, the classic one otherwise. An unknown wallpaper, and the desktop when
+    /// the first screen of `screens` is not a display of `take`, are the classic gradient.
+    private static func background(
+        of style: StageStyle, take: TakeRecord, outputSize: SIMD2<Int>, screens: ScreenPlan
+    ) -> (layer: BackgroundLayer, gradient: Gradient) {
         func floats(_ color: RGBA) -> SIMD4<Float> { SIMD4(Float(color.r), Float(color.g), Float(color.b), Float(color.a)) }
-        func classic() -> Gradient { Self.background(of: .tomaClassic).gradient }
-        switch background {
+        func classic() -> Gradient {
+            guard case let .gradient(start, end, angle) = Background.tomaClassic else { preconditionFailure("Toma classic is a gradient") }
+            return (floats(start), floats(end), Float(angle))
+        }
+        let blur = style.backgroundBlur.isNaN ? 0 : min(max(style.backgroundBlur, 0), 1)
+        let sigma = blur * 0.04 * Double(outputSize.x)
+        func image(_ source: BackgroundImage.Source) -> BackgroundLayer { .image(BackgroundImage(source: source, blurSigma: sigma)) }
+        switch style.background {
         case let .gradient(start, end, angle):
             return (.gradient, (floats(start), floats(end), Float(angle)))
         case let .color(color):
             return (.color(floats(color)), classic())
         case let .wallpaper(id):
-            return (WallpaperPreset.preset(id: id).map(BackgroundLayer.wallpaper) ?? .gradient, classic())
-        case .image, .desktop:
-            return (.gradient, classic())
+            return (WallpaperPreset.preset(id: id).map { .wallpaper($0, blurSigma: sigma) } ?? .gradient, classic())
+        case let .image(file):
+            return (image(.asset(file)), classic())
+        case .desktop:
+            let display = screens.initial[take.id].flatMap(take.track).flatMap { $0.kind.isScreen ? $0.source.displayID : nil }
+            return (display.map { image(.desktop(take: take.id, displayID: $0)) } ?? .gradient, classic())
         }
     }
 
