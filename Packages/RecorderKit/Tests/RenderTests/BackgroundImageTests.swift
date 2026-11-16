@@ -22,15 +22,6 @@ private let otherHash = "fedcba9876543210fedcba9876543210"
 private let firstDisplay: UInt32 = 69_734_208
 private let secondDisplay: UInt32 = 731_409
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing decodes
-/// the image and waits for the GPU, which block (`offThePool` in DocumentRenderTests). `body` checks nothing itself:
-/// an expectation off the test's task would not be the test's, so it returns what the test checks.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `<dir>/Demo.toma` with a take of one second from `base` on two displays, `display-1` (`firstDisplay`) and
 /// `display-2` (`secondDisplay`), whose video files are missing: no screen is drawn, so every pixel of a frame is the
 /// background, and nothing but the background is read.

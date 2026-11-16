@@ -33,14 +33,6 @@ private func project(in dir: URL, segments: [VideoSegmentSpec]? = nil) async thr
     return try builder.write()
 }
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread (drawing decodes, and
-/// blocks while it does).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// The presentation times of the sync samples (key frames) of the video track of the movie at `url`, read from the
 /// samples themselves (`kCMSampleAttachmentKey_NotSync`), without decoding.
 private func syncSeconds(of url: URL) async throws -> [Double] {

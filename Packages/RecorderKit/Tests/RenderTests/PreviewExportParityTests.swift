@@ -33,18 +33,38 @@ private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
     return try #require(created)
 }
 
+/// `renderer`'s frame at `t` drawn through the export path, `render(at:into:)` into a new pixel buffer of
+/// `width` × `height`, as its bytes; off the cooperative pool, since drawing decodes and blocks while it does.
+private func exported(_ renderer: FrameRenderer, at t: Double, width: Int, height: Int) async throws -> [UInt8] {
+    try await offThePool {
+        var created: CVPixelBuffer?
+        let attributes = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            kCVPixelBufferMetalCompatibilityKey: true,
+        ] as CFDictionary
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes, &created)
+        guard status == kCVReturnSuccess, let pixelBuffer = created else {
+            throw TestSupportError.failed("no pixel buffer of \(width) × \(height): \(status)")
+        }
+        try renderer.render(at: t, into: pixelBuffer)
+        return packedBytes(of: pixelBuffer)
+    }
+}
+
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func renderIsDeterministic() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await movingCursorProject(in: dir)
         let size = SIMD2(1280, 720)
         let renderer = try FrameRenderer(project: project, outputSize: size)
-        let first = try renderer.renderBytes(at: 1.0)
-        let second = try renderer.renderBytes(at: 1.0)
+        let other = try FrameRenderer(project: project, outputSize: size)
+        let (first, second, third) = try await offThePool {
+            (try renderer.renderBytes(at: 1.0), try renderer.renderBytes(at: 1.0), try other.renderBytes(at: 1.0))
+        }
         #expect(first.count == 1280 * 720 * 4)
         #expect(first == second)
         // A second renderer, which decodes the frame with its own reader, draws the same bytes.
-        #expect(try FrameRenderer(project: project, outputSize: size).renderBytes(at: 1.0) == first)
+        #expect(third == first)
         // And it is the frame at 1 s, with the cursor drawn.
         let evaluator = FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: size)
         let frame = evaluator.frame(at: 1.0)
@@ -63,12 +83,10 @@ func previewAndExportPathsMatchBitForBit() async throws {
         let project = try await movingCursorProject(in: dir)
         let renderer = try FrameRenderer(project: project, outputSize: [1280, 720])
         let preview = PreviewRenderer(renderer: renderer)
-        let pixelBuffer = try makePixelBuffer(width: 1280, height: 720)
         var previous: [UInt8]?
         for t in [0, 0.5, 1.7] {
-            try renderer.render(at: t, into: pixelBuffer)
-            let exported = packedBytes(of: pixelBuffer)
-            let previewed = try preview.snapshot(at: t)
+            let exported = try await exported(renderer, at: t, width: 1280, height: 720)
+            let previewed = try await offThePool { try preview.snapshot(at: t) }
             #expect(exported.count == 1280 * 720 * 4)
             #expect(exported == previewed, "at \(t) s")
             #expect(exported != previous, "frames at different times differ")
@@ -94,15 +112,13 @@ func previewAndExportMatchWithCameraAndArea() async throws {
         let project = try builder.write()
         let renderer = try FrameRenderer(project: project, outputSize: [1280, 720])
         let preview = PreviewRenderer(renderer: renderer)
-        let pixelBuffer = try makePixelBuffer(width: 1280, height: 720)
         let evaluator = FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: [1280, 720])
         var previous: [UInt8]?
         for t in [0, 0.5, 1.7] {
             let frame = evaluator.frame(at: t)
             #expect(frame.camera != nil && frame.screen?.crop != Rect(x: 0, y: 0, width: 1, height: 1), "at \(t) s")
-            try renderer.render(at: t, into: pixelBuffer)
-            let exported = packedBytes(of: pixelBuffer)
-            #expect(exported == (try preview.snapshot(at: t)), "at \(t) s")
+            let exported = try await exported(renderer, at: t, width: 1280, height: 720)
+            #expect(exported == (try await offThePool { try preview.snapshot(at: t) }), "at \(t) s")
             #expect(exported != previous, "frames at different times differ")
             previous = exported
             // The camera is drawn: the centre of its rect is the camera's frame of that time.
@@ -136,7 +152,7 @@ func windowSegmentsAtAnotherScaleFillTheWindow() async throws {
         let rect = try #require(
             FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: size).frame(at: 0).screen?.rect)
         for (t, index) in [(0.5, 15), (1.5, 45)] {
-            let bytes = try renderer.renderBytes(at: t)
+            let bytes = try await offThePool { try renderer.renderBytes(at: t) }
             func at(_ u: Double, _ v: Double) -> SIMD4<UInt8> {
                 pixel(bytes, width: size.x, x: Int(rect.x + u * rect.width), y: Int(rect.y + v * rect.height))
             }
@@ -262,7 +278,7 @@ func goldenFramesAreDrawnFromTheHardwareEncodersVideo() async throws {
             let project = try await GoldenProjects.make(
                 "phaseZero", in: folder, videoEncoder: GoldenProjects.goldenFramesEncoder, makeVideoWriter: makeVideoWriter)
             let renderer = try FrameRenderer(project: project, outputSize: size)
-            return try await goldenOffThePool { try times.map { try renderer.renderBytes(at: $0) } }
+            return try await offThePool { try times.map { try renderer.renderBytes(at: $0) } }
         }
         let free = try await make(in: "free")
         let engine = BusyMediaEngine(busyWriters: 1)
@@ -273,13 +289,6 @@ func goldenFramesAreDrawnFromTheHardwareEncodersVideo() async throws {
             let differing = zip(busy[k], free[k]).filter { $0 != $1 }.count
             #expect(differing == 0, "\(differing) bytes of the frame at \(t) s differ")
         }
-    }
-}
-
-/// Runs `body` on a thread of its own: decoding blocks, and must not hold a Swift concurrency thread.
-private func goldenOffThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
     }
 }
 

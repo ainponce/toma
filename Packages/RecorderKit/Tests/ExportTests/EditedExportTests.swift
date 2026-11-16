@@ -124,14 +124,6 @@ private func export(
     return destination
 }
 
-/// Runs `body` on a thread of its own: drawing decodes, which blocks in `copyNextSampleBuffer`, and many tests blocking
-/// Swift's cooperative pool at once hang the run.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// The output seconds of frame `n` at `fps`.
 private func frameSeconds(_ n: Int, _ fps: Int) -> Double { Double(TimeMap.frameTime(n, frameRate: fps)) / 1e9 }
 

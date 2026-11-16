@@ -9,13 +9,6 @@ private enum TrackReadError: Error {
     case cannotAddOutput, didNotStart
 }
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread.
-private func onOwnThread<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// Reads every sample of `track` with `outputSettings` and folds them into `initial` with `fold`.
 /// Throws `TestSupportError.failed` if the reader does not complete.
 ///
@@ -28,7 +21,7 @@ public func readTrack<T: Sendable>(
 ) async throws -> T {
     // Handed over to the reading thread, and not used here again until it is done.
     nonisolated(unsafe) let track = track
-    let (value, status) = try await onOwnThread { () throws -> (T, AVAssetReader.Status) in
+    let (value, status) = try await offThePool { () throws -> (T, AVAssetReader.Status) in
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
         guard reader.canAdd(output) else { throw TrackReadError.cannotAddOutput }
