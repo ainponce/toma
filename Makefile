@@ -10,12 +10,12 @@ test:
 	swift test --package-path Packages/RecorderKit
 
 # The thread-safety argument of TrackPipeline, TrackFrameReader, the take's life cycle, the process's cache of
-# background images and a renderer's cursor images rests on this run (plan exit criterion). Every name matches tests: a
-# suite, or a file of loose @Test functions (TrackFrameReaderTests, InputActivityRecorderTests, BackgroundImageTests,
-# CursorRenderTests).
+# background images, a renderer's cursor images and the compositor's mipmapped copies of the screen rests on this run
+# (plan exit criterion). Every name matches tests: a suite, or a file of loose @Test functions (TrackFrameReaderTests,
+# InputActivityRecorderTests, BackgroundImageTests, CursorRenderTests, ScreenSamplingTests).
 tsan:
 	TSAN_OPTIONS=$${TSAN_OPTIONS:-halt_on_error=1} swift test --package-path Packages/RecorderKit --sanitize=thread \
-		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|CaptureRunLifecycleTests|WindowCaptureTests|LevelMeterTests|FocusGuardTests|TimeLimitTests|WallpaperLayoutTests|CursorImageRecorderTests|InputActivityRecorderTests|BackgroundImageTests|EditedMixTests|EditJournalTests|EditSessionTests|CursorRenderTests|SpeedStretchTests'
+		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|CaptureRunLifecycleTests|WindowCaptureTests|LevelMeterTests|FocusGuardTests|TimeLimitTests|WallpaperLayoutTests|CursorImageRecorderTests|InputActivityRecorderTests|BackgroundImageTests|EditedMixTests|EditJournalTests|EditSessionTests|CursorRenderTests|SpeedStretchTests|ScreenSamplingTests'
 
 crash-test:
 	bash scripts/test-crash-recovery.sh

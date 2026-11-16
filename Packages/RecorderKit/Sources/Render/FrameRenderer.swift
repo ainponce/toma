@@ -42,7 +42,8 @@ public enum RenderError: Error, Equatable {
 /// for the GPU (`BackgroundImages`); the frames after it reuse that. A blurred wallpaper is drawn and blurred the same
 /// way, once. A window frame's title is drawn by CoreText the first time it is shown (`TitleTexture`), and reused the
 /// same way. So is a cursor's image: each of Toma's cursors is drawn, and each image the take recorded read and uploaded,
-/// the first time a frame shows it (`CursorImages`), and reused.
+/// the first time a frame shows it (`CursorImages`), and reused. A screen sampled with mipmaps (`ScreenLayer.mipmapped`)
+/// is not: every frame copies its decoded frame and makes its mipmaps on the GPU (`Compositor`).
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {

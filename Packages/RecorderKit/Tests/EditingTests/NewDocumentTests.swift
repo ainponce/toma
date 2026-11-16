@@ -60,6 +60,17 @@ private enum NewDocumentFixture {
         return try builder.write()
     }
 
+    /// A take of 2 s of one window, `width` × 600 pt.
+    static func window(in dir: URL, name: String, width: Double) async throws -> LoadedProject {
+        let builder = try TakeBuilder(in: dir, name: name)
+        let source = TrackSource(
+            name: "Synthetic Window", globalFrame: Rect(x: 100, y: 80, width: width, height: 600), pixelScale: 2, windowID: 7)
+        try await builder.addVideoTrack(
+            id: "window-1", kind: .window, source: source,
+            segments: [VideoSegmentSpec(start: base, seconds: 2, framesPerSecond: 10)])
+        return try builder.write()
+    }
+
     /// A 32 × 32 PNG, filled.
     static func png() throws -> Data {
         guard let context = CGContext(
@@ -147,5 +158,41 @@ private enum NewDocumentFixture {
         var cursor = DefaultStyle.toma.cursor
         cursor.style = .toma
         #expect(plain.cursor == cursor)
+    }
+}
+
+@Test func windowTakesGetCornersThatCoverTheBlackOnes() async throws {
+    try await withTemporaryDirectory { dir in
+        let window = try await NewDocumentFixture.window(in: dir, name: "window", width: 800)
+        let document = NewDocument.make(project: window, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
+        #expect(document.screens.initial == ["take-001": "window-1"])
+        // The window, 4:3, inside the padding of a 16:9 output: the corners that cover 26 of its 800 pt, as a
+        // fraction of the output's width.
+        let output = SIMD2<Double>(1920, 1080)
+        let rect = StageLayout.screenRect(contentAspect: 800.0 / 600, padding: 0.08, outputSize: output)
+        let cover = 26.0 / 800 * rect.width / output.x
+        #expect(WindowCornerCover.blackCornerPoints == 26)
+        #expect(WindowCornerCover.cornerRadius(windowWidthPoints: 800, screenRectWidth: rect.width, outputWidth: output.x) == cover)
+        #expect(cover > DefaultStyle.toma.style.cornerRadius)
+        #expect(document.style.cornerRadius >= cover * (1 - 1e-12))
+        #expect(abs(document.style.cornerRadius - cover) <= 1e-12)
+        // Everything else of the style is the default one's.
+        var stage = DefaultStyle.toma.style
+        stage.screenSampling = .mipmapped
+        stage.geometryTransition = .spring
+        stage.cornerRadius = document.style.cornerRadius
+        #expect(document.style == stage)
+
+        // A window wide enough for the default corners to cover its black ones keeps them.
+        let wide = try await NewDocumentFixture.window(in: dir, name: "wide", width: 2400)
+        let wideRect = StageLayout.screenRect(contentAspect: 2400.0 / 600, padding: 0.08, outputSize: output)
+        #expect(WindowCornerCover.cornerRadius(windowWidthPoints: 2400, screenRectWidth: wideRect.width, outputWidth: output.x) < 0.012)
+        #expect(NewDocument.make(project: wide, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make).style.cornerRadius == 0.012)
+        // A display: the default corners.
+        let display = try await NewDocumentFixture.take(in: dir, name: "display", screens: 1)
+        #expect(NewDocument.make(project: display, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make).style.cornerRadius == 0.012)
+        // Nothing to cover in a window of no usable size.
+        #expect(WindowCornerCover.cornerRadius(windowWidthPoints: 0, screenRectWidth: rect.width, outputWidth: output.x) == 0)
+        #expect(WindowCornerCover.cornerRadius(windowWidthPoints: .nan, screenRectWidth: rect.width, outputWidth: output.x) == 0)
     }
 }

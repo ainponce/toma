@@ -74,34 +74,116 @@ public enum ShaderSource {
         return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - radius;
     }
 
-    // The screen and the camera: bilinear, opaque, with antialiased rounded corners. Inside a window frame, the window's
-    // rounded rect (the shape) cuts the screen instead, and its own rect, square, along the edge it does not share with
-    // the window: the top one, under the bar. For a crop, the texture is sampled half a texel inside it at most, so
-    // neither the bilinear filter nor the antialiased edge (drawn past the image) mixes in what is outside it.
-    fragment float4 screenFragment(QuadOut in [[stage_in]],
-                                   constant QuadUniforms &u [[buffer(0)]],
-                                   texture2d<float> source [[texture(0)]],
-                                   sampler linearSampler [[sampler(0)]]) {
+    // How much of the pixel at p the screen or the camera covers: its rect with antialiased rounded corners. Inside a
+    // window frame, the window's rounded rect (the shape) cuts the screen instead, and its own rect, square, along the
+    // edge it does not share with the window: the top one, under the bar.
+    static float imageCoverage(float2 p, constant QuadUniforms &u) {
         float2 halfSize = u.contentSize * 0.5;
         float radius = min(u.radius, min(halfSize.x, halfSize.y));
-        float d = roundedRectDistance(in.p - (u.contentOrigin + halfSize), halfSize, radius);
+        float d = roundedRectDistance(p - (u.contentOrigin + halfSize), halfSize, radius);
         float coverage = clamp(0.5 - d, 0.0, 1.0);
         if (u.shapeSize.x > 0.0) {
             float2 halfShape = u.shapeSize * 0.5;
             float shapeRadius = min(u.radius, min(halfShape.x, halfShape.y));
-            float shape = roundedRectDistance(in.p - (u.shapeOrigin + halfShape), halfShape, shapeRadius);
-            float rect = roundedRectDistance(in.p - (u.contentOrigin + halfSize), halfSize, 0.0);
+            float shape = roundedRectDistance(p - (u.shapeOrigin + halfShape), halfShape, shapeRadius);
+            float rect = roundedRectDistance(p - (u.contentOrigin + halfSize), halfSize, 0.0);
             coverage = clamp(0.5 - max(shape, rect), 0.0, 1.0);
         }
-        float2 uv = in.uv;
+        return coverage;
+    }
+
+    // The texture coordinates sampled for uv: for a crop, half a texel inside it at most, so neither the filter nor the
+    // antialiased edge (drawn past the image) mixes in what is outside it.
+    static float2 imageUV(float2 uv, constant QuadUniforms &u, texture2d<float> source) {
         if (u.clampsToCrop != 0.0) {
             float2 halfTexel = 0.5 / float2(source.get_width(), source.get_height());
             float2 low = u.uvOrigin + halfTexel;
             float2 high = max(u.uvOrigin + u.uvSize - halfTexel, low);
             uv = clamp(uv, low, high);
         }
-        float3 color = source.sample(linearSampler, uv).rgb;
+        return uv;
+    }
+
+    // The screen and the camera: bilinear, opaque, over `imageCoverage`.
+    fragment float4 screenFragment(QuadOut in [[stage_in]],
+                                   constant QuadUniforms &u [[buffer(0)]],
+                                   texture2d<float> source [[texture(0)]],
+                                   sampler linearSampler [[sampler(0)]]) {
+        float coverage = imageCoverage(in.p, u);
+        float3 color = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
         return float4(color, 1.0) * coverage;
+    }
+
+    // The screen sampled trilinear from a mipmapped copy of its frame (`ScreenLayer.mipmapped`), opaque, over
+    // `imageCoverage`. The level is chosen from how fast the coordinates change before a crop clamps them: those clamped
+    // stop changing along the crop's edges, where they would read the full-size level and alias.
+    fragment float4 mipmappedScreenFragment(QuadOut in [[stage_in]],
+                                            constant QuadUniforms &u [[buffer(0)]],
+                                            texture2d<float> source [[texture(0)]],
+                                            sampler trilinearSampler [[sampler(0)]]) {
+        float coverage = imageCoverage(in.p, u);
+        float2 uv = imageUV(in.uv, u, source);
+        float3 color = source.sample(trilinearSampler, uv, gradient2d(dfdx(in.uv), dfdy(in.uv))).rgb;
+        return float4(color, 1.0) * coverage;
+    }
+
+    struct ShadowUniforms {
+        float2 lower;       // the box: the rect that casts the shadow, moved down by its offset
+        float2 upper;
+        float sigma;        // of the blur, > 0
+        float corner;       // the box's corners, at most half its shorter side
+        float opacity;
+        float padding;
+    };
+
+    // Abramowitz and Stegun 7.1.26, within 1.5e-7 of erf, which Metal does not have: `ShadowMath.erf`, the same in Float.
+    static float shadowErf(float x) {
+        float a = abs(x);
+        float t = 1.0 / (1.0 + 0.3275911 * a);
+        float poly = 1.061405429;
+        poly = -1.453152027 + t * poly;
+        poly = 1.421413741 + t * poly;
+        poly = -0.284496736 + t * poly;
+        poly = 0.254829592 + t * poly;
+        poly = t * poly;
+        float y = 1.0 - poly * exp(-a * a);
+        return x < 0.0 ? -y : y;
+    }
+
+    // The box's row at height y from its centre (narrower in its rounded corners) blurred along x by sigma, at x from its
+    // centre: exact, with two erf.
+    static float shadowRow(float x, float y, float sigma, float corner, float2 halfSize) {
+        float delta = min(halfSize.y - corner - abs(y), 0.0);
+        float curved = halfSize.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+        float k = 0.70710678 / sigma;
+        return 0.5 * (shadowErf((x + curved) * k) - shadowErf((x - curved) * k));
+    }
+
+    // The normal density of sigma at x.
+    static float shadowGaussian(float x, float sigma) {
+        return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.5066282746 * sigma);
+    }
+
+    // The shadow of a rounded box blurred by a Gaussian (Evan Wallace's, `ShadowMath`): the rows blurred along x,
+    // integrated along y at `ShadowMath.ySamples` samples, at the middle of equal steps over [-3 sigma, 3 sigma] clipped to
+    // the box. Premultiplied black at that alpha times the opacity.
+    fragment float4 shadowFragment(QuadOut in [[stage_in]],
+                                   constant ShadowUniforms &u [[buffer(0)]]) {
+        float2 centre = (u.lower + u.upper) * 0.5;
+        float2 halfSize = (u.upper - u.lower) * 0.5;
+        float2 p = in.p - centre;
+        float low = p.y - halfSize.y;
+        float high = p.y + halfSize.y;
+        float start = min(max(-3.0 * u.sigma, low), high);
+        float end = min(max(3.0 * u.sigma, low), high);
+        float span = (end - start) / float(\#(ShadowMath.ySamples));
+        float y = start + span * 0.5;
+        float value = 0.0;
+        for (int i = 0; i < \#(ShadowMath.ySamples); i++) {
+            value += shadowRow(p.x, p.y - y, u.sigma, u.corner, halfSize) * shadowGaussian(y, u.sigma) * span;
+            y += span;
+        }
+        return float4(0.0, 0.0, 0.0, u.opacity * value);
     }
 
     struct WindowBarUniforms {

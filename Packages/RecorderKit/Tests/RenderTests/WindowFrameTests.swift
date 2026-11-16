@@ -230,3 +230,49 @@ func cornersOnTheWholeWindowNotTheScreenTop() async throws {
         #expect(isClose(at(left + Int(radius), top + 1), barColor, tolerance: 1), "\(at(left + Int(radius), top + 1))")
     }
 }
+
+@Test func windowCornersAreAtMostOnePointThreeBars() throws {
+    let take = makeTake(tracks: [displayTrack(globalFrame: screenFrame, segments: [segment(start: base, end: base.adding(seconds: 1))])])
+    var document = EditDocument.legacy(take: take, events: [])
+    document.style.frame = .macWindow(appearance: .light, title: "", buttons: true)
+    document.style.shadow = 0.5
+    func frame() -> RenderFrame { FrameEvaluator(take: take, events: [], document: document, outputSize: size).frame(at: 0.5) }
+    // Today's corners are under 1.3 bars: as they are.
+    let small = try #require(frame().windowFrame)
+    #expect(small.cornerRadius == 0.012 * 1280)
+    // The slider's largest corners, 0.04 of the width, are more than 1.3 bars of a 16:9 window: 1.3 bars, on the window,
+    // the screen at its bottom and the shadow.
+    document.style.cornerRadius = 0.04
+    let large = frame()
+    let window = try #require(large.windowFrame)
+    #expect(0.04 * 1280 > 1.3 * window.barHeight)
+    #expect(window.cornerRadius == 1.3 * window.barHeight)
+    #expect(large.screen?.cornerRadius == window.cornerRadius && large.shadow?.cornerRadius == window.cornerRadius)
+    // Without the frame, the screen keeps them.
+    document.style.frame = .none
+    #expect(frame().screen?.cornerRadius == 0.04 * 1280)
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func largeCornersNeverCutTheButtons() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await screenProject(in: dir)
+        var document = framed(project)
+        document.style.cornerRadius = 0.04
+        let layer = try windowLayer(project, document)
+        let bytes = try await render(project, document)
+        // The red button's top-left edge, 4.5 px from its centre (its radius is 0.21 bars, 5.8 px): inside the window's
+        // corner of 1.3 bars, where one of 0.04 of the width would show the background.
+        let centre = layer.firstButton
+        let edge = centre + SIMD2(-4.5, -4.5) / 2.squareRoot()
+        let p = pixel(bytes, width: size.x, x: Int(edge.x), y: Int(edge.y))
+        #expect(isClose(p, bgra(0xFF5F57), tolerance: 2), "\(p)")
+        // The whole button is red to its rim, all around it.
+        for step in 0..<16 {
+            let angle = Double(step) * .pi / 8
+            let point = centre + 3.5 * SIMD2(cos(angle), sin(angle))
+            let p = pixel(bytes, width: size.x, x: Int(point.x), y: Int(point.y))
+            #expect(isClose(p, bgra(0xFF5F57), tolerance: 2), "at \(angle): \(p)")
+        }
+    }
+}
