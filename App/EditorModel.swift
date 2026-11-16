@@ -178,14 +178,17 @@ final class EditorModel {
     @ObservationIgnored private var pendingAudioStart: Double?
     @ObservationIgnored private var clockGeneration = 0
     @ObservationIgnored private var lastLabelUpdate = 0.0
+    /// The playhead is being dragged on the timeline's ruler.
+    @ObservationIgnored private var isScrubbing = false
     @ObservationIgnored private var editorState = EditorState()
     /// Banners closed in this window (the legacy one is remembered in the project's caches).
     @ObservationIgnored private var dismissedRecovery = false
     @ObservationIgnored private var dismissedReopened = false
     /// An edit was made in this window: a project of an earlier version is not one without edits any more.
     @ObservationIgnored private var editedHere = false
-    /// The spans of video that could not be read, in output seconds of the shown scene.
-    @ObservationIgnored private var missingVideo: [ClosedRange<Double>] = []
+    /// The spans of video that could not be read, in output seconds of the shown scene: the banner under the playhead and
+    /// the hatching of the timeline's Video track.
+    private(set) var missingVideo: [ClosedRange<Double>] = []
     @ObservationIgnored private var missingVideoCheck: MissingVideoCheck?
     @ObservationIgnored private var openTask: Task<Void, Never>?
     @ObservationIgnored private var applyTask: Task<Void, Never>?
@@ -733,6 +736,27 @@ final class EditorModel {
     /// The time being played, read from the clock (not observed): for what follows playback closer than the label.
     func playbackSeconds() -> Double {
         isPlaying ? clockSeconds() : currentSeconds
+    }
+
+    /// The playhead dragged on the timeline's ruler (design §5.5): it goes to the frame of the grid nearest `seconds`,
+    /// and the preview shows it as `.scrubbing`, the latest instant asked for winning (the engine draws only that one),
+    /// without sound. Playing stops first. `endScrub()` shows the exact frame.
+    func scrub(toSeconds seconds: Double) {
+        guard canPlay, let timeline else { return }
+        if isPlaying { pause() }
+        let frame = timeline.frame(nearest: seconds)
+        guard !isScrubbing || frame != playheadFrame else { return }
+        isScrubbing = true
+        setPlayhead(frame)
+        engine?.request(.scrubbing(seconds: timeline.seconds(ofFrame: frame)))
+    }
+
+    /// The drag of the playhead ended: the preview shows the exact frame it is on.
+    func endScrub() {
+        guard isScrubbing else { return }
+        isScrubbing = false
+        engine?.request(.paused(frame: playheadFrame))
+        missingVideoCheck?.run()
     }
 
     /// Asks for the paused frame again (the view's size changed).

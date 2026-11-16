@@ -2772,6 +2772,17 @@
         }
       }
     },
+    "Screen" : {
+      "comment" : "The timeline's track of which screen is shown",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pantalla"
+          }
+        }
+      }
+    },
     "Screen Recording" : {
       "localizations" : {
         "es" : {
@@ -3204,6 +3215,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Atardecer"
+          }
+        }
+      }
+    },
+    "System" : {
+      "comment" : "The timeline's track of the system audio",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sistema"
           }
         }
       }
@@ -4321,6 +4343,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Vertical"
+          }
+        }
+      }
+    },
+    "Video" : {
+      "comment" : "The timeline's track of the clips",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video"
           }
         }
       }
