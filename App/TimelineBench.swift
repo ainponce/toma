@@ -22,7 +22,7 @@ enum TimelineBench {
     static func run(editor: NSView) {
         let snapshots = ProcessInfo.processInfo.environment["TOMA_BENCH_TIMELINE_SNAPSHOTS"].map { URL(fileURLWithPath: $0) }
         print("editor timeline: \(Int(editor.frame.width)) × \(Int(editor.frame.height)) pt")
-        if let snapshots, let editor = editor as? EditorTimelineView {
+        if let snapshots, let editor = editor.subviews.compactMap({ $0 as? EditorTimelineView }).first ?? editor as? EditorTimelineView {
             snapshot(editor, to: snapshots.appending(path: "timeline-editor.png"))
         }
         let (project, document) = makeProject()

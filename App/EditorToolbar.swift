@@ -43,8 +43,9 @@ struct EditorToolbar: CustomizableToolbarContent {
     }
 }
 
-/// The format selector: 16:9, 9:16 and 1:1. Choosing one is an edit.
-private struct FormatMenu: View {
+/// The format selector: 16:9, 9:16 and 1:1. Choosing one is an edit. Its formats, titles and symbols are also the
+/// Project menu's (`ProjectCommands`).
+struct FormatMenu: View {
     let model: EditorModel
 
     var body: some View {
@@ -71,7 +72,7 @@ private struct FormatMenu: View {
         .accessibilityValue(Text(Self.title(aspect)))
     }
 
-    private static let aspects: [Aspect] = [.landscape, .portrait, .square]
+    static let aspects: [Aspect] = [.landscape, .portrait, .square]
 
     static func symbol(_ aspect: Aspect) -> String {
         switch aspect {
@@ -90,8 +91,8 @@ private struct FormatMenu: View {
     }
 }
 
-/// Export (⌘E), prominent; while exporting, a ring of its progress with "Cancel Export"; once done, "Export finished ·
-/// Show in Finder" for a few seconds.
+/// Export (⌘E), prominent, which opens the export sheet (`ExportSheet`); while exporting, a ring of its progress with
+/// "Cancel Export"; once done, "Export finished · Show in Finder" for 8 seconds.
 private struct ExportControl: View {
     let model: EditorModel
 
@@ -124,7 +125,7 @@ private struct ExportControl: View {
 
     @ViewBuilder
     private var exportButton: some View {
-        let button = Button("Export") { model.exportVideo() }
+        let button = Button("Export") { model.openExportSheet() }
             .keyboardShortcut("e", modifiers: .command)
             .disabled(!model.canExport)
         if #available(macOS 26, *) {

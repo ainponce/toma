@@ -10,6 +10,9 @@ import ProjectFormat
 final class TimelineViewController: NSViewController {
     private let model: EditorModel
     private let timeline = EditorTimelineView()
+    /// The timeline itself, for the window's keys.
+    var timelineView: EditorTimelineView { timeline }
+    private let bar = TimelineBar()
     /// The package and the take the caches read, and the work of the waveforms.
     private var cachesFor: (url: URL, take: TakeRecord)?
     private var waveformWork: [Task<Void, Never>] = []
@@ -34,7 +37,7 @@ final class TimelineViewController: NSViewController {
     }
 
     override func loadView() {
-        view = timeline
+        view = TimelineContainer(bar: bar, timeline: timeline)
     }
 
     override func viewDidLoad() {
@@ -43,8 +46,34 @@ final class TimelineViewController: NSViewController {
         timeline.onScrub = { [weak model] τ in model?.scrub(toSeconds: Double(τ) / 1e9) }
         timeline.onScrubEnd = { [weak model] in model?.endScrub() }
         timeline.onMute = { [weak self] track, muted in self?.setMuted(track, muted) }
+        timeline.restoredScaleAndScroll = { [weak model] in (model?.timelineScale, model?.timelineOffset ?? 0) }
+        timeline.onScaleAndScrollChange = { [weak model] scale, offset in
+            model?.timelineScale = scale
+            model?.timelineOffset = offset
+        }
+        timeline.interaction.model = model
+        wireBar()
         followContent()
+        followBar()
         followPlayhead()
+    }
+
+    /// The bar's controls do what the timeline's menus do, and follow its scale and its snapping.
+    private func wireBar() {
+        bar.onSplit = { [weak model] in model?.splitAtPlayhead() }
+        bar.onSpeed = { [weak model] in model?.setSpeed($0) }
+        bar.onCustomSpeed = { [weak timeline] in timeline?.interaction.askCustomSpeed() }
+        bar.onAddZoom = { [weak model] in model?.addZoom() }
+        bar.onSnapping = { [weak timeline] in timeline?.snapping = $0 }
+        bar.onScale = { [weak timeline] in timeline?.setScale($0) }
+        bar.onZoomIn = { [weak timeline] in timeline?.zoomIn() }
+        bar.onZoomOut = { [weak timeline] in timeline?.zoomOut() }
+        bar.onFit = { [weak timeline] in timeline?.fitToWindow() }
+        timeline.onSnappingChange = { [weak self] in self.map { $0.bar.setSnapping($0.timeline.snapping) } }
+        timeline.onScaleChange = { [weak self] in
+            guard let self else { return }
+            bar.setScale(timeline.scale, fit: timeline.scaleRange.lowerBound)
+        }
     }
 
     /// The document, the spans that could not be read and whether it can be edited, as the model has them now and each
@@ -55,6 +84,17 @@ final class TimelineViewController: NSViewController {
             showContent()
         } onChange: { [weak self] in
             Task { @MainActor in self?.followContent() }
+        }
+    }
+
+    /// What the bar enables and shows: whether the document can be edited, and the speed of what the menu applies to.
+    private func followBar() {
+        guard !stopped else { return }
+        withObservationTracking {
+            bar.setEnabled(model.canEdit, hasClip: !model.speedTargets.isEmpty)
+            bar.setSpeed(model.speedOfTargets)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.followBar() }
         }
     }
 
@@ -73,6 +113,8 @@ final class TimelineViewController: NSViewController {
     private func showContent() {
         let missing = model.missingVideo
         timeline.canEdit = model.canEdit
+        timeline.marks = model.timelineMarks
+        timeline.selected = Self.selectedIDs(model.selection)
         guard model.state == .ready, let document = model.document, let project = model.overlayProject else {
             timeline.showNothing()
             return
@@ -99,6 +141,14 @@ final class TimelineViewController: NSViewController {
                 guard !Task.isCancelled else { return }
                 self?.timeline.setWaveform(levels, for: track.id)
             }
+        }
+    }
+
+    private static func selectedIDs(_ selection: EditorSelection?) -> Set<String> {
+        switch selection {
+        case let .clips(ids)?, let .zooms(ids)?: ids
+        case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
+        case nil: []
         }
     }
 

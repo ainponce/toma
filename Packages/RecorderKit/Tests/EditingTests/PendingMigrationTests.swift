@@ -376,6 +376,62 @@ private enum Pending {
     }
 }
 
+@MainActor @Test func canUndoAndCanRedoAreFalseWhereAMigrateThatCutsTheHistoryRefuses() async throws {
+    try await withTemporaryDirectory { dir in
+        let url = try await DocumentV1Fixture.make(in: dir, steps: 0, snapshotAt: nil)
+        // As above, a line of version 1 that writes the whole camera, two steps after it, and the second undone (as 1b
+        // writes it): an undo and a redo on the stacks that both apply to the document, and both of which the first
+        // edit's `migrate` cuts.
+        let v1 = try #require(DocumentMigration.reverted(JSONValue(encoding: Pending.created(url)), to: 1))
+        guard case let .object(document) = v1, case let .object(camera)? = document["camera"] else {
+            Issue.record("no camera")
+            return
+        }
+        var hidden = camera
+        hidden["show"] = .bool(false)
+        let lines = [
+            EditLogEntry.do(
+                seq: 2, group: 2, label: EditLabel.camera.rawValue,
+                changes: [.set(path: try JSONPointer("/camera"), before: .object(camera), after: .object(hidden))],
+                at: DocumentV1Fixture.date),
+            EditLogEntry.do(
+                seq: 3, group: 3, label: EditLabel.padding.rawValue,
+                changes: [.set(path: try JSONPointer("/style/padding"), before: .number(0.08), after: .number(0.1))],
+                at: DocumentV1Fixture.date),
+            EditLogEntry.do(
+                seq: 4, group: 4, label: EditLabel.padding.rawValue,
+                changes: [.set(path: try JSONPointer("/style/padding"), before: .number(0.1), after: .number(0.12))],
+                at: DocumentV1Fixture.date),
+            EditLogEntry.undo(seq: 5, group: 4),
+        ]
+        try Pending.append(try lines.map { try $0.jsonLine() + "\n" }.joined(), to: url)
+        let before = try Pending.lines(url)
+
+        let session = try await Pending.open(url, Pending.context(caches: dir.appending(path: "Caches")))
+        // The history 1b left names an undo and a redo, but the Edit menu offers neither: both would be refused.
+        #expect(session.undoLabel == .padding && session.redoLabel == .padding)
+        #expect(session.document.style.padding == 0.1)
+        #expect(!session.canUndo && !session.canRedo)
+        #expect(session.undo() == .refused)
+        #expect(session.redo() == .refused)
+        #expect(session.document.style.padding == 0.1)
+        #expect(await session.flushed() == 5)
+        #expect(try Pending.lines(url) == before)
+
+        // The first edit writes the `migrate`: from then on each answer is what the step does.
+        #expect(session.perform(try Pending.step(session.document, "/style/shadow", 0.2, .shadow)) == .applied)
+        #expect(session.canUndo && !session.canRedo)
+        #expect(session.undo() == .applied)
+        // Nothing from before the `migrate` comes back.
+        #expect(!session.canUndo && session.canRedo)
+        #expect(session.undo() == .refused)
+        #expect(session.redo() == .applied)
+        #expect(session.canUndo && !session.canRedo)
+        #expect(session.redo() == .refused)
+        await session.close()
+    }
+}
+
 @MainActor @Test func readDocumentOfAPendingProjectChangesNothing() async throws {
     try await withTemporaryDirectory { dir in
         let url = try await DocumentV1Fixture.make(in: dir, steps: 3, snapshotAt: 1)

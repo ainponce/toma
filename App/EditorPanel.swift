@@ -48,9 +48,11 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
 struct EditorPanel: View {
     let model: EditorModel
 
-    @State private var tab = EditorPanelTab.background
     @Namespace private var indicator
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// The tab shown: the model's, remembered with the window's state.
+    private var tab: EditorPanelTab { model.panelTab }
 
     private var tabs: [EditorPanelTab] {
         EditorPanelTab.allCases.filter { $0 != .camera || model.hasCamera }
@@ -77,10 +79,10 @@ struct EditorPanel: View {
         }
         .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: tab)
         .onChange(of: model.selection) { _, selection in
-            if let wanted = EditorPanelTab.tab(for: selection), tabs.contains(wanted) { tab = wanted }
+            if let wanted = EditorPanelTab.tab(for: selection), tabs.contains(wanted) { model.panelTab = wanted }
         }
         .onChange(of: model.hasCamera) { _, has in
-            if !has, tab == .camera { tab = .background }
+            if !has, tab == .camera { model.panelTab = .background }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text("Panel"))
@@ -90,7 +92,7 @@ struct EditorPanel: View {
         HStack(spacing: 2) {
             ForEach(tabs) { item in
                 Button {
-                    withAnimation(.panel(Motion.selector, reduceMotion: reduceMotion)) { tab = item }
+                    withAnimation(.panel(Motion.selector, reduceMotion: reduceMotion)) { model.panelTab = item }
                 } label: {
                     Image(systemName: item.symbol)
                         .frame(maxWidth: .infinity, minHeight: 28)

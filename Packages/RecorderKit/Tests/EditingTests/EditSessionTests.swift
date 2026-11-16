@@ -342,6 +342,43 @@ private enum SessionFixture {
     }
 }
 
+@MainActor @Test func canUndoAndCanRedoSayWhatUndoAndRedoWouldDo() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await SessionFixture.package(in: dir)
+        let caches = dir.appending(path: "Caches")
+        let session = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
+        #expect(!session.canUndo && !session.canRedo)
+        #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .applied)
+        #expect(session.canUndo && !session.canRedo)
+        let before = session.revision
+        // Asking changes nothing.
+        #expect(session.canUndo)
+        #expect(session.revision == before && session.document.style.padding == 0.1)
+        #expect(session.undo() == .applied)
+        #expect(!session.canUndo && session.canRedo)
+        #expect(session.redo() == .applied)
+        #expect(session.canUndo && !session.canRedo)
+        #expect(await session.flushed() == 4)
+        await session.close()
+        #expect(!session.canUndo && !session.canRedo)
+
+        // After opening again, from the log.
+        let again = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
+        #expect(again.canUndo && !again.canRedo)
+        #expect(again.undo() == .applied)
+        #expect(!again.canUndo && again.canRedo)
+        await again.close()
+
+        // Read-only: nothing.
+        let lock = try RecordingLock.acquire(at: project.package.editLockURL, info: .current(now: Date()))
+        defer { lock.release() }
+        let readOnly = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
+        #expect(readOnly.access == .readOnly(.openElsewhere))
+        #expect(!readOnly.canUndo && !readOnly.canRedo)
+        await readOnly.close()
+    }
+}
+
 @MainActor @Test func snapshotWithoutALogStartsALogOfIt() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await SessionFixture.package(in: dir)

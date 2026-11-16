@@ -20,11 +20,14 @@ final class ExportGate {
 /// (`TimelineViewController`, its divider between `EditorLayout.timelineHeightRange`). The preview and the panel are
 /// SwiftUI in an `NSHostingController`, the timeline AppKit; each part's view has its identifier (`preview`,
 /// `inspector`, `timeline`). The preview's bridges its `.toolbar` and title to the window (`sceneBridgingOptions`),
-/// without which the bar would not appear.
+/// without which the bar would not appear. The window's keys are `EditorKeyboard`'s (design §5.7), and Tab and ⇧Tab move
+/// the focus between the bar, the preview, the panel and the timeline in the order they are on screen.
 @MainActor
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
-    private let model: EditorModel
+    let model: EditorModel
+    /// The window's keys.
+    let keyboard: EditorKeyboard
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
@@ -48,9 +51,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
         model.onRecovered = onRecovered
         timeline = TimelineViewController(model: model)
+        keyboard = EditorKeyboard(model: model, timeline: timeline.timelineView)
         let visible = NSScreen.main?.visibleFrame ?? NSRect(origin: .zero, size: EditorLayout.minimumSize)
         let size = EditorLayout.initialSize(visible: visible.size)
-        let window = NSWindow(
+        let window = EditorKeyWindow(
             contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = model.name
@@ -59,7 +63,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
+        window.autorecalculatesKeyViewLoop = true
+        window.keyboard = keyboard
         super.init(window: window)
+        keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
+        // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
+        // the content's views ask for it. Its delegate's (`windowWillReturnUndoManager`) is Edit ▸ Undo's.
+        window.delegate = self
 
         let preview = NSHostingController(rootView: EditorPreviewPane(model: model) { [weak self] in self?.togglePanel(nil) })
         preview.sceneBridgingOptions = [.toolbars, .title]
@@ -98,7 +108,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.setFrame(
             NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height),
             display: false)
-        window.delegate = self
         keepTimelineHeight(EditorLayout.timelineHeight)
         model.window = window
         model.load()
@@ -136,7 +145,6 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     /// there is one (Task 37), collapses or expands.
     @objc func togglePanel(_ sender: Any?) {
         model.panelVisible.toggle()
-        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = model.panelVisible }
         guard let inspector = horizontalSplit.splitViewItems.first(where: { $0.behavior == .inspector }) else { return }
         inspector.animator().isCollapsed = !model.panelVisible
     }
@@ -144,11 +152,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Window
 
     func windowDidBecomeKey(_ notification: Notification) {
-        KeyEditorPanel.shared.isVisible = model.panelVisible
+        KeyEditor.shared.follow(model)
     }
 
     func windowDidResignKey(_ notification: Notification) {
-        KeyEditorPanel.shared.isVisible = nil
+        KeyEditor.shared.stopFollowing(model)
     }
 
     /// The window's least size is `EditorLayout.minimumSize`, its bar included. AppKit keeps it as the content's least
@@ -180,7 +188,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         timeline.stop()
-        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = nil }
+        KeyEditor.shared.stopFollowing(model)
         model.close()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
@@ -234,23 +242,14 @@ private struct EditorPreviewPane: View {
     }
 }
 
-/// The key editor's panel, for the View menu's item: SwiftUI's commands do not see an AppKit window's responder chain.
-/// An `ObservableObject`, which commands follow (`@ObservedObject`).
-@MainActor
-final class KeyEditorPanel: ObservableObject {
-    static let shared = KeyEditorPanel()
-    /// Whether the key editor shows its panel; `nil` while no editor is the key window.
-    @Published var isVisible: Bool?
-}
-
 /// View ▸ Show Panel / Hide Panel (⌥⌘I), in SwiftUI's View menu with the sidebar's commands (`InspectorCommands` is for
 /// SwiftUI's scenes only), sent along the responder chain to the key editor.
 struct EditorCommands: Commands {
-    @ObservedObject var panel = KeyEditorPanel.shared
+    @ObservedObject var editor = KeyEditor.shared
 
     var body: some Commands {
         CommandGroup(after: .sidebar) {
-            let isVisible = panel.isVisible
+            let isVisible = editor.panelVisible
             Button(isVisible == false ? LocalizedStringKey("Show Panel") : LocalizedStringKey("Hide Panel")) {
                 NSApp.sendAction(#selector(EditorWindowController.togglePanel(_:)), to: nil, from: nil)
             }

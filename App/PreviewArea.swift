@@ -136,7 +136,9 @@ private struct PreviewSurface: NSViewRepresentable {
 }
 
 /// See `PreviewSurface`. A click plays or pauses, as in QuickTime (a double click does nothing more: only its first
-/// click counts); a drag does not.
+/// click counts); a drag does not. It takes the keyboard's focus with a click, or Tab and ⇧Tab, and shows the system's
+/// focus ring around the video: its keys are then the window's (`EditorKeyboard`). VoiceOver reads it as "Preview", its
+/// value the playhead's time.
 final class PreviewSurfaceView: NSView {
     private let model: EditorModel
     private var displayLink: CADisplayLink?
@@ -189,6 +191,15 @@ final class PreviewSurfaceView: NSView {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         updateDrawableSize()
+        noteFocusRingMaskChanged()
+    }
+
+    override var acceptsFirstResponder: Bool { true }
+    override var canBecomeKeyView: Bool { true }
+    override var focusRingMaskBounds: NSRect { bounds }
+
+    override func drawFocusRingMask() {
+        bounds.fill()
     }
 
     override func viewDidChangeBackingProperties() {
@@ -212,6 +223,7 @@ final class PreviewSurfaceView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
         mouseDownPoint = event.clickCount == 1 ? convert(event.locationInWindow, from: nil) : nil
     }
 

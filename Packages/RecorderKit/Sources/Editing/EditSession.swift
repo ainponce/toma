@@ -341,25 +341,47 @@ public final class EditSession {
         return outcome
     }
 
-    /// Undoes the group on top of the undo stack.
-    public func undo() -> EditOutcome {
+    /// Whether `undo()` would undo a group now, rather than refuse: the Edit menu offers it only then. Changes nothing.
+    /// `false` too where the first line's `migrate` would cut the history (1c design §13.2), as `undo()` refuses then.
+    public var canUndo: Bool { undoing() != nil }
+
+    /// Whether `redo()` would redo a group now, rather than refuse. Changes nothing; `false` where the first line's
+    /// `migrate` would cut the history, as for `canUndo`.
+    public var canRedo: Bool { redoing() != nil }
+
+    /// An undo or a redo as it would be handed over: its lines (the `migrate` lines first while `pendingMigration`
+    /// holds, then its own), the history once they are recorded, and the document it leaves.
+    private struct HistoryStep {
+        var lines: [EditLogEntry]
+        var history: UndoHistory
+        var next: EditDocument
+    }
+
+    /// The undo of the group on top of the undo stack; `nil` when `undo()` refuses.
+    private func undoing() -> HistoryStep? {
         guard isEditable, !restartingLog, let group = history.done.last, let changes = groups[group],
             let next = try? document.applying(changes.reversed().map(\.inverse)), next.isDrawable
-        else { return .refused }
-        return handHistoryStep(to: next) { history in
+        else { return nil }
+        return historyStep(to: next) { history in
             history.done.last == group ? .undo(seq: history.nextSeq, group: group) : nil
         }
     }
 
-    /// Redoes the group on top of the redo stack.
-    public func redo() -> EditOutcome {
+    /// The redo of the group on top of the redo stack; `nil` when `redo()` refuses.
+    private func redoing() -> HistoryStep? {
         guard isEditable, !restartingLog, let group = history.undone.last, let changes = groups[group],
             let next = try? document.applying(changes), next.isDrawable
-        else { return .refused }
-        return handHistoryStep(to: next) { history in
+        else { return nil }
+        return historyStep(to: next) { history in
             history.undone.last == group ? .redo(seq: history.nextSeq, group: group) : nil
         }
     }
+
+    /// Undoes the group on top of the undo stack.
+    public func undo() -> EditOutcome { take(undoing()) }
+
+    /// Redoes the group on top of the redo stack.
+    public func redo() -> EditOutcome { take(redoing()) }
 
     /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), for the step that
     /// names it, which comes after: `.imported(path)` once it is on the drive. The file is decoded first, on the queue of
@@ -552,20 +574,26 @@ public final class EditSession {
         return .pendingUpgrade
     }
 
-    /// Hands the line of an undo or a redo, made by `line` from the history after the `migrate` lines of the first line
-    /// while `pendingMigration` holds, to the journal behind them, and moves the document to `next`. `line` gives `nil`
-    /// when its group is not on top any more: a `migrate` that cuts the history (a line of 1b before it writes inside of
-    /// what it adds, 1c design §13.2) leaves nothing before it to undo or redo, and the step is refused.
-    private func handHistoryStep(to next: EditDocument, _ line: (UndoHistory) -> EditLogEntry?) -> EditOutcome {
+    /// The undo or the redo whose line `line` makes from the history after the `migrate` lines of the first line while
+    /// `pendingMigration` holds, leaving `next`. Changes nothing. `nil` when `line` gives `nil`, its group not on top any
+    /// more: a `migrate` that cuts the history (a line of 1b before it writes inside of what it adds, 1c design §13.2)
+    /// leaves nothing before it to undo or redo, and the step is refused.
+    private func historyStep(to next: EditDocument, _ line: (UndoHistory) -> EditLogEntry?) -> HistoryStep? {
         var history = history
         var lines = migrations(recordedIn: &history)
-        guard let last = line(history) else { return .refused }
+        guard let last = line(history) else { return nil }
         lines.append(last)
-        guard let outcome = hand(lines) else { return .refused }
         history.record(last)
-        self.history = history
+        return HistoryStep(lines: lines, history: history, next: next)
+    }
+
+    /// Hands the lines of `step`, an undo or a redo, to the journal, and moves the document to the one it leaves;
+    /// `.refused` without one, or if they cannot be handed over.
+    private func take(_ step: HistoryStep?) -> EditOutcome {
+        guard let step, let last = step.lines.last, let outcome = hand(step.lines) else { return .refused }
+        history = step.history
         diskVersion = EditDocument.currentVersion
-        change(to: next, seq: last.seq)
+        change(to: step.next, seq: last.seq)
         return outcome
     }
 

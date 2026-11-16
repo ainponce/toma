@@ -15,7 +15,10 @@ struct TomaApp: App {
         } label: {
             MenuBarIcon(recording: appDelegate.recording)
         }
-        .commands { EditorCommands() }
+        .commands {
+            EditorCommands()
+            ProjectCommands(app: appDelegate)
+        }
     }
 }
 
@@ -93,6 +96,8 @@ private struct MenuContent: View {
             }
         }
         Divider()
+        Button("Open…") { app.openProject() }
+            .keyboardShortcut("o")
         Button("Open Last Project") { recording.openLastProject() }
             .disabled(!recording.hasLastProject)
         if recording.phase == .idle {

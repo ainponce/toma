@@ -29,6 +29,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var hideDesktopIcons: Bool = false
     /// Whether a take notes when keys are typed, never which (`KeyActivityRecorder`), for the zoom while typing.
     public var noteKeyActivity: Bool = true
+    /// What the editor's export sheet remembers: the resolution and the quality of the last export.
+    public var export: ExportPreferences = .init()
     /// The named style new projects take ("Use for New Projects", 1c design §8), by its id (`NamedStyle.id`, 8 hex
     /// digits); `nil`: Toma's style (plan decision 29). An id no style of the library has any more is Toma's style too.
     public var newProjectsStyleID: String?
@@ -41,7 +43,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         hotKeys: HotKeyBindings = .defaults, afterStop: AfterStop = .openEditor, teleprompter: TeleprompterSettings = .init(),
         cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
         focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true,
-        newProjectsStyleID: String? = nil
+        export: ExportPreferences = .init(), newProjectsStyleID: String? = nil
     ) {
         self.selection = selection
         self.quick = quick
@@ -55,6 +57,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.focusShortcutIdentifier = focusShortcutIdentifier
         self.hideDesktopIcons = hideDesktopIcons
         self.noteKeyActivity = noteKeyActivity
+        self.export = export
         self.newProjectsStyleID = newProjectsStyleID
     }
 
@@ -76,6 +79,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
             (try? container.decodeIfPresent(String.self, forKey: .focusShortcutIdentifier)) ?? defaults.focusShortcutIdentifier
         hideDesktopIcons = (try? container.decodeIfPresent(Bool.self, forKey: .hideDesktopIcons)) ?? defaults.hideDesktopIcons
         noteKeyActivity = (try? container.decodeIfPresent(Bool.self, forKey: .noteKeyActivity)) ?? defaults.noteKeyActivity
+        export = (try? container.decodeIfPresent(ExportPreferences.self, forKey: .export)) ?? defaults.export
         newProjectsStyleID =
             (try? container.decodeIfPresent(String.self, forKey: .newProjectsStyleID)) ?? defaults.newProjectsStyleID
     }
