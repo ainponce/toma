@@ -619,6 +619,10 @@ Hace falta un proyecto con cámara. La pestaña tiene la tarjeta "Bloque selecci
 - **Borrar todos los cambios.** En un proyecto con varios cambios de la burbuja, "Borrar todos los cambios" vacía la lista y un solo ⌘Z los devuelve todos. Con bloques, los cambios que caen dentro de uno siguen en la lista, atenuados, con "oculto por el bloque «Pantalla dividida» de 0:28", y debajo de la lista está la nota de que los de adentro siguen contando después.
 - **Aspecto.** Espejar da vuelta la cámara; Borde (0 a 100) y sus seis colores más el selector; Sombra (0 a 100). Cada barra es un gesto: arrastrarla se ve en la vista previa y un ⌘Z la deshace entera.
 
+**El GIF: el corpus** (25)
+
+- *Opcional:* si tiene gifski instalado, comparar a ojo un GIF del corpus. `TOMA_BENCH=1 TOMA_GIF_CORPUS_OUT=~/Desktop/corpus-gif swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter gifCorpusBeatsImageIO` deja en `~/Desktop/corpus-gif/<toma>/` los cuadros (`frames/*.png`), el GIF de Toma (`toma.gif`) y el de ImageIO (`imageio.gif`) de cada toma del corpus (los escribe aunque la prueba falle por sus metas, ver `docs/performance.md`, fila 25). Con `gifski --fps 15 -o gifski.gif frames/*.png`, abrir los tres en Safari a tamaño real: el de Toma no tiene bandas que molesten en el fondo `aurora-1` ni en la cámara, el tramado no titila en lo quieto, y el texto se lee como en los otros. Anotar el tamaño de los tres.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

@@ -249,16 +249,17 @@ func oklabShaderMatchesTheCPU() throws {
     }
 }
 
-/// Reuse while the mean error is within the quality's threshold and fewer than 2 % of the pixels are far off; the
-/// provisional constants of plan decision 17.
+/// Reuse while the mean error is within the quality's threshold and fewer than 3 % of the pixels are far off; the
+/// constants of plan decision 17 as gifQuant-1 froze them (Task 25).
 @Test func reuseFollowsTheThresholds() {
     #expect(PaletteBuilder.shouldReuse(PaletteError(meanOKLab: 0.010, largeErrorFraction: 0.01), quality: .balanced))
     #expect(!PaletteBuilder.shouldReuse(PaletteError(meanOKLab: 0.020, largeErrorFraction: 0.01), quality: .balanced))
     #expect(!PaletteBuilder.shouldReuse(PaletteError(meanOKLab: 0.010, largeErrorFraction: 0.03), quality: .balanced))
+    #expect(PaletteBuilder.shouldReuse(PaletteError(meanOKLab: 0.010, largeErrorFraction: 0.029), quality: .balanced))
 
     #expect(GIFQuality.allCases.map(\.maxColors) == [128, 256, 256])
-    #expect(GIFQuality.allCases.map(\.ditherStrength) == [1.0, 0.75, 1.0])
-    #expect(GIFQuality.allCases.map(\.reuseMeanError) == [0.025, 0.015, 0.010])
+    #expect(GIFQuality.allCases.map(\.ditherStrength) == [0.75, 0.5, 0.75])
+    #expect(GIFQuality.allCases.map(\.reuseMeanError) == [0.025, 0.015, 0.015])
     #expect(PaletteRules.maxExactColors == 32 && PaletteRules.exactCoverage == 0.005)
-    #expect(PaletteRules.largeError == 0.06 && PaletteRules.largeErrorLimit == 0.02)
+    #expect(PaletteRules.largeError == 0.06 && PaletteRules.largeErrorLimit == 0.03)
 }
