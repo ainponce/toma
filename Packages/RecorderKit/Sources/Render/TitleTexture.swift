@@ -84,6 +84,14 @@ final class TitleTexture {
         return pow(2, Double(level) / 2)
     }
 
+    /// The system's window-title font at `size` points (one point a pixel of the texture). `CTFontCreateUIFontForLanguage`
+    /// gives the window-title font at its own size whatever size it is asked for (13 pt on macOS 26), so the size is set
+    /// on a copy of it.
+    static func font(size: Double) -> CTFont? {
+        guard size > 0, size.isFinite, let font = CTFontCreateUIFontForLanguage(.windowTitle, 0, nil) else { return nil }
+        return CTFontCreateCopyWithAttributes(font, size, nil, nil)
+    }
+
     /// `layer` as it is at `scale`: its rect and its bar `scale` times as large, from the stage's origin.
     static func scaled(_ layer: WindowFrameLayer, by scale: Double) -> WindowFrameLayer {
         var scaled = layer
@@ -98,7 +106,7 @@ final class TitleTexture {
         let box = layer.barPixels
         let room = layer.rect.width - 2 * layer.titleInset
         guard !layer.title.isEmpty, box.size.x > 0, box.size.y > 0, room > 0, layer.barHeight > 0,
-              let font = CTFontCreateUIFontForLanguage(.windowTitle, layer.barHeight * 13 / 28, nil)
+              let font = Self.font(size: layer.barHeight * 13 / 28)
         else { return nil }
         let white: CGFloat = layer.appearance == .light ? 0 : 1
         let color = CGColor(srgbRed: white, green: white, blue: white, alpha: 0.85)
