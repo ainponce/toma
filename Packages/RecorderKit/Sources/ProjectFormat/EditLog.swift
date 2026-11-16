@@ -659,6 +659,9 @@ public struct EditReplay: Sendable {
         }
 
         private var groups: [Int: Group] = [:]
+        /// The groups that are `undone`: a `do` of a new group closes them, without looking at every group (a replay
+        /// stays linear in the lines however many groups it has).
+        private var undone: Set<Int> = []
         private var walk: DocumentMigration.LogWalk
 
         init(createVersion: Int) {
@@ -694,23 +697,29 @@ public struct EditReplay: Sendable {
                 if let existing = groups[group] {
                     if existing.state == .applied { groups[group]?.changes += changes }
                 } else {
-                    close { $0 == .undone }
+                    for id in undone { groups[id] = Group(state: .closed, changes: []) }
+                    undone.removeAll()
                     groups[group] = Group(state: .applied, changes: changes)
                 }
             case let .undo(_, group):
-                if groups[group]?.state == .applied { groups[group]?.state = .undone }
-            case let .redo(_, group):
-                if groups[group]?.state == .undone { groups[group]?.state = .applied }
-            case let .migrate(_, from, to):
-                if !walk.walkMigrate(from: from, to: to) {
-                    close { _ in true }
+                if groups[group]?.state == .applied {
+                    groups[group]?.state = .undone
+                    undone.insert(group)
                 }
-            }
-        }
-
-        private mutating func close(where shouldClose: (State) -> Bool) {
-            for (id, group) in groups where group.state != .closed && shouldClose(group.state) {
-                groups[id] = Group(state: .closed, changes: [])
+            case let .redo(_, group):
+                if groups[group]?.state == .undone {
+                    groups[group]?.state = .applied
+                    undone.remove(group)
+                }
+            case let .migrate(_, from, to):
+                // An additive migrate keeps the history; any other cuts it, and every group closes (rare: one per
+                // change of the document's version).
+                if !walk.walkMigrate(from: from, to: to) {
+                    for (id, group) in groups where group.state != .closed {
+                        groups[id] = Group(state: .closed, changes: [])
+                    }
+                    undone.removeAll()
+                }
             }
         }
     }

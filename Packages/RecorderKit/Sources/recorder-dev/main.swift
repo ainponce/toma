@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import Analysis
 import AppKit
 import ArgumentParser
 import CoreGraphics
@@ -10,8 +11,10 @@ import Export
 import Foundation
 import ImageIO
 import ProjectFormat
+import QuartzCore
 import Recording
 import Recovery
+import Render
 import Synchronization
 import SyntheticCapture
 
@@ -23,7 +26,7 @@ struct RecorderDev: AsyncParsableCommand {
         abstract: "Records, recovers, verifies, exports and stresses the editing of Toma takes from the command line.",
         subcommands: [
             SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, BenchExport.self,
-            EditStress.self, EditCheck.self,
+            BenchPreview.self, EditStress.self, EditCheck.self,
         ]
     )
 }
@@ -731,6 +734,394 @@ struct BenchExport: AsyncParsableCommand {
         if backgroundImage { arguments.append("--background-image") }
         print(try runThisTool(arguments), terminator: "")
     }
+}
+
+struct BenchPreview: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "bench-preview",
+        abstract: "Plays and scrubs a package, or a synthetic take with everything on, in the preview engine and prints its timings.",
+        discussion: """
+            Drives a PreviewEngine (the editor's preview, drawing into a CAMetalLayer of --view-width × --view-height \
+            pixels that no window shows) from the main thread as a display link would, 60 times a second, and prints:
+
+            - paths: the time to build the motion paths of the take, and of an hour of take made by repeating its \
+              cursor and clicks with a zoom block of 4 s every 10 s, half following the cursor (design §7.9: rebuilding \
+              an hour's paths);
+            - source: the size and frames per second of the take's screen;
+            - playing: the size the frames were drawn at (the export's, until the preview falls behind and draws at \
+              half the side: PreviewQuality), and from each request to the end of the GPU's work on the frame it asked \
+              for, p50 and p95 ("frame"), the late frames and the frames of the grid skipped; when the size changed, the \
+              same for the frames after the change too;
+            - main thread: the longest a request took on the main thread;
+            - scrubbing: the new frames shown per second while the playhead is dragged back and forth over the take;
+            - release: from the pause asked for at the end of each drag to its exact frame done, the median and the \
+              longest of the drags; the drags go across most of the take in 1.5 s and slow down to where they end, as \
+              a hand does, and are released there; "released moving" is the same with drags that keep their speed to \
+              the end and are released at once, the worst case.
+
+            The frames are drawn at the export's size, --width × --height (3840 × 2160 by default), at --fps. \
+            --synthetic records a synthetic take of 10 s with a camera (as bench-export --synthetic does), its screen \
+            --source-width × --source-height (3840 × 2160 by default, whatever the size drawn: design §7.9 plays a 4K60 \
+            source) at --fps, in a temporary folder, and benchmarks it with --all-on (bench-export's document, everything \
+            on) in a process of its own, then removes it. With TOMA_BENCH_VERBOSE=1 in the environment it also prints each \
+            drag's release.
+            """
+    )
+
+    @Argument(help: "The .toma package; leave it out with --synthetic.")
+    var package: String?
+
+    @Flag(help: "Record a synthetic take with a camera in a temporary folder and benchmark it with --all-on.")
+    var synthetic = false
+
+    @Flag(help: "Play the benchmark's document, everything on, instead of the package's edit.")
+    var allOn = false
+
+    @Option(help: "Width of the frames drawn (the export's size), in pixels.")
+    var width = 3840
+
+    @Option(help: "Height of the frames drawn (the export's size), in pixels.")
+    var height = 2160
+
+    @Option(help: "Frames per second of the frames drawn (and of the synthetic take).")
+    var fps = 60
+
+    @Option(help: "With --synthetic, the width of the synthetic take's screen, in pixels.")
+    var sourceWidth = 3840
+
+    @Option(help: "With --synthetic, the height of the synthetic take's screen, in pixels.")
+    var sourceHeight = 2160
+
+    @Option(help: "Width of the layer the preview is shown in, in pixels.")
+    var viewWidth = 2560
+
+    @Option(help: "Height of the layer the preview is shown in, in pixels.")
+    var viewHeight = 1440
+
+    func validate() throws {
+        guard width > 0, height > 0, fps > 0, viewWidth > 0, viewHeight > 0, sourceWidth > 0, sourceHeight > 0 else {
+            throw ValidationError("--width, --height, --fps, --source-width, --source-height, --view-width and --view-height must be positive.")
+        }
+        guard synthetic != (package != nil) else { throw ValidationError("Give a package or --synthetic, not both.") }
+    }
+
+    func run() async throws {
+        if synthetic {
+            try runSynthetic()
+            return
+        }
+        guard let package else { return }
+        let (project, edit) = try readProject(package, raw: false)
+        let document = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: false) : edit
+        print(String(format: "load average: %.2f", loadAverage()))
+        if let screen = project.take.tracks.first(where: { $0.kind.isScreen }), let file = screen.segments.first?.file,
+           let track = try await AVURLAsset(url: project.package.fileURL(file)).loadTracks(withMediaType: .video).first
+        {
+            let (size, rate) = try await track.load(.naturalSize, .nominalFrameRate)
+            print(String(format: "source: %d × %d at %.2f fps (%@)", Int(size.width), Int(size.height), rate, screen.id))
+        }
+
+        // The motion paths: of the take, and of an hour.
+        let clock = ContinuousClock()
+        var started = clock.now
+        let paths = MotionPaths(take: project.take, events: project.events, document: document)
+        let takePaths = clock.now - started
+        let takeSeconds = TimeMap(sequence: document.sequence).durationSeconds
+        print("paths: \(milliseconds(takePaths)) ms for \(String(format: "%.1f", takeSeconds)) s of take")
+        let hour = BenchHour(project: project, document: document)
+        var hourBest = Duration.seconds(3600)
+        for _ in 0..<3 {
+            started = clock.now
+            _ = MotionPaths(take: hour.take, events: hour.events, document: hour.document)
+            hourBest = min(hourBest, clock.now - started)
+        }
+        print("paths of an hour: \(milliseconds(hourBest)) ms (best of 3; \(hour.events.count) events, \(hour.document.zoom.regions.count) zoom blocks)")
+
+        let size = SIMD2(width, height)
+        let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: fps)
+        renderer.setScene(renderer.makeScene(document: document, paths: paths, outputSize: size))
+        let layer = CAMetalLayer()
+        CATransaction.begin()
+        layer.drawableSize = CGSize(width: viewWidth, height: viewHeight)
+        CATransaction.commit()
+        let engine = PreviewEngine(renderer: renderer, layer: layer)
+        let log = PresentLog()
+        engine.onPresented = { seconds, late in log.presented(seconds, late: late) }
+        let frames = TimeMap(sequence: document.sequence).frameCount(frameRate: fps)
+        let duration = Double(frames) / Double(fps)
+        func frameSeconds(_ n: Int) -> Double { Double(TimeMap.frameTime(n, frameRate: fps)) / 1e9 }
+
+        // Warm up: the first frame loads the tracks and compiles the pipelines.
+        let warm = log.ask(.paused(frame: 0), seconds: 0, engine: engine)
+        _ = await log.waitForPresent(after: warm, seconds: 0)
+
+        // Playing, from 0 to the end, as a display link at 60 Hz asks.
+        let playing = try await driveFromTheMainThread(for: duration, log: log) { elapsed in
+            .playing(seconds: elapsed)
+        } engine: { engine }
+        func describe(_ size: SIMD2<Int>) -> String { "\(size.x) × \(size.y)" }
+        let sizes = playing.sizes.enumerated().map { k, change in
+            k == 0 ? describe(change.size) : String(format: "%@ from %.2f s", describe(change.size), change.time)
+        }
+        print("playing at " + (sizes.isEmpty ? "no size: nothing drawn" : sizes.joined(separator: ", then ")))
+        func printPlaying(_ name: String, from start: Double, through end: Double) {
+            let latencies = log.latencies(ofPlayingFrom: start, through: end, fps: fps)
+            let presented = log.presented(from: start, through: end)
+            let distinct = Set(presented.map(\.seconds)).count
+            print(String(
+                format: "%@: %d frames shown in %.2f s (%.1f per second), %d late; frame p50 %.2f ms, p95 %.2f ms, max %.2f ms",
+                name, distinct, end - start, Double(distinct) / (end - start), presented.filter(\.late).count,
+                percentile(latencies, 0.5) * 1000, percentile(latencies, 0.95) * 1000, (latencies.max() ?? 0) * 1000))
+        }
+        printPlaying("playing (\(frames) frames)", from: playing.start, through: playing.end)
+        if playing.sizes.count > 1, let last = playing.sizes.last {
+            printPlaying("playing at \(describe(last.size))", from: playing.start + last.time, through: playing.end)
+        }
+
+        // Scrubbing: dragged back and forth over the take, 1.5 s each way, then released at a frame of the grid: slowing
+        // down to the end as a hand does, and keeping the speed to the end.
+        var releases: (slowing: [Double], moving: [Double]) = ([], [])
+        var scrubFrames = 0
+        var scrubTime = 0.0
+        var longestRequest = playing.longestRequest
+        for drag in 0..<12 {
+            let slowing = drag < 6
+            let from = drag % 2 == 0 ? 0.0 : duration, to = drag % 2 == 0 ? duration : 0.0
+            let target = from + (to - from) * (0.55 + 0.07 * Double(drag % 6))
+            let n = min(Int((target * Double(fps)).rounded()), frames - 1)
+            let end = frameSeconds(n)
+            let scrub = try await driveFromTheMainThread(for: 1.5, log: log) { elapsed in
+                let x = min(elapsed / 1.5, 1)
+                return .scrubbing(seconds: from + (end - from) * (slowing ? 1 - pow(1 - x, 3) : x))
+            } engine: { engine }
+            longestRequest = max(longestRequest, scrub.longestRequest)
+            scrubFrames += log.presented(from: scrub.start, through: scrub.end).count
+            scrubTime += scrub.end - scrub.start
+            // The mouse comes up where the drag ended: its last position first, as the last drag event.
+            if slowing { _ = await MainActor.run { log.ask(.scrubbing(seconds: end), seconds: end, engine: engine) } }
+            try await Task.sleep(for: .nanoseconds(16_666_667))
+            let asked = await MainActor.run { log.ask(.paused(frame: n), seconds: end, engine: engine) }
+            if let done = await log.waitForPresent(after: asked, seconds: end) {
+                if ProcessInfo.processInfo.environment["TOMA_BENCH_VERBOSE"] == "1" {
+                    print(String(format: "  drag %d (%@, %@): released at %.2f s, exact in %.1f ms", drag, slowing ? "slowing" : "moving", from < end ? "forward" : "back", end, (done - asked) * 1000))
+                }
+                if slowing { releases.slowing.append(done - asked) } else { releases.moving.append(done - asked) }
+            }
+            try await Task.sleep(for: .milliseconds(300))
+        }
+        print(String(format: "scrubbing: %.1f new frames per second", Double(scrubFrames) / scrubTime))
+        print(String(
+            format: "release: exact frame %.1f ms after the pause (median of %d), %.1f ms at most",
+            percentile(releases.slowing, 0.5) * 1000, releases.slowing.count, (releases.slowing.max() ?? 0) * 1000))
+        print(String(
+            format: "released moving: exact frame %.1f ms after the pause (median of %d), %.1f ms at most",
+            percentile(releases.moving, 0.5) * 1000, releases.moving.count, (releases.moving.max() ?? 0) * 1000))
+        print(String(format: "main thread: longest request %.3f ms", longestRequest * 1000))
+        print("peak memory: \(peakFootprint().map { "\($0 >> 20) MB" } ?? "unknown")")
+    }
+
+    /// Asks `engine` for `request(elapsed)` from the main thread 60 times a second for `seconds`, as a display link
+    /// would; returns when it started and ended (`CACurrentMediaTime`) and the longest a request took.
+    private func driveFromTheMainThread(
+        for seconds: Double, log: PresentLog, _ request: @escaping @Sendable (Double) -> PreviewRequest,
+        engine: @escaping @Sendable () -> PreviewEngine
+    ) async throws -> DisplayTicks.Run {
+        let ticks = DisplayTicks(seconds: seconds, log: log, request: request, engine: engine())
+        return await ticks.run()
+    }
+
+    /// Records the synthetic take with `synth-record` and benchmarks it with `--all-on`, each in a process of its own,
+    /// then removes the take.
+    private func runSynthetic() throws {
+        let folder = FileManager.default.temporaryDirectory.appending(path: "bench-preview-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        print("recording a synthetic take of \(Int(BenchDocument.seconds)) s, \(sourceWidth) × \(sourceHeight) at \(fps) fps, with a camera, to draw at \(width) × \(height)")
+        let recorded = try runThisTool([
+            "synth-record", folder.path, "--duration", String(BenchDocument.seconds), "--width", String(sourceWidth), "--height",
+            String(sourceHeight), "--fps", String(fps), "--camera",
+        ])
+        guard let take = recorded.split(separator: "\n").first.map(String.init), take.hasSuffix(".toma") else {
+            printError("error: synth-record printed no package")
+            throw ExitCode.failure
+        }
+        print(try runThisTool([
+            "bench-preview", take, "--all-on", "--width", String(width), "--height", String(height), "--fps", String(fps),
+            "--view-width", String(viewWidth), "--view-height", String(viewHeight),
+        ]), terminator: "")
+    }
+}
+
+/// What a preview engine was asked and presented, with the times (`CACurrentMediaTime`), for `bench-preview`.
+private final class PresentLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var asked: [(time: Double, request: PreviewRequest)] = []
+    private var shown: [(time: Double, seconds: Double, late: Bool)] = []
+
+    /// Asks `engine` for `request` now and notes it; returns when.
+    func ask(_ request: PreviewRequest, seconds: Double, engine: PreviewEngine) -> Double {
+        let now = CACurrentMediaTime()
+        lock.withLock { asked.append((now, request)) }
+        engine.request(request)
+        return now
+    }
+
+    func presented(_ seconds: Double, late: Bool) {
+        let now = CACurrentMediaTime()
+        lock.withLock { shown.append((now, seconds, late)) }
+    }
+
+    /// The frames presented between two times.
+    func presented(from start: Double, through end: Double) -> [(seconds: Double, late: Bool)] {
+        lock.withLock { shown.filter { $0.time >= start && $0.time <= end + 0.1 }.map { ($0.seconds, $0.late) } }
+    }
+
+    /// Waits until a frame of output second `seconds` is presented after `time`, or 10 s; returns when it was.
+    func waitForPresent(after time: Double, seconds: Double) async -> Double? {
+        let deadline = time + 10
+        while CACurrentMediaTime() < deadline {
+            if let found = lock.withLock({ shown.first { $0.time >= time && abs($0.seconds - seconds) < 1e-6 }?.time }) {
+                return found
+            }
+            try? await Task.sleep(for: .milliseconds(1))
+        }
+        return nil
+    }
+
+    /// For each frame of the grid presented while playing between two times: from the first request that asked for it to
+    /// its presentation, in seconds.
+    func latencies(ofPlayingFrom start: Double, through end: Double, fps: Int) -> [Double] {
+        lock.withLock {
+            var firstAsked: [Int: Double] = [:]
+            for (time, request) in asked where time >= start && time <= end {
+                guard case let .playing(seconds) = request else { continue }
+                let n = Int((seconds * Double(fps) + 1e-6).rounded(.down))
+                if firstAsked[n] == nil { firstAsked[n] = time }
+            }
+            return shown.filter { $0.time >= start && $0.time <= end + 0.1 }.compactMap { shown in
+                let n = Int((shown.seconds * Double(fps)).rounded())
+                return firstAsked[n].map { shown.time - $0 }
+            }
+        }
+    }
+}
+
+/// A display link's ticks, 60 a second on the main queue, each asking the engine for a request.
+private final class DisplayTicks: @unchecked Sendable {
+    private let seconds: Double
+    private let log: PresentLog
+    private let request: @Sendable (Double) -> PreviewRequest
+    private let engine: PreviewEngine
+    private let lock = NSLock()
+    private var longest = 0.0
+    private var sizes: [(time: Double, size: SIMD2<Int>)] = []
+
+    /// When the ticks started and ended (`CACurrentMediaTime`), the longest a request took, and the sizes the frames were
+    /// drawn at, each with the seconds after the start it was first seen.
+    struct Run {
+        var start: Double
+        var end: Double
+        var longestRequest: Double
+        var sizes: [(time: Double, size: SIMD2<Int>)]
+    }
+
+    init(seconds: Double, log: PresentLog, request: @escaping @Sendable (Double) -> PreviewRequest, engine: PreviewEngine) {
+        self.seconds = seconds
+        self.log = log
+        self.request = request
+        self.engine = engine
+    }
+
+    func run() async -> Run {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Run, Never>) in
+            let timer = DispatchSource.makeTimerSource(flags: .strict, queue: .main)
+            let start = CACurrentMediaTime()
+            timer.schedule(deadline: .now(), repeating: .nanoseconds(16_666_667), leeway: .nanoseconds(0))
+            timer.setEventHandler { [self] in
+                let elapsed = CACurrentMediaTime() - start
+                guard elapsed < seconds else {
+                    timer.cancel()
+                    let end = CACurrentMediaTime()
+                    continuation.resume(returning: lock.withLock { Run(start: start, end: end, longestRequest: longest, sizes: sizes) })
+                    return
+                }
+                let request = request(elapsed)
+                let before = CACurrentMediaTime()
+                _ = log.ask(request, seconds: elapsed, engine: engine)
+                let took = CACurrentMediaTime() - before
+                let drawn = engine.drawnSize
+                lock.withLock {
+                    longest = max(longest, took)
+                    if let drawn, sizes.last?.size != drawn { sizes.append((elapsed, drawn)) }
+                }
+            }
+            timer.resume()
+        }
+    }
+}
+
+/// An hour of take made from `project`'s: its screens' segments an hour long, its cursor and clicks repeated every
+/// length of the take, and `document` over the whole hour with a zoom block of 4 s every 10 s, every other one following
+/// the cursor (Task 19's measure).
+private struct BenchHour {
+    var take: TakeRecord
+    var events: [InputEvent]
+    var document: EditDocument
+
+    init(project: LoadedProject, document original: EditDocument) {
+        let hour = 3600.0
+        take = project.take
+        let start = original.sequence.first?.start ?? HostTime(nanoseconds: 0)
+        let length = max(original.sequence.last.map { $0.end.seconds(since: start) } ?? 10, 1)
+        for t in take.tracks.indices {
+            guard let first = take.tracks[t].segments.first else { continue }
+            var segment = first
+            segment.endHostTime = first.startHostTime.adding(seconds: hour)
+            take.tracks[t].segments = [segment]
+        }
+        let ordered = project.events.sorted { $0.t < $1.t }
+        let repeated = ordered.filter { event in
+            switch event.kind {
+            case .cursor, .mouseDown, .mouseUp: true
+            default: false
+            }
+        }
+        var events = ordered
+        for k in 1..<Int(hour / length) {
+            events += repeated.map { InputEvent(t: $0.t.adding(seconds: Double(k) * length), kind: $0.kind) }
+        }
+        self.events = events
+        var document = original
+        if var clip = document.sequence.first {
+            clip.end = clip.start.adding(seconds: hour)
+            clip.speed = 1
+            document.sequence = [clip]
+        }
+        document.zoom.regions = (0..<Int(hour / 10)).map { k in
+            ZoomRegion(
+                id: String(format: "z-%08x", k + 1), take: project.take.id, start: start.adding(seconds: Double(k) * 10),
+                end: start.adding(seconds: Double(k) * 10 + 4), origin: .user, depth: 2,
+                focus: k % 2 == 0 ? .follow : .fixed(x: 0.3, y: 0.7), instant: false)
+        }
+        self.document = document
+    }
+}
+
+/// The value of `values` at fraction `p` of them in order (0 when there are none).
+private func percentile(_ values: [Double], _ p: Double) -> Double {
+    guard !values.isEmpty else { return 0 }
+    let sorted = values.sorted()
+    return sorted[min(Int((Double(sorted.count - 1) * p).rounded()), sorted.count - 1)]
+}
+
+private func milliseconds(_ duration: Duration) -> String {
+    String(format: "%.1f", Double(duration.components.attoseconds) / 1e15 + Double(duration.components.seconds) * 1000)
+}
+
+/// The load average of the last minute.
+private func loadAverage() -> Double {
+    var loads = [Double](repeating: 0, count: 3)
+    return getloadavg(&loads, 3) > 0 ? loads[0] : -1
 }
 
 /// Runs this tool with `arguments`, waits for it and returns what it printed; throws `ExitCode.failure` if it fails.

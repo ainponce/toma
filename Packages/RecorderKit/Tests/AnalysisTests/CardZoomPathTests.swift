@@ -87,6 +87,35 @@ extension ZoomFixtures {
             }
         }
 
+        @Test func aLayoutEditThatMakesOrRemovesASplitIsNotTheSamePaths() throws {
+            // `MotionPaths.areThePaths(of:)` keeps the paths of an edit they don't read: the layouts decide the card's
+            // path, so an edit that makes a split or takes it away builds them again.
+            let regions = [block(1, from: 1, to: 3)]
+            let events = trail(from: 0, to: 10) { sweep($0) }
+            let bubble = cardDocument(regions: regions, layout: .bubble)
+            let projectSplit = cardDocument(regions: regions)
+            let blockSplit = cardDocument(regions: regions, layout: .bubble, layouts: [layoutBlock(1, .split, from: 2, to: 6)])
+            var blockNoLongerSplit = blockSplit
+            blockNoLongerSplit.camera.layouts[0].kind = .screenOnly
+
+            let noSplit = paths(bubble, events: events)
+            #expect(noSplit.cardZoom == nil)
+            #expect(noSplit.areThePaths(of: bubble))
+            for (name, split) in [("the project's layout", projectSplit), ("a block", blockSplit)] {
+                // Made: the paths without a split are not the split's.
+                #expect(!noSplit.areThePaths(of: split), "\(name)")
+                let motion = paths(split, events: events)
+                #expect(motion.cardZoom != nil, "\(name)")
+                #expect(motion.areThePaths(of: split), "\(name)")
+                // Removed: the split's are not the paths without it.
+                #expect(!motion.areThePaths(of: bubble), "\(name)")
+            }
+            // A block that stops being a split, the project's layout still not one.
+            #expect(paths(blockNoLongerSplit, events: events).cardZoom == nil)
+            #expect(!paths(blockSplit, events: events).areThePaths(of: blockNoLongerSplit))
+            #expect(!paths(blockNoLongerSplit, events: events).areThePaths(of: blockSplit))
+        }
+
         @Test func cropNeverLeavesTheScreen() throws {
             var generator = ZoomRandom(seed: 0x6361_7264)
             // A 16:10 display in 16:9; a 16:9 display in 9:16, padded, with the macOS window frame; a vertical window in 1:1.
