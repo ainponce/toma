@@ -21,7 +21,7 @@ public final class DefaultStyleStore: Sendable {
 
     public let directory: URL
 
-    private static let fileName = "default-style.json"
+    static let fileName = "default-style.json"
     /// Where `save` and `reset` run, one at a time.
     private let queue = DispatchQueue(label: "dev.toma.DefaultStyleStore", qos: .userInitiated)
 

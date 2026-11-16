@@ -10,6 +10,7 @@ import Editing
 import Export
 import Foundation
 import ImageIO
+import Library
 import ProjectFormat
 import QuartzCore
 import Recording
@@ -26,7 +27,7 @@ struct RecorderDev: AsyncParsableCommand {
         abstract: "Records, recovers, verifies, exports and stresses the editing of Toma takes from the command line.",
         subcommands: [
             SynthRecord.self, Record.self, ListSources.self, Recover.self, Verify.self, ExportMP4.self, BenchExport.self,
-            BenchPreview.self, EditStress.self, EditCheck.self,
+            BenchPreview.self, EditStress.self, EditCheck.self, LibraryEmpty.self,
         ]
     )
 }
@@ -1222,6 +1223,81 @@ enum BenchDocument {
         let url = folder.appending(path: name)
         if !FileManager.default.fileExists(atPath: url.path) { try (png as Data).write(to: url) }
         return "assets/" + name
+    }
+}
+
+// MARK: - Library
+
+struct LibraryEmpty: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "library-empty",
+        abstract: "Empties the trash of a projects folder as the library does: every project in it, deleted forever.",
+        discussion: """
+            Deletes every package in <projects folder>/Trash/ with LibraryOperations.deleteForever: each is first \
+            renamed to Trash/.deleting-<UUID> (from then on it is in no list), then deleted, never following a link. \
+            Prints "deleted <n>" each time one more is deleted. Exits 1 if any could not be deleted (it is back under \
+            its name in the trash) or has a lock taken.
+
+            With --finish-only, it only finishes the deletions a crash left (LibraryOperations.finishPendingDeletions: \
+            the Trash/.deleting-* folders), as the app does when it opens, and touches nothing else.
+
+            No take is recording and no project is open here. The library's records (where each project of the trash \
+            came from) are kept in a temporary folder, never the app's.
+            """
+    )
+
+    @Argument(help: "The projects folder, which holds Trash/.")
+    var projectsFolder: String
+
+    @Flag(help: "Only finish the deletions a crash left (Trash/.deleting-*).")
+    var finishOnly = false
+
+    func validate() throws {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: projectsFolder, isDirectory: &isDirectory), isDirectory.boolValue else {
+            throw ValidationError("\(projectsFolder) is not a folder.")
+        }
+    }
+
+    func run() async throws {
+        let folder = URL(fileURLWithPath: projectsFolder, isDirectory: true)
+        let scratch = FileManager.default.temporaryDirectory
+            .appending(path: "recorder-dev-library-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let fileSystem = SystemFileSystem()
+        let operations = LibraryOperations(
+            projectsFolder: folder, fileSystem: fileSystem,
+            records: LibraryRecordsStore(url: scratch.appending(path: "library.json")), app: CommandLineApp())
+        if finishOnly {
+            await operations.finishPendingDeletions()
+            return
+        }
+        let trash = ProjectTrash.folder(in: folder)
+        let packages = ((try? fileSystem.list(trash)) ?? [])
+            .filter { !$0.lastPathComponent.hasPrefix(".") && $0.pathExtension == ProjectPackage.fileExtension }
+            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+        let printed = Mutex(0)
+        let result = await operations.deleteForever(packages) { done, _, _ in
+            printed.withLock { last in
+                while last < done {
+                    last += 1
+                    print("deleted \(last)")
+                }
+            }
+        }
+        if case .failure(let failure) = result {
+            printError("error: \(failure)")
+            throw ExitCode.failure
+        }
+    }
+
+    /// The app around the library, from the command line: nothing records, nothing is open.
+    private struct CommandLineApp: LibraryAppState {
+        func isRecording() -> Bool { false }
+        func isOpenHere(_ url: URL) -> Bool { false }
+        func hasUnsavedChanges(_ url: URL) -> Bool { false }
+        func close(_ url: URL) async {}
     }
 }
 

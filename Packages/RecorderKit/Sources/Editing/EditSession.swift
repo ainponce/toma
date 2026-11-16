@@ -27,12 +27,16 @@ public struct EditContext: Sendable {
     /// background of `defaultStyle` is: a new project copies it into its `assets/`. Without it, a new project with such a
     /// background gets Toma's.
     public var styleDirectory: URL?
+    /// The camera a new project starts with (1c design §13.3): that of the style of the new projects, mirrored and with a
+    /// shadow in Toma's.
+    public var cameraLook: CameraLook = .newProjects
 
     public init(
         app: AppInfo, cachesRoot: URL, defaultStyle: DefaultStyle, now: @escaping @Sendable () -> Date,
         makeID: @escaping @Sendable (String) -> String,
         compaction: (maxBytes: Int, maxEntries: Int) = (LogCompaction.maxBytes, LogCompaction.maxEntries),
-        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system, styleDirectory: URL? = nil
+        journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system, styleDirectory: URL? = nil,
+        cameraLook: CameraLook = .newProjects
     ) {
         self.app = app
         self.cachesRoot = cachesRoot
@@ -43,6 +47,7 @@ public struct EditContext: Sendable {
         self.journalIO = journalIO
         self.upgradeIO = upgradeIO
         self.styleDirectory = styleDirectory
+        self.cameraLook = cameraLook
     }
 }
 
@@ -440,6 +445,35 @@ public final class EditSession {
         guard let step = StyleCommands.applyDefaultStyle(document, style, take: project.take, events: project.events)
         else { return .refused }
         return perform(step)
+    }
+
+    /// "Apply" a named style (1c design §8): `StyleCommands.applyStyle` of `style` for the take, as one step that `perform`
+    /// takes. An image background is brought into the package first from `imageDirectory`, the folder of the style's
+    /// image (`StyleLibrary.imageDirectory(of:)`), with `importAsset`, as `applyDefaultStyle` does; without the folder, or
+    /// if the image is not there or does not decode, the rest is applied and the project keeps its background
+    /// (`imageMissing`). An error of the disk is never a missing image: `importAsset` tries it again meanwhile, and if it
+    /// gives up (`.saveFailed`, shown in `notices`) nothing is applied. `.refused` if the project cannot be edited, or has
+    /// all of it already.
+    public func applyStyle(_ style: NamedStyle, imageDirectory: URL?) async -> (outcome: EditOutcome, imageMissing: Bool) {
+        guard isEditable else { return (.refused, false) }
+        var style = style
+        var imageMissing = false
+        if case let .image(file) = style.look.style.background {
+            var imported: String?
+            if let imageDirectory, let name = DefaultStyleStore.assetName(file) {
+                switch await importAsset(imageDirectory.appending(path: name)) {
+                case let .imported(path): imported = path
+                case .notEditable, .saveFailed: return (.refused, false)
+                case .notAnImage: break
+                }
+            }
+            imageMissing = imported == nil
+            // The document as it is after the import, which waited.
+            style.look.style.background = imported.map { .image(file: $0) } ?? document.style.background
+        }
+        guard let step = StyleCommands.applyStyle(document, style, take: project.take, events: project.events)
+        else { return (.refused, imageMissing) }
+        return (perform(step), imageMissing)
     }
 
     /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every
@@ -1409,7 +1443,8 @@ private struct Resolution: Sendable {
                 resolution = Resolution(document: .legacy(for: project), createsLogAtFirstEdit: true, legacyLook: true)
             } else {
                 resolution = Resolution(
-                    document: NewDocument.make(project: project, defaultStyle: context.defaultStyle, makeID: context.makeID),
+                    document: NewDocument.make(
+                        project: project, defaultStyle: context.defaultStyle, makeID: context.makeID, cameraLook: context.cameraLook),
                     startsLog: true, isNewDocument: true)
             }
             if damaged {

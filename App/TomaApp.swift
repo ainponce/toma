@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import AppSupport
+import ProjectFormat
 import SwiftUI
 import os
 
@@ -14,6 +15,7 @@ struct TomaApp: App {
         } label: {
             MenuBarIcon(recording: appDelegate.recording)
         }
+        .commands { EditorCommands() }
     }
 }
 

@@ -17,6 +17,15 @@ import Testing
         #expect(Motion.countdownDigitExit == .milliseconds(280) && Motion.notchBlend == .milliseconds(320))
     }
 
+    @Test func newMotionConstants() {
+        #expect(Motion.panelSwap == Spring(damping: 1.0, response: 0.30))
+        #expect(Motion.trackItem == Spring(damping: 0.90, response: 0.30))
+        #expect(Motion.timelineZoom == Spring(damping: 1.0, response: 0.28))
+        #expect(Motion.timelineScroll == Spring(damping: 1.0, response: 0.36))
+        #expect(Motion.hover == Spring(damping: 1.0, response: 0.20))
+        #expect(Motion.panelSwapRise == 6)
+    }
+
     @Test func springValueSettlesOnItsTarget() {
         var width = SpringValue(value: 0, spring: Motion.islandExpand)
         #expect(width.isSettled && width.target == 0)
