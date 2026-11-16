@@ -40,14 +40,14 @@ private enum StyleFixture {
         }
     }
 
-    /// A 32 × 32 PNG filled with `red`.
-    static func png(red: Double) throws -> Data {
+    /// A `width` × `height` PNG filled with `red`.
+    static func png(red: Double, width: Int = 32, height: Int = 32) throws -> Data {
         guard let context = CGContext(
-            data: nil, width: 32, height: 32, bitsPerComponent: 8, bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { throw TestSupportError.failed("no context") }
         context.setFillColor(CGColor(red: red, green: 0.6, blue: 0.4, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: 32, height: 32))
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
         guard let image = context.makeImage() else { throw TestSupportError.failed("no image") }
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, UTType.png.identifier as CFString, 1, nil)
@@ -94,6 +94,11 @@ private enum StyleFixture {
     }
 
     static func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
+
+    /// Makes the item at `url` an hour old, as one a crash left long ago.
+    static func age(_ url: URL) throws {
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -3_600)], ofItemAtPath: url.path)
+    }
 }
 
 /// Stands in for the macOS Trash: moves what it is given into a folder of the test's, and remembers it.
@@ -166,16 +171,6 @@ private final class TrashDouble: Sendable {
         var renamedByHand = updated
         renamedByHand.id = "abcdef05"
         #expect(library.list() == [demos, updated, renamedByHand])
-
-        // A package a crash left half built is not listed, and the next new one clears it away.
-        let halfBuilt = library.directory.appending(path: ".deadbeef-\(UUID().uuidString).staging", directoryHint: .isDirectory)
-        try manager.createDirectory(at: halfBuilt, withIntermediateDirectories: false)
-        try Data(contentsOf: file).write(to: halfBuilt.appending(path: "style.json"))
-        #expect(library.list() == [demos, updated, renamedByHand])
-        let third = StyleFixture.style(id: "00000003", name: "Tercero")
-        try await library.save(third, imageFrom: nil)
-        #expect(!StyleFixture.exists(halfBuilt))
-        #expect(library.list() == [demos, third, updated, renamedByHand])
 
         // An id that is not 8 lowercase hex digits names no package: refused, and nothing is written.
         let before = StyleFixture.names(in: library.directory)
@@ -354,6 +349,8 @@ private final class TrashDouble: Sendable {
         let library = StyleFixture.library(in: dir)
         try await library.save(StyleFixture.style(id: "00000001", name: "Ya estaba"), imageFrom: nil)
         let before = try StyleFixture.files(under: library.directory)
+        // A whole PNG, but past the largest side a package's image is decoded at.
+        let oversized = try StyleFixture.png(red: 0.4, width: PackageFileKind.asset.maxPixelSide + 1, height: 1)
 
         let damages: [(String, (URL) throws -> Void)] = [
             ("style.json is a link", { package in
@@ -375,6 +372,9 @@ private final class TrashDouble: Sendable {
             }),
             ("the image is cut short", { package in
                 try png.prefix(png.count / 2).write(to: package.appending(path: "assets/\(name)"))
+            }),
+            ("the image is wider than 16 384 px", { package in
+                try oversized.write(to: package.appending(path: "assets/\(name)"))
             }),
             ("the image is missing", { package in try manager.removeItem(at: package.appending(path: "assets/\(name)")) }),
             ("assets is a link", { package in
@@ -537,5 +537,164 @@ private final class TrashDouble: Sendable {
             #expect(name.hasSuffix(".tomastyle") && !name.hasPrefix("."), "\(name)")
         }
         #expect(StyleFixture.names(in: first.directory.appending(path: "\(shared.id).tomastyle")) == ["assets", "style.json"])
+    }
+}
+
+@Test func aLegacyStyleThatCannotBeReadNowIsMigratedLater() async throws {
+    try await withTemporaryDirectory { dir in
+        let legacy = DefaultStyleStore(directory: dir.appending(path: "Style", directoryHint: .isDirectory))
+        try await legacy.save(StyleFixture.look, from: nil)
+        let file = legacy.directory.appending(path: "default-style.json")
+        let library = StyleFixture.library(in: dir)
+
+        // Not readable just now (a home folder copied with the wrong owner): its error, and no mark.
+        #expect(chmod(file.path, 0) == 0)
+        await #expect(throws: POSIXError(.EACCES)) {
+            _ = try await library.migrateLegacyDefault(from: legacy.directory, named: "Mi estilo")
+        }
+        #expect(!StyleFixture.exists(library.directory.appending(path: ".migrated-1b")))
+        #expect(library.list().isEmpty)
+
+        // Readable again: the next launch migrates it.
+        #expect(chmod(file.path, 0o644) == 0)
+        let migrated = try #require(try await library.migrateLegacyDefault(from: legacy.directory, named: "Mi estilo"))
+        #expect(migrated == NamedStyle(id: migrated.id, name: "Mi estilo", look: StyleFixture.look, camera: .newProjects))
+        #expect(library.list() == [migrated])
+
+        // One that reads but does not decode, or that can never be read (a FIFO), never will: nothing, marked once.
+        let damages: [(String, (URL) throws -> Void)] = [
+            ("does not decode", { try Data("{\"style\":".utf8).write(to: $0) }),
+            ("is a FIFO", { url in
+                try FileManager.default.removeItem(at: url)
+                #expect(mkfifo(url.path, 0o644) == 0)
+            }),
+        ]
+        for (index, (what, damage)) in damages.enumerated() {
+            try damage(file)
+            let other = StyleFixture.library(in: dir, folder: "Other \(index)")
+            #expect(try await other.migrateLegacyDefault(from: legacy.directory, named: "Mi estilo") == nil, "\(what)")
+            #expect(StyleFixture.exists(other.directory.appending(path: ".migrated-1b")), "\(what)")
+            #expect(other.list().isEmpty, "\(what)")
+        }
+    }
+}
+
+@Test func anotherProcessesWorkIsLeftAlone() async throws {
+    try await withTemporaryDirectory { dir in
+        let manager = FileManager.default
+        let library = StyleFixture.library(in: dir)
+        let png = try StyleFixture.png(red: 0.8)
+        let source = try StyleFixture.package(in: dir, name: "Source", png: png)
+        let name = StyleFixture.name(of: source.file)
+        var style = StyleFixture.style(id: "abababab", name: "Compartido")
+        style.look.style.background = .image(file: source.file)
+        try await library.save(style, imageFrom: source.package)
+        let package = library.directory.appending(path: "abababab.tomastyle", directoryHint: .isDirectory)
+        let assets = library.imageDirectory(of: style)
+
+        // What another process of Toma is writing right now, and the same left by a crash an hour ago: a package being
+        // built, the mark, a style.json and an image, each in a hidden folder or temporary file of a name of its own.
+        func work() -> [URL] {
+            [
+                library.directory.appending(path: ".12345678-\(UUID().uuidString).staging", directoryHint: .isDirectory),
+                library.directory.appending(path: "..migrated-1b.\(UUID().uuidString).tmp"),
+                package.appending(path: ".style.json.\(UUID().uuidString).tmp"),
+                assets.appending(path: ".\(name).\(UUID().uuidString).tmp"),
+            ]
+        }
+        let underWay = work()
+        let leftOver = work()
+        for (urls, old) in [(underWay, false), (leftOver, true)] {
+            try manager.createDirectory(at: urls[0], withIntermediateDirectories: false)
+            try Data("{".utf8).write(to: urls[0].appending(path: "style.json"))
+            for url in urls.dropFirst() { try Data("partial".utf8).write(to: url) }
+            if old { try urls.forEach(StyleFixture.age) }
+        }
+        #expect(library.list() == [style])
+
+        // A save over the package and a new one land; what a crash left goes, and what is under way stays as it was.
+        style.name = "Compartido 2"
+        try await library.save(style, imageFrom: nil)
+        let new = StyleFixture.style(id: "cdcdcdcd", name: "Nuevo")
+        try await library.save(new, imageFrom: nil)
+        #expect(library.list() == [style, new])
+        for url in leftOver { #expect(!StyleFixture.exists(url), "\(url.lastPathComponent)") }
+        for url in underWay.dropFirst() { #expect(try Data(contentsOf: url) == Data("partial".utf8), "\(url.lastPathComponent)") }
+        #expect(try Data(contentsOf: underWay[0].appending(path: "style.json")) == Data("{".utf8))
+        #expect(try Data(contentsOf: assets.appending(path: name)) == png)
+    }
+}
+
+@Test func crashMidSaveLeavesTheOldStyle() async throws {
+    try await withTemporaryDirectory { dir in
+        let library = StyleFixture.library(in: dir)
+        let png = try StyleFixture.png(red: 0.15)
+        let source = try StyleFixture.package(in: dir, name: "Source", png: png)
+        let name = StyleFixture.name(of: source.file)
+        var style = StyleFixture.style(id: "0c0c0c0c", name: "Antes")
+        style.look.style.background = .image(file: source.file)
+        try await library.save(style, imageFrom: source.package)
+        let package = library.directory.appending(path: "0c0c0c0c.tomastyle", directoryHint: .isDirectory)
+        let assets = library.imageDirectory(of: style)
+
+        // A save of another image that a crash cut short after its image was written: the new image whole in `assets/`,
+        // its style.json still in a temporary file, half written.
+        let otherPNG = try StyleFixture.png(red: 0.85)
+        let other = try StyleFixture.package(in: dir, name: "Other", png: otherPNG)
+        try otherPNG.write(to: assets.appending(path: StyleFixture.name(of: other.file)))
+        let temporary = package.appending(path: ".style.json.\(UUID().uuidString).tmp")
+        try Data("{\n  \"camera\" : {\n    \"border\" : ".utf8).write(to: temporary)
+        try StyleFixture.age(temporary)
+
+        // The old style, as it was, with its image.
+        #expect(library.list() == [style])
+        #expect(try Data(contentsOf: assets.appending(path: name)) == png)
+
+        // The next save clears both away.
+        style.name = "Después"
+        try await library.save(style, imageFrom: nil)
+        #expect(library.list() == [style])
+        #expect(StyleFixture.names(in: package) == ["assets", "style.json"])
+        #expect(StyleFixture.names(in: assets) == [name])
+    }
+}
+
+@Test func aVolumeWithoutExclusiveRenameStillTakesStyles() async throws {
+    try await withTemporaryDirectory { dir in
+        let disk = try DiskImage.attach(sizeMegabytes: 20, fileSystem: .exFAT, in: dir)
+        defer { try? disk.detach(force: true) }
+        // exFAT has no `RENAME_EXCL`.
+        let probe = disk.mountPoint.appending(path: "Probe", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: probe, withIntermediateDirectories: false)
+        let moved = renamex_np(probe.path, disk.mountPoint.appending(path: "Probed").path, UInt32(RENAME_EXCL))
+        let code = errno
+        #expect(moved == -1 && (code == ENOTSUP || code == EINVAL))
+
+        let library = StyleFixture.library(in: disk.mountPoint)
+        let png = try StyleFixture.png(red: 0.35)
+        let source = try StyleFixture.package(in: dir, name: "Source", png: png)
+        let name = StyleFixture.name(of: source.file)
+        var style = StyleFixture.style(id: "e0e0e0e0", name: "En exFAT")
+        style.look.style.background = .image(file: source.file)
+        // New, then over itself.
+        try await library.save(style, imageFrom: source.package)
+        #expect(library.list() == [style])
+        style.name = "En exFAT 2"
+        try await library.save(style, imageFrom: nil)
+        #expect(library.list() == [style])
+        // A copy, and an import whose id is taken: the move finds it there, and the style takes another id.
+        let copy = try await library.duplicate(id: style.id, name: "Copia")
+        let sent = dir.appending(path: "Sent/Estilo.tomastyle", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: sent.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: library.directory.appending(path: "e0e0e0e0.tomastyle"), to: sent)
+        let imported = try await library.importPackage(sent)
+        #expect(imported.id != style.id)
+        var expected = style
+        expected.id = imported.id
+        #expect(imported == expected)
+        #expect(Set(library.list().map(\.id)) == [style.id, copy.id, imported.id])
+        for added in [style, copy, imported] {
+            #expect(try Data(contentsOf: library.imageDirectory(of: added).appending(path: name)) == png, "\(added.name)")
+        }
     }
 }

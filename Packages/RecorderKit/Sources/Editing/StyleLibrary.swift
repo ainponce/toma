@@ -20,10 +20,17 @@ public enum StyleLibraryError: Error, Equatable, Sendable {
 /// (plan decisions 29 and 30). A package can be sent to another Mac and imported there.
 ///
 /// Every call but `list` and `imageDirectory` runs on one serial queue of the process, never on the caller's thread
-/// (never the main thread's), one at a time. Files are written with `DurableFile.writeAtomically`; a new package is built
-/// whole in a hidden folder of the library and moved in with one `rename`, so the library holds all of it or none; a
-/// package is only ever removed by `delete`, which gives it to the macOS Trash. Nothing in a package is followed if it is
-/// a link, and only an id of 8 lowercase hex digits names a package, so no path is built from what a file says.
+/// (never the main thread's), one at a time. Each file is written whole through a temporary file of a name of its own,
+/// full-synced and renamed in its place; a new package is built whole in a hidden folder of the library and moved in
+/// with one `rename` that never replaces a package (`moveExclusively`), so the library holds all of it or none; a
+/// package is only ever removed by `delete`, which gives it to the macOS Trash. Nothing in a package is followed if it
+/// is a link, and only an id of 8 lowercase hex digits names a package, so no path is built from what a file says.
+///
+/// Two processes of Toma (an installed app and a build of it) can share the folder: neither writes nor removes the
+/// other's temporary files or hidden folders, as what a crash left is cleared only once it is older than `staleAge`.
+/// What they do not share is the queue: if both save one style at the same moment, the `style.json` renamed last wins,
+/// whole, and if the two named different images, the other's cleanup may remove the image of the one that won (the style
+/// stays, and applying it says its image is missing).
 public final class StyleLibrary: Sendable {
     /// `~/Library/Application Support/Toma/Styles/`. Computed: a stored `static var` is not concurrency-safe.
     public static var defaultDirectory: URL {
@@ -39,12 +46,16 @@ public final class StyleLibrary: Sendable {
     private static let assetsFolder = "assets"
     private static let packageExtension = "tomastyle"
     private static let migratedMark = ".migrated-1b"
-    /// The end of the name of the hidden folder a new package is built in.
-    private static let stagingExtension = "staging"
+    /// The end of the name of the hidden folder a new package is built in, `.<id>-<UUID>.staging`.
+    private static let stagingSuffix = ".staging"
+    /// The end of the name of a temporary file, `.<name>.<UUID>.tmp`.
+    private static let temporarySuffix = ".tmp"
+    /// How old a temporary file or hidden folder is before it is taken as left by a crash and cleared: a write of a style
+    /// takes well under a second, so a younger one may be another process's write under way.
+    private static let staleAge: TimeInterval = 10 * 60
     /// The largest `style.json` read: a style is a few kilobytes.
     private static let maxFileBytes = 1 << 20
-    /// One queue for every library of the process: two libraries of one folder never write one file at once
-    /// (`DurableFile` writes through a temporary file of a fixed name), and each call sees what the one before it wrote.
+    /// One queue for every library of the process: each call sees what the one before it wrote.
     private static let queue = DispatchQueue(label: "dev.toma.StyleLibrary", qos: .userInitiated)
 
     /// `trash` gives a package to the macOS Trash; tests pass their own, so nothing reaches the real one.
@@ -112,8 +123,7 @@ public final class StyleLibrary: Sendable {
             var style = try Self.readStyle(packageAt: self.packageURL(id))
             style.id = id
             style.name = name
-            try DurableFile.writeAtomically(
-                try ProjectJSON.encoder().encode(StyleFile(style)), named: Self.fileName, inDirectory: folder)
+            try Self.writeAtomically(try ProjectJSON.encoder().encode(StyleFile(style)), named: Self.fileName, in: folder)
         }
     }
 
@@ -148,8 +158,10 @@ public final class StyleLibrary: Sendable {
     /// The default style of 1b in `legacyDirectory` (`DefaultStyleStore`, read with its `load()`) as a style of the
     /// library named `name`, with the camera of a new project (`CameraLook.newProjects`, measured against the short side,
     /// 1c design §8) and its image; the style, which the app marks for new projects. Once: after the first call
-    /// `.migrated-1b` is in the library and every later call gives `nil`. `nil` also if there is no style of 1b (none
-    /// saved or one that cannot be read, which 1b took as Toma's, or Toma's own). The style of 1b is left where it is.
+    /// `.migrated-1b` is in the library and every later call gives `nil`. `nil` also if there is no style of 1b: no file,
+    /// one that can never be read (a link, not a regular file) or one that reads but does not decode, which 1b took as
+    /// Toma's, or Toma's own. A file that cannot be read for another reason (`EACCES`, `EIO`) throws that error before the
+    /// mark, so the next launch looks again. The style of 1b is left where it is.
     ///
     /// Its image, `<sha>.<ext>` beside it, is read with `SafeRead`; if it is not there or does not decode, the style has
     /// Toma's background, as 1b gave its new projects. The id is the same for the same style, so a call that a crash cut
@@ -200,13 +212,19 @@ public final class StyleLibrary: Sendable {
         guard errno == ENOENT else { throw posixError() }
         var migrated: NamedStyle?
         let look = DefaultStyleStore(directory: legacyDirectory).load()
-        if look != .toma {
+        if look == .toma {
+            // Toma's look, or a file `load()` could not read: none to migrate if it is not there, can never be read or reads
+            // (it is Toma's or does not decode). Any other error may pass, and is thrown before the mark.
+            do {
+                _ = try SafeRead.regularFile(at: legacyDirectory.appending(path: DefaultStyleStore.fileName))
+            } catch let error as POSIXError where [.ENOENT, .ENOTDIR, .ELOOP, .EFTYPE].contains(error.code) {}
+        } else {
             var style = NamedStyle(id: "", name: name, look: look, camera: .newProjects)
             let image = Self.legacyImage(of: &style, in: legacyDirectory)
             style.id = try Self.migratedID(of: style.look)
             migrated = try addMigrated(Contents(style: style, image: image), in: library)
         }
-        try DurableFile.writeAtomically(Data(), named: Self.migratedMark, inDirectory: library)
+        try Self.writeAtomically(Data(), named: Self.migratedMark, in: library)
         return migrated
     }
 
@@ -247,25 +265,27 @@ public final class StyleLibrary: Sendable {
     }
 
     /// Writes `contents` as the new package `<id>.tomastyle` of the library `library` is open on: built whole in a hidden
-    /// folder of the library, full-synced, and moved in with `renameatx_np` and `RENAME_EXCL`, so the library holds all of
-    /// the package or none of it. `EEXIST` if anything has its name. The hidden folder goes either way, and so do those a
-    /// crash left: none holds the only copy of a style, which is in its source until the move.
+    /// folder of the library, full-synced, and moved in with `moveExclusively`, so the library holds all of the package or
+    /// none of it. `EEXIST` if anything has its name. The hidden folder goes either way, and so do the hidden folders and
+    /// temporary files of the library a crash left, once older than `staleAge`: none holds the only copy of a style, which
+    /// is in its source until the move.
     private func create(_ contents: Contents, in library: Int32) throws {
-        let suffix = "." + Self.stagingExtension
-        for name in (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
-        where name.hasPrefix(".") && name.hasSuffix(suffix) {
-            try? FileManager.default.removeItem(at: directory.appending(path: name))
+        let now = Date()
+        for name in Self.names(in: library) where name.hasPrefix(".") && Self.isStale(name, in: library, now: now) {
+            if name.hasSuffix(Self.stagingSuffix) {
+                try? FileManager.default.removeItem(at: directory.appending(path: name))
+            } else if name.hasSuffix(Self.temporarySuffix) {
+                unlinkat(library, name, 0)
+            }
         }
-        let staging = ".\(contents.style.id)-\(UUID().uuidString)" + suffix
+        let staging = ".\(contents.style.id)-\(UUID().uuidString)" + Self.stagingSuffix
         guard mkdirat(library, staging, 0o755) == 0 else { throw posixError() }
         do {
             let folder = openat(library, staging, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             guard folder >= 0 else { throw posixError() }
             defer { close(folder) }
             try Self.fill(folder, with: contents)
-            guard renameatx_np(library, staging, library, Self.packageName(contents.style.id), UInt32(RENAME_EXCL)) == 0 else {
-                throw posixError()
-            }
+            try Self.moveExclusively(staging, to: Self.packageName(contents.style.id), in: library)
         } catch {
             try? FileManager.default.removeItem(at: directory.appending(path: staging))
             throw error
@@ -274,9 +294,9 @@ public final class StyleLibrary: Sendable {
     }
 
     /// Writes `contents` into the package folder `folder` is open on: its image's bytes to `assets/<name>` (`assets/` made
-    /// and synced if it is not there, never followed if it is a link), then `style.json`, each with
-    /// `DurableFile.writeAtomically`; then the images of `assets/` it does not name go, and `assets/` with them if it
-    /// names none.
+    /// and synced if it is not there, never followed if it is a link), then `style.json`, each with `writeAtomically`; then
+    /// the images of `assets/` it does not name go, `assets/` with them if it names none, and the temporary files a crash
+    /// left in the package, once older than `staleAge`.
     private static func fill(_ folder: Int32, with contents: Contents) throws {
         if let image = contents.image, let data = image.data {
             let made = mkdirat(folder, assetsFolder, 0o755) == 0
@@ -285,10 +305,62 @@ public final class StyleLibrary: Sendable {
             guard assets >= 0 else { throw posixError() }
             defer { close(assets) }
             if made { try DurableFile.fullSync(folder) }
-            try DurableFile.writeAtomically(data, named: image.name, inDirectory: assets)
+            try writeAtomically(data, named: image.name, in: assets)
         }
-        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(StyleFile(contents.style)), named: fileName, inDirectory: folder)
-        removeImages(in: folder, except: contents.image?.name)
+        try writeAtomically(try ProjectJSON.encoder().encode(StyleFile(contents.style)), named: fileName, in: folder)
+        tidy(folder, keeping: contents.image?.name)
+    }
+
+    /// Replaces `name` in the folder `folder` is open on with `data`, as `DurableFile.writeAtomically(_:named:inDirectory:)`
+    /// does (the file full-synced, renamed over `name`, the folder full-synced), but through a temporary file of a name of
+    /// its own, `.<name>.<UUID>.tmp`, made with `O_EXCL | O_NOFOLLOW`: two processes that write one package never write one
+    /// temporary file, nor remove each other's.
+    private static func writeAtomically(_ data: Data, named name: String, in folder: Int32) throws {
+        let temporary = ".\(name).\(UUID().uuidString)" + temporarySuffix
+        let file = openat(folder, temporary, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        guard file >= 0 else { throw posixError() }
+        do {
+            do {
+                try data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+                    var written = 0
+                    while written < bytes.count {
+                        let count = Darwin.write(file, bytes.baseAddress! + written, bytes.count - written)
+                        if count < 0 {
+                            if errno == EINTR { continue }
+                            throw posixError()
+                        }
+                        written += count
+                    }
+                }
+                try DurableFile.fullSync(file)
+            } catch {
+                close(file)
+                throw error
+            }
+            guard close(file) == 0, renameat(folder, temporary, folder, name) == 0 else { throw posixError() }
+        } catch {
+            unlinkat(folder, temporary, 0)
+            throw error
+        }
+        try DurableFile.fullSync(folder)
+    }
+
+    /// Moves the hidden folder `from` to `to`, both in the library `library` is open on, never over anything:
+    /// `renameatx_np` with `RENAME_EXCL`, which throws `EEXIST` if anything is at `to`. On a volume without it (exFAT,
+    /// SMB: `ENOTSUP`, or `EINVAL` for the flag), `renameat` once nothing is found at `to`, as the library moves a project
+    /// there: it can only ever replace a folder that came to `to` empty in between, and something else there is `EEXIST`.
+    private static func moveExclusively(_ from: String, to: String, in library: Int32) throws {
+        if renameatx_np(library, from, library, to, UInt32(RENAME_EXCL)) == 0 { return }
+        let failure = posixError()
+        guard failure.code == .ENOTSUP || failure.code == .EINVAL else { throw failure }
+        var info = stat()
+        if fstatat(library, to, &info, AT_SYMLINK_NOFOLLOW) == 0 { throw POSIXError(.EEXIST) }
+        guard errno == ENOENT else { throw posixError() }
+        guard renameat(library, from, library, to) == 0 else {
+            let error = posixError()
+            if [.ENOTEMPTY, .EEXIST, .ENOTDIR, .EISDIR].contains(error.code) { throw POSIXError(.EEXIST) }
+            throw error
+        }
     }
 
     /// The image `style`'s background names, as `save` takes it: in the package `folder` is open on already, or read from
@@ -417,26 +489,57 @@ public final class StyleLibrary: Sendable {
         return fstatat(assets, name, &info, AT_SYMLINK_NOFOLLOW) == 0 && info.st_mode & S_IFMT == S_IFREG
     }
 
-    /// Removes the images of the package's `assets/` but `kept`, and `assets/` if `kept` is `nil` and nothing else is in
-    /// it. What cannot be removed stays: an image too many is never a style lost.
-    private static func removeImages(in folder: Int32, except kept: String?) {
+    /// Removes from the package `folder` is open on the images of its `assets/` but `kept`, `assets/` if `kept` is `nil`
+    /// and nothing else is in it, and the temporary files of both older than `staleAge`. What cannot be removed stays: a
+    /// file too many is never a style lost.
+    private static func tidy(_ folder: Int32, keeping kept: String?) {
+        let now = Date()
         let assets = openat(folder, assetsFolder, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard assets >= 0 else { return }
-        guard let listing = fdopendir(assets) else {
+        if assets >= 0 {
+            for name in names(in: assets) {
+                if PackageFileKind.asset.isValidName(name) ? name != kept : isStaleTemporary(name, in: assets, now: now) {
+                    unlinkat(assets, name, 0)
+                }
+            }
             close(assets)
-            return
+            if kept == nil { unlinkat(folder, assetsFolder, AT_REMOVEDIR) }
         }
+        for name in names(in: folder) where isStaleTemporary(name, in: folder, now: now) {
+            unlinkat(folder, name, 0)
+        }
+    }
+
+    /// Whether `name` in the folder `fd` is open on is a temporary file, `.<name>.<UUID>.tmp`, older than `staleAge`.
+    private static func isStaleTemporary(_ name: String, in fd: Int32, now: Date) -> Bool {
+        name.hasPrefix(".") && name.hasSuffix(temporarySuffix) && isStale(name, in: fd, now: now)
+    }
+
+    /// Whether `name` in the folder `fd` is open on, not followed if it is a link, was last changed more than `staleAge`
+    /// before `now`.
+    private static func isStale(_ name: String, in fd: Int32, now: Date) -> Bool {
+        var info = stat()
+        guard fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { return false }
+        let changed = TimeInterval(info.st_mtimespec.tv_sec) + TimeInterval(info.st_mtimespec.tv_nsec) / 1e9
+        return now.timeIntervalSince1970 - changed > staleAge
+    }
+
+    /// The names in the folder `fd` is open on, but `.` and `..`, read through a descriptor of their own.
+    private static func names(in fd: Int32) -> [String] {
+        let own = openat(fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard own >= 0 else { return [] }
+        guard let listing = fdopendir(own) else {
+            close(own)
+            return []
+        }
+        defer { closedir(listing) }
         var names: [String] = []
         while let entry = readdir(listing) {
             var raw = entry.pointee.d_name
             let length = Int(entry.pointee.d_namlen)
-            names.append(withUnsafeBytes(of: &raw) { String(decoding: $0.prefix(length), as: UTF8.self) })
+            let name = withUnsafeBytes(of: &raw) { String(decoding: $0.prefix(length), as: UTF8.self) }
+            if name != ".", name != ".." { names.append(name) }
         }
-        for name in names where name != kept && PackageFileKind.asset.isValidName(name) {
-            unlinkat(dirfd(listing), name, 0)
-        }
-        closedir(listing)
-        if kept == nil { unlinkat(folder, assetsFolder, AT_REMOVEDIR) }
+        return names
     }
 }
 
