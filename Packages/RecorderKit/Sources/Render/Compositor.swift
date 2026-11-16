@@ -140,24 +140,25 @@ public final class Compositor: @unchecked Sendable {
         mipmappedCopies = MipmappedCopies(device: device)
     }
 
-    /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame`
-    /// map onto the whole target (they are in pixels of `frame.outputSize`; a background that is not a gradient is read
-    /// at the stage point under each of the target's pixels, its grain of the target's pixels). The screen is drawn only
-    /// when `frame.screen` is set and `screen` is given, its `crop` filling its rect: with `mipmapped`, trilinear from a
-    /// copy with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even its mipmaps hold
-    /// anything outside an Area; nothing for a crop that is not finite. The shadow (`frame.shadow`) only with it, under it
-    /// and the window frame. The cursor only when `frame.cursor` is set, shown (opacity above 0) and of some size, with
-    /// `cursor` the texture of its image (`CursorImages`), which every cursor of the frame (its subframes', its samples)
-    /// is drawn with; the click effects over it (`frame.clickEffects`); the camera only when `frame.camera` is set and
-    /// `camera` is given, filling its rect without stretching (cropped, centred, to the rect's shape). An `.image`
-    /// background is `backgroundImage`, the texture `BackgroundImages` made of it for this size, or the frame's gradient
-    /// without one. A `.wallpaper` is drawn directly without `backgroundImage`; with one, its mesh gradient, blurred or
-    /// not (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A window frame's title is
-    /// `windowTitle`, the texture `TitleTexture` made of it, drawn at the bar's pixels (`barPixels`) through the stage;
-    /// none without one. The stage is drawn through `frame.stage`, and blurred with `frame.subframes` or
-    /// `frame.cursorSamples` (see the type's notes). Throws `RenderError.metalResourceUnavailable`, having encoded
-    /// nothing, when Metal cannot make the screen's copy or the blur's tile memory: a frame is never drawn some other way.
-    /// `screen`, `camera`, `cursor`, `backgroundImage` and `windowTitle` must stay alive until `commandBuffer` completes.
+    /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame` map onto the
+    /// whole target (they are in pixels of `frame.outputSize`; a background that is not a gradient is read at the stage
+    /// point under each of the target's pixels, its grain of the target's pixels). The screen is drawn only when
+    /// `frame.screen` is set and `screen` is given, its `crop` filling its rect: with `mipmapped`, trilinear from a
+    /// copy with mipmaps of the crop's whole pixels alone that this makes on the GPU first, so not even its mipmaps
+    /// hold anything outside an Area; nothing for a crop that is not finite. The shadow (`frame.shadow`) only with it,
+    /// under it and the window frame. The cursor only when `frame.cursor` is set, shown (opacity above 0) and of some
+    /// size, with `cursor` the texture of its image (`CursorImages`), which every cursor of the frame (its subframes',
+    /// its samples) is drawn with; the click effects over it (`frame.clickEffects`); the camera only when
+    /// `frame.camera` is set and `camera` is given, filling its rect without stretching (cropped, centred, to the
+    /// rect's shape). An `.image` background is `backgroundImage`, the texture `BackgroundImages` made of it for this
+    /// size, or the frame's gradient without one. A `.wallpaper` is drawn directly without `backgroundImage`; with one,
+    /// its mesh gradient, blurred or not (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A
+    /// window frame's title is `windowTitle`, the texture `TitleTexture` made of it at the frame's title scale
+    /// (`TitleTexture.scale(for:)`), drawn at those bar's pixels (`barPixels`) through the stage; none without one. The
+    /// stage is drawn through `frame.stage`, and blurred with `frame.subframes` or `frame.cursorSamples` (see the
+    /// type's notes). Throws `RenderError.metalResourceUnavailable`, having encoded nothing, when Metal cannot make the
+    /// screen's copy or the blur's tile memory: a frame is never drawn some other way. `screen`, `camera`, `cursor`,
+    /// `backgroundImage` and `windowTitle` must stay alive until `commandBuffer` completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
@@ -219,7 +220,7 @@ public final class Compositor: @unchecked Sendable {
                 let share = 1 / Double(frame.cursorSamples.count)
                 for layer in frame.cursorSamples {
                     drawCursor(
-                        layer, through: stage, outputSize: frame.outputSize, weight: share, texture: cursor, pipeline: blur.cursorSample,
+                        layer, through: stage, outputSize: frame.outputSize, share: share, texture: cursor, pipeline: blur.cursorSample,
                         encoder: encoder, counts: &counts)
                 }
                 encoder.setRenderPipelineState(blur.resolveCursor)
@@ -395,15 +396,17 @@ public final class Compositor: @unchecked Sendable {
         }
         if bands != nil { encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: targetSize.x, height: targetSize.y)) }
 
-        // 3. Window frame: its bar and buttons, then its title, made for the bar's pixels as they are (`TitleTexture`).
+        // 3. Window frame: its bar and buttons, then its title, made for the bar's pixels at the frame's title scale
+        // (`TitleTexture.scale(for:)`): those pixels, brought back to the stage, through it.
         if let window, let unzoomed = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
             drawWindowBar(window, viewport: viewport, pipelines: pipelines, encoder: encoder)
             if let windowTitle = textures.windowTitle {
-                let box = unzoomed.barPixels
-                let origin = SIMD2<Double>(box.origin)
+                let scale = TitleTexture.scale(for: frame)
+                let box = (scale == 1 ? unzoomed : TitleTexture.scaled(unzoomed, by: scale)).barPixels
+                let origin = SIMD2<Double>(box.origin) / scale, boxSize = SIMD2<Double>(box.size) / scale
                 drawSprite(
                     windowTitle, origin: stage?.outputPoint(ofStage: origin, outputSize: size) ?? origin,
-                    size: SIMD2<Double>(box.size) * (stage?.depth ?? 1), pipeline: pipelines.sprite, viewport: viewport, encoder: encoder)
+                    size: boxSize * (stage?.depth ?? 1), pipeline: pipelines.sprite, viewport: viewport, encoder: encoder)
             }
         }
 
@@ -539,7 +542,7 @@ public final class Compositor: @unchecked Sendable {
     /// say: their rounded rect inset by its corners and a pixel, so neither the corners nor the antialiased edges are in
     /// it. With a window, its bar and the screen under it cover it; `nil` when it is empty, or when the screen does not
     /// fill the window under its bar (it always does).
-    private static func opaqueInterior(screen: ScreenLayer?, window: WindowFrameLayer?) -> Rect? {
+    static func opaqueInterior(screen: ScreenLayer?, window: WindowFrameLayer?) -> Rect? {
         guard let screen, screen.rect.width > 0, screen.rect.height > 0 else { return nil }
         var rect = screen.rect, radius = screen.cornerRadius
         if let window, window.rect.width > 0, window.rect.height > 0 {
@@ -596,10 +599,10 @@ public final class Compositor: @unchecked Sendable {
     }
 
     /// Draws the cursor `layer` (stage coordinates) through `stage` with `texture`, its image: its hotspot at its
-    /// position, pressed smaller about it, at its opacity times `weight` (`cursorFragment`, or a sample of the motion
-    /// blur's, `cursorSampleFragment`). Nothing of one hidden or of no size.
+    /// position, pressed smaller about it, at its opacity times `share`, its share of an average (`cursorFragment`, or a
+    /// sample of the motion blur's, `cursorSampleFragment`). Nothing of one hidden or of no size.
     private func drawCursor(
-        _ layer: CursorLayer, through stage: StageTransform?, outputSize: SIMD2<Int>, weight: Double = 1, texture: any MTLTexture,
+        _ layer: CursorLayer, through stage: StageTransform?, outputSize: SIMD2<Int>, share: Double = 1, texture: any MTLTexture,
         pipeline: any MTLRenderPipelineState, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
     ) {
         let layer = stage?.drawn(layer, outputSize: outputSize) ?? layer
@@ -608,7 +611,7 @@ public final class Compositor: @unchecked Sendable {
         guard height > 0, height.isFinite, layer.aspect > 0, layer.aspect.isFinite else { return }
         let size = SIMD2(height * layer.aspect, height)
         drawSprite(
-            texture, origin: layer.hotspot - layer.hotspotFraction * size, size: size, opacity: Float(min(layer.opacity, 1) * weight),
+            texture, origin: layer.hotspot - layer.hotspotFraction * size, size: size, opacity: Float(min(layer.opacity, 1) * share),
             pipeline: pipeline, viewport: SIMD2<Float>(Float(outputSize.x), Float(outputSize.y)), encoder: encoder)
         counts.cursors += 1
     }

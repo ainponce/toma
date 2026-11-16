@@ -284,3 +284,83 @@ func aWallpaperIsPlacedOnATargetOfAnotherSize() throws {
     #expect(worst <= 8, "\(worst)")
     #expect(worstZoomed <= 12, "\(worstZoomed)")
 }
+
+/// A bare take's legacy document in the macOS frame with a title, zoomed in on its centre by `regions`.
+private func titledDocument(_ take: TakeRecord, regions: [ZoomRegion]) -> EditDocument {
+    var document = EditDocument.legacy(take: take, events: [])
+    document.style.frame = .macWindow(appearance: .light, title: "Toma — a title long enough to read", buttons: true)
+    document.zoom.regions = regions
+    return document
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func theTitleIsDrawnAgainAtTheZoomedSize() throws {
+    let take = StageDrawing.bareTake()
+    // At the window's top, where the bar is.
+    let document = titledDocument(
+        take, regions: [StageDrawing.zoom(1, from: 1, to: 3, depth: 2, focus: .fixed(x: 0.5, y: 0), instant: true)])
+    let evaluator = FrameEvaluator(take: take, events: [], document: document, outputSize: size)
+    let rest = evaluator.frame(at: 0.5), zoomed = evaluator.frame(at: 2)
+    let window = try #require(rest.windowFrame)
+    #expect(zoomed.windowFrame == window && zoomed.stage?.depth == 2)
+    #expect(TitleTexture.scale(for: rest) == 1 && TitleTexture.scale(for: zoomed) == 2)
+    let titles = TitleTexture(device: try #require(MTLCreateSystemDefaultDevice()))
+    // At rest, one texel per pixel of the bar.
+    let atRest = try #require(try titles.texture(for: window, scale: 1))
+    #expect(SIMD2(atRest.width, atRest.height) == window.barPixels.size)
+    // At depth 2, at least as many texels as the bar is drawn pixels across and down.
+    let sharp = try #require(try titles.texture(for: window, scale: TitleTexture.scale(for: zoomed)))
+    #expect(Double(sharp.width) >= window.rect.width * 2 && Double(sharp.height) >= window.barHeight * 2, "\(sharp.width)×\(sharp.height)")
+    // Both are kept: the one at rest again draws nothing.
+    #expect(titles.drawCount == 2)
+    #expect(try titles.texture(for: window, scale: 1) === atRest && titles.drawCount == 2)
+    // Drawn through the stage, the title is on the zoomed bar: what it changes is inside the bar as drawn.
+    let drawer = try StageDrawing.Drawer()
+    func draw(title: (any MTLTexture)?) throws -> [UInt8] {
+        let target = try StageDrawing.target(device: drawer.device, size: size)
+        let commandBuffer = try #require(drawer.queue.makeCommandBuffer())
+        try drawer.compositor.encode(
+            zoomed, screen: drawer.screen, camera: nil, cursor: drawer.cursor, windowTitle: title, into: target,
+            commandBuffer: commandBuffer)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        return StageDrawing.bytes(of: target)
+    }
+    let with = try draw(title: sharp), without = try draw(title: nil)
+    let bar = try #require(zoomed.stage).outputRect(
+        ofStage: Rect(x: window.rect.x, y: window.rect.y, width: window.rect.width, height: window.barHeight), outputSize: size)
+    var changed = 0, outside = 0
+    for y in 0..<size.y {
+        for x in 0..<size.x where pixel(with, width: size.x, x: x, y: y) != pixel(without, width: size.x, x: x, y: y) {
+            changed += 1
+            let inside = Double(x) >= bar.x - 1 && Double(x) < bar.x + bar.width + 1 && Double(y) >= bar.y - 1
+                && Double(y) < bar.y + bar.height + 1
+            if !inside { outside += 1 }
+        }
+    }
+    #expect(changed > 100 && outside == 0, "\(changed) changed, \(outside) outside the bar")
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func aMovingZoomDrawsTheTitleAFewTimes() throws {
+    let take = StageDrawing.bareTake(seconds: 4)
+    // A zoom to depth 3 with the spring, blurred: every frame of the way in, at 60 fps.
+    var document = titledDocument(take, regions: [StageDrawing.zoom(1, from: 0.5, to: 4, depth: 3)])
+    document.zoom.motionBlur = 1
+    let evaluator = FrameEvaluator(take: take, events: [], document: document, outputSize: size)
+    let titles = TitleTexture(device: try #require(MTLCreateSystemDefaultDevice()))
+    var scales: Set<Double> = []
+    for n in 0..<180 {
+        let frame = evaluator.frame(at: Double(TimeMap.frameTime(n, frameRate: 60)) / 1e9)
+        let window = try #require(frame.windowFrame)
+        let scale = TitleTexture.scale(for: frame)
+        scales.insert(scale)
+        let texture = try #require(try titles.texture(for: window, scale: scale))
+        // Never fewer texels than the deepest subsample draws the bar.
+        let depth = frame.subframes.map(\.stage.depth).reduce(frame.stage?.depth ?? 1, max)
+        #expect(Double(texture.width) >= window.rect.width * depth, "frame \(n)")
+    }
+    // ⌈log√2 3⌉ + 1 = 5 at most: 1, √2, 2, 2√2 and 4.
+    #expect(titles.drawCount <= Int((2 * log2(3.0)).rounded(.up)) + 1 && titles.drawCount == scales.count, "\(scales.sorted())")
+    #expect(scales.count > 2)
+}

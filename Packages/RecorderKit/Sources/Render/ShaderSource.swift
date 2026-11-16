@@ -131,14 +131,19 @@ public enum ShaderSource {
         return uv;
     }
 
-    // The screen and the camera: bilinear, opaque, over `imageCoverage`.
+    // The screen and the camera: bilinear, opaque, over `imageCoverage`. The one body of `screenFragment` and of
+    // `cameraTargetFragment`.
+    static float4 screenColor(QuadOut in, constant QuadUniforms &u, texture2d<float> source, sampler linearSampler) {
+        float coverage = imageCoverage(in.p, u);
+        float3 color = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
+        return float4(color, 1.0) * coverage;
+    }
+
     fragment float4 screenFragment(QuadOut in [[stage_in]],
                                    constant QuadUniforms &u [[buffer(0)]],
                                    texture2d<float> source [[texture(0)]],
                                    sampler linearSampler [[sampler(0)]]) {
-        float coverage = imageCoverage(in.p, u);
-        float3 color = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
-        return float4(color, 1.0) * coverage;
+        return screenColor(in, u, source, linearSampler);
     }
 
     // The screen sampled trilinear from a mipmapped copy of its frame (`ScreenLayer.mipmapped`), opaque, over
@@ -451,14 +456,14 @@ public enum ShaderSource {
         return out;
     }
 
-    // One of the cursor's samples (`cursorFragment`), at its opacity times its weight (1/N), added to the sum by the
-    // pipeline's blending.
+    // One of the cursor's samples (`cursorFragment`), added to the sum by the pipeline's blending: `opacity` is its own
+    // times its share of the average, 1/N.
     fragment SumOut cursorSampleFragment(QuadOut in [[stage_in]],
-                                         constant float &weight [[buffer(0)]],
+                                         constant float &opacity [[buffer(0)]],
                                          texture2d<float> sprite [[texture(0)]],
                                          sampler mipSampler [[sampler(0)]]) {
         SumOut out;
-        out.sum = sprite.sample(mipSampler, in.uv) * weight;
+        out.sum = sprite.sample(mipSampler, in.uv) * opacity;
         return out;
     }
 
@@ -485,15 +490,13 @@ public enum ShaderSource {
         return out;
     }
 
-    // The camera (`screenFragment`) into the target of the motion blur's pass.
+    // The camera (`screenColor`) into the target of the motion blur's pass.
     fragment TargetOut cameraTargetFragment(QuadOut in [[stage_in]],
                                             constant QuadUniforms &u [[buffer(0)]],
                                             texture2d<float> source [[texture(0)]],
                                             sampler linearSampler [[sampler(0)]]) {
-        float coverage = imageCoverage(in.p, u);
-        float3 color = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
         TargetOut out;
-        out.color = float4(color, 1.0) * coverage;
+        out.color = screenColor(in, u, source, linearSampler);
         return out;
     }
     """#

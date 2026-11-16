@@ -611,3 +611,30 @@ private struct ZoomRandom: RandomNumberGenerator {
         return z ^ (z >> 31)
     }
 }
+
+/// Every bit of a placed state.
+private func bits(_ state: ZoomCameraState) -> [UInt64] {
+    [state.logDepth, state.center.x, state.center.y].map(\.bitPattern)
+}
+
+@Test func aSpanGivesTheStateOfEachInstant() {
+    // A following block over a cursor that never stops, a fixed one, an instant one, a checkpoint and the output's end.
+    let document = zoomDocument(
+        sequence: [zoomClip(1, from: 0, to: 6)], regions: [
+            block(1, from: 0.5, to: 2), block(2, from: 2, to: 3.5, depth: 3, focus: .fixed(x: 0.8, y: 0.2)),
+            block(3, from: 4, to: 5, depth: 1.5, focus: .fixed(x: 0.3, y: 0.7), instant: true),
+        ], smoothing: smoothed)
+    let path = paths(document, events: trail(from: 0, to: 6, sweep)).zoom
+    let h = TimeMap.frameTime(1, frameRate: 24) / 2
+    for centre in [0.0, 0.5, 0.51, 0.999, 1.0, 1.7, 2.0, 3.5, 4.0, 5.0, 5.99, 6, 7] {
+        let t = output(centre)
+        let span = path.span(from: t - h, through: t + h)
+        for τ in Array(stride(from: t - h, through: t + h, by: 1_234_567)) + [t, t - h - 5_000_000, t + h + 1, t + 2 * h, -1] {
+            #expect(bits(span.state(atOutput: τ)) == bits(path.state(atOutput: τ)), "at \(τ)")
+        }
+    }
+    // Inside the instant block, its target itself, read either way.
+    let inside = output(4.5)
+    #expect(bits(path.span(from: inside, through: inside).state(atOutput: inside)) == bits(path.state(atOutput: inside)))
+    #expect(path.state(atOutput: inside).depth == 1.5)
+}

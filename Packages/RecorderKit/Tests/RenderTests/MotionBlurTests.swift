@@ -305,8 +305,8 @@ func aSharpWallpaperUnderTheBlurIsReadFromItsMesh() throws {
 }
 
 /// The GPU time of each of `frames` drawn at `output` one after the other after eight to warm up, with a 4K screen, Toma's
-/// arrow, the window's title and the background's texture as `FrameRenderer` gives it: the median, the 95th percentile
-/// and the largest, in seconds, and whether every frame completed.
+/// arrow, and the window's title and the background's texture as `FrameRenderer` gives them: the median, the 95th
+/// percentile and the largest, in seconds, and whether every frame completed.
 private func gpuTimes(
     of frames: [RenderFrame], output: SIMD2<Int>
 ) async throws -> (p50: Double, p95: Double, max: Double, count: Int, completed: Bool) {
@@ -318,7 +318,7 @@ private func gpuTimes(
         let queue = try #require(device.makeCommandQueue())
         let screen = try StageDrawing.screenTexture(device: device, width: 3840, height: 2160)
         let cursor = try CursorSprite.makeTexture(device: device)
-        let title = try frames[0].windowFrame.flatMap { try TitleTexture(device: device).texture(for: $0) }
+        let titles = TitleTexture(device: device)
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: output.x, height: output.y, mipmapped: false)
         descriptor.usage = [.renderTarget, .shaderRead]
@@ -328,6 +328,7 @@ private func gpuTimes(
         for (index, frame) in frames.enumerated() {
             let commandBuffer = try #require(queue.makeCommandBuffer())
             let background = try FrameRenderer.backgroundTexture(of: frame, images: images, outputSize: output)
+            let title = try frame.windowFrame.flatMap { try titles.texture(for: $0, scale: TitleTexture.scale(for: frame)) }
             try compositor.encode(
                 frame, screen: screen, camera: nil, cursor: cursor, backgroundImage: background, windowTitle: title, into: target,
                 commandBuffer: commandBuffer)
@@ -386,4 +387,58 @@ func sixteenSubsamplesAt4KFitTheFrameBudget() async throws {
         #expect(times.completed && times.count == 120)
         #expect(times.p95 <= 0.0167, "\(name): p95 \(times.p95 * 1000) ms")
     }
+}
+
+/// `rects` as `[x, y, width, height]` each, to compare.
+private func values(_ rects: [MTLScissorRect]) -> [[Int]] {
+    rects.map { [$0.x, $0.y, $0.width, $0.height] }
+}
+
+@Test func scissorBandsAreTheTargetButTheWholePixelsOfTheHole() {
+    let output = SIMD2(200, 100)
+    // A hole between pixels: only those wholly inside it are left out.
+    let hole = Rect(x: 10.5, y: 20.25, width: 100.5, height: 50.5)
+    #expect(values(Compositor.scissorBands(around: hole, outputSize: output, targetSize: output))
+        == [[0, 0, 200, 21], [0, 70, 200, 30], [0, 21, 11, 49], [111, 21, 89, 49]])
+    // A target twice the output: the hole in its pixels.
+    #expect(values(Compositor.scissorBands(around: hole, outputSize: output, targetSize: output &* 2))
+        == [[0, 0, 400, 41], [0, 141, 400, 59], [0, 41, 21, 100], [222, 41, 178, 100]])
+    // Partly off the target: only the bands left inside it.
+    #expect(values(Compositor.scissorBands(
+        around: Rect(x: -20, y: -10, width: 100, height: 60), outputSize: output, targetSize: output))
+        == [[0, 50, 200, 50], [80, 0, 120, 50]])
+    // No whole pixel in it: all of the target. Over all of it: nothing.
+    #expect(values(Compositor.scissorBands(
+        around: Rect(x: 10.2, y: 10.2, width: 0.5, height: 0.5), outputSize: output, targetSize: output)) == [[0, 0, 200, 100]])
+    #expect(Compositor.scissorBands(around: Rect(x: -5, y: -5, width: 300, height: 300), outputSize: output, targetSize: output)
+        .isEmpty)
+}
+
+@Test func theOpaqueInsideIsTheRoundedRectInsetByItsCorners() {
+    let screen = ScreenLayer(
+        trackID: trackID, sourceTime: base, rect: Rect(x: 100, y: 50, width: 400, height: 300), cornerRadius: 20)
+    // The screen alone: inset by its corners and a pixel.
+    #expect(Compositor.opaqueInterior(screen: screen, window: nil) == Rect(x: 121, y: 71, width: 358, height: 258))
+    // In a window it fills under the bar: the window's rect, inset by its rounder corners (the bottom ones) and a pixel.
+    let window = WindowFrameLayer(
+        rect: Rect(x: 100, y: 30, width: 400, height: 320), barHeight: 20, appearance: .dark, title: "", buttons: true,
+        cornerRadius: 10, bottomCornerRadius: 24)
+    #expect(Compositor.opaqueInterior(screen: screen, window: window) == Rect(x: 125, y: 55, width: 350, height: 270))
+    // A screen that does not fill the window under its bar: nothing is taken as opaque.
+    var narrow = screen
+    narrow.rect.width -= 10
+    #expect(Compositor.opaqueInterior(screen: narrow, window: window) == nil)
+    var short = screen
+    short.rect.height -= 10
+    #expect(Compositor.opaqueInterior(screen: short, window: window) == nil)
+    // Too small for its corners, of no size, no screen; corners that are not a number count as none.
+    var small = screen
+    small.rect = Rect(x: 0, y: 0, width: 30, height: 30)
+    #expect(Compositor.opaqueInterior(screen: small, window: nil) == nil)
+    small.rect.width = 0
+    #expect(Compositor.opaqueInterior(screen: small, window: nil) == nil)
+    #expect(Compositor.opaqueInterior(screen: nil, window: window) == nil)
+    var odd = screen
+    odd.cornerRadius = .nan
+    #expect(Compositor.opaqueInterior(screen: odd, window: nil) == Rect(x: 101, y: 51, width: 398, height: 298))
 }
