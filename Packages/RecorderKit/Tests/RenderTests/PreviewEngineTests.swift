@@ -50,6 +50,12 @@ private func seconds(ofFrame n: Int, rate: Int) -> Double {
     Double(TimeMap.frameTime(n, frameRate: rate)) / 1e9
 }
 
+/// What the engine's callbacks take first. Metal calls them in a command buffer's completed handler, on a thread of its
+/// own, and orders that handler after the commit in a way ThreadSanitizer cannot see: without a lock both sides take,
+/// it took the stored properties of a `Watched`, written on the main thread as it was made, for a race with their reads
+/// in the callbacks (`make tsan`, `mainThreadNeverWaits`). The engine itself hands its hooks over under its own lock.
+private let watchedPublished = Mutex(())
+
 /// An engine for `renderer` with a layer of `drawable` pixels, and what it draws, gathered from its callbacks.
 private final class Watched: @unchecked Sendable {
     let engine: PreviewEngine
@@ -63,8 +69,15 @@ private final class Watched: @unchecked Sendable {
         layer.drawableSize = CGSize(width: drawable.x, height: drawable.y)
         CATransaction.commit()
         engine = PreviewEngine(renderer: renderer, layer: layer)
-        engine.onPresented = { [self] seconds, late in lock.withLock { presentedFrames.append((seconds, late)) } }
-        engine.hooks.onDrawn = { [self] frame in lock.withLock { drawnFrames.append(frame) } }
+        engine.onPresented = { [self] seconds, late in
+            watchedPublished.withLock { _ in }
+            lock.withLock { presentedFrames.append((seconds, late)) }
+        }
+        engine.hooks.onDrawn = { [self] frame in
+            watchedPublished.withLock { _ in }
+            lock.withLock { drawnFrames.append(frame) }
+        }
+        watchedPublished.withLock { _ in }
     }
 
     var drawn: [PreviewEngine.DrawnFrame] { lock.withLock { drawnFrames } }

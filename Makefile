@@ -10,12 +10,15 @@ test:
 	swift test --package-path Packages/RecorderKit
 
 # The thread-safety argument of TrackPipeline, TrackFrameReader, the take's life cycle, the process's cache of
-# background images, a renderer's cursor images and the preview's audio rests on this run (plan exit criterion). Every
-# name matches tests: a suite, or a file of loose @Test functions (TrackFrameReaderTests, InputActivityRecorderTests,
-# BackgroundImageTests, CursorRenderTests, AudioRingBufferTests, PreviewAudioPlayerTests).
+# background images, a renderer's cursor images, the preview's audio, the default style's store, the preparation of a
+# preview, the synthetic input, the cancellation of an export, the steps of quitting with editors open and a log that
+# starts again behind the Undo menu rests on this run (plan exit criterion). Every name matches tests: a suite, a file
+# of loose @Test functions (TrackFrameReaderTests, InputActivityRecorderTests, BackgroundImageTests, CursorRenderTests,
+# AudioRingBufferTests, PreviewAudioPlayerTests, DefaultStyleStoreTests, ScreenlessPreviewTests, LogRestartMenuTests),
+# or one test (cancelledExportCleansUp, the only cancellation of the pipelined export).
 tsan:
 	TSAN_OPTIONS=$${TSAN_OPTIONS:-halt_on_error=1} swift test --package-path Packages/RecorderKit --sanitize=thread \
-		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|CaptureRunLifecycleTests|WindowCaptureTests|LevelMeterTests|FocusGuardTests|TimeLimitTests|WallpaperLayoutTests|CursorImageRecorderTests|InputActivityRecorderTests|BackgroundImageTests|EditedMixTests|EditJournalTests|EditSessionTests|CursorRenderTests|SpeedStretchTests|AudioRingBufferTests|PreviewAudioPlayerTests|PackageUpgradeTests|ThumbnailCacheTests|WaveformCacheTests|ScreenSamplingTests|AssetImportTests|ScreenChangeTests|EditedExportTests|PreviewEngineTests|WindowFrameTests'
+		--filter 'RecordingCoordinatorTests|TrackFrameReaderTests|RecordingControllerTests|QuitSequencerTests|CameraTests|SystemAudioTests|CaptureRunLifecycleTests|WindowCaptureTests|LevelMeterTests|FocusGuardTests|TimeLimitTests|WallpaperLayoutTests|CursorImageRecorderTests|InputActivityRecorderTests|BackgroundImageTests|EditedMixTests|EditJournalTests|EditSessionTests|CursorRenderTests|SpeedStretchTests|AudioRingBufferTests|PreviewAudioPlayerTests|PackageUpgradeTests|ThumbnailCacheTests|WaveformCacheTests|ScreenSamplingTests|AssetImportTests|ScreenChangeTests|EditedExportTests|PreviewEngineTests|WindowFrameTests|DefaultStyleStoreTests|PreviewPreparationTests|ScreenlessPreviewTests|SyntheticSourcesTests|cancelledExportCleansUp|QuitWithEditorsTests|LogRestartMenuTests'
 
 crash-test:
 	bash scripts/test-crash-recovery.sh
