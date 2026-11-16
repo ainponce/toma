@@ -5,6 +5,12 @@ public enum MouseButton: String, Codable, Sendable {
     case left, right, other
 }
 
+/// A system cursor a `cursorImage` event can say its image is: the shapes Toma can draw in its own style.
+/// A `kind` this version does not know reads as none, so a newer version can add shapes.
+public enum CursorKind: String, Codable, Sendable, CaseIterable {
+    case arrow, iBeam, pointingHand, openHand, closedHand, crosshair, resizeLeftRight, resizeUpDown, notAllowed
+}
+
 /// One line of `events.jsonl`: something that happened at host time `t` during a take.
 ///
 /// Encoded flat, with `t`, `type` and the fields of its kind at the same level:
@@ -54,6 +60,17 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// The camera looks like this from `t` on: the user moved it or changed its shape or size while
         /// recording. The take's `cameraStyle` is how it looked before the first one.
         case cameraStyle(CameraStyle)
+        /// macOS shows this cursor from `t` on (version 3). Its image is `takes/<take>/cursors/<hash>.png`, drawn at 4
+        /// times its size in points; `hash` is 32 hex digits of SHA-256 of the image. `hotspot` is where the pointer is
+        /// in the image, as a fraction of it from its top left; `size` is the cursor's width (`x`) and height (`y`) in
+        /// points. `kind`: the system cursor whose pixels it has, if it is one of them (`nil` otherwise, or a `kind`
+        /// this version does not know).
+        case cursorImage(hash: String, hotspot: SIMD2<Double>, size: SIMD2<Double>, kind: CursorKind?)
+        /// The user scrolled `dx`, `dy` points since the last one (version 3), summed every 1/30 s, with the pointer at
+        /// (`x`, `y`) at the end.
+        case scroll(dx: Double, dy: Double, x: Double, y: Double)
+        /// At least one key was pressed in the 250 ms that start at `t` (version 3). Never which, nor how many.
+        case keyActivity
     }
 
     /// The event as one line of compact JSON with its keys in alphabetical order,
@@ -76,12 +93,22 @@ public struct InputEvent: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case t, type, x, y, button, displayID, frame, scale, track, index, domain, code, reason, deviceUniqueID, count
-        case onScreen, style
+        case onScreen, style, hash, hotspot, size, kind, dx, dy
+    }
+
+    /// The keys of `hotspot`.
+    private enum PointKeys: String, CodingKey {
+        case x, y
+    }
+
+    /// The keys of `size`.
+    private enum SizeKeys: String, CodingKey {
+        case width, height
     }
 
     private enum EventType: String, Codable {
         case cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker
-        case droppedSamples, audioClock, windowGeometry, cameraStyle
+        case droppedSamples, audioClock, windowGeometry, cameraStyle, cursorImage, scroll, keyActivity
     }
 
     public init(from decoder: any Decoder) throws {
@@ -152,6 +179,25 @@ public struct InputEvent: Codable, Equatable, Sendable {
             )
         case .cameraStyle:
             kind = .cameraStyle(try container.decode(CameraStyle.self, forKey: .style))
+        case .cursorImage:
+            let hotspot = try container.nestedContainer(keyedBy: PointKeys.self, forKey: .hotspot)
+            let size = try container.nestedContainer(keyedBy: SizeKeys.self, forKey: .size)
+            kind = .cursorImage(
+                hash: try container.decode(String.self, forKey: .hash),
+                hotspot: SIMD2(try hotspot.decode(Double.self, forKey: .x), try hotspot.decode(Double.self, forKey: .y)),
+                size: SIMD2(try size.decode(Double.self, forKey: .width), try size.decode(Double.self, forKey: .height)),
+                // A shape this version does not know: the recorded image, as without one.
+                kind: try container.decodeIfPresent(String.self, forKey: .kind).flatMap(CursorKind.init(rawValue:))
+            )
+        case .scroll:
+            kind = .scroll(
+                dx: try container.decode(Double.self, forKey: .dx),
+                dy: try container.decode(Double.self, forKey: .dy),
+                x: try container.decode(Double.self, forKey: .x),
+                y: try container.decode(Double.self, forKey: .y)
+            )
+        case .keyActivity:
+            kind = .keyActivity
         }
         self.init(t: t, kind: kind)
     }
@@ -215,6 +261,24 @@ public struct InputEvent: Codable, Equatable, Sendable {
         case let .cameraStyle(style):
             try container.encode(EventType.cameraStyle, forKey: .type)
             try container.encode(style, forKey: .style)
+        case let .cursorImage(hash, hotspot, size, cursorKind):
+            try container.encode(EventType.cursorImage, forKey: .type)
+            try container.encode(hash, forKey: .hash)
+            var point = container.nestedContainer(keyedBy: PointKeys.self, forKey: .hotspot)
+            try point.encode(hotspot.x, forKey: .x)
+            try point.encode(hotspot.y, forKey: .y)
+            var extent = container.nestedContainer(keyedBy: SizeKeys.self, forKey: .size)
+            try extent.encode(size.x, forKey: .width)
+            try extent.encode(size.y, forKey: .height)
+            try container.encodeIfPresent(cursorKind, forKey: .kind)
+        case let .scroll(dx, dy, x, y):
+            try container.encode(EventType.scroll, forKey: .type)
+            try container.encode(dx, forKey: .dx)
+            try container.encode(dy, forKey: .dy)
+            try container.encode(x, forKey: .x)
+            try container.encode(y, forKey: .y)
+        case .keyActivity:
+            try container.encode(EventType.keyActivity, forKey: .type)
         }
     }
 }

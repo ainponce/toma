@@ -37,9 +37,23 @@ private func take(_ id: String) -> TakeRecord {
         #expect(package.trackDirectory(take: "take-001", track: "mic").path.hasSuffix("Demo.toma/takes/take-001/mic"))
         #expect(package.eventsURL(take: "take-001").path.hasSuffix("Demo.toma/takes/take-001/events.jsonl"))
         #expect(package.lockURL(take: "take-001").path.hasSuffix("Demo.toma/takes/take-001/recording.lock"))
+        #expect(package.editLogURL.path.hasSuffix("Demo.toma/edit-log.jsonl"))
+        #expect(package.editLockURL.path.hasSuffix("Demo.toma/edit.lock"))
+        #expect(package.assetsURL.path.hasSuffix("Demo.toma/assets") && package.assetsURL.hasDirectoryPath)
+        #expect(package.cursorsDirectory(take: "take-001").path.hasSuffix("Demo.toma/takes/take-001/cursors"))
+        #expect(package.cursorsDirectory(take: "take-001").hasDirectoryPath)
+        let cursor = package.cursorImageURL(take: "take-001", hash: "3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e")
+        #expect(cursor.path.hasSuffix("Demo.toma/takes/take-001/cursors/3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e.png"))
+        #expect(try package.relativePath(of: cursor) == "takes/take-001/cursors/3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e.png")
+        // The editor's files and folders appear with the first edit, never when the package is created.
+        for url in [package.editURL, package.editLogURL, package.editLockURL, package.assetsURL] {
+            #expect(!FileManager.default.fileExists(atPath: url.path), "\(url.lastPathComponent)")
+        }
 
         let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
-        #expect(manifest == Manifest(formatVersion: Manifest.currentFormatVersion, app: testApp, createdAt: testDate, takes: []))
+        let projectID = try #require(manifest.projectID)
+        #expect(manifest == Manifest(
+            formatVersion: Manifest.currentFormatVersion, app: testApp, createdAt: testDate, takes: [], projectID: projectID))
         #expect(!FileManager.default.fileExists(atPath: package.manifestURL.path + ".tmp"))
     }
 }

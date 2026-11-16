@@ -1,6 +1,6 @@
 # Formato de proyecto de Toma
 
-**Versión 2 (`formatVersion: 2`), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad. Los lectores de esta versión leen también los paquetes de la versión 1, que se quedan en la versión 1 (ver [Cambios de la versión 2](#cambios-de-la-versión-2)).
+**Versión 3 (`formatVersion: 3`), inestable hasta la fase 4.** Los nombres y campos todavía pueden cambiar. A partir del primer release público, cada cambio de formato viene con su migración y sus pruebas de compatibilidad. Los lectores de esta versión leen también los paquetes de las versiones 1 y 2, que se quedan en su versión hasta que el usuario los edita (ver [Cambios de la versión 3](#cambios-de-la-versión-3)).
 
 El formato es público para que cualquier herramienta pueda leer, verificar o recuperar una grabación sin la app. Las reglas de este documento son las que sigue el código de `Packages/RecorderKit/Sources/ProjectFormat`.
 
@@ -10,9 +10,11 @@ Un proyecto es una carpeta con extensión `.toma` que Finder muestra como un sol
 
 ```
 MiVideo.toma/
-  manifest.json                versión de formato, app, fecha, tomas, pistas y segmentos
-  edit.json                    decisiones del usuario (línea de tiempo, estilos); lo escribe el editor desde
-                               la fase 1 (en la fase 0 no existe)
+  manifest.json                versión de formato, id del proyecto, app, fecha, tomas, pistas y segmentos
+  edit.json                    decisiones del usuario (línea de tiempo, estilos); lo escribe el editor (versión 3)
+  edit-log.jsonl               el registro de cambios del editor (versión 3)
+  edit.lock                    lock del editor que escribe el paquete (versión 3)
+  assets/                      imágenes propias del fondo, copiadas al paquete (versión 3)
   takes/
     take-001/
       display-1/               una carpeta por pista, con el id de la pista (display-<CGDirectDisplayID>)
@@ -31,15 +33,17 @@ MiVideo.toma/
       .reserve                 espacio reservado mientras se graba (ver más abajo)
       wallpapers/              opcional: el fondo de cada pantalla grabada, al empezar la toma (versión 2)
         display-1.png          uno por pantalla (display-<CGDirectDisplayID>.png)
+      cursors/                 opcional: las imágenes del cursor de la toma (versión 3)
+        3f2a9c0e….png          una por imagen distinta (<hash>.png, ver el evento cursorImage)
   cache/                       regenerable: transcripciones, sugerencias, miniaturas
 ```
 
 - Las tomas se llaman `take-001`, `take-002`, … Un número nunca se reutiliza: la toma nueva recibe el número siguiente al más alto del manifiesto y salta cualquier carpeta que ya exista en `takes/`.
-- **Rutas.** Un paquete puede venir de cualquier lado (una carpeta compartida, una descarga), así que ninguna herramienta sigue una ruta del manifiesto sin comprobarla. El `id` de una toma es `take-` y tres o más dígitos; el de una pista, solo letras ASCII, dígitos y `-`; el `file` de un segmento es exactamente `takes/<toma>/<pista>/seg-NNNN.mov` para su `index`. Dentro de una toma, `takes/`, la carpeta de la toma, su `wallpapers/`, las de sus pistas, `recording.lock`, `events.jsonl` y `.reserve` no pueden ser enlaces simbólicos ni de otro tipo (carpetas las carpetas, archivos comunes los archivos). Un paquete que no cumple algo de esto es *para reparar*: la recuperación no lo toca. El editor y el export solo leen: no abren un paquete cuyo manifiesto tiene una ruta inválida (`validatePaths`), pero no comprueban los enlaces de dentro de una toma (`checkLayout` lo usa solo la recuperación), y nunca escriben nada en el paquete. La ruta del paquete en sí sí puede pasar por enlaces (`/var` es uno, o una carpeta Movies enlazada): solo se comprueba lo que está dentro.
+- **Rutas.** Un paquete puede venir de cualquier lado (una carpeta compartida, una descarga), así que ninguna herramienta sigue una ruta del manifiesto sin comprobarla. El `id` de una toma es `take-` y tres o más dígitos; el de una pista, solo letras ASCII, dígitos y `-`; el `file` de un segmento es exactamente `takes/<toma>/<pista>/seg-NNNN.mov` para su `index`. Dentro de una toma, `takes/`, la carpeta de la toma, su `wallpapers/`, las de sus pistas, `recording.lock`, `events.jsonl` y `.reserve` no pueden ser enlaces simbólicos ni de otro tipo (carpetas las carpetas, archivos comunes los archivos). Un paquete que no cumple algo de esto es *para reparar*: la recuperación no lo toca. El editor y el export no abren un paquete cuyo manifiesto tiene una ruta inválida (`validatePaths`), pero no comprueban los enlaces de dentro de una toma (`checkLayout` lo usa solo la recuperación). El export nunca escribe nada en el paquete, y el editor solo sus propios archivos (ver [Cambios de la versión 3](#cambios-de-la-versión-3)). La ruta del paquete en sí sí puede pasar por enlaces (`/var` es uno, o una carpeta Movies enlazada): solo se comprueba lo que está dentro.
 - Los segmentos se numeran desde 1 con cuatro dígitos (`seg-0001.mov`). Cada pista abre un segmento nuevo cada vez que su captura se interrumpe (pausa, error del stream, cambio de formato), así un corte nunca daña lo grabado antes.
 - Los segmentos son películas fragmentadas, con fragmentos de 1 s: si la app, el sistema o la batería se apagan de golpe, se puede leer todo hasta el último fragmento escrito.
 - Los segmentos de micrófono guardan todos los canales del dispositivo, en su orden: ALAC hasta 8 canales y LPCM Float32 con distribución discreta (`kAudioChannelLayoutTag_DiscreteInOrder`) desde 9. La distribución de canales que declara un archivo de 3 a 8 canales es la que ALAC exige para esa cantidad (por ejemplo `MPEG_5_1_D` para 6) y es solo una etiqueta: el canal *n* del archivo es la entrada *n* del dispositivo, no el altavoz que la etiqueta nombra.
-- Las pistas de iPhone/iPad, las imágenes de cursor (`cursors/`) y los eventos de scroll llegan en fases posteriores.
+- Las pistas de iPhone/iPad llegan en fases posteriores.
 
 ## `manifest.json`
 
@@ -52,7 +56,8 @@ Ejemplo completo de un proyecto con una toma terminada: la pantalla tuvo un cort
     "version" : "0.1.0"
   },
   "createdAt" : "2026-11-13T16:00:00Z",
-  "formatVersion" : 2,
+  "formatVersion" : 3,
+  "projectID" : "9d4f3b2a7c1e48d6b05a2f9e3c7d1a84",
   "takes" : [
     {
       "cameraStyle" : {
@@ -188,16 +193,18 @@ Reglas de escritura:
 - Después de un corte de energía puede quedar un `manifest.json.tmp` más nuevo que `manifest.json` (completo en disco, pero sin el cambio de nombre). Los lectores lo ignoran y usan `manifest.json`; la recuperación puede revisarlo más adelante. La próxima escritura lo borra y crea uno nuevo.
 - Una toma entra al manifiesto, ya `recording`, antes de que se grabe nada: si esa primera escritura no llega al disco (después de un reintento con el espacio del `.reserve` si faltó espacio), la toma no empieza, y se sueltan el lock y el `.reserve`. Una carpeta de `takes/` que el manifiesto no lista pero que tiene un segmento o un `recording.lock` que nadie tiene hace que el paquete sea *para reparar*, y el motivo dice cuál de las dos cosas encontró (archivos grabados, o solo un `recording.lock` que quedó).
 - Un solo proceso escribe el manifiesto de un paquete por vez, porque todas las escrituras usan el mismo `manifest.json.tmp`.
-- `formatVersion` se decide al crear el paquete y ninguna escritura lo cambia: un paquete de la versión 1 se reescribe como versión 1.
+- `formatVersion` se decide al crear el paquete y solo lo cambia la primera edición del usuario, que pasa un paquete v1 o v2 a v3 (ver [Cambios de la versión 3](#cambios-de-la-versión-3)). La grabación y la recuperación nunca lo cambian: un paquete de la versión 1 se reescribe como versión 1.
 
 ### Campos
 
 | Campo | Tipo | Significado |
 |---|---|---|
-| `formatVersion` | entero | Versión del formato con que se creó el paquete: `2` en los paquetes nuevos, `1` en los de antes. Nunca cambia (ver [Cambios de la versión 2](#cambios-de-la-versión-2)). |
+| `formatVersion` | entero | Versión del formato del paquete: `3` en los paquetes nuevos, `2` y `1` en los de antes. Cambia solo con la primera edición de un paquete v1 o v2, que lo pasa a `3` (ver [Cambios de la versión 3](#cambios-de-la-versión-3)). |
 | `app` | objeto | `name` y `version` de la app que creó el proyecto. |
 | `createdAt` | fecha | Creación del proyecto. |
 | `takes` | lista | Tomas en el orden en que se grabaron. |
+| `projectID` | texto | Desde la versión 3. El id estable del proyecto: 32 dígitos hexadecimales en minúscula, que no cambian al renombrar ni al mover el paquete. Al azar en un paquete creado en la versión 3; el derivado en uno que pasó a la versión 3 con su primera edición. Si falta (siempre en las versiones 1 y 2), el id es el derivado (ver [Cambios de la versión 3](#cambios-de-la-versión-3)). |
+| `upgradedFrom` | entero | Desde la versión 3, solo en un paquete que se creó en la versión `1` o `2` y pasó a la versión 3 con su primera edición: la versión en que se creó. Falta en un paquete creado en la versión 3. |
 
 **Toma** (`takes[]`)
 
@@ -311,7 +318,7 @@ Reglas de escritura:
 - Las líneas van en el orden en que se registraron, que no siempre es el orden de `t`: un clic llega con el instante que le puso el sistema y el cursor se muestrea en otra cola. Quien necesite orden temporal ordena por `t`.
 - Un solo proceso escribe el archivo de una toma por vez.
 
-**Coordenadas.** `x`, `y` (cursor y clics) y `frame` (`displayGeometry` y `windowGeometry`) están en puntos globales, el espacio de `CGEvent.location` y de `globalFrame` en el manifiesto: el origen está arriba a la izquierda de la pantalla principal, `y` crece hacia abajo, y una pantalla a la izquierda o arriba de la principal tiene coordenadas negativas. La posición dentro de la grabación de una pantalla es `(x − globalFrame.x, y − globalFrame.y)` en puntos, o eso por `pixelScale` en píxeles. macOS da el cursor con fracciones de punto, así que `x` e `y` no siempre son enteros.
+**Coordenadas.** `x`, `y` (cursor, clics y `scroll`) y `frame` (`displayGeometry` y `windowGeometry`) están en puntos globales, el espacio de `CGEvent.location` y de `globalFrame` en el manifiesto: el origen está arriba a la izquierda de la pantalla principal, `y` crece hacia abajo, y una pantalla a la izquierda o arriba de la principal tiene coordenadas negativas. La posición dentro de la grabación de una pantalla es `(x − globalFrame.x, y − globalFrame.y)` en puntos, o eso por `pixelScale` en píxeles. macOS da el cursor con fracciones de punto, así que `x` e `y` no siempre son enteros.
 
 ### Tipos
 
@@ -324,13 +331,16 @@ Reglas de escritura:
 | `segmentStarted` | `track`, `index` | La pista `track` (su `id` en el manifiesto) abrió el segmento `index`. `t` es el `startHostTime` del segmento; la recuperación lo usa si el archivo quedó en disco pero el segmento no llegó al manifiesto. |
 | `streamInterrupted` | `track`, `domain`, `code` | El stream de captura de la pista falló con ese error (dominio y código del `NSError`). La pista sigue en un segmento nuevo, que tiene su propio `segmentStarted`. |
 | `paused` | `reason` | La captura se detuvo en todas las pistas, que cierran su segmento como `paused`. `reason` es `willSleep` (la Mac va a entrar en reposo), `screenLocked`, que cubre dos cosas: la pantalla se bloqueó, o las pantallas se apagaron (las dos se pliegan en un solo estado, que termina solo cuando la pantalla está desbloqueada y encendida, así encender las pantallas sobre la pantalla de bloqueo no reanuda nada), o `user` (desde la fase 1a: el usuario pausó la toma, que sigue en pausa hasta que la reanuda, aunque mientras tanto se bloquee y desbloquee la pantalla). Mientras se graba, la app no deja que las pantallas se apaguen solas por inactividad, así que eso pasa solo si el usuario las apaga o bloquea la Mac. Con varios motivos a la vez hay un solo `paused`, con el `reason` del que empezó la pausa, y un solo `resumed`, cuando ya no queda ninguno. Un lector no falla ante un `reason` que no conoce. |
-| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. Entre un `paused` y su `resumed` no se graba nada: tampoco hay eventos `cursor`, `mouseDown`, `mouseUp`, `windowGeometry` ni `cameraStyle` (privacidad: ni la pantalla de bloqueo ni sus clics). |
+| `resumed` | | La captura volvió después de `paused`; cada pista abre un segmento nuevo. Entre un `paused` y su `resumed` no se graba nada: tampoco hay eventos `cursor`, `mouseDown`, `mouseUp`, `windowGeometry`, `cameraStyle`, `cursorImage`, `scroll` ni `keyActivity` (privacidad: ni la pantalla de bloqueo ni sus clics). |
 | `deviceChanged` | `track`, `deviceUniqueID` | La pista siguió grabando desde otro dispositivo (el `uniqueID` del micrófono o de la cámara), por ejemplo porque se desconectó el micrófono o la cámara. |
 | `marker` | | Una marca que el usuario puso mientras grababa. La app la escribe desde la fase 1a; nunca entre un `paused` y su `resumed`, donde no se graba nada. |
 | `droppedSamples` | `track`, `count` | Total de muestras (cuadros o bloques de audio) que la pista `track` perdió hasta ahora en su segmento actual, el que abrió su último `segmentStarted`. Se escribe cada 2 s mientras se graba, solo si cambió, y no toca el manifiesto: es lo que la recuperación usa como `droppedFrames` de un segmento que la app no llegó a cerrar. |
 | `audioClock` | `track`, `frame` | La muestra número `frame` del archivo del segmento actual de la pista de audio `track` (contando desde 0, la muestra de `startHostTime`) se capturó en `t`. El archivo de audio solo cuenta muestras y el reloj del dispositivo no va exactamente al ritmo del host, así que la grabación escribe uno cada 5 s de audio de cada segmento, con el instante del bloque que empieza en esa muestra, y el export ubica el audio por host time interpolando entre ellos (ver [Tiempos](#tiempos)). `frame` cuenta solo las muestras escritas en el archivo, así que el audio que el escritor descarta en tiempo real (su cola llena) no corre las anclas: cada una nombra una muestra que está en el archivo. Un lector descarta un ancla que no avanza en `frame` y en `t` respecto de la última que usa, o que se aparta más de 5000 ppm de la frecuencia del archivo respecto de la anterior. |
 | `windowGeometry` | `track`, `frame`, `onScreen` | Desde la versión 2. Dónde está la ventana de la pista `window` `track`: su rectángulo en puntos globales (`x`, `y`, `width`, `height`) y si macOS la tiene en pantalla. `onScreen` es `false` tanto con la ventana minimizada u oculta como en otro Space, donde se sigue grabando. Se escribe al empezar la toma y cada vez que cambia el marco o `onScreen`. El render usa el último con `t` hasta el instante que dibuja, o `globalFrame` si no hay ninguno. |
 | `cameraStyle` | `style` | Desde la versión 2. La cámara se ve con el estilo `style` (`shape`, `size`, `anchor`, como el `cameraStyle` de la toma) desde `t`: el usuario movió la burbuja o le cambió la forma o el tamaño mientras grababa. El `cameraStyle` de la toma es el estilo de antes del primero. Un cambio hecho en pausa se escribe en el instante de reanudar, justo después de `resumed`, y un estilo igual al último escrito no se escribe. |
+| `cursorImage` | `hash`, `hotspot`, `size`, `kind` | Desde la versión 3. macOS muestra este cursor desde `t`. Su imagen es `takes/<toma>/cursors/<hash>.png` (ver [`cursors/`](#cursors)), y la línea se escribe recién cuando la imagen está en el disco. `hotspot`: dónde está el puntero dentro de la imagen, como fracción de su ancho (`x`) y de su alto (`y`) desde arriba a la izquierda. `size`: el tamaño del cursor en puntos (`width`, `height`). `kind`, opcional: el cursor del sistema cuyos píxeles tiene en esa Mac, si es uno de `arrow`, `iBeam`, `pointingHand`, `openHand`, `closedHand`, `crosshair`, `resizeLeftRight`, `resizeUpDown` o `notAllowed`; si falta, o es uno que el lector no conoce (una versión más nueva puede sumar formas), se usa la imagen grabada y la línea vale igual. La grabación mira el cursor cada 1/30 s y escribe una línea solo cuando cambia. |
+| `scroll` | `dx`, `dy`, `x`, `y` | Desde la versión 3. El usuario hizo scroll `dx`, `dy` puntos (los de `scrollingDeltaX` y `scrollingDeltaY` de macOS; con un mouse que cuenta líneas, 10 puntos por línea), la suma de cada 1/30 s en una línea, con el puntero en (`x`, `y`) al final. |
+| `keyActivity` | | Desde la versión 3. Se apretó al menos una tecla en los 250 ms que empiezan en `t` (un múltiplo de 250 ms de `HostTime`): una línea por ventana con al menos una tecla. Es actividad, nunca contenido: ni qué teclas, ni sus códigos, ni los modificadores, ni cuántas, y la ventana fija borra el ritmo entre teclas. Nunca se escribe con la entrada segura de macOS activa (los campos de contraseña, la entrada segura de Terminal) ni si el usuario lo apagó en los ajustes. |
 
 Una línea de cada tipo, exactamente como se escribe:
 
@@ -349,6 +359,9 @@ Una línea de cada tipo, exactamente como se escribe:
 {"frame":240000,"t":5,"track":"mic","type":"audioClock"}
 {"frame":{"height":600,"width":800,"x":100,"y":80},"onScreen":true,"t":5,"track":"window-4242","type":"windowGeometry"}
 {"style":{"anchor":"topLeading","shape":"landscape","size":0.17},"t":5,"type":"cameraStyle"}
+{"hash":"3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e","hotspot":{"x":0.16,"y":0.12},"kind":"arrow","size":{"height":32,"width":24},"t":5,"type":"cursorImage"}
+{"dx":0,"dy":-42.5,"t":5,"type":"scroll","x":640.5,"y":402}
+{"t":5,"type":"keyActivity"}
 ```
 
 ### Lectura después de un crash
@@ -408,6 +421,16 @@ Opcional (versión 2). `takes/<toma>/wallpapers/display-<CGDirectDisplayID>.png`
 - En un volumen sin `RENAME_EXCL` (exFAT o SMB, por ejemplo) `renamex_np` da `ENOTSUP`: ninguna foto se guarda, no queda ningún archivo a medias, la app lo anota y la toma sigue igual.
 - La recuperación no la toca.
 
+## `cursors/`
+
+Opcional (versión 3). `takes/<toma>/cursors/<hash>.png` es una imagen del cursor que mostró macOS durante la toma, la que nombra un evento `cursorImage`: una por imagen distinta, aunque el cursor vaya y vuelva entre dos formas muchas veces.
+
+- La imagen está dibujada a 4 veces su tamaño en puntos (`size` del evento), así se ve nítida con zoom. `<hash>` son 32 dígitos hexadecimales en minúscula de SHA-256 del ancho, el alto, el `hotspot` y los píxeles RGBA de esa imagen: el nombre es su contenido.
+- Cada imagen se escribe una sola vez y nunca sobre otra: si ya hay una con ese nombre, se deja.
+- Es una carpeta común y sus imágenes, archivos comunes con un nombre exactamente `<hash>.png`. Un lector las abre sin seguir enlaces simbólicos y trata como ausente la que no cumple.
+- Puede faltar la carpeta, o la imagen de algún evento: en una toma de las versiones 1 o 2, en las de `recorder-dev`, o si macOS no dio la imagen del cursor. Sin ella se dibuja el cursor de Toma; nada depende de ella para leer o exportar una toma.
+- La recuperación no la toca.
+
 ## Cierre de una toma
 
 La regla es la de los segmentos: el manifiesto dice que algo terminó solo cuando eso ya está en el disco. Al cerrar una toma, en este orden:
@@ -425,7 +448,7 @@ Una toma con `status` `recording` cuyo `recording.lock` no tiene nadie quedó ab
 
 - Antes de tocar nada comprueba las rutas (ver [Rutas](#el-paquete)): con un `id`, un `file` o un enlace simbólico que podrían sacarla del paquete, no cambia nada y no crea nada fuera de él. `events.jsonl` se abre con `O_NOFOLLOW` y tiene que ser un archivo común.
 - Toma el lock de la toma mientras trabaja. No recupera nada mientras otra toma del mismo paquete se está grabando (su grabador es quien escribe `manifest.json`), y lo vuelve a comprobar, junto con que el manifiesto no haya cambiado, justo antes de escribirlo. Las tomas de un paquete se recuperan de a una y antes de grabar algo nuevo en él.
-- No toca un manifiesto de un `formatVersion` que no lee (uno mayor que el que conoce). Al escribir el manifiesto conserva su `formatVersion`: un paquete v1 recuperado sigue siendo v1.
+- No toca un manifiesto de un `formatVersion` que no lee (uno mayor que el que conoce). Al escribir el manifiesto conserva su `formatVersion`, su `projectID` y su `upgradedFrom`: un paquete v1 recuperado sigue siendo v1.
 - Hace terminar `events.jsonl` en un límite de línea, como antes de agregarle líneas (ver arriba).
 - Cierra cada segmento abierto (sin `endHostTime` o sin `endReason`) según lo que se puede leer de su archivo:
   - `recoveredAfterCrash`, con `endHostTime` igual a `startHostTime` más la duración legible, que llega hasta el último fragmento completo;
@@ -466,7 +489,31 @@ Compatibilidad:
 
 - Un lector de la versión 2 lee las versiones 1 y 2 (`Manifest.supportedFormatVersions`, `1...2`) y rechaza cualquier otra antes de decodificar el manifiesto: un paquete de una versión más nueva es *para reparar* y no se toca. Un lector de la versión 1 rechaza así los paquetes v2.
 - Un paquete v1 se lee como siempre: no tiene ninguno de los campos nuevos, y su toma no tiene `cameraStyle`.
-- **Un paquete v1 se queda en v1.** La versión se decide al crear el paquete y nadie la reescribe: ni la recuperación ni la app cambian un proyecto viejo en silencio, y nada que la versión 1 no define se escribe en un paquete v1.
+- **Un paquete v1 se queda en v1 hasta que el usuario lo edita.** La versión se decide al crear el paquete y la grabación y la recuperación nunca la reescriben: nada cambia un proyecto viejo en silencio, y nada que la versión 1 no define se escribe en un paquete v1. Desde la versión 3, la primera edición del usuario lo pasa a la versión 3 (ver [Cambios de la versión 3](#cambios-de-la-versión-3)).
+
+## Cambios de la versión 3
+
+La versión 3 llega con el hito 1b, el editor con estilo, cursor y zoom. Los paquetes nuevos se crean con `formatVersion: 3`.
+
+- El campo `projectID` del manifiesto: el id estable del proyecto, al azar al crear el paquete. **Id derivado**, el de un paquete sin `projectID` (versiones 1 y 2): los primeros 16 bytes, en 32 dígitos hexadecimales en minúscula, de SHA-256 sobre el UTF-8 de `createdAt` como se escribe en el manifiesto (ISO 8601) seguido de `\n` y, por cada toma en orden, su `id`, `\n`, su `startedAt` en ISO 8601 y `\n`. Por ejemplo, con `createdAt` `2026-11-15T20:00:00Z` y una toma `take-001` de `startedAt` `2026-11-15T20:00:01Z`, SHA-256 de `"2026-11-15T20:00:00Z\ntake-001\n2026-11-15T20:00:01Z\n"`. Ninguno de los dos cambia al renombrar o mover el paquete, y una copia en Finder tiene el mismo id que el original. Las cachés del editor van fuera del paquete, en una carpeta con ese id.
+- El campo `upgradedFrom` del manifiesto: la versión en que se creó un paquete que pasó a la versión 3 con su primera edición.
+- La carpeta opcional `takes/<toma>/cursors/`, con las imágenes del cursor (ver [`cursors/`](#cursors)).
+- Eventos nuevos: `cursorImage`, `scroll` y `keyActivity`. Como los demás, nunca entre un `paused` y su `resumed`, una línea por evento y con las claves en orden alfabético:
+
+  ```
+  {"hash":"3f2a9c0e3f2a9c0e3f2a9c0e3f2a9c0e","hotspot":{"x":0.16,"y":0.12},"kind":"arrow","size":{"height":32,"width":24},"t":5,"type":"cursorImage"}
+  {"dx":0,"dy":-42.5,"t":5,"type":"scroll","x":640.5,"y":402}
+  {"t":5,"type":"keyActivity"}
+  ```
+
+  Un `kind` de `cursorImage` que el lector no conoce se lee como ausente: se usa la imagen grabada y la línea vale igual.
+- Nombres reservados en la raíz del paquete, para el editor: `edit.json` (el documento de edición), `edit-log.jsonl` (el registro de cambios), `edit.lock` (el lock del editor que escribe) y `assets/` (imágenes propias del fondo). El editor escribe solo esos y el manifiesto, una vez, al pasar un paquete v1 o v2 a la versión 3; en un paquete v1 o v2 sin editar no escribe nada, y nunca toca `takes/`.
+
+Compatibilidad:
+
+- Un lector de la versión 3 lee las versiones 1, 2 y 3 (`Manifest.supportedFormatVersions`, `1...3`) y rechaza cualquier otra antes de decodificar el manifiesto. Un lector de la versión 2 rechaza así los paquetes v3: un paquete v3 es *para reparar* para la app de la versión 2, que no lo toca, así nunca muestra sin sus ediciones lo que el usuario cortó.
+- Un paquete v1 o v2 se lee como siempre: no tiene `projectID` ni `upgradedFrom`, y su id es el derivado.
+- **Un paquete v1 o v2 se queda en su versión hasta que el usuario lo edita.** Abrirlo, reproducirlo y exportarlo no escriben nada en el paquete. La primera edición lo pasa a la versión 3: el manifiesto se reescribe con `formatVersion: 3`, `upgradedFrom` y el `projectID` derivado (así su carpeta de cachés sigue siendo la misma), y nada más cambia: las tomas conservan su contenido v1 o v2, que la versión 3 sabe leer.
 
 ## Los datos crudos nunca se borran
 
