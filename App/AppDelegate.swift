@@ -322,6 +322,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             updateActivationPolicy()
         }
         made = editor
+        editor.keyboard.open = { [weak self] in self?.openProject() }
         editors[key] = editor
         Task {
             await editor.restoreWindowState()

@@ -192,6 +192,10 @@ enum TimelineText {
 ///   (`TimelineLayout.autoscrollOffset`), unless it was scrolled away by hand, until the playhead is in sight again.
 /// - With Reduce Motion, the scale and the scroll change at once with a fade (`Motion.reducedMotionFade`).
 /// - A click or a drag on the ruler moves the playhead (`onScrub`, `onScrubEnd`).
+/// - The keys (⌘+, ⌘−, ⇧Z, N and the rest of design §5.7) are the window's, `EditorKeyboard`'s; with the focus, the
+///   timeline shows the system's focus ring, and Tab and ⇧Tab reach it.
+/// - VoiceOver (design §5.10): a container with an element for each clip, zoom block and camera change in sight, and the
+///   playhead (`TimelineAccessibility`).
 @MainActor
 final class EditorTimelineView: NSView, NSViewToolTipOwner {
     // MARK: What it shows
@@ -232,6 +236,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     var onScaleAndScrollChange: (_ scale: Double?, _ offset: Double) -> Void = { _, _ in }
     /// The mouse's editing of the timeline: its drags, hover and menus.
     private(set) lazy var interaction = TimelineInteraction(view: self)
+    /// What VoiceOver reads of it.
+    private lazy var accessibility = TimelineAccessibility(view: self)
 
     let tracks = TimelineTracks()
     private(set) var content: TimelineContent?
@@ -334,9 +340,33 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     override var isFlipped: Bool { true }
     override var wantsUpdateLayer: Bool { true }
     override var acceptsFirstResponder: Bool { true }
+    /// Tab and ⇧Tab reach it, as they reach the preview and the panel.
+    override var canBecomeKeyView: Bool { true }
 
     override func updateLayer() {
         layer?.backgroundColor = palette.background
+    }
+
+    /// The focus ring, inside the edges: the window and the split view around it would cut it off outside.
+    override var focusRingMaskBounds: NSRect { bounds }
+
+    override func drawFocusRingMask() {
+        bounds.insetBy(dx: 3, dy: 3).fill()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        noteFocusRingMaskChanged()
+    }
+
+    // MARK: VoiceOver
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .group }
+    override func accessibilityLabel() -> String? { String(localized: "Timeline", comment: "VoiceOver: the editor's timeline") }
+
+    override func accessibilityChildren() -> [Any]? {
+        accessibility.children() + (super.accessibilityChildren() ?? [])
     }
 
     /// Shows `document` of `take` (with `events`' markers), the spans in `missing` hatched; `nil`, nothing (the project is
@@ -349,6 +379,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         shown = (take, document, missing)
         shownEvents = events
         rebuildContent()
+        NSAccessibility.post(element: self, notification: .layoutChanged)
     }
 
     /// Shows `document` instead of the committed one while a drag lasts (`nil`: the committed one again). The next `show`
@@ -787,31 +818,6 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     /// The range of scales, from the whole sequence in the width to 600 pt per second.
     var scaleRange: ClosedRange<Double> {
         TimelineLayout.fitScale(duration: durationSeconds, width: areaWidth)...TimelineLayout.maxPointsPerSecond
-    }
-
-    override func performKeyEquivalent(with event: NSEvent) -> Bool {
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if content != nil, modifiers == .command || modifiers == [.command, .shift], let key = event.charactersIgnoringModifiers {
-            switch key {
-            case "+", "=":
-                zoomIn()
-                return true
-            case "-":
-                zoomOut()
-                return true
-            default: break
-            }
-        }
-        return super.performKeyEquivalent(with: event)
-    }
-
-    override func keyDown(with event: NSEvent) {
-        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
-        if content != nil, modifiers == .shift, event.charactersIgnoringModifiers?.lowercased() == "z" {
-            fitToWindow()
-            return
-        }
-        super.keyDown(with: event)
     }
 
     // MARK: - Appearance

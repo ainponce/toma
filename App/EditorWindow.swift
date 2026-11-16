@@ -20,11 +20,14 @@ final class ExportGate {
 /// (`TimelineViewController`, its divider between `EditorLayout.timelineHeightRange`). The preview and the panel are
 /// SwiftUI in an `NSHostingController`, the timeline AppKit; each part's view has its identifier (`preview`,
 /// `inspector`, `timeline`). The preview's bridges its `.toolbar` and title to the window (`sceneBridgingOptions`),
-/// without which the bar would not appear.
+/// without which the bar would not appear. The window's keys are `EditorKeyboard`'s (design §5.7), and Tab and ⇧Tab move
+/// the focus between the bar, the preview, the panel and the timeline in the order they are on screen.
 @MainActor
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
     let model: EditorModel
+    /// The window's keys.
+    let keyboard: EditorKeyboard
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
@@ -48,9 +51,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
         model.onRecovered = onRecovered
         timeline = TimelineViewController(model: model)
+        keyboard = EditorKeyboard(model: model, timeline: timeline.timelineView)
         let visible = NSScreen.main?.visibleFrame ?? NSRect(origin: .zero, size: EditorLayout.minimumSize)
         let size = EditorLayout.initialSize(visible: visible.size)
-        let window = NSWindow(
+        let window = EditorKeyWindow(
             contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
         window.title = model.name
@@ -59,7 +63,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.titleVisibility = .hidden
         window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
+        window.autorecalculatesKeyViewLoop = true
+        window.keyboard = keyboard
         super.init(window: window)
+        keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
         // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
         // the content's views ask for it. Its delegate's (`windowWillReturnUndoManager`) is Edit ▸ Undo's.
         window.delegate = self

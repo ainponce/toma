@@ -14,7 +14,7 @@ import QuartzCore
 ///   on the ruler moves the playhead, and with ⌥ a drag marks a range.
 /// - A drag is one gesture of the model (`beginGesture` … `endGesture`): while it lasts the timeline and the preview show
 ///   the document with the drag's step applied, and on the mouse's release the step is made once, one undo step with its
-///   label. Esc during a drag is Task 42's; releasing outside does the same as inside.
+///   label. Esc during a drag gives it up (`cancelDrag()`); releasing outside does the same as inside.
 /// - Within 6 pt of an edge of a clip or a block, the cursor is `resizeLeftRight` and a drag trims it, with a label
 ///   ("−1,20 s · 0:18,40"); a drag of a block moves it; a drag in an empty place of the Zoom track makes one (at least 0.3 s)
 ///   and a double click makes one of 3 s; the diamonds of the camera and the limits between screens are dragged in time.
@@ -468,6 +468,27 @@ final class TimelineInteraction {
         } else {
             hideLabel()
         }
+    }
+
+    /// Esc while the mouse is down (design §5.7): a drag that edits is given up, nothing made, and the timeline and the
+    /// preview show the document again; the playhead stays where it was dragged, and the marks where they were put. The
+    /// rest of the drag does nothing. Whether there was one.
+    func cancelDrag() -> Bool {
+        switch drag {
+        case .none:
+            return false
+        case .playhead:
+            view.endScrub()
+        case .marks, .emptyZoom, .pressed:
+            break
+        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .moveBoundary:
+            lastStep = nil
+            model?.cancelGesture()
+            view.setPreview(nil)
+        }
+        drag = .none
+        hideLabel()
+        return true
     }
 
     /// The mouse was released: the gesture's last step is made, once.

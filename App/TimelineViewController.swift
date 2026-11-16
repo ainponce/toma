@@ -10,6 +10,8 @@ import ProjectFormat
 final class TimelineViewController: NSViewController {
     private let model: EditorModel
     private let timeline = EditorTimelineView()
+    /// The timeline itself, for the window's keys.
+    var timelineView: EditorTimelineView { timeline }
     private let bar = TimelineBar()
     /// The package and the take the caches read, and the work of the waveforms.
     private var cachesFor: (url: URL, take: TakeRecord)?

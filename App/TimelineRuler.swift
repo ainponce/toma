@@ -160,9 +160,3 @@ final class TimelineRuler {
         return whole + (Locale.current.decimalSeparator ?? ".") + String(milliseconds % 1000 / 100)
     }
 }
-
-/// The in and out marks of the ruler (I and O, or ⌥ and a drag on the ruler), in output nanoseconds.
-struct TimelineMarks: Equatable {
-    var `in`: Int64?
-    var out: Int64?
-}

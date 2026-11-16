@@ -72,7 +72,8 @@ enum EditorBanner: Equatable {
 ///
 /// The playhead paused is always a frame of the project's grid (`playheadFrame`), the export's frame `n` at the export's
 /// size (the document's format at 1080 on its shorter side). Playing, the time runs free on the audio's clock (the
-/// host's while there is no sound) and the label follows it ten times a second. When the sequence changes, the playhead
+/// host's while there is no sound) and the label follows it ten times a second; J and L play at other speeds, on the
+/// host's clock without sound (`shuttle(_:)`). When the sequence changes, the playhead
 /// keeps the source instant it shows if that is still kept, at its new output time; if it was cut, it goes to the output
 /// time of the edit point that took its place (Task 14).
 @MainActor @Observable
@@ -181,6 +182,8 @@ final class EditorModel {
     @ObservationIgnored private var timeline: Timeline?
     /// Playing: where the clock started on the host's clock, when there is no audio.
     @ObservationIgnored private var hostClock = (seconds: 0.0, host: 0.0)
+    /// Playing: the speed, signed (J and L: `shuttle(_:)`); 1 with `play()`.
+    @ObservationIgnored private var speed = 1
     @ObservationIgnored private var usesAudioClock = false
     /// Where the sound was asked to start, until the player has taken it (its clock tells where it stopped before).
     @ObservationIgnored private var pendingAudioStart: Double?
@@ -708,6 +711,7 @@ final class EditorModel {
     func play() {
         guard canPlay, !isPlaying, let timeline else { return }
         if playheadFrame >= timeline.lastFrame { setPlayhead(0) }
+        speed = 1
         isPlaying = true
         lastLabelUpdate = 0
         startClock(at: timeline.seconds(ofFrame: playheadFrame))
@@ -724,6 +728,29 @@ final class EditorModel {
         if timeline.revision != session.revision { movePlayhead(to: Timeline(session.document, revision: session.revision)) }
         engine?.request(.paused(frame: playheadFrame))
         missingVideoCheck?.run()
+    }
+
+    /// The speed playing at, signed: 0 paused, 1 playing (`play()`), and J and L's others (`shuttle(_:)`).
+    var playbackSpeed: Int { isPlaying ? speed : 0 }
+
+    /// J and L (design §5.7): plays at `speed` (signed; backwards with a negative one) from where the playhead is, or the
+    /// time playing. At 1× forwards it is `play()`, with sound; at any other speed, the host's clock runs at that speed
+    /// without sound, and backwards the preview shows the latest instant asked for, as a drag of the playhead does (it can
+    /// show fewer frames). It stops at the end, and backwards at the start. Whether it plays.
+    @discardableResult
+    func shuttle(_ speed: Int) -> Bool {
+        guard canPlay, speed != 0, let timeline else { return false }
+        if isPlaying, self.speed == speed { return true }
+        // Paused at the end, forwards plays from the start, as `play()` does; at the start, backwards does nothing.
+        let from = !isPlaying && speed > 0 && playheadFrame >= timeline.lastFrame ? 0 : playheadFrame
+        let seconds = isPlaying ? clockSeconds() : timeline.seconds(ofFrame: from)
+        guard speed > 0 || seconds > 0 else { return false }
+        if isPlaying { stopPlaying() }
+        self.speed = speed
+        isPlaying = true
+        lastLabelUpdate = 0
+        startClock(at: seconds)
+        return true
     }
 
     /// Goes to frame `n` of the grid; playing, it plays on from there.
@@ -784,14 +811,14 @@ final class EditorModel {
     func displayTick() {
         guard isPlaying, let engine, let timeline else { return }
         let seconds = clockSeconds()
-        guard seconds < timeline.map.durationSeconds else {
-            // The end: stops on the last frame.
+        guard seconds < timeline.map.durationSeconds, speed > 0 || seconds > 0 else {
+            // The end (or, backwards, the start): stops on its frame.
             stopPlaying()
-            setPlayhead(timeline.lastFrame)
+            setPlayhead(speed > 0 ? timeline.lastFrame : 0)
             engine.request(.paused(frame: playheadFrame))
             return
         }
-        engine.request(.playing(seconds: seconds))
+        engine.request(speed > 0 ? .playing(seconds: seconds) : .scrubbing(seconds: seconds))
         let now = Self.hostSeconds()
         if now - lastLabelUpdate >= Self.labelInterval {
             lastLabelUpdate = now
@@ -809,11 +836,11 @@ final class EditorModel {
     }
 
     /// Starts the clock at `seconds`: the audio's, which waits there until its first frame is heard, or the host's while
-    /// there is no sound (or it cannot start).
+    /// there is no sound (or it cannot start, or the speed is not 1×).
     private func startClock(at seconds: Double) {
         clockGeneration += 1
         hostClock = (seconds, Self.hostSeconds())
-        guard let player else {
+        guard let player, speed == 1 else {
             usesAudioClock = false
             return
         }
@@ -842,7 +869,7 @@ final class EditorModel {
 
     private func clockSeconds() -> Double {
         if usesAudioClock, let player { return pendingAudioStart ?? player.clock.seconds(atHost: Self.hostSeconds()) }
-        return hostClock.seconds + (Self.hostSeconds() - hostClock.host)
+        return hostClock.seconds + Double(speed) * (Self.hostSeconds() - hostClock.host)
     }
 
     private func stopPlaying() {

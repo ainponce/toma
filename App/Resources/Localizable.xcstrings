@@ -401,6 +401,17 @@
         }
       }
     },
+    "Automatic zoom of %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: an automatic zoom block, its depth, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom automático de %1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "Avoid Clipping" : {
       "comment" : "The Audio tab: the limiter",
       "localizations" : {
@@ -554,6 +565,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se interrumpió la captura de la cámara. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "Camera change at %@" : {
+      "comment" : "VoiceOver: a change of the camera's style on the timeline, its time",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambio de la cámara en %@"
           }
         }
       }
@@ -2439,6 +2461,17 @@
         }
       }
     },
+    "Part from %1$@ to %2$@, speed %3$@" : {
+      "comment" : "VoiceOver: a clip of the timeline, its start, end and speed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tramo de %1$@ a %2$@, velocidad %3$@"
+          }
+        }
+      }
+    },
     "Part of the recording couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -2539,6 +2572,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Reproducir"
+          }
+        }
+      }
+    },
+    "Playhead, %1$@ of %2$@" : {
+      "comment" : "VoiceOver: the timeline's playhead, its time and what the output lasts",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cabezal, %1$@ de %2$@"
           }
         }
       }
@@ -4563,6 +4607,17 @@
         }
       }
     },
+    "Timeline" : {
+      "comment" : "VoiceOver: the editor's timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Línea de tiempo"
+          }
+        }
+      }
+    },
     "Timeline Scale" : {
       "comment" : "The timeline's track bar: the scale's slider",
       "localizations" : {
@@ -4676,6 +4731,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Recortar"
+          }
+        }
+      }
+    },
+    "Trim End to Playhead" : {
+      "comment" : "VoiceOver: an action of a clip: its end trimmed up to the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar el final hasta el cabezal"
+          }
+        }
+      }
+    },
+    "Trim Start to Playhead" : {
+      "comment" : "VoiceOver: an action of a clip: its start trimmed up to the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar el inicio hasta el cabezal"
           }
         }
       }
@@ -5002,6 +5079,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Alejar"
+          }
+        }
+      }
+    },
+    "Zoom of %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a zoom block of the user's, its depth, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom de %1$@, de %2$@ a %3$@"
           }
         }
       }

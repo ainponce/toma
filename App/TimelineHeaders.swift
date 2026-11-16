@@ -20,6 +20,8 @@ final class TrackHeaderView: NSView {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         icon.contentTintColor = .secondaryLabelColor
+        // VoiceOver reads the name.
+        icon.setAccessibilityElement(false)
         name.stringValue = title
         name.font = .systemFont(ofSize: 11)
         name.textColor = .secondaryLabelColor
