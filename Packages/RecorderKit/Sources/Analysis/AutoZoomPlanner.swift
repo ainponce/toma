@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import CryptoKit
 import Foundation
 import ProjectFormat
 
@@ -78,9 +77,7 @@ public enum AutoZoomPlanner {
     /// bytes, in lowercase hex, of SHA-256 of the UTF-8 of `"autoZoom-1|<take>|<start>|<end>"`, the times in
     /// nanoseconds. Planning again without changes gives the same ids.
     public static func regionID(take: String, start: HostTime, end: HostTime) -> String {
-        let digest = SHA256.hash(data: Data("\(id)|\(take)|\(start.nanoseconds)|\(end.nanoseconds)".utf8))
-        let digits = Array("0123456789abcdef")
-        return "z-" + String(digest.prefix(4).flatMap { [digits[Int($0 >> 4)], digits[Int($0 & 0x0F)]] })
+        PlannerID.make(prefix: "z-", [id, take, "\(start.nanoseconds)", "\(end.nanoseconds)"])
     }
 }
 

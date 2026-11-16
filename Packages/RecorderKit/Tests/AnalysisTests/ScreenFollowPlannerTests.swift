@@ -57,10 +57,17 @@ enum ScreenFollowFixtures {
         InputEvent(t: t, kind: pointer(0, on: screen).kind)
     }
 
+    /// A clip of `take` over the seconds `[from, to)` after `base`.
+    static func clip(from: Double, to: Double, speed: Double = 1, take: String = takeID) -> Clip {
+        Clip(id: "c-00000001", take: take, start: at(from), end: at(to), speed: speed)
+    }
+
     /// The plan of `take` over `events`, in a package where every segment file of `take` is written with `bytes`
-    /// bytes, but those of the tracks in `missing`, which are not written.
+    /// bytes, but those of the tracks in `missing`, which are not written. With `sequence`, measured in its output
+    /// (`plan(take:events:package:timeMap:)`); without, in the take's new document's.
     static func plan(
-        _ events: [InputEvent], take: TakeRecord = makeTake(), missing: Set<String> = [], bytes: Int = 1
+        _ events: [InputEvent], take: TakeRecord = makeTake(), missing: Set<String> = [], bytes: Int = 1,
+        sequence: [Clip]? = nil
     ) throws -> (initial: String?, changes: [ScreenChange]) {
         try withTemporaryDirectory { directory in
             let package = ProjectPackage(url: directory.appendingPathComponent("Test.toma", isDirectory: true))
@@ -71,8 +78,37 @@ enum ScreenFollowFixtures {
                     try Data(repeating: 0x2A, count: bytes).write(to: url)
                 }
             }
-            return ScreenFollowPlanner.plan(take: take, events: events, package: package)
+            guard let sequence else { return ScreenFollowPlanner.plan(take: take, events: events, package: package) }
+            return ScreenFollowPlanner.plan(take: take, events: events, package: package, timeMap: TimeMap(sequence: sequence))
         }
+    }
+
+    /// A pointer that wanders between both screens and off them at uneven times, with pauses, for 59 s (seeded, so
+    /// always the same).
+    static func wander() -> [InputEvent] {
+        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
+        func next(_ bound: UInt64) -> UInt64 {
+            state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+            return (state >> 33) % bound
+        }
+        var events: [InputEvent] = []
+        var t: UInt64 = 0
+        while t < 59_000_000_000 {
+            let place = next(5)
+            let time = HostTime(nanoseconds: base.nanoseconds + t)
+            switch place {
+            case 0: events.append(InputEvent(t: time, kind: .cursor(x: 5000, y: 5000)))
+            case 1, 2: events.append(pointer(time, on: 1))
+            default: events.append(pointer(time, on: 2))
+            }
+            if next(12) == 0 {
+                events.append(InputEvent(t: HostTime(nanoseconds: time.nanoseconds + 1_000), kind: .paused(reason: "user")))
+                t += 1_000 + next(3_000_000_000)
+                events.append(InputEvent(t: HostTime(nanoseconds: base.nanoseconds + t), kind: .resumed))
+            }
+            t += 1 + next(1_600_000_000)
+        }
+        return events
     }
 
     /// The id of plan decision 10, computed here on its own.
@@ -244,29 +280,7 @@ extension ScreenFollowFixtures {
         }
 
         @Test func changesNeverOverlapAndAlwaysSwitch() throws {
-            // A pointer that wanders between both screens and off them at uneven times, with pauses.
-            var state: UInt64 = 0x9E37_79B9_7F4A_7C15
-            func next(_ bound: UInt64) -> UInt64 {
-                state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-                return (state >> 33) % bound
-            }
-            var events: [InputEvent] = []
-            var t: UInt64 = 0
-            while t < 59_000_000_000 {
-                let place = next(5)
-                let time = HostTime(nanoseconds: base.nanoseconds + t)
-                switch place {
-                case 0: events.append(InputEvent(t: time, kind: .cursor(x: 5000, y: 5000)))
-                case 1, 2: events.append(pointer(time, on: 1))
-                default: events.append(pointer(time, on: 2))
-                }
-                if next(12) == 0 {
-                    events.append(InputEvent(t: HostTime(nanoseconds: time.nanoseconds + 1_000), kind: .paused(reason: "user")))
-                    t += 1_000 + next(3_000_000_000)
-                    events.append(InputEvent(t: HostTime(nanoseconds: base.nanoseconds + t), kind: .resumed))
-                }
-                t += 1 + next(1_600_000_000)
-            }
+            let events = wander()
             let take = makeTake()
             let result = try plan(events, take: take)
             #expect(result.changes.count > 5)
@@ -284,6 +298,106 @@ extension ScreenFollowFixtures {
                 shown = change.track
                 previous = output
             }
+        }
+
+        @Test func initialIsThePointersScreenWhenNothingCountsAtTheStart() throws {
+            // Nothing can be read in the first second; from 1 s both screens can, with the pointer on display-2.
+            let take = makeTake([
+                display(1, frame: frame1, segments: [segment("display-1", from: 1)]),
+                display(
+                    2, frame: frame2,
+                    segments: [segment("display-2", 1, to: 1, endReason: .empty), segment("display-2", 2, from: 1)]),
+            ])
+            let result = try plan([pointer(0, on: 2), pointer(30, on: 2)], take: take)
+            #expect(result.initial == "display-2")
+            #expect(result.changes.isEmpty)
+        }
+
+        // A document's output: `plan(take:events:package:timeMap:)`.
+
+        @Test func theNewDocumentsOutputIsTheDefault() throws {
+            let events = wander()
+            let take = makeTake()
+            let sequence = TakeTimeline.recordedSpans(take: take, events: events).map {
+                Clip(id: "c-00000001", take: takeID, start: $0.lowerBound, end: $0.upperBound, speed: 1)
+            }
+            let byDefault = try plan(events, take: take)
+            let given = try plan(events, take: take, sequence: sequence)
+            #expect(byDefault.initial == given.initial)
+            #expect(byDefault.changes == given.changes)
+        }
+
+        @Test func aCutThatRemovesAStayDoesNotSwitch() throws {
+            // 2 s on display-2, there and back in the recorded take.
+            let events = [pointer(0, on: 1), pointer(3, on: 2), pointer(5, on: 1)]
+            #expect(try plan(events).changes == [change(at(3), "display-2"), change(at(5), "display-1")])
+            // With the source from 2.9 s to 5.1 s cut, none of it is in the output.
+            let cut = try plan(events, sequence: [clip(from: 0, to: 2.9), clip(from: 5.1, to: 60)])
+            #expect(cut.initial == "display-1")
+            #expect(cut.changes.isEmpty)
+        }
+
+        @Test func aClipsSpeedScalesAStay() throws {
+            // 1.2 s of source on display-2: 0.6 s of output at 2×.
+            let events = [pointer(0, on: 1), pointer(3, on: 2), pointer(4.2, on: 1)]
+            #expect(try plan(events).changes == [change(at(3), "display-2"), change(at(4.2), "display-1")])
+            #expect(try plan(events, sequence: [clip(from: 0, to: 60, speed: 2)]).changes.isEmpty)
+            // 0.5 s of source: 1 s of output at 0.5×.
+            let slow = [pointer(0, on: 1), pointer(3, on: 2), pointer(3.5, on: 1)]
+            #expect(try plan(slow).changes.isEmpty)
+            #expect(
+                try plan(slow, sequence: [clip(from: 0, to: 60, speed: 0.5)]).changes
+                    == [change(at(3), "display-2"), change(at(3.5), "display-1")])
+        }
+
+        @Test func aStayIsMeasuredAcrossACut() throws {
+            // On display-2 from 3 s, with the source from 3.4 s to 10 s cut.
+            let sequence = [clip(from: 0, to: 3.4), clip(from: 10, to: 60)]
+            // Back on display-1 at 10.5 s: 0.4 s + 0.5 s of output.
+            let long = try plan([pointer(0, on: 1), pointer(3, on: 2), pointer(10.5, on: 1)], sequence: sequence)
+            #expect(long.changes == [change(at(3), "display-2"), change(at(10.5), "display-1")])
+            // At 10.3 s: 0.4 s + 0.3 s.
+            let short = try plan([pointer(0, on: 1), pointer(3, on: 2), pointer(10.3, on: 1)], sequence: sequence)
+            #expect(short.changes.isEmpty)
+            // Entered inside the cut: the change rules from the first instant kept after it, the next clip's start.
+            let inside = try plan([pointer(0, on: 1), pointer(5, on: 2)], sequence: sequence)
+            #expect(inside.changes == [change(at(10), "display-2")])
+        }
+
+        @Test func aLegacyPauseStillCountsInTheStay() throws {
+            // Paused from 3.3 s to 20 s, each screen's segment ends at the pause and the next starts at the resume.
+            let take = makeTake([
+                display(
+                    1, frame: frame1,
+                    segments: [segment("display-1", 1, to: 3.3, endReason: .paused), segment("display-1", 2, from: 20)]),
+                display(
+                    2, frame: frame2,
+                    segments: [segment("display-2", 1, to: 3.3, endReason: .paused), segment("display-2", 2, from: 20)]),
+            ])
+            let events = [
+                pointer(0, on: 1), pointer(3, on: 2), InputEvent(t: at(3.3), kind: .paused(reason: "user")),
+                InputEvent(t: at(20), kind: .resumed), pointer(20.3, on: 1),
+            ]
+            // The new document closes the pause: 0.6 s on display-2.
+            #expect(try plan(events, take: take).changes.isEmpty)
+            // The legacy document's one clip shows it as a still frame: 17.3 s.
+            let legacy = try plan(events, take: take, sequence: [clip(from: 0, to: 60)])
+            #expect(legacy.changes == [change(at(3), "display-2"), change(at(20.3), "display-1")])
+        }
+
+        @Test func instantsShownAtOneOutputInstantAreOne() throws {
+            // At 16×, the pointer's move to display-2 5 ns after the start is seen from the output's first instant on.
+            let events = [pointer(base, on: 1), pointer(HostTime(nanoseconds: base.nanoseconds + 5), on: 2)]
+            let result = try plan(events, sequence: [clip(from: 0, to: 60, speed: 16)])
+            #expect(result.initial == "display-2")
+            #expect(result.changes.isEmpty)
+        }
+
+        @Test func aStayEndsWithItsTake() throws {
+            // This take's clip ends at 4 s; a clip of another take follows it.
+            let sequence = [clip(from: 0, to: 4), clip(from: 100, to: 160, take: "take-002")]
+            #expect(try plan([pointer(0, on: 1), pointer(3.5, on: 2)], sequence: sequence).changes.isEmpty)
+            #expect(try plan([pointer(0, on: 1), pointer(3, on: 2)], sequence: sequence).changes == [change(at(3), "display-2")])
         }
     }
 }
