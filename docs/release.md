@@ -515,6 +515,13 @@ Una sola pasada de fin de hito, contra la app de esta rama, en orden: la prepara
 
 ### 2. Detalle por área
 
+**Un proyecto de 1b abierto en 1c** (3)
+
+Un proyecto editado con la app de 1b sigue siendo de 1b en el disco hasta que se lo edita en 1c: mirarlo no lo cambia.
+- Con el proyecto de 1b de la preparación (paso 1): abrirlo en 1c, reproducirlo y moverse por la línea de tiempo sin tocar nada, y cerrarlo. Abrirlo otra vez con la copia de 1b (`~/Desktop/Toma-1b.app`): abre igual que antes, con sus ediciones y sin ningún aviso.
+- Abrirlo en 1c y editarlo (otro margen alcanza), y cerrarlo. Abrirlo con la copia de 1b: ahora dice que el proyecto se editó con una versión más nueva de Toma.
+- En 1c, en ese mismo proyecto, deshacer hasta el final: también se deshacen las ediciones hechas en 1b (el corte y el margen), hasta el proyecto como se grabó.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

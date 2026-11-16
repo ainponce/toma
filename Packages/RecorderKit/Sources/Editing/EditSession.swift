@@ -131,6 +131,13 @@ public enum EditOutcome: Equatable, Sendable {
 /// of it; with neither, `NewDocument`, written at once. A log cut short is truncated and synced before the journal opens
 /// it; one past `context.compaction` is compacted through the journal (`replaceLog`), after a snapshot at its last line,
 /// and only if that makes it shorter.
+///
+/// A project of 1b, whose document is of `documentVersion` 1, stays in version 1 on disk until its first edit (1c design
+/// §13.2): the session shows it migrated, but while `pendingMigration` holds, everything it writes is version 1 (the
+/// snapshot, the compaction, the repair of the log), so the app of 1b still opens a project 1c only looked at. The first
+/// line it hands to the journal (`perform`, `undo` or `redo`) goes with the `migrate` lines before it, in one write
+/// (`EditJournal.append(_:)` of both); from then on the snapshot is of the current version. Every `create` the session
+/// writes again keeps the version the log's `create` is written in (`createVersion`).
 @MainActor
 public final class EditSession {
     /// The project as opened; its manifest is the one the upgrade to version 3 wrote, once it did.
@@ -160,6 +167,16 @@ public final class EditSession {
     private var baseSeq = 0
     /// The `seq` of each line given to the journal, in order.
     private var appendedSeqs: [Int] = []
+    /// The `documentVersion` `document` is written in on disk (1c design §13.2): the replay's (`EditReplay.version`) or
+    /// the snapshot's it opened from; `EditDocument.currentVersion` for a new document, a legacy one, and once the session
+    /// handed the journal a line, which migrates it.
+    private var diskVersion = EditDocument.currentVersion
+    /// The `documentVersion` the log's `create` is written in (`EditLogRead.createVersion`): every `create` the session
+    /// writes again (the compaction at opening and at closing, the repair) keeps it, whether or not it migrated since.
+    private var createVersion = EditDocument.currentVersion
+    /// The document is of an older version on disk and no line was handed to the journal yet: what the session writes
+    /// is written in `diskVersion`, and the first line goes with its `migrate`.
+    private var pendingMigration: Bool { diskVersion < EditDocument.currentVersion }
     /// The legacy document whose `create` the first edit writes (version 1 or 2, or 3 with `upgradedFrom` and no log).
     private var pendingCreate: EditDocument?
     /// The manifest of a version 1 or 2 package as it was opened, while it can be edited and is not upgraded yet.
@@ -206,6 +223,8 @@ public final class EditSession {
         logBytes = opened.logBytes
         baseSeq = opened.baseSeq
         appendedSeqs = opened.appendedSeqs
+        diskVersion = opened.diskVersion
+        createVersion = opened.createVersion
         pendingCreate = opened.pendingCreate
         let manifest = opened.project.manifest
         legacyManifest = manifest.formatVersion < 3 && opened.access == .editable ? manifest : nil
@@ -235,12 +254,23 @@ public final class EditSession {
     public nonisolated static func readDocument(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument) {
+        let (project, document, _) = try readDocumentWithDiskVersion(url, take: take, context: context)
+        return (project, document)
+    }
+
+    /// `readDocument(_:take:context:)`, and the `documentVersion` the document is written in on disk (1c design §13.2):
+    /// 1 for a project of 1b that has not been edited in 1c, which `document` shows migrated; `EditDocument.currentVersion`
+    /// for one edited since, a legacy document (version 1 or 2 package) and a new one.
+    public nonisolated static func readDocumentWithDiskVersion(
+        _ url: URL, take: String?, context: EditContext
+    ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
         let project = try LoadedProject.load(url, take: take)
-        guard project.manifest.formatVersion >= 3 else { return (project, .legacy(for: project)) }
+        guard project.manifest.formatVersion >= 3 else { return (project, .legacy(for: project), EditDocument.currentVersion) }
         let files = try EditFiles.read(project.package)
         if let version = files.newerVersion { throw EditDocumentError.newerVersion(version) }
         if let code = files.unsafe { throw POSIXError(code) }
-        return (project, Resolution.of(project, files: files, context: context).shown)
+        let resolution = Resolution.of(project, files: files, context: context)
+        return (project, resolution.shown, resolution.diskVersion)
     }
 
     /// Where the package is now (`F_GETPATH` of its folder), for what goes by path (importing an asset, the export, the
@@ -267,19 +297,23 @@ public final class EditSession {
     /// Applies `step` and hands its `do` line to the journal, without waiting for the disk. A step with the same label
     /// and target as the last one, less than 1 s after it, joins its undo group (design §6.4). The first step of a
     /// version 1 or 2 package starts its upgrade to version 3, and the line waits for it, as those of the steps that come
-    /// meanwhile do (`.pendingUpgrade`).
+    /// meanwhile do (`.pendingUpgrade`). The first line of a project of 1b goes with its `migrate` (`pendingMigration`).
     public func perform(_ step: EditStep) -> EditOutcome {
         guard isEditable, !step.changes.isEmpty, let next = try? document.applying(step.changes), next.isDrawable
         else { return .refused }
         if restartingLog {
-            // The new log starts with a `create` of the document as it is then, this step included.
+            // The new log starts with a `create` of the document as it is then, this step included: an edited document,
+            // of the current version.
+            diskVersion = EditDocument.currentVersion
             change(to: next, seq: document.logSequence)
             return .applied
         }
         let at = context.now()
-        var lines: [EditLogEntry] = []
-        // Recorded before the `do`, which it numbers; if the lines are not handed over, the next step writes it again.
-        if let create = legacyCreate() {
+        // The lines before the `do` are recorded first, since they number it; only once they are handed over is the
+        // history kept: if they are not, the next step writes them again.
+        var history = history
+        var lines = migrations(recordedIn: &history)
+        if let create = legacyCreate(seq: history.nextSeq) {
             history.record(create)
             lines.append(create)
         }
@@ -293,7 +327,9 @@ public final class EditSession {
         // A new group ends what could be redone.
         let closing = groups[group] == nil ? history.undone : []
         history.record(line)
+        self.history = history
         pendingCreate = nil
+        diskVersion = EditDocument.currentVersion
         for group in closing { groups[group] = nil }
         groups[group, default: []] += step.changes
         change(to: next, seq: line.seq)
@@ -305,11 +341,9 @@ public final class EditSession {
         guard isEditable, !restartingLog, let group = history.done.last, let changes = groups[group],
             let next = try? document.applying(changes.reversed().map(\.inverse)), next.isDrawable
         else { return .refused }
-        let line = EditLogEntry.undo(seq: history.nextSeq, group: group)
-        guard let outcome = hand([line]) else { return .refused }
-        history.record(line)
-        change(to: next, seq: line.seq)
-        return outcome
+        return handHistoryStep(to: next) { history in
+            history.done.last == group ? .undo(seq: history.nextSeq, group: group) : nil
+        }
     }
 
     /// Redoes the group on top of the redo stack.
@@ -317,11 +351,9 @@ public final class EditSession {
         guard isEditable, !restartingLog, let group = history.undone.last, let changes = groups[group],
             let next = try? document.applying(changes), next.isDrawable
         else { return .refused }
-        let line = EditLogEntry.redo(seq: history.nextSeq, group: group)
-        guard let outcome = hand([line]) else { return .refused }
-        history.record(line)
-        change(to: next, seq: line.seq)
-        return outcome
+        return handHistoryStep(to: next) { history in
+            history.undone.last == group ? .redo(seq: history.nextSeq, group: group) : nil
+        }
     }
 
     /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), for the step that
@@ -341,8 +373,8 @@ public final class EditSession {
         guard (try? await Self.run(on: files, { AssetImport.decodes(url) })) == true else { return .notAnImage }
         guard isEditable else { return .notEditable }
         let reopened = reopenings
-        if journal == nil, upgrade == nil, let manifest = legacyManifest, let legacy = pendingCreate, let create = legacyCreate(),
-            (try? create.jsonLine()) != nil
+        if journal == nil, upgrade == nil, let manifest = legacyManifest, let legacy = pendingCreate,
+            let create = legacyCreate(seq: history.nextSeq), (try? create.jsonLine()) != nil
         {
             history.record(create)
             pendingCreate = nil
@@ -486,16 +518,45 @@ public final class EditSession {
         return .pendingUpgrade
     }
 
-    /// Hands `lines` to the journal; `false`, and nothing handed over, if one cannot be encoded or the journal is closed.
-    private func append(_ lines: [EditLogEntry], to journal: EditJournal) -> Bool {
-        guard let encoded = try? lines.map({ try $0.jsonLine() }) else { return false }
-        for (entry, text) in zip(lines, encoded) {
-            // Only a closed journal throws, and then for the first line already.
-            guard (try? journal.append(text)) != nil else { return false }
-            appendedSeqs.append(entry.seq)
-            entries.append(entry)
-            logBytes += text.utf8.count + 1
+    /// Hands the line of an undo or a redo, made by `line` from the history after the `migrate` lines of the first line
+    /// while `pendingMigration` holds, to the journal behind them, and moves the document to `next`. `line` gives `nil`
+    /// when its group is not on top any more: a `migrate` that cuts the history (a line of 1b before it writes inside of
+    /// what it adds, 1c design §13.2) leaves nothing before it to undo or redo, and the step is refused.
+    private func handHistoryStep(to next: EditDocument, _ line: (UndoHistory) -> EditLogEntry?) -> EditOutcome {
+        var history = history
+        var lines = migrations(recordedIn: &history)
+        guard let last = line(history) else { return .refused }
+        lines.append(last)
+        guard let outcome = hand(lines) else { return .refused }
+        history.record(last)
+        self.history = history
+        diskVersion = EditDocument.currentVersion
+        change(to: next, seq: last.seq)
+        return outcome
+    }
+
+    /// The `migrate` lines that go before the first line the session hands to the journal while `pendingMigration`
+    /// holds (1c design §13.2), one for each version from `diskVersion` to the current one, numbered from
+    /// `history.nextSeq` and recorded in `history`; none otherwise.
+    private func migrations(recordedIn history: inout UndoHistory) -> [EditLogEntry] {
+        guard pendingMigration else { return [] }
+        return (diskVersion..<EditDocument.currentVersion).map { from in
+            let migrate = EditLogEntry.migrate(seq: history.nextSeq, from: from, to: from + 1)
+            history.record(migrate)
+            return migrate
         }
+    }
+
+    /// Hands `lines` to the journal, all at once (`EditJournal.append(_:)`: one write); `false`, and nothing handed
+    /// over, if one cannot be encoded or the journal is closed.
+    private func append(_ lines: [EditLogEntry], to journal: EditJournal) -> Bool {
+        guard let encoded = try? lines.map({ try $0.jsonLine(writingDocumentAt: createVersion) }),
+            // Only a closed journal throws.
+            (try? journal.append(encoded)) != nil
+        else { return false }
+        appendedSeqs += lines.map(\.seq)
+        entries += lines
+        logBytes += encoded.reduce(0) { $0 + $1.utf8.count + 1 }
         snapshotPolicy.entriesSinceSnapshot += lines.count
         snapshotPolicy.lastChange = .now
         if snapshotPolicy.isDue(now: .now) {
@@ -536,12 +597,12 @@ public final class EditSession {
         }
     }
 
-    /// The `create` of the legacy document whose `create` the first edit writes (`pendingCreate`), numbered as the next
-    /// line; `nil` without one.
-    private func legacyCreate() -> EditLogEntry? {
+    /// The `create` of the legacy document whose `create` the first edit writes (`pendingCreate`), numbered `seq`, the
+    /// next line's; `nil` without one.
+    private func legacyCreate(seq: Int) -> EditLogEntry? {
         guard var created = pendingCreate else { return nil }
-        created.logSequence = history.nextSeq
-        return .create(seq: created.logSequence, document: created, app: context.app)
+        created.logSequence = seq
+        return .create(seq: seq, document: created, app: context.app)
     }
 
     /// The code of the `.saveFailed` shown, if one is.
@@ -599,7 +660,8 @@ public final class EditSession {
         self.journal = journal
         listen(to: journal)
         guard (try? journal.append(line)) != nil else { return retryNewLog() }
-        history = UndoHistory(entries: [create])
+        createVersion = diskVersion
+        history = UndoHistory(entries: [create], createVersion: createVersion)
         groups = [:]
         entries = [create]
         logBytes = line.utf8.count + 1
@@ -615,12 +677,13 @@ public final class EditSession {
         journalChanged(to: journal.state)
     }
 
-    /// The `create` that starts a new log with the document as it is now, and its line.
+    /// The `create` that starts a new log with the document as it is now, and its line, written in `diskVersion`: a
+    /// project of 1b not edited yet stays in version 1.
     private func createOfDocument() throws -> (EditLogEntry, String) {
         var created = document
         created.logSequence = history.nextSeq
         let create = EditLogEntry.create(seq: created.logSequence, document: created, app: context.app)
-        return (create, try create.jsonLine())
+        return (create, try create.jsonLine(writingDocumentAt: diskVersion))
     }
 
     private func retryNewLog() {
@@ -830,23 +893,28 @@ public final class EditSession {
         startSnapshot()
     }
 
-    /// Writes the snapshot of the document as it is now once the journal confirmed its last line; one at a time.
+    /// Writes the snapshot of the document as it is now, in the version it is in on disk then, once the journal confirmed
+    /// every line handed to it; one at a time. It names the line the document includes (`logSequence`): when the lines
+    /// of a step go to the journal, the document is still the one before them.
     private func startSnapshot() {
         guard !isClosed, !restartingLog, let journal, document.isDrawable else { return }
         guard snapshotTask == nil else {
             snapshotWanted = true
             return
         }
-        let (target, seq, lines) = (document, lastSeq, appendedSeqs.count)
+        let (target, version, lines) = (document, diskVersion, appendedSeqs.count)
         snapshotTask = Task { [weak self] in
             let confirmed = await journal.flushed()
-            await self?.finishSnapshot(target, seq: seq, lines: lines, confirmed: confirmed, journal: journal)
+            await self?.finishSnapshot(target, writtenIn: version, lines: lines, confirmed: confirmed, journal: journal)
         }
     }
 
-    private func finishSnapshot(_ target: EditDocument, seq: Int, lines: Int, confirmed: Int, journal: EditJournal) async {
+    private func finishSnapshot(
+        _ target: EditDocument, writtenIn version: Int, lines: Int, confirmed: Int, journal: EditJournal
+    ) async {
+        let seq = target.logSequence
         // Decision 20: only once every line up to `seq` is on disk; a journal that recovers brings it back (`.saved`).
-        if journal === self.journal, !isClosed, confirmed >= lines, seq != snapshotSeq, await write(target) {
+        if journal === self.journal, !isClosed, confirmed >= lines, seq != snapshotSeq, await write(target, writtenIn: version) {
             snapshotSeq = seq
             snapshotPolicy.entriesSinceSnapshot = appendedSeqs.count - lines
         }
@@ -857,27 +925,28 @@ public final class EditSession {
         }
     }
 
-    /// At closing, with every line on disk: the snapshot of the last line, if `edit.json` is not that one already.
+    /// At closing, with every line on disk: the snapshot of the last line, if `edit.json` is not that one already; in
+    /// version 1 for a project of 1b not edited in this session.
     private func writeSnapshotIfBehind() async {
         let seq = lastSeq
-        guard seq > 0, snapshotSeq != seq, document.isDrawable, await write(document) else { return }
+        guard seq > 0, snapshotSeq != seq, document.isDrawable, await write(document, writtenIn: diskVersion) else { return }
         snapshotSeq = seq
     }
 
-    private func write(_ snapshot: EditDocument) async -> Bool {
+    private func write(_ snapshot: EditDocument, writtenIn version: Int) async -> Bool {
         let folder = folder
-        return (try? await Self.run(on: files) { try Opening.writeSnapshot(snapshot, in: folder) }) != nil
+        return (try? await Self.run(on: files) { try Opening.writeSnapshot(snapshot, writtenIn: version, in: folder) }) != nil
     }
 
     /// At closing, with every line on disk and the snapshot at the last one: the compaction, through the journal, if the
-    /// log is past a threshold and it makes the log shorter.
+    /// log is past a threshold and it makes the log shorter. Its `create` stays in `createVersion`.
     private func compactIfNeeded(_ journal: EditJournal) async {
-        let entries = entries
+        let (entries, createVersion) = (entries, createVersion)
         guard snapshotSeq == lastSeq,
             LogCompaction.isNeeded(
                 bytes: logBytes, entries: entries.count, maxBytes: context.compaction.maxBytes,
                 maxEntries: context.compaction.maxEntries),
-            let shorter = try? await Self.run(on: files, { try Opening.compaction(of: entries) })
+            let shorter = try? await Self.run(on: files, { try Opening.compaction(of: entries, createVersion: createVersion) })
         else { return }
         let (compacted, lines) = shorter
         guard (try? await journal.replaceLog(with: lines)) != nil else { return }
@@ -914,6 +983,8 @@ private struct Opened: Sendable {
     var logBytes = 0
     var baseSeq = 0
     var appendedSeqs: [Int] = []
+    var diskVersion = EditDocument.currentVersion
+    var createVersion = EditDocument.currentVersion
     var pendingCreate: EditDocument?
     var snapshotSeq: Int?
 }
@@ -1002,6 +1073,8 @@ private enum Opening {
         }
         let resolution = Resolution.of(project, files: files, context: context)
         opened.document = resolution.shown
+        opened.diskVersion = resolution.diskVersion
+        opened.createVersion = resolution.createVersion
         if resolution.legacyLook { opened.notices = [.legacyLook] }
         opened.baseSeq = resolution.entries.last?.seq ?? 0
         if let refusal = resolution.refusal {
@@ -1029,14 +1102,16 @@ private enum Opening {
                 resolution.document.style.background, from: context.styleDirectory, into: ProjectPackage(url: current))
         }
 
+        // While the document is of an older version on disk, everything written here is in that version (1c design §13.2).
+        let (diskVersion, createVersion) = (resolution.diskVersion, resolution.createVersion)
         var entries = resolution.entries
-        var history = UndoHistory(entries: entries)
+        var history = UndoHistory(entries: entries, createVersion: createVersion)
         var snapshotSeq = resolution.snapshotSeq
         if resolution.startsLog {
             opened.document.logSequence = max(1, opened.document.logSequence)
             let create = EditLogEntry.create(seq: opened.document.logSequence, document: opened.document, app: context.app)
             do {
-                try journal.append(try create.jsonLine())
+                try journal.append(try create.jsonLine(writingDocumentAt: createVersion))
             } catch {
                 await journal.close()
                 lock.release(inDirectory: folder.descriptor)
@@ -1049,7 +1124,9 @@ private enum Opening {
             entries.append(create)
             opened.appendedSeqs = [create.seq]
             // Decision 20: the snapshot only once its line is on disk.
-            if await journal.flushed() == 1, snapshotSeq != create.seq, (try? writeSnapshot(opened.document, in: folder)) != nil {
+            if await journal.flushed() == 1, snapshotSeq != create.seq,
+                (try? writeSnapshot(opened.document, writtenIn: diskVersion, in: folder)) != nil
+            {
                 snapshotSeq = create.seq
             }
         }
@@ -1060,14 +1137,16 @@ private enum Opening {
             LogCompaction.isNeeded(
                 bytes: logBytes, entries: entries.count, maxBytes: context.compaction.maxBytes,
                 maxEntries: context.compaction.maxEntries),
-            let shorter = try? compaction(of: entries)
+            let shorter = try? compaction(of: entries, createVersion: createVersion)
         {
             let (compacted, lines) = shorter
             // The snapshot first, at the last line: the compaction renumbers the lines before it.
-            if snapshotSeq != last, (try? writeSnapshot(opened.document, in: folder)) != nil { snapshotSeq = last }
+            if snapshotSeq != last, (try? writeSnapshot(opened.document, writtenIn: diskVersion, in: folder)) != nil {
+                snapshotSeq = last
+            }
             if snapshotSeq == last, (try? await journal.replaceLog(with: lines)) != nil {
                 entries = compacted
-                history = UndoHistory(entries: compacted)
+                history = UndoHistory(entries: compacted, createVersion: createVersion)
                 logBytes = folder.size(of: logName) ?? logBytes
             }
         }
@@ -1085,6 +1164,8 @@ private enum Opening {
         let files = try EditFiles.read(opened.project.package)
         let resolution = Resolution.of(opened.project, files: files, context: context)
         opened.document = resolution.shown
+        opened.diskVersion = resolution.diskVersion
+        opened.createVersion = resolution.createVersion
         if resolution.legacyLook { opened.notices = [.legacyLook] }
         opened.baseSeq = resolution.entries.last?.seq ?? 0
         if case let .newerDocument(version)? = resolution.refusal {
@@ -1095,9 +1176,10 @@ private enum Opening {
         return opened
     }
 
-    /// Puts the log in the state the journal takes it in: a damaged one kept apart and rewritten (and an `edit.json`
-    /// that is the only record but cannot be read kept apart too), or one that ends inside a line truncated; then synced,
-    /// so a snapshot never names a line that is not on the drive (plan decision 20).
+    /// Puts the log in the state the journal takes it in: a damaged one kept apart and rewritten, its `create` in the
+    /// version it is written in (and an `edit.json` that is the only record but cannot be read kept apart too), or one
+    /// that ends inside a line, or with a `migrate` that its first edit did not follow, truncated; then synced, so a
+    /// snapshot never names a line that is not on the drive (plan decision 20).
     private static func prepareLog(
         _ resolution: Resolution, read: Bool, logURL: URL, folder: PackageFolder, context: EditContext
     ) throws {
@@ -1105,27 +1187,42 @@ private enum Opening {
         guard read else { return }
         if resolution.rewritesLog {
             try folder.keepApart(logName, now: context.now())
-            try DurableFile.writeAtomically(try lines(of: resolution.entries), named: logName, inDirectory: folder.descriptor)
+            try DurableFile.writeAtomically(
+                try lines(of: resolution.entries, createVersion: resolution.createVersion), named: logName,
+                inDirectory: folder.descriptor)
         } else {
             _ = try EditLogReader.truncateIncompleteTail(logURL)
             try folder.fullSync(logName)
         }
     }
 
-    static func writeSnapshot(_ document: EditDocument, in folder: PackageFolder) throws {
-        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(document), named: snapshotName, inDirectory: folder.descriptor)
+    /// Writes `edit.json`: `document` in `version`, as `DocumentMigration.reverted` gives it (the JSON the replay gives
+    /// before decoding it, 1c design §13.2) when that is older than the document's. Throws `EncodingError.invalidValue`
+    /// for a document that version cannot hold, and writes nothing then.
+    static func writeSnapshot(_ document: EditDocument, writtenIn version: Int, in folder: PackageFolder) throws {
+        let data: Data
+        if version == document.documentVersion {
+            data = try ProjectJSON.encoder().encode(document)
+        } else if let written = DocumentMigration.reverted(try JSONValue(encoding: document), to: version) {
+            data = try ProjectJSON.encoder().encode(written)
+        } else {
+            throw EncodingError.invalidValue(
+                document, EncodingError.Context(codingPath: [], debugDescription: "The document has no version \(version)."))
+        }
+        try DurableFile.writeAtomically(data, named: snapshotName, inDirectory: folder.descriptor)
     }
 
-    /// `LogCompaction.compact(entries)` and its lines, if it is shorter (Task 10: a compaction that drops nothing
-    /// rewrites nothing).
-    static func compaction(of entries: [EditLogEntry]) throws -> ([EditLogEntry], [String])? {
-        let compacted = LogCompaction.compact(entries)
+    /// `LogCompaction.compact(entries, createVersion:)` and its lines, the `create` in `createVersion`, if it is shorter
+    /// (Task 10: a compaction that drops nothing rewrites nothing).
+    static func compaction(of entries: [EditLogEntry], createVersion: Int) throws -> ([EditLogEntry], [String])? {
+        let compacted = LogCompaction.compact(entries, createVersion: createVersion)
         guard compacted.count < entries.count else { return nil }
-        return (compacted, try compacted.map { try $0.jsonLine() })
+        return (compacted, try compacted.map { try $0.jsonLine(writingDocumentAt: createVersion) })
     }
 
-    private static func lines(of entries: [EditLogEntry]) throws -> Data {
-        Data(try entries.map { try $0.jsonLine() + "\n" }.joined().utf8)
+    /// The bytes of a log of `entries`, its `create` in `createVersion`.
+    private static func lines(of entries: [EditLogEntry], createVersion: Int) throws -> Data {
+        Data(try entries.map { try $0.jsonLine(writingDocumentAt: createVersion) + "\n" }.joined().utf8)
     }
 
     /// The changes of the `do` lines of each group still in the stacks: of a log the replay applied, every `do` of a group
@@ -1177,11 +1274,12 @@ private enum Opening {
 /// What `edit.json` and `edit-log.jsonl` hold, read with `SafeRead.regularFile(at:)`: never through a symlink, never
 /// blocked on a FIFO.
 private struct EditFiles: Sendable {
+    /// A document is read migrated, with the `documentVersion` it is written in.
     enum Snapshot: Sendable {
         case missing
-        case document(EditDocument, modified: Date)
+        case document(EditDocument, modified: Date, version: Int)
         /// It decodes, but no render could draw it (`isDrawable`).
-        case undrawable(EditDocument)
+        case undrawable(EditDocument, version: Int)
         /// It cannot be read or decoded.
         case unreadable
     }
@@ -1212,8 +1310,10 @@ private struct EditFiles: Sendable {
             let data = try SafeRead.regularFile(at: package.editURL)
             do {
                 let document = try EditDocument.decode(data)
+                let version = EditDocument.writtenVersion(of: data) ?? EditDocument.currentVersion
                 files.snapshot = document.isDrawable
-                    ? .document(document, modified: dates(of: package.editURL)?.modified ?? .distantPast) : .undrawable(document)
+                    ? .document(document, modified: dates(of: package.editURL)?.modified ?? .distantPast, version: version)
+                    : .undrawable(document, version: version)
             } catch let EditDocumentError.newerVersion(version) {
                 files.newerVersion = max(files.newerVersion ?? version, version)
             } catch {
@@ -1261,28 +1361,34 @@ private struct Resolution: Sendable {
     /// The `logSequence` of `edit.json`, when it names a line the log keeps.
     var snapshotSeq: Int?
     var refusal: ReadOnlyReason?
+    /// The `documentVersion` `document` is written in on disk (1c design §13.2): the replay's (`EditReplay.version`), the
+    /// snapshot's it starts from, or the current one for a legacy or new document.
+    var diskVersion = EditDocument.currentVersion
+    /// The `documentVersion` of the `create` of the log the session keeps: that of `entries` (`EditLogRead.createVersion`),
+    /// or `diskVersion` for a log that starts with a `create` of `document`.
+    var createVersion = EditDocument.currentVersion
 
     static func of(_ project: LoadedProject, files: EditFiles, context: EditContext) -> Resolution {
         if let version = files.newerVersion {
             // Nothing to show: the app shows no preview.
             return Resolution(document: .legacy(for: project), refusal: .newerDocument(version))
         }
-        var snapshot: (document: EditDocument, modified: Date)?
-        if case let .document(document, modified) = files.snapshot { snapshot = (document, modified) }
+        var snapshot: (document: EditDocument, modified: Date, version: Int)?
+        if case let .document(document, modified, version) = files.snapshot { snapshot = (document, modified, version) }
         var resolution: Resolution
         if let log = files.log, case .create? = log.entries.first,
-            let replay = EditReplay.replay(snapshot: snapshot?.document, entries: log.entries)
+            case let (replay, good)? = replayed(log, snapshot: snapshot.map { ($0.document, $0.version) })
         {
-            // Task 10: the history comes only from the lines the replay applied.
-            let good = Array(log.entries.prefix { $0.seq <= replay.lastAppliedSeq })
             if let snapshot, snapshot.document.logSequence > replay.lastAppliedSeq {
                 // Plan decision 5: `edit.json` is newer than every line that can be applied (the damage is before it,
                 // or the log lost lines it holds). It opens, and the log starts again with a `create` of it.
-                resolution = .starting(from: snapshot.document)
+                resolution = .starting(from: snapshot.document, writtenIn: snapshot.version)
                 resolution.rewritesLog = true
                 resolution.recoveredUpTo = snapshot.modified
             } else {
-                resolution = Resolution(document: replay.document, entries: good)
+                resolution = Resolution(
+                    document: replay.document, entries: good, diskVersion: replay.version,
+                    createVersion: log.createVersion ?? EditDocument.currentVersion)
                 if let snapshot, good.contains(where: { $0.seq == snapshot.document.logSequence }) {
                     resolution.snapshotSeq = snapshot.document.logSequence
                 }
@@ -1295,10 +1401,10 @@ private struct Resolution: Sendable {
             // No line to start from: no log, an empty one, one cut short or damaged in its first line.
             let damaged = files.log?.damagedLine != nil
             if let snapshot {
-                resolution = .starting(from: snapshot.document)
+                resolution = .starting(from: snapshot.document, writtenIn: snapshot.version)
                 if damaged { resolution.recoveredUpTo = snapshot.modified }
-            } else if case let .undrawable(document) = files.snapshot {
-                resolution = Resolution(document: document)
+            } else if case let .undrawable(document, version) = files.snapshot {
+                resolution = Resolution(document: document, diskVersion: version, createVersion: version)
             } else if project.manifest.upgradedFrom != nil {
                 resolution = Resolution(document: .legacy(for: project), createsLogAtFirstEdit: true, legacyLook: true)
             } else {
@@ -1330,8 +1436,37 @@ private struct Resolution: Sendable {
         return shown
     }
 
-    private static func starting(from snapshot: EditDocument) -> Resolution {
-        Resolution(document: snapshot, startsLog: true, snapshotSeq: snapshot.logSequence >= 1 ? snapshot.logSequence : nil)
+    /// `snapshot`, written in `version`, with a log that starts with a `create` of it in that version.
+    private static func starting(from snapshot: EditDocument, writtenIn version: Int) -> Resolution {
+        Resolution(
+            document: snapshot, startsLog: true, snapshotSeq: snapshot.logSequence >= 1 ? snapshot.logSequence : nil,
+            diskVersion: version, createVersion: version)
+    }
+
+    /// The replay of `log`, from `snapshot` (in the version it is written in) or from its `create`, and the lines it
+    /// applied, which the log keeps (Task 10: the history comes only from those). They never end with a `migrate`: like
+    /// the reader (1c plan decision 6), a replay that stops right after one stops before it, as if the first edit that
+    /// wrote it had not come, so a repaired log never ends with one either. `nil` if there is nothing to start from.
+    private static func replayed(
+        _ log: EditLogRead, snapshot: (document: EditDocument, version: Int)?
+    ) -> (replay: EditReplay, good: [EditLogEntry])? {
+        var entries = log.entries
+        // Where the first replay stopped: the log is repaired up to the good lines.
+        var mismatch: Int?
+        while var replay = EditReplay.replay(
+            snapshot: snapshot?.document, snapshotVersion: snapshot?.version ?? EditDocument.currentVersion, entries: entries,
+            createVersion: log.createVersion ?? EditDocument.currentVersion)
+        {
+            var good = Array(entries.prefix { $0.seq <= replay.lastAppliedSeq })
+            guard case .migrate? = good.last else {
+                replay.mismatchSeq = replay.mismatchSeq ?? mismatch
+                return (replay, good)
+            }
+            mismatch = mismatch ?? replay.mismatchSeq
+            while case .migrate? = good.last { good.removeLast() }
+            entries = good
+        }
+        return nil
     }
 
     /// The `at` of the last `do` of `entries`: the edit is recovered up to then.

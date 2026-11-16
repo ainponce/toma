@@ -245,12 +245,25 @@ public final class EditJournal: Sendable {
     /// Adds `line` (one line of the log, without its line break) to what goes to disk next, and returns at once.
     /// Throws `EBADF` after `close()`, when nothing would write the line any more.
     public func append(_ line: String) throws {
-        var bytes = Array(line.utf8)
-        bytes.append(newline)
+        try append([line])
+    }
+
+    /// Adds `lines` (lines of the log, without their line breaks) to what goes to disk next, all at once, and returns at
+    /// once (1c plan decision 7): they go in the same batch, one buffer written with one `write` and one sync, and
+    /// after a write that failed the retry goes on with that buffer from the byte where it stopped. A crash leaves the
+    /// first ones and, at most, one cut short after them, which the reader drops. Throws `EBADF` after `close()`, when
+    /// nothing would write them any more.
+    public func append(_ lines: [String]) throws {
+        let items = lines.map { line in
+            var bytes = Array(line.utf8)
+            bytes.append(newline)
+            return Item.line(bytes)
+        }
         let outcome = shared.withLock { shared -> Bool? in
             guard !shared.isClosed else { return nil }
-            shared.items.append(.line(bytes))
-            shared.appended += 1
+            guard !items.isEmpty else { return false }
+            shared.items += items
+            shared.appended += items.count
             // While failing, the line waits for the next retry, and the state stays what keeps it from the disk.
             if case .failing = shared.state { return false }
             Self.set(.pending(shared.appended - shared.confirmed), in: &shared)
