@@ -195,22 +195,6 @@ private struct SplitMix: RandomNumberGenerator {
     }
 }
 
-/// A clip at another speed than 1 is silent until its audio is stretched (plan decision 21); the clips around it play.
-@Test func aSpedUpClipIsSilentUntilItIsStretched() async throws {
-    try await withTemporaryDirectory { dir in
-        let project = try await take(in: dir, name: "speed")
-        var document = edited(project, clips: [(0, 1)])
-        document.sequence.append(Clip(id: "c-00000002", take: takeID, start: at(1), end: at(3), speed: 2))
-        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
-        let samples = try await rendered(mix)
-        #expect(samples.count == 96_000)
-        #expect(abs(rms(samples, start: 0, from: 0.1, to: 0.9) - 0.25 / 2.0.squareRoot()) < 0.005)
-        #expect(samples[48_000...].allSatisfy { $0 == 0 })
-        // The source goes on, but at another speed: the clip before fades out.
-        #expect(samples[47_999] == 0 && samples[47_000] != 0)
-    }
-}
-
 /// A clip split without a cut (the second part starting where the first ends, at the same speed) mixes the clip
 /// unsplit, bit for bit: no fade at the seam, and the source read on from where the first part left off. Split at
 /// instants that fall between samples, in two and in three, with click sounds and the limiter too.

@@ -19,18 +19,21 @@ import Synchronization
 ///   a clip split without a cut), there is no fade and the source is read on without a break: the mix is the clip's
 ///   unsplit. The output never fades at its start or its end (plan decision 7), so the legacy document, one clip, mixes
 ///   the samples the export always did.
-/// - A clip at another speed than 1, or of another take, is silent (plan decision 21: until its audio is stretched).
+/// - A clip at another speed than 1, up to 4×, plays its source stretched to the clip's frames with its pitch kept
+///   (`SpeedStretch`), track by track before its gain: the clips of one take at one speed that go on one from the
+///   other are stretched as one, from where they start. A clip faster than 4×, or of another take, is silent.
 /// - A click sound (`cursor.clickSound`, `ClickSounds`) plays at `clickSoundGain` from the output frame of every left
 ///   or right `mouseDown` the clips keep; one less than `ClickSounds.minimumSpacing` after the last that sounded does
 ///   not sound.
 /// - The mix lasts `totalFrames`, what the video lasts at its frame rate (`totalFrames(frameCount:framesPerSecond:)`):
 ///   past the content, silence; before its end, the content is cut.
 ///
-/// A range of the mix is the same whatever was rendered before it. With the limiter, whose gain depends on the frames
-/// before, a range that does not follow on from the one rendered last starts a limiter `PeakLimiter.settleFrames`
-/// before it (at frame 0, when that is closer), which by then gives what the limiter of a mix played from the start
-/// does. `render` holds a lock while it mixes (its readers and its limiter have state): calls take turns, and the export
-/// and the preview each have a mix of their own.
+/// A range of the mix is the same whatever was rendered before it, rendered without a preroll. With the limiter, whose
+/// gain depends on the frames before, a range that does not follow on from the one rendered last starts a limiter
+/// `PeakLimiter.settleFrames` before it (at frame 0, when that is closer), which by then gives what the limiter of a mix
+/// played from the start does; a stretched clip is stretched from its start. `render` holds a lock while it mixes (its
+/// readers, its stretches and its limiter have state): calls take turns, and the export and the preview each have a mix
+/// of their own.
 public final class EditedMix: Sendable {
     /// 1 or 2.
     public let channels: Int
@@ -45,6 +48,8 @@ public final class EditedMix: Sendable {
 
     /// The clips with any output, in order.
     private let pieces: [Piece]
+    /// The runs of clips the stretched pieces play.
+    private let runs: [SpeedStretch.Run]
     /// The gain of each of `source.tracks`.
     private let gains: [Float]
     /// The output frames the click sound starts at, in order, and the sound at its gain.
@@ -77,12 +82,12 @@ public final class EditedMix: Sendable {
         }
     }
 
-    /// One clip as the mix plays it: output frames `start ..< end`, reading the tracks' timeline from `source` (`nil`
-    /// when it is silent), fading in at its start and out at its end where the sound jumps from or to another clip.
+    /// One clip as the mix plays it: output frames `start ..< end` of `sound`, fading in at its start and out at its end
+    /// where the sound jumps from or to another clip.
     private struct Piece: Sendable {
         var start: Int64
         var end: Int64
-        var source: Int64?
+        var sound: Sound
         var fadesIn: Bool
         var fadesOut: Bool
 
@@ -95,9 +100,20 @@ public final class EditedMix: Sendable {
         }
     }
 
-    /// What `render` changes: each track's reader, and the limiter with the output frame it gives next.
+    /// What a clip plays.
+    private enum Sound: Equatable, Sendable {
+        /// Nothing: a clip of another take, or faster than `SpeedStretch.maximumSpeed`.
+        case silent
+        /// At 1×: the tracks' timeline from this frame on, frame for frame.
+        case source(Int64)
+        /// At another speed: its frames of `runs[run]`, stretched.
+        case stretched(run: Int)
+    }
+
+    /// What `render` changes: each track's reader and stretch, and the limiter with the output frame it gives next.
     private struct State {
         var readers: [AudioTrackTimeline.Reader]
+        var stretches: [SpeedStretch]
         var limiter: PeakLimiter
         var limiterNext: Int64?
         /// One track's frames of the range being mixed.
@@ -145,7 +161,7 @@ public final class EditedMix: Sendable {
         let timeMap = TimeMap(sequence: document.sequence)
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)
         contentFrames = Self.frames(ofNanoseconds: timeMap.duration)
-        pieces = Self.pieces(of: document.sequence, timeMap: timeMap, contentFrames: contentFrames, source: source)
+        (pieces, runs) = Self.pieces(of: document.sequence, timeMap: timeMap, contentFrames: contentFrames, source: source)
         gains = source.keys.map { key in
             guard let plan = document.audio.tracks[key] else { return 1 }
             if plan.muted { return 0 }
@@ -161,7 +177,9 @@ public final class EditedMix: Sendable {
         }
         limited = document.audio.limiter
         missing = Self.missing(of: source, timeMap: timeMap, totalFrames: totalFrames)
-        state = Mutex(State(readers: source.tracks.map(AudioTrackTimeline.Reader.init), limiter: PeakLimiter(channels: source.channels)))
+        state = Mutex(State(
+            readers: source.tracks.map(AudioTrackTimeline.Reader.init), stretches: source.tracks.map(SpeedStretch.init),
+            limiter: PeakLimiter(channels: source.channels)))
     }
 
     /// The spans left silent, track by track, in output seconds within the mix (with the cuts in them closed): the
@@ -188,11 +206,19 @@ public final class EditedMix: Sendable {
     /// Writes output frames `outputFrames` of the mix into `samples`, which then holds exactly
     /// `outputFrames.count × channels` values, interleaved: silence outside `0 ..< totalFrames` and past the content.
     ///
+    /// `preroll` is for a range that does not follow on from the one rendered last and starts in a stretched clip: with
+    /// 0 (the export) its stretch starts from where the clip's run does, so the range is what it always is; with more
+    /// (0.2 s in the preview after a jump) it starts that many seconds of output before the range, which is faster and
+    /// can differ from the export in the first samples (design §7.7). A range that follows on goes on with the stretch
+    /// under way, whatever `preroll` is; at 1× it changes nothing.
+    ///
     /// It decodes the tracks as it goes, and blocks in `AVAssetReader` until AVFoundation's own reads finish: call it
     /// from a thread or queue of its own, never from Swift's cooperative pool (where enough callers at once would leave
     /// those reads no thread to run on) nor from the main thread.
-    public func render(outputFrames: Range<Int64>, into samples: inout [Float]) {
+    public func render(outputFrames: Range<Int64>, into samples: inout [Float], preroll: Double = 0) {
         let count = outputFrames.count
+        // At most an hour, so the frames always fit; not a number, none.
+        let prerollFrames = preroll > 0 ? Int64((min(preroll, 3_600) * AudioTrackTimeline.sampleRate).rounded()) : 0
         state.withLock { state in
             if limited {
                 // The limiter gives each frame `lookaheadFrames` after it took it: it takes the frames that far ahead.
@@ -203,22 +229,24 @@ public final class EditedMix: Sendable {
                     let settling = min(start, max(0, start - Int64(PeakLimiter.settleFrames)))
                     state.limiter = PeakLimiter(channels: channels)
                     var before: [Float] = []
-                    mix(settling..<(start + lookahead), into: &before, state: &state)
+                    mix(settling..<(start + lookahead), preroll: prerollFrames, into: &before, state: &state)
                     state.limiter.process(&before)
                 }
-                mix((outputFrames.lowerBound + lookahead)..<(outputFrames.upperBound + lookahead), into: &samples, state: &state)
+                let ahead = (outputFrames.lowerBound + lookahead)..<(outputFrames.upperBound + lookahead)
+                mix(ahead, preroll: prerollFrames, into: &samples, state: &state)
                 state.limiter.process(&samples)
                 state.limiterNext = outputFrames.upperBound
             } else {
-                mix(outputFrames, into: &samples, state: &state)
+                mix(outputFrames, preroll: prerollFrames, into: &samples, state: &state)
             }
         }
         precondition(samples.count == count * channels, "EditedMix: \(samples.count) samples for \(count) frames")
         for i in samples.indices { samples[i] = min(max(samples[i], -1), 1) }
     }
 
-    /// The sum of the tracks and the click sounds over output frames `frames`, into `samples`, before the limiter.
-    private func mix(_ frames: Range<Int64>, into samples: inout [Float], state: inout State) {
+    /// The sum of the tracks and the click sounds over output frames `frames`, into `samples`, before the limiter; a
+    /// stretch that starts anew starts `preroll` frames before (0: at its run's start).
+    private func mix(_ frames: Range<Int64>, preroll: Int64, into samples: inout [Float], state: inout State) {
         samples.removeAll(keepingCapacity: true)
         samples.append(contentsOf: repeatElement(0, count: frames.count * channels))
         let heard = frames.clamped(to: 0..<max(0, min(contentFrames, totalFrames)))
@@ -227,11 +255,17 @@ public final class EditedMix: Sendable {
         while k < pieces.count, pieces[k].start < heard.upperBound {
             let piece = pieces[k]
             k += 1
-            guard let source = piece.source else { continue }
+            guard piece.sound != .silent else { continue }
             let from = max(heard.lowerBound, piece.start), to = min(heard.upperBound, piece.end)
-            let read = (source + (from - piece.start))..<(source + (to - piece.start))
-            for (t, reader) in state.readers.enumerated() where gains[t] != 0 {
-                reader.read(read, into: &state.track)
+            for t in state.readers.indices where gains[t] != 0 {
+                switch piece.sound {
+                case .silent:
+                    continue
+                case .source(let source):
+                    state.readers[t].read((source + (from - piece.start))..<(source + (to - piece.start)), into: &state.track)
+                case .stretched(let run):
+                    state.stretches[t].read(runs[run], frames: from..<to, preroll: preroll, into: &state.track)
+                }
                 for frame in from..<to {
                     let gain = gains[t] * piece.fade(at: frame)
                     let input = Int(frame - from) * channels, output = Int(frame - frames.lowerBound) * channels
@@ -255,38 +289,54 @@ public final class EditedMix: Sendable {
     // MARK: - From the document
 
     /// The clips of `sequence` with any output frames, in order, as the mix plays them: faded where the sound would
-    /// jump, read on where a clip goes on with the source of the one before.
-    private static func pieces(of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, source: Source) -> [Piece] {
+    /// jump, read on where a clip goes on with the source of the one before (at 1× frame for frame, at another speed in
+    /// the same run), and the runs the stretched ones play.
+    private static func pieces(
+        of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, source: Source
+    ) -> (pieces: [Piece], runs: [SpeedStretch.Run]) {
         let starts = timeMap.clipOutputStarts.map(frames(ofNanoseconds:))
         var pieces: [Piece] = []
+        var runs: [SpeedStretch.Run] = []
         // The clip of the last piece.
         var previous: Clip?
         for (k, clip) in sequence.enumerated() {
             let start = starts[k], end = k + 1 < starts.count ? starts[k + 1] : contentFrames
             guard start < end else { continue }
-            let plays = clip.take == source.takeID && speed(of: clip) == 1
-            var piece = Piece(
-                start: start, end: end, source: plays ? frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.start)) : nil,
-                fadesIn: false, fadesOut: false)
+            // Read as `TimeMap` reads it, which gives the clip its frames: the picture and the sound agree on it.
+            let clipSpeed = ClipSpeed.clamped(clip.speed)
+            let from = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.start))
+            var piece = Piece(start: start, end: end, sound: .silent, fadesIn: false, fadesOut: false)
+            if clip.take == source.takeID, clipSpeed == 1 {
+                piece.sound = .source(from)
+            } else if clip.take == source.takeID, clipSpeed <= SpeedStretch.maximumSpeed {
+                piece.sound = .stretched(run: runs.count)
+                runs.append(SpeedStretch.Run(
+                    output: start..<end, source: from, sourceEnd: frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.end)),
+                    speed: clipSpeed))
+            }
             if let previous, let last = pieces.indices.last {
-                let goesOn = clip.take == previous.take && clip.start == previous.end && speed(of: clip) == speed(of: previous)
-                if goesOn, let before = pieces[last].source, piece.source != nil {
+                let followsOn = clip.take == previous.take && clip.start == previous.end
+                let goesOn = followsOn && clipSpeed == ClipSpeed.clamped(previous.speed)
+                switch (pieces[last].sound, piece.sound) {
+                case (.source(let before), .source) where goesOn:
                     // The source frames on from where the clip before left off, so the seam is not there at all.
-                    piece.source = before + (pieces[last].end - pieces[last].start)
-                } else {
+                    piece.sound = .source(before + (pieces[last].end - pieces[last].start))
+                case (.stretched(let run), .stretched) where goesOn:
+                    // The same stretch goes on, so the seam is not there either.
+                    runs[run].output = runs[run].output.lowerBound..<end
+                    runs[run].sourceEnd = runs[runs.count - 1].sourceEnd
+                    runs.removeLast()
+                    piece.sound = .stretched(run: run)
+                default:
                     piece.fadesIn = true
                     pieces[last].fadesOut = true
+                    if case .stretched(let run) = pieces[last].sound { runs[run].followedBySource = followsOn && piece.sound != .silent }
                 }
             }
             pieces.append(piece)
             previous = clip
         }
-        return pieces
-    }
-
-    /// The speed `TimeMap` reads for `clip`: clamped to 0.25…16, 1 when it is not a number.
-    private static func speed(of clip: Clip) -> Double {
-        clip.speed.isNaN ? 1 : min(max(clip.speed, 0.25), 16)
+        return (pieces, runs)
     }
 
     /// The output frames where a click sounds: each kept `mouseDown` at its output time, unless it comes less than
