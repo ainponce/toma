@@ -21,7 +21,9 @@ import ProjectFormat
 ///
 /// Under the zoom camera the title is drawn again at the size it is drawn (design §7.3), at a `scale` of the bar's pixels
 /// unzoomed (`scale(for:)`): the frame's deepest depth rounded up to a power of √2, so it is never magnified and a moving
-/// zoom draws it again only at each step of √2. At rest the scale is 1, one texel per pixel.
+/// zoom draws it again only at each step of √2. At rest the scale is 1, one texel per pixel. While a change moves the
+/// window (design §7.6), its title is drawn the same way from where the window goes (`source(for:)`), as large as its bar
+/// is now, and stretched onto that bar: a spring draws it again only at each step of √2 too, and once it settles, at 1.
 ///
 /// Not thread-safe: `FrameRenderer` uses it with its lock held.
 final class TitleTexture {
@@ -71,14 +73,26 @@ final class TitleTexture {
     /// The most pixels across a title's texture: past it, a deep zoom magnifies the title.
     static let maxSide = 8192
 
-    /// The scale `frame`'s title is drawn at (see the type's notes): 1 at rest and without a window frame; otherwise the
-    /// deepest depth of the stage's transforms (its subframes' too) rounded up to √2^k, at most what keeps the texture
-    /// within `maxSide` pixels. `Compositor` and `FrameRenderer` both read it here.
+    /// The window frame `frame`'s title is drawn from: where the window goes while a change moves it
+    /// (`RenderFrame.settledWindowFrame`), the frame's own otherwise; `nil` without a window frame.
+    static func source(for frame: RenderFrame) -> WindowFrameLayer? {
+        frame.settledWindowFrame ?? frame.windowFrame
+    }
+
+    /// The scale `frame`'s title is drawn at, of its `source(for:)` (see the type's notes): 1 at rest and without a window
+    /// frame; otherwise the deepest depth of the stage's transforms (its subframes' too), times how much larger the window
+    /// is now than where it goes while it moves, rounded up to √2^k, at most what keeps the texture within `maxSide`
+    /// pixels. `Compositor` and `FrameRenderer` both read it here.
     static func scale(for frame: RenderFrame) -> Double {
         guard let window = frame.windowFrame else { return 1 }
-        let depth = frame.subframes.map(\.stage.depth).reduce(frame.stage?.depth ?? 1, max)
+        var depth = frame.subframes.map(\.stage.depth).reduce(frame.stage?.depth ?? 1, max)
+        let source = frame.settledWindowFrame ?? window
+        if let settled = frame.settledWindowFrame {
+            let larger = max(window.rect.width / settled.rect.width, window.barHeight / settled.barHeight)
+            if larger.isFinite, larger > 0 { depth *= larger }
+        }
         guard depth > 1, depth.isFinite else { return 1 }
-        let side = Double(max(window.barPixels.size.x, window.barPixels.size.y, 1))
+        let side = Double(max(source.barPixels.size.x, source.barPixels.size.y, 1))
         var level = Int(min((2 * log2(depth)).rounded(.up), 64))
         while level > 0, side * pow(2, Double(level) / 2) > Double(maxSide) { level -= 1 }
         return pow(2, Double(level) / 2)
