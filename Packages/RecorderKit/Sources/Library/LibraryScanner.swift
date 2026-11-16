@@ -65,7 +65,7 @@ public final class LibraryScanner: Sendable {
     /// The projects folder's path components, standardized, to tell what is in it.
     private let projectsComponents: [String]
     private let fileSystem: any LibraryFileSystem
-    private let readDocument: @Sendable (URL) throws -> (LoadedProject, EditDocument, Int)
+    private let readDocument: @Sendable (URL) throws -> (LoadedProject, DocumentOutline)
     /// Kept so the app hands the scanner the same probe as every other part of the library, and a test can count that it
     /// is never called: locks are probed only right before a destructive action (design §6.6), never by the scanner.
     private let isLockHeld: @Sendable (URL) -> Bool
@@ -82,11 +82,11 @@ public final class LibraryScanner: Sendable {
         var projectsVolume: VolumeInfo?
     }
 
-    /// `readDocument` is `ProjectReader`'s, by default `EditSession.readDocumentWithDiskVersion` with `context`;
+    /// `readDocument` is `ProjectReader`'s, by default `EditSession.readOutline` with `context`;
     /// `isLockHeld`, by default `RecordingLock.isHeld`, is never called.
     public init(
         projectsFolder: URL, fileSystem: any LibraryFileSystem,
-        readDocument: (@Sendable (URL) throws -> (LoadedProject, EditDocument, Int))? = nil,
+        readDocument: (@Sendable (URL) throws -> (LoadedProject, DocumentOutline))? = nil,
         isLockHeld: @escaping @Sendable (URL) -> Bool = { RecordingLock.isHeld(at: $0) }, context: EditContext,
         isRecording: @escaping @Sendable () -> Bool, onUpdate: @escaping @Sendable (LibraryUpdate) -> Void
     ) {
@@ -346,7 +346,7 @@ public final class LibraryScanner: Sendable {
     /// identity of file 0, which is never told). `readDocument` is timed as an access to the same disk.
     private func read(_ url: URL, place: Place, fileSystem: TimedFileSystem) -> Reading {
         let readDocument = self.readDocument
-        let timedRead: @Sendable (URL) throws -> (LoadedProject, EditDocument, Int) = { url in
+        let timedRead: @Sendable (URL) throws -> (LoadedProject, DocumentOutline) = { url in
             try fileSystem.timed { try readDocument(url) }
         }
         var summary = ProjectReader.summary(

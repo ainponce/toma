@@ -68,7 +68,7 @@ private final class Updates: Sendable {
     }
 }
 
-/// `EditSession`'s `readDocument`, which writes down every package it is asked for.
+/// The library's read of a document (`EditSession.readOutline`), which writes down every package it is asked for.
 private final class DocumentReads: Sendable {
     private let context: EditContext
     private let log = Mutex<[URL]>([])
@@ -83,10 +83,9 @@ private final class DocumentReads: Sendable {
         log.withLock { $0 = [] }
     }
 
-    func read(_ url: URL) throws -> (LoadedProject, EditDocument, Int) {
+    func read(_ url: URL) throws -> (LoadedProject, DocumentOutline) {
         log.withLock { $0.append(url) }
-        let (project, document, version) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
-        return (project, document, version)
+        return try EditSession.readOutline(url, take: nil, context: context)
     }
 }
 
@@ -863,10 +862,9 @@ private func unblocking<T>(
             ])
             // The document is read past the file system (`EditSession` opens its files itself): it stalls as a disk would.
             let context = Scan.context(dir)
-            let stalled: @Sendable (URL) throws -> (LoadedProject, EditDocument, Int) = { url in
+            let stalled: @Sendable (URL) throws -> (LoadedProject, DocumentOutline) = { url in
                 Thread.sleep(forTimeInterval: (LibraryScanner.slowAccess + .milliseconds(300)).seconds)
-                let (project, document, version) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
-                return (project, document, version)
+                return try EditSession.readOutline(url, take: nil, context: context)
             }
             let updates = Updates()
             let scanner = LibraryScanner(
@@ -991,19 +989,53 @@ private func unblocking<T>(
             print(
                 "reconcileAndIndexAThousand: index \(indexing) (sizes summed by \(sizes)), reconcile unchanged \(reconciling), "
                     + "the same reads alone \(direct)")
-            // Tracked: reading each project decodes its whole event log (`EditSession.readDocumentWithDiskVersion`), about
-            // 2.6 of its 3.2 ms; the fix is the follow-up of Task 32's review (Important 1), after Task 28: a read-only
-            // resolution in Editing that loads the event log only for `EditDocument.legacy(for:)` and `NewDocument.make`.
-            // Once it lands this known issue is not recorded and the test says so: then drop `withKnownIssue`.
-            withKnownIssue(
-                "Indexing 1,000 projects takes about 3 s, over design §15's 2 s: the follow-up of Task 32's review (Important 1)"
-            ) {
-                #expect(indexing <= .seconds(2))
-            }
+            #expect(indexing <= .seconds(2))
             #expect(reconciling <= .milliseconds(400))
             if benchDir != nil {
                 try DurableFile.writeAtomically(try index.encoded(), to: projects.appending(path: "index.json"))
             }
+        }
+    }
+
+    /// Design §15's 2 s with documents that come from the take's events too (Task 31b): the same thousand turned into a
+    /// quarter each of version 1 and 2 packages without edits, version 3 never opened (a `NewDocument`) and edited
+    /// ones.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
+    func indexAMixedThousand() async throws {
+        try await withTemporaryDirectory { dir in
+            let projects = try Scan.folder("Projects", in: dir)
+            let urls = try await LibraryFixtures.folder(in: projects, kinds: [.synthetic(count: 1000)])
+            for (index, url) in urls.enumerated() where index % 4 != 3 {
+                let package = ProjectPackage(url: url)
+                try FileManager.default.removeItem(at: package.editLogURL)
+                guard index % 4 != 2 else { continue }
+                let data = try Data(contentsOf: package.manifestURL)
+                var manifest = try ProjectJSON.decoder().decode(Manifest.self, from: data)
+                manifest.formatVersion = index % 4 + 1
+                manifest.projectID = nil
+                try ProjectJSON.encoder().encode(manifest).write(to: package.manifestURL)
+            }
+            let clock = ContinuousClock()
+            let updates = Updates()
+            let start = clock.now
+            Scan.scanner(projects: projects, in: dir, updates: updates).reconcile(from: LibraryIndex())
+            #expect(await updates.waitForFinished(timeout: .seconds(60)))
+            let indexing = start.duration(to: try #require(updates.arrivals.last { $0.update == .finished }).at)
+            let index = Scan.index(of: updates)
+            #expect(index.projects.count == 1000)
+            #expect(index.projects.allSatisfy { $0.state == .normal && $0.outputSeconds != nil })
+            let versions = Dictionary(grouping: index.projects) { $0.formatVersion ?? 0 }.mapValues(\.count)
+            #expect(versions == [1: 250, 2: 250, 3: 500])
+
+            let direct = clock.measure {
+                for url in urls {
+                    _ = ProjectReader.summary(
+                        of: url, place: .projectsFolder(subfolder: ""), fileSystem: SystemFileSystem(),
+                        context: Scan.context(dir), now: Scan.now)
+                }
+            }
+            print("indexAMixedThousand: index \(indexing), the same reads alone \(direct)")
+            #expect(indexing <= .seconds(2))
         }
     }
 }

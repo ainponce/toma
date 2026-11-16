@@ -263,10 +263,11 @@ public actor LibraryThumbnails {
 
     /// Calls `finish` with the frame at `time(outputSeconds:)` of the project at `url` as the export draws it, at
     /// `size(for:)` of its aspect (`nil` if the GPU could not draw it), or `stopped` if nothing was drawn: the document
-    /// could not be read or the renderer made, or `shouldStop()` once the document is read. One of them, once. The
-    /// document is read without a lock and without writing anything. Decodes and waits for the GPU: never on the
-    /// cooperative pool. The renderer goes only after `finish` returns: closing its readers
-    /// (`AVAssetReader.cancelReading`) takes some 20 ms, which the thumbnail need not wait for.
+    /// could not be read (with the take's event log, which the cursor and the clicks come from: `readDocument` throws
+    /// for one it cannot read, so no thumbnail is ever kept without them) or the renderer made, or `shouldStop()` once
+    /// the document is read. One of them, once. The document is read without a lock and without writing anything.
+    /// Decodes and waits for the GPU: never on the cooperative pool. The renderer goes only after `finish` returns:
+    /// closing its readers (`AVAssetReader.cancelReading`) takes some 20 ms, which the thumbnail need not wait for.
     private static func draw(
         _ url: URL, context: EditContext, shouldStop: () -> Bool, then finish: (CGImage?) -> Void,
         stopped: () -> Void

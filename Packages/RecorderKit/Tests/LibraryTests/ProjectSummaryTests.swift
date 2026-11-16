@@ -41,8 +41,8 @@ private enum Reading {
     }
 }
 
-/// `EditSession`'s `readDocument`, which writes down every package it is asked for and how many accesses `fileSystem` had
-/// seen by then.
+/// The library's read of a document (`EditSession.readOutline`), which writes down every package it is asked for and
+/// how many accesses `fileSystem` had seen by then.
 private final class CountingReader: Sendable {
     struct Call: Equatable, Sendable {
         var url: URL
@@ -60,10 +60,10 @@ private final class CountingReader: Sendable {
 
     var calls: [Call] { log.withLock { $0 } }
 
-    func read(_ url: URL) throws -> (LoadedProject, EditDocument, Int) {
+    func read(_ url: URL) throws -> (LoadedProject, DocumentOutline) {
         let accesses = fileSystem?.accesses.count ?? 0
         log.withLock { $0.append(Call(url: url, accessesBefore: accesses)) }
-        return try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
+        return try EditSession.readOutline(url, take: nil, context: context)
     }
 }
 
@@ -434,7 +434,7 @@ private func unblocking<T>(
         let urls = try await LibraryFixtures.folder(in: dir, kinds: [.synthetic(count: 1_000)])
         let counting = CountingFileSystem()
         // The document is not what is counted here: one read of it stands for all.
-        let read = try EditSession.readDocumentWithDiskVersion(urls[0], take: nil, context: Reading.context(dir))
+        let read = try EditSession.readOutline(urls[0], take: nil, context: Reading.context(dir))
         let summaries = urls.map { url in
             ProjectReader.summary(
                 of: url, place: Reading.projectsFolder, fileSystem: counting, readDocument: { _ in read },

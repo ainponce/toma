@@ -523,6 +523,30 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         }
     }
 
+    /// Task 31b: the library reads an edited project without its event log, but its thumbnail draws the cursor and the
+    /// clicks from it. One that cannot be read (here `EACCES`, as a disk that fails, `EIO`, would) gives no thumbnail
+    /// and keeps none, never one without them under the project's key; once it reads, the thumbnail is drawn.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func unreadableEventLogIsNoThumbnail() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
+            let events = ProjectPackage(url: url).eventsURL(take: LibraryFixtures.take)
+            #expect(chmod(events.path, 0) == 0)
+            defer { chmod(events.path, 0o644) }
+            let summary = Thumbs.summary(url, in: dir)
+            #expect(summary.state == .normal)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            #expect(await thumbnails.render(url, summary: summary, context: Thumbs.context(dir)) == nil)
+            #expect(await thumbnails.renders == 0)
+            #expect(Thumbs.files(Thumbs.cache(dir)).isEmpty)
+
+            #expect(chmod(events.path, 0o644) == 0)
+            _ = try #require(await thumbnails.render(url, summary: summary, context: Thumbs.context(dir)))
+            #expect(await thumbnails.renders == 1)
+            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(try LibraryThumbnails.key(of: url)).heic"])
+        }
+    }
+
     /// A new thumbnail of a take of a 4K screen (a minute at 30 fps: its frame at 6 s), drawn from nothing, ten times, each
     /// in a cache of its own. Run by an agent, with `TOMA_BENCH=1`.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
