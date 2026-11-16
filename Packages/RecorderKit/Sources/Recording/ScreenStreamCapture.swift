@@ -15,7 +15,8 @@ import os
 /// A run's stream starts in its `start` and stops once, when the run ends: from the `start` or `stop` that comes next
 /// or from the stream's own error (then it has stopped already), or, if the run ends while the stream is still
 /// starting, from its own `start` as soon as it has started. `start` and `stop` wait for every `stopCapture` in flight,
-/// so a stream that had started is stopped before the next one is made. A stream still starting when its run ends is
+/// so a stream that had started is stopped before the next one is made; `stopTimeLimit` at most: a ScreenCaptureKit
+/// that never answers (replayd stuck) must not keep a take from closing. A stream still starting when its run ends is
 /// not stopping yet, and the next run's stream can be made while it starts; it stops once started, and none of its
 /// frames reaches a sink.
 ///
@@ -42,6 +43,8 @@ final class ScreenStreamCapture: Sendable {
     private let lastComplete = Mutex<HostTime?>(nil)
 
     fileprivate static let logger = Logger(subsystem: "dev.toma.Toma", category: "ScreenStreamCapture")
+    /// How long `start` and `stop` wait for the `stopCapture` calls in flight; they take a fraction of a second.
+    static let stopTimeLimit = Duration.seconds(3)
 
     init(trackID: String, scale: CaptureScale, reconfiguration: @escaping Reconfiguration) {
         self.trackID = trackID
@@ -113,9 +116,28 @@ final class ScreenStreamCapture: Sendable {
         return true
     }
 
+    /// Waits for the `stopCapture` calls in flight, `stopTimeLimit` at most; one that has not answered by then is
+    /// logged and left behind.
     private func waitForStops() async {
-        await withCheckedContinuation { continuation in
-            stopping.notify(queue: .global()) { continuation.resume() }
+        guard await Self.wait(for: stopping, atMost: Self.stopTimeLimit) else {
+            Self.logger.error(
+                "\(self.trackID, privacy: .public): stopCapture has not answered after \(Self.stopTimeLimit, privacy: .public); going on without it")
+            return
+        }
+    }
+
+    /// Waits until `group` is empty, `limit` at most: `false` when the limit came first.
+    static func wait(for group: DispatchGroup, atMost limit: Duration) async -> Bool {
+        let once = ResumeOnce()
+        return await withCheckedContinuation { continuation in
+            group.notify(queue: .global()) {
+                if once.claim() { continuation.resume(returning: true) }
+            }
+            let (seconds, attoseconds) = limit.components
+            let nanoseconds = Int(seconds) * 1_000_000_000 + Int(attoseconds / 1_000_000_000)
+            DispatchQueue.global().asyncAfter(deadline: .now() + .nanoseconds(nanoseconds)) {
+                if once.claim() { continuation.resume(returning: false) }
+            }
         }
     }
 
@@ -210,6 +232,19 @@ final class ScreenStreamCapture: Sendable {
         configuration.queueDepth = 6
         configuration.capturesAudio = false
         return configuration
+    }
+}
+
+/// The first of several callers to `claim` it wins: a continuation that two callbacks race to resume is resumed once.
+private final class ResumeOnce: Sendable {
+    private let claimed = Mutex(false)
+
+    /// `true` for the first call only.
+    func claim() -> Bool {
+        claimed.withLock { claimed in
+            defer { claimed = true }
+            return !claimed
+        }
     }
 }
 

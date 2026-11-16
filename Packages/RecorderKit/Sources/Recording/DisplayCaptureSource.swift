@@ -57,7 +57,9 @@ public enum DisplayExclusions {
 /// an app of `excludedBundleIDs` launches while it runs (Notification Center restarting), the filter is made again,
 /// so the new process is left out too. Launches are heard from `NSWorkspace.runningApplications` (key-value
 /// observed), which also lists the apps without a Dock icon (`LSUIElement`, as Notification Center is) that
-/// `didLaunchApplicationNotification` leaves out, and from that notification as well.
+/// `didLaunchApplicationNotification` leaves out, and from that notification as well. An app of `excludedBundleIDs`
+/// that a start (a stream's restart too) did not find is looked for again once the stream runs: one that launched
+/// while no stream ran is left out all the same.
 public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
     public let trackID: String
     public let kind = TrackKind.display
@@ -136,12 +138,19 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
 
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
         observeLaunches()
+        var missingBundleIDs: [String] = []
         try await capture.start(on: queue, sink: sink, output: self) {
-            let filter = try await makeFilter().filter
+            let made = try await makeFilter()
+            missingBundleIDs = made.missingBundleIDs
             let configuration = Self.makeConfiguration(
-                contentRect: filter.contentRect, pointPixelScale: Double(filter.pointPixelScale),
+                contentRect: made.filter.contentRect, pointPixelScale: Double(made.filter.pointPixelScale),
                 framesPerSecond: framesPerSecond, scale: scale)
-            return ScreenStreamCapture.Setup(filter: filter, configuration: configuration)
+            return ScreenStreamCapture.Setup(filter: made.filter, configuration: configuration)
+        }
+        // A launch heard while no stream ran (this one restarting) found nothing to update: the apps this filter
+        // missed are looked for again now that the stream runs.
+        for bundleID in missingBundleIDs {
+            Task { await self.refreshFilter(excluding: bundleID) }
         }
     }
 
@@ -197,7 +206,7 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
             ) { [weak self] notification in
                 let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
                 guard let self, let bundleID = app?.bundleIdentifier, excludedBundleIDs.contains(bundleID) else { return }
-                Task { await self.refreshFilter(launched: bundleID) }
+                Task { await self.refreshFilter(excluding: bundleID) }
             }
             let runningApplications = workspace.observe(\.runningApplications, options: [.old, .new]) { [weak self] _, change in
                 guard let self else { return }
@@ -207,20 +216,21 @@ public final class DisplayCaptureSource: NSObject, CaptureSource, SCStreamOutput
                 let launched = DisplayExclusions.launched(
                     before: apps(change.oldValue), after: apps(change.newValue), bundleIDs: excludedBundleIDs)
                 for bundleID in launched {
-                    Task { await self.refreshFilter(launched: bundleID) }
+                    Task { await self.refreshFilter(excluding: bundleID) }
                 }
             }
             watch = LaunchWatch(notification: notification, runningApplications: runningApplications)
         }
     }
 
-    /// Gives the running stream a filter that leaves out the app `bundleID` just launched, looking for it again a
-    /// second later while it is not among the shareable apps.
-    private func refreshFilter(launched bundleID: String) async {
+    /// Gives the running stream a filter that leaves out the app `bundleID` (just launched, or missing when the stream
+    /// started), looking for it again a second later while it is not among the shareable apps. Without a running
+    /// stream, nothing: its next start makes its filter, and looks again for what that one misses.
+    private func refreshFilter(excluding bundleID: String) async {
         for attempt in 1...Self.relaunchAttempts {
             if attempt > 1 { try? await Task.sleep(for: .seconds(1)) }
             Self.logger.notice(
-                "\(self.trackID, privacy: .public) makes its filter again: \(bundleID, privacy: .public) launched (attempt \(attempt))")
+                "\(self.trackID, privacy: .public) makes its filter again to exclude \(bundleID, privacy: .public) (attempt \(attempt))")
             let made: (filter: SCContentFilter, missingBundleIDs: [String])
             do {
                 made = try await makeFilter()

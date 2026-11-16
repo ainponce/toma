@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import CoreGraphics
+import Dispatch
 import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
@@ -102,6 +103,24 @@ import Testing
         // Stopped by its own error, or never started: nothing to stop.
         #expect(stops([didStart, streamEnded, end]) == ([false, false, false], .ended))
         #expect(stops([end, streamEnded, didStart]) == ([false, false, false], .ended))
+    }
+
+    @Test(.timeLimit(.minutes(1))) func aStopThatNeverAnswersIsWaitedForAtMostItsLimit() async {
+        #expect(ScreenStreamCapture.stopTimeLimit == .seconds(3))
+        // A `stopCapture` whose completion never comes (replayd stuck): the wait gives up at its limit.
+        let hung = DispatchGroup()
+        hung.enter()
+        let clock = ContinuousClock()
+        let started = clock.now
+        #expect(await ScreenStreamCapture.wait(for: hung, atMost: .milliseconds(100)) == false)
+        #expect(clock.now - started < .seconds(5))
+        // One that answers ends the wait, before the limit.
+        let answering = DispatchGroup()
+        answering.enter()
+        DispatchQueue.global().async { answering.leave() }
+        #expect(await ScreenStreamCapture.wait(for: answering, atMost: .seconds(30)))
+        #expect(await ScreenStreamCapture.wait(for: DispatchGroup(), atMost: .seconds(30)))
+        hung.leave()
     }
 
     // MARK: - Visibility
