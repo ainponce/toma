@@ -136,7 +136,7 @@ private enum NewDocumentFixture {
             // The automatic blocks of the document as it is.
             #expect(!document.zoom.regions.isEmpty)
             #expect(document.zoom.regions == AutoZoomPlanner.plan(take: project.take, events: project.events, document: document))
-            #expect(document.camera == legacy.camera)
+            #expect(document.camera == CameraLook.newProjects.applied(to: legacy.camera))
             #expect(document.audio == AudioPlan(limiter: true, tracks: legacy.audio.tracks))
             let plan = ScreenFollowPlanner.plan(take: project.take, events: project.events, package: project.package)
             #expect(document.screens.initial == ["take-001": "display-1"])
@@ -149,6 +149,25 @@ private enum NewDocumentFixture {
                 #expect(document.screens.changes.isEmpty)
             }
         }
+    }
+}
+
+@Test func newProjectsAreMirroredWithShadowAndShortSide() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await NewDocumentFixture.take(in: dir, name: "look", screens: 1)
+        let document = NewDocument.make(project: project, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make)
+        #expect(document.camera.mirror)
+        #expect(document.camera.shadow == 0.4)
+        #expect(document.camera.border == .none)
+        #expect(document.camera.sizeReference == .shortSide)
+        #expect(document.camera.layout == .bubble)
+        #expect(document.camera.layouts.isEmpty)
+        // Another look is the one the document gets, and the take's bubble is what it recorded.
+        let legacyLook = CameraLook(mirror: false, border: .none, shadow: 0, layout: .bubble, sizeReference: .height)
+        let plain = NewDocument.make(
+            project: project, defaultStyle: .toma, makeID: NewDocumentFixture.IDs().make, cameraLook: legacyLook)
+        #expect(plain.camera == EditDocument.legacy(for: project).camera)
+        #expect(document.camera.initial == plain.camera.initial)
     }
 }
 
