@@ -28,3 +28,6 @@ dist/
 sparkle_ed.key
 *.p12
 *.p12.password
+
+# Parallel task worktrees (SDD)
+.worktrees/
