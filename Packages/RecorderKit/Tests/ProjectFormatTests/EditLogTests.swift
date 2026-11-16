@@ -638,3 +638,41 @@ func largeDocumentReplaysItsTailFast() throws {
         #expect(read.entries.count == 20_001)
     }
 }
+
+/// Going through the lines before a snapshot is linear in the lines, however many groups there are (Task 13's review:
+/// each new group looked at every group before it). Twice the groups take about twice as long, never four times: the
+/// best of three runs of each, so a busy machine does not decide.
+@Test func replayIsLinearInTheGroups() throws {
+    func log(groups: Int) throws -> (entries: [EditLogEntry], snapshot: EditDocument) {
+        var entries: [EditLogEntry] = [.create(seq: 1, document: SmallDocument.document, app: app)]
+        func padding(_ k: Int) -> Double { 0.08 + Double(k) / 1_000_000 }
+        for k in 0..<groups {
+            entries.append(doLine(entries.count + 1, group: k + 1, try set("/style/padding", padding(k), padding(k + 1))))
+            // Every tenth group is undone and redone, and every tenth after it left undone: the next group's `do` closes
+            // it, so closing runs at scale too.
+            if k % 10 == 0 {
+                entries.append(.undo(seq: entries.count + 1, group: k + 1))
+                entries.append(.redo(seq: entries.count + 1, group: k + 1))
+            } else if k % 10 == 5 {
+                entries.append(.undo(seq: entries.count + 1, group: k + 1))
+            }
+        }
+        var snapshot = SmallDocument.document
+        snapshot.style.padding = padding(groups)
+        return (entries, at(entries.count, snapshot))
+    }
+    let clock = ContinuousClock()
+    func best(groups: Int) throws -> Duration {
+        let (entries, snapshot) = try log(groups: groups)
+        var best = Duration.seconds(3600)
+        for _ in 0..<3 {
+            let started = clock.now
+            let replayed = try replay(entries, from: snapshot)
+            best = min(best, clock.now - started)
+            #expect(replayed.mismatchSeq == nil && replayed.lastAppliedSeq == entries.count)
+        }
+        return best
+    }
+    let small = try best(groups: 10_000), large = try best(groups: 20_000)
+    #expect(large < small * 3, "10 000 groups in \(small), 20 000 in \(large)")
+}

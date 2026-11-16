@@ -229,6 +229,45 @@ func mipmappedFramesInFlightGiveTheSameBytes() async throws {
     #expect(rounds.map(\.free) == [6, 6])
 }
 
+/// What `mipmappedCopiesOfOldSizesAreLetGo` saw after each frame.
+private struct CopiesAfterFrame: Sendable, Equatable {
+    var made: Int
+    var free: Int
+    var freeSizes: Int
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func mipmappedCopiesOfOldSizesAreLetGo() async throws {
+    // A crop of another size in every frame, as while a change of geometry moves it: only the copies of the last two
+    // sizes stay, the others' memory goes (Task 27's review: up to six copies of about 45 MB at 4K stayed). A size asked
+    // for again after that makes a new copy.
+    let seen = try await offThePool { () throws -> [CopiesAfterFrame] in
+        let device = try metalDevice()
+        let compositor = try Compositor(device: device)
+        let screen = try texture(device, width: 740, height: 370) { _, _ in SIMD4<UInt8>(40, 200, 90, 255) }
+        let cursor = try CursorSprite.makeTexture(device: device)
+        guard let queue = device.makeCommandQueue() else { throw TestSupportError.missing("command queue") }
+        return try [0.9, 0.8, 0.7, 0.6, 0.9].enumerated().map { k, width in
+            let frame = screenFrame(
+                size: SIMD2(320, 180), rect: Rect(x: 60, y: 40, width: 200 * width, height: 100),
+                crop: Rect(x: 0, y: 0, width: width, height: 1), mipmapped: true)
+            let target = try target(for: frame, device: device)
+            guard let commandBuffer = queue.makeCommandBuffer() else { throw TestSupportError.missing("command buffer") }
+            try compositor.encode(frame, screen: screen, camera: nil, cursor: cursor, into: target, commandBuffer: commandBuffer)
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            // The copy comes back when the frame's completion is called, which can be after `waitUntilCompleted`.
+            let deadline = Date().addingTimeInterval(5)
+            while compositor.mipmappedCopiesCount.free < min(k + 1, 2), Date() < deadline { Thread.sleep(forTimeInterval: 0.01) }
+            let count = compositor.mipmappedCopiesCount
+            return CopiesAfterFrame(made: count.made, free: count.free, freeSizes: compositor.mipmappedCopiesFreeSizes)
+        }
+    }
+    #expect(seen.map(\.made) == [1, 2, 3, 4, 5])
+    #expect(seen.map(\.free) == [1, 2, 2, 2, 2])
+    #expect(seen.map(\.freeSizes) == [1, 2, 2, 2, 2])
+}
+
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func mipmappedAreaShowsNothingOutsideIt() async throws {
     // An Area's crop of a 400 × 300 frame, its borders on no pixel and no power of two: blue in the pixels wholly inside

@@ -395,6 +395,9 @@ public struct EditReplay: Sendable {
         }
 
         private var groups: [Int: Group] = [:]
+        /// The groups that are `undone`: a `do` of a new group closes them, without looking at every group (a replay
+        /// stays linear in the lines however many groups it has).
+        private var undone: Set<Int> = []
 
         /// What `entry` applies to the document, or `nil` if it does not follow what came before.
         func changes(for entry: EditLogEntry) -> [EditChange]? {
@@ -422,21 +425,24 @@ public struct EditReplay: Sendable {
                 if let existing = groups[group] {
                     if existing.state == .applied { groups[group]?.changes += changes }
                 } else {
-                    close { $0 == .undone }
+                    for id in undone { groups[id] = Group(state: .closed, changes: []) }
+                    undone.removeAll()
                     groups[group] = Group(state: .applied, changes: changes)
                 }
             case let .undo(_, group):
-                if groups[group]?.state == .applied { groups[group]?.state = .undone }
+                if groups[group]?.state == .applied {
+                    groups[group]?.state = .undone
+                    undone.insert(group)
+                }
             case let .redo(_, group):
-                if groups[group]?.state == .undone { groups[group]?.state = .applied }
+                if groups[group]?.state == .undone {
+                    groups[group]?.state = .applied
+                    undone.remove(group)
+                }
             case .migrate:
-                close { _ in true }
-            }
-        }
-
-        private mutating func close(where shouldClose: (State) -> Bool) {
-            for (id, group) in groups where group.state != .closed && shouldClose(group.state) {
-                groups[id] = Group(state: .closed, changes: [])
+                // Rare (one per change of the document's version): every group closes.
+                for (id, group) in groups where group.state != .closed { groups[id] = Group(state: .closed, changes: []) }
+                undone.removeAll()
             }
         }
     }

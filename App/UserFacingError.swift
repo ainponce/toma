@@ -150,7 +150,7 @@ private func description(of error: RenderError) -> String {
     case .noMetalDevice:
         String(localized: "This Mac has no graphics device to draw the video.")
     case .invalidOutputSize, .targetSizeMismatch, .unsupportedPixelFormat, .metalResourceUnavailable,
-         .missingShaderFunction, .textureCreationFailed, .gpuFailed:
+         .missingShaderFunction, .textureCreationFailed, .gpuFailed, .frameNotDecoded:
         String(localized: "The video couldn't be drawn.")
     }
 }

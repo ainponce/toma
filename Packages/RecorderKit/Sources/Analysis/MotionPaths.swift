@@ -9,11 +9,45 @@ public struct MotionPaths: Sendable {
     public let stage: StagePoints
     public let cursor: CursorPath
     public let zoom: ZoomCameraPath
+    /// What of the document they were built from.
+    private let inputs: Inputs
 
     public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
         timeMap = TimeMap(sequence: document.sequence)
         stage = StagePoints(take: take, events: events, document: document)
         cursor = CursorPath(take: take, events: events, style: document.cursor, timeMap: timeMap)
         zoom = ZoomCameraPath(document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take)
+        inputs = Inputs(document)
+    }
+
+    /// Whether these are the paths of `document` too (of the same take and events): it differs from the one they were
+    /// built from in nothing they read (the clips, the screens, the aspect, the window frame and the padding, the cursor,
+    /// the zoom and the camera), as after an edit of the background, the shadow or the corners. Then a new revision
+    /// keeps them rather than building them again (about 100 ms for an hour of take).
+    public func areThePaths(of document: EditDocument) -> Bool {
+        inputs == Inputs(document)
+    }
+
+    /// Everything of a document the paths read (`StagePoints`, `CursorPath`, `ZoomCameraPath`, `CameraBubble`).
+    private struct Inputs: Equatable, Sendable {
+        let sequence: [Clip]
+        let screens: ScreenPlan
+        let aspect: Aspect
+        let frame: WindowFrame
+        let padding: Double
+        let cursor: CursorStyle
+        let zoom: ZoomPlan
+        let camera: CameraPlan
+
+        init(_ document: EditDocument) {
+            sequence = document.sequence
+            screens = document.screens
+            aspect = document.aspect
+            frame = document.style.frame
+            padding = document.style.padding
+            cursor = document.cursor
+            zoom = document.zoom
+            camera = document.camera
+        }
     }
 }

@@ -32,6 +32,11 @@ jobs:
         run: swift test --package-path Packages/RecorderKit --filter hevcAndH264EncodersAreAvailable
       - run: make test
       - run: make crash-test
+      - name: Benchmarks (no targets: the runners are not the reference Macs, design §10.2)
+        run: |
+          swift build --package-path Packages/RecorderKit -c release --product recorder-dev
+          Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic --width 1920 --height 1080
+          Packages/RecorderKit/.build/release/recorder-dev bench-export --synthetic --width 1920 --height 1080
       - run: make project
       - name: Build app
         run: xcodebuild -project Toma.xcodeproj -scheme Toma -configuration Debug -derivedDataPath build build CODE_SIGNING_ALLOWED=NO

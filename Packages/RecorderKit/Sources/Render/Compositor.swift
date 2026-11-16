@@ -272,6 +272,9 @@ public final class Compositor: @unchecked Sendable {
     /// How many mipmapped copies of the screen were made so far, and how many no frame on the GPU uses: for tests.
     var mipmappedCopiesCount: (made: Int, free: Int) { mipmappedCopies.count }
 
+    /// How many sizes the mipmapped copies no frame on the GPU uses are of: for tests.
+    var mipmappedCopiesFreeSizes: Int { mipmappedCopies.freeSizes }
+
     /// Draws `frame`'s click effects alone over what `target` holds, through `frame.stage`, as `encode` draws them over
     /// its stage: for tests.
     func encodeClickEffects(of frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer) {
@@ -956,7 +959,9 @@ private struct WindowBarUniforms {
 
 /// The mipmapped copies of the screen's frames (`ScreenLayer.mipmapped`), each of the part of its frame shown alone: one
 /// for each frame on the GPU, of its size and format, kept once the GPU is done with that frame for a later one to use
-/// again, so a frame never writes into a copy another frame still reads.
+/// again, so a frame never writes into a copy another frame still reads. Only copies of the last two sizes asked for are
+/// kept (the screen, and the one being left in a crossfade): while a change of geometry moves the crop, every frame asks
+/// for another size, and the copies of the sizes before it (about 45 MB each at 4K) are let go rather than kept.
 ///
 /// A frame's completion hands its copy back on a thread of Metal's, which reads nothing of this but through `state`'s
 /// lock: what Metal orders between a commit and its completion, the thread sanitizer cannot see.
@@ -974,11 +979,39 @@ private final class MipmappedCopies: @unchecked Sendable {
         }
     }
 
+    /// A copy's size and format.
+    private struct Size: Equatable {
+        var width: Int
+        var height: Int
+        var pixelFormat: MTLPixelFormat
+
+        init(width: Int, height: Int, pixelFormat: MTLPixelFormat) {
+            (self.width, self.height, self.pixelFormat) = (width, height, pixelFormat)
+        }
+
+        init(of texture: any MTLTexture) {
+            self.init(width: texture.width, height: texture.height, pixelFormat: texture.pixelFormat)
+        }
+    }
+
+    /// How many sizes of copies are kept.
+    private static let keptSizes = 2
+
     private struct State {
         /// The copies no frame on the GPU uses, oldest first.
         var free: [Copy] = []
         /// How many were made, for tests.
         var made = 0
+        /// The sizes last asked for, the latest last: `keptSizes` at most.
+        var sizes: [Size] = []
+
+        /// Notes that `size` was asked for, and lets go of the free copies of a size no longer among the last ones.
+        mutating func ask(_ size: Size) {
+            sizes.removeAll { $0 == size }
+            sizes.append(size)
+            if sizes.count > MipmappedCopies.keptSizes { sizes.removeFirst(sizes.count - MipmappedCopies.keptSizes) }
+            free.removeAll { !sizes.contains(Size(of: $0.texture)) }
+        }
     }
 
     private let device: any MTLDevice
@@ -989,6 +1022,15 @@ private final class MipmappedCopies: @unchecked Sendable {
     }
 
     var count: (made: Int, free: Int) { state.withLock { ($0.made, $0.free.count) } }
+
+    /// How many sizes the free copies are of, for tests.
+    var freeSizes: Int {
+        state.withLock { state in
+            state.free.reduce(into: [Size]()) { sizes, copy in
+                if !sizes.contains(Size(of: copy.texture)) { sizes.append(Size(of: copy.texture)) }
+            }.count
+        }
+    }
 
     /// The whole pixels of a frame `width` × `height` inside `crop` (fractions of it, 0, 0 its top-left corner), rounded
     /// inward: on each axis from `ceil(start − 10⁻⁶)` to `floor(end + 10⁻⁶)` within the frame, or the pixel of the crop's
@@ -1037,10 +1079,10 @@ private final class MipmappedCopies: @unchecked Sendable {
 
     /// A free copy of that size and format, or a new one.
     private func take(width: Int, height: Int, pixelFormat: MTLPixelFormat) -> Copy? {
+        let size = Size(width: width, height: height, pixelFormat: pixelFormat)
         let reused = state.withLock { state -> Copy? in
-            let index = state.free.lastIndex {
-                $0.texture.width == width && $0.texture.height == height && $0.texture.pixelFormat == pixelFormat
-            }
+            state.ask(size)
+            let index = state.free.lastIndex { Size(of: $0.texture) == size }
             return index.map { state.free.remove(at: $0) }
         }
         if let reused { return reused }
@@ -1056,6 +1098,8 @@ private final class MipmappedCopies: @unchecked Sendable {
 
     private func give(_ copy: Copy) {
         state.withLock { state in
+            // One of a size no longer asked for goes.
+            guard state.sizes.contains(Size(of: copy.texture)) else { return }
             state.free.append(copy)
             if state.free.count > Self.kept { state.free.removeFirst() }
         }
