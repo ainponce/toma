@@ -18,6 +18,10 @@ import Testing
         #expect(all.displayString == "⌃⌥⇧⌘K" && all.carbonModifiers == 0x1B00)
         #expect(KeyCombo(keyCode: 40, modifiers: .control, key: "K").carbonModifiers == 0x1000)
         #expect(KeyCombo(keyCode: 40, modifiers: .option, key: "K").carbonModifiers == 0x800)
+
+        // The app names some keys in the user's language; what is saved stays as it is.
+        let space = KeyCombo(keyCode: 49, modifiers: [.option, .command], key: "Space")
+        #expect(space.displayString(keyName: "Espacio") == "⌥⌘Espacio" && space.displayString == "⌥⌘Space")
     }
 
     @Test func onlyTheIslandShortcutIsActiveAtRest() {

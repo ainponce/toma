@@ -259,6 +259,9 @@ struct RecordingDot: View {
     /// The ring is gone at 70 % of the period, as in the prototype.
     private static let spread = 0.7
     private static let ringWidth = 7.0
+    /// The ring is drawn again 30 times a second at most, not on every frame of the display (120 on ProMotion): the
+    /// wings are on the main thread for the whole take.
+    private static let ringInterval = 1.0 / 30
 
     var body: some View {
         Circle()
@@ -266,7 +269,7 @@ struct RecordingDot: View {
             .frame(width: size, height: size)
             .background {
                 if !isPaused, !reduceMotion {
-                    TimelineView(.animation) { context in
+                    TimelineView(.animation(minimumInterval: Self.ringInterval)) { context in
                         let phase = context.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: Self.period) / Self.period
                         let grown = min(phase / Self.spread, 1)
                         Circle()

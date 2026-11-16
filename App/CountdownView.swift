@@ -84,7 +84,7 @@ extension AnyTransition {
             removal: .modifier(
                 active: DigitLook(opacity: 0, blur: 10, scale: 1.35), identity: DigitLook(opacity: 1, blur: 0, scale: 1)
             )
-            .animation(.easeIn(duration: 0.28)))
+            .animation(.easeIn(duration: Motion.countdownDigitExit.timeInterval)))
     }
 }
 

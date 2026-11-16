@@ -182,7 +182,7 @@ private struct PeekRow: View {
                 .font(.system(size: 12))
             Text("New Recording")
                 .font(.system(size: 12, weight: .medium))
-            if let shortcut { KeyCap(text: shortcut.displayString) }
+            if let shortcut { KeyCap(text: shortcut.shownString) }
         }
         .foregroundStyle(.white)
         .lineLimit(1)

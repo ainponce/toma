@@ -61,8 +61,9 @@ private final class DiscardingSink: CaptureSink {
     func source(_ trackID: String, didStopWithError error: any Error) {}
 }
 
-/// A microphone's level as a few bars that rise fast and fall slowly (`MeterBallistics`, every frame), from
-/// the peak `peak` reads at each frame; yellow near full scale.
+/// A microphone's level as a few bars that rise fast and fall slowly (`MeterBallistics`, every frame drawn), from
+/// the peak `peak` reads at each frame; yellow near full scale. Drawn 30 times a second at most, not on every frame of
+/// the display (120 on ProMotion): it is in the wings, on the main thread, for the whole take.
 struct LevelMeter: View {
     /// The peak now, in dBFS.
     let peak: () -> Float
@@ -72,9 +73,10 @@ struct LevelMeter: View {
 
     /// Each bar's share of the level, so the bars do not move as one block.
     private static let weights = [0.78, 1.0, 0.9, 0.82, 0.95, 0.72]
+    private static let frameInterval = 1.0 / 30
 
     var body: some View {
-        TimelineView(.animation) { context in
+        TimelineView(.animation(minimumInterval: Self.frameInterval)) { context in
             let level = motion.level(peak: peak(), at: context.date)
             HStack(alignment: .bottom, spacing: 2) {
                 ForEach(0..<bars, id: \.self) { index in

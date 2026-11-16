@@ -81,7 +81,8 @@ private struct IslandGlass: ViewModifier {
             Color.black.opacity(black ? 1 : 0)
         }
         // The prototype's fade between black and glass; the design's 200 ms one with "Reduce motion".
-        .animation(.easeInOut(duration: reduceMotion ? Motion.reducedMotionFade.timeInterval : 0.32), value: black)
+        .animation(
+            .easeInOut(duration: (reduceMotion ? Motion.reducedMotionFade : Motion.notchBlend).timeInterval), value: black)
     }
 
     private var usesLiquidGlass: Bool {

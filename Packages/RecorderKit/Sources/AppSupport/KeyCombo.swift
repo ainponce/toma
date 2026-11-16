@@ -31,8 +31,14 @@ public struct KeyCombo: Codable, Hashable, Sendable {
 
     /// The modifiers in macOS's order, ⌃⌥⇧⌘, then the key: "⇧⌘2".
     public var displayString: String {
+        displayString(keyName: key)
+    }
+
+    /// The modifiers in macOS's order, then `keyName`: the key as the app names it in the user's language (the
+    /// space bar, for one).
+    public func displayString(keyName: String) -> String {
         let symbols: [(KeyModifiers, String)] = [(.control, "⌃"), (.option, "⌥"), (.shift, "⇧"), (.command, "⌘")]
-        return symbols.filter { modifiers.contains($0.0) }.map(\.1).joined() + key
+        return symbols.filter { modifiers.contains($0.0) }.map(\.1).joined() + keyName
     }
 
     /// The modifiers as `RegisterEventHotKey` takes them: `cmdKey` 0x100, `shiftKey` 0x200, `optionKey`

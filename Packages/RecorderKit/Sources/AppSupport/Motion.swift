@@ -40,6 +40,12 @@ public enum Motion {
     public static let contentEnterScale = 0.94
     /// With "Reduce motion", everything is a fade of this long, without scale or bounce.
     public static let reducedMotionFade: Duration = .milliseconds(200)
+    /// A number of the countdown leaving, growing and blurring out (ease-in): the prototype's timing, which the
+    /// design's table does not list.
+    public static let countdownDigitExit: Duration = .milliseconds(280)
+    /// The island's fade between the notch's black and the glass (ease-in-out): the prototype's timing, which the
+    /// design's table does not list; `reducedMotionFade` with "Reduce motion".
+    public static let notchBlend: Duration = .milliseconds(320)
 }
 
 /// One animated number (a width, a height, a radius) driven by a `Spring` toward its target. It can be

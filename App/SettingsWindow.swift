@@ -367,7 +367,7 @@ private struct ShortcutRow: View {
                         if model.recording == action {
                             Text("Type Shortcut")
                         } else if let combo = model.bindings.combos[action] {
-                            Text(verbatim: combo.displayString)
+                            Text(verbatim: combo.shownString)
                         } else {
                             Text("No Shortcut")
                         }

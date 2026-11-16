@@ -778,6 +778,17 @@
         }
       }
     },
+    "Key %lld" : {
+      "comment" : "A key the keyboard layout has no character for, named by its key code, in a keyboard shortcut",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tecla %lld"
+          }
+        }
+      }
+    },
     "Large" : {
       "comment" : "The camera bubble's size",
       "localizations" : {
@@ -1932,6 +1943,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Código fuente de esta versión: %@"
+          }
+        }
+      }
+    },
+    "Space" : {
+      "comment" : "The space bar, in a keyboard shortcut such as ⌥⌘Space",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espacio"
           }
         }
       }

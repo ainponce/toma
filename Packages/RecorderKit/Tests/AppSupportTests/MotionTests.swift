@@ -13,6 +13,8 @@ import Testing
         #expect(Motion.contentDelay == .milliseconds(60) && Motion.contentExit == .milliseconds(170))
         #expect(Motion.contentEnterBlur == 10 && Motion.contentExitBlur == 8 && Motion.contentEnterScale == 0.94)
         #expect(Motion.reducedMotionFade == .milliseconds(200))
+        // The prototype's, outside the table.
+        #expect(Motion.countdownDigitExit == .milliseconds(280) && Motion.notchBlend == .milliseconds(320))
     }
 
     @Test func springValueSettlesOnItsTarget() {

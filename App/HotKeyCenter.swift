@@ -248,6 +248,27 @@ extension KeyCombo {
     private static func keyName(_ event: NSEvent) -> String {
         if let special = specialKeys[Int(event.keyCode)] { return special }
         let plain = event.characters(byApplyingModifiers: [])?.uppercased() ?? ""
-        return plain.isEmpty ? "#\(event.keyCode)" : plain
+        return plain.isEmpty ? unnamedKey(UInt32(event.keyCode)) : plain
+    }
+
+    /// The saved name of a key the layout gives no character for.
+    private static func unnamedKey(_ keyCode: UInt32) -> String {
+        "#\(keyCode)"
+    }
+
+    /// What Settings and the island show (`displayString`): the space bar and a key the layout gives no character for
+    /// are named in the user's language (they are saved in English, "Space" and "#42"); every other key as saved.
+    var shownString: String {
+        let name =
+            if keyCode == UInt32(kVK_Space) {
+                String(localized: "Space", comment: "The space bar, in a keyboard shortcut such as ⌥⌘Space")
+            } else if key == Self.unnamedKey(keyCode) {
+                String(
+                    localized: "Key \(Int(keyCode))",
+                    comment: "A key the keyboard layout has no character for, named by its key code, in a keyboard shortcut")
+            } else {
+                key
+            }
+        return displayString(keyName: name)
     }
 }
