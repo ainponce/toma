@@ -156,10 +156,10 @@ final class EditorKeyboard {
             togglePanel()
             return true
         case .export:
-            // The bar's Export: its button shows only while no export runs or just finished, and the model refuses a
-            // second one meanwhile.
+            // The export sheet (Task 43), whatever the bar shows — also during the "Exportación terminada" label;
+            // the model refuses a second export while one runs.
             guard model.canExport else { return false }
-            model.exportVideo()
+            model.openExportSheet()
             return true
         case .open:
             open()
