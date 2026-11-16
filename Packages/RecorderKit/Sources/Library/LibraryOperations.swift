@@ -3,6 +3,7 @@ import Darwin
 import Dispatch
 import Foundation
 import ProjectFormat
+import Synchronization
 
 /// What the library needs to know of the app around it (design §6.6), from the app's own state: never by probing a
 /// lock. Asked on the library's own threads, never the main one.
@@ -47,7 +48,8 @@ public enum LibraryFailure: Error, Equatable, Sendable {
 public struct DuplicateRecord: Equatable, Sendable {
     /// The copy's package.
     public var copy: URL
-    /// It is in the projects folder: undoing it moves it to the library's trash; otherwise to the Trash of macOS.
+    /// It was made in the projects folder. Undoing it looks again where it is now: in the projects folder it goes to the
+    /// library's trash, elsewhere to the Trash of macOS.
     public var insideProjectsFolder: Bool
     /// `edit.json` of the copy when it was made; `nil` if it had none.
     public var editSignature: FileSignature?
@@ -75,10 +77,13 @@ public struct DuplicateRecord: Equatable, Sendable {
 public final class LibraryOperations: Sendable {
     /// How often a paused copy or deletion looks again whether the take ended.
     static let pausePoll: useconds_t = 50_000
-    /// The size of each read and write of a copy: a take that starts stops it within one of these.
-    static let copyChunk = 1 << 20
     /// The names a package gets in the trash while it is deleted (decision 33).
     static let deletingPrefix = ".deleting-"
+    /// How many levels of folders under the projects folder `finishPendingDeletions` looks into for abandoned copies, as
+    /// deep as the library lists projects (design §6.2).
+    static let abandonedCopiesDepth = 4
+    /// The copies this process is making.
+    static let copiesInProgress = CopiesInProgress()
 
     private let projectsFolder: URL
     private let fileSystem: any LibraryFileSystem
@@ -147,19 +152,29 @@ public final class LibraryOperations: Sendable {
     /// The copy is made under a hidden name in the same folder (`.<UUID>.duplicating`) and renamed to `name` with
     /// `RENAME_EXCL` once it is whole: a clone (`clonefile(2)`) where the disk has them, byte for byte the original;
     /// otherwise, once the disk is known to have room for it (`.noRoom`), a copy through descriptors, paused while a take
-    /// is being recorded, with `progress` (from 0 towards 1) after each step. `progress(1)` once it is done. The original
-    /// is read through a descriptor of its own folder: the Finder can rename it or its folder meanwhile, and the copy is
-    /// still made, next to it. A failure removes the hidden copy: nothing is left half done.
+    /// is being recorded, with `progress` (from 0 towards 1) after each step, each file synced and the disk flushed
+    /// (`F_FULLFSYNC`) before the copy gets its name. `progress(1)` once it is done. The original is read through a
+    /// descriptor of its own folder: the Finder can rename it or its folder meanwhile, and the copy is still made, next to
+    /// it. A failure removes the hidden copy: nothing is left half done. A crash leaves at most the hidden copy, which
+    /// `finishPendingDeletions` removes; while it is being made, `waitForCopies` waits for it.
     ///
     /// Refused while a take is being recorded, if the project's editor has changes it could not write, for a name that is
     /// not valid or is taken in that folder, and, as `.name(.tooLong)`, for one the disk finds too long (`ENAMETOOLONG`:
-    /// a name the Finder gave the original can be longer than the library's own limit, and its copy's need not fit).
+    /// a name the Finder gave the original can be longer than the library's own limit, and its copy's need not fit). A
+    /// disk without room for the clone or the copy gives `.noRoom` with the size of the original.
     public func duplicate(
         _ url: URL, named name: String, progress: @escaping @Sendable (Double) -> Void
     ) async -> Result<DuplicateRecord, LibraryFailure> {
         if app.isRecording() { return .failure(.recording) }
         if app.hasUnsavedChanges(url) { return .failure(.unsavedChanges) }
         return await onDisk(.utility) { [self] in duplicateOnDisk(url, named: name, progress: progress) }
+    }
+
+    /// Returns once no copy this process makes is in progress (of any `LibraryOperations`): the app waits for this
+    /// before it quits, since a file operation is never left half done (design §6.8). A copy paused while a take records
+    /// goes on once the take is closed.
+    public func waitForCopies() async {
+        await Self.copiesInProgress.waitUntilNone()
     }
 
     private func duplicateOnDisk(
@@ -178,30 +193,40 @@ public final class LibraryOperations: Sendable {
             return .failure(Self.failure(error))
         }
         let parent = open(folder.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-        guard parent >= 0 else { return .failure(.posix(Self.errnoCode())) }
+        guard parent >= 0 else { return .failure(.posix(FileTree.errnoCode())) }
         defer { close(parent) }
         let source = openat(parent, url.lastPathComponent, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard source >= 0 else { return .failure(.posix(Self.errnoCode())) }
+        guard source >= 0 else { return .failure(.posix(FileTree.errnoCode())) }
         defer { close(source) }
+        /// The size of the original, wherever it is now.
+        func originalSize() throws -> Int64 {
+            try fileSystem.allocatedSize(of: Self.folder(open: source, given: url))
+        }
 
         let hidden = ".\(UUID().uuidString).duplicating"
+        Self.copiesInProgress.begin(hidden)
+        defer { Self.copiesInProgress.end(hidden) }
         if fclonefileat(source, parent, hidden, UInt32(CLONE_NOFOLLOW)) != 0 {
-            let code = Self.errnoCode()
+            let code = FileTree.errnoCode()
             guard code == .ENOTSUP else {
                 Self.removeQuietly(hidden, in: parent)
+                if code == .ENOSPC || code == .EDQUOT { return .failure(.noRoom(needed: (try? originalSize()) ?? 0)) }
                 return .failure(.posix(code))
             }
             // No clones on this disk: a copy, once there is room for it.
             let needed: Int64
             do {
-                needed = try fileSystem.allocatedSize(of: url)
-                if needed > (try fileSystem.freeSpace(of: folder)) { return .failure(.noRoom(needed: needed)) }
+                let free = try fileSystem.freeSpace(of: Self.folder(open: parent, given: folder))
+                needed = try originalSize()
+                if needed > free { return .failure(.noRoom(needed: needed)) }
             } catch {
                 return .failure(Self.failure(error))
             }
             do {
                 let copy = try FolderCopy(source, progress: progress, beforeEachStep: { [self] in waitWhileRecording() })
                 try copy.copy(into: parent, named: hidden)
+                // Each file was synced: the disk's cache too, before the copy can be seen.
+                try DurableFile.fullSync(parent)
             } catch {
                 Self.removeQuietly(hidden, in: parent)
                 let failure = Self.failure(error)
@@ -278,14 +303,18 @@ public final class LibraryOperations: Sendable {
 
     /// Deletes forever the packages at `urls`, which are all in the trash (otherwise nothing happens:
     /// `.outsideProjectsFolder`). Those this app has open (to look at) are closed first. Then each, once its locks are
-    /// found free, is renamed to `Trash/.deleting-<UUID>`: from that moment it is in no list, and a crash leaves it for
-    /// `finishPendingDeletions`. Then they are deleted one by one, never following a link, paused while a take is being
-    /// recorded. `progress(done, total, paused)` is told the projects deleted out of `urls.count` once they are all
-    /// renamed, after each one, and when a pause begins and ends. Returns once all are deleted.
+    /// found free, is renamed to `Trash/.deleting-<UUID>` within the trash itself (through a descriptor of it that is not
+    /// a link): from that moment it is in no list, and a crash leaves it for `finishPendingDeletions`. Its locks are asked
+    /// again under that name, where nothing can open it anew, and one found taken goes back to its name. Then they are
+    /// deleted one by one, never following a link, paused while a take is being recorded. `progress(done, total, paused)`
+    /// is told the projects deleted out of `urls.count` once they are all renamed, after each one, and when a pause
+    /// begins and ends. Returns once all are deleted.
     ///
     /// A package that could not be deleted goes back to its name in the trash (with « 2»… if it is taken), with what
     /// was left of it. `.openElsewhere` if the only one asked for has a lock taken; otherwise those with a lock taken and
-    /// those that could not be deleted are `.someNotDeleted`. Deleting forever cannot be undone.
+    /// those that could not be deleted are `.someNotDeleted`. But if one could not go back to its name either, it is not
+    /// in the trash's list any more (`finishPendingDeletions` deletes it the next time, unless its locks are taken then):
+    /// `.posix` with the error of that rename, before anything else. Deleting forever cannot be undone.
     public func deleteForever(
         _ urls: [URL], progress: @escaping @Sendable (Int, Int, Bool) -> Void
     ) async -> Result<Void, LibraryFailure> {
@@ -303,35 +332,34 @@ public final class LibraryOperations: Sendable {
                 for identity in identities { records.trashOrigins[identity] = nil }
             }
         }
+        if let stuck = marked.stuck ?? deleted.stuck { return .failure(.posix(stuck)) }
         let notDeleted = marked.locked + marked.failed + deleted.failed
         if notDeleted == 0 { return .success(()) }
         if total == 1, marked.locked == 1 { return .failure(.openElsewhere) }
         return .failure(.someNotDeleted(notDeleted))
     }
 
-    /// Deletes what deletions a crash left in the trash (`Trash/.deleting-*`, decision 33), paused while a take is being
-    /// recorded, and touches nothing else: a link among them is removed itself. Whatever cannot be deleted stays as it
-    /// is, for the next time.
+    /// Finishes what a crash left half done, and touches nothing else:
+    /// - the deletions in the trash (`Trash/.deleting-*`, decision 33), each once its locks are found free (asked just
+    ///   before; one taken is left for the next time); a link among them is removed itself;
+    /// - the hidden copies of a duplicate (`.<UUID>.duplicating`) in the projects folder and its folders four levels
+    ///   down (not in the trash, in hidden folders nor in packages), if the projects folder is on a local internal disk
+    ///   (design §6.5: nothing in the background anywhere else), but those this process is making.
+    ///
+    /// Paused while a take is being recorded. Whatever cannot be removed stays as it is, for the next time.
     public func finishPendingDeletions() async {
         await onDisk(.utility) { [self] in
-            let trash = ProjectTrash.folder(in: projectsFolder)
-            guard let entries = try? fileSystem.list(trash) else { return }
-            let pending = entries.map(\.lastPathComponent).filter { $0.hasPrefix(Self.deletingPrefix) }
-            guard !pending.isEmpty else { return }
-            let folder = open(trash.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard folder >= 0 else { return }
-            defer { close(folder) }
-            for name in pending {
-                try? Self.removeTree(named: name, in: folder) { waitWhileRecording() }
-            }
+            finishDeleting()
+            removeAbandonedCopies()
         }
     }
 
     // MARK: - Undo a duplicate
 
-    /// Undoes `record`, a copy this library made, without ever deleting it (design §6.3): a copy in the projects folder
-    /// goes to its trash (as `moveToTrash`, and can be restored), one elsewhere to the Trash of macOS (`trash`). Returns
-    /// where it is now: in the trash, or the URL it had when it went to the Trash of macOS, which does not say.
+    /// Undoes `record`, a copy this library made, without ever deleting it (design §6.3): a copy that is in the projects
+    /// folder now (whatever `insideProjectsFolder` said when it was made) goes to its trash (as `moveToTrash`, and can be
+    /// restored), one elsewhere to the Trash of macOS (`trash`). Returns where it is now: in the trash, or the URL it had
+    /// when it went to the Trash of macOS, which does not say.
     ///
     /// Refused, and the copy stays, if it was opened or changed since it was made (`.copyOpenedOrChanged`): this app has
     /// it open, its `edit.lock` is taken (asked just before), or its `edit.json` or `edit-log.jsonl` is not as it was
@@ -353,7 +381,8 @@ public final class LibraryOperations: Sendable {
             guard signature(of: package.editURL) == record.editSignature, signature(of: package.editLogURL) == record.logSignature
             else { return .failure(.copyOpenedOrChanged) }
             if let refusal = lockRefusal(of: record.copy, editLock: false) { return .failure(refusal) }
-            if record.insideProjectsFolder { return moveIntoTrash(record.copy) }
+            // Where it is now, not where it was: the projects folder may have changed meanwhile.
+            if place(ofFolder: record.copy.deletingLastPathComponent()) != .elsewhere { return moveIntoTrash(record.copy) }
             do {
                 try trash(record.copy)
             } catch {
@@ -381,7 +410,7 @@ public final class LibraryOperations: Sendable {
         let origin = TrashOrigin(bookmark: try? from.bookmarkData(), path: from.path)
         let trash = ProjectTrash.folder(in: projectsFolder)
         do {
-            if mkdir(trash.path, 0o755) != 0, errno != EEXIST { throw POSIXError(Self.errnoCode()) }
+            if mkdir(trash.path, 0o755) != 0, errno != EEXIST { throw POSIXError(FileTree.errnoCode()) }
             return .success(Trashed(url: try ProjectTrash.move(url, into: trash), identity: identity, origin: origin))
         } catch {
             return .failure(Self.failure(error))
@@ -414,8 +443,8 @@ public final class LibraryOperations: Sendable {
                 resolvingBookmarkData: bookmark, options: [.withoutUI, .withoutMounting], relativeTo: nil,
                 bookmarkDataIsStale: &isStale)
             {
-                let path = Self.realPath(byPath)
-                candidates.append(path != nil && path == Self.realPath(resolved) ? byPath : resolved)
+                let path = FileTree.realPath(byPath)
+                candidates.append(path != nil && path == FileTree.realPath(resolved) ? byPath : resolved)
             }
         }
         candidates.append(byPath)
@@ -437,12 +466,19 @@ public final class LibraryOperations: Sendable {
         var locked = 0
         /// Those whose locks or name could not be looked at or changed, left as they are.
         var failed = 0
+        /// Why one found locked once hidden could not go back to its name, if one could not.
+        var stuck: POSIXErrorCode?
     }
 
-    /// Renames each of `urls` whose locks are free to `.deleting-<UUID>` in the trash. On the disk's thread.
+    /// Renames each of `urls` whose locks are free to `.deleting-<UUID>` in the trash, and asks its locks again under that
+    /// name: one taken goes back to its name. On the disk's thread.
     private func markForDeletion(_ urls: [URL]) -> Marked {
         var marked = Marked(pending: [])
-        let trash = ProjectTrash.folder(in: projectsFolder)
+        guard let trash = openTrash() else {
+            marked.failed = urls.count
+            return marked
+        }
+        defer { close(trash.fd) }
         for url in urls {
             switch lockRefusal(of: url, editLock: true) {
             case nil: break
@@ -454,38 +490,54 @@ public final class LibraryOperations: Sendable {
                 continue
             }
             let identity = try? PackageIdentity(of: url, in: fileSystem)
+            let name = url.deletingPathExtension().lastPathComponent
             let hidden = Self.deletingPrefix + UUID().uuidString
             do {
-                try ProjectTrash.renameExclusively(
-                    from: AT_FDCWD, url.path, to: AT_FDCWD, trash.appending(path: hidden, directoryHint: .isDirectory).path)
-                marked.pending.append((hidden, url.deletingPathExtension().lastPathComponent, identity))
+                try ProjectTrash.renameExclusively(from: trash.fd, url.lastPathComponent, to: trash.fd, hidden)
             } catch let error as POSIXError where error.code == .ENOENT {
                 marked.gone += 1
+                continue
             } catch {
                 marked.failed += 1
+                continue
+            }
+            // Nothing can open it by its old name any more: asked now, the answer holds.
+            switch lockRefusal(of: trash.url.appending(path: hidden, directoryHint: .isDirectory), editLock: true) {
+            case nil:
+                marked.pending.append((hidden, name, identity))
+                continue
+            case .openElsewhere?:
+                marked.locked += 1
+            case _?:
+                marked.failed += 1
+            }
+            do {
+                try Self.nameAgain(hidden, as: name, in: trash.fd)
+            } catch {
+                if marked.stuck == nil, case .posix(let code) = Self.failure(error) { marked.stuck = code }
             }
         }
         return marked
     }
 
     /// Deletes the packages `marked` hid in the trash, one by one, paused while a take is being recorded; one that cannot
-    /// be deleted goes back to its name. Their identities, and how many could not be deleted. On the disk's thread.
+    /// be deleted goes back to its name. Their identities, how many could not be deleted, and why one of those could not
+    /// go back to its name, if one could not. On the disk's thread.
     private func deleteMarked(
         _ pending: [(hidden: String, name: String, identity: PackageIdentity?)], alreadyGone: Int, total: Int,
         progress: (Int, Int, Bool) -> Void
-    ) -> (identities: [PackageIdentity], failed: Int) {
+    ) -> (identities: [PackageIdentity], failed: Int, stuck: POSIXErrorCode?) {
         var done = alreadyGone
         progress(done, total, false)
-        guard !pending.isEmpty else { return ([], 0) }
-        let trash = ProjectTrash.folder(in: projectsFolder)
-        let folder = open(trash.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        defer { if folder >= 0 { close(folder) } }
+        guard !pending.isEmpty else { return ([], 0, nil) }
+        guard let trash = openTrash() else { return ([], pending.count, FileTree.errnoCode()) }
+        defer { close(trash.fd) }
         var identities: [PackageIdentity] = []
         var failed = 0
+        var stuck: POSIXErrorCode?
         for package in pending {
             do {
-                guard folder >= 0 else { throw POSIXError(Self.errnoCode()) }
-                try Self.removeTree(named: package.hidden, in: folder) {
+                try FileTree.removeTree(named: package.hidden, in: trash.fd) {
                     waitWhileRecording { paused in progress(done, total, paused) }
                 }
                 done += 1
@@ -493,41 +545,111 @@ public final class LibraryOperations: Sendable {
                 progress(done, total, false)
             } catch {
                 failed += 1
-                let hidden = trash.appending(path: package.hidden, directoryHint: .isDirectory)
-                _ = try? ProjectTrash.move(hidden, into: trash, as: package.name)
+                do {
+                    try Self.nameAgain(package.hidden, as: package.name, in: trash.fd)
+                } catch {
+                    if stuck == nil, case .posix(let code) = Self.failure(error) { stuck = code }
+                }
             }
         }
-        return (identities, failed)
+        return (identities, failed, stuck)
     }
 
-    /// Removes the item `name` of the folder open at `folder` and, if it is a folder, everything in it, depth first;
-    /// `beforeEach` before each item is removed. A link is removed itself, never followed, and what is already gone
-    /// counts as removed. Stops at the first item that cannot be removed and throws its error.
-    static func removeTree(named name: String, in folder: Int32, beforeEach: () -> Void) throws {
-        var info = stat()
-        guard fstatat(folder, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else {
-            if errno == ENOENT { return }
-            throw POSIXError(errnoCode())
-        }
-        if info.st_mode & S_IFMT == S_IFDIR {
-            let inner = openat(folder, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-            guard inner >= 0 else {
-                if errno == ENOENT { return }
-                throw POSIXError(errnoCode())
-            }
-            defer { close(inner) }
-            for entry in try names(in: inner) {
-                try removeTree(named: entry, in: inner, beforeEach: beforeEach)
+    /// Renames `hidden`, in the folder open at `folder`, to `name` (without `.toma`), with « 2», « 3»… while that is
+    /// taken, never over anything.
+    private static func nameAgain(_ hidden: String, as name: String, in folder: Int32) throws {
+        var attempt = 1
+        while true {
+            let candidate = attempt == 1 ? name : "\(name) \(attempt)"
+            do {
+                try ProjectTrash.renameExclusively(from: folder, hidden, to: folder, "\(candidate).\(ProjectPackage.fileExtension)")
+                return
+            } catch let error as POSIXError where error.code == .EEXIST {
+                attempt += 1
             }
         }
-        beforeEach()
-        let flags = info.st_mode & S_IFMT == S_IFDIR ? AT_REMOVEDIR : 0
-        guard unlinkat(folder, name, flags) == 0 || errno == ENOENT else { throw POSIXError(errnoCode()) }
+    }
+
+    /// The deletions a crash left in the trash, each once its locks are found free. On the disk's thread.
+    private func finishDeleting() {
+        guard let entries = try? fileSystem.list(ProjectTrash.folder(in: projectsFolder)) else { return }
+        let pending = entries.map(\.lastPathComponent).filter { $0.hasPrefix(Self.deletingPrefix) }
+        guard !pending.isEmpty, let trash = openTrash() else { return }
+        defer { close(trash.fd) }
+        for name in pending {
+            var info = stat()
+            guard fstatat(trash.fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
+            if info.st_mode & S_IFMT == S_IFDIR,
+                lockRefusal(of: trash.url.appending(path: name, directoryHint: .isDirectory), editLock: true) != nil
+            {
+                continue
+            }
+            try? FileTree.removeTree(named: name, in: trash.fd) { waitWhileRecording() }
+        }
+    }
+
+    /// The hidden copies a crash left in the projects folder, if it is on a local internal disk. On the disk's thread.
+    private func removeAbandonedCopies() {
+        guard let volume = try? fileSystem.volume(of: projectsFolder), volume.isInternal, !volume.isRemovable,
+            !volume.isNetwork, !volume.isSynced
+        else { return }
+        removeAbandonedCopies(in: projectsFolder, depth: 0)
+    }
+
+    /// The hidden copies no one is making in `folder`, and in its folders down to `abandonedCopiesDepth`.
+    private func removeAbandonedCopies(in folder: URL, depth: Int) {
+        guard let entries = try? fileSystem.list(folder) else { return }
+        var abandoned: [String] = []
+        for entry in entries {
+            let name = entry.lastPathComponent
+            if Self.isHiddenCopy(name) {
+                if !Self.copiesInProgress.contains(name) { abandoned.append(name) }
+                continue
+            }
+            guard depth < Self.abandonedCopiesDepth, !name.hasPrefix("."),
+                entry.pathExtension.lowercased() != ProjectPackage.fileExtension,
+                depth > 0 || name != ProjectTrash.folderName,
+                (try? fileSystem.stat(entry, withAddedDate: false))?.kind == .directory
+            else { continue }
+            removeAbandonedCopies(in: entry, depth: depth + 1)
+        }
+        guard !abandoned.isEmpty else { return }
+        let fd = open(folder.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return }
+        defer { close(fd) }
+        for name in abandoned {
+            // Only a folder: a link of that name was not made by a duplicate.
+            var info = stat()
+            guard fstatat(fd, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFDIR else { continue }
+            try? FileTree.removeTree(named: name, in: fd) { waitWhileRecording() }
+        }
+    }
+
+    /// Whether `name` is that of the hidden copy of a duplicate: `.<UUID>.duplicating`.
+    private static func isHiddenCopy(_ name: String) -> Bool {
+        let suffix = ".duplicating"
+        guard name.hasPrefix("."), name.hasSuffix(suffix) else { return false }
+        return UUID(uuidString: String(name.dropFirst().dropLast(suffix.count))) != nil
+    }
+
+    /// The trash of the projects folder, open with a descriptor that is not a link and is the trash itself (its real
+    /// path), and its URL; `nil` if it cannot be opened or is not that folder.
+    private func openTrash() -> (fd: Int32, url: URL)? {
+        let url = ProjectTrash.folder(in: projectsFolder)
+        let fd = open(url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { return nil }
+        guard let projects = FileTree.realPath(projectsFolder), FileTree.path(of: fd) == projects + "/" + ProjectTrash.folderName
+        else {
+            close(fd)
+            errno = ENOTDIR
+            return nil
+        }
+        return (fd, url)
     }
 
     /// `removeTree` without pauses, of something this library made, whatever comes of it.
     private static func removeQuietly(_ name: String, in folder: Int32) {
-        try? removeTree(named: name, in: folder) {}
+        try? FileTree.removeTree(named: name, in: folder) {}
     }
 
     // MARK: - Private: the disk
@@ -543,7 +665,7 @@ public final class LibraryOperations: Sendable {
 
     /// Where `folder` is, by real paths (so that `/var` and `/private/var`, or a link on the way, are the same place).
     private func place(ofFolder folder: URL) -> Place {
-        guard let projects = Self.realPath(projectsFolder), let path = Self.realPath(folder) else { return .elsewhere }
+        guard let projects = FileTree.realPath(projectsFolder), let path = FileTree.realPath(folder) else { return .elsewhere }
         let trash = projects + "/" + ProjectTrash.folderName
         if path == trash || path.hasPrefix(trash + "/") { return .trash }
         if path == projects || path.hasPrefix(projects + "/") { return .projects }
@@ -552,7 +674,7 @@ public final class LibraryOperations: Sendable {
 
     /// Whether the package at `url` is directly in the trash of the projects folder.
     private func isInTrash(_ url: URL) -> Bool {
-        guard let projects = Self.realPath(projectsFolder), let folder = Self.realPath(url.deletingLastPathComponent()) else {
+        guard let projects = FileTree.realPath(projectsFolder), let folder = FileTree.realPath(url.deletingLastPathComponent()) else {
             return false
         }
         return folder == projects + "/" + ProjectTrash.folderName
@@ -607,45 +729,9 @@ public final class LibraryOperations: Sendable {
 
     /// The folder open at `fd` as `given` while it is still there; where it is now if it was moved or renamed.
     private static func folder(open fd: Int32, given: URL) -> URL {
-        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
-        guard fcntl(fd, F_GETPATH, &buffer) != -1 else { return given }
-        let now = String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
-        return realPath(given) == now ? given : URL(fileURLWithPath: now, isDirectory: true)
+        guard let now = FileTree.path(of: fd) else { return given }
+        return FileTree.realPath(given) == now ? given : URL(fileURLWithPath: now, isDirectory: true)
     }
-
-    static func realPath(_ url: URL) -> String? {
-        guard let path = realpath(url.path, nil) else { return nil }
-        defer { free(path) }
-        return String(cString: path)
-    }
-
-    /// The names in the folder open at `fd`, but `.` and `..`.
-    static func names(in fd: Int32) throws -> [String] {
-        let copy = dup(fd)
-        guard copy >= 0 else { throw POSIXError(errnoCode()) }
-        guard let stream = fdopendir(copy) else {
-            let error = POSIXError(errnoCode())
-            close(copy)
-            throw error
-        }
-        defer { closedir(stream) }
-        rewinddir(stream)
-        var names: [String] = []
-        while true {
-            errno = 0
-            guard let entry = readdir(stream) else {
-                if errno != 0 { throw POSIXError(errnoCode()) }
-                return names
-            }
-            let length = Int(entry.pointee.d_namlen)
-            let name = withUnsafeBytes(of: entry.pointee.d_name) { bytes in
-                String(decoding: bytes.prefix(length), as: UTF8.self)
-            }
-            if name != ".", name != ".." { names.append(name) }
-        }
-    }
-
-    static func errnoCode() -> POSIXErrorCode { POSIXErrorCode(rawValue: errno) ?? .EIO }
 
     /// `error` as a failure of the library: the code of a `POSIXError`, itself or under Foundation's; `EIO` otherwise.
     static func failure(_ error: any Error) -> LibraryFailure {
@@ -668,128 +754,43 @@ public final class LibraryOperations: Sendable {
     }
 }
 
-/// A copy of a folder, through descriptors: the original or its folder can be renamed meanwhile. Never follows a link
-/// (a link is copied as one); a FIFO is made again; anything else that is not a file or a folder is left out. Files are
-/// copied in steps of `LibraryOperations.copyChunk`, with `beforeEachStep` before each (it pauses) and `progress` after
-/// (the bytes copied over those of the original, below 1); each file and folder gets the original's permissions and
-/// dates.
-private final class FolderCopy {
-    private let source: Int32
-    private let total: Int64
-    private var copied: Int64 = 0
-    private let progress: (Double) -> Void
-    private let beforeEachStep: () -> Void
-    private var buffer = [UInt8](repeating: 0, count: LibraryOperations.copyChunk)
-
-    init(_ source: Int32, progress: @escaping (Double) -> Void, beforeEachStep: @escaping () -> Void) throws {
-        self.source = source
-        self.progress = progress
-        self.beforeEachStep = beforeEachStep
-        total = try Self.bytes(in: source)
+/// The copies a process is making, by the name of their hidden folder (`.<UUID>.duplicating`, unique): the sweep of
+/// abandoned copies leaves them alone, and quitting waits for them.
+final class CopiesInProgress: Sendable {
+    private struct State {
+        var names: Set<String> = []
+        var waiters: [CheckedContinuation<Void, Never>] = []
     }
 
-    /// Makes the folder `name` in the folder open at `parent` a copy of the source.
-    func copy(into parent: Int32, named name: String) throws {
-        var info = stat()
-        guard fstat(source, &info) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        try copyFolder(source, info: info, into: parent, named: name)
+    private let state = Mutex(State())
+
+    func begin(_ name: String) {
+        state.withLock { _ = $0.names.insert(name) }
     }
 
-    private func copyFolder(_ folder: Int32, info: stat, into parent: Int32, named name: String) throws {
-        guard mkdirat(parent, name, 0o700) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        let target = openat(parent, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-        guard target >= 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        defer { close(target) }
-        for entry in try LibraryOperations.names(in: folder) {
-            var item = stat()
-            guard fstatat(folder, entry, &item, AT_SYMLINK_NOFOLLOW) == 0 else {
-                // Gone meanwhile: the editor replaces its files by renames.
-                if errno == ENOENT { continue }
-                throw POSIXError(LibraryOperations.errnoCode())
-            }
-            switch item.st_mode & S_IFMT {
-            case S_IFDIR:
-                let inner = openat(folder, entry, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                guard inner >= 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-                defer { close(inner) }
-                try copyFolder(inner, info: item, into: target, named: entry)
-            case S_IFREG:
-                try copyFile(entry, in: folder, into: target)
-            case S_IFLNK:
-                var destination = [CChar](repeating: 0, count: Int(MAXPATHLEN) + 1)
-                let length = readlinkat(folder, entry, &destination, Int(MAXPATHLEN))
-                guard length >= 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-                destination[length] = 0
-                guard symlinkat(destination, target, entry) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-            case S_IFIFO:
-                guard mkfifoat(target, entry, item.st_mode & 0o7777) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-            default:
-                continue
-            }
+    func end(_ name: String) {
+        let waiters = state.withLock { state -> [CheckedContinuation<Void, Never>] in
+            state.names.remove(name)
+            guard state.names.isEmpty else { return [] }
+            defer { state.waiters = [] }
+            return state.waiters
         }
-        try Self.setModeAndDates(of: target, as: info)
+        for waiter in waiters { waiter.resume() }
     }
 
-    private func copyFile(_ name: String, in folder: Int32, into target: Int32) throws {
-        let input = openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        guard input >= 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        defer { close(input) }
-        var info = stat()
-        guard fstat(input, &info) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        guard info.st_mode & S_IFMT == S_IFREG else { throw POSIXError(.EFTYPE) }
-        let output = openat(target, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
-        guard output >= 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        defer { close(output) }
-        while true {
-            beforeEachStep()
-            let count = buffer.withUnsafeMutableBytes { read(input, $0.baseAddress, $0.count) }
-            if count < 0 {
-                if errno == EINTR { continue }
-                throw POSIXError(LibraryOperations.errnoCode())
+    func contains(_ name: String) -> Bool {
+        state.withLock { $0.names.contains(name) }
+    }
+
+    /// Returns once no copy is being made.
+    func waitUntilNone() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let isNone = state.withLock { state -> Bool in
+                if state.names.isEmpty { return true }
+                state.waiters.append(continuation)
+                return false
             }
-            if count == 0 { break }
-            try buffer.withUnsafeBytes { bytes in
-                var offset = 0
-                while offset < count {
-                    let written = write(output, bytes.baseAddress! + offset, count - offset)
-                    if written < 0 {
-                        if errno == EINTR { continue }
-                        throw POSIXError(LibraryOperations.errnoCode())
-                    }
-                    offset += written
-                }
-            }
-            copied += Int64(count)
-            progress(min(Double(copied) / Double(max(total, 1)), 1.0.nextDown))
+            if isNone { continuation.resume() }
         }
-        try Self.setModeAndDates(of: output, as: info)
-    }
-
-    /// The permissions and the access and modification dates of `info`, on the item open at `fd`.
-    private static func setModeAndDates(of fd: Int32, as info: stat) throws {
-        guard fchmod(fd, info.st_mode & 0o7777) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-        let times = [info.st_atimespec, info.st_mtimespec]
-        guard futimens(fd, times) == 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-    }
-
-    /// The bytes of every regular file in the folder open at `folder`, links not followed.
-    private static func bytes(in folder: Int32) throws -> Int64 {
-        var total: Int64 = 0
-        for entry in try LibraryOperations.names(in: folder) {
-            var item = stat()
-            guard fstatat(folder, entry, &item, AT_SYMLINK_NOFOLLOW) == 0 else { continue }
-            switch item.st_mode & S_IFMT {
-            case S_IFREG:
-                total += Int64(item.st_size)
-            case S_IFDIR:
-                let inner = openat(folder, entry, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
-                guard inner >= 0 else { throw POSIXError(LibraryOperations.errnoCode()) }
-                defer { close(inner) }
-                total += try bytes(in: inner)
-            default:
-                break
-            }
-        }
-        return total
     }
 }

@@ -16,6 +16,7 @@ private let app = AppInfo(name: "Tests", version: "0")
 final class FakeAppState: LibraryAppState {
     private struct State {
         var recording = false
+        var recordingAnswers = 0
         var open: Set<String> = []
         var unsaved: Set<String> = []
         var closed: [String] = []
@@ -28,6 +29,10 @@ final class FakeAppState: LibraryAppState {
         set { state.withLock { $0.recording = newValue } }
     }
 
+    /// How many times `isRecording()` answered `true`: a paused copy or deletion asks again every 50 ms, so two answers
+    /// mean it is waiting, and four more that 200 ms went by while it waited.
+    var recordingAnswers: Int { state.withLock { $0.recordingAnswers } }
+
     /// The packages `close` was called for, in order, by path.
     var closed: [String] { state.withLock { $0.closed } }
 
@@ -38,7 +43,12 @@ final class FakeAppState: LibraryAppState {
         }
     }
 
-    func isRecording() -> Bool { recording }
+    func isRecording() -> Bool {
+        state.withLock { state in
+            if state.recording { state.recordingAnswers += 1 }
+            return state.recording
+        }
+    }
 
     func isOpenHere(_ url: URL) -> Bool { state.withLock { $0.open.contains(Self.key(url)) } }
 
@@ -59,6 +69,11 @@ final class FakeAppState: LibraryAppState {
 /// about (H18): the library probes locks only just before an action that changes where a project is.
 final class LockProbes: Sendable {
     private let asked = Mutex<[String]>([])
+    private let answer: @Sendable (URL) -> Bool
+
+    init(answer: @escaping @Sendable (URL) -> Bool = { RecordingLock.isHeld(at: $0) }) {
+        self.answer = answer
+    }
 
     /// The lock files asked about so far, by path, in order.
     var paths: [String] { asked.withLock { $0 } }
@@ -67,7 +82,7 @@ final class LockProbes: Sendable {
 
     func isHeld(_ url: URL) -> Bool {
         asked.withLock { $0.append(url.standardizedFileURL.path) }
-        return RecordingLock.isHeld(at: url)
+        return answer(url)
     }
 }
 
@@ -94,14 +109,19 @@ final class TrashDouble: Sendable {
 struct Rig {
     let projects: URL
     let app = FakeAppState()
-    let probes = LockProbes()
+    let probes: LockProbes
     let macTrash: TrashDouble
     let records: LibraryRecordsStore
     let operations: LibraryOperations
 
     var trash: URL { ProjectTrash.folder(in: projects) }
 
-    init(in folder: URL, projects: URL? = nil, fileSystem: any LibraryFileSystem = SystemFileSystem()) throws {
+    /// `locks` answers `isLockHeld` (by default, `RecordingLock.isHeld`).
+    init(
+        in folder: URL, projects: URL? = nil, fileSystem: any LibraryFileSystem = SystemFileSystem(),
+        locks: @escaping @Sendable (URL) -> Bool = { RecordingLock.isHeld(at: $0) }
+    ) throws {
+        probes = LockProbes(answer: locks)
         self.projects = projects ?? folder.appending(path: "Projects", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: self.projects, withIntermediateDirectories: true)
         let macTrashFolder = folder.appending(path: "MacTrash-\(UUID().uuidString)", directoryHint: .isDirectory)
@@ -388,13 +408,14 @@ private func failure(of result: Result<Void, LibraryFailure>) -> LibraryFailure?
                 appState.recording = true
             }
         }
-        #expect(await eventually(timeout: .seconds(30)) { appState.recording })
-        try await Task.sleep(for: .milliseconds(100))
+        // Asked twice: it is waiting.
+        #expect(await eventually(timeout: .seconds(30)) { appState.recordingAnswers >= 2 })
         let hidden = try #require(try names(in: projects).first { $0.hasSuffix(".duplicating") })
         let partial = projects.appending(path: hidden, directoryHint: .isDirectory)
         let paused = bytes(under: partial)
-        try await Task.sleep(for: .milliseconds(200))
-        // Not one byte more while the take records.
+        // Not one byte more while the take records, for four more askings: 200 ms.
+        let answers = appState.recordingAnswers
+        #expect(await eventually(timeout: .seconds(30)) { appState.recordingAnswers >= answers + 4 })
         #expect(bytes(under: partial) == paused)
         #expect(paused < 48 * 1_048_576)
         #expect(!exists(projects.appending(path: "x copia.toma")))
@@ -583,7 +604,12 @@ private func failure(of result: Result<Void, LibraryFailure>) -> LibraryFailure?
         let again = try await rig.operations.moveToTrash(restored).get()
         rig.probes.reset()
         #expect(failure(of: await rig.operations.deleteForever([again]) { _, _, _ in }) == nil)
-        #expect(Set(rig.probes.paths) == lockPaths(of: again, takes: takes))
+        // Under its name, then once hidden, where nothing can open it anew.
+        let hiddenProbes = rig.probes.paths.filter { $0.contains("/Trash/.deleting-") }
+        #expect(Set(rig.probes.paths.filter { !$0.contains("/Trash/.deleting-") }) == lockPaths(of: again, takes: takes))
+        #expect(hiddenProbes.count == 3)
+        let hiddenPackage = try #require(hiddenProbes.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent() })
+        #expect(Set(hiddenProbes) == lockPaths(of: hiddenPackage, takes: takes))
         rig.probes.reset()
 
         #expect(try await rig.operations.undoDuplicate(record).get().lastPathComponent == "x copia.toma")
@@ -715,8 +741,9 @@ private func failure(of result: Result<Void, LibraryFailure>) -> LibraryFailure?
         }
         #expect(await eventually(timeout: .seconds(30)) { events.withLock { $0.contains("1/5 paused") } })
         let paused = itemCount(under: rig.trash)
-        try await Task.sleep(for: .milliseconds(200))
-        // Nothing more is deleted while the take records.
+        // Nothing more is deleted while the take records, for four more askings.
+        let answers = appState.recordingAnswers
+        #expect(await eventually(timeout: .seconds(30)) { appState.recordingAnswers >= answers + 4 })
         #expect(itemCount(under: rig.trash) == paused)
         #expect(paused > 0)
 
@@ -781,10 +808,273 @@ private func failure(of result: Result<Void, LibraryFailure>) -> LibraryFailure?
         #expect(exists(copy4.copy))
         #expect(rig.macTrash.trashed.count == 1)
 
-        // Closed again without a change: it can go.
+        // While a take records, or with a take of it being recorded: refused, and the copy stays.
         await rig.app.close(copy2.copy)
+        rig.app.recording = true
+        #expect(await rig.operations.undoDuplicate(copy2) == .failure(.recording))
+        rig.app.recording = false
+        let recordingLock = try RecordingLock.acquire(
+            at: ProjectPackage(url: copy2.copy).lockURL(take: "take-001"), info: .current(now: Date()))
+        #expect(await rig.operations.undoDuplicate(copy2) == .failure(.openElsewhere))
+        recordingLock.release()
+        #expect(exists(copy2.copy))
+
+        // Closed again without a change: it can go.
         #expect(try await rig.operations.undoDuplicate(copy2).get().lastPathComponent == "x copia 2.toma")
         #expect(!exists(copy2.copy))
+        await rig.records.flush()
+    }
+}
+
+@Test func deletingWhileRecordingHidesThenWaits() async throws {
+    try await withTemporaryDirectory { folder in
+        let rig = try Rig(in: folder)
+        let a = try await rig.operations.moveToTrash(try makeProject("a", in: rig.projects).url).get()
+        let b = try await rig.operations.moveToTrash(try makeProject("b", in: rig.projects).url).get()
+        let appState = rig.app
+        appState.recording = true
+        let events = Mutex<[String]>([])
+
+        let emptying = Task {
+            await rig.operations.deleteForever([a, b]) { done, total, paused in
+                events.withLock { $0.append("\(done)/\(total)\(paused ? " paused" : "")") }
+            }
+        }
+        #expect(await eventually(timeout: .seconds(30)) { events.withLock { $0.contains("0/2 paused") } })
+        // Out of every list at once (the user confirmed); deleted only once the take ends.
+        let hidden = try names(in: rig.trash)
+        #expect(hidden.count == 2 && hidden.allSatisfy { $0.hasPrefix(".deleting-") })
+        let paused = itemCount(under: rig.trash)
+        let answers = appState.recordingAnswers
+        #expect(await eventually(timeout: .seconds(30)) { appState.recordingAnswers >= answers + 4 })
+        #expect(itemCount(under: rig.trash) == paused)
+
+        appState.recording = false
+        #expect(failure(of: await emptying.value) == nil)
+        #expect(events.withLock { $0 } == ["0/2", "0/2 paused", "0/2", "1/2", "2/2"])
+        #expect(try names(in: rig.trash).isEmpty)
+        await rig.records.flush()
+    }
+}
+
+@Test func aLockTakenAsItIsHiddenPutsItBack() async throws {
+    try await withTemporaryDirectory { folder in
+        // Another app opens it just as it is hidden: its locks are free under its name, taken under the hidden one.
+        let rig = try Rig(in: folder, locks: { $0.path.contains("/.deleting-") && $0.lastPathComponent == "edit.lock" })
+        let trashed = try await rig.operations.moveToTrash(try makeProject("x", in: rig.projects).url).get()
+        let before = try treeHash(trashed)
+
+        #expect(failure(of: await rig.operations.deleteForever([trashed]) { _, _, _ in }) == .openElsewhere)
+        #expect(try names(in: rig.trash) == ["x.toma"])
+        #expect(try treeHash(trashed) == before)
+        #expect(rig.probes.paths.contains { $0.contains("/Trash/.deleting-") })
+        await rig.records.flush()
+    }
+}
+
+@Test func aDeletionThatCannotGoBackToItsNameSaysSo() async throws {
+    try await withTemporaryDirectory { folder in
+        let rig = try Rig(in: folder)
+        let trashed = try await rig.operations.moveToTrash(try makeProject("x", in: rig.projects).url).get()
+        let trash = rig.trash
+        // Once it is hidden, the trash cannot be written to: the package cannot be removed from it, nor named again.
+        let result = await rig.operations.deleteForever([trashed]) { done, _, _ in
+            if done == 0 { chmod(trash.path, 0o555) }
+        }
+        chmod(trash.path, 0o755)
+        // Not "still in the trash": it is hidden, and finished the next time.
+        #expect(failure(of: result) == .posix(.EACCES))
+        let left = try names(in: rig.trash)
+        #expect(left.count == 1 && left.allSatisfy { $0.hasPrefix(".deleting-") })
+        await rig.operations.finishPendingDeletions()
+        #expect(try names(in: rig.trash).isEmpty)
+        await rig.records.flush()
+    }
+}
+
+// MARK: - Abandoned copies and quitting
+
+@Test func abandonedCopiesAreSweptOnlyOnAnInternalDisk() async throws {
+    try await withTemporaryDirectory { folder in
+        let rig = try Rig(in: folder)
+        func hiddenCopy(in parent: URL, name: String = ".\(UUID().uuidString).duplicating") throws -> URL {
+            let url = parent.appending(path: name, directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: url.appending(path: "takes"), withIntermediateDirectories: true)
+            try Data("half".utf8).write(to: url.appending(path: "manifest.json"))
+            return url
+        }
+        let clientes = rig.projects.appending(path: "Clientes", directoryHint: .isDirectory)
+        let deep = rig.projects.appending(path: "A/B/C", directoryHint: .isDirectory)
+        let swept = [try hiddenCopy(in: rig.projects), try hiddenCopy(in: clientes), try hiddenCopy(in: deep)]
+        // Not looked into: the trash, a package, a hidden folder; nor a name that is not a copy's, nor a link.
+        let x = try makeProject("x", in: rig.projects)
+        let outside = folder.appending(path: "Outside", directoryHint: .isDirectory)
+        let kept = [
+            try hiddenCopy(in: rig.trash), try hiddenCopy(in: x.url), try hiddenCopy(in: rig.projects.appending(path: ".hidden")),
+            try hiddenCopy(in: rig.projects, name: ".not-a-uuid.duplicating"), try hiddenCopy(in: outside),
+        ]
+        let link = rig.projects.appending(path: ".\(UUID().uuidString).duplicating", directoryHint: .notDirectory)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let outsideHash = try treeHash(outside)
+
+        await rig.operations.finishPendingDeletions()
+        #expect(swept.allSatisfy { !exists($0) })
+        #expect(kept.allSatisfy(exists))
+        #expect(exists(link))
+        #expect(try treeHash(outside) == outsideHash)
+        #expect(try names(in: clientes).isEmpty)
+
+        // A projects folder on a disk that can be pulled out is not looked at by itself (design §6.5).
+        let image = try DiskImage.attach(sizeMegabytes: 20, fileSystem: .apfs, in: folder)
+        defer { try? image.detach(force: true) }
+        let removable = try Rig(in: folder, projects: image.mountPoint.appending(path: "Projects", directoryHint: .isDirectory))
+        let left = try hiddenCopy(in: removable.projects)
+        await removable.operations.finishPendingDeletions()
+        #expect(exists(left))
+    }
+}
+
+@Test func aCopyInProgressIsNotSweptAndQuittingWaitsForIt() async throws {
+    try await withTemporaryDirectory { folder in
+        let image = try DiskImage.attach(sizeMegabytes: 96, fileSystem: .hfsPlus, in: folder)
+        defer { try? image.detach(force: true) }
+        let projects = image.mountPoint.appending(path: "Projects", directoryHint: .isDirectory)
+        // An internal disk without clones (HFS+, as an internal disk): a copy takes long enough to be met.
+        let counting = CountingFileSystem(
+            base: DelayingFileSystem(volumes: [
+                .init(root: image.mountPoint, info: DelayingFileSystem.volumeInfo(uuid: "INTERNAL", mountPath: image.mountPoint.path))
+            ]))
+        let rig = try Rig(in: folder, projects: projects, fileSystem: counting)
+        let original = try makeProject("x", in: projects, mediaBytes: 24 * 1_048_576)
+        let before = try treeHash(original.url)
+        let abandoned = projects.appending(path: ".\(UUID().uuidString).duplicating", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: abandoned, withIntermediateDirectories: false)
+        let appState = rig.app
+        let started = Mutex(false)
+
+        let copying = Task {
+            await rig.operations.duplicate(original.url, named: "x copia") { value in
+                guard value >= 0.25, value < 1, !started.withLock({ $0 }) else { return }
+                started.withLock { $0 = true }
+                appState.recording = true
+            }
+        }
+        #expect(await eventually(timeout: .seconds(30)) { appState.recordingAnswers >= 2 })
+        let quit = Mutex(false)
+        let quitting = Task {
+            await rig.operations.waitForCopies()
+            quit.withLock { $0 = true }
+        }
+        counting.reset()
+        let sweeping = Task { await rig.operations.finishPendingDeletions() }
+        // The sweep has looked at the projects folder while the copy is half made.
+        #expect(await eventually(timeout: .seconds(30)) {
+            counting.urls(of: .list).contains { $0.standardizedFileURL.path == projects.standardizedFileURL.path }
+        })
+        #expect(!quit.withLock { $0 })
+
+        appState.recording = false
+        let record = try await copying.value.get()
+        await quitting.value
+        await sweeping.value
+        #expect(quit.withLock { $0 })
+        #expect(try treeHash(record.copy) == before)
+        #expect(!exists(abandoned))
+        #expect(try names(in: projects) == ["x copia.toma", "x.toma"])
+    }
+}
+
+// MARK: - The original moved, the disk full
+
+/// A file system as `base`, which calls `onFreeSpace` before it answers `freeSpace(of:)`.
+private final class HookedFileSystem: LibraryFileSystem {
+    private let base = SystemFileSystem()
+    private let onFreeSpace: @Sendable () -> Void
+
+    init(onFreeSpace: @escaping @Sendable () -> Void) {
+        self.onFreeSpace = onFreeSpace
+    }
+
+    func list(_ directory: URL) throws -> [URL] { try base.list(directory) }
+    func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat { try base.stat(url, withAddedDate: withAddedDate) }
+    func volume(of url: URL) throws -> VolumeInfo { try base.volume(of: url) }
+    func read(_ url: URL, maxBytes: Int) throws -> Data { try base.read(url, maxBytes: maxBytes) }
+    func allocatedSize(of package: URL) throws -> Int64 { try base.allocatedSize(of: package) }
+
+    func freeSpace(of url: URL) throws -> Int64 {
+        onFreeSpace()
+        return try base.freeSpace(of: url)
+    }
+}
+
+@Test func aDuplicateMeasuresTheOriginalWhereItIsNow() async throws {
+    try await withTemporaryDirectory { folder in
+        let image = try DiskImage.attach(sizeMegabytes: 32, fileSystem: .hfsPlus, in: folder)
+        defer { try? image.detach(force: true) }
+        let projects = image.mountPoint.appending(path: "Projects", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: false)
+        let original = projects.appending(path: "x.toma", directoryHint: .isDirectory)
+        let renamedTo = projects.appending(path: "x renombrado.toma", directoryHint: .isDirectory)
+        // The Finder renames the original once it is open, before it is measured.
+        let renamed = Mutex(false)
+        let hooked = HookedFileSystem {
+            guard !renamed.withLock({ $0 }) else { return }
+            renamed.withLock { $0 = true }
+            try? FileManager.default.moveItem(at: original, to: renamedTo)
+        }
+        let rig = try Rig(in: folder, projects: projects, fileSystem: hooked)
+        try makeProject("x", in: projects, mediaBytes: 2 * 1_048_576)
+        let before = try treeHash(original)
+
+        let record = try await rig.operations.duplicate(original, named: "x copia", progress: noProgress).get()
+        #expect(renamed.withLock { $0 })
+        #expect(try treeHash(record.copy) == before)
+        #expect(try names(in: projects) == ["x copia.toma", "x renombrado.toma"])
+    }
+}
+
+@Test func aCloneWithoutRoomSaysSo() async throws {
+    try await withTemporaryDirectory { folder in
+        let image = try DiskImage.attach(sizeMegabytes: 20, fileSystem: .apfs, in: folder)
+        defer { try? image.detach(force: true) }
+        let projects = image.mountPoint.appending(path: "Projects", directoryHint: .isDirectory)
+        let rig = try Rig(in: folder, projects: projects)
+        let original = try makeProject("x", in: projects, mediaBytes: 1_048_576)
+        for number in 1...300 { try Data("\(number)".utf8).write(to: original.cacheURL.appending(path: "\(number)")) }
+        // The disk filled up to the last block.
+        let filler = image.mountPoint.appending(path: "filler")
+        FileManager.default.createFile(atPath: filler.path, contents: nil)
+        let handle = try FileHandle(forWritingTo: filler)
+        let block = Data(count: 65_536)
+        while (try? handle.write(contentsOf: block)) != nil {}
+        try? handle.close()
+        let needed = try SystemFileSystem().allocatedSize(of: original.url)
+
+        #expect(await rig.operations.duplicate(original.url, named: "x copia", progress: noProgress) == .failure(.noRoom(needed: needed)))
+        #expect(try names(in: projects) == ["x.toma"])
+    }
+}
+
+@Test func undoLooksWhereTheCopyIsNow() async throws {
+    try await withTemporaryDirectory { folder in
+        let rig = try Rig(in: folder)
+        let x = try makeProject("x", in: rig.projects)
+        let y = try makeProject("y", in: folder.appending(path: "Desktop", directoryHint: .isDirectory))
+        let inside = try await rig.operations.duplicate(x.url, named: "x copia", progress: noProgress).get()
+        let outside = try await rig.operations.duplicate(y.url, named: "y copia", progress: noProgress).get()
+
+        // Records that say the opposite of where the copies are: where they are counts.
+        var wrongOutside = outside
+        wrongOutside.insideProjectsFolder = true
+        #expect(await rig.operations.undoDuplicate(wrongOutside) == .success(outside.copy))
+        #expect(rig.macTrash.trashed == [FakeAppState.key(outside.copy)])
+        #expect(!exists(rig.trash))
+
+        var wrongInside = inside
+        wrongInside.insideProjectsFolder = false
+        let trashed = try await rig.operations.undoDuplicate(wrongInside).get()
+        #expect(location(trashed) == location(rig.trash.appending(path: "x copia.toma")))
+        #expect(rig.macTrash.trashed.count == 1)
         await rig.records.flush()
     }
 }
