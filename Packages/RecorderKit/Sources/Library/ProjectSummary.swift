@@ -147,8 +147,7 @@ public enum ProjectReader {
             volume = try fileSystem.volume(of: url)
             folder = try fileSystem.stat(url, withAddedDate: place == .trash)
         } catch {
-            let state: ProjectState =
-                isMissing(error) ? .unavailable(.notFound) : .needsRepair("The package cannot be looked at: \(reason(error))")
+            let state: ProjectState = isMissing(error) ? .unavailable(.notFound) : cannotBeLookedAt(error)
             return ProjectSummary(
                 identity: PackageIdentity(volume: url.path, file: 0), path: url.path, name: name, place: place,
                 hasCamera: false, state: state, lastSeen: lastSeen)
@@ -191,12 +190,7 @@ public enum ProjectReader {
 
         let isUnfinished = manifest.takes.contains { $0.status == .recording }
         if !isUnfinished {
-            let read: (URL) throws -> (LoadedProject, EditDocument, Int) =
-                readDocument ?? { url in
-                    let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(
-                        url, take: nil, context: context)
-                    return (project, document, diskVersion)
-                }
+            let read = readDocument ?? defaultReadDocument(context: context)
             do {
                 let (project, document, diskVersion) = try read(url)
                 summary.formatVersion = project.manifest.formatVersion
@@ -234,6 +228,19 @@ public enum ProjectReader {
         return summary
     }
 
+    /// `readDocument`'s default, also the library scanner's: `EditSession.readDocumentWithDiskVersion` with `context`.
+    static func defaultReadDocument(context: EditContext) -> @Sendable (URL) throws -> (LoadedProject, EditDocument, Int) {
+        { url in
+            let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
+            return (project, document, diskVersion)
+        }
+    }
+
+    /// The state of a package that could not be looked at for another reason than not being there: `error` says why.
+    static func cannotBeLookedAt(_ error: any Error) -> ProjectState {
+        .needsRepair("The package cannot be looked at: \(reason(error))")
+    }
+
     /// `error` in a few words, for the help text of a project to repair.
     private static func reason(_ error: any Error) -> String {
         if let code = posixCode(of: error) { return String(cString: strerror(code)) + "." }
@@ -246,7 +253,7 @@ public enum ProjectReader {
 
     /// Whether `error` says nothing is at the path: `ENOENT`, `ENOTDIR` (a folder on the way is not one), or
     /// Foundation's "no such file", itself or as its underlying error.
-    private static func isMissing(_ error: any Error) -> Bool {
+    static func isMissing(_ error: any Error) -> Bool {
         if let code = posixCode(of: error) { return code == ENOENT || code == ENOTDIR }
         let error = error as NSError
         return error.domain == NSCocoaErrorDomain
