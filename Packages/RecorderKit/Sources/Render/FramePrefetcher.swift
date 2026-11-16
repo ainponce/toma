@@ -1,13 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import AVFoundation
-import CoreMedia
 import CoreVideo
 import Foundation
 import Metal
 import ProjectFormat
 import Synchronization
-import VideoToolbox
-import os
 
 /// Decodes the frames of one video track ahead of whoever draws them, on a queue of its own: the source instants it is
 /// told it will be asked for (`schedule(_:)`), in that order, each the frame its `TrackFrameReader` gives for it (the
@@ -23,9 +19,10 @@ import os
 /// `latest(atSource:)`, for playback, never waits at all: a frame not decoded in time leaves the one before it. Meant for
 /// one consumer, asking for the instants in the order scheduled: one asked for that is not the next scheduled drops the
 /// ones before it (frames skipped, as playback does), or, if it is not scheduled at all, everything scheduled (a jump),
-/// and is decoded first, on its own. An instant someone is waiting for is never dropped that way (only by `reset()`,
-/// which wakes the caller to ask again), so a second caller asking at the same time slows the first one down but never
-/// leaves it waiting for good.
+/// and is decoded first, on its own. An instant someone is waiting for is never dropped that way: only `reset()` drops it,
+/// and wakes whoever waits for it to ask again. So a second caller asking at the same time slows the first one down but
+/// never leaves it waiting for good. A caller can wait in a task (`frame(atSource:)`) or on a queue of its own
+/// (`frame(atSource:completion:)`).
 ///
 /// For scrubbing, `keyFrame(atSource:)` decodes the key frame at or before an instant alone, without the reader.
 final class FramePrefetcher: @unchecked Sendable {
@@ -70,27 +67,27 @@ final class FramePrefetcher: @unchecked Sendable {
         /// for a later instant not decoded in time.
         var newest: (time: HostTime, frame: CachedTexture?)?
         /// Callers waiting for an entry to be decoded, by a token of theirs, with the entry's `id`.
-        var waiters: [Int: (entry: Int, continuation: CheckedContinuation<Void, any Error>)] = [:]
+        var waiters: [Int: (entry: Int, waiter: Waiter)] = [:]
         var nextToken = 0
 
         /// The entry of instant `time`, the first one scheduled for it, after dropping those before it that nobody waits
         /// for (frames skipped); or, when `time` is not scheduled, a new entry for it, first in line, after dropping every
-        /// entry nobody waits for (a jump). Returns its index, and the callers waiting for entries dropped, to be resumed.
-        mutating func entry(
-            at time: HostTime
-        ) -> (index: Int, dropped: [CheckedContinuation<Void, any Error>]) {
+        /// entry nobody waits for (a jump). Returns its index. No entry anybody waits for is dropped here.
+        mutating func entry(at time: HostTime) -> Int {
             let waited = Set(waiters.values.map(\.entry))
-            let index = entries.firstIndex { $0.time == time }
-            let end = index ?? entries.endIndex
+            let end = entries.firstIndex { $0.time == time } ?? entries.endIndex
             let dropped = Set(entries[..<end].filter { !waited.contains($0.id) }.map(\.id))
             entries.removeAll { dropped.contains($0.id) }
-            let resumed = waiters.filter { dropped.contains($0.value.entry) }.map(\.key).compactMap {
-                waiters.removeValue(forKey: $0)?.continuation
-            }
-            if let found = entries.firstIndex(where: { $0.time == time }) { return (found, resumed) }
+            if let found = entries.firstIndex(where: { $0.time == time }) { return found }
             entries.insert(Entry(id: nextID, time: time), at: 0)
             nextID += 1
-            return (0, resumed)
+            return 0
+        }
+
+        /// Takes the waiters of entry `id`.
+        mutating func waiters(of id: Int) -> [Waiter] {
+            let tokens = waiters.filter { $0.value.entry == id }.map(\.key)
+            return tokens.compactMap { waiters.removeValue(forKey: $0)?.waiter }
         }
 
         /// The first entry not decoded yet, if there is room to decode it within `byteLimit`.
@@ -98,6 +95,19 @@ final class FramePrefetcher: @unchecked Sendable {
             guard let index = entries.firstIndex(where: { $0.decoded == nil }), index < FramePrefetcher.maxFrames else { return nil }
             let bytesAhead = entries[..<index].reduce(0) { $0 + $1.bytes }
             return index == 0 || bytesAhead + frameBytes <= byteLimit ? index : nil
+        }
+    }
+
+    /// Who waits for an entry, and how it is woken: to ask again.
+    private enum Waiter {
+        case task(CheckedContinuation<Void, any Error>)
+        case callback(@Sendable () -> Void)
+
+        func wake() {
+            switch self {
+            case let .task(continuation): continuation.resume()
+            case let .callback(callback): callback()
+            }
         }
     }
 
@@ -130,15 +140,15 @@ final class FramePrefetcher: @unchecked Sendable {
     }
 
     /// Drops every instant scheduled and every frame decoded ahead, as after a jump. A frame being decoded is dropped
-    /// once it is; a caller waiting asks again.
+    /// once it is; a caller waiting is woken and asks again.
     func reset() {
         let waiting = state.withLock { state in
             state.entries.removeAll()
             state.newest = nil
             defer { state.waiters.removeAll() }
-            return state.waiters.values.map(\.continuation)
+            return state.waiters.values.map(\.waiter)
         }
-        for continuation in waiting { continuation.resume() }
+        for waiter in waiting { waiter.wake() }
     }
 
     /// How many instants are scheduled and not taken yet, and how many of them are decoded: for tests.
@@ -153,19 +163,38 @@ final class FramePrefetcher: @unchecked Sendable {
     func frame(atSource time: HostTime) async throws -> CachedTexture? {
         while true {
             try Task.checkCancellation()
-            let (step, waitFor, dropped) = state.withLock { state -> (Result<CachedTexture?, RenderError>?, Int, [CheckedContinuation<Void, any Error>]) in
+            let (step, waitFor) = state.withLock { state -> (Result<CachedTexture?, RenderError>?, Int) in
                 // Instants scheduled before it were skipped, or it was not scheduled: they go.
-                let (index, dropped) = state.entry(at: time)
+                let index = state.entry(at: time)
                 let entry = state.entries[index]
-                guard let decoded = entry.decoded else { return (nil, entry.id, dropped) }
+                guard let decoded = entry.decoded else { return (nil, entry.id) }
                 state.entries.remove(at: index)
-                return (decoded, entry.id, dropped)
+                return (decoded, entry.id)
             }
-            for continuation in dropped { continuation.resume() }
             decodeIfThereIsRoom()
             if let step { return try step.get() }
             try await waitForEntry(waitFor)
         }
+    }
+
+    /// `frame(atSource:)` for a caller that waits on a queue of its own rather than in a task: `completion` gets the frame,
+    /// or why it could not be made a texture, once it is decoded (at once if it was decoded ahead), on the caller's thread
+    /// or on this prefetcher's queue. Never blocks.
+    func frame(atSource time: HostTime, completion: @escaping @Sendable (Result<CachedTexture?, RenderError>) -> Void) {
+        let decoded = state.withLock { state -> Result<CachedTexture?, RenderError>? in
+            let index = state.entry(at: time)
+            let entry = state.entries[index]
+            if let decoded = entry.decoded {
+                state.entries.remove(at: index)
+                return decoded
+            }
+            // Woken once it is decoded, or dropped by `reset()`: then it asks again.
+            defer { state.nextToken += 1 }
+            state.waiters[state.nextToken] = (entry.id, .callback { [self] in frame(atSource: time, completion: completion) })
+            return nil
+        }
+        decodeIfThereIsRoom()
+        if let decoded { completion(decoded) }
     }
 
     /// What `latest(atSource:)` finds.
@@ -182,16 +211,14 @@ final class FramePrefetcher: @unchecked Sendable {
     /// before it, or schedules it first when it was not (a jump); one not decoded yet stays scheduled, to be decoded.
     /// - Throws: `RenderError.textureCreationFailed` for a frame Core Video cannot make a texture of.
     func latestFrame(atSource time: HostTime) throws -> Latest {
-        let (latest, dropped) = state.withLock { state -> (Result<Latest, RenderError>, [CheckedContinuation<Void, any Error>]) in
-            let (index, dropped) = state.entry(at: time)
+        let latest = state.withLock { state -> Result<Latest, RenderError> in
+            let index = state.entry(at: time)
             guard let decoded = state.entries[index].decoded else {
-                let previous = state.newest.flatMap { $0.time < time ? $0 : nil }
-                return (.success(.late(previous: previous)), dropped)
+                return .success(.late(previous: state.newest.flatMap { $0.time < time ? $0 : nil }))
             }
             state.entries.remove(at: index)
-            return (decoded.map(Latest.onTime), dropped)
+            return decoded.map(Latest.onTime)
         }
-        for continuation in dropped { continuation.resume() }
         decodeIfThereIsRoom()
         return try latest.get()
     }
@@ -236,7 +263,7 @@ final class FramePrefetcher: @unchecked Sendable {
                     guard !Task.isCancelled, let entry = state.entries.first(where: { $0.id == id }), entry.decoded == nil else {
                         return false
                     }
-                    state.waiters[token] = (id, continuation)
+                    state.waiters[token] = (id, .task(continuation))
                     return true
                 }
                 if !waits {
@@ -244,7 +271,9 @@ final class FramePrefetcher: @unchecked Sendable {
                 }
             }
         } onCancel: {
-            state.withLock { $0.waiters.removeValue(forKey: token) }?.continuation.resume(throwing: CancellationError())
+            if case let .task(continuation)? = state.withLock({ $0.waiters.removeValue(forKey: token) })?.waiter {
+                continuation.resume(throwing: CancellationError())
+            }
         }
     }
 
@@ -284,7 +313,7 @@ final class FramePrefetcher: @unchecked Sendable {
             } else {
                 decoded = .success(nil)
             }
-            let waiting = state.withLock { state -> [CheckedContinuation<Void, any Error>] in
+            let waiting = state.withLock { state -> [Waiter] in
                 if case let .success(texture?) = decoded { state.lastDecoded = texture }
                 if case let .success(texture) = decoded, state.newest.map({ $0.time <= next.time }) ?? true {
                     state.newest = (next.time, texture)
@@ -294,150 +323,9 @@ final class FramePrefetcher: @unchecked Sendable {
                 guard let index = state.entries.firstIndex(where: { $0.id == next.id }) else { return [] }
                 state.entries[index].decoded = decoded
                 state.entries[index].bytes = bytes
-                let tokens = state.waiters.filter { $0.value.entry == next.id }.map(\.key)
-                return tokens.compactMap { state.waiters.removeValue(forKey: $0)?.continuation }
+                return state.waiters(of: next.id)
             }
-            for continuation in waiting { continuation.resume() }
+            for waiter in waiting { waiter.wake() }
         }
-    }
-}
-
-/// Decodes key frames alone, for scrubbing (plan decision 32): the key frame at or before an instant, found with an
-/// `AVSampleCursor` (from the sample at or before the instant, back in presentation order to a full sync sample), its
-/// sample read by an `AVSampleBufferGenerator` without a timebase (synchronously) and decoded by a
-/// `VTDecompressionSession` kept while the format allows, to BGRA in IOSurfaces like `TrackFrameReader`'s. No
-/// `AVAssetReader` is opened, so a scrub costs one decode of one frame, and none while the key frame stays the same.
-///
-/// Not thread-safe; blocks while it reads and decodes.
-final class KeyFrameDecoder {
-    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "KeyFrameDecoder")
-
-    /// How many key frames were decoded, for tests.
-    private(set) var decodeCount = 0
-
-    private let textureCache: CVMetalTextureCache
-    private var session: VTDecompressionSession?
-    /// The generator of the segment last read, by its file.
-    private var generator: (asset: AVURLAsset, generator: AVSampleBufferGenerator)?
-    /// The key frame last decoded: its file, its presentation time in it, and its frame.
-    private var last: (asset: AVURLAsset, time: CMTime, frame: CachedTexture?)?
-    /// The segments read so far, closed ones: their files, by the span of host time each holds.
-    private var segments: [TrackFrameReader.Media] = []
-    /// Errors already logged.
-    private var reported: Set<String> = []
-
-    /// - Throws: `RenderError.metalResourceUnavailable` if Core Video cannot make a texture cache for `device`.
-    init(device: any MTLDevice) throws {
-        let usage = MTLTextureUsage.shaderRead.rawValue
-        let attributes = [kCVMetalTextureUsage as String: NSNumber(value: usage)] as CFDictionary
-        var cache: CVMetalTextureCache?
-        let status = CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, attributes, &cache)
-        guard status == kCVReturnSuccess, let cache else {
-            throw RenderError.metalResourceUnavailable("key frame texture cache (CVReturn \(status))")
-        }
-        textureCache = cache
-    }
-
-    deinit {
-        if let session { VTDecompressionSessionInvalidate(session) }
-    }
-
-    /// The segment read before that holds `time`, if one does (only a closed segment is kept: its span is known).
-    func media(at time: HostTime) -> TrackFrameReader.Media? {
-        segments.first { $0.start <= time && $0.end.map { time < $0 } == true }
-    }
-
-    /// The key frame at or before host time `time` in the segment `media` (`TrackFrameReader.media(at:)`); `nil` before
-    /// its first frame or when it cannot be read or decoded.
-    func keyFrame(at time: HostTime, of media: TrackFrameReader.Media) -> CachedTexture? {
-        if media.end != nil, !segments.contains(where: { $0.start == media.start }) { segments.append(media) }
-        guard time >= media.start else { return nil }
-        let offset = CMTime(value: Int64(time.nanoseconds - media.start.nanoseconds), timescale: 1_000_000_000)
-        guard let cursor = media.track.makeSampleCursor(presentationTimeStamp: offset) else { return nil }
-        // "At or near" the time: back to the sample at or before it, then to a full sync sample.
-        while cursor.presentationTimeStamp > offset {
-            guard cursor.stepInPresentationOrder(byCount: -1) == -1 else { return nil }
-        }
-        while !cursor.currentSampleSyncInfo.sampleIsFullSync.boolValue {
-            guard cursor.stepInPresentationOrder(byCount: -1) == -1 else { return nil }
-        }
-        let keyTime = cursor.presentationTimeStamp
-        if let last, last.asset === media.asset, last.time == keyTime { return last.frame }
-        let frame = decode(cursor, of: media.asset)
-        last = (media.asset, keyTime, frame)
-        return frame
-    }
-
-    /// The sample at `cursor` of `asset`, decoded, as a texture.
-    private func decode(_ cursor: AVSampleCursor, of asset: AVURLAsset) -> CachedTexture? {
-        let generator = self.generator.flatMap { $0.asset === asset ? $0.generator : nil }
-            ?? AVSampleBufferGenerator(asset: asset, timebase: nil)
-        self.generator = (asset, generator)
-        let sample: CMSampleBuffer
-        do {
-            sample = try generator.makeSampleBuffer(for: AVSampleBufferRequest(start: cursor))
-        } catch {
-            report("cannot read the key frame: \(TrackFrameReader.describe(error))")
-            return nil
-        }
-        guard let format = CMSampleBufferGetFormatDescription(sample), let session = session(for: format) else { return nil }
-        let output = DecodedImage()
-        let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample, flags: [], infoFlagsOut: nil) { status, _, image, _, _ in
-            output.set(status == noErr ? image : nil)
-        }
-        VTDecompressionSessionWaitForAsynchronousFrames(session)
-        guard status == noErr, let pixelBuffer = output.get() else {
-            report("cannot decode the key frame (OSStatus \(status))")
-            return nil
-        }
-        decodeCount += 1
-        CVMetalTextureCacheFlush(textureCache, 0)
-        do {
-            return try CachedTexture(pixelBuffer, cache: textureCache)
-        } catch {
-            report("cannot make a texture of the key frame: \(error)")
-            return nil
-        }
-    }
-
-    /// The session, made again when it cannot take `format`.
-    private func session(for format: CMFormatDescription) -> VTDecompressionSession? {
-        if let session, VTDecompressionSessionCanAcceptFormatDescription(session, formatDescription: format) { return session }
-        if let session { VTDecompressionSessionInvalidate(session) }
-        session = nil
-        let attributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
-            kCVPixelBufferMetalCompatibilityKey as String: true,
-        ]
-        var made: VTDecompressionSession?
-        let status = VTDecompressionSessionCreate(
-            allocator: nil, formatDescription: format, decoderSpecification: nil, imageBufferAttributes: attributes as CFDictionary,
-            outputCallback: nil, decompressionSessionOut: &made)
-        guard status == noErr, let made else {
-            report("cannot make a decompression session (OSStatus \(status))")
-            return nil
-        }
-        session = made
-        return made
-    }
-
-    private func report(_ message: String) {
-        guard reported.insert(message).inserted else { return }
-        Self.logger.error("\(message, privacy: .public)")
-    }
-}
-
-/// The image a decompression session hands its output handler, read once it returned.
-private final class DecodedImage: @unchecked Sendable {
-    private let lock = NSLock()
-    private var image: CVImageBuffer?
-
-    func set(_ image: CVImageBuffer?) {
-        lock.withLock { self.image = image }
-    }
-
-    func get() -> CVImageBuffer? {
-        lock.withLock { image }
     }
 }

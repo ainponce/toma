@@ -40,6 +40,10 @@ final class BackgroundImages {
     let blur: Blur
     /// How many images have been blurred, for tests.
     private(set) var blurCount = 0
+    /// How many images have been uploaded (or tried to), for tests.
+    private(set) var uploadCount = 0
+    /// For tests: an upload fails with this, as when Metal cannot make the texture.
+    var uploadFailure: RenderError?
 
     private let device: any MTLDevice
     private let library: any MTLLibrary
@@ -170,6 +174,8 @@ final class BackgroundImages {
 
     /// `image` as an `.rgba8Unorm` texture with mipmaps.
     private func upload(_ image: DecodedBackgroundImage) throws -> any MTLTexture {
+        uploadCount += 1
+        if let uploadFailure { throw uploadFailure }
         let descriptor = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .rgba8Unorm, width: image.width, height: image.height, mipmapped: true)
         descriptor.usage = .shaderRead

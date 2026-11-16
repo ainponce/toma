@@ -648,10 +648,13 @@ func largeDocumentReplaysItsTailFast() throws {
         func padding(_ k: Int) -> Double { 0.08 + Double(k) / 1_000_000 }
         for k in 0..<groups {
             entries.append(doLine(entries.count + 1, group: k + 1, try set("/style/padding", padding(k), padding(k + 1))))
-            // Every tenth group is undone and redone, so there are undone groups to close.
+            // Every tenth group is undone and redone, and every tenth after it left undone: the next group's `do` closes
+            // it, so closing runs at scale too.
             if k % 10 == 0 {
                 entries.append(.undo(seq: entries.count + 1, group: k + 1))
                 entries.append(.redo(seq: entries.count + 1, group: k + 1))
+            } else if k % 10 == 5 {
+                entries.append(.undo(seq: entries.count + 1, group: k + 1))
             }
         }
         var snapshot = SmallDocument.document

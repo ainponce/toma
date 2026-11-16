@@ -132,10 +132,11 @@ func latestRequestWins() async throws {
         for n in 1...10 { watched.engine.request(.paused(frame: n)) }
         gate.open()
         try await watched.waitForDrawn(2)
-        // Nothing else comes.
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(watched.drawn.map(\.request) == [.paused(frame: 0), .paused(frame: 10)])
-        #expect(watched.presented.map(\.seconds) == [0, seconds(ofFrame: 10, rate: 30)])
+        // Nothing else comes: a request asked now is drawn right after them, in order.
+        watched.engine.request(.paused(frame: 20))
+        try await watched.waitForDrawn(3)
+        #expect(watched.drawn.map(\.request) == [.paused(frame: 0), .paused(frame: 10), .paused(frame: 20)])
+        #expect(watched.presented.map(\.seconds) == [0, seconds(ofFrame: 10, rate: 30), seconds(ofFrame: 20, rate: 30)])
     }
 }
 
@@ -234,7 +235,6 @@ func sizeChangeDoesNotReopenReaders() async throws {
         for n in 43...50 {
             watched.engine.request(.playing(seconds: seconds(ofFrame: n, rate: 60)))
             try await watched.waitForDrawn(n - 41)
-            try await Task.sleep(for: .milliseconds(20))
         }
         #expect(watched.drawn.dropFirst().allSatisfy { $0.frame.outputSize == SIMD2(1280, 720) })
         // And back to the pause, at the export's size.
@@ -325,9 +325,8 @@ func stuckTrackLoadNeverBlocksTheCaller() async throws {
             longest = max(longest, clock.measure { watched.engine.request(request) })
         }
         #expect(longest < .milliseconds(1), "the longest request took \(longest)")
-        // The frame shown stays.
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(watched.drawn.count == 1)
+        // The frame shown stays: the queue is held in the load, so nothing else can be drawn.
+        #expect(gate.hasWaiter && watched.drawn.count == 1)
         gate.open()
         // Let go, the frame being drawn is, then the latest request: the frame before the gap, as the export shows it.
         let latest = try await watched.waitForDrawn(3)
@@ -338,7 +337,8 @@ func stuckTrackLoadNeverBlocksTheCaller() async throws {
 }
 
 /// A second caller of a prefetcher (Task 30's review): asking for another instant while the first one waits slows the
-/// first one down, but never leaves it waiting for good.
+/// first one down, but never leaves it waiting for good; nor a third, waiting on a queue of its own (the preview's
+/// pause).
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
 func secondCallerNeverLeavesTheFirstWaiting() async throws {
     try await withTemporaryDirectory { dir in
@@ -356,17 +356,23 @@ func secondCallerNeverLeavesTheFirstWaiting() async throws {
         #expect(await eventually { gate.hasWaiter })
         // The first instant is being decoded (its track loading) when another one is asked for.
         let second = Task { try await prefetcher.frame(atSource: base.adding(seconds: 1.5)) }
-        try await Task.sleep(for: .milliseconds(100))
-        gate.open()
         let done = Mutex<[Int]>([])
+        #expect(await eventually { prefetcher.pending.scheduled == 2 })
+        prefetcher.frame(atSource: base.adding(seconds: 2.5)) { result in
+            let index = (try? result.get()).flatMap { $0 }.map { frameIndex(of: $0.pixelBuffer) } ?? -1
+            done.withLock { $0.append(index) }
+        }
+        #expect(prefetcher.pending.scheduled == 3)
+        gate.open()
         for task in [first, second] {
             Task {
                 let index = (try? await task.value).map { frameIndex(of: $0.pixelBuffer) } ?? -1
                 done.withLock { $0.append(index) }
             }
         }
-        #expect(await eventually(timeout: .seconds(20)) { done.withLock { $0.count == 2 } }, "both callers get their frame")
-        #expect(done.withLock { $0.sorted() } == [15, 45])
+        #expect(await eventually(timeout: .seconds(20)) { done.withLock { $0.count == 3 } }, "every caller gets its frame")
+        // Frames 15, 45 and 75 (the palette has 64 colours).
+        #expect(done.withLock { $0.sorted() } == [11, 15, 45])
     }
 }
 
@@ -518,5 +524,129 @@ func releaseFindsTheExactFrameDecodedWhileScrubbing() async throws {
     cursor.cursor.smoothing = .off
     var camera = document
     camera.camera.show.toggle()
-    for edited in [padded, zoomed, cut, cursor, camera] { #expect(!paths.areThePaths(of: edited)) }
+    var portrait = document
+    portrait.aspect = .portrait
+    var framed = document
+    framed.style.frame = .macWindow(appearance: .light, title: "Toma", buttons: true)
+    var screens = document
+    screens.screens.changes = [ScreenChange(id: "p-00000001", take: takeID, t: base.adding(seconds: 2), track: trackID, origin: .user)]
+    for edited in [padded, zoomed, cut, cursor, camera, portrait, framed, screens] { #expect(!paths.areThePaths(of: edited)) }
+}
+
+/// While playing, `latest(atSource:)` never waits: before anything is decoded it has nothing, and a frame not decoded in
+/// time leaves the frame decoded before it.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+func latestNeverWaitsAndLeavesTheFrameBefore() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await project(in: dir)
+        let renderer = try legacyRenderer(project, [640, 360], rate: 30)
+        let reader = try #require(renderer.reader(for: trackID))
+        let gate = Gate()
+        defer { gate.open() }
+        reader.trackLoader = { asset in
+            gate.wait()
+            return TrackFrameReader.loadFirstVideoTrack(of: asset)
+        }
+        let prefetcher = try FramePrefetcher(reader: reader, device: renderer.device)
+        let half = base.adding(seconds: 0.5), two = base.adding(seconds: 2)
+        prefetcher.schedule(half)
+        #expect(await eventually { gate.hasWaiter })
+        // Being decoded (the track still loading): nothing yet, at once.
+        #expect(try prefetcher.latest(atSource: half) == nil)
+        gate.open()
+        #expect(await eventually { prefetcher.pending.decoded == 1 })
+        #expect(frameIndex(of: try #require(try prefetcher.latest(atSource: half)).pixelBuffer) == 15)
+        // Two seconds was never scheduled: the frame before it stays, while it is decoded.
+        #expect(frameIndex(of: try #require(try prefetcher.latest(atSource: two)).pixelBuffer) == 15)
+        #expect(await eventually { prefetcher.pending.decoded == 1 })
+        #expect(frameIndex(of: try #require(try prefetcher.latest(atSource: two)).pixelBuffer) == 60)
+    }
+}
+
+/// `resized(to:)` is the scene a new evaluator at that size gives, frame for frame: the background's blur, the window
+/// frame and a change of shape under way, at both sizes.
+@Test func resizedIsTheSceneAtThatSize() {
+    let take = makeTake(tracks: [displayTrack(globalFrame: screenFrame, segments: [segment(start: base, end: base.adding(seconds: 4))])])
+    var events = cursorEvents(from: base, seconds: 4, across: screenFrame)
+    events.append(InputEvent(
+        t: base.adding(seconds: 2), kind: .displayGeometry(displayID: 1, frame: Rect(x: 0, y: 0, width: 480, height: 480), scale: 1)))
+    var document = EditDocument.legacy(take: take, events: events)
+    document.style.background = .wallpaper("aurora-1")
+    document.style.backgroundBlur = 0.5
+    document.style.shadow = 0.6
+    document.style.frame = .macWindow(appearance: .dark, title: "Toma", buttons: true)
+    document.style.geometryTransition = .spring
+    document.cursor.motionBlur = 1
+    let paths = MotionPaths(take: take, events: events, document: document)
+    let large = FrameEvaluator(take: take, events: events, document: document, outputSize: [1920, 1080], paths: paths, frameRate: 60)
+    let small = FrameEvaluator(take: take, events: events, document: document, outputSize: [1280, 720], paths: paths, frameRate: 60)
+    let resizedDown = large.resized(to: [1280, 720]), resizedUp = small.resized(to: [1920, 1080])
+    #expect(resizedDown.outputSize == SIMD2(1280, 720) && resizedDown.frameRate == 60 && resizedDown.duration == small.duration)
+    for k in 0..<80 {
+        let t = Double(k) / 20
+        #expect(resizedDown.frame(at: t) == small.frame(at: t), "down at \(t) s")
+        #expect(resizedUp.frame(at: t) == large.frame(at: t), "up at \(t) s")
+    }
+}
+
+/// A background image whose texture Metal could not make throws the same error on every frame, without decoding or
+/// uploading it again, until a new scene tries it again (Task 21's review).
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+func aFailedUploadIsNotTriedAgainUntilANewScene() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await project(in: dir)
+        let file = "assets/fedcba9876543210fedcba9876543210.png"
+        let url = project.package.fileURL(file)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try redImage().write(to: url)
+        var pictured = EditDocument.legacy(for: project)
+        pictured.style.background = .image(file: file)
+        let renderer = try FrameRenderer(project: project, document: pictured, outputSize: [640, 360], frameRate: 30)
+        let failure = RenderError.metalResourceUnavailable("background image texture (test)")
+        renderer.backgroundImages.uploadFailure = failure
+        let failures = try await offThePool { () -> [RenderError?] in
+            (0..<3).map { k in
+                do {
+                    _ = try renderer.renderBytes(at: 0.5 + Double(k) / 10)
+                    return nil
+                } catch {
+                    return error as? RenderError
+                }
+            }
+        }
+        #expect(failures == [failure, failure, failure])
+        #expect(renderer.backgroundImages.uploadCount == 1)
+        #expect(BackgroundImages.decodeCount(of: .asset(file), in: project.package) == 1)
+        // A new scene tries it again: now it uploads, and the image is drawn.
+        renderer.backgroundImages.uploadFailure = nil
+        renderer.setScene(renderer.scene)
+        let drawn = try await offThePool { try renderer.renderBytes(at: 0.5) }
+        #expect(renderer.backgroundImages.uploadCount == 2)
+        let corner = pixel(drawn, width: 640, x: 2, y: 2)
+        #expect(corner.z > 200 && corner.y < 60 && corner.x < 60, "\(corner)")
+    }
+}
+
+/// A new scene while scrubbing drops what the prefetchers decoded ahead (`FrameRenderer.setScene(_:)`): the scrub drawn
+/// again with it schedules the exact frames near the playhead again.
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+func aNewSceneWhileScrubbingDecodesTheExactFramesAgain() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await project(in: dir)
+        let renderer = try legacyRenderer(project, [1280, 720], rate: 30)
+        let watched = Watched(renderer)
+        watched.engine.request(.scrubbing(seconds: 2.7))
+        try await watched.waitForDrawn(1)
+        let prefetcher = try #require(try renderer.prefetcher(for: trackID))
+        #expect(await eventually(timeout: .seconds(20)) { prefetcher.pending.decoded == 2 })
+
+        var document = EditDocument.legacy(for: project)
+        document.style.padding = 0.2
+        let paths = MotionPaths(take: project.take, events: project.events, document: document)
+        watched.engine.setScene(renderer.makeScene(document: document, paths: paths, outputSize: [1280, 720]))
+        let redrawn = try await watched.waitForDrawn(2)
+        #expect(redrawn.request == .scrubbing(seconds: 2.7))
+        // (Scheduled after the frame is presented: waited for, not read at once.)
+        #expect(await eventually(timeout: .seconds(20)) { prefetcher.pending.decoded == 2 })
+    }
 }
