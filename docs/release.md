@@ -536,6 +536,7 @@ El editor abre cada proyecto en una ventana con la barra arriba (el nombre y la 
 | 2. La vista previa: en la M1, `bench-preview --synthetic --width 1920 --height 1080` (fuente 4K60 dibujada a 1080p: 60 fps, p95 ≤ 16,7 ms, arrastre ≥ 20 por segundo, ≤ 150 ms al soltar, hilo principal ≤ 4 ms) y `bench-preview --synthetic` (el tamaño al que bajó); en la del dueño, tan nítida como el MP4 en QuickTime | pendiente | pendiente | pendiente |
 | 2. La ventana del editor: tamaño inicial y mínimo; la barra en Liquid Glass (26), estándar (15) y sólida con Reducir transparencia; el gris en modo claro y oscuro; transporte y clic; cada franja con su texto | pendiente | pendiente | pendiente |
 | 2. El sonido de la vista previa: sincronía con la salida de la Mac y con AirPods, cambiar de salida mientras suena, un salto con AirPods, el hueco de 85 ms | pendiente | pendiente | pendiente |
+| 2. Superposiciones de la vista previa: arrastrar el recuadro de un zoom de punto fijo y sus esquinas (la vista previa muestra el cuadro sin zoom mientras se arrastra y el de verdad al soltar; el recuadro no sale de la pantalla); arrastrar y soltar la burbuja de la cámara con fuerza (sigue al puntero, se ven los 8 puntos, ancla con un movimiento suave y vibra el trackpad); un clic en la vista previa fuera de las superposiciones sigue reproduciendo o pausando; un `kill -9` en medio de un arrastre pierde solo ese arrastre | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

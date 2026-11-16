@@ -24,7 +24,7 @@ public enum ZoomCommands {
     /// A block made with a double click: 3 s of output, centred on the instant.
     public static let defaultDuration: Int64 = 3_000_000_000
     /// The depths of a block (design §5.4): 1.25× to 4×.
-    static let depthRange: ClosedRange<Double> = 1.25...4
+    public static let depthRange: ClosedRange<Double> = 1.25...4
 
     /// Makes a block of the user's in the free part of the output range `output` (clamped to the output), with the id
     /// `makeID("z-")`: at the project's depth (`zoom.auto.depth`), following the cursor, moving with the spring. Over

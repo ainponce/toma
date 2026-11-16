@@ -404,6 +404,74 @@ final class EditorModel {
         return outcome
     }
 
+    // MARK: - Gestures
+
+    /// A drag on the preview or on a bar of the panel is one gesture (design decision 22): while it lasts, the preview shows
+    /// the document with the step applied, never logged; on its end, one `perform`.
+    private(set) var isGesturing = false
+    @ObservationIgnored private var gestureStep: EditStep?
+    /// What the gesture shows of the document besides its step (the zoom's box shows the frame without zoom).
+    @ObservationIgnored private var gestureLook: (EditDocument) -> EditDocument = { $0 }
+    @ObservationIgnored private var gestureBuilds = 0
+
+    /// Starts a gesture. `look` changes what the preview shows while it lasts (never what is logged).
+    func beginGesture(look: @escaping (EditDocument) -> EditDocument = { $0 }) {
+        guard canEdit, !isGesturing else { return }
+        isGesturing = true
+        gestureStep = nil
+        gestureLook = look
+        showGesture()
+    }
+
+    /// The step the gesture has now: the preview shows the document with its changes applied; if they do not apply, the
+    /// document without them.
+    func updateGesture(_ step: EditStep) {
+        guard isGesturing else { return }
+        gestureStep = step
+        showGesture()
+    }
+
+    /// Ends the gesture with one `perform` of its last step (none if it never had one).
+    func endGesture() {
+        guard isGesturing else { return }
+        isGesturing = false
+        let step = gestureStep
+        gestureStep = nil
+        gestureLook = { $0 }
+        if let step, perform(step) != .refused { return }
+        showSessionRevision()
+    }
+
+    /// Ends the gesture without a change: the preview goes back to the document.
+    func cancelGesture() {
+        guard isGesturing else { return }
+        isGesturing = false
+        gestureStep = nil
+        gestureLook = { $0 }
+        showSessionRevision()
+    }
+
+    private func showGesture() {
+        guard let document, let builder else { return }
+        var shown = document
+        if let step = gestureStep, let applied: EditDocument = try? document.applying(step.changes) { shown = applied }
+        shown = gestureLook(shown)
+        // Negative revisions are the gestures': no session's revision is one.
+        gestureBuilds += 1
+        builder.build(revision: -gestureBuilds, document: shown, outputSize: Self.exportSize(of: shown), mix: baseMix)
+    }
+
+    /// The preview shows the session's document again.
+    private func showSessionRevision() {
+        guard let session, let builder else { return }
+        builder.build(revision: session.revision, document: session.document, outputSize: Self.exportSize(of: session.document), mix: baseMix)
+    }
+
+    /// The project as the session has it, for what the overlays place.
+    var overlayProject: LoadedProject? { session.map(currentProject(of:)) }
+    /// The playhead in output nanoseconds.
+    var playheadNanoseconds: Int64 { timeline.map { Int64(TimeMap.frameTime(playheadFrame, frameRate: $0.frameRate)) } ?? 0 }
+
     func undo() {
         _ = session?.undo()
     }

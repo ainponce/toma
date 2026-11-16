@@ -61,6 +61,7 @@ struct PreviewArea: View {
         case .ready:
             VStack(spacing: 12) {
                 PreviewSurface(model: model)
+                    .overlay { PreviewOverlay(model: model) }
                     .aspectRatio(CGFloat(model.previewAspect.ratio), contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Transport(model: model)
