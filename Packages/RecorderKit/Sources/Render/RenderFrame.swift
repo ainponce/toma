@@ -13,7 +13,8 @@ public struct RenderFrame: Equatable, Sendable {
     /// it cannot be placed (a `captureArea` with a size that is not usable, or a display without a usable
     /// `globalFrame`).
     public var screen: ScreenLayer?
-    /// `nil` when the cursor's position is unknown or off what is shown of the screen.
+    /// `nil` when the cursor's position is unknown or off what is shown of the screen. In stage coordinates: output
+    /// pixels with the stage unzoomed. While it is hidden (`opacity` 0) nothing is drawn of it.
     public var cursor: CursorLayer?
     /// `nil` when the take has no camera, and before its first frame.
     public var camera: CameraLayer?
@@ -90,15 +91,43 @@ public struct CameraLayer: Equatable, Sendable {
     }
 }
 
-/// The redrawn cursor: `CursorSprite`'s hotspot goes at `hotspot`, and the sprite is `height` tall.
+/// The image a cursor is drawn with.
+public enum CursorImageRef: Equatable, Sendable {
+    /// Toma's cursor of that shape (`CursorSprite`).
+    case toma(CursorKind)
+    /// The take's image `cursors/<hash>.png`.
+    case recorded(hash: String)
+}
+
+/// The drawn cursor: its `image`, `height` tall and `aspect` × `height` wide, with the point `hotspotFraction` of it (0,
+/// 0 is its top-left corner) at `hotspot`, at `opacity` (premultiplied: every channel times it) and pressed to
+/// `clickScale` of its size about `hotspot`. Nothing is drawn of it at opacity 0 or of no size.
 public struct CursorLayer: Equatable, Sendable {
     /// In output pixels, origin at the top left.
     public var hotspot: SIMD2<Double>
-    /// In output pixels.
+    /// In output pixels, before `clickScale`.
     public var height: Double
+    public var image: CursorImageRef
+    /// Fractions of the image.
+    public var hotspotFraction: SIMD2<Double>
+    /// Width over height of the image.
+    public var aspect: Double
+    /// 1 shown, 0 hidden.
+    public var opacity: Double
+    /// 1 at rest, smaller while pressed.
+    public var clickScale: Double
 
-    public init(hotspot: SIMD2<Double>, height: Double) {
+    public init(
+        hotspot: SIMD2<Double>, height: Double, image: CursorImageRef = .toma(.arrow),
+        hotspotFraction: SIMD2<Double> = CursorSprite.hotspot, aspect: Double = CursorSprite.aspect, opacity: Double = 1,
+        clickScale: Double = 1
+    ) {
         self.hotspot = hotspot
         self.height = height
+        self.image = image
+        self.hotspotFraction = hotspotFraction
+        self.aspect = aspect
+        self.opacity = opacity
+        self.clickScale = clickScale
     }
 }

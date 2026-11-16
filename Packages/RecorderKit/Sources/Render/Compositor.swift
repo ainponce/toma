@@ -20,6 +20,7 @@ public final class Compositor: @unchecked Sendable {
     private let blurredWallpaperPipeline: any MTLRenderPipelineState
     private let screenPipeline: any MTLRenderPipelineState
     private let spritePipeline: any MTLRenderPipelineState
+    private let cursorPipeline: any MTLRenderPipelineState
     private let windowBarPipeline: any MTLRenderPipelineState
     private let screenSampler: any MTLSamplerState
     private let spriteSampler: any MTLSamplerState
@@ -61,6 +62,7 @@ public final class Compositor: @unchecked Sendable {
         blurredWallpaperPipeline = try pipeline(vertex: "gradientVertex", fragment: "blurredWallpaperFragment", blended: false)
         screenPipeline = try pipeline(vertex: "quadVertex", fragment: "screenFragment", blended: true)
         spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
+        cursorPipeline = try pipeline(vertex: "quadVertex", fragment: "cursorFragment", blended: true)
         windowBarPipeline = try pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blended: true)
 
         let sampler = MTLSamplerDescriptor()
@@ -82,8 +84,9 @@ public final class Compositor: @unchecked Sendable {
     /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame`
     /// map onto the whole target (they are in pixels of `frame.outputSize`). The screen is drawn only when
     /// `frame.screen` is set and `screen` is given, its `crop` filling its rect; the cursor only when `frame.cursor`
-    /// is set; the camera only when `frame.camera` is set and `camera` is given, filling its rect without stretching
-    /// (cropped, centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
+    /// is set, shown (opacity above 0) and of some size, with `cursor` the texture of its image (`CursorImages`); the
+    /// camera only when `frame.camera` is set and `camera` is given, filling its rect without stretching (cropped,
+    /// centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
     /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn directly
     /// without `backgroundImage`; with one, its blurred mesh gradient (`BackgroundImages.texture(forWallpaper:…)`), the
     /// grain is added to it. A window frame's title is `windowTitle`, the texture `TitleTexture` made of it, drawn at the
@@ -151,10 +154,15 @@ public final class Compositor: @unchecked Sendable {
                 encoder: encoder)
         }
 
-        // 4. Cursor, its hotspot at the cursor position.
-        if let layer = frame.cursor, layer.height > 0 {
-            let size = SIMD2(layer.height * CursorSprite.aspect, layer.height)
-            drawSprite(cursor, origin: layer.hotspot - CursorSprite.hotspot * size, size: size, viewport: viewport, encoder: encoder)
+        // 4. Cursor, its hotspot at the cursor position, pressed smaller about it, at its opacity.
+        if let layer = frame.cursor, layer.opacity > 0 {
+            let height = layer.height * layer.clickScale
+            if height > 0, height.isFinite, layer.aspect > 0, layer.aspect.isFinite {
+                let size = SIMD2(height * layer.aspect, height)
+                drawSprite(
+                    cursor, origin: layer.hotspot - layer.hotspotFraction * size, size: size, opacity: Float(min(layer.opacity, 1)),
+                    viewport: viewport, encoder: encoder)
+            }
         }
 
         // 5. Camera, over everything.
@@ -245,9 +253,10 @@ public final class Compositor: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
-    /// Draws `texture`, premultiplied, into the rect at `origin` of `size` (output pixels), all of it (`spriteFragment`).
+    /// Draws `texture`, premultiplied, into the rect at `origin` of `size` (output pixels), all of it: as it is
+    /// (`spriteFragment`), or at `opacity` (`cursorFragment`).
     private func drawSprite(
-        _ texture: any MTLTexture, origin: SIMD2<Double>, size: SIMD2<Double>, viewport: SIMD2<Float>,
+        _ texture: any MTLTexture, origin: SIMD2<Double>, size: SIMD2<Double>, opacity: Float? = nil, viewport: SIMD2<Float>,
         encoder: any MTLRenderCommandEncoder
     ) {
         var quad = QuadUniforms(
@@ -259,7 +268,12 @@ public final class Compositor: @unchecked Sendable {
             uvOrigin: .zero,
             uvSize: .one,
             radius: 0)
-        encoder.setRenderPipelineState(spritePipeline)
+        if var opacity {
+            encoder.setRenderPipelineState(cursorPipeline)
+            encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 0)
+        } else {
+            encoder.setRenderPipelineState(spritePipeline)
+        }
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentSamplerState(spriteSampler, index: 0)

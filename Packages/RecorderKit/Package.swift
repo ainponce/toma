@@ -23,7 +23,7 @@ let package = Package(
         .target(name: "Recording", dependencies: ["ProjectFormat"]),
         .target(name: "SyntheticCapture", dependencies: ["Recording", "ProjectFormat"]),
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
-        .target(name: "Render", dependencies: ["ProjectFormat"]),
+        .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
         .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording"]),
         // Shared by every test target; not a product.
@@ -42,7 +42,8 @@ let package = Package(
         .testTarget(
             name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
-            name: "RenderTests", dependencies: ["Render", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
+            name: "RenderTests",
+            dependencies: ["Render", "Analysis", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
             name: "ExportTests",
             dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
