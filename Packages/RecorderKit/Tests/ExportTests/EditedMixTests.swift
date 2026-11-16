@@ -56,6 +56,22 @@ private func constant(_ value: Float) -> @Sendable (Int, CMSampleBuffer) -> CMSa
     }
 }
 
+/// Replaces every frame of a block of an audio segment by noise from a hash of the block and the sample, at up to 1/4 of
+/// full scale (an `AudioSegmentSpec.transform`): a frame read from the wrong place never matches.
+private func noise(_ block: Int, _ sample: CMSampleBuffer) -> CMSampleBuffer {
+    guard let data = CMSampleBufferGetDataBuffer(sample) else { return sample }
+    var state = UInt64(truncatingIfNeeded: block) &* 0x9E37_79B9_7F4A_7C15 &+ 1
+    let values = (0..<(CMBlockBufferGetDataLength(data) / MemoryLayout<Float>.size)).map { _ -> Float in
+        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        return Float(Int64(state >> 33) % 2_001 - 1_000) / 4_000
+    }
+    let status = values.withUnsafeBytes {
+        CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: data, offsetIntoDestination: 0, dataLength: $0.count)
+    }
+    precondition(status == noErr, "noise block: \(status)")
+    return sample
+}
+
 private func mouseDown(_ button: MouseButton, at seconds: Double) -> InputEvent {
     InputEvent(t: at(seconds), kind: .mouseDown(button, x: 100, y: 100))
 }
@@ -190,6 +206,33 @@ private struct SplitMix: RandomNumberGenerator {
         #expect(samples.count == 96_000)
         #expect(abs(rms(samples, start: 0, from: 0.1, to: 0.9) - 0.25 / 2.0.squareRoot()) < 0.005)
         #expect(samples[48_000...].allSatisfy { $0 == 0 })
+        // The source goes on, but at another speed: the clip before fades out.
+        #expect(samples[47_999] == 0 && samples[47_000] != 0)
+    }
+}
+
+/// A clip split without a cut (the second part starting where the first ends, at the same speed) mixes the clip
+/// unsplit, bit for bit: no fade at the seam, and the source read on from where the first part left off. Split at
+/// instants that fall between samples, in two and in three, with click sounds and the limiter too.
+@Test func aSplitWithoutACutIsTheClipUnsplit() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(
+            in: dir, name: "split", systemAudio: [AudioSegmentSpec(start: base, seconds: 3, channels: 2, frequency: 1000, amplitude: 0.7)],
+            events: [mouseDown(.left, at: 0.9), mouseDown(.left, at: 1.234_567_890)])
+        for limiter in [false, true] {
+            func plan(_ spans: [(from: Double, to: Double)]) -> EditDocument {
+                edited(project, clips: spans) {
+                    $0.cursor.clickSound = "soft-1"
+                    $0.audio.limiter = limiter
+                }
+            }
+            let mix = try await EditedMix.make(project: project, document: plan([(0.1, 2.9)]), framesPerSecond: 60)
+            let whole = try await rendered(mix)
+            for spans in [[(0.1, 1.234_567_890), (1.234_567_890, 2.9)], [(0.1, 0.700_000_013), (0.700_000_013, 2.222_222_222), (2.222_222_222, 2.9)]] {
+                let split = try await rendered(mix.with(document: plan(spans), framesPerSecond: 60))
+                #expect(bits(split) == bits(whole), "limiter \(limiter): \(spans)")
+            }
+        }
     }
 }
 
@@ -260,6 +303,41 @@ private struct SplitMix: RandomNumberGenerator {
     }
 }
 
+/// The limiter's lookahead is made up for inside the mix: under the ceiling, the limited mix is the mix without it, bit
+/// for bit, every transient (each click sound) at its own sample, not 240 frames late.
+@Test func theLimiterKeepsTheMixInTime() async throws {
+    try await withTemporaryDirectory { dir in
+        // At most 0.25 of the microphone and 0.42 × 0.5 of a click: under −1 dBFS.
+        let project = try await take(in: dir, name: "inTime", events: [mouseDown(.left, at: 0.25), mouseDown(.left, at: 1.7)])
+        let plain = edited(project, clips: [(0, 1.1), (1.3, 3)]) { $0.cursor.clickSound = "mechanical-1" }
+        var limited = plain
+        limited.audio.limiter = true
+        let mix = try await EditedMix.make(project: project, document: plain, framesPerSecond: 60)
+        let off = try await rendered(mix), on = try await rendered(mix.with(document: limited, framesPerSecond: 60))
+        #expect(off.contains { abs($0) > 0.3 }, "the clicks are there")
+        #expect(bits(on) == bits(off))
+    }
+}
+
+/// With the limiter, a render that starts in the middle of the mix gives the same span of a render from the start,
+/// bit for bit: the limiter it starts settles on the frames before it. `twoAudioTracks` passes the ceiling all along.
+@Test func aLimitedRenderFromTheMiddleIsTheSpanOfTheWhole() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await GoldenProjects.make("twoAudioTracks", in: dir)
+        let document = edited(project, clips: [(0, 1.4), (1.6, 3)]) { $0.audio.limiter = true }
+        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+        let whole = try await rendered(mix)
+        let n = mix.totalFrames
+        let again = mix.with(document: document, framesPerSecond: 60)
+        // Before the limiter's settling time from the start, at it, and well after it; then backwards.
+        for k: Int64 in [1, 20_000, 48_000, 70_001, 100_000, 133_000, 60_000] {
+            let tail = Array(whole[(Int(k) * 2)...])
+            #expect(bits(try await rendered(mix.with(document: document, framesPerSecond: 60), k..<n)) == bits(tail), "\(k)..<\(n) first")
+            #expect(bits(try await rendered(again, k..<n)) == bits(tail), "\(k)..<\(n) after another range")
+        }
+    }
+}
+
 // MARK: - Click sounds
 
 /// One sound per left or right `mouseDown` kept, from its output frame, at `clickSoundGain`; a second click 30 ms after
@@ -302,6 +380,26 @@ private struct SplitMix: RandomNumberGenerator {
         let sound = try #require(ClickSounds.samples("mechanical-1"))
         var expected = [Float](repeating: 0, count: 96_000)
         for (n, x) in sound.enumerated() { expected[48_000 + n] = x }
+        #expect(bits(samples) == bits(expected))
+    }
+}
+
+/// A click in a clip at another speed sounds at its output time, `O_k + round((x − s_k) / v_k)`: at 2× from source
+/// 1 s, the click at source 2 s is at output 1.5 s, frame 72 000. It is not stretched.
+@Test func aClickInAClipAtAnotherSpeedSoundsAtItsOutputTime() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(
+            in: dir, name: "spedClick", mic: [AudioSegmentSpec(start: base, seconds: 3, amplitude: 0)], events: [mouseDown(.left, at: 2.0)])
+        var document = edited(project, clips: [(0, 1)]) {
+            $0.cursor.clickSound = "soft-1"
+            $0.cursor.clickSoundGain = 1
+        }
+        document.sequence.append(Clip(id: "c-00000002", take: takeID, start: at(1), end: at(3), speed: 2))
+        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+        let samples = try await rendered(mix)
+        let sound = try #require(ClickSounds.samples("soft-1"))
+        var expected = [Float](repeating: 0, count: 96_000)
+        for (n, x) in sound.enumerated() { expected[72_000 + n] = x }
         #expect(bits(samples) == bits(expected))
     }
 }
@@ -382,6 +480,80 @@ private struct SplitMix: RandomNumberGenerator {
             for try await (i, samples) in group {
                 #expect(bits(samples) == bits(whole[Int(ranges[i].lowerBound)..<Int(ranges[i].upperBound)]), "\(ranges[i])")
             }
+        }
+    }
+}
+
+/// A track's reader starts the file near the frame asked for, one ALAC packet before it, and reads the samples a
+/// reader from the file's start does: right after the segment's start, across packets, in the middle and at its very
+/// end. A 44.1 kHz segment, which the reader resamples, is read from its start instead, with the same bits.
+@Test func aTrackIsReadFromNearTheFrameAskedFor() async throws {
+    try await withTemporaryDirectory { dir in
+        for rate in [48_000.0, 44_100.0] {
+            let project = try await take(
+                in: dir, name: "seek\(Int(rate))", seconds: 20, mic: [AudioSegmentSpec(start: base, seconds: 20, sampleRate: rate, transform: noise)])
+            let track = try #require(project.take.tracks.first { $0.id == micID })
+            let timeline = try await AudioTrackTimeline.load(project, track: track, origin: base, channels: 1)
+            let placed = try #require(timeline.placed.first)
+            #expect((placed.seekOrigin != nil) == (rate == 48_000), "\(rate) Hz")
+            // The whole segment, read in order from its start.
+            let all = placed.start..<placed.end
+            let whole = try await offThePool {
+                let reader = AudioTrackTimeline.Reader(timeline)
+                var samples: [Float] = [], block: [Float] = []
+                var frame = all.lowerBound
+                while frame < all.upperBound {
+                    let end = min(frame + 4_096, all.upperBound)
+                    reader.read(frame..<end, into: &block)
+                    samples += block
+                    frame = end
+                }
+                return samples
+            }
+            #expect(whole.count == all.count && whole.contains { $0 != 0 })
+            let length = all.count
+            for offset in [1, 100, 4_095, 4_097, 8_193, 250_001, length / 2, length - 4_000, length - 10, length - 1] {
+                let from = all.lowerBound + Int64(offset), to = min(from + 3_000, all.upperBound)
+                let (part, opening) = try await offThePool {
+                    let reader = AudioTrackTimeline.Reader(timeline)
+                    var samples: [Float] = []
+                    reader.read(from..<to, into: &samples)
+                    return (samples, reader.lastOpening)
+                }
+                #expect(bits(part) == bits(whole[offset..<(offset + Int(to - from))]), "\(rate) Hz from \(offset)")
+                let needed = Int64(placed.segment.map.decoded(atOutput: Double(from)).rounded(.down))
+                let expected = rate == 48_000 && needed > AudioTrackTimeline.seekPreroll ? needed - AudioTrackTimeline.seekPreroll : 0
+                #expect(opening == expected, "\(rate) Hz from \(offset): started at \(String(describing: opening))")
+            }
+        }
+    }
+}
+
+/// How long the first render of a revision takes at different points of a 10 min take with a microphone and system
+/// audio at 48 kHz, one segment each, and how long making the mix takes. Run by an agent, with `TOMA_BENCH=1`.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
+func seekLatencyOnALongTake() async throws {
+    try await withTemporaryDirectory { dir in
+        let minutes = 10.0
+        let project = try await take(
+            in: dir, name: "long", seconds: minutes * 60,
+            systemAudio: [AudioSegmentSpec(start: base, seconds: minutes * 60, channels: 2, frequency: 1000)])
+        let document = EditDocument.legacy(for: project)
+        let clock = ContinuousClock()
+        var made: EditedMix?
+        let making = try await clock.measure { made = try await EditedMix.make(project: project, document: document, framesPerSecond: 60) }
+        let mix = try #require(made)
+        print("seekLatencyOnALongTake: make \(making) for \(minutes) min of microphone and system audio")
+        for seconds in [1.0, 60, 300, minutes * 60 - 1] {
+            let start = Int64(seconds * 48_000)
+            let revision = mix.with(document: document, framesPerSecond: 60)
+            let latency = try await offThePool {
+                clock.measure {
+                    var block: [Float] = []
+                    revision.render(outputFrames: start..<(start + 4_096), into: &block)
+                }
+            }
+            print("seekLatencyOnALongTake: first block at \(seconds) s of a new revision: \(latency)")
         }
     }
 }

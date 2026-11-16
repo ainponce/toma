@@ -13,9 +13,12 @@ import Synchronization
 /// - Clip `k` is output frames `round(O_k × 48 000 / 10⁹) ..< round(O_{k+1} × 48 000 / 10⁹)` (`TimeMap`'s starts, the
 ///   last clip ending at `round(D × 48 000 / 10⁹)`, where the content ends), reading the source from the frame of its
 ///   start, `round((s_k − origin) × 48 000 / 10⁹)`, with `origin` the take's timeline start (`TakeTimeline.bounds`).
-/// - Between two clips the one before fades out over its last 192 frames (4 ms) and the one after fades in over its
-///   first 192, linearly; the output never fades at its start or its end (plan decision 7), so the legacy document,
-///   one clip, mixes the samples the export always did.
+/// - Where two clips meet and the sound would jump (a cut, another take, another speed, or a clip that is silent), the
+///   one before fades out over its last 192 frames (4 ms) and the one after fades in over its first 192, linearly. Where
+///   the clip after goes on with the source of the one before (the same take and speed, its start the other's end, as
+///   a clip split without a cut), there is no fade and the source is read on without a break: the mix is the clip's
+///   unsplit. The output never fades at its start or its end (plan decision 7), so the legacy document, one clip, mixes
+///   the samples the export always did.
 /// - A clip at another speed than 1, or of another take, is silent (plan decision 21: until its audio is stretched).
 /// - A click sound (`cursor.clickSound`, `ClickSounds`) plays at `clickSoundGain` from the output frame of every left
 ///   or right `mouseDown` the clips keep; one less than `ClickSounds.minimumSpacing` after the last that sounded does
@@ -24,9 +27,10 @@ import Synchronization
 ///   past the content, silence; before its end, the content is cut.
 ///
 /// A range of the mix is the same whatever was rendered before it. With the limiter, whose gain depends on the frames
-/// before, a range that does not follow on from the one rendered last starts the limiter over there, so the same
-/// ranges asked for in the same order give the same bits. `render` holds a lock while it mixes (its readers and its
-/// limiter have state): calls take turns, and the export and the preview each have a mix of their own.
+/// before, a range that does not follow on from the one rendered last starts a limiter `PeakLimiter.settleFrames`
+/// before it (at frame 0, when that is closer), which by then gives what the limiter of a mix played from the start
+/// does. `render` holds a lock while it mixes (its readers and its limiter have state): calls take turns, and the export
+/// and the preview each have a mix of their own.
 public final class EditedMix: Sendable {
     /// 1 or 2.
     public let channels: Int
@@ -74,7 +78,7 @@ public final class EditedMix: Sendable {
     }
 
     /// One clip as the mix plays it: output frames `start ..< end`, reading the tracks' timeline from `source` (`nil`
-    /// when it is silent), fading in at its start and out at its end when another clip is there.
+    /// when it is silent), fading in at its start and out at its end where the sound jumps from or to another clip.
     private struct Piece: Sendable {
         var start: Int64
         var end: Int64
@@ -183,6 +187,10 @@ public final class EditedMix: Sendable {
 
     /// Writes output frames `outputFrames` of the mix into `samples`, which then holds exactly
     /// `outputFrames.count × channels` values, interleaved: silence outside `0 ..< totalFrames` and past the content.
+    ///
+    /// It decodes the tracks as it goes, and blocks in `AVAssetReader` until AVFoundation's own reads finish: call it
+    /// from a thread or queue of its own, never from Swift's cooperative pool (where enough callers at once would leave
+    /// those reads no thread to run on) nor from the main thread.
     public func render(outputFrames: Range<Int64>, into samples: inout [Float]) {
         let count = outputFrames.count
         state.withLock { state in
@@ -190,10 +198,13 @@ public final class EditedMix: Sendable {
                 // The limiter gives each frame `lookaheadFrames` after it took it: it takes the frames that far ahead.
                 let lookahead = Int64(PeakLimiter.lookaheadFrames)
                 if state.limiterNext != outputFrames.lowerBound {
+                    // A new limiter, given the frames before the range to settle on (from 0, where the whole mix starts it).
+                    let start = outputFrames.lowerBound
+                    let settling = min(start, max(0, start - Int64(PeakLimiter.settleFrames)))
                     state.limiter = PeakLimiter(channels: channels)
-                    var ahead: [Float] = []
-                    mix(outputFrames.lowerBound..<(outputFrames.lowerBound + lookahead), into: &ahead, state: &state)
-                    state.limiter.process(&ahead)
+                    var before: [Float] = []
+                    mix(settling..<(start + lookahead), into: &before, state: &state)
+                    state.limiter.process(&before)
                 }
                 mix((outputFrames.lowerBound + lookahead)..<(outputFrames.upperBound + lookahead), into: &samples, state: &state)
                 state.limiter.process(&samples)
@@ -243,22 +254,39 @@ public final class EditedMix: Sendable {
 
     // MARK: - From the document
 
-    /// The clips of `sequence` with any output frames, in order, as the mix plays them.
+    /// The clips of `sequence` with any output frames, in order, as the mix plays them: faded where the sound would
+    /// jump, read on where a clip goes on with the source of the one before.
     private static func pieces(of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, source: Source) -> [Piece] {
         let starts = timeMap.clipOutputStarts.map(frames(ofNanoseconds:))
         var pieces: [Piece] = []
+        // The clip of the last piece.
+        var previous: Clip?
         for (k, clip) in sequence.enumerated() {
             let start = starts[k], end = k + 1 < starts.count ? starts[k + 1] : contentFrames
             guard start < end else { continue }
-            // At 1× as `TimeMap` reads its speed (one that is not a number is 1).
-            let atOneTimes = clip.speed.isNaN || clip.speed == 1
-            let plays = clip.take == source.takeID && atOneTimes
-            pieces.append(Piece(
+            let plays = clip.take == source.takeID && speed(of: clip) == 1
+            var piece = Piece(
                 start: start, end: end, source: plays ? frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.start)) : nil,
-                fadesIn: !pieces.isEmpty, fadesOut: false))
+                fadesIn: false, fadesOut: false)
+            if let previous, let last = pieces.indices.last {
+                let goesOn = clip.take == previous.take && clip.start == previous.end && speed(of: clip) == speed(of: previous)
+                if goesOn, let before = pieces[last].source, piece.source != nil {
+                    // The source frames on from where the clip before left off, so the seam is not there at all.
+                    piece.source = before + (pieces[last].end - pieces[last].start)
+                } else {
+                    piece.fadesIn = true
+                    pieces[last].fadesOut = true
+                }
+            }
+            pieces.append(piece)
+            previous = clip
         }
-        for k in pieces.indices.dropLast() { pieces[k].fadesOut = true }
         return pieces
+    }
+
+    /// The speed `TimeMap` reads for `clip`: clamped to 0.25…16, 1 when it is not a number.
+    private static func speed(of clip: Clip) -> Double {
+        clip.speed.isNaN ? 1 : min(max(clip.speed, 0.25), 16)
     }
 
     /// The output frames where a click sounds: each kept `mouseDown` at its output time, unless it comes less than

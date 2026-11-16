@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-import Export
+@testable import Export
 import Foundation
 import Testing
 
@@ -79,3 +79,29 @@ private func loudThenQuiet(seconds: Double, quietSeconds: Double = 0, channels: 
         #expect(largest < 1e-3, "\(channels) channel(s): \(largest) off the input after the release")
     }
 }
+
+/// Two limiters that saw different sounds settle on the same one: given the same frames for `settleFrames`, they give
+/// the same bits from there on, whether those frames pass the ceiling all along or are under it.
+@Test func limitersWithDifferentPastsSettleOnTheSameBits() {
+    let settle = PeakLimiter.settleFrames
+    for channels in [1, 2] {
+        // Loud all along; quiet; and quiet, then loud again once the release has landed.
+        let quiet = loudThenQuiet(seconds: 0, quietSeconds: 1.5, channels: channels)
+        let common = [loudThenQuiet(seconds: 2, channels: channels), quiet, quiet + loudThenQuiet(seconds: 1, channels: channels)]
+        for later in common {
+            var a = PeakLimiter(channels: channels), b = PeakLimiter(channels: channels)
+            var pastA = loudThenQuiet(seconds: 0.7, quietSeconds: 0.1, channels: channels).map { $0 * 1.7 }
+            var pastB = loudThenQuiet(seconds: 0, quietSeconds: 0.4, channels: channels)
+            a.process(&pastA)
+            b.process(&pastB)
+            var outA = later, outB = later
+            a.process(&outA)
+            b.process(&outB)
+            let from = (settle + 1) * channels
+            #expect(bits(outA[from...]) == bits(outB[from...]), "\(channels) channel(s)")
+            #expect(bits(outA[..<(PeakLimiter.lookaheadFrames * channels)]) != bits(outB[..<(PeakLimiter.lookaheadFrames * channels)]), "they did start apart")
+        }
+    }
+}
+
+private func bits(_ samples: some Collection<Float>) -> [UInt32] { samples.map(\.bitPattern) }

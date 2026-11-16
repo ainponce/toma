@@ -11,7 +11,11 @@ import Foundation
 /// ceiling. Under the ceiling it changes nothing: every sample comes out as it went in, `lookaheadFrames` frames later.
 ///
 /// Deterministic: a function of the frames given since it was made, whatever blocks they came in; the average adds
-/// fixed-point integers, so it never drifts.
+/// fixed-point integers, so it never drifts. The release lands exactly on the gain needed once it is within
+/// `releaseSnap` of it, so a limiter forgets where it started: two limiters in different states given the same frames
+/// come together when their envelopes land on the same gain (at the first peak that needs less than both, or when the
+/// release lands, within `settleFrames`), and give the same bits 241 frames later. That is how a mix started in the
+/// middle sounds as the one played from the start (`EditedMix`).
 public struct PeakLimiter: Sendable {
     /// −1 dBFS: 10^(−1/20).
     public static let ceiling: Float = 0.8912509
@@ -19,6 +23,12 @@ public struct PeakLimiter: Sendable {
     public static let lookaheadFrames = 240
     /// 50 ms at 48 kHz: the time constant of the release.
     public static let releaseFrames = 2_400
+    /// How close the release gets to the gain needed before it lands on it: −120 dB, inaudible.
+    static let releaseSnap = 1e-6
+    /// 1 s at 48 kHz: what a limiter needs of the frames before one to give it as one that saw them all would. The
+    /// release lands from any gain in under 33 200 frames (`releaseFrames × ln(1 / releaseSnap)`), and the lookahead
+    /// and the average forget what came before it in 241 more.
+    static let settleFrames = 48_000
 
     /// The frames each gain is taken over: the lookahead and the frame itself.
     private static let span = lookaheadFrames + 1
@@ -84,8 +94,12 @@ public struct PeakLimiter: Sendable {
         windowCount += 1
         let smallest = windowGains[windowHead]
 
-        // Down at once, back up with the release; never above what the frames ahead need.
-        envelope = smallest < envelope ? smallest : envelope + (smallest - envelope) * Self.releaseStep
+        // Down at once, back up with the release, landing on it at the end; never above what the frames ahead need.
+        if smallest < envelope || smallest - envelope < Self.releaseSnap {
+            envelope = smallest
+        } else {
+            envelope += (smallest - envelope) * Self.releaseStep
+        }
         // Rounded down, so the average is never above the gain any frame of its span needs.
         let fixed = Int((envelope * Double(Self.unit)).rounded(.down))
         recentSum += fixed - recent[averageIndex]
