@@ -870,7 +870,7 @@ Las imágenes propias del fondo, copiadas al paquete (con un clon de APFS cuando
 
 ### Las cachés, fuera del paquete
 
-Todo lo regenerable va a `~/Library/Caches/dev.toma.Toma/Projects/<projectID>/`, para todas las versiones del formato (el id es el del manifiesto o el derivado): `thumbnails/` (las miniaturas de la línea de tiempo), `waveforms/` (las formas de onda), `suggestions/` (la salida de los planificadores, con su versión y la huella de sus entradas) y `editor-state.json` (el estado de la ventana, la pestaña del panel, el cabezal y la escala de la línea de tiempo). Nunca hace falta para abrir ni para exportar, y macOS puede vaciarla. Como el `projectID` nombra una carpeta, un id que no son exactamente 32 dígitos hexadecimales en minúscula nunca se usa como nombre (el manifiesto que lo trae es inválido; en la carpeta se reemplaza por un hash). La app borra al arrancar las carpetas que no se usan hace 30 días.
+Todo lo regenerable va a `~/Library/Caches/dev.toma.Toma/Projects/<projectID>/`, para todas las versiones del formato (el id es el del manifiesto o el derivado): `thumbnails/` (las miniaturas de la línea de tiempo), `waveforms/` (las formas de onda), `suggestions/` (reservada: en 1b nada la escribe) y `editor-state.json` (el estado de la ventana, la pestaña del panel, el cabezal y la escala de la línea de tiempo). Nunca hace falta para abrir ni para exportar, y macOS puede vaciarla. Como el `projectID` nombra una carpeta, un id que no son exactamente 32 dígitos hexadecimales en minúscula nunca se usa como nombre (el manifiesto que lo trae es inválido; en la carpeta se reemplaza por un hash). La app borra al arrancar las carpetas que no se usan hace 30 días.
 
 ### Los lectores seguros
 
