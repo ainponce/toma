@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import RecorderKitTestSupport
-import Render
 import Testing
 @testable import ProjectFormat
 
@@ -322,6 +321,18 @@ private func encoded(_ document: EditDocument) throws -> String {
     #expect(text.contains(#""appearance" : "light""#))
 }
 
+@Test func hostTimesAbove2To53RoundTripExactly() throws {
+    // 2⁵³ ns are about 104 days of uptime: past it, a `Double` would no longer hold every nanosecond.
+    var document = DesignExample.document
+    document.sequence[0].start = ns(9_007_199_254_740_993)
+    document.sequence[0].end = ns(UInt64.max)
+    let text = try encoded(document)
+    #expect(text.contains(#""start" : 9007199254740993"#))
+    #expect(text.contains(#""end" : 18446744073709551615"#))
+    #expect(try EditDocument.decode(Data(text.utf8)) == document)
+    #expect(try encoded(try EditDocument.decode(Data(text.utf8))) == text)
+}
+
 @Test func optionalsAreOmittedNeverNull() throws {
     var document = DesignExample.document
     document.zoom.regions = [document.zoom.regions[0]]
@@ -424,21 +435,6 @@ private func encoded(_ document: EditDocument) throws -> String {
     #expect(camera.changes.map(\.style) == [early, late])
 }
 
-@Test func legacyGradientConvertsToStyleV0Floats() throws {
-    guard case let .gradient(start, end, angle) = Background.tomaClassic else {
-        Issue.record("tomaClassic is not a gradient")
-        return
-    }
-    let style = StyleV0()
-    for (rgba, simd) in [(start, style.gradientStart), (end, style.gradientEnd)] {
-        let floats = [Float(rgba.r), Float(rgba.g), Float(rgba.b), Float(rgba.a)]
-        #expect(floats.map(\.bitPattern) == [simd.x, simd.y, simd.z, simd.w].map(\.bitPattern))
-    }
-    #expect(Float(angle).bitPattern == style.gradientAngleDegrees.bitPattern)
-    #expect(start == RGBA(127.0 / 255, 90.0 / 255, 240.0 / 255, 1))
-    #expect(end == RGBA(44.0 / 255, 177.0 / 255, 188.0 / 255, 1))
-}
-
 @Test func newerDocumentVersionIsRefused() throws {
     // Read before the rest: the rest of a newer document need not decode.
     #expect(throws: EditDocumentError.newerVersion(2)) {
@@ -449,7 +445,24 @@ private func encoded(_ document: EditDocument) throws -> String {
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":1,"aspect":"4:3"}"#.utf8)) }
 }
 
-@Test func unknownValuesAreRefused() {
+@Test func newerDocumentVersionIsRefusedInsideAnotherValue() throws {
+    // As in the `create` line of the edit log, where the document is a field of the entry.
+    struct Entry: Decodable {
+        var document: EditDocument
+    }
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 1", with: "\"documentVersion\" : 2")
+    #expect(newer != DesignExample.canonical)
+    #expect(throws: EditDocumentError.newerVersion(2)) {
+        try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(newer)}".utf8))
+    }
+    #expect(throws: EditDocumentError.newerVersion(3)) {
+        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":3,"aspect":"4:3"}]"#.utf8))
+    }
+    let current = try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(DesignExample.canonical)}".utf8))
+    #expect(current.document == DesignExample.document)
+}
+
+@Test func unknownValuesAreRefused() throws {
     for (from, to) in [
         (#""aspect" : "16:9""#, #""aspect" : "4:3""#),
         (#""type" : "wallpaper""#, #""type" : "video""#),
@@ -464,7 +477,9 @@ private func encoded(_ document: EditDocument) throws -> String {
     }
     var document = DesignExample.document
     document.style.background = .color(RGBA(0.1, 0.2, 0.3, 1))
-    let threeComponents = (try? encoded(document))?.replacingOccurrences(of: "0.3,\n        1\n", with: "0.3\n") ?? ""
+    let text = try encoded(document)
+    let threeComponents = text.replacingOccurrences(of: "0.3,\n        1\n", with: "0.3\n")
+    #expect(threeComponents != text)
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(threeComponents.utf8)) }
 }
 

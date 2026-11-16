@@ -55,17 +55,35 @@ public struct EditDocument: Codable, Equatable, Sendable {
         self.audio = audio
     }
 
-    /// Decodes an encoded document. Its `documentVersion` is read first, on its own: a document newer than
-    /// `currentVersion`, which this version may not be able to decode, throws `EditDocumentError.newerVersion`.
-    /// Anything else that does not decode throws the `DecodingError`.
+    /// Decodes an encoded document with `ProjectJSON.decoder()`, as `init(from:)` does.
     public static func decode(_ data: Data) throws -> EditDocument {
-        let version = try ProjectJSON.decoder().decode(DocumentVersion.self, from: data).documentVersion
-        guard version <= currentVersion else { throw EditDocumentError.newerVersion(version) }
-        return try ProjectJSON.decoder().decode(EditDocument.self, from: data)
+        try ProjectJSON.decoder().decode(EditDocument.self, from: data)
     }
 
-    private struct DocumentVersion: Decodable {
-        var documentVersion: Int
+    private enum CodingKeys: String, CodingKey {
+        case documentVersion, logSequence, aspect, frameRate, sequence, screens, style, cursor, zoom, camera, audio
+    }
+
+    /// Reads `documentVersion` first, on its own: a document newer than `currentVersion`, which this version may not
+    /// be able to decode, throws `EditDocumentError.newerVersion` before anything else is read, wherever it is (a
+    /// file of its own or a field of another value, like the `create` line of the edit log). Anything else that does
+    /// not decode throws the `DecodingError`.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try container.decode(Int.self, forKey: .documentVersion)
+        guard version <= Self.currentVersion else { throw EditDocumentError.newerVersion(version) }
+        self.init(
+            documentVersion: version,
+            logSequence: try container.decode(Int.self, forKey: .logSequence),
+            aspect: try container.decode(Aspect.self, forKey: .aspect),
+            frameRate: try container.decode(Int.self, forKey: .frameRate),
+            sequence: try container.decode([Clip].self, forKey: .sequence),
+            screens: try container.decode(ScreenPlan.self, forKey: .screens),
+            style: try container.decode(StageStyle.self, forKey: .style),
+            cursor: try container.decode(CursorStyle.self, forKey: .cursor),
+            zoom: try container.decode(ZoomPlan.self, forKey: .zoom),
+            camera: try container.decode(CameraPlan.self, forKey: .camera),
+            audio: try container.decode(AudioPlan.self, forKey: .audio))
     }
 }
 
