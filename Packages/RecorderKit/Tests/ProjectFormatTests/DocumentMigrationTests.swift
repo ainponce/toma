@@ -650,7 +650,8 @@ enum CameraSectionExample {
         (try set("/camera/initial/take-001"), false),
         (try set("/camera/layoutsAndMore"), false),
         (try set("/style/padding"), false),
-        (try set("/documentVersion"), false),
+        // The migration reads it and writes it.
+        (try set("/documentVersion"), true),
     ]
     for (change, touches) in cases {
         #expect(DocumentMigration.touchesAddedFields(change, from: 1) == touches, "\(change)")

@@ -7,9 +7,12 @@ import ProjectFormat
 ///
 /// It follows the lines as the replay does. A `do` of a new group goes on top of `done` and empties `undone` (history is
 /// linear: what was undone can no longer come back); an `undo` moves an applied group to the top of `undone`, and a
-/// `redo` moves an undone one back to the top of `done`. A `migrate` empties both, since nothing before it can be undone
-/// or redone, and so does a `create`, where a log starts. A line the replay refuses (a `do` of a group that is undone or
-/// was emptied away, an `undo` of one that is not applied, a `redo` of one that is not undone) changes nothing.
+/// `redo` moves an undone one back to the top of `done`. A `create`, where a log starts, empties both, and so does a
+/// `migrate`, unless it keeps the history (1c design §13.2, `DocumentMigration.LogWalk`): it follows
+/// (`DocumentMigration.follows(from:to:atVersion:)`, from the version of the `create`) and no `do` line before it writes
+/// inside of what it adds, so a step of before is undone on the migrated document. A line the replay refuses (a `do` of a
+/// group that is undone or was emptied away, an `undo` of one that is not applied, a `redo` of one that is not undone)
+/// changes nothing.
 public struct UndoHistory: Equatable, Sendable {
     /// The applied groups, in the order they were done or redone: the last one is the next undo.
     public private(set) var done: [Int] = []
@@ -25,6 +28,8 @@ public struct UndoHistory: Equatable, Sendable {
     private var lastDo: Burst?
     /// What `groupForNext` gave, until the next entry is recorded.
     private var asked: Burst?
+    /// The version of the document along the lines recorded, for each `migrate`.
+    private var walk: DocumentMigration.LogWalk
 
     /// A burst of steps with the same key, each less than this after the one before, is one undo group.
     private static let burstGap: TimeInterval = 1.0
@@ -37,7 +42,7 @@ public struct UndoHistory: Equatable, Sendable {
 
     private enum State: Equatable, Sendable {
         case applied, undone
-        /// Undone before a `do` of a new group, or before a `migrate`: it can't come back.
+        /// Undone before a `do` of a new group, or before a `migrate` that cuts the history: it can't come back.
         case closed
     }
 
@@ -48,8 +53,10 @@ public struct UndoHistory: Equatable, Sendable {
         var at: Date
     }
 
-    /// The stacks after `entries`, as `EditLogReader.read` gives them.
-    public init(entries: [EditLogEntry]) {
+    /// The stacks after `entries`, as `EditLogReader.read` gives them, whose `create` holds a document written in
+    /// `createVersion` (`EditLogRead.createVersion`).
+    public init(entries: [EditLogEntry], createVersion: Int = EditDocument.currentVersion) {
+        walk = DocumentMigration.LogWalk(createVersion: createVersion)
         for entry in entries {
             record(entry)
         }
@@ -85,11 +92,12 @@ public struct UndoHistory: Equatable, Sendable {
         lastDo = nil
         nextSeq = max(nextSeq, entry.seq + 1)
         switch entry {
-        case .create, .migrate:
-            close(done + undone)
-            done = []
-            undone = []
-        case let .do(_, group, label, _, _):
+        case .create:
+            clear()
+        case let .migrate(_, from, to):
+            if !walk.walkMigrate(from: from, to: to) { clear() }
+        case let .do(_, group, label, changes, _):
+            walk.walkDo(changes)
             nextSeq = max(nextSeq, group + 1)
             switch groups[group]?.state {
             case nil:
@@ -120,6 +128,13 @@ public struct UndoHistory: Equatable, Sendable {
 
     private func label(of group: Int?) -> EditLabel? {
         group.flatMap { groups[$0] }.flatMap { EditLabel(rawValue: $0.label) }
+    }
+
+    /// Empties both stacks: nothing in them can be undone or redone again.
+    private mutating func clear() {
+        close(done + undone)
+        done = []
+        undone = []
     }
 
     private mutating func close(_ closing: [Int]) {
