@@ -252,27 +252,33 @@ public final class EditSession {
     }
 
     /// The project at `url` and its document as `open` would show it, without taking the lock or writing anything (for
-    /// `recorder-dev` and the export): a damaged log is replayed up to its last good line in memory, and a new project
-    /// gets a `NewDocument` that is not saved. Throws `EditDocumentError.newerVersion` for a newer document and the
-    /// `POSIXError` (`ELOOP`, `EFTYPE`) of an edit file that is a symlink or not a regular file: the take without its
-    /// edit would show what was cut.
+    /// `recorder-dev`, the export and the library's thumbnails): a damaged log is replayed up to its last good line in
+    /// memory, and a new project gets a `NewDocument` that is not saved. Throws `EditDocumentError.newerVersion` for a
+    /// newer document and the `POSIXError` (`ELOOP`, `EFTYPE`) of an edit file that is a symlink or not a regular file:
+    /// the take without its edit would show what was cut.
     ///
-    /// The take's event log is read only for a document that comes from it, the legacy one (a version 1 or 2 package,
-    /// one upgraded and never edited) or a `NewDocument`, and an error reading it is thrown then, as `LoadedProject.load`
-    /// throws it. A document that comes from the edit files never needs it (the replay never reads events): the project
-    /// reads its events the first time they are asked for (`LoadedProject.events`), so the library reads an edited
-    /// project without opening its `events.jsonl` (Task 31b, design §15). One that is a link, is reached through one or is
-    /// not a regular file is refused all the same, at once (`LoadedProject.load(_:take:deferringEvents:)`).
+    /// The project comes with its events read (`LoadedProject.load(_:take:)`'s, whatever the document comes from), for
+    /// the callers that draw or rebuild from them: an event log that cannot be read is thrown here, never drawn as no
+    /// events. `readDocumentWithDiskVersion(_:take:context:)` gives a project that reads them only when asked for.
     public nonisolated static func readDocument(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument) {
         let (project, document, _) = try readDocumentWithDiskVersion(url, take: take, context: context)
+        try project.readEvents()
         return (project, document)
     }
 
-    /// `readDocument(_:take:context:)`, and the `documentVersion` the document is written in on disk (1c design §13.2):
-    /// 1 for a project of 1b that has not been edited in 1c, which `document` shows migrated; `EditDocument.currentVersion`
-    /// for one edited since, a legacy document (version 1 or 2 package) and a new one.
+    /// The document `readDocument(_:take:context:)` reads, and the `documentVersion` it is written in on disk (1c
+    /// design §13.2): 1 for a project of 1b that has not been edited in 1c, which `document` shows migrated;
+    /// `EditDocument.currentVersion` for one edited since, a legacy document (version 1 or 2 package) and a new one.
+    ///
+    /// The take's event log is read only for a document that comes from it, the legacy one (a version 1 or 2 package,
+    /// one upgraded and never edited) or a `NewDocument`, and an error reading it is thrown then, as
+    /// `LoadedProject.load` throws it. A document that comes from the edit files never needs it (the replay never reads
+    /// events), and its project reads them only when they are asked for (`LoadedProject.events`, which then has none if
+    /// they cannot be read; `LoadedProject.readEvents()` throws why): what does not use them never opens `events.jsonl`
+    /// (Task 31b, design §15). One that is a link, is reached through one or is not a regular file is refused all the
+    /// same, at once (`LoadedProject.load(_:take:deferringEvents:)`).
     public nonisolated static func readDocumentWithDiskVersion(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
@@ -284,18 +290,67 @@ public final class EditSession {
         _ url: URL, take: String?, context: EditContext, readingEvents read: @escaping LoadedProject.EventsReader
     ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
         let project = try LoadedProject.load(url, take: take, deferringEvents: read)
-        guard project.manifest.formatVersion >= 3 else {
-            try project.readEvents()
-            return (project, .legacy(for: project), EditDocument.currentVersion)
+        let files = try readOnlyEditFiles(of: project)
+        let (document, diskVersion) = try readOnlyDocument(of: project, files: files, context: context)
+        return (project, document, diskVersion)
+    }
+
+    /// What the library shows of the document `readDocumentWithDiskVersion(_:take:context:)` reads (design §6.8): its
+    /// output's length and format and the version it is written in, equal to that document's
+    /// (`DocumentOutline(_:diskVersion:)`). Read as it reads them, with the same errors, except that a document that
+    /// would come from the take's events is told from the take without decoding them where it does not depend on them
+    /// (`DocumentOutline.withoutEvents`): a version 1 or 2 package, or a version 3 one without edit files, of a take
+    /// with at most one screen that recorded something, and for a `NewDocument` an event log that holds no pause. The
+    /// project reads its events only when they are asked for, as `readDocumentWithDiskVersion`'s does.
+    public nonisolated static func readOutline(
+        _ url: URL, take: String?, context: EditContext
+    ) throws -> (LoadedProject, DocumentOutline) {
+        try readOutline(url, take: take, context: context, readingEvents: LoadedProject.takeEvents)
+    }
+
+    /// `readOutline(_:take:context:)` with the take's events read by `read`.
+    package nonisolated static func readOutline(
+        _ url: URL, take: String?, context: EditContext, readingEvents read: @escaping LoadedProject.EventsReader
+    ) throws -> (LoadedProject, DocumentOutline) {
+        let project = try LoadedProject.load(url, take: take, deferringEvents: read)
+        let files = try readOnlyEditFiles(of: project)
+        // Without edit files, a version 3 document comes from the events as a version 1 or 2 one does (`Resolution.of`
+        // with no log and no `edit.json`): the legacy one if the package was upgraded, a `NewDocument` if not.
+        if files.map({ $0.log == nil && $0.snapshot.isMissing }) ?? true {
+            let isNew = files != nil && project.manifest.upgradedFrom == nil
+            if let outline = try DocumentOutline.withoutEvents(of: project, isNewDocument: isNew) {
+                return (project, outline)
+            }
         }
+        let (document, diskVersion) = try readOnlyDocument(of: project, files: files, context: context)
+        return (project, DocumentOutline(document, diskVersion: diskVersion))
+    }
+
+    /// The edit files of a version 3 project for a read without the lock, `nil` for a version 1 or 2 one (which never
+    /// looks at them): throws `EditDocumentError.newerVersion` for a newer document and the `POSIXError` of an edit
+    /// file that is a symlink or not a regular file.
+    private nonisolated static func readOnlyEditFiles(of project: LoadedProject) throws -> EditFiles? {
+        guard project.manifest.formatVersion >= 3 else { return nil }
         let files = try EditFiles.read(project.package)
         if let version = files.newerVersion { throw EditDocumentError.newerVersion(version) }
         if let code = files.unsafe { throw POSIXError(code) }
+        return files
+    }
+
+    /// The document `project` shows read-only with its edit `files` (`nil` for a version 1 or 2 package: the legacy
+    /// one), and the version it is written in on disk. Its events are read only for a document that comes from them.
+    private nonisolated static func readOnlyDocument(
+        of project: LoadedProject, files: EditFiles?, context: EditContext
+    ) throws -> (EditDocument, diskVersion: Int) {
+        guard let files else {
+            try project.readEvents()
+            return (.legacy(for: project), EditDocument.currentVersion)
+        }
         let resolution = try Resolution.of(project, files: files, context: context) { project in
             try project.readEvents()
             return project
         }
-        return (project, resolution.shown, resolution.diskVersion)
+        return (resolution.shown, resolution.diskVersion)
     }
 
     /// Where the package is now (`F_GETPATH` of its folder), for what goes by path (importing an asset, the export, the
@@ -1336,6 +1391,10 @@ private struct EditFiles: Sendable {
         case undrawable(EditDocument, version: Int)
         /// It cannot be read or decoded.
         case unreadable
+
+        var isMissing: Bool {
+            if case .missing = self { true } else { false }
+        }
     }
 
     var snapshot = Snapshot.missing

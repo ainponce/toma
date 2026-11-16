@@ -19,6 +19,12 @@ public enum ScreenChoice {
         return candidates.first { $0.source.globalFrame.map { CursorGeometry.contains(point, $0) } ?? false } ?? candidates[0]
     }
 
+    /// Whether `screenTrack(in:events:)` looks at the events for `take`: only when two or more of its screen tracks
+    /// recorded a segment. Otherwise the events change nothing of the choice.
+    public static func dependsOnEvents(_ take: TakeRecord) -> Bool {
+        take.tracks.filter { $0.kind.isScreen && !$0.segments.isEmpty }.count > 1
+    }
+
     /// The position of the earliest pointer event, the first of those with the same `t` in the order given (the
     /// first that `sortedByTime()` would give), without sorting them all.
     private static func firstPointerPosition(in events: [InputEvent]) -> SIMD2<Double>? {

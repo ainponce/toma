@@ -94,6 +94,28 @@ private enum Fixture {
         return try builder.write().package.url
     }
 
+    /// A take of two displays side by side, in a new package `<name>.toma` of `formatVersion`: the first recorded 1 s,
+    /// the second, the one under the pointer, 0.5 s from 0.2 s on. Which one shows changes the output's length.
+    @concurrent static func twoScreens(in dir: URL, name: String, formatVersion: Int) async throws -> URL {
+        let builder = try TakeBuilder(in: dir, name: name, formatVersion: formatVersion)
+        for (index, x) in [0.0, 640].enumerated() {
+            let frame = Rect(x: x, y: 0, width: 640, height: 360)
+            let display = UInt32(index + 1)
+            try await builder.addVideoTrack(
+                id: "display-\(display)",
+                source: TrackSource(name: "Synthetic Display", displayID: display, globalFrame: frame, pixelScale: 1),
+                segments: [
+                    VideoSegmentSpec(
+                        start: base.adding(seconds: 0.2 * Double(index)), seconds: index == 0 ? 1 : 0.5,
+                        framesPerSecond: 10)
+                ])
+            let geometry = InputEvent.Kind.displayGeometry(displayID: display, frame: frame, scale: 1)
+            try builder.addEvents([InputEvent(t: base.adding(seconds: -0.01), kind: geometry)])
+        }
+        try builder.addEvents([InputEvent(t: base.adding(seconds: 0.25), kind: .cursor(x: 900, y: 100))])
+        return try builder.write().package.url
+    }
+
     /// Opens the project, sets its padding and closes it, which writes `edit.json` at the last line.
     @MainActor static func edit(_ url: URL, padding: Double, in dir: URL) async throws {
         let session = try await EditSession.open(url, take: nil, context: context(dir))
@@ -204,16 +226,34 @@ private enum Fixture {
             #expect(all.count == 8 && all.allSatisfy { $0 == events }, "\(kind)")
             #expect(together.reads == 1, "\(kind)")
 
-            // The reader of the app does not read it either: one it cannot read is told only when the events are asked
-            // for, which then gives none.
+            // `readDocument` comes with them read: what it gives keeps them after the file cannot be read any more.
             let file = ProjectPackage(url: url).eventsURL(take: project.take.id)
+            let (whole, plain) = try EditSession.readDocument(url, take: nil, context: Fixture.context(dir))
+            #expect(plain == document, "\(kind)")
             #expect(chmod(file.path, 0) == 0)
+            #expect(whole.events == events, "\(kind)")
+
+            // The library's read does not read it: one it cannot read is told only when the events are asked for, which
+            // then gives none. `readDocument`, whose callers draw from them, throws it, as before.
             let (unreadable, same, sameVersion) = try EditSession.readDocumentWithDiskVersion(
                 url, take: nil, context: Fixture.context(dir))
             #expect(same == document && sameVersion == diskVersion, "\(kind)")
             #expect(throws: POSIXError(.EACCES), "\(kind)") { try unreadable.readEvents() }
             #expect(unreadable.events.isEmpty, "\(kind)")
+            #expect(throws: POSIXError(.EACCES), "\(kind)") {
+                try EditSession.readDocument(url, take: nil, context: Fixture.context(dir))
+            }
             #expect(chmod(file.path, 0o644) == 0)
+
+            // An event log that was there when the project was read and is gone when its events are asked for (the
+            // package renamed meanwhile) is an error, never a take without one.
+            let (moved, _, _) = try EditSession.readDocumentWithDiskVersion(
+                url, take: nil, context: Fixture.context(dir))
+            let elsewhere = url.deletingLastPathComponent().appending(path: "moved.toma", directoryHint: .isDirectory)
+            try FileManager.default.moveItem(at: url, to: elsewhere)
+            #expect(throws: POSIXError(.ENOENT), "\(kind)") { try moved.readEvents() }
+            #expect(moved.events.isEmpty, "\(kind)")
+            try FileManager.default.moveItem(at: elsewhere, to: url)
 
             // Asked for later, the event log is read as `load` reads it: a FIFO put there since is refused at once,
             // never waited on.
@@ -281,5 +321,66 @@ private enum Fixture {
             // The document is the one the editor shows read-only, from the project loaded with its events.
             #expect(document == (try await Fixture.shownReadOnly(url, in: dir)), "\(kind)")
         }
+    }
+}
+
+@MainActor @Test func outlinesAreThoseOfTheFullRead() async throws {
+    try await withTemporaryDirectory { dir in
+        var cases: [(name: String, url: URL, decodes: Bool)] = []
+        for kind in Kind.allCases {
+            // Told without the events: the legacy and new documents of one screen; read as before: the rest.
+            let derived = [Kind.v1, .v2, .neverOpened, .upgradedNeverEdited].contains(kind)
+            cases.append(("\(kind)", try await Fixture.make(kind, in: dir), kind.comesFromEvents && !derived))
+        }
+        let extra = dir.appending(path: "extra", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: extra, withIntermediateDirectories: true)
+        // Two screens: which one shows depends on the first pointer position, in the events.
+        for version in [2, 3] {
+            let url = try await Fixture.twoScreens(in: extra, name: "two-\(version)", formatVersion: version)
+            cases.append(("two screens v\(version)", url, true))
+        }
+        // A new document of a take paused from 0.4 s to 0.6 s: the pause is cut.
+        let paused = try await Fixture.package(in: extra, name: "paused")
+        let log = ProjectPackage(url: paused).eventsURL(take: try LoadedProject.load(paused).take.id)
+        let handle = try FileHandle(forWritingTo: log)
+        try handle.seekToEnd()
+        for event in [
+            InputEvent(t: Fixture.base.adding(seconds: 0.4), kind: .paused(reason: "user")),
+            InputEvent(t: Fixture.base.adding(seconds: 0.6), kind: .resumed),
+        ] {
+            try handle.write(contentsOf: Data((try event.jsonLine() + "\n").utf8))
+        }
+        try handle.close()
+        cases.append(("paused", paused, true))
+        // A new document of a take without an event log: nothing to decode.
+        let silent = try await Fixture.package(in: extra, name: "silent")
+        let silentTake = try LoadedProject.load(silent).take.id
+        try FileManager.default.removeItem(at: ProjectPackage(url: silent).eventsURL(take: silentTake))
+        cases.append(("no event log", silent, false))
+
+        for (name, url, decodes) in cases {
+            let before = try treeHash(url)
+            let reader = CountingReader()
+            let (project, outline) = try EditSession.readOutline(
+                url, take: nil, context: Fixture.context(dir), readingEvents: reader.read)
+            #expect(reader.reads == (decodes ? 1 : 0), "\(name)")
+            let (full, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(
+                url, take: nil, context: Fixture.context(dir))
+            #expect(outline == DocumentOutline(document, diskVersion: diskVersion), "\(name)")
+            #expect(project.manifest == full.manifest && project.take == full.take, "\(name)")
+            #expect(try treeHash(url) == before, "\(name)")
+        }
+        // Where the outline is told from the events, the take alone would tell it wrong.
+        for (name, url, _) in cases where name.hasPrefix("two screens") || name == "paused" {
+            let (project, outline) = try EditSession.readOutline(url, take: nil, context: Fixture.context(dir))
+            let takeAlone = DocumentOutline(EditDocument.legacy(take: project.take, events: []), diskVersion: 2)
+            #expect(outline.outputSeconds != takeAlone.outputSeconds, "\(name)")
+        }
+        // A take without an event log has none, without the reader being asked, and it is no error.
+        let reader = CountingReader()
+        let (project, _, _) = try EditSession.readDocumentWithDiskVersion(
+            silent, take: nil, context: Fixture.context(dir), readingEvents: reader.read)
+        #expect(project.events.isEmpty && reader.reads == 0)
+        try project.readEvents()
     }
 }

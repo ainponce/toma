@@ -12,7 +12,9 @@ public struct LoadedProject: Sendable {
     /// take has no event log. A cut-short last line and lines this version cannot read are skipped.
     ///
     /// A project loaded with `load(_:take:deferringEvents:)` reads them the first time they are asked for, here or with
-    /// `readEvents()`, as `load(_:take:)` reads them; one whose event log cannot be read then has none.
+    /// `readEvents()`, as `load(_:take:)` reads them: that first access reads and decodes the whole log from the disk,
+    /// holding a lock the copies share, so it is never made on the main thread. One whose event log cannot be read then
+    /// has none here; `readEvents()` throws why.
     public var events: [InputEvent] {
         get { (try? source.events()) ?? [] }
         set { source = EventSource(newValue) }
@@ -44,18 +46,25 @@ public struct LoadedProject: Sendable {
     /// no events.
     public static func load(_ url: URL, take: String? = nil) throws -> LoadedProject {
         let (package, manifest, record) = try loadTake(url, take: take)
-        let events = try takeEvents(package, record.id)
+        let events: [InputEvent]
+        do {
+            events = try takeEvents(package, record.id)
+        } catch let error as POSIXError where error.code == .ENOENT {
+            events = []
+        }
         return LoadedProject(package: package, manifest: manifest, take: record, events: events)
     }
 
-    /// `load(_:take:)` without reading the take's events yet: `read` reads them, once for this value and its copies, the
-    /// first time they are asked for (`events`, `readEvents()`), so who needs only the manifest and the take never opens
-    /// the event log.
+    /// `load(_:take:)` without reading the take's events yet: `read` reads them, once for this value and its copies,
+    /// the first time they are asked for (`events`, `readEvents()`, which read the disk then: never on the main
+    /// thread), so who needs only the manifest and the take never opens the event log.
     ///
     /// The event log is looked at without opening it (`SafeRead.checkRegularFile(_:in:)`): one `load(_:take:)` would
-    /// refuse for being a link, being reached through one (`takes/`, `takes/<take>/`) or not being a regular file throws
-    /// the same error here, at once. Only what reading it tells (`EACCES` on the file itself, `EIO`) waits until the
-    /// events are asked for.
+    /// refuse for being a link, being reached through one (`takes/`, `takes/<take>/`) or not being a regular file
+    /// throws the same error here, at once, and a take without one has no events (`read` is never called). Only what
+    /// reading it tells (`EACCES` on the file itself, `EIO`) waits until the events are asked for; so does an event log
+    /// that was there and is gone by then (`ENOENT`, the package renamed or moved meanwhile), which is an error, not a
+    /// take without one.
     package static func load(
         _ url: URL, take: String?, deferringEvents read: @escaping EventsReader
     ) throws -> LoadedProject {
@@ -65,7 +74,7 @@ public struct LoadedProject: Sendable {
             // Where `EventLogReader.read(take:of:)` reads it.
             try SafeRead.checkRegularFile("takes/\(id)/events.jsonl", in: package.url)
         } catch let error as POSIXError where error.code == .ENOENT {
-            // A take without an event log, which has no events.
+            return LoadedProject(package: package, manifest: manifest, take: record, events: [])
         }
         return LoadedProject(
             package: package, manifest: manifest, take: record, source: EventSource(reading: { try read(package, id) }))
@@ -108,14 +117,10 @@ public struct LoadedProject: Sendable {
     /// Reads the events of the take with this ID in a package.
     package typealias EventsReader = @Sendable (ProjectPackage, _ take: String) throws -> [InputEvent]
 
-    /// How `load(_:take:)` reads a take's events: `EventLogReader.read(take:of:)`'s, none for a take without an event
-    /// log (`ENOENT`).
+    /// How `load(_:take:)` reads a take's events: `EventLogReader.read(take:of:)`'s. It throws `ENOENT` for a take
+    /// without an event log, which the loads read as no events when they find none there.
     package static let takeEvents: EventsReader = { package, take in
-        do {
-            return try EventLogReader.read(take: take, of: package).events
-        } catch let error as POSIXError where error.code == .ENOENT {
-            return []
-        }
+        try EventLogReader.read(take: take, of: package).events
     }
 
     /// The events of a take, or what reads them the first time they are asked for: read at most once.

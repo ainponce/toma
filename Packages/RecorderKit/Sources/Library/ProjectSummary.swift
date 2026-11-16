@@ -121,11 +121,12 @@ public enum ProjectReader {
     /// The summary of the package at `url`, which is in `place`.
     ///
     /// Through `fileSystem`: the package itself (which must be a folder, never a link), its volume, the signatures of
-    /// `manifest.json`, `edit.json` and `edit-log.jsonl`, and the manifest, of at most `maxManifestBytes`. Only once the
-    /// manifest was read and is one this version reads, and unless a take is still `recording` (whose event log is
-    /// being written), the document with `readDocument` (by default `EditSession`'s, with `context`: no lock, nothing
-    /// written, the tail of the log applied), for the output's length and format and the version it is written in.
-    /// The size on disk and the thumbnail are left for later.
+    /// `manifest.json`, `edit.json` and `edit-log.jsonl`, and the manifest, of at most `maxManifestBytes`. Only once
+    /// the manifest was read and is one this version reads, and unless a take is still `recording` (whose event log is
+    /// being written), the document's outline with `readDocument` (by default `EditSession.readOutline`, with
+    /// `context`: no lock, nothing written, the tail of the log applied, the event log decoded only where the outline
+    /// depends on it), for the output's length and format and the version it is written in. The size on disk and the
+    /// thumbnail are left for later.
     ///
     /// The state, the first that holds: a package that is not there (`ENOENT`, `ENOTDIR`) is `.unavailable(.notFound)`
     /// and one that cannot be looked at for another reason (`EIO`, `EACCES`…) `.needsRepair`, both with an identity of
@@ -135,7 +136,7 @@ public enum ProjectReader {
     /// `.readOnlyVolume`, `.normal`. The volume's free space is never asked.
     public static func summary(
         of url: URL, place: Place, fileSystem: any LibraryFileSystem,
-        readDocument: (@Sendable (URL) throws -> (LoadedProject, EditDocument, Int))? = nil, context: EditContext,
+        readDocument: (@Sendable (URL) throws -> (LoadedProject, DocumentOutline))? = nil, context: EditContext,
         now: Date
     ) -> ProjectSummary {
         let package = ProjectPackage(url: url)
@@ -192,13 +193,13 @@ public enum ProjectReader {
         if !isUnfinished {
             let read = readDocument ?? defaultReadDocument(context: context)
             do {
-                let (project, document, diskVersion) = try read(url)
+                let (project, outline) = try read(url)
                 summary.formatVersion = project.manifest.formatVersion
-                summary.documentVersion = diskVersion
-                summary.outputSeconds = TimeMap(sequence: document.sequence).durationSeconds
-                summary.aspect = document.aspect
+                summary.documentVersion = outline.diskVersion
+                summary.outputSeconds = outline.outputSeconds
+                summary.aspect = outline.aspect
                 summary.hasCamera = project.take.tracks.contains { $0.kind == .camera }
-                if diskVersion > EditDocument.currentVersion {
+                if outline.diskVersion > EditDocument.currentVersion {
                     summary.state = .newerVersion
                     return summary
                 }
@@ -228,12 +229,11 @@ public enum ProjectReader {
         return summary
     }
 
-    /// `readDocument`'s default, also the library scanner's: `EditSession.readDocumentWithDiskVersion` with `context`.
-    static func defaultReadDocument(context: EditContext) -> @Sendable (URL) throws -> (LoadedProject, EditDocument, Int) {
-        { url in
-            let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
-            return (project, document, diskVersion)
-        }
+    /// `readDocument`'s default, also the library scanner's: `EditSession.readOutline` with `context`.
+    static func defaultReadDocument(
+        context: EditContext
+    ) -> @Sendable (URL) throws -> (LoadedProject, DocumentOutline) {
+        { url in try EditSession.readOutline(url, take: nil, context: context) }
     }
 
     /// The state of a package that could not be looked at for another reason than not being there: `error` says why.
