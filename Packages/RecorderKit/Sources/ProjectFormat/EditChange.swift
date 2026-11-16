@@ -193,6 +193,7 @@ public enum EditCollection: String, Sendable {
     case zoomSuppressed = "/zoom/suppressed"
     case cameraChanges = "/camera/changes"
     case screenChanges = "/screens/changes"
+    case cameraLayouts = "/camera/layouts"
 
     var pointer: JSONPointer {
         JSONPointer(components: rawValue.split(separator: "/").map(String.init))

@@ -7,7 +7,9 @@ import Testing
 private func ns(_ nanoseconds: UInt64) -> HostTime { HostTime(nanoseconds: nanoseconds) }
 
 /// The example of `edit.json` of design §6.2: a new project with two clips (the second at 2×), a change of screen, an
-/// automatic zoom, a manual one and a deleted automatic one.
+/// automatic zoom, a manual one and a deleted automatic one. In `documentVersion` 2: 1b's example migrated (1c design
+/// §13.2), so its camera has the bubble layout, no blocks and the rest of what the migration adds. The example as 1b
+/// wrote it, in version 1, is `DocumentV1Example`.
 enum DesignExample {
     /// The example as the design writes it, with objects on one line.
     static let json = """
@@ -21,11 +23,19 @@ enum DesignExample {
             }
           },
           "camera" : {
+            "border" : { "color" : [ 1, 1, 1, 1 ], "width" : 0 },
             "changes" : [
               { "id" : "k-1c2d0a9e", "origin" : "recorded", "style" : { "anchor" : "topLeading", "shape" : "circle", "size" : 0.24 }, "t" : 81290000000000, "take" : "take-001" }
             ],
             "initial" : { "take-001" : { "anchor" : "bottomTrailing", "shape" : "circle", "size" : 0.24 } },
-            "show" : true
+            "layout" : { "kind" : "bubble" },
+            "layoutRules" : "cameraLayout-1",
+            "layouts" : [],
+            "mirror" : false,
+            "shadow" : 0,
+            "show" : true,
+            "sizeReference" : "height",
+            "spring" : { "damping" : 0.95, "response" : 0.5 }
           },
           "cursor" : {
             "clickEffect" : "ripple-1",
@@ -39,7 +49,7 @@ enum DesignExample {
             "smoothing" : { "damping" : 1, "response" : 0.16 },
             "style" : "system"
           },
-          "documentVersion" : 1,
+          "documentVersion" : 2,
           "frameRate" : 60,
           "logSequence" : 128,
           "screens" : {
@@ -77,7 +87,7 @@ enum DesignExample {
 
     /// The value the example holds, field by field.
     static let document = EditDocument(
-        documentVersion: 1,
+        documentVersion: EditDocument.currentVersion,
         logSequence: 128,
         aspect: .landscape,
         frameRate: 60,
@@ -142,6 +152,15 @@ enum DesignExample {
             }
           },
           "camera" : {
+            "border" : {
+              "color" : [
+                1,
+                1,
+                1,
+                1
+              ],
+              "width" : 0
+            },
             "changes" : [
               {
                 "id" : "k-1c2d0a9e",
@@ -162,7 +181,21 @@ enum DesignExample {
                 "size" : 0.24
               }
             },
-            "show" : true
+            "layout" : {
+              "kind" : "bubble"
+            },
+            "layoutRules" : "cameraLayout-1",
+            "layouts" : [
+
+            ],
+            "mirror" : false,
+            "shadow" : 0,
+            "show" : true,
+            "sizeReference" : "height",
+            "spring" : {
+              "damping" : 0.95,
+              "response" : 0.5
+            }
           },
           "cursor" : {
             "clickEffect" : "ripple-1",
@@ -179,7 +212,7 @@ enum DesignExample {
             },
             "style" : "system"
           },
-          "documentVersion" : 1,
+          "documentVersion" : 2,
           "frameRate" : 60,
           "logSequence" : 128,
           "screens" : {
@@ -437,12 +470,19 @@ private func encoded(_ document: EditDocument) throws -> String {
 
 @Test func newerDocumentVersionIsRefused() throws {
     // Read before the rest: the rest of a newer document need not decode.
-    #expect(throws: EditDocumentError.newerVersion(2)) {
-        try EditDocument.decode(Data(#"{"documentVersion":2,"aspect":"4:3"}"#.utf8))
+    #expect(throws: EditDocumentError.newerVersion(3)) {
+        try EditDocument.decode(Data(#"{"documentVersion":3,"aspect":"4:3"}"#.utf8))
     }
-    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 1", with: "\"documentVersion\" : 2")
-    #expect(throws: EditDocumentError.newerVersion(2)) { try EditDocument.decode(Data(newer.utf8)) }
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 3")
+    #expect(newer != DesignExample.canonical)
+    #expect(throws: EditDocumentError.newerVersion(3)) { try EditDocument.decode(Data(newer.utf8)) }
+    #expect(throws: EditDocumentError.newerVersion(3)) {
+        try EditDocument.decode(json: ProjectJSON.decoder().decode(JSONValue.self, from: Data(newer.utf8)))
+    }
+    #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":2,"aspect":"4:3"}"#.utf8)) }
+    // An older one is migrated first, and one that cannot be is no document either.
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":1,"aspect":"4:3"}"#.utf8)) }
+    #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":0,"aspect":"4:3"}"#.utf8)) }
 }
 
 @Test func newerDocumentVersionIsRefusedInsideAnotherValue() throws {
@@ -450,13 +490,13 @@ private func encoded(_ document: EditDocument) throws -> String {
     struct Entry: Decodable {
         var document: EditDocument
     }
-    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 1", with: "\"documentVersion\" : 2")
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 3")
     #expect(newer != DesignExample.canonical)
-    #expect(throws: EditDocumentError.newerVersion(2)) {
+    #expect(throws: EditDocumentError.newerVersion(3)) {
         try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(newer)}".utf8))
     }
-    #expect(throws: EditDocumentError.newerVersion(3)) {
-        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":3,"aspect":"4:3"}]"#.utf8))
+    #expect(throws: EditDocumentError.newerVersion(4)) {
+        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":4,"aspect":"4:3"}]"#.utf8))
     }
     let current = try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(DesignExample.canonical)}".utf8))
     #expect(current.document == DesignExample.document)

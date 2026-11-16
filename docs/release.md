@@ -494,6 +494,19 @@ Una captura de ventana graba en negro las esquinas redondeadas de la ventana, co
 | 2. Micrófonos a 44,1, 24 y 16 kHz en macOS 15: empezar en el medio | pendiente | pendiente | pendiente |
 | 2. Esquinas de las tomas de ventana: ninguna negra con el estilo por defecto; radio de las negras en píxeles y en puntos (macOS 26 y 15) | pendiente | pendiente | pendiente |
 
+## Pendientes del dueño del hito 1c
+
+Una sola pasada de fin de hito, contra la app de esta rama, en orden: la preparación, el recorrido completo y el detalle por área. Cada comprobación dice qué se tiene que ver. Si se ve otra cosa, o algo molesta, anotar lo que se ve (con la versión exacta de macOS) en la tabla del final: los agentes trabajan con esas notas. Ninguna comprobación pide cambiar código. Entre paréntesis, la tarea de origen.
+
+### 0. Preparación
+
+1. **Antes de recibir la copia de 1c, guardar un proyecto de 1b.** La copia de 1c reemplaza `build/prueba/Toma.app`: antes, copiar la del hito 1b a otra carpeta (`cp -R build/prueba/Toma.app ~/Desktop/Toma-1b.app`) y, con ella, abrir un proyecto con cámara, editarlo (un corte y otro margen alcanzan), exportarlo y cerrarlo. Ese proyecto y su video son los de la comprobación 7 del recorrido, que lo abre en 1c y después otra vez con la copia de 1b.
+2. **Abrir la copia de prueba.** La arma el controlador después de unir la rama: `open build/prueba/Toma.app`. `codesign -dv build/prueba/Toma.app 2>&1 | grep Authority` dice `Authority=Toma Project Signing` cuando salió firmada con el certificado (paso 1 de la preparación del hito 1a); si no, es ad hoc.
+3. Si se creó el certificado de firma después de recibir la copia de prueba, pedir una copia nueva: la anterior quedó ad hoc y macOS no conserva sus permisos.
+4. **Permisos.** Los mismos del hito 1a (paso 3 de su preparación): Toma pide cada uno cuando hace falta. El hito 1c no pide ninguno nuevo.
+
+### 2. Detalle por área
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

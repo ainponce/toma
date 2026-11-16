@@ -10,10 +10,12 @@ import Foundation
 /// is named with its version (`aurora-1`, `ripple-1`, `autoZoom-1`…), and springs and measures are stored as numbers,
 /// so an update never changes what a project already saved.
 public struct EditDocument: Codable, Equatable, Sendable {
-    /// The version of the document this app writes; it refuses a newer one (`decode(_:)`).
-    public static let currentVersion = 1
+    /// The version of the document this app writes; it reads an older one migrated (`DocumentMigration`) and refuses a
+    /// newer one (`decode(_:)`).
+    public static let currentVersion = 2
 
-    /// The version of the document within format version 3: 1 in milestone 1b.
+    /// The version of the document within format version 3: 1 in milestone 1b; 2 from 1c, with the camera's layouts
+    /// and look (1c design §13.1). A decoded document is always of `currentVersion`.
     public var documentVersion: Int
     /// The `seq` of the last line of the edit log this document already includes.
     public var logSequence: Int
@@ -55,9 +57,32 @@ public struct EditDocument: Codable, Equatable, Sendable {
         self.audio = audio
     }
 
-    /// Decodes an encoded document with `ProjectJSON.decoder()`, as `init(from:)` does.
+    /// Decodes an encoded document with `ProjectJSON.decoder()`, as `init(from:)` does: an older one migrated to
+    /// `currentVersion`, a newer one refused.
     public static func decode(_ data: Data) throws -> EditDocument {
         try ProjectJSON.decoder().decode(EditDocument.self, from: data)
+    }
+
+    /// Decodes a document from its JSON with the rule of `init(from:)`: an older one is migrated on `json` itself before
+    /// it is decoded, a newer one refused.
+    public static func decode(json: JSONValue) throws -> EditDocument {
+        guard case let .object(members) = json, let written = members["documentVersion"],
+            let version = try? written.decoded(as: Int.self), (1..<currentVersion).contains(version)
+        else { return try json.decoded(as: EditDocument.self) }
+        do {
+            return try migrated(json, from: version).decoded(as: EditDocument.self)
+        } catch let EditChangeError.invalidDocument(pointer) {
+            throw migrationError(at: pointer, under: [], from: version)
+        }
+    }
+
+    /// The `documentVersion` of an encoded document, read alone: `nil` if `data` has none (not JSON, not an object, or
+    /// without an integer `documentVersion`). Says what is written on disk, before any migration.
+    public static func writtenVersion(of data: Data) -> Int? {
+        struct Written: Decodable {
+            var documentVersion: Int
+        }
+        return try? ProjectJSON.decoder().decode(Written.self, from: data).documentVersion
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -66,12 +91,27 @@ public struct EditDocument: Codable, Equatable, Sendable {
 
     /// Reads `documentVersion` first, on its own: a document newer than `currentVersion`, which this version may not
     /// be able to decode, throws `EditDocumentError.newerVersion` before anything else is read, wherever it is (a
-    /// file of its own or a field of another value, like the `create` line of the edit log). Anything else that does
-    /// not decode throws the `DecodingError`.
+    /// file of its own or a field of another value, like the `create` line of the edit log). An older one is read as
+    /// JSON, migrated with `DocumentMigration` up to `currentVersion` and decoded from that, also wherever it is. Anything
+    /// else that does not decode, a version below 1 or a document that does not migrate included, throws a
+    /// `DecodingError`.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let version = try container.decode(Int.self, forKey: .documentVersion)
         guard version <= Self.currentVersion else { throw EditDocumentError.newerVersion(version) }
+        guard version >= 1 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .documentVersion, in: container, debugDescription: "There is no document of version \(version).")
+        }
+        guard version == Self.currentVersion else {
+            let json = try JSONValue(from: decoder)
+            do {
+                self = try Self.migrated(json, from: version).decoded(as: EditDocument.self)
+            } catch let EditChangeError.invalidDocument(pointer) {
+                throw Self.migrationError(at: pointer, under: decoder.codingPath, from: version)
+            }
+            return
+        }
         self.init(
             documentVersion: version,
             logSequence: try container.decode(Int.self, forKey: .logSequence),
@@ -84,6 +124,44 @@ public struct EditDocument: Codable, Equatable, Sendable {
             zoom: try container.decode(ZoomPlan.self, forKey: .zoom),
             camera: try container.decode(CameraPlan.self, forKey: .camera),
             audio: try container.decode(AudioPlan.self, forKey: .audio))
+    }
+
+    /// `json`, a document of `version`, migrated up to `currentVersion`.
+    private static func migrated(_ json: JSONValue, from version: Int) throws(EditChangeError) -> JSONValue {
+        var json = json
+        for from in version..<currentVersion {
+            json = try DocumentMigration.migrate(json, from: from)
+        }
+        return json
+    }
+
+    /// The error of a document of `version` that does not migrate, at `pointer` of the document, which is at `codingPath`.
+    private static func migrationError(
+        at pointer: String, under codingPath: [any CodingKey], from version: Int
+    ) -> DecodingError {
+        let components = (try? JSONPointer(pointer))?.components ?? []
+        return .dataCorrupted(
+            DecodingError.Context(
+                codingPath: codingPath + components.map(DocumentKey.init),
+                debugDescription: "A document of version \(version) that does not migrate."))
+    }
+
+    /// A member of a document, for the coding path of an error.
+    private struct DocumentKey: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+
+        init(_ stringValue: String) {
+            self.stringValue = stringValue
+        }
+
+        init?(stringValue: String) {
+            self.init(stringValue)
+        }
+
+        init?(intValue: Int) {
+            nil
+        }
     }
 }
 
@@ -620,17 +698,54 @@ public struct SourceRange: Codable, Equatable, Sendable {
     }
 }
 
-/// The camera: how it looks at the start of each take, and from each change on.
+/// The camera: how its bubble looks at the start of each take and from each change on, the layout of the project and of
+/// each block, and its look in every layout. The fields after `changes` arrived with `documentVersion` 2 (1c design
+/// §13.1); their defaults are the values the migration from version 1 gives them, which draw exactly what 1b drew.
 public struct CameraPlan: Codable, Equatable, Sendable {
+    /// `false` draws every layout as the screen alone, keeping the blocks.
     public var show: Bool
-    /// By take ID. In the document, `size` goes from 0.10 to 0.45.
+    /// The take's bubble, by take ID. In the document, `size` goes from 0.10 to 0.45.
     public var initial: [String: CameraStyle]
     public var changes: [CameraChange]
+    /// The layout outside the blocks.
+    public var layout: CameraLayout
+    /// The blocks, in order and never overlapping within a take.
+    public var layouts: [LayoutBlock]
+    /// Whether the camera's picture is flipped horizontally (its place is not).
+    public var mirror: Bool
+    public var border: CameraBorder
+    /// The camera's shadow, 0 to 1.
+    public var shadow: Double
+    public var sizeReference: SizeReference
+    /// The spring of the transitions between layouts.
+    public var spring: SpringSpec
+    /// The rules of the layouts, with their version: `cameraLayout-1` (`CameraLayoutRules.id`).
+    public var layoutRules: String
 
-    public init(show: Bool, initial: [String: CameraStyle], changes: [CameraChange]) {
+    public init(
+        show: Bool,
+        initial: [String: CameraStyle],
+        changes: [CameraChange],
+        layout: CameraLayout = .bubble,
+        layouts: [LayoutBlock] = [],
+        mirror: Bool = false,
+        border: CameraBorder = .none,
+        shadow: Double = 0,
+        sizeReference: SizeReference = .height,
+        spring: SpringSpec = CameraLayoutRules.spring,
+        layoutRules: String = CameraLayoutRules.id
+    ) {
         self.show = show
         self.initial = initial
         self.changes = changes
+        self.layout = layout
+        self.layouts = layouts
+        self.mirror = mirror
+        self.border = border
+        self.shadow = shadow
+        self.sizeReference = sizeReference
+        self.spring = spring
+        self.layoutRules = layoutRules
     }
 }
 
