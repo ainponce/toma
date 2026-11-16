@@ -27,22 +27,45 @@ public struct UndoMenuItem: Equatable, Sendable {
     }
 }
 
-/// What closing an editor's window does (design §5.9): when a change couldn't be saved and still isn't (the amber
-/// banner's `EditNotice.saveFailed`), it asks first ("Some changes couldn't be saved"), one question at a time. A change
-/// merely on its way to the disk (a line being synced, the move to version 3, a new log being started: unsaved, but
-/// nothing failed) is not asked about: the session saves it as it closes.
+/// What closing an editor's window does (design §5.9): it asks first, one question at a time, in the order of
+/// `questions`, and the first "no" keeps it open:
+/// - when a change couldn't be saved and still isn't (the amber banner's `EditNotice.saveFailed`): "Some changes couldn't
+///   be saved" (`UnsavedChangesAnswer`). A change merely on its way to the disk (a line being synced, the move to version
+///   3, a new log being started: unsaved, but nothing failed) is not asked about: the session saves it as it closes. Quitting
+///   asks the same (`losesEdits`, `TerminationQuestion.unsavedEdits`);
+/// - while its export runs: whether to close and cancel it, as quitting asks. An export is never cancelled silently.
 public enum EditorClosing: Equatable, Sendable {
     case close
-    /// Asks, with `UnsavedChangesAnswer`.
+    /// Asks `questions`.
     case ask
-    /// Stays open: the question is up already.
+    /// Stays open: a question is up already.
     case keepOpen
 
-    /// From the session's `hasUnsavedChanges` and `notices`.
-    public static func decide(hasUnsavedChanges: Bool, notices: [EditNotice], isAsking: Bool) -> EditorClosing {
+    /// What closing asks.
+    public enum Question: Equatable, Sendable {
+        case unsavedChanges
+        case cancelExport
+    }
+
+    /// From the session's `hasUnsavedChanges` and `notices`, and whether the editor's export runs.
+    public static func decide(
+        hasUnsavedChanges: Bool, notices: [EditNotice], isExporting: Bool = false, isAsking: Bool
+    ) -> EditorClosing {
         if isAsking { return .keepOpen }
-        let saveFailed = notices.contains { if case .saveFailed = $0 { true } else { false } }
-        return hasUnsavedChanges && saveFailed ? .ask : .close
+        return questions(hasUnsavedChanges: hasUnsavedChanges, notices: notices, isExporting: isExporting).isEmpty ? .close : .ask
+    }
+
+    /// What closing asks now, in order.
+    public static func questions(hasUnsavedChanges: Bool, notices: [EditNotice], isExporting: Bool) -> [Question] {
+        var questions: [Question] = []
+        if losesEdits(hasUnsavedChanges: hasUnsavedChanges, notices: notices) { questions.append(.unsavedChanges) }
+        if isExporting { questions.append(.cancelExport) }
+        return questions
+    }
+
+    /// Whether closing the session now loses edits: a change couldn't be saved and still isn't.
+    public static func losesEdits(hasUnsavedChanges: Bool, notices: [EditNotice]) -> Bool {
+        hasUnsavedChanges && notices.contains { if case .saveFailed = $0 { true } else { false } }
     }
 }
 
@@ -52,6 +75,15 @@ public enum UnsavedChangesAnswer: CaseIterable, Sendable {
     case closeAnyway
 
     public var closesTheWindow: Bool { self == .closeAnyway }
+}
+
+/// The answers to "An export is in progress. Close the window and cancel it?", in the alert's order: the first,
+/// "Cancel", is the default; "Close" cancels the export (its partial file removed) and closes the window.
+public enum ExportClosingAnswer: CaseIterable, Sendable {
+    case cancel
+    case close
+
+    public var closesTheWindow: Bool { self == .close }
 }
 
 /// A project package as a folder on its volume (its device and inode): the same through a symlink and after it is renamed
