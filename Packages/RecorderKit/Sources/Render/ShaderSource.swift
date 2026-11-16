@@ -110,17 +110,10 @@ public enum ShaderSource {
         return x;
     }
 
-    // One of Toma's wallpapers, over a quad of any part of the target: a mesh gradient of its colours, each weighing
-    // exp(-d² / 0.06) by its squared distance d² to the stage point in units of the stage's longer side (relative to
-    // the nearest point's, so the weights never all vanish), plus a grain of ±2 % from an integer hash of the output
-    // pixel. Nothing interpolated is read: a pixel depends on where it is alone, however the drawing is split. The grain
-    // is of the output pixel, not of the stage point, so a zoom of the stage enlarges the gradient and not the grain.
-    fragment float4 wallpaperFragment(QuadOut in [[stage_in]],
-                                      constant WallpaperUniforms &u [[buffer(0)]],
-                                      constant float2 *points [[buffer(1)]],   // fractions of the stage
-                                      constant float4 *colors [[buffer(2)]]) { // opaque
-        float2 pixel = in.position.xy;   // the centre of the output pixel
-        float2 stage = pixel;            // the stage point under it: the same until something transforms the stage
+    // The mesh gradient of one of Toma's wallpapers at a stage point: its colours, each weighing exp(-d² / 0.06) by its
+    // squared distance d² to the point in units of the stage's longer side (relative to the nearest point's, so the
+    // weights never all vanish).
+    static float3 wallpaperMesh(float2 stage, constant WallpaperUniforms &u, constant float2 *points, constant float4 *colors) {
         float side = max(u.stageSize.x, u.stageSize.y);
         float distances[6];
         float nearest = INFINITY;
@@ -136,10 +129,99 @@ public enum ShaderSource {
             sum += colors[i].rgb * weight;
             total += weight;
         }
+        return sum / total;
+    }
+
+    // A wallpaper's grain at an output pixel: ±2 % from an integer hash of the pixel. It is of the output pixel, not of
+    // the stage point, so a zoom of the stage enlarges the gradient and not the grain, and a blur softens the gradient
+    // and not the grain.
+    static float wallpaperGrain(float2 pixel) {
         uint2 p = uint2(pixel);
         uint h = hash32(p.x ^ hash32(p.y));
-        float grain = (float(h >> 8) / 16777216.0 - 0.5) * 0.04;
-        return float4(saturate(sum / total + grain), 1.0);
+        return (float(h >> 8) / 16777216.0 - 0.5) * 0.04;
+    }
+
+    // One of Toma's wallpapers, over a quad of any part of the target: its mesh gradient plus its grain. Nothing
+    // interpolated is read: a pixel depends on where it is alone, however the drawing is split.
+    fragment float4 wallpaperFragment(QuadOut in [[stage_in]],
+                                      constant WallpaperUniforms &u [[buffer(0)]],
+                                      constant float2 *points [[buffer(1)]],   // fractions of the stage
+                                      constant float4 *colors [[buffer(2)]]) { // opaque
+        float2 pixel = in.position.xy;   // the centre of the output pixel
+        float2 stage = pixel;            // the stage point under it: the same until something transforms the stage
+        return float4(saturate(wallpaperMesh(stage, u, points, colors) + wallpaperGrain(pixel)), 1.0);
+    }
+
+    // A wallpaper's mesh gradient alone, without its grain, over the whole target (the stage, `BackgroundImages`): what
+    // is blurred for a blurred wallpaper.
+    fragment float4 wallpaperMeshFragment(GradientOut in [[stage_in]],
+                                          constant WallpaperUniforms &u [[buffer(0)]],
+                                          constant float2 *points [[buffer(1)]],
+                                          constant float4 *colors [[buffer(2)]]) {
+        return float4(wallpaperMesh(in.position.xy, u, points, colors), 1.0);
+    }
+
+    // A blurred wallpaper over the whole target: its mesh gradient blurred (`BackgroundImages`, the stage's size) at the
+    // stage point under the output pixel, plus the grain of the output pixel, as sharp as without the blur.
+    fragment float4 blurredWallpaperFragment(GradientOut in [[stage_in]],
+                                             constant float2 &stageSize [[buffer(0)]],
+                                             texture2d<float> mesh [[texture(0)]],
+                                             sampler linearSampler [[sampler(0)]]) {
+        float2 pixel = in.position.xy;
+        float2 stage = pixel;
+        return float4(saturate(mesh.sample(linearSampler, stage / stageSize).rgb + wallpaperGrain(pixel)), 1.0);
+    }
+
+    // A background image (`BackgroundImages`), over the whole target: its texture is the stage's size, the image
+    // already covering it and blurred, so the output pixel reads the texel of the stage point under it. The stage point
+    // is the output pixel until something transforms the stage.
+    fragment float4 backgroundImageFragment(GradientOut in [[stage_in]],
+                                            constant float2 &stageSize [[buffer(0)]],
+                                            texture2d<float> image [[texture(0)]],
+                                            sampler linearSampler [[sampler(0)]]) {
+        float2 stage = in.position.xy;
+        return float4(image.sample(linearSampler, stage / stageSize).rgb, 1.0);
+    }
+
+    struct CoverUniforms {
+        float2 targetSize;   // the target, in pixels
+        float2 uvOrigin;     // texture coordinates at the target's top-left corner
+        float2 uvSize;       // texture coordinates across the target
+        float2 padding;
+    };
+
+    // An image covering the whole target (`BackgroundImages`): the part uvOrigin...uvOrigin + uvSize of it, trilinear
+    // from its mipmaps, so an image larger than the target is reduced without aliasing. Opaque.
+    fragment float4 coverFragment(GradientOut in [[stage_in]],
+                                  constant CoverUniforms &u [[buffer(0)]],
+                                  texture2d<float> image [[texture(0)]],
+                                  sampler mipSampler [[sampler(0)]]) {
+        float2 uv = u.uvOrigin + in.position.xy / u.targetSize * u.uvSize;
+        return float4(image.sample(mipSampler, uv).rgb, 1.0);
+    }
+
+    struct BlurUniforms {
+        float2 direction;   // one texel along the pass: (1, 0) or (0, 1)
+        float sigma;        // in texels, > 0
+        int radius;         // texels read on each side of the pixel's own: ceil(3σ)
+    };
+
+    // One pass of a separable Gaussian blur of σ texels (`BackgroundImages`, where Metal Performance Shaders cannot run),
+    // from a source the target's size. A texel past the edge is the edge's (clamp to edge), so nothing dark comes in
+    // from outside the image; the weights are normalized over the taps read.
+    fragment float4 blurFragment(GradientOut in [[stage_in]],
+                                 constant BlurUniforms &u [[buffer(0)]],
+                                 texture2d<float> source [[texture(0)]]) {
+        constexpr sampler edge(coord::pixel, address::clamp_to_edge, filter::nearest);
+        float2 centre = in.position.xy;
+        float4 sum = 0.0;
+        float total = 0.0;
+        for (int i = -u.radius; i <= u.radius; i++) {
+            float weight = exp(-float(i * i) / (2.0 * u.sigma * u.sigma));
+            sum += source.sample(edge, centre + u.direction * float(i)) * weight;
+            total += weight;
+        }
+        return sum / total;
     }
 
     // The cursor sprite, already premultiplied.

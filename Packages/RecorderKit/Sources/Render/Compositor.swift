@@ -12,8 +12,12 @@ public final class Compositor: @unchecked Sendable {
     /// The only target format: preview and export must write the same bytes, so never an `_srgb` format.
     public static let pixelFormat = MTLPixelFormat.bgra8Unorm
 
+    /// The compiled shaders (`ShaderSource`), for what draws into textures of its own (`BackgroundImages`).
+    let library: any MTLLibrary
     private let gradientPipeline: any MTLRenderPipelineState
     private let wallpaperPipeline: any MTLRenderPipelineState
+    private let backgroundImagePipeline: any MTLRenderPipelineState
+    private let blurredWallpaperPipeline: any MTLRenderPipelineState
     private let screenPipeline: any MTLRenderPipelineState
     private let spritePipeline: any MTLRenderPipelineState
     private let screenSampler: any MTLSamplerState
@@ -47,8 +51,11 @@ public final class Compositor: @unchecked Sendable {
             }
             return try device.makeRenderPipelineState(descriptor: descriptor)
         }
+        self.library = library
         gradientPipeline = try pipeline(vertex: "gradientVertex", fragment: "gradientFragment", blended: false)
         wallpaperPipeline = try pipeline(vertex: "quadVertex", fragment: "wallpaperFragment", blended: false)
+        backgroundImagePipeline = try pipeline(vertex: "gradientVertex", fragment: "backgroundImageFragment", blended: false)
+        blurredWallpaperPipeline = try pipeline(vertex: "gradientVertex", fragment: "blurredWallpaperFragment", blended: false)
         screenPipeline = try pipeline(vertex: "quadVertex", fragment: "screenFragment", blended: true)
         spritePipeline = try pipeline(vertex: "quadVertex", fragment: "spriteFragment", blended: true)
 
@@ -72,31 +79,49 @@ public final class Compositor: @unchecked Sendable {
     /// map onto the whole target (they are in pixels of `frame.outputSize`). The screen is drawn only when
     /// `frame.screen` is set and `screen` is given, its `crop` filling its rect; the cursor only when `frame.cursor`
     /// is set; the camera only when `frame.camera` is set and `camera` is given, filling its rect without stretching
-    /// (cropped, centred, to the rect's shape). `screen`, `camera` and `cursor` must stay alive until `commandBuffer`
+    /// (cropped, centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
+    /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn directly
+    /// without `backgroundImage`; with one, its blurred mesh gradient (`BackgroundImages.texture(forWallpaper:…)`), the
+    /// grain is added to it. `screen`, `camera`, `cursor` and `backgroundImage` must stay alive until `commandBuffer`
     /// completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
         camera: (any MTLTexture)?,
         cursor: any MTLTexture,
+        backgroundImage: (any MTLTexture)? = nil,
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer
     ) {
         let encoder = renderPass(into: target, commandBuffer: commandBuffer)
         let viewport = SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y))
+        func drawFramesGradient() {
+            let angle = frame.gradientAngleDegrees * .pi / 180
+            drawGradient(start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), encoder: encoder)
+        }
 
         // 1. Background.
         switch frame.background {
         case .gradient:
-            let angle = frame.gradientAngleDegrees * .pi / 180
-            drawGradient(start: frame.gradientStart, end: frame.gradientEnd, direction: SIMD2(sin(angle), -cos(angle)), encoder: encoder)
+            drawFramesGradient()
+        case .image:
+            if let backgroundImage {
+                drawBackgroundImage(backgroundImage, viewport: viewport, encoder: encoder)
+            } else {
+                // The image is missing or cannot be read: the frame carries Toma classic for it.
+                drawFramesGradient()
+            }
         case let .color(color):
             // Both ends of that colour: every pixel is `mix(color, color, t)`, the colour itself.
             drawGradient(start: color, end: color, direction: .zero, encoder: encoder)
-        case let .wallpaper(preset):
-            drawWallpaper(
-                preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), viewport: viewport,
-                encoder: encoder)
+        case let .wallpaper(preset, _):
+            if let backgroundImage {
+                drawBlurredWallpaper(backgroundImage, viewport: viewport, encoder: encoder)
+            } else {
+                drawWallpaper(
+                    preset, in: Rect(x: 0, y: 0, width: Double(viewport.x), height: Double(viewport.y)), viewport: viewport,
+                    encoder: encoder)
+            }
         }
 
         // 2. Screen.
@@ -181,6 +206,27 @@ public final class Compositor: @unchecked Sendable {
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
+    /// Fills the whole target with `texture`, a background image made for the stage's size (`backgroundImageFragment`).
+    private func drawBackgroundImage(_ texture: any MTLTexture, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        var stageSize = viewport
+        encoder.setRenderPipelineState(backgroundImagePipeline)
+        encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.setFragmentSamplerState(screenSampler, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
+    /// Fills the whole target with `mesh`, a wallpaper's mesh gradient blurred for the stage's size, and the grain of the
+    /// output pixels (`blurredWallpaperFragment`).
+    private func drawBlurredWallpaper(_ mesh: any MTLTexture, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
+        var stageSize = viewport
+        encoder.setRenderPipelineState(blurredWallpaperPipeline)
+        encoder.setFragmentBytes(&stageSize, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        encoder.setFragmentTexture(mesh, index: 0)
+        encoder.setFragmentSamplerState(screenSampler, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
     /// Draws the part `rect` (output pixels) of `preset` over a stage of the whole output (`wallpaperFragment`).
     private func drawWallpaper(_ preset: WallpaperPreset, in rect: Rect, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder) {
         let origin = SIMD2(Float(rect.x), Float(rect.y)), size = SIMD2(Float(rect.width), Float(rect.height))
@@ -245,7 +291,7 @@ private struct GradientUniforms {
 }
 
 /// `WallpaperUniforms` in `ShaderSource.metal`: 16 bytes.
-private struct WallpaperUniforms {
+struct WallpaperUniforms {
     var stageSize: SIMD2<Float>
     var count: UInt32
     var padding: UInt32

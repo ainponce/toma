@@ -9,7 +9,9 @@
 /// - Within each take, the clips are in source order and never overlap (as `EditDocument.sequence` is in 1b), so the
 ///   mapping is monotonic and each source instant is shown at most once.
 /// - A speed is read in its range, 0.25 to 16 (a speed out of it is clamped, one that is not a number is 1), so a
-///   document edited by hand never stops the render.
+///   document edited by hand never stops the render. Every mapping here reads it so, also the one of the instants
+///   outside the clips (`output(ofSampleAt:take:)`, `output(ofChangeAt:take:)`): the render and the motion paths share
+///   this one rule.
 public struct TimeMap: Equatable, Sendable {
     /// `D`, in nanoseconds.
     public let duration: Int64
@@ -83,6 +85,28 @@ public struct TimeMap: Equatable, Sendable {
         return i + 1 < takeClips.count ? clipOutputStarts[takeClips[i + 1]] : nil
     }
 
+    /// The output time of a sample of `take` taken at source instant `x` (a pointer position): its own in a clip
+    /// (`output(atSource:take:)`); before the take's first clip and from the end of its last one on,
+    /// `O_k + round((x − s_k) / v_k)` through that clip (negative, or past `D`), so a sample the recorder took before the
+    /// sources started counts at output 0, as it always did. `nil` in a cut between two clips of the take, and for a
+    /// take without clips.
+    public func output(ofSampleAt x: HostTime, take: String) -> Int64? {
+        guard let takeClips = clipsByTake[take], let first = takeClips.first, let last = takeClips.last else { return nil }
+        if x.nanoseconds < clips[first].start { return extrapolated(x.nanoseconds, clip: first) }
+        if x.nanoseconds >= clips[last].end { return extrapolated(x.nanoseconds, clip: last) }
+        return output(atSource: x, take: take)
+    }
+
+    /// Where a change of `take` at source instant `x` (of the camera) starts to rule: before the take's first clip, at
+    /// its time through that clip's mapping (negative: it is under way at output 0, as it always was); otherwise from
+    /// the first instant kept at or after it (`firstKeptOutput(atOrAfter:take:)`), so one in a cut rules from the next
+    /// clip on and one after the last clip never rules. `nil` for a take without clips.
+    public func output(ofChangeAt x: HostTime, take: String) -> Int64? {
+        guard let first = clipsByTake[take]?.first else { return nil }
+        if x.nanoseconds < clips[first].start { return extrapolated(x.nanoseconds, clip: first) }
+        return firstKeptOutput(atOrAfter: x, take: take)
+    }
+
     /// The output range in which source range `range` of `take` is seen, with the cuts inside it closed: from the
     /// output of its first kept instant to the end of the output of its last one (each end mapped in its clip as
     /// `O_k + round((x − s_k) / v_k)`), so a block split by a cut is still one block in the output. `nil` if nothing in
@@ -118,9 +142,19 @@ public struct TimeMap: Equatable, Sendable {
 
     // MARK: - Private
 
-    /// `O_k + round((x − s_k) / v_k)` for clip `k`, with `s_k ≤ x ≤ e_k`; at `x == e_k` it is `O_k + D_k`.
+    /// `O_k + round((x − s_k) / v_k)` for clip `k`, with `s_k ≤ x` (past `e_k` too); at `x == e_k` it is `O_k + D_k`.
     private func output(ofSource x: UInt64, inClip k: Int) -> Int64 {
         Self.adding(clipOutputStarts[k], Self.outputOffset(ofSource: x - clips[k].start, speed: clips[k].speed))
+    }
+
+    /// `O_k + round((x − s_k) / v_k)` for an instant `x` on either side of clip `k`, rounded as inside it (halves away
+    /// from zero, so an instant before the clip is the negative of one as far after its start), saturating at the ends
+    /// of `Int64`.
+    private func extrapolated(_ x: UInt64, clip k: Int) -> Int64 {
+        let piece = clips[k]
+        if x >= piece.start { return output(ofSource: x, inClip: k) }
+        // `O_k` is never negative and the offset at most `Int64.max`: the difference never overflows.
+        return clipOutputStarts[k] - Self.outputOffset(ofSource: piece.start - x, speed: piece.speed)
     }
 
     /// The index in `takeClips` of the last clip whose start is at or before `x`; -1 if there is none.
