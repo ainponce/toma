@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Dispatch
 import ProjectFormat
 
 /// The motion of one revision of the document (design §8.6): its time map, where things are on the stage, the drawn
@@ -44,6 +45,10 @@ public struct MotionPaths: Sendable {
     ///   cameras, and it is built again.
     /// - The layouts only decide whether there is a card's camera: one that was not there is simulated from output 0.
     ///
+    /// After an edit of zoom blocks alone, each camera also takes the old one's tail from the first checkpoint after the
+    /// blocks it changed on which it is the old camera again, bit for bit (`ZoomSimulation`). The stage's camera and the
+    /// card's are built at once, on two threads: they read the same cursor and stage and nothing of each other.
+    ///
     /// Built off the main thread, like `init(take:events:document:)`.
     public init(take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths) {
         let inputs = Inputs(document)
@@ -62,16 +67,33 @@ public struct MotionPaths: Sendable {
         let changed = sameStage ? [timeChanged, cursorChanged].compactMap { $0 }.min() : 0
         let bubbleChanged = Self.firstChangedBubbleOutput(
             old.inputs.camera, old.timeMap, document.camera, timeMap, take: take.id).map(StepGrid.firstStep(atOrAfter:))
+        let zoomChanged = [changed, bubbleChanged].compactMap { $0 }.min()
+        (zoom, cardZoom) = Self.atOnce(
+            {
+                ZoomCameraPath(
+                    document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.zoom,
+                    changedFrom: zoomChanged)
+            },
+            {
+                CardZoomPath(
+                    document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.cardZoom,
+                    changedFrom: changed)
+            })
         self.timeMap = timeMap
         self.stage = stage
         self.cursor = cursor
-        zoom = ZoomCameraPath(
-            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.zoom,
-            changedFrom: [changed, bubbleChanged].compactMap { $0 }.min())
-        cardZoom = CardZoomPath(
-            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.cardZoom,
-            changedFrom: changed)
         self.inputs = inputs
+    }
+
+    /// `a()` and `b()`, run at once on two threads (`DispatchQueue.concurrentPerform`, which returns when both are done):
+    /// for work that shares nothing it writes, which gives what running them one after the other gives.
+    private static func atOnce<A: Sendable, B: Sendable>(_ a: @Sendable () -> A, _ b: @Sendable () -> B) -> (A, B) {
+        let first = Slot<A>(), second = Slot<B>()
+        DispatchQueue.concurrentPerform(iterations: 2) { k in
+            if k == 0 { first.value = a() } else { second.value = b() }
+        }
+        // `concurrentPerform` returned: both were written, each by one thread, before this reads them.
+        return (first.value!, second.value!)
     }
 
     /// Whether these are the paths of `document` too (of the same take and events): it differs from the one they were
@@ -166,4 +188,9 @@ public struct MotionPaths: Sendable {
         let i = (0..<common).first { a[$0].t != b[$0].t || a[$0].style != b[$0].style } ?? common
         return [a, b].compactMap { i < $0.count ? $0[i].t : nil }.min()
     }
+}
+
+/// One result of `MotionPaths.atOnce(_:_:)`: written by one thread, read once that thread is done.
+private final class Slot<Value>: @unchecked Sendable {
+    var value: Value?
 }

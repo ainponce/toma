@@ -46,16 +46,15 @@ public struct CardZoomPath: Sendable {
 
     /// `nil` when neither the project's layout nor any block is a split.
     public init?(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
-        guard Self.hasSplit(document) else { return nil }
-        simulation = ZoomSimulation(
-            document: document, timeMap: timeMap, cursor: cursor, take: take, viewport: CardViewport(stage: stage))
+        self.init(
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil)
     }
 
     /// The card's camera of the same take after an edit (`MotionPaths.init(take:events:document:after:)`): bit for bit
-    /// `init(document:timeMap:stage:cursor:take:)`'s. With `old`, its checkpoints before the first step the edit can
-    /// change, `changed` (what the camera reads besides its blocks and spring: the time map, the stage and the cursor;
-    /// `nil`, none of them changes; the layouts only decide whether there is a card's camera) or that of its first
-    /// block or spring that differs; without one, simulated from output 0.
+    /// `init(document:timeMap:stage:cursor:take:)`'s (that one without `old`). With `old`, from its checkpoints as
+    /// `ZoomSimulation` keeps them; `changed` is the first step at which what the camera reads besides its blocks and
+    /// spring (the time map, the stage and the cursor) can differ, `nil` where none of them does; the layouts only
+    /// decide whether there is a card's camera. Without `old`, simulated from output 0.
     init?(
         document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
         after old: CardZoomPath?, changedFrom changed: Int?
@@ -127,6 +126,10 @@ public struct CardZoomPath: Sendable {
 
     /// The steps simulated to build `checkpoints`.
     var simulatedSteps: Int { simulation.simulatedSteps }
+
+    /// The checkpoint from which the checkpoints are the old simulation's, after an edit of blocks alone; `nil` when
+    /// they were all simulated or kept from before the edit.
+    var splicedAt: Int? { simulation.splicedAt }
 }
 
 extension CardZoomState {

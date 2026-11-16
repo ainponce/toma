@@ -255,7 +255,9 @@ public struct CursorPath: Sendable {
             var buttons: [ButtonChange] = []
             var clicks: [(output: Int64, point: SIMD2<Double>)] = []
             var down = Set<MouseButton>()
-            for event in events.sortedByTime() {
+            // Already in time order (as a take's events are recorded), they are what the stable sort would give.
+            let inOrder = zip(events, events.dropFirst()).allSatisfy { $0.t <= $1.t }
+            for event in inOrder ? events : events.sortedByTime() {
                 switch event.kind {
                 case let .mouseDown(button, _, _): down.insert(button)
                 case let .mouseUp(button, _, _): down.remove(button)

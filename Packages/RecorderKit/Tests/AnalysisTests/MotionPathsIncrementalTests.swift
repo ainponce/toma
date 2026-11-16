@@ -194,19 +194,6 @@ extension ZoomFixtures {
         return document
     }
 
-    /// Every bit of a cursor's sample.
-    fileprivate static func bits(_ sample: CursorSample?) -> [UInt64]? {
-        sample.map { [$0.position.x, $0.position.y, $0.opacity, $0.clickScale].map(\.bitPattern) + [$0.pressed ? 1 : 0] }
-    }
-
-    /// Every bit of a cursor's spring on a step.
-    fileprivate static func bits(_ state: CursorPath.State?) -> [UInt64]? {
-        state.map { state in
-            let values = [state.position.x, state.position.y, state.velocity.x, state.velocity.y, state.target.x, state.target.y]
-            return (values + [state.scale, state.scaleVelocity]).map(\.bitPattern) + [state.pressed ? 1 : 0]
-        }
-    }
-
     /// Whether every query of `paths` gives the bits of `full`'s (of the same document, built from nothing): the
     /// checkpoints of every path (all a query reads of the simulations), the clicks and the releases; over one span of
     /// the whole output of each (the query at a point, over the steps kept), every frame at `frameRate` and, every
@@ -270,7 +257,7 @@ extension ZoomFixtures {
         /// Chains of edits of every kind, in a random order, each rebuilt from the paths of the edit before it (rebuilt
         /// too), over a take of about 5 minutes of output. A toggle (the zoom shown, the cursor's smoothing off) comes
         /// back with the next edit, so the edits after it still move the cameras and the spring; most edits keep some
-        /// checkpoints and simulate some.
+        /// checkpoints and simulate some, and some of zoom blocks alone take the old cameras' tail.
         @Test(arguments: [0x6564_6974_0001, 0x6564_6974_0002] as [UInt64])
         func incrementalEqualsFullForRandomEdits(seed: UInt64) {
             let seconds = 330.0
@@ -280,7 +267,7 @@ extension ZoomFixtures {
             var document = editedTakeDocument(seconds: seconds)
             var paths = MotionPaths(take: take, events: events, document: document)
             var history: [EditDocument] = []
-            var partial = 0
+            var partial = 0, spliced = 0
             let edits = PathEdit.allCases.shuffled(using: &random).flatMap { [.zoomShow, .cursorOff].contains($0) ? [$0, $0] : [$0] }
             for edit in edits {
                 let next = edited(document, by: edit, seconds: seconds, history: history, random: &random)
@@ -291,13 +278,15 @@ extension ZoomFixtures {
                 expectSameBits(paths, full, "\(edit)")
                 let simulated = [paths.cursor.simulatedSteps, paths.zoom.simulatedSteps, paths.cardZoom?.simulatedSteps ?? 0]
                 if simulated.contains(where: { $0 > 0 && $0 < full.zoom.simulatedSteps }) { partial += 1 }
+                if paths.zoom.splicedAt != nil || paths.cardZoom?.splicedAt != nil { spliced += 1 }
             }
             #expect(partial >= 6, "\(partial) of \(edits.count)")
+            #expect(spliced >= 2, "\(spliced) of \(edits.count)")
         }
 
         /// An edit at 50 minutes of an hour simulates the last 10 minutes and the second before it, at most: of the
         /// cursor's spring, the stage's camera and the card's; none of a path it changes nothing of.
-        @Test func editLateInTheTakeSimulatesOnlyTheTail() {
+        @Test func editLateInTheTakeSimulatesOnlyTheTail() throws {
             let hour = 3_600.0
             let take = zoomTake(camera: true, seconds: hour + 1)
             let events = wanderingEvents(seconds: hour, rate: 10)
@@ -325,7 +314,8 @@ extension ZoomFixtures {
             ]
             for (name, edited, most) in cases {
                 let rebuilt = MotionPaths(take: take, events: events, document: edited, after: paths)
-                let simulated = (rebuilt.cursor.simulatedSteps, rebuilt.zoom.simulatedSteps, rebuilt.cardZoom?.simulatedSteps ?? -1)
+                let card = try #require(rebuilt.cardZoom, "\(name)")
+                let simulated = (rebuilt.cursor.simulatedSteps, rebuilt.zoom.simulatedSteps, card.simulatedSteps)
                 #expect(simulated.0 <= most.0 && simulated.1 <= most.1 && simulated.2 <= most.2, "\(name): \(simulated)")
                 #expect(simulated.1 > 0 || most.1 == 0, "\(name): \(simulated)")
             }
@@ -338,7 +328,8 @@ extension ZoomFixtures {
         }
 
         /// An edit at the first second (a zoom, a trim of the first clip, the cursor's spring) simulates every path it
-        /// changes from output 0, all of it, with the bits of the paths built from nothing.
+        /// changes from output 0: all of it, or, after an edit of zoom blocks alone, up to the checkpoint from which a
+        /// camera takes the old one's tail; with the bits of the paths built from nothing.
         @Test func editAtTheStartRebuildsEverything() {
             let seconds = 330.0
             let take = zoomTake(camera: true, seconds: seconds + 1)
@@ -352,10 +343,94 @@ extension ZoomFixtures {
             for (name, edited, cursorToo) in [("a zoom", zoomed, false), ("a trim", trimmed, true), ("the cursor", spring, true)] {
                 let rebuilt = MotionPaths(take: take, events: events, document: edited, after: paths)
                 let all = StepGrid.firstStep(atOrAfter: rebuilt.timeMap.duration) + 1
-                #expect(rebuilt.zoom.simulatedSteps == all, "\(name)")
-                #expect(rebuilt.cardZoom?.simulatedSteps == all, "\(name)")
+                // From step -1, the run before output 0.
+                #expect(rebuilt.zoom.simulatedSteps == rebuilt.zoom.splicedAt.map { $0 + 1 } ?? all, "\(name)")
+                let card = rebuilt.cardZoom
+                #expect(card?.simulatedSteps == card.map { $0.splicedAt.map { $0 + 1 } ?? all }, "\(name)")
+                #expect(cursorToo || rebuilt.zoom.splicedAt != nil, "\(name)")
                 #expect(rebuilt.cursor.simulatedSteps == (cursorToo ? all : 0), "\(name)")
                 expectSameBits(rebuilt, MotionPaths(take: take, events: events, document: edited), name)
+            }
+        }
+
+        /// An edit of zoom blocks alone in the middle of a take (a block added, one deleted, one moved): each camera takes
+        /// the old one's tail as soon as it is bit for bit the old camera again on a checkpoint after the blocks the edit
+        /// changed, the index of its block moved by the blocks added or deleted, so it simulates a few seconds; with the
+        /// bits of the paths built from nothing.
+        @Test func aZoomEditTakesTheOldTailOnceTheCameraIsBack() throws {
+            let seconds = 330.0
+            let take = zoomTake(camera: true, seconds: seconds + 1)
+            let events = wanderingEvents(seconds: seconds)
+            let document = editedTakeDocument(seconds: seconds)
+            let paths = MotionPaths(take: take, events: events, document: document)
+            var added = document, deleted = document, moved = document
+            let k = document.zoom.regions.firstIndex { $0.start >= source(120) }!
+            added.zoom.regions.insert(block(98, from: 118, to: 119.5, depth: 2.2, focus: .fixed(x: 0.3, y: 0.6)), at: k)
+            deleted.zoom.regions.remove(at: k)
+            moved.zoom.regions[k].start = moved.zoom.regions[k].start.adding(seconds: 0.6)
+            moved.zoom.regions[k].end = moved.zoom.regions[k].end.adding(seconds: 0.6)
+            for (name, edited) in [("added", added), ("deleted", deleted), ("moved", moved)] {
+                let rebuilt = MotionPaths(take: take, events: events, document: edited, after: paths)
+                let card = try #require(rebuilt.cardZoom, "\(name)")
+                #expect(rebuilt.zoom.splicedAt != nil && card.splicedAt != nil, "\(name)")
+                #expect(rebuilt.zoom.simulatedSteps <= steps(30) && card.simulatedSteps <= steps(30), "\(name)")
+                #expect(rebuilt.cursor.simulatedSteps == 0, "\(name)")
+                expectSameBits(rebuilt, MotionPaths(take: take, events: events, document: edited), name)
+            }
+        }
+
+        /// A camera that is not the old one again on any checkpoint after the edit (a slow spring that keeps swinging to
+        /// the end of the take) simulates the whole rest, as without the old tail.
+        @Test func aCameraThatNeverComesBackSimulatesTheRest() {
+            let seconds = 120.0
+            let take = zoomTake(camera: true, seconds: seconds + 1)
+            let events = wanderingEvents(seconds: seconds)
+            var document = editedTakeDocument(seconds: seconds)
+            // No instant block either, whose end puts the camera at rest exactly.
+            document.zoom.spring = SpringSpec(damping: 0.2, response: 4)
+            for k in document.zoom.regions.indices { document.zoom.regions[k].instant = false }
+            let paths = MotionPaths(take: take, events: events, document: document)
+            var moved = document
+            let k = document.zoom.regions.lastIndex { $0.start <= source(100) }!
+            moved.zoom.regions[k].depth = 4
+            let rebuilt = MotionPaths(take: take, events: events, document: moved, after: paths)
+            let full = MotionPaths(take: take, events: events, document: moved)
+            #expect(rebuilt.zoom.splicedAt == nil && rebuilt.cardZoom?.splicedAt == nil)
+            #expect(rebuilt.zoom.simulatedSteps > steps(15) && rebuilt.zoom.simulatedSteps < full.zoom.simulatedSteps)
+            expectSameBits(rebuilt, full, "a block of the last part")
+        }
+
+        /// A split that comes (a block of the camera track), goes and comes back with a zoom edit: the card's camera is
+        /// built from output 0 when it appears, dropped when it goes, and, with one before, rebuilt at once with the
+        /// stage's (`MotionPaths.atOnce`); each time with the bits of the paths built from nothing.
+        @Test func theCardsCameraComesAndGoes() throws {
+            let seconds = 60.0
+            let take = zoomTake(camera: true, seconds: seconds + 1)
+            let events = wanderingEvents(seconds: seconds)
+            var none = editedTakeDocument(seconds: seconds)
+            none.camera.layouts = []
+            var split = none
+            split.camera.layouts = [splitBlock(1, from: 20, to: 30)]
+            var zoomed = split
+            zoomed.zoom.regions[2].start = zoomed.zoom.regions[2].start.adding(seconds: -1)
+            var paths = MotionPaths(take: take, events: events, document: none)
+            #expect(paths.cardZoom == nil)
+            let all = StepGrid.firstStep(atOrAfter: paths.timeMap.duration) + 1
+            for (name, document) in [("split", split), ("no split", none), ("split again", split), ("a zoom", zoomed)] {
+                let had = paths.cardZoom != nil
+                paths = MotionPaths(take: take, events: events, document: document, after: paths)
+                let full = MotionPaths(take: take, events: events, document: document)
+                expectSameBits(paths, full, name)
+                switch name {
+                case "no split":
+                    #expect(paths.cardZoom == nil)
+                case "a zoom":
+                    let card = try #require(paths.cardZoom).simulatedSteps
+                    #expect(had && (1..<all).contains(paths.zoom.simulatedSteps) && (1..<all).contains(card))
+                default:
+                    #expect(!had && paths.zoom.simulatedSteps == 0, "\(name)")
+                    #expect(try #require(paths.cardZoom, "\(name)").simulatedSteps == all, "\(name)")
+                }
             }
         }
 
@@ -449,8 +524,9 @@ extension ZoomFixtures {
         /// the automatic zoom's blocks over them, the smoothed cursor, with a split from 10 to 20 minutes and without one.
         /// The edits: a zoom block moved by 0.5 s, and a cut of 1 s of source, in the middle of the hour and at its last
         /// minute. Run by an agent, with `TOMA_BENCH=1`, in release; printed and recorded in docs/performance.md. It asserts
-        /// only that an edit at the end costs less than a quarter of building the paths from nothing (a cut there maps
-        /// every event again: about a tenth).
+        /// the goal for the zoom edits, which take the old cameras' tail wherever they are, and, for a cut, which shifts
+        /// all that follows it, only that one at the end costs less than a quarter of building the paths from nothing (a
+        /// cut there places every event again: about a twentieth).
         @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
         func rebuildingAnHourAfterAnEdit() throws {
             let hour = 3_600.0
@@ -498,7 +574,12 @@ extension ZoomFixtures {
                     for (edit, edited) in [("a zoom moved", moved(document, at: t)), ("a cut", cut(document, at: t))] {
                         let rebuilt = median { _ = MotionPaths(take: take, events: events, document: edited, after: paths) }
                         row += "; \(edit) at \(when) \(ms(rebuilt))"
-                        if t > hour / 2 { #expect(rebuilt < full / 4, "\(name), \(edit) at \(when): \(ms(rebuilt))") }
+                        let goal = Duration.milliseconds(document.camera.layouts.isEmpty ? 20 : 30)
+                        if edit == "a zoom moved" {
+                            #expect(rebuilt <= goal, "\(name), \(edit) at \(when): \(ms(rebuilt))")
+                        } else if t > hour / 2 {
+                            #expect(rebuilt < full / 4, "\(name), \(edit) at \(when): \(ms(rebuilt))")
+                        }
                     }
                 }
                 lines.append(row)
