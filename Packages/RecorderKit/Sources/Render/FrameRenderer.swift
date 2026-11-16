@@ -3,6 +3,7 @@ import CoreVideo
 import Foundation
 import Metal
 import ProjectFormat
+import Synchronization
 
 public enum RenderError: Error, Equatable {
     /// This Mac has no Metal device.
@@ -25,7 +26,7 @@ public enum RenderError: Error, Equatable {
 
 /// Renders frames of a take: the one drawing path behind the editor preview and the MP4 export.
 ///
-/// A frame is a function of the project and the output time alone (`FrameEvaluator`), drawn by
+/// A frame is a function of the project, its edit document and the output time alone (`FrameEvaluator`), drawn by
 /// `Compositor` over the screen and camera frames that a `TrackFrameReader` of each track decodes for that time.
 /// Every way to draw — `render(at:into:)`, `renderBytes(at:)` and `PreviewRenderer` — goes through
 /// `encode(at:into:commandBuffer:)`.
@@ -45,8 +46,10 @@ public final class FrameRenderer: @unchecked Sendable {
     public let device: any MTLDevice
     let commandQueue: any MTLCommandQueue
     private let evaluator: FrameEvaluator
-    private let reader: TrackFrameReader?
-    private let cameraReader: TrackFrameReader?
+    private let package: ProjectPackage
+    private let take: TakeRecord
+    /// The reader of each track read so far, by track ID, made the first time a frame (or `missingVideo`) needs it.
+    private let readers = Mutex<[String: TrackFrameReader]>([:])
     private let compositor: Compositor
     private let cursorTexture: any MTLTexture
     private let textureCache: CVMetalTextureCache
@@ -56,29 +59,39 @@ public final class FrameRenderer: @unchecked Sendable {
     public var duration: Double { evaluator.duration }
 
     /// The spans of the screen and of the camera shown with the frame before them so far, because a segment could
-    /// not be decoded there (`TrackFrameReader`), in output seconds clamped to `[0, duration]`, in time order (by
-    /// start, end and track). After drawing every frame of the timeline in order (an export), it lists every such
-    /// span of the output.
+    /// not be decoded there (`TrackFrameReader`), in output seconds within `[0, duration]`, in time order (by start, end
+    /// and track): each span of the source through `TimeMap.outputRange(ofSource:take:)`, with the cuts inside it closed,
+    /// and none that is all cut. The tracks are those the document shows (its screens, and the camera unless it is
+    /// hidden), so the segments that cannot be used at all are listed before a frame is drawn. After drawing every frame
+    /// of the timeline in order (an export), it lists every such span of the output.
     public var missingVideo: [MissingVideo] {
-        let start = evaluator.timelineStart, duration = evaluator.duration
-        let read = [reader, cameraReader].compactMap { $0 }
-        return read
+        let timeMap = evaluator.timeMap, takeID = take.id
+        return evaluator.videoTrackIDs
+            .compactMap(reader(for:))
             .flatMap { reader in reader.gaps.map { (reader.trackID, $0) } }
             .compactMap { track, gap -> MissingVideo? in
-                let from = gap.start.seconds(since: start), to = gap.end.seconds(since: start)
-                guard to >= 0, from <= duration else { return nil }
-                let clamped = min(max(from, 0), duration)
+                // A span of no source (a read that timed out at one instant) is listed where that instant is shown.
+                let output = gap.start < gap.end
+                    ? timeMap.outputRange(ofSource: gap.start..<gap.end, take: takeID)
+                    : timeMap.output(atSource: gap.start, take: takeID).map { $0..<$0 }
+                guard let output else { return nil }
                 return MissingVideo(
-                    track: track, file: gap.file, start: clamped, end: max(clamped, min(to, duration)), reason: gap.reason)
+                    track: track, file: gap.file, start: Double(output.lowerBound) / 1e9, end: Double(output.upperBound) / 1e9,
+                    reason: gap.reason)
             }
             .sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
+    }
+
+    /// The legacy document's frames (`EditDocument.legacy(for:)`): what phase 0 and 1a draw.
+    public convenience init(project: LoadedProject, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil) throws {
+        try self.init(project: project, document: .legacy(for: project), outputSize: outputSize, device: device)
     }
 
     /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps.
     /// - Parameter device: the system default device when `nil`.
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
     ///   errors of `Compositor.init` and `CursorSprite.makeTexture`.
-    public init(project: LoadedProject, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil) throws {
+    public init(project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil) throws {
         guard outputSize.x > 0, outputSize.y > 0 else { throw RenderError.invalidOutputSize(outputSize) }
         guard let device = device ?? MTLCreateSystemDefaultDevice() else { throw RenderError.noMetalDevice }
         guard let commandQueue = device.makeCommandQueue() else {
@@ -98,13 +111,9 @@ public final class FrameRenderer: @unchecked Sendable {
         textureCache = cache
         compositor = try Compositor(device: device)
         cursorTexture = try CursorSprite.makeTexture(device: device)
-        evaluator = FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: outputSize)
-        reader = evaluator.screenTrackID
-            .flatMap { project.take.track($0) }
-            .map { TrackFrameReader(package: project.package, track: $0) }
-        cameraReader = evaluator.cameraTrackID
-            .flatMap { project.take.track($0) }
-            .map { TrackFrameReader(package: project.package, track: $0) }
+        evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: outputSize)
+        package = project.package
+        take = project.take
     }
 
     /// Encodes the frame at `outputTime` into `target`, which must be `.bgra8Unorm` and `outputSize` big
@@ -116,8 +125,8 @@ public final class FrameRenderer: @unchecked Sendable {
         try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
             let frame = evaluator.frame(at: outputTime)
-            let screen = try frame.screen.flatMap { try texture(of: reader, at: $0.sourceTime, until: commandBuffer) }
-            let camera = try frame.camera.flatMap { try texture(of: cameraReader, at: $0.sourceTime, until: commandBuffer) }
+            let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
+            let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             compositor.encode(frame, screen: screen, camera: camera, cursor: cursorTexture, into: target, commandBuffer: commandBuffer)
         }
     }
@@ -176,6 +185,18 @@ public final class FrameRenderer: @unchecked Sendable {
         commandBuffer.waitUntilCompleted()
         guard commandBuffer.status == .completed else {
             throw RenderError.gpuFailed(commandBuffer.error.map { String(describing: $0) } ?? "status \(commandBuffer.status.rawValue)")
+        }
+    }
+
+    /// The reader of track `trackID` of the take, made the first time it is asked for; `nil` for a track the take does
+    /// not have.
+    private func reader(for trackID: String) -> TrackFrameReader? {
+        readers.withLock { readers in
+            if let reader = readers[trackID] { return reader }
+            guard let track = take.track(trackID) else { return nil }
+            let reader = TrackFrameReader(package: package, track: track)
+            readers[trackID] = reader
+            return reader
         }
     }
 
