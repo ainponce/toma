@@ -2764,6 +2764,16 @@
         }
       }
     },
+    "This recording has nothing to export." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta grabación no tiene nada para exportar."
+          }
+        }
+      }
+    },
     "This recording hasn't finished saving" : {
       "localizations" : {
         "es" : {
