@@ -51,6 +51,10 @@ public struct CursorSample: Equatable, Sendable {
 public struct CursorPath: Sendable {
     /// The kept `mouseDown`s, in output order: where the click effects and sounds come from.
     public let clicks: [(output: Int64, point: SIMD2<Double>)]
+    /// When no button is down any more: the output of each button change that leaves none down, placed as the press
+    /// reads the buttons (one in a cut, from the next clip on; one after the last clip, never), in output order. Where
+    /// the press of the click effects ends.
+    public let releases: [Int64]
 
     /// The raw positions, in output order.
     private let samples: [Sample]
@@ -90,6 +94,7 @@ public struct CursorPath: Sendable {
         self.samples = samples
         self.buttons = buttons
         self.clicks = clicks
+        releases = buttons.filter { !$0.pressed }.map(\.output)
         idle = style.hideWhenIdle
             ? IdleVisibility(
                 positions: samples.map { ($0.output, $0.point) }, presses: Self.presses(buttons), clicks: clicks.map(\.output),
