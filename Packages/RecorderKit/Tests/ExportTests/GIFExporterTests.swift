@@ -153,10 +153,7 @@ private func fill(_ folder: URL, leaving: Int) throws {
     fsync(fd)
 }
 
-/// One test at a time: with several exports of a smoothed cursor drawing at once, the Thread Sanitizer (`make tsan`)
-/// reports a race on `CursorPath`'s `FromCheckpoint`, an empty struct passed `inout` (every empty value has the same
-/// address), where nothing is shared.
-@Suite(.serialized) struct GIFExporterTests {
+@Suite struct GIFExporterTests {
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(10)))
     func twoExportsGiveTheSameBytes() async throws {
         try await withTemporaryDirectory { dir in

@@ -18,8 +18,8 @@
 # and the 3 projects out of the trash must not change.
 # Seventh, the GIF export (gif_case): export-gif of a 10 s take killed at a random moment 20 times; after every kill
 # nothing has the final name, and the next export to the same destination finishes, removes the .partial.gif left and
-# writes a GIF sips reads. Then the peak memory of export-gif (/usr/bin/time -l) of a 10 s and of a 60 s take at 800 px
-# must be the same within 10 %.
+# writes a GIF sips reads, with the bytes of the first one; the package never changes. Then the peak memory of
+# export-gif (/usr/bin/time -l) of a 10 s and of a 60 s take at 800 px must be the same within 10 %.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -399,15 +399,18 @@ gif_peak() {
 # The GIF export (Task 22, 1c design §7.4 and §16.1): 20 runs of export-gif of a 10 s synth-record take (800 px, 15 fps),
 # each killed with SIGKILL at a random moment from 0.2 to 2.0 s. After every kill nothing may have the final name; then
 # export-gif to the same destination must finish, remove the .partial.gif the kill left and write a GIF that sips reads
-# as 800 px wide (it is removed before the next run, so the next kill is checked against no file again). Then the peak
+# as 800 px wide and that has the bytes of the first one (every export is a process of its own: the same project and
+# options give the same GIF); it is removed before the next run, so the next kill is checked against no file again. No
+# export, killed or not, may change a byte of the package. Then the peak
 # memory (H19, in processes of their own: a test run measures every test at once): export-gif of a 10 s and of a 60 s
 # take at 800 px must reach the same peak memory footprint within 10 %, the memory not growing with the duration.
 gif_case() {
-  local DIR PKG LONG RUN PID STATUS PARTIALS=0 WIDTH PEAKS SHORT SHORT_RSS LONG_PEAK LONG_RSS
+  local DIR PKG BEFORE LONG RUN PID STATUS PARTIALS=0 WIDTH PEAKS SHORT SHORT_RSS LONG_PEAK LONG_RSS
   DIR=$(mktemp -d)
   echo "== GIF: export-gif of a 10 s take, kill -9 at random, 20 times (in $DIR)"
   "$BIN" synth-record "$DIR" --duration 10 > "$DIR/short.out"
   PKG=$(head -1 "$DIR/short.out")
+  BEFORE=$(package_hash "$PKG")
   for RUN in $(seq 1 20); do
     STATUS=0
     "$BIN" export-gif "$PKG" "$DIR/out.gif" > "$DIR/gif.out" 2> "$DIR/gif.err" &
@@ -439,14 +442,26 @@ gif_case() {
       echo "FAIL: sips does not read the GIF of run $RUN as 800 px wide (${WIDTH:-no width})"
       exit 1
     fi
-    rm "$DIR/out.gif"
+    if [ "$RUN" -eq 1 ]; then
+      mv "$DIR/out.gif" "$DIR/first.gif"
+    elif ! cmp -s "$DIR/first.gif" "$DIR/out.gif"; then
+      echo "FAIL: the GIF of run $RUN does not have the bytes of the first one"
+      exit 1
+    else
+      rm "$DIR/out.gif"
+    fi
+    if [ "$(package_hash "$PKG")" != "$BEFORE" ]; then
+      echo "FAIL: export-gif changed the package in run $RUN"
+      exit 1
+    fi
   done
   if [ "$PARTIALS" -eq 0 ]; then
     echo "FAIL: no run was killed while it wrote out.gif.partial.gif: nothing was checked"
     exit 1
   fi
   tail -1 "$DIR/gif.out"
-  echo "$PARTIALS of 20 runs killed while writing out.gif.partial.gif; every next export finished and removed it"
+  echo "$PARTIALS of 20 runs killed while writing out.gif.partial.gif; every next export finished, removed it and wrote" \
+    "the same bytes; the package did not change"
 
   echo "== GIF: the peak memory of export-gif of a 10 s and of a 60 s take"
   "$BIN" synth-record "$DIR" --duration 60 > "$DIR/long.out"
