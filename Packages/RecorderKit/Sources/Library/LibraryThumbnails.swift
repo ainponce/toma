@@ -7,24 +7,32 @@ import Foundation
 import ImageIO
 import ProjectFormat
 import Render
+import Synchronization
 
 /// The library's thumbnails (design §6.8, plan decision 26, `thumb-1`): each project as it is exported (style, layout,
 /// camera) at output instant `time(outputSeconds:)`, drawn by the export's `FrameRenderer` from its document as
 /// `EditSession.readDocument` reads it, at the size of its aspect inside `pixelSize`, and kept as HEIC in `directory`
-/// as `<key>.heic`. The key comes from what the package holds (`key(manifest:edit:log:size:)`): a change to the project
-/// gives another thumbnail, and a copy that did not change shares its original's.
+/// as `<key>.heic`. The key comes from what the package holds (`key(of:)`, `key(manifest:edit:log:size:)`): a change to
+/// the project gives another thumbnail, and a copy that did not change shares its original's. A project never opened in
+/// the editor has no edit files: it is drawn with the new document of `EditContext.defaultStyle` (without an image
+/// background, which only opening it copies into the package), which the key does not cover, so its thumbnail can show a
+/// default style changed since, until it is opened (which writes its log, and so changes its key).
 ///
-/// What the caller decides: which cards to draw (the visible ones, two at a time and with a low priority), and which
-/// projects may be looked at (`mayDraw(place:volume:opened:)`): never, by itself, one of Other places or on a removable,
-/// network or synced volume. What it does by itself: nothing while `isRecording()` (the take owns the disk and the GPU),
-/// nothing for a project that cannot be opened (`ProjectState`), and it never writes inside a package.
+/// What the caller decides: which cards to draw (the visible ones, two at a time and with a low priority, cancelling a card
+/// that scrolls away), and which projects may be looked at (`mayDraw(place:volume:opened:)`): never, by itself, one of
+/// Other places or on a removable, network or synced volume. What it does by itself: it draws nothing while
+/// `isRecording()` (the take owns the disk and the GPU; thumbnails already in the cache are still read, a light read), nor
+/// for a project that cannot be opened (`ProjectState`), nor for a caller cancelled before its frame is drawn; it draws a
+/// key asked for twice at once only once; and it never writes inside a package.
 ///
-/// No thread of Swift's cooperative pool waits for anything: the package's files are read, the frame decoded and drawn,
-/// and the HEIC written on a queue of the actor's own, which the actor waits for suspended, so two thumbnails can be
-/// drawn at once. `cached(_:)` reads one small file of the cache on the actor.
+/// No thread of Swift's cooperative pool waits for anything: the cache and the package's files are read, the HEIC
+/// decoded, the frame decoded and drawn and the HEIC written on a concurrent queue of the actor's own, which the actor
+/// waits for suspended, so two thumbnails can be drawn at once. (Not a serial dispatch queue as the actor's executor:
+/// the Thread Sanitizer of `make tsan` reports the isolated code of such an actor as racing with itself.)
 ///
-/// The cache is trimmed after each thumbnail written, to `maxBytes`, the files used longest ago first: a file's date is
-/// touched whenever it is read.
+/// The cache is trimmed after each thumbnail written, once it is handed back, to `maxBytes`, the files used longest ago
+/// first (a file's date is touched whenever it is read); temporary files left by a write that never finished go after
+/// `staleTemporarySeconds`.
 public actor LibraryThumbnails {
     /// Twice the card's size (design §6.8): the box every thumbnail fits in.
     public static let pixelSize = SIMD2<Int>(520, 292)
@@ -38,6 +46,9 @@ public actor LibraryThumbnails {
     static let quality = 1.0
     /// The largest file of the cache that is read.
     static let maxFileBytes = 8 * 1_048_576
+    /// How old a temporary file of the cache is when the trim removes it: a write takes milliseconds, so one this old was
+    /// left by a crash.
+    static let staleTemporarySeconds: Int64 = 600
 
     /// `~/Library/Caches/dev.toma.Toma/Library/thumbnails`.
     public static var defaultDirectory: URL {
@@ -49,15 +60,30 @@ public actor LibraryThumbnails {
     private let directory: URL
     private let maxBytes: Int64
     private let isRecording: @Sendable () -> Bool
-    /// Where the files are read and written and the frames drawn: never a thread of the cooperative pool.
+    /// Where the cache and the package's files are read, the frames drawn and the cache written, two or more at once:
+    /// never a thread of the cooperative pool.
     private let work = DispatchQueue(label: "dev.toma.Toma.LibraryThumbnails", qos: .utility, attributes: .concurrent)
-    /// How many thumbnails were set to be drawn rather than read from the cache, for tests.
+    /// The draws under way, by key, with how many callers wait for each.
+    private var drawing = InFlight()
+    /// How many frames were drawn on the GPU rather than read from the cache, for tests.
     private(set) var renders = 0
+    /// What tests run on `work` while a thumbnail is drawn.
+    private var hooks = Hooks()
+
+    /// What tests run on `work`, to see where the cache is read, hold a draw or start a take in the middle of one.
+    struct Hooks: Sendable {
+        /// Before a thumbnail is read from the cache.
+        var beforeReading: (@Sendable () -> Void)?
+        /// Before the project's document is read.
+        var beforeDrawing: (@Sendable () -> Void)?
+        /// Once the frame is drawn, before the HEIC is encoded and written.
+        var afterDrawing: (@Sendable () -> Void)?
+    }
 
     /// - Parameters:
     ///   - directory: the cache's folder (`defaultDirectory` in the app), made when the first thumbnail is written;
     ///     never one inside a package.
-    ///   - isRecording: whether the app is recording: while it is, nothing is drawn.
+    ///   - isRecording: whether the app is recording: while it is, nothing is drawn (the cache is still read).
     public init(
         directory: URL, maxBytes: Int64 = LibraryThumbnails.maxCacheBytes, isRecording: @escaping @Sendable () -> Bool
     ) {
@@ -112,40 +138,93 @@ public actor LibraryThumbnails {
         return volume.isInternal && !volume.isRemovable
     }
 
-    /// The thumbnail of key `key` from the cache, which counts as a use of it; `nil` if there is none or it cannot be
-    /// read.
-    public func cached(_ key: String) -> CGImage? {
-        Self.read(key, in: directory)
+    /// The thumbnail of key `key` (`ProjectSummary.thumbnailKey`, `key(of:)`) from the cache, which counts as a use of
+    /// it; `nil` if there is none or it cannot be read. Read and decoded on the actor's queue, also while a take records.
+    public func cached(_ key: String) async -> CGImage? {
+        let directory = self.directory, hooks = self.hooks
+        return await onWork {
+            hooks.beforeReading?()
+            return Self.read(key, in: directory)
+        }
     }
 
     /// The thumbnail of the package at `url`, which `summary` describes: from the cache if the project did not change
-    /// since one was drawn, otherwise drawn now and written to the cache. `nil` while the app is recording, for a project
-    /// that cannot be opened (to repair, of a newer version, unfinished or not available), and if anything fails.
+    /// since one was drawn, also while a take records; otherwise drawn now and written to the cache, unless a take
+    /// records. `nil` when it would have to be drawn while a take records, for a project that cannot be opened (to
+    /// repair, of a newer version, unfinished or not available), for a caller cancelled before it is done, and if anything
+    /// fails. Callers asking for the same key at once share one draw, which stops (drawing and writing nothing more) once
+    /// all of them are cancelled.
     public func render(_ url: URL, summary: ProjectSummary, context: EditContext) async -> CGImage? {
-        guard !isRecording(), Self.isDrawable(summary.state) else { return nil }
-        let directory = self.directory
+        guard Self.isDrawable(summary.state) else { return nil }
+        let directory = self.directory, hooks = self.hooks
         guard let looked = await onWork({ () -> (key: String, cached: CGImage?)? in
             guard let key = try? Self.key(of: url) else { return nil }
+            hooks.beforeReading?()
             return (key, Self.read(key, in: directory))
         }) else { return nil }
         if let image = looked.cached { return image }
 
-        let isRecording = self.isRecording, maxBytes = self.maxBytes
-        guard !isRecording() else { return nil }
-        renders += 1
-        return await withCheckedContinuation { continuation in
-            work.async {
-                Self.draw(url, context: context, isRecording: isRecording) { image in
-                    // Kept only under the key of what was drawn: a project that changed meanwhile is drawn again next
-                    // time.
-                    if let image, (try? Self.key(of: url)) == looked.key, let heic = Self.heic(image) {
-                        let file = Self.file(looked.key, in: directory)
-                        if Self.write(heic, to: file) { Self.trim(directory, to: maxBytes, keeping: file.lastPathComponent) }
+        guard !isRecording(), !Task.isCancelled else { return nil }
+        let key = looked.key
+        let task = drawing.join(key) { Task { await self.draw(url, key: key, context: context) } }
+        let image = await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            Task { await self.leave(key, task) }
+        }
+        drawing.finish(key, task)
+        return Task.isCancelled ? nil : image
+    }
+
+    private func leave(_ key: String, _ task: Task<CGImage?, Never>) {
+        drawing.leave(key, task)
+    }
+
+    /// How many callers wait for the draw of `key`, for tests.
+    func waiting(for key: String) -> Int {
+        drawing.waiters(for: key)
+    }
+
+    func setHooks(_ hooks: Hooks) {
+        self.hooks = hooks
+    }
+
+    /// The thumbnail of the package at `url`, whose key was `key`, drawn on `work` and written to the cache under that key
+    /// if the package still has it; the image is handed back before the cache is trimmed and the renderer closed. Stops
+    /// before drawing, and writes nothing, once a take records or the task is cancelled.
+    private func draw(_ url: URL, key: String, context: EditContext) async -> CGImage? {
+        let stopped = Flag()
+        let isRecording = self.isRecording, directory = self.directory, maxBytes = self.maxBytes, hooks = self.hooks
+        let shouldStop: @Sendable () -> Bool = { isRecording() || stopped.isSet }
+        let drawn = await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<(image: CGImage?, drew: Bool), Never>) in
+                work.async {
+                    hooks.beforeDrawing?()
+                    Self.draw(url, context: context, shouldStop: shouldStop) { image in
+                        hooks.afterDrawing?()
+                        // Kept only under the key of what was drawn (a project that changed meanwhile is drawn again
+                        // next time), and neither encoded nor written once a take records: nothing competes with it.
+                        let file = Self.file(key, in: directory)
+                        let stored =
+                            if let image, !shouldStop(), (try? Self.key(of: url)) == key, let heic = Self.heic(image),
+                               !shouldStop()
+                            {
+                                Self.write(heic, to: file)
+                            } else {
+                                false
+                            }
+                        continuation.resume(returning: (image, true))
+                        if stored { Self.trim(directory, to: maxBytes, keeping: file.lastPathComponent) }
+                    } stopped: {
+                        continuation.resume(returning: (nil, false))
                     }
-                    continuation.resume(returning: image)
                 }
             }
+        } onCancel: {
+            stopped.set()
         }
+        if drawn.drew { renders += 1 }
+        return drawn.image
     }
 
     /// Whether a project in `state` can be drawn: it opens.
@@ -156,10 +235,11 @@ public actor LibraryThumbnails {
         }
     }
 
-    /// The key of the package at `url` as it is now, at `pixelSize`: `manifest.json` (at most
-    /// `ProjectReader.maxManifestBytes`) and `edit.json` read with `SafeRead`, never through a link, and `edit-log.jsonl`
-    /// looked at with `lstat`.
-    static func key(of url: URL) throws -> String {
+    /// The key of the thumbnail of the package at `url` as it is now, at `pixelSize`: what the index keeps as
+    /// `ProjectSummary.thumbnailKey`, for `cached(_:)`. `manifest.json` (at most `ProjectReader.maxManifestBytes`) and
+    /// `edit.json` are read with `SafeRead`, never through a link, and `edit-log.jsonl` looked at with `lstat`: light reads,
+    /// never on the main thread. Throws what reading them throws (a missing `edit.json` or log is part of the key).
+    public static func key(of url: URL) throws -> String {
         let package = ProjectPackage(url: url)
         let manifest = try SafeRead.regularFile(at: package.manifestURL, maxBytes: ProjectReader.maxManifestBytes)
         let edit: Data?
@@ -181,22 +261,24 @@ public actor LibraryThumbnails {
         return key(manifest: manifest, edit: edit, log: log, size: pixelSize)
     }
 
-    /// Calls `finish`, once, with the frame at `time(outputSeconds:)` of the project at `url` as the export draws it, at
-    /// `size(for:)` of its aspect, or with `nil` if it cannot be drawn: its document read without a lock and without
-    /// writing anything, and nothing drawn if `isRecording()` by then. Decodes and waits for the GPU: never on the
-    /// cooperative pool. The renderer goes only after `finish` returns: closing its readers (`AVAssetReader.cancelReading`)
-    /// takes some 20 ms, which the thumbnail need not wait for.
+    /// Calls `finish` with the frame at `time(outputSeconds:)` of the project at `url` as the export draws it, at
+    /// `size(for:)` of its aspect (`nil` if the GPU could not draw it), or `stopped` if nothing was drawn: the document
+    /// could not be read or the renderer made, or `shouldStop()` once the document is read. One of them, once. The
+    /// document is read without a lock and without writing anything. Decodes and waits for the GPU: never on the
+    /// cooperative pool. The renderer goes only after `finish` returns: closing its readers
+    /// (`AVAssetReader.cancelReading`) takes some 20 ms, which the thumbnail need not wait for.
     private static func draw(
-        _ url: URL, context: EditContext, isRecording: () -> Bool, then finish: (CGImage?) -> Void
+        _ url: URL, context: EditContext, shouldStop: () -> Bool, then finish: (CGImage?) -> Void,
+        stopped: () -> Void
     ) {
         let renderer: FrameRenderer, size: SIMD2<Int>
         do {
             let (project, document) = try EditSession.readDocument(url, take: nil, context: context)
-            guard !isRecording() else { return finish(nil) }
+            guard !shouldStop() else { return stopped() }
             size = Self.size(for: document.aspect)
             renderer = try FrameRenderer(project: project, document: document, outputSize: size)
         } catch {
-            return finish(nil)
+            return stopped()
         }
         withExtendedLifetime(renderer) {
             let bytes = try? renderer.renderBytes(at: time(outputSeconds: renderer.duration))
@@ -270,18 +352,24 @@ public actor LibraryThumbnails {
     }
 
     /// Removes the thumbnails of `directory` used longest ago (by their files' dates) until those left take at most
-    /// `maxBytes`, never the file named `keeping`, the one just written. Only the regular `.heic` files of the folder
-    /// count; one that goes meanwhile counts as nothing.
+    /// `maxBytes`, never the file named `keeping`, the one just written, and the temporary files of `write` older than
+    /// `staleTemporarySeconds`. Only regular files count; one that goes meanwhile counts as nothing.
     private static func trim(_ directory: URL, to maxBytes: Int64, keeping: String) {
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: directory.path) else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1e9)
         var files: [(name: String, size: Int64, used: Int64)] = []
-        for name in names where name.hasSuffix(".heic") && !name.hasPrefix(".") {
+        for name in names {
+            let isTemporary = name.hasPrefix(".") && name.hasSuffix(".tmp")
+            guard isTemporary || (name.hasSuffix(".heic") && !name.hasPrefix(".")) else { continue }
+            let path = directory.appending(path: name, directoryHint: .notDirectory).path
             var info = stat()
-            guard lstat(directory.appending(path: name, directoryHint: .notDirectory).path, &info) == 0,
-                  info.st_mode & S_IFMT == S_IFREG
-            else { continue }
+            guard lstat(path, &info) == 0, info.st_mode & S_IFMT == S_IFREG else { continue }
             let used = Int64(info.st_mtimespec.tv_sec) * 1_000_000_000 + Int64(info.st_mtimespec.tv_nsec)
-            files.append((name, Int64(info.st_size), used))
+            if isTemporary {
+                if now - used > staleTemporarySeconds * 1_000_000_000 { unlink(path) }
+            } else {
+                files.append((name, Int64(info.st_size), used))
+            }
         }
         var total = files.reduce(0) { $0 + $1.size }
         for file in files.sorted(by: { ($0.used, $0.name) < ($1.used, $1.name) }) where total > maxBytes {
@@ -297,5 +385,56 @@ public actor LibraryThumbnails {
         await withCheckedContinuation { continuation in
             work.async { continuation.resume(returning: body()) }
         }
+    }
+}
+
+/// The draws under way, by key, which every caller asking for the same key while one runs shares: the first caller starts
+/// it, the others wait for the same result, and it is cancelled once every caller waiting for it was cancelled (as
+/// `SharedWork` does for the editor's caches). Kept by the actor, which uses it only from its own isolation.
+private struct InFlight {
+    private var running: [String: (task: Task<CGImage?, Never>, waiters: Int)] = [:]
+
+    /// The draw of `key`: the one running, now with one more waiter, or the one `start` makes.
+    mutating func join(_ key: String, start: () -> Task<CGImage?, Never>) -> Task<CGImage?, Never> {
+        if var entry = running[key] {
+            entry.waiters += 1
+            running[key] = entry
+            return entry.task
+        }
+        let task = start()
+        running[key] = (task, 1)
+        return task
+    }
+
+    /// A waiter of `task` was cancelled: once none waits for it, the draw is cancelled and the next caller starts anew.
+    mutating func leave(_ key: String, _ task: Task<CGImage?, Never>) {
+        guard var entry = running[key], entry.task == task else { return }
+        entry.waiters -= 1
+        if entry.waiters > 0 {
+            running[key] = entry
+        } else {
+            running[key] = nil
+            task.cancel()
+        }
+    }
+
+    /// `task` returned to a waiter: the next caller for `key` starts anew (and finds what it left in the cache).
+    mutating func finish(_ key: String, _ task: Task<CGImage?, Never>) {
+        if running[key]?.task == task { running[key] = nil }
+    }
+
+    func waiters(for key: String) -> Int {
+        running[key]?.waiters ?? 0
+    }
+}
+
+/// A flag set once, from any thread.
+private final class Flag: Sendable {
+    private let state = Mutex(false)
+
+    var isSet: Bool { state.withLock { $0 } }
+
+    func set() {
+        state.withLock { $0 = true }
     }
 }
