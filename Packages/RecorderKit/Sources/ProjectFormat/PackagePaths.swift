@@ -14,6 +14,9 @@ public enum PackagePathError: Error, Equatable, Sendable, CustomStringConvertibl
     case invalidSegmentFile(take: String, track: String, file: String)
     /// An entry of a take, relative to the package root, that is a symlink or not the kind of file it must be.
     case unexpectedEntry(String)
+    /// A `projectID` that is not 32 lowercase hex digits (`ProjectID.isValid`): it names the project's cache folder,
+    /// outside the package.
+    case invalidProjectID(String)
 
     public var description: String {
         switch self {
@@ -21,15 +24,18 @@ public enum PackagePathError: Error, Equatable, Sendable, CustomStringConvertibl
         case let .invalidTrackID(take, track): "track ID \"\(track)\" of \(take) has characters other than letters, digits and -"
         case let .invalidSegmentFile(take, track, file): "segment file \"\(file)\" of \(take)/\(track) is not where its index says"
         case .unexpectedEntry(let path): "\(path) is a symlink or not the kind of file it should be"
+        case .invalidProjectID(let id): "project ID \"\(id)\" is not 32 lowercase hex digits"
         }
     }
 }
 
 extension Manifest {
     /// Throws unless every take ID is `take-NNN` (three or more digits), every track ID is letters,
-    /// digits and `-`, and every segment's `file` is exactly `takes/<take>/<track>/seg-NNNN.mov` for its
-    /// index (1 or more), so no path built from the manifest can leave the package.
+    /// digits and `-`, every segment's `file` is exactly `takes/<take>/<track>/seg-NNNN.mov` for its
+    /// index (1 or more), and the `projectID`, if there is one, is 32 lowercase hex digits, so no path built
+    /// from the manifest can leave the package, nor the project's cache folder the caches folder.
     public func validatePaths() throws(PackagePathError) {
+        if let projectID, !ProjectID.isValid(projectID) { throw .invalidProjectID(projectID) }
         for take in takes { try take.validatePaths() }
     }
 }
