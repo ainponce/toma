@@ -66,6 +66,9 @@ public struct ZoomCameraPath: Sendable {
 
     /// The last step simulated: the one of the end of the output.
     let lastStep: Int
+    /// Where the camera jumps (at an instant block's entry and exit), in order: each from the output time of the step
+    /// before the jump through that of the step it jumps on. A motion blur never mixes the two sides.
+    public let jumps: [ClosedRange<Int64>]
 
     private let stageSize: SIMD2<Double>
     private let spring: SpringSpec
@@ -86,7 +89,14 @@ public struct ZoomCameraPath: Sendable {
         lastStep = StepGrid.firstStep(atOrAfter: timeMap.duration)
         stageSize = stage.stageSize
         spring = StepGrid.stable(document.zoom.spring)
-        blocks = document.zoom.show ? Self.blocks(of: document.zoom, take: take.id, timeMap: timeMap) : []
+        let blocks = document.zoom.show ? Self.blocks(of: document.zoom, take: take.id, timeMap: timeMap) : []
+        self.blocks = blocks
+        let lastStep = self.lastStep
+        // An instant block is entered on its first step and left on the one after its last: the camera jumps there.
+        let jumpSteps = Set(blocks.filter { $0.instant && !$0.steps.isEmpty }.flatMap { [$0.steps.lowerBound, $0.steps.upperBound] })
+        jumps = jumpSteps.filter { $0 > 0 && $0 <= lastStep }.sorted().map {
+            StepGrid.outputTime(ofStep: $0 - 1)...StepGrid.outputTime(ofStep: $0)
+        }
         takeID = take.id
         clipTakes = document.sequence.map(\.take)
         self.timeMap = timeMap

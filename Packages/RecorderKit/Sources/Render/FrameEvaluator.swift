@@ -74,7 +74,10 @@ import simd
 ///   `MotionBlurPlan.sampleCount` of how far the stage's corner that moves most goes in output pixels between the ends of
 ///   the shutter, `t ± σ_z / 2`; with the cursor's, `N_c` of how far the cursor goes, times the depth at `t`. Every
 ///   subsample is at an output time (`MotionBlurPlan.sampleTimes`, held to the output), which the paths are in, so none
-///   reads what a cut left out; the screen's content, the cursor's image and the click effects are those of `t`.
+///   reads what a cut left out; the screen's content, the cursor's image and the click effects are those of `t`. A
+///   shutter that crosses a jump of its path (an instant block's edge, `ZoomCameraPath.jumps`; an unsmoothed cursor at a
+///   cut, `CursorPath.jumps`) is held to the side of `t` (`MotionBlurPlan.sampleTimes(at:shutter:frameDuration:count:jumps:)`),
+///   so a frame is never the images of both sides.
 ///   - `N_z > 1`: `N = max(N_z, N_c)` subframes (`RenderFrame.subframes`), the stage of subframe `j` at the `j`-th of `N`
 ///     times over the camera's shutter and its cursor at the `j`-th of `N` over the cursor's (the cursor of `t` when it
 ///     does not blur).
@@ -225,8 +228,8 @@ public struct FrameEvaluator: Sendable {
         let output = min(max(τ, 0), timeMap.duration - 1)
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
         // The ends of each shutter, and the paths over them, from which `t` is read too: one simulation for each.
-        let zoomEnds = shutterEnds(zoomShutter, at: output)
-        let cursorEnds = document.cursor.show ? shutterEnds(cursorShutter, at: output) : [output]
+        let zoomEnds = shutterEnds(zoomShutter, at: output, jumps: paths.zoom.jumps)
+        let cursorEnds = document.cursor.show ? shutterEnds(cursorShutter, at: output, jumps: paths.cursor.jumps) : [output]
         let zoomSpan = zoomEnds.count > 1 ? paths.zoom.span(from: zoomEnds[0], through: zoomEnds[1]) : nil
         let cursorSpan = cursorEnds.count > 1 ? paths.cursor.span(from: cursorEnds[0], through: cursorEnds[1]) : nil
         /// Where the cursor is placed and what it is drawn with, while it is shown.
@@ -318,15 +321,16 @@ public struct FrameEvaluator: Sendable {
         return frame
     }
 
-    /// The output times of the ends of a shutter of `shutter` frames about `output`, held to the output; only `output`
-    /// without a shutter.
-    private func shutterEnds(_ shutter: Double, at output: Int64) -> [Int64] {
-        sampleTimes(shutter, count: 2, at: output)
+    /// The output times of the ends of a shutter of `shutter` frames about `output`, held to the side of `output` of the
+    /// path's `jumps` and to the output; only `output` without a shutter.
+    private func shutterEnds(_ shutter: Double, at output: Int64, jumps: [ClosedRange<Int64>]) -> [Int64] {
+        sampleTimes(shutter, count: 2, at: output, jumps: jumps)
     }
 
-    /// `MotionBlurPlan.sampleTimes` of `count` subsamples of the frame at `output`, held to the output.
-    private func sampleTimes(_ shutter: Double, count: Int, at output: Int64) -> [Int64] {
-        MotionBlurPlan.sampleTimes(at: output, shutter: shutter, frameDuration: frameDuration, count: count)
+    /// `MotionBlurPlan.sampleTimes` of `count` subsamples of the frame at `output`, held to the side of `output` of the
+    /// path's `jumps` and to the output.
+    private func sampleTimes(_ shutter: Double, count: Int, at output: Int64, jumps: [ClosedRange<Int64>]) -> [Int64] {
+        MotionBlurPlan.sampleTimes(at: output, shutter: shutter, frameDuration: frameDuration, count: count, jumps: jumps)
             .map { min(max($0, 0), timeMap.duration - 1) }
     }
 
@@ -364,15 +368,15 @@ public struct FrameEvaluator: Sendable {
         }
         if let zoom, zoomSamples > 1 {
             let count = max(zoomSamples, cursorSamples)
-            let stageTimes = sampleTimes(zoomShutter, count: count, at: output)
-            let cursorTimes = cursorSamples > 1 ? sampleTimes(cursorShutter, count: count, at: output) : nil
+            let stageTimes = sampleTimes(zoomShutter, count: count, at: output, jumps: paths.zoom.jumps)
+            let cursorTimes = cursorSamples > 1 ? sampleTimes(cursorShutter, count: count, at: output, jumps: paths.cursor.jumps) : nil
             frame.subframes = stageTimes.indices.map { j in
                 let stage = stageTransform(zoom.span.state(atOutput: stageTimes[j]), screen: screen)
                 guard let cursor, let cursorTimes else { return StageSubframe(stage: stage, cursor: frame.cursor) }
                 return StageSubframe(stage: stage, cursor: cursorLayer(cursor.span.sample(atOutput: cursorTimes[j]), cursor.place))
             }
         } else if let cursor, cursorSamples > 1 {
-            let layers = sampleTimes(cursorShutter, count: cursorSamples, at: output).map {
+            let layers = sampleTimes(cursorShutter, count: cursorSamples, at: output, jumps: paths.cursor.jumps).map {
                 cursorLayer(cursor.span.sample(atOutput: $0), cursor.place)
             }
             guard var hidden = layers.lazy.compactMap({ $0 }).first else { return }
