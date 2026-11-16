@@ -80,6 +80,12 @@ final class TimelineAccessibility {
                     depth, start, end)
             add(zoom.id, .zoom, zoom.output, label: label, actions: [Action(.delete)])
         }
+        for block in content.layoutBlocks.items {
+            let label = String(
+                format: String(localized: "Layout %1$@, from %2$@ to %3$@", comment: "VoiceOver: a layout block of the Camera track, its layout, start and end"),
+                LayoutNames.name(block.info.kind), Self.time(block.output.lowerBound), Self.time(block.output.upperBound))
+            add(block.id, .camera, block.output, label: label, actions: [Action(.changeLayout)] + trim.filter { $0.kind != .split })
+        }
         for change in content.cameraChanges.items {
             let label = String(
                 format: String(localized: "Camera change at %@", comment: "VoiceOver: a change of the camera's style on the timeline, its time"),
@@ -125,7 +131,7 @@ final class TimelineAccessibility {
     // MARK: - Actions
 
     private struct Action {
-        enum Kind { case split, delete, trimStart, trimEnd }
+        enum Kind { case split, delete, trimStart, trimEnd, changeLayout }
         let kind: Kind
         init(_ kind: Kind) { self.kind = kind }
 
@@ -135,6 +141,7 @@ final class TimelineAccessibility {
             case .delete: String(localized: "Delete")
             case .trimStart: String(localized: "Trim Start to Playhead", comment: "VoiceOver: an action of a clip: its start trimmed up to the playhead")
             case .trimEnd: String(localized: "Trim End to Playhead", comment: "VoiceOver: an action of a clip: its end trimmed up to the playhead")
+            case .changeLayout: String(localized: "Change Layout")
             }
         }
     }
@@ -145,7 +152,7 @@ final class TimelineAccessibility {
         switch track {
         case .video: model.selection = .clips([id])
         case .zoom: model.selection = .zooms([id])
-        case .camera: model.selection = .cameraChange(id)
+        case .camera: model.selection = view.content?.layoutBlockIDs.contains(id) == true ? .layoutBlock(id) : .cameraChange(id)
         case .ruler, .screen, .audio: return false
         }
         return true
@@ -153,6 +160,7 @@ final class TimelineAccessibility {
 
     private func run(_ action: Action.Kind, id: String, track: TimelineTrack, output: Range<Int64>) -> Bool {
         guard let model else { return false }
+        let isBlock = track == .camera && view.content?.layoutBlockIDs.contains(id) == true
         // Split and trim the clip under the playhead: this one, only if the playhead is on it.
         let onIt = output.lowerBound < model.playheadNanoseconds && model.playheadNanoseconds < output.upperBound
         switch action {
@@ -161,9 +169,15 @@ final class TimelineAccessibility {
             model.split(atOutput: model.playheadNanoseconds)
             return true
         case .trimStart:
-            return onIt && model.trimToPlayhead(.start)
+            return onIt && (isBlock ? model.trimLayoutBlock(id, edge: .start) : model.trimToPlayhead(.start))
         case .trimEnd:
-            return onIt && model.trimToPlayhead(.end)
+            return onIt && (isBlock ? model.trimLayoutBlock(id, edge: .end) : model.trimToPlayhead(.end))
+        case .changeLayout:
+            guard isBlock, let geometry = view.geometry(),
+                let frame = geometry.itemFrame(of: TimelineItem(id: id, track: track, output: output))
+            else { return false }
+            view.interaction.popLayoutMenu(id: id, at: CGPoint(x: TimelineLayout.headerWidth + frame.minX, y: frame.maxY))
+            return true
         case .delete:
             guard select(id, on: track) else { return false }
             view.interaction.deleteSelected()

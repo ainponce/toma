@@ -31,6 +31,31 @@ extension EditorModel {
         }
     }
 
+    /// A new layout block (design §5.5): from a double click on the Camera track (`click`), from "Disposición ▾" (`kind`) or
+    /// from the shortcuts (`kind`, at the playhead or over the marked range). It is the one selected; its layout is the last
+    /// one chosen for a block (`LayoutTrackRules.newBlock`), and `kind`, when given, is chosen now.
+    @discardableResult
+    func addLayoutBlock(click: Int64? = nil, kind: LayoutKind? = nil) -> Bool {
+        guard canEdit, let document, let map = panelTimeMap else { return false }
+        let plan = LayoutTrackRules.newBlock(
+            playhead: playheadNanoseconds, click: click, marks: timelineMarks.range, lastKind: kind ?? lastBlockLayout)
+        let step = plan.range.map { LayoutCommands.add(document, kind: plan.kind, output: $0, timeMap: map, makeID: Self.newID) }
+            ?? LayoutCommands.add(document, kind: plan.kind, at: plan.start, timeMap: map, makeID: Self.newID)
+        guard let step, perform(step) != .refused else { return false }
+        selection = .layoutBlock(step.target)
+        rememberBlockLayout(plan.kind)
+        return true
+    }
+
+    /// The edge of block `id` brought to the playhead (VoiceOver's "trim"), in one step.
+    @discardableResult
+    func trimLayoutBlock(_ id: String, edge: ClipEdge) -> Bool {
+        guard canEdit, let document, let map = panelTimeMap,
+            let step = LayoutCommands.trim(document, id: id, edge: edge, toOutput: playheadNanoseconds, timeMap: map)
+        else { return false }
+        return perform(step) != .refused
+    }
+
     /// Transición: Suave · Instantánea.
     func setLayoutInstant(_ id: String, _ instant: Bool) {
         guard let document else { return }

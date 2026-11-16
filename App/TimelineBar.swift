@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import Editing
+import ProjectFormat
 
 /// The timeline's track bar (design §5.1 and §5.5), 32 pt over the ruler: on the left Split, the speed menu and Add Zoom;
 /// on the right Snapping, the scale (− slider +) and Fit to Window. It holds no state of the document: the controller says
@@ -14,6 +15,8 @@ final class TimelineBar: NSView {
     var onSpeed: (Double) -> Void = { _ in }
     var onCustomSpeed: () -> Void = {}
     var onAddZoom: () -> Void = {}
+    /// A layout of "Layout ▾": a block of it at the playhead or over the marked range.
+    var onAddLayout: (LayoutKind) -> Void = { _ in }
     var onSnapping: (Bool) -> Void = { _ in }
     /// The slider moved to a scale.
     var onScale: (Double) -> Void = { _ in }
@@ -24,6 +27,7 @@ final class TimelineBar: NSView {
     private let split = NSButton()
     private let speed = NSPopUpButton(frame: .zero, pullsDown: true)
     private let addZoom = NSButton()
+    private let addLayout = NSPopUpButton(frame: .zero, pullsDown: true)
     private let snapping = NSButton()
     private let smaller = NSButton()
     private let slider = NSSlider(value: 0, minValue: 0, maxValue: 1, target: nil, action: nil)
@@ -40,6 +44,20 @@ final class TimelineBar: NSView {
         addSubview(separator)
         configure(split, symbol: "scissors", title: String(localized: "Split"), action: #selector(splitClicked))
         configure(addZoom, symbol: "plus.magnifyingglass", title: String(localized: "Add Zoom"), action: #selector(addZoomClicked))
+        addLayout.controlSize = .small
+        addLayout.bezelStyle = .texturedRounded
+        addLayout.setAccessibilityLabel(String(localized: "Add Layout"))
+        addLayout.toolTip = String(localized: "Add Layout")
+        addLayout.addItem(withTitle: String(localized: "Add Layout"))
+        addLayout.item(at: 0)?.image = NSImage(systemSymbolName: "rectangle.3.group", accessibilityDescription: nil)
+        for kind in LayoutNames.order {
+            let item = NSMenuItem(title: LayoutNames.name(kind), action: #selector(layoutChosen(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = kind.rawValue
+            item.image = NSImage(systemSymbolName: LayoutTrackRules.symbol(kind, orientation: .beside), accessibilityDescription: nil)
+            addLayout.menu?.addItem(item)
+        }
+        addLayout.isHidden = true
         configure(snapping, symbol: "magnet", title: String(localized: "Snapping"), action: #selector(snappingClicked))
         snapping.setButtonType(.pushOnPushOff)
         snapping.state = .on
@@ -55,7 +73,7 @@ final class TimelineBar: NSView {
         slider.action = #selector(sliderMoved)
         slider.isContinuous = true
         slider.setAccessibilityLabel(String(localized: "Timeline Scale"))
-        for view in [split, speed, addZoom, snapping, smaller, slider, larger, fit] { addSubview(view) }
+        for view in [split, speed, addZoom, addLayout, snapping, smaller, slider, larger, fit] { addSubview(view) }
         setSpeed(nil)
     }
 
@@ -83,7 +101,7 @@ final class TimelineBar: NSView {
         separator.frame = NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
         let y = (bounds.height - 22) / 2
         var x = 8.0
-        for (view, width) in [(split, 84.0), (speed, 72), (addZoom, 104)] as [(NSView, Double)] {
+        for (view, width) in [(split, 84.0), (speed, 72), (addZoom, 104), (addLayout, 118)] as [(NSView, Double)] {
             view.frame = NSRect(x: x, y: y, width: width, height: 22)
             x += width + 6
         }
@@ -98,7 +116,9 @@ final class TimelineBar: NSView {
     // MARK: - State
 
     /// Enables the controls that edit (`canEdit`), and shows `speed` (`nil`: none, or mixed) in the speed menu.
-    func setEnabled(_ canEdit: Bool, hasClip: Bool) {
+    func setEnabled(_ canEdit: Bool, hasClip: Bool, hasCamera: Bool = false) {
+        addLayout.isHidden = !hasCamera
+        addLayout.isEnabled = canEdit && hasCamera
         split.isEnabled = canEdit
         addZoom.isEnabled = canEdit
         speed.isEnabled = canEdit && hasClip
@@ -153,6 +173,10 @@ final class TimelineBar: NSView {
 
     @objc private func splitClicked() { onSplit() }
     @objc private func addZoomClicked() { onAddZoom() }
+
+    @objc private func layoutChosen(_ sender: NSMenuItem) {
+        if let raw = sender.representedObject as? String, let kind = LayoutKind(rawValue: raw) { onAddLayout(kind) }
+    }
     @objc private func snappingClicked() { onSnapping(snapping.state == .on) }
     @objc private func smallerClicked() { onZoomOut() }
     @objc private func largerClicked() { onZoomIn() }

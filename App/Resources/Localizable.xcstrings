@@ -191,6 +191,17 @@
         }
       }
     },
+    "Add Layout" : {
+      "comment" : "The timeline's track bar menu: makes a layout block at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disposición"
+          }
+        }
+      }
+    },
     "Add Layout Block" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block was added",
       "localizations" : {
@@ -452,6 +463,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Automático"
+          }
+        }
+      }
+    },
+    "Automatic Size" : {
+      "comment" : "Context menu of a layout block: the split's size is chosen by Toma",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño automático"
           }
         }
       }
@@ -2276,6 +2298,17 @@
         }
       }
     },
+    "Instant Transition" : {
+      "comment" : "Context menu of a layout block: it jumps at its edges",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transición instantánea"
+          }
+        }
+      }
+    },
     "It goes to the Trash." : {
       "comment" : "Manage Styles: the alert before a style goes to the macOS Trash",
       "localizations" : {
@@ -2358,6 +2391,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Disposición"
+          }
+        }
+      }
+    },
+    "Layout %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a layout block of the Camera track, its layout, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disposición %1$@, de %2$@ a %3$@"
           }
         }
       }
@@ -4267,6 +4311,50 @@
         }
       }
     },
+    "Split · camera at the bottom" : {
+      "comment" : "Camera track: label of a Split block with the camera at the bottom (square and tall formats)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dividida · cámara abajo"
+          }
+        }
+      }
+    },
+    "Split · camera on the left" : {
+      "comment" : "Camera track: label of a Split block with the camera on the left",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dividida · cámara a la izquierda"
+          }
+        }
+      }
+    },
+    "Split · camera on the right" : {
+      "comment" : "Camera track: label of a Split block with the camera on the right",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dividida · cámara a la derecha"
+          }
+        }
+      }
+    },
+    "Split · camera on top" : {
+      "comment" : "Camera track: label of a Split block with the camera on top (square and tall formats)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dividida · cámara arriba"
+          }
+        }
+      }
+    },
     "Square" : {
       "comment" : "The camera bubble's shape: a square with rounded corners",
       "localizations" : {
@@ -4510,6 +4598,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo correr el atajo de No Molestar. Puede que suenen notificaciones durante la grabación."
+          }
+        }
+      }
+    },
+    "The camera can't be read: only the screen is shown." : {
+      "comment" : "Camera track: the camera has nothing readable",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer la cámara: se ve solo la pantalla."
           }
         }
       }

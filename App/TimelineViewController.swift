@@ -16,6 +16,7 @@ final class TimelineViewController: NSViewController {
     /// The package and the take the caches read, and the work of the waveforms.
     private var cachesFor: (url: URL, take: TakeRecord)?
     private var waveformWork: [Task<Void, Never>] = []
+    private var cameraCheck: Task<Void, Never>?
     private var stopped = false
 
     init(model: EditorModel) {
@@ -33,6 +34,7 @@ final class TimelineViewController: NSViewController {
         stopped = true
         for work in waveformWork { work.cancel() }
         waveformWork = []
+        cameraCheck?.cancel()
         timeline.stop()
     }
 
@@ -52,6 +54,13 @@ final class TimelineViewController: NSViewController {
             model?.timelineOffset = offset
         }
         timeline.interaction.model = model
+        // The Camera header: the panel edits the project's layout, on the Camera tab.
+        timeline.onCameraHeader = { [weak model] in
+            guard let model else { return }
+            model.selection = nil
+            if !model.panelVisible { model.panelVisible = true }
+            model.panelTab = .camera
+        }
         wireBar()
         followContent()
         followBar()
@@ -64,6 +73,7 @@ final class TimelineViewController: NSViewController {
         bar.onSpeed = { [weak model] in model?.setSpeed($0) }
         bar.onCustomSpeed = { [weak timeline] in timeline?.interaction.askCustomSpeed() }
         bar.onAddZoom = { [weak model] in model?.addZoom() }
+        bar.onAddLayout = { [weak model] in model?.addLayoutBlock(kind: $0) }
         bar.onSnapping = { [weak timeline] in timeline?.snapping = $0 }
         bar.onScale = { [weak timeline] in timeline?.setScale($0) }
         bar.onZoomIn = { [weak timeline] in timeline?.zoomIn() }
@@ -91,7 +101,7 @@ final class TimelineViewController: NSViewController {
     private func followBar() {
         guard !stopped else { return }
         withObservationTracking {
-            bar.setEnabled(model.canEdit, hasClip: !model.speedTargets.isEmpty)
+            bar.setEnabled(model.canEdit, hasClip: !model.speedTargets.isEmpty, hasCamera: model.hasCamera)
             bar.setSpeed(model.speedOfTargets)
         } onChange: { [weak self] in
             Task { @MainActor in self?.followBar() }
@@ -129,6 +139,17 @@ final class TimelineViewController: NSViewController {
     /// The thumbnails' cache, and the waveform of each audio track worked out off the main thread (decoded by the cache on
     /// its queue, its levels in a task of their own).
     private func makeCaches(_ project: LoadedProject, _ caches: ProjectCaches) {
+        // Whether the camera has anything to read (plan decision 40): the Camera row says so when it has not. The files are
+        // looked at off the main thread.
+        let (take, package) = (project.take, project.package)
+        cameraCheck?.cancel()
+        cameraCheck = Task { [weak self] in
+            let readable = await Task.detached(priority: .utility) {
+                LayoutTrackRules.cameraReadable(take: take) { SegmentAvailability.classify($0, in: package) }
+            }.value
+            guard !Task.isCancelled else { return }
+            self?.timeline.cameraUnreadable = !readable && take.tracks.contains { $0.kind == .camera }
+        }
         timeline.tracks.forgetThumbnails()
         timeline.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
         for work in waveformWork { work.cancel() }

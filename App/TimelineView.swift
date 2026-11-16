@@ -46,6 +46,8 @@ struct TimelineGeometry {
         case .video, .screen: return itemRect(item.output, top: top + 2, height: row.height - 4, gap: 1)
         case .zoom: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
         case .camera:
+            // A layout block is a rectangle; a change of the bubble, a diamond.
+            if !item.output.isEmpty { return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1) }
             let x = snapped(self.x(item.output.lowerBound))
             guard x > -8, x < areaWidth + 8 else { return nil }
             return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
@@ -77,6 +79,7 @@ struct TimelinePalette {
     var background, rulerBackground, separator, tick, label: CGColor
     var clipFill, badgeFill, badgeText, hatchStroke, hatchFill: CGColor
     var zoomFill, zoomAutoFill, zoomStroke, zoomText, zoomAutoText: CGColor
+    var layoutFill, layoutText: CGColor
     var screenFill, screenText, camera, microphone, systemAudio: CGColor
     var marker, marksFill, marksEdge, playhead, contrastBorder: CGColor
     /// The selection's outline, the hovered item's wash and the label of a drag.
@@ -97,6 +100,7 @@ struct TimelinePalette {
                 zoomFill: NSColor.systemPurple.withAlphaComponent(0.85).cgColor,
                 zoomAutoFill: NSColor.systemPurple.withAlphaComponent(0.28).cgColor, zoomStroke: NSColor.systemPurple.cgColor,
                 zoomText: NSColor.white.cgColor, zoomAutoText: NSColor.labelColor.cgColor,
+                layoutFill: NSColor.systemIndigo.withAlphaComponent(0.85).cgColor, layoutText: NSColor.white.cgColor,
                 screenFill: NSColor.systemTeal.withAlphaComponent(0.35).cgColor, screenText: NSColor.labelColor.cgColor,
                 camera: NSColor.systemPink.cgColor, microphone: NSColor.systemGreen.withAlphaComponent(0.85).cgColor,
                 systemAudio: NSColor.systemBlue.withAlphaComponent(0.85).cgColor, marker: NSColor.systemOrange.cgColor,
@@ -215,6 +219,12 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     var canEdit = false {
         didSet { if canEdit != oldValue { updateHeaders() } }
     }
+    /// The camera cannot be read (`LayoutTrackRules.cameraReadable`): the Camera row says so.
+    var cameraUnreadable = false {
+        didSet { if cameraUnreadable != oldValue { tracks.cameraUnreadable = cameraUnreadable; needsLayout = true } }
+    }
+    /// A click on the Camera track's header: the panel edits the project's layout.
+    var onCameraHeader: () -> Void = {}
     var onScrub: (Int64) -> Void = { _ in }
     var onScrubEnd: () -> Void = {}
     var onMute: (_ track: String, _ muted: Bool) -> Void = { _, _ in }
@@ -294,6 +304,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private var isStopped = false
     /// Where the help over the hatching is.
     private var helpRect: CGRect?
+    /// The dimmed diamonds' help rectangles, in the order their tooltips were added (their `userData` is the index + 1).
+    private var diamondHelp: [(rect: CGRect, id: String)] = []
 
     override init(frame: NSRect) {
         palette = TimelinePalette.make(NSApp.effectiveAppearance)
@@ -407,6 +419,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         let items = content.clips.items.map { TimelineItem(id: $0.id, track: .video, output: $0.output) }
             + content.screens.items.map { TimelineItem(id: $0.id, track: .screen, output: $0.output) }
             + content.zooms.items.map { TimelineItem(id: $0.id, track: .zoom, output: $0.output) }
+            + content.layoutBlocks.items.map { TimelineItem(id: $0.id, track: .camera, output: $0.output) }
+            // After the blocks: a diamond inside one is pointed at before it.
             + content.cameraChanges.items.map { TimelineItem(id: $0.id, track: .camera, output: $0.output) }
         itemsCache = items
         return items
@@ -853,6 +867,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
                 guard case let .audio(id) = row.track else { return }
                 self?.onMute(id, muted)
             }
+            header.onPress = { [weak self] in self?.onCameraHeader() }
             headerRows.addSubview(header)
             return header
         }
@@ -861,6 +876,10 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
 
     private func updateHeaders() {
         for header in headers {
+            if case .camera = header.track {
+                header.setSubtitle(content.map { LayoutNames.name($0.projectLayout) })
+                continue
+            }
             guard case let .audio(id) = header.track else { continue }
             header.setMuted(content?.audio[id]?.muted ?? false, enabled: canEdit)
         }
@@ -878,18 +897,37 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
                 x: TimelineLayout.headerWidth, y: TimelineLayout.rulerHeight + video.top - geometry.verticalOffset,
                 width: geometry.areaWidth, height: video.height)
         }
-        if help != helpRect {
+        // The help over the camera's dimmed diamonds.
+        var diamonds: [(rect: CGRect, id: String)] = []
+        if geometry.rows.contains(where: { $0.track == .camera }), let content {
+            for change in content.cameraChanges.items where change.info.hiddenBy != nil {
+                guard let frame = geometry.itemFrame(of: TimelineItem(id: change.id, track: .camera, output: change.output)) else { continue }
+                diamonds.append((frame.offsetBy(dx: TimelineLayout.headerWidth, dy: 0).insetBy(dx: -2, dy: -2), change.id))
+            }
+        }
+        if help != helpRect || diamonds.map(\.rect) != diamondHelp.map(\.rect) || diamonds.map(\.id) != diamondHelp.map(\.id) {
             helpRect = help
+            diamondHelp = diamonds
             removeAllToolTips()
             if let help { addToolTip(help, owner: self, userData: nil) }
+            for (k, diamond) in diamonds.enumerated() {
+                addToolTip(diamond.rect, owner: self, userData: UnsafeMutableRawPointer(bitPattern: k + 1))
+            }
         }
     }
 
     nonisolated func view(
         _ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?
     ) -> String {
-        MainActor.assumeIsolated {
+        let helpIndex = data.map { Int(bitPattern: $0) - 1 }
+        return MainActor.assumeIsolated {
             guard let content else { return "" }
+            if let k = helpIndex, diamondHelp.indices.contains(k),
+                let change = content.cameraChanges.items.first(where: { $0.id == diamondHelp[k].id }),
+                let kind = change.info.hiddenBy
+            {
+                return String(format: String(localized: "Not shown while the “%@” block rules; it still counts afterwards."), LayoutNames.name(kind))
+            }
             let τ = content.layout.output(atX: point.x, scale: scale, offset: offset)
             guard content.missing.contains(where: { $0.contains(τ) }) else { return "" }
             return String(localized: "This part of the recording couldn't be read: the frame before it is shown.")

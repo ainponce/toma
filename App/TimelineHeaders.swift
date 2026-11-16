@@ -7,6 +7,10 @@ import ProjectFormat
 final class TrackHeaderView: NSView {
     let track: TimelineTrack
     var onMute: (Bool) -> Void = { _ in }
+    /// A click on the header (the Camera's: the project's layout is selected).
+    var onPress: () -> Void = {}
+    /// The second line of the Camera's header: the project's layout.
+    private let subtitle = NSTextField(labelWithString: "")
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private var mute: NSButton?
@@ -43,7 +47,33 @@ final class TrackHeaderView: NSView {
             addSubview(button)
             mute = button
         }
+        if case .camera = track {
+            subtitle.font = .systemFont(ofSize: 10)
+            subtitle.textColor = .tertiaryLabelColor
+            subtitle.lineBreakMode = .byTruncatingTail
+            addSubview(subtitle)
+            setAccessibilityRole(.button)
+            setAccessibilityLabel(String(localized: "Camera"))
+        }
         layer?.addSublayer(separator)
+    }
+
+    /// The project's layout under "Camera"; with it, the header is a button.
+    func setSubtitle(_ text: String?) {
+        guard case .camera = track else { return }
+        subtitle.stringValue = text ?? ""
+        setAccessibilityValue(text)
+        needsLayout = true
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if case .camera = track { onPress() } else { super.mouseDown(with: event) }
+    }
+
+    override func accessibilityPerformPress() -> Bool {
+        guard case .camera = track else { return false }
+        onPress()
+        return true
     }
 
     @available(*, unavailable)
@@ -71,9 +101,11 @@ final class TrackHeaderView: NSView {
         super.layout()
         let height = bounds.height
         // An audio track has its name on top and Mute under it; the others, the name in the middle.
-        let line = mute == nil ? (height - 14) / 2 : 4
+        let two = track == .camera && !subtitle.stringValue.isEmpty
+        let line = mute == nil ? (two ? 3 : (height - 14) / 2) : 4
         icon.frame = CGRect(x: 8, y: line, width: 14, height: 14)
         name.frame = CGRect(x: 26, y: line, width: bounds.width - 30, height: 14)
+        subtitle.frame = CGRect(x: 26, y: line + 14, width: bounds.width - 30, height: 13)
         mute?.frame = CGRect(x: 24, y: line + 15, width: 18, height: 15)
         separator.frame = CGRect(x: 0, y: height - 1, width: bounds.width, height: 1)
     }

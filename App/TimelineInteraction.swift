@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppKit
 import AppSupport
 import Editing
@@ -58,6 +59,11 @@ final class TimelineInteraction {
         case moveZoom(Base, id: String, range: Range<Int64>, grab: Int64)
         case createZoom(Base, anchor: Int64)
         case moveCamera(Base, id: String)
+        /// An empty place of the Camera track: a click, or a drag that makes a layout block.
+        case emptyLayout(down: CGPoint, anchor: Int64)
+        case trimLayout(Base, id: String, edge: ClipEdge, range: Range<Int64>)
+        case moveLayout(Base, id: String, range: Range<Int64>, grab: Int64)
+        case createLayout(Base, anchor: Int64)
         case moveBoundary(Base, changeID: String)
     }
 
@@ -130,16 +136,21 @@ final class TimelineInteraction {
         guard let model else { return }
         let next = TimelineHitTest.selection(selectedIDs, clicking: hit, shift: shift) { [weak self] in self?.item($0)?.track }
         guard hit != .playhead else { return }
-        model.selection = Self.selection(next, on: next.first.flatMap { item($0)?.track })
+        model.selection = selection(next, on: next.first.flatMap { item($0)?.track })
+    }
+
+    /// Whether `id`, an item of the Camera track, is a layout block (and not a change of the bubble).
+    private func isLayoutBlock(_ id: String) -> Bool {
+        view.content?.layoutBlockIDs.contains(id) == true
     }
 
     /// `ids`, all of `track`, as the model's selection.
-    private static func selection(_ ids: Set<String>, on track: TimelineTrack?) -> EditorSelection? {
+    private func selection(_ ids: Set<String>, on track: TimelineTrack?) -> EditorSelection? {
         guard let id = ids.first, let track else { return nil }
         switch track {
         case .video: return .clips(ids)
         case .zoom: return .zooms(ids)
-        case .camera: return .cameraChange(id)
+        case .camera: return isLayoutBlock(id) ? .layoutBlock(id) : .cameraChange(id)
         case .screen: return id == "initial" ? nil : .screenChange(id)
         case .ruler, .audio: return nil
         }
@@ -172,6 +183,13 @@ final class TimelineInteraction {
                 } else {
                     drag = .emptyZoom(down: point, anchor: τ)
                 }
+            } else if track == .camera, canEdit {
+                if event.clickCount >= 2 {
+                    model?.addLayoutBlock(click: clamped(τ))
+                    drag = .none
+                } else {
+                    drag = .emptyLayout(down: point, anchor: τ)
+                }
             } else {
                 // A click on nothing moves the playhead, and dragging goes on moving it.
                 drag = .playhead
@@ -201,11 +219,15 @@ final class TimelineInteraction {
             guard TimelineDragRules.isDrag(from: down, to: point), let base = begin() else { return }
             drag = .createZoom(base, anchor: anchor)
             updateDrag(event)
+        case let .emptyLayout(down, anchor):
+            guard TimelineDragRules.isDrag(from: down, to: point), let base = begin() else { return }
+            drag = .createLayout(base, anchor: anchor)
+            updateDrag(event)
         case let .pressed(down, hit):
             guard TimelineDragRules.isDrag(from: down, to: point) else { return }
             start(hit, at: point)
             updateDrag(event)
-        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .moveBoundary:
+        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
             updateDrag(event)
         }
     }
@@ -221,11 +243,11 @@ final class TimelineInteraction {
             break
         case .playhead:
             view.endScrub()
-        case .emptyZoom:
+        case .emptyZoom, .emptyLayout:
             // A click: the playhead goes there.
             view.scrub(at: point(event).x)
             view.endScrub()
-        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .moveBoundary:
+        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
             finish()
         }
     }
@@ -372,6 +394,12 @@ final class TimelineInteraction {
         case let .item(.zoom, id):
             guard let base = begin(), let range = zoomRange(id, in: base.document) else { return }
             drag = .moveZoom(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
+        case let .edge(.camera, id, edge) where isLayoutBlock(id):
+            guard let base = begin(), let range = layoutRange(id, in: base.document) else { return }
+            drag = .trimLayout(base, id: id, edge: edge, range: range)
+        case let .item(.camera, id) where isLayoutBlock(id):
+            guard let base = begin(), let range = layoutRange(id, in: base.document) else { return }
+            drag = .moveLayout(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
         case let .item(.camera, id), let .edge(.camera, id, _):
             guard let base = begin() else { return }
             drag = .moveCamera(base, id: id)
@@ -384,6 +412,17 @@ final class TimelineInteraction {
         default:
             drag = .none
         }
+    }
+
+    /// The layout a block made by a drag gets: the last one chosen for a block, or the first time Full-Screen Camera.
+    private var newBlockKind: LayoutKind {
+        LayoutTrackRules.newBlock(playhead: 0, click: nil, marks: nil, lastKind: model?.lastBlockLayout).kind
+    }
+
+    /// Where the preview shows layout block `id` of `document`.
+    private func layoutRange(_ id: String, in document: EditDocument) -> Range<Int64>? {
+        guard let k = document.camera.layouts.firstIndex(where: { $0.id == id }) else { return nil }
+        return LayoutTimeline.blockOutputs(of: document, timeMap: TimeMap(sequence: document.sequence))[k]
     }
 
     private func zoomRange(_ id: String, in document: EditDocument) -> Range<Int64>? {
@@ -447,6 +486,31 @@ final class TimelineInteraction {
             if let range = TimelineDragRules.creationRange(from: a, to: b, duration: base.map.duration) {
                 step = ZoomCommands.add(base.document, output: range, makeID: makeID)
             }
+        case let .trimLayout(trimBase, id, edge, range):
+            base = trimBase
+            let τ = snapped(output(at: point), event: event, base: base)
+            step = LayoutCommands.trim(base.document, id: id, edge: edge, toOutput: τ, timeMap: base.map)
+            let edgeOutput = edge == .start ? range.lowerBound : range.upperBound
+            if let step, let next = try? base.document.applying(step.changes), let moved = layoutRange(id, in: next) {
+                let now = edge == .start ? moved.lowerBound : moved.upperBound
+                label = (now - edgeOutput, now)
+            } else {
+                label = (0, edgeOutput)
+            }
+        case let .moveLayout(moveBase, id, range, grab):
+            base = moveBase
+            let proposed = output(at: point) - grab - range.lowerBound
+            let active = TimelineDragRules.snapActive(enabled: view.snapping, commandHeld: event.modifierFlags.contains(.command))
+            let shift = TimelineDragRules.snapShift(
+                of: range, by: proposed, points: base.points, extra: snapTargets(),
+                tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
+            step = LayoutCommands.move(base.document, id: id, toOutputStart: range.lowerBound + shift, timeMap: base.map)
+        case let .createLayout(createBase, anchor):
+            base = createBase
+            let a = snapped(anchor, event: event, base: base), b = snapped(output(at: point), event: event, base: base)
+            if let range = LayoutTrackRules.creationRange(from: a, to: b, duration: base.map.duration) {
+                step = LayoutCommands.add(base.document, kind: newBlockKind, output: range, timeMap: base.map, makeID: makeID)
+            }
         case let .moveCamera(cameraBase, id):
             base = cameraBase
             let τ = snapped(output(at: point), event: event, base: base)
@@ -458,7 +522,10 @@ final class TimelineInteraction {
         default:
             return
         }
-        if case .trimClip = drag { NSCursor.resizeLeftRight.set() } else if case .trimZoom = drag { NSCursor.resizeLeftRight.set() }
+        switch drag {
+        case .trimClip, .trimZoom, .trimLayout: NSCursor.resizeLeftRight.set()
+        default: break
+        }
         lastStep = step
         model?.updateGesture(step)
         let preview = step.flatMap { try? base.document.applying($0.changes) as EditDocument }
@@ -479,9 +546,9 @@ final class TimelineInteraction {
             return false
         case .playhead:
             view.endScrub()
-        case .marks, .emptyZoom, .pressed:
+        case .marks, .emptyZoom, .emptyLayout, .pressed:
             break
-        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .moveBoundary:
+        case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
             lastStep = nil
             model?.cancelGesture()
             view.setPreview(nil)
@@ -505,6 +572,10 @@ final class TimelineInteraction {
         guard let step else { return }
         switch drag {
         case .createZoom, .moveZoom: model.selection = .zooms([step.target])
+        case .createLayout:
+            model.selection = .layoutBlock(step.target)
+            model.rememberBlockLayout(newBlockKind)
+        case .moveLayout, .trimLayout: model.selection = .layoutBlock(step.target)
         default: break
         }
     }
@@ -587,6 +658,9 @@ final class TimelineInteraction {
         case let .item(.screen, id), let .edge(.screen, id, _):
             select(hit, shift: false)
             addScreenItems(to: menu, id: id)
+        case let .item(.camera, id) where isLayoutBlock(id), let .edge(.camera, id, _) where isLayoutBlock(id):
+            select(hit, shift: false)
+            addLayoutItems(to: menu, id: id)
         case let .item(.camera, id), let .edge(.camera, id, _):
             select(hit, shift: false)
             let delete = MenuAction(String(localized: "Delete Change")) { model.deleteCameraChange(id) }
@@ -666,6 +740,65 @@ final class TimelineInteraction {
         let delete = MenuAction(String(localized: "Delete Zoom")) { [weak self] in self?.deleteSelected() }
         delete.isEnabled = canEdit
         menu.addItem(delete)
+    }
+
+    /// The menu of a layout block (design §5.5): the five layouts, the camera's side and automatic size when it is a split,
+    /// instant transition and delete.
+    private func addLayoutItems(to menu: NSMenu, id: String) {
+        guard let model, let document = model.document, let block = document.camera.layouts.first(where: { $0.id == id }),
+            let range = layoutRange(id, in: document)
+        else { return }
+        let target = LayoutEditTarget.block(id: id, output: range.lowerBound)
+        for kind in LayoutNames.order {
+            let item = MenuAction(LayoutNames.name(kind)) { model.setLayoutKind(kind, target: target) }
+            item.image = NSImage(
+                systemSymbolName: LayoutTrackRules.symbol(kind, orientation: view.content?.splitOrientation ?? .beside),
+                accessibilityDescription: nil)
+            item.state = block.kind == kind ? .on : .off
+            item.isEnabled = canEdit
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let isSplit = block.kind == .split
+        let sides = NSMenu()
+        sides.autoenablesItems = false
+        let split = block.split ?? SplitLayout(side: .end)
+        let beside = view.content?.splitOrientation != .stacked
+        for (side, title) in [
+            (CameraSide.start, beside ? String(localized: "Left") : String(localized: "Top")),
+            (.end, beside ? String(localized: "Right") : String(localized: "Bottom")),
+        ] {
+            let item = MenuAction(title) { model.setSplitSide(side, id: id) }
+            item.state = split.side == side ? .on : .off
+            item.isEnabled = canEdit
+            sides.addItem(item)
+        }
+        let sideItem = NSMenuItem(title: String(localized: "Camera Side"), action: nil, keyEquivalent: "")
+        sideItem.submenu = sides
+        sideItem.isEnabled = canEdit && isSplit
+        menu.addItem(sideItem)
+        let automatic = MenuAction(String(localized: "Automatic Size")) { model.setSplitShare(percent: nil, id: id) }
+        automatic.state = isSplit && split.share == nil ? .on : .off
+        automatic.isEnabled = canEdit && isSplit && split.share != nil
+        menu.addItem(automatic)
+        let instant = MenuAction(String(localized: "Instant Transition")) { model.setLayoutInstant(id, !block.instant) }
+        instant.state = block.instant ? .on : .off
+        instant.isEnabled = canEdit
+        menu.addItem(instant)
+        menu.addItem(.separator())
+        let delete = MenuAction(String(localized: "Delete Block")) { [weak self] in self?.deleteSelected() }
+        delete.isEnabled = canEdit
+        menu.addItem(delete)
+    }
+
+    /// The same menu at `point` of the timeline, for VoiceOver's "Change Layout": the block is selected first.
+    func popLayoutMenu(id: String, at point: CGPoint) {
+        guard let model, view.content != nil else { return }
+        model.selection = .layoutBlock(id)
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        addLayoutItems(to: menu, id: id)
+        menu.popUp(positioning: nil, at: point, in: view)
     }
 
     private func addScreenItems(to menu: NSMenu, id: String) {
