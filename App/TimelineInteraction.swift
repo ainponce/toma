@@ -711,16 +711,15 @@ final class TimelineInteraction {
         alert.messageText = String(localized: "Custom Speed")
         alert.informativeText = String(localized: "From 0.25× to 16×.") + " " + String(localized: "Up to 4× the sound speeds up without changing pitch; faster, the clip has no sound.")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 120, height: 24))
-        // In the user's language ("1,5"), as it is read back.
-        field.stringValue = TimelineFormat.number(model.speedOfTargets ?? 1)
+        // In the user's language ("1,5"), rounded for display only: left as it is, nothing changes (`CustomSpeedEntry`).
+        let entry = CustomSpeedEntry(shown: TimelineFormat.number(model.speedOfTargets ?? 1))
+        field.stringValue = entry.shown
         field.setAccessibilityLabel(String(localized: "Speed"))
         alert.accessoryView = field
         alert.addButton(withTitle: String(localized: "OK"))
         alert.addButton(withTitle: String(localized: "Cancel"))
         alert.beginSheetModal(for: window) { response in
-            guard response == .alertFirstButtonReturn else { return }
-            let text = field.stringValue.replacingOccurrences(of: ",", with: ".").trimmingCharacters(in: .whitespaces)
-            guard let speed = Double(text.replacingOccurrences(of: "×", with: "")), speed.isFinite else { return }
+            guard response == .alertFirstButtonReturn, let speed = entry.speed(from: field.stringValue) else { return }
             MainActor.assumeIsolated { model.setSpeed(speed) }
         }
     }
