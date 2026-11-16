@@ -2,40 +2,32 @@
 import CoreMedia
 import Foundation
 
-/// The sound of an export: the streams of its audio tracks (`AudioTrackTimeline`, each placed by its own clock) added
-/// together at unity gain, in blocks of 48 kHz Float32 PCM ready for the AAC encoder.
-///
-/// A sum past full scale is clipped to [−1, 1], never wrapped around: two loud sources at once distort, but keep
-/// their shape. The mix is mono if every track is, stereo otherwise: `channels` is `min(2, the most any track
-/// needs)` (`AudioTrackTimeline.channelCount(of:in:)`), and every timeline is loaded with it.
+/// The sound of an export as the AAC encoder takes it: the mix of its document (`EditedMix`) in blocks of 48 kHz Float32
+/// PCM, one after the other from output frame 0 to `totalFrames`, each presented at its output time.
 ///
 /// Not thread-safe: one owner reads it, from one thread at a time.
 final class AudioMix {
     /// Frames per block handed to the encoder.
     static let blockFrames = 4096
 
+    let mix: EditedMix
     /// 1 or 2.
-    let channels: Int
+    var channels: Int { mix.channels }
     /// Length of the mix, in frames.
-    let totalFrames: Int64
+    var totalFrames: Int64 { mix.totalFrames }
     /// Format of the blocks: interleaved Float32 at `AudioTrackTimeline.sampleRate` with `channels` channels.
     let formatDescription: CMAudioFormatDescription
     /// Output frame of the next block.
     private(set) var position: Int64 = 0
 
-    private let timelines: [AudioTrackTimeline]
-    /// One track's frames of the block being mixed.
-    private var trackBlock: [Float] = []
+    /// The frames of the block being made.
+    private var block: [Float] = []
 
-    /// The mix of `timelines`, `totalFrames` long.
-    /// - Precondition: `channels` is 1 or 2, and every timeline was loaded with it.
+    /// The blocks of `mix`.
     /// - Throws: `ExportError.writerFailed` if the block format cannot be made.
-    init(timelines: [AudioTrackTimeline], channels: Int, totalFrames: Int64) throws {
-        precondition(channels == 1 || channels == 2, "AudioMix: \(channels) channels")
-        precondition(timelines.allSatisfy { $0.channels == channels }, "AudioMix: a track was loaded with other channels than the mix")
-        self.timelines = timelines
-        self.channels = channels
-        self.totalFrames = max(0, totalFrames)
+    init(mix: EditedMix) throws {
+        self.mix = mix
+        let channels = mix.channels
         var description = AudioStreamBasicDescription(
             mSampleRate: AudioTrackTimeline.sampleRate,
             mFormatID: kAudioFormatLinearPCM,
@@ -58,8 +50,8 @@ final class AudioMix {
         formatDescription = format
     }
 
-    /// The spans left silent, track by track, each in the order its timeline found them.
-    var missingAudio: [MissingAudio] { timelines.flatMap(\.missingAudio) }
+    /// The spans left silent, track by track (`EditedMix.missingAudio`).
+    var missingAudio: [MissingAudio] { mix.missingAudio }
 
     static func layoutTag(channels: Int) -> AudioChannelLayoutTag {
         channels == 1 ? kAudioChannelLayoutTag_Mono : kAudioChannelLayoutTag_Stereo
@@ -77,15 +69,10 @@ final class AudioMix {
     func nextBlock() throws -> CMSampleBuffer? {
         guard position < totalFrames else { return nil }
         let count = Int(min(Int64(Self.blockFrames), totalFrames - position))
-        var samples = [Float](repeating: 0, count: count * channels)
-        for timeline in timelines {
-            timeline.read(into: &trackBlock, frames: count)
-            for i in samples.indices { samples[i] += trackBlock[i] }
-        }
-        for i in samples.indices { samples[i] = min(max(samples[i], -1), 1) }
-        let block = try makeSampleBuffer(samples, frames: count, at: position)
+        mix.render(outputFrames: position..<(position + Int64(count)), into: &block)
+        let sample = try makeSampleBuffer(block, frames: count, at: position)
         position += Int64(count)
-        return block
+        return sample
     }
 
     private func makeSampleBuffer(_ samples: [Float], frames: Int, at position: Int64) throws -> CMSampleBuffer {

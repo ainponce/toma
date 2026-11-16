@@ -548,12 +548,11 @@ func systemAudioStartingLateIsSilentBefore() async throws {
             segments: [AudioSegmentSpec(start: base, seconds: 1, amplitude: 0.9)])
         let project = try builder.write()
         let totalFrames: Int64 = 48_000
-        var timelines: [AudioTrackTimeline] = []
-        for track in project.take.tracks {
-            timelines.append(try await AudioTrackTimeline.load(project, track: track, timelineStart: base, totalFrames: totalFrames, channels: 1))
-        }
-        let mix = try AudioMix(timelines: timelines, channels: 1, totalFrames: totalFrames)
-        #expect(mix.channels == 1)
+        // The second of both tracks, at unity gain.
+        var document = EditDocument.legacy(for: project)
+        document.sequence = [Clip(id: "c-00000001", take: project.take.id, start: base, end: base.adding(seconds: 1), speed: 1)]
+        let mix = try AudioMix(mix: try await EditedMix.make(project: project, document: document, framesPerSecond: 60))
+        #expect(mix.channels == 1 && mix.totalFrames == totalFrames)
         var mixed: [Float] = []
         while let block = try mix.nextBlock() {
             let data = try #require(CMSampleBufferGetDataBuffer(block))
