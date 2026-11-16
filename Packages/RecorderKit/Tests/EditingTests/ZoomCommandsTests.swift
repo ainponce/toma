@@ -133,24 +133,24 @@ private enum ZoomFixture {
 }
 
 @Test func movingAZoomStopsAtItsNeighbour() throws {
-    let a = ZoomFixture.block("z-0000000a", from: 2, to: 4, origin: .auto, depth: nil)
+    let a = ZoomFixture.block("z-0000000a", from: 2, to: 4)
     let b = ZoomFixture.block("z-0000000b", from: 6, to: 8)
     let document = ZoomFixture.document([a, b])
-    let step = try #require(ZoomCommands.move(document, id: a.id, toOutputStart: ZoomFixture.output(5.5)))
+    func move(_ id: String, to seconds: Double) -> EditStep? {
+        ZoomCommands.move(document, id: id, toOutputStart: ZoomFixture.output(seconds), makeID: ZoomFixture.IDs().make)
+    }
+    let step = try #require(move(a.id, to: 5.5))
     #expect(step.label == .zoomMove)
     #expect(step.target == a.id)
-    var moved = ZoomFixture.block(a.id, from: 4, to: 6, depth: nil)
-    moved.origin = .user
+    let moved = ZoomFixture.block(a.id, from: 4, to: 6)
     #expect(step.changes == [try #require(document.replaceChange(.zoomRegions, id: a.id, with: moved))])
     #expect(try ZoomFixture.applying(step, to: document).zoom.regions == [moved, b])
     // Back, it stops at the start of the output; where it is already, nothing.
-    let back = try #require(ZoomCommands.move(document, id: a.id, toOutputStart: ZoomFixture.output(-3)))
-    #expect(ZoomFixture.spans(try ZoomFixture.applying(back, to: document)) == [0...2, 6...8])
-    #expect(ZoomCommands.move(document, id: a.id, toOutputStart: ZoomFixture.output(2)) == nil)
-    #expect(ZoomCommands.move(document, id: "z-ffffffff", toOutputStart: 0) == nil)
+    #expect(ZoomFixture.spans(try ZoomFixture.applying(try #require(move(a.id, to: -3)), to: document)) == [0...2, 6...8])
+    #expect(move(a.id, to: 2) == nil)
+    #expect(move("z-ffffffff", to: 0) == nil)
     // Forward from the last block, up to the end of the output.
-    let last = try #require(ZoomCommands.move(document, id: b.id, toOutputStart: ZoomFixture.output(70)))
-    #expect(ZoomFixture.spans(try ZoomFixture.applying(last, to: document)) == [2...4, 58...60])
+    #expect(ZoomFixture.spans(try ZoomFixture.applying(try #require(move(b.id, to: 70)), to: document)) == [2...4, 58...60])
 }
 
 @Test func trimmingAZoomStopsAtItsNeighbourAndKeepsItsMinimum() throws {
@@ -286,16 +286,41 @@ private enum ZoomFixture {
     #expect(edited.zoom.regions.allSatisfy { $0.origin == .user })
 }
 
-@Test func aMovedAutoZoomKeepsItsIDAndIsNeverPlannedTwice() throws {
-    let events = ZoomFixture.click(5)
+@Test func aMovedAutoZoomIsANewBlockAndItsPlaceStaysFree() throws {
+    let events = ZoomFixture.click(5) + ZoomFixture.click(20)
     let document = ZoomFixture.planned(events)
     let auto = try #require(document.zoom.regions.first)
-    // Moved away, it is the user's, with the id its planned place gave it.
-    let moved = try document.applying(try #require(ZoomCommands.move(document, id: auto.id, toOutputStart: ZoomFixture.output(30))).changes)
-    #expect(moved.zoom.regions.map(\.id) == [auto.id])
-    // The planner puts a block at 4.5 s again, whose id would be the same: it is left out, so no two blocks share one.
-    let step = ZoomCommands.regenerate(moved, take: ZoomFixture.take, events: events, settings: moved.zoom.auto)
-    #expect(step.changes.isEmpty)
+    #expect(ZoomFixture.spans(document) == [4.5...6, 19.5...21])
+    // Moved, it is a block of the user's with an id of its own, in start order; its old place is suppressed.
+    let step = try #require(
+        ZoomCommands.move(document, id: auto.id, toOutputStart: ZoomFixture.output(10), makeID: ZoomFixture.IDs().make))
+    #expect(step.label == .zoomMove)
+    #expect(step.target == "z-00000010")
+    var moved = auto
+    (moved.id, moved.origin, moved.start, moved.end) = ("z-00000010", .user, ZoomFixture.at(10), ZoomFixture.at(11.5))
+    let place = SourceRange(take: ZoomFixture.takeID, start: auto.start, end: auto.end)
+    #expect(
+        step.changes == [
+            try #require(document.removeChange(.zoomRegions, at: 0)), document.insertChange(.zoomRegions, at: 0, moved),
+            document.insertChange(.zoomSuppressed, at: 0, place),
+        ])
+    let edited = try ZoomFixture.applying(step, to: document)
+    #expect(edited.zoom.regions == [moved, document.zoom.regions[1]])
+    #expect(edited.zoom.suppressed == [place])
+
+    // Planned again: nothing comes back at 4.5 s, with the same settings…
+    #expect(ZoomCommands.regenerate(edited, take: ZoomFixture.take, events: events, settings: edited.zoom.auto).changes.isEmpty)
+    // …with others, which would plan a block of another range there (and so of another id)…
+    var settings = edited.zoom.auto
+    settings.leadIn = 1.0
+    settings.groupGap = 1.0
+    let other = try edited.applying(ZoomCommands.regenerate(edited, take: ZoomFixture.take, events: events, settings: settings).changes)
+    #expect(ZoomFixture.spans(other) == [10...11.5, 19...21])
+    // …and once the moved block is deleted.
+    let deleted = try edited.applying(try #require(ZoomCommands.delete(edited, ids: [moved.id])).changes)
+    #expect(deleted.zoom.suppressed == [place])
+    let again = try deleted.applying(ZoomCommands.regenerate(deleted, take: ZoomFixture.take, events: events, settings: settings).changes)
+    #expect(ZoomFixture.spans(again) == [19...21])
 }
 
 @Test func blocksAreMadeInWhatTheOutputShows() throws {
@@ -316,7 +341,7 @@ private enum ZoomFixture {
     // A block in the cut takes no room.
     let hidden = ZoomFixture.document([ZoomFixture.block("z-0000000a", from: 12, to: 18)], sequence: sequence)
     #expect(ZoomCommands.add(hidden, output: ZoomFixture.range(9, 11), makeID: ZoomFixture.IDs().make) != nil)
-    #expect(ZoomCommands.move(hidden, id: "z-0000000a", toOutputStart: 0) == nil)
+    #expect(ZoomCommands.move(hidden, id: "z-0000000a", toOutputStart: 0, makeID: ZoomFixture.IDs().make) == nil)
 }
 
 @Test func zoomShowAndMotionBlurAreSteps() throws {

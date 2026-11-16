@@ -279,9 +279,7 @@ public final class EditSession {
         let at = context.now()
         var lines: [EditLogEntry] = []
         // Recorded before the `do`, which it numbers; if the lines are not handed over, the next step writes it again.
-        if var created = pendingCreate {
-            created.logSequence = history.nextSeq
-            let create = EditLogEntry.create(seq: created.logSequence, document: created, app: context.app)
+        if let create = legacyCreate() {
             history.record(create)
             lines.append(create)
         }
@@ -326,33 +324,90 @@ public final class EditSession {
         return outcome
     }
 
-    /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`) and gives its path, as
-    /// the document names it (`assets/<sha>.<ext>`), once it is on the drive: the step that names it comes after. `nil`,
-    /// and nothing written, while the project cannot be edited, or if `BoundedImage` does not decode the file as the
-    /// package's asset reader would (decoded first, on the queue of files).
+    /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), for the step that
+    /// names it, which comes after: `.imported(path)` once it is on the drive. The file is decoded first, on the queue of
+    /// files, as the package's asset reader decodes one: `.notAnImage` if it does not, and nothing is written.
     ///
-    /// A version 1 or 2 package moves to version 3 first, with only the `create` of its legacy document
-    /// (`PackageUpgrade.upgrade(first: nil)`) on the queue of files, or after the attempt of the upgrade a step started;
-    /// steps that come meanwhile wait for it, as in `perform`. Nothing is copied into a package that is not at version 3
-    /// yet: if the attempt fails for a moment (it is tried again, as for `perform`), or another process took `edit.lock`
-    /// first or changed the package (the session goes read-only or opens again), this is `nil`.
-    public func importAsset(_ url: URL) async -> String? {
-        guard isEditable, (try? await Self.run(on: files, { AssetImport.decodes(url) })) == true, isEditable else { return nil }
+    /// A version 1 or 2 package moves to version 3 first, with only the `create` of its legacy document (the upgrade with
+    /// no step), or after the upgrade a step started: nothing is copied into a package that is not at version 3 yet. An
+    /// error that passes, of that upgrade (tried again, as for `perform`) or of the copy (a full disk, `EIO`), is shown as
+    /// `EditNotice.saveFailed`, and the import waits and is tried again every `EditJournal.retryInterval`, as an edit's
+    /// line is; it gives up with `.saveFailed` if the caller's task is cancelled or the session closes meanwhile, and at
+    /// once for an error that never passes (`Opening.lastingRefusal`). A disk's error is never `.notAnImage`.
+    /// `.notEditable` while the project cannot be edited, if another process took `edit.lock` first (read-only then) or
+    /// changed the package (it is opened again), as with `perform`.
+    public func importAsset(_ url: URL) async -> AssetImportOutcome {
+        guard isEditable else { return .notEditable }
+        guard (try? await Self.run(on: files, { AssetImport.decodes(url) })) == true else { return .notAnImage }
+        guard isEditable else { return .notEditable }
         let reopened = reopenings
-        if journal == nil, upgrade == nil, let manifest = legacyManifest, var created = pendingCreate {
-            let legacy = created
-            created.logSequence = history.nextSeq
-            let create = EditLogEntry.create(seq: created.logSequence, document: created, app: context.app)
-            guard (try? create.jsonLine()) != nil else { return nil }
+        if journal == nil, upgrade == nil, let manifest = legacyManifest, let legacy = pendingCreate, let create = legacyCreate(),
+            (try? create.jsonLine()) != nil
+        {
             history.record(create)
             pendingCreate = nil
             startUpgrade(manifest, legacy: legacy, first: nil, at: context.now(), lines: [create])
             change(to: document, seq: create.seq)
         }
-        while let attempt = upgrade?.attempt { await attempt.value }
-        guard isEditable, journal != nil, reopenings == reopened else { return nil }
-        let package = ProjectPackage(url: packageURL)
-        return try? await Self.run(on: files) { try AssetImport.copy(url, into: package) }
+        // The upgrade through its attempts, the failed ones shown by `finishUpgradeAttempt`.
+        while let upgrade {
+            if Task.isCancelled { return .saveFailed(shownSaveFailure ?? .ECANCELED) }
+            if let attempt = upgrade.attempt {
+                await attempt.value
+            } else if let retry = upgrade.retry {
+                await retry.value
+            } else {
+                // Closed after its last attempt failed.
+                break
+            }
+        }
+        guard reopenings == reopened, isEditable, journal != nil else {
+            return upgrade != nil ? .saveFailed(shownSaveFailure ?? .EIO) : .notEditable
+        }
+        var failing: POSIXErrorCode?
+        defer { if failing != nil { showSaveFailed(journalFailure) } }
+        while true {
+            let package = ProjectPackage(url: packageURL)
+            let placed = (try? await Self.run(on: files) { () -> Result<String, AssetImport.Failure> in
+                Result { () throws(AssetImport.Failure) in try AssetImport.place(url, into: package) }
+            }) ?? .failure(.destination(POSIXError(.EIO)))
+            switch placed {
+            case let .success(path):
+                return .imported(path)
+            case .failure(.unsupported), .failure(.source), .failure(.changed):
+                return .notAnImage
+            case let .failure(.destination(error)):
+                guard Opening.lastingRefusal(error) == nil else { return .saveFailed(error.code) }
+                failing = error.code
+                showSaveFailed(error.code)
+                try? await Task.sleep(for: EditJournal.retryInterval)
+                guard !Task.isCancelled, isEditable else { return .saveFailed(error.code) }
+            }
+        }
+    }
+
+    /// "Apply Default Style" (design §5.9): `StyleCommands.applyDefaultStyle` of `style` for the take, as one step that
+    /// `perform` takes. An image background is brought into the package first from `styleDirectory`, the default style's
+    /// folder (its `<sha>.<ext>`, with `importAsset`); without the folder, or if the image is not there, does not decode
+    /// or cannot be saved, the classic gradient (`Background.tomaClassic`) is applied in its place. `.refused` if the
+    /// project cannot be edited, or has all of it already.
+    public func applyDefaultStyle(_ style: DefaultStyle, styleDirectory: URL?) async -> EditOutcome {
+        guard isEditable else { return .refused }
+        var style = style
+        if case let .image(file) = style.style.background {
+            var background = Background.tomaClassic
+            if let styleDirectory, let name = DefaultStyleStore.assetName(file) {
+                switch await importAsset(styleDirectory.appending(path: name)) {
+                case let .imported(path): background = .image(file: path)
+                case .notEditable: return .refused
+                case .notAnImage, .saveFailed: break
+                }
+            }
+            style.style.background = background
+        }
+        guard let step = StyleCommands.applyDefaultStyle(document, style, take: project.take, events: project.events)
+        else { return .refused }
+        return perform(step)
     }
 
     /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every
@@ -479,6 +534,24 @@ public final class EditSession {
         case .pending:
             break
         }
+    }
+
+    /// The `create` of the legacy document whose `create` the first edit writes (`pendingCreate`), numbered as the next
+    /// line; `nil` without one.
+    private func legacyCreate() -> EditLogEntry? {
+        guard var created = pendingCreate else { return nil }
+        created.logSequence = history.nextSeq
+        return .create(seq: created.logSequence, document: created, app: context.app)
+    }
+
+    /// The code of the `.saveFailed` shown, if one is.
+    private var shownSaveFailure: POSIXErrorCode? {
+        notices.lazy.compactMap { if case let .saveFailed(code) = $0 { code } else { nil } }.first
+    }
+
+    /// The code of the journal's failure, if it is failing.
+    private var journalFailure: POSIXErrorCode? {
+        if case let .failing(code)? = journal?.state { code } else { nil }
     }
 
     private func showSaveFailed(_ code: POSIXErrorCode?) {

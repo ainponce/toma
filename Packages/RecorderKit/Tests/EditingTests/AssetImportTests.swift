@@ -84,6 +84,64 @@ private enum ImportFixture {
     @concurrent static func hash(_ package: ProjectPackage) async throws -> String {
         try treeHash(package.url)
     }
+
+    /// The path of `.imported`, or a recorded issue.
+    static func path(_ outcome: AssetImportOutcome, sourceLocation: SourceLocation = #_sourceLocation) -> String? {
+        guard case let .imported(path) = outcome else {
+            Issue.record("not imported: \(outcome)", sourceLocation: sourceLocation)
+            return nil
+        }
+        return path
+    }
+
+    /// A switch the tests turn while a session reads it.
+    final class Flag: Sendable {
+        private let value: Mutex<Bool>
+
+        init(_ value: Bool) {
+            self.value = Mutex(value)
+        }
+
+        var isOn: Bool { value.withLock { $0 } }
+
+        func set(_ on: Bool) { value.withLock { $0 = on } }
+    }
+
+    /// The system's upgrade calls, with every write failing with `ENOSPC` while `fails` is on.
+    static func failingUpgrade(while fails: Flag) -> PackageUpgradeIO {
+        PackageUpgradeIO(
+            write: { data, name, directory in
+                if fails.isOn { throw POSIXError(.ENOSPC) }
+                try PackageUpgradeIO.system.write(data, name, directory)
+            },
+            pause: PackageUpgradeIO.system.pause)
+    }
+
+    /// Another process upgrades the version 1 or 2 package of `project`, as it was opened, with an edit of its own, and
+    /// lets it go.
+    @concurrent static func upgradeElsewhere(_ project: LoadedProject, caches: URL) async throws {
+        let fd = open(project.package.url.path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        let legacy = EditDocument.legacy(for: project)
+        let step = try #require(StyleCommands.set(legacy, "/style/padding", 0.3, label: .padding))
+        let result = try PackageUpgrade.upgrade(
+            project.package, folder: fd, opened: project.manifest, legacy: legacy, first: step, context: context(caches: caches))
+        guard case let .upgraded(lock, _) = result else { throw TestSupportError.failed("not upgraded: \(result)") }
+        lock.release()
+    }
+
+    /// Fills the volume `folder` is on with a file `filler` in it, until a write says it is full.
+    @concurrent static func fill(_ folder: URL) async throws {
+        let fd = open(folder.appending(path: "filler").path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        for size in [1 << 20, 1 << 12, 1 << 9] {
+            let chunk = [UInt8](repeating: 0x2A, count: size)
+            while chunk.withUnsafeBytes({ write(fd, $0.baseAddress, $0.count) }) == size {}
+        }
+        fsync(fd)
+    }
 }
 
 @Test func importedImageIsCopiedOnceByContent() async throws {
@@ -184,29 +242,69 @@ private enum ImportFixture {
         let caches = dir.appending(path: "Caches")
         let session = try await EditSession.open(project.package.url, take: nil, context: ImportFixture.context(caches: caches))
         #expect(session.access == .editable)
-        // Not an image: nothing is written.
+        // Not an image, or not there: nothing is written.
         let garbage = dir.appending(path: "Garbage.png")
         try Data((0..<4_096).map { UInt8(truncatingIfNeeded: $0 &* 31) }).write(to: garbage)
-        #expect(await session.importAsset(garbage) == nil)
+        #expect(await session.importAsset(garbage) == .notAnImage)
+        #expect(await session.importAsset(dir.appending(path: "Missing.png")) == .notAnImage)
         #expect(!FileManager.default.fileExists(atPath: project.package.assetsURL.path))
         // An image: its path, and the file there before the step that names it.
         let png = try ImportFixture.image()
         let image = dir.appending(path: "Background.png")
         try png.write(to: image)
-        let path = try #require(await session.importAsset(image))
-        #expect(path == "assets/\(ImportFixture.hash(png)).png")
+        #expect(await session.importAsset(image) == .imported("assets/\(ImportFixture.hash(png)).png"))
+        let path = "assets/\(ImportFixture.hash(png)).png"
         #expect(try Data(contentsOf: project.package.fileURL(path)) == png)
         let step = try #require(StyleCommands.set(session.document, "/style/background", Background.image(file: path), label: .background))
         #expect(session.perform(step) == .applied)
+        #expect(session.notices.isEmpty)
 
-        // Read-only: nothing.
+        // Read-only, or closed: nothing.
         let other = try await EditSession.open(project.package.url, take: nil, context: ImportFixture.context(caches: caches))
         #expect(other.access == .readOnly(.openElsewhere))
         let another = dir.appending(path: "Another.png")
         try ImportFixture.image(red: 0.1).write(to: another)
-        #expect(await other.importAsset(another) == nil)
-        #expect(try ImportFixture.names(in: project.package.assetsURL) == [String(path.dropFirst("assets/".count))])
+        #expect(await other.importAsset(another) == .notEditable)
         await other.close()
+        await session.close()
+        #expect(await session.importAsset(another) == .notEditable)
+        #expect(try ImportFixture.names(in: project.package.assetsURL) == [String(path.dropFirst("assets/".count))])
+    }
+}
+
+@MainActor @Test func importOnAFullDiskWaitsAndIsTriedAgain() async throws {
+    try await withTemporaryDirectory { dir in
+        // A version 3 package on a small HFS+ volume, full once the session is open.
+        let disk = try DiskImage.attach(sizeMegabytes: 20, fileSystem: .hfsPlus, in: dir)
+        defer { try? disk.detach(force: true) }
+        let project = try await ImportFixture.package(in: disk.mountPoint)
+        let session = try await EditSession.open(
+            project.package.url, take: nil, context: ImportFixture.context(caches: dir.appending(path: "Caches")))
+        #expect(await session.flushed() == 1)
+        try await ImportFixture.fill(disk.mountPoint)
+        let png = try ImportFixture.image()
+        let image = dir.appending(path: "Background.png")
+        try png.write(to: image)
+
+        // A full disk is not "not an image": it is shown, and the import waits.
+        let importing = Task { await session.importAsset(image) }
+        #expect(await eventually(timeout: .seconds(20)) { session.notices.contains(.saveFailed(.ENOSPC)) })
+        try FileManager.default.removeItem(at: disk.mountPoint.appending(path: "filler"))
+        let path = "assets/\(ImportFixture.hash(png)).png"
+        #expect(await importing.value == .imported(path))
+        #expect(try Data(contentsOf: project.package.fileURL(path)) == png)
+        #expect(!session.notices.contains { if case .saveFailed = $0 { true } else { false } })
+
+        // Given up by its caller, it says why.
+        try await ImportFixture.fill(disk.mountPoint)
+        let another = dir.appending(path: "Another.png")
+        try ImportFixture.image(red: 0.1).write(to: another)
+        let cancelled = Task { await session.importAsset(another) }
+        #expect(await eventually(timeout: .seconds(20)) { session.notices.contains(.saveFailed(.ENOSPC)) })
+        cancelled.cancel()
+        #expect(await cancelled.value == .saveFailed(.ENOSPC))
+        #expect(!session.notices.contains { if case .saveFailed = $0 { true } else { false } })
+        try FileManager.default.removeItem(at: disk.mountPoint.appending(path: "filler"))
         await session.close()
     }
 }
@@ -220,7 +318,7 @@ private enum ImportFixture {
         let image = dir.appending(path: "Background.png")
         try png.write(to: image)
 
-        let path = try #require(await session.importAsset(image))
+        let path = try #require(ImportFixture.path(await session.importAsset(image)))
         #expect(await session.flushed() == 1)
         // Version 3, with a log of one line: the legacy document's `create`, without a `do`.
         let manifest = try ImportFixture.manifest(project.package)
@@ -249,38 +347,6 @@ private enum ImportFixture {
         await reopened.close()
     }
 
-    // The upgrade fails for a moment (the disk is full): nothing is copied into the version 2 package, and once the
-    // upgrade is tried again, with the `create` alone, the image goes in.
-    try await withTemporaryDirectory { dir in
-        let project = try await ImportFixture.package(in: dir, formatVersion: 2)
-        let fails = Mutex(true)
-        let io = PackageUpgradeIO(
-            write: { data, name, directory in
-                if fails.withLock({ $0 }) { throw POSIXError(.ENOSPC) }
-                try PackageUpgradeIO.system.write(data, name, directory)
-            },
-            pause: PackageUpgradeIO.system.pause)
-        var context = ImportFixture.context(caches: dir.appending(path: "Caches"))
-        context.upgradeIO = io
-        let session = try await EditSession.open(project.package.url, take: nil, context: context)
-        let image = dir.appending(path: "Background.png")
-        try ImportFixture.image().write(to: image)
-
-        #expect(await session.importAsset(image) == nil)
-        #expect(session.notices.contains(.saveFailed(.ENOSPC)))
-        #expect(session.access == .editable)
-        #expect(!FileManager.default.fileExists(atPath: project.package.assetsURL.path))
-        #expect(try ImportFixture.manifest(project.package).formatVersion == 2)
-
-        fails.withLock { $0 = false }
-        #expect(await eventually(timeout: .seconds(20)) { !session.notices.contains(.saveFailed(.ENOSPC)) })
-        let path = try #require(await session.importAsset(image))
-        #expect(try ImportFixture.manifest(project.package).formatVersion == 3)
-        #expect(try EditLogReader.read(project.package.editLogURL).entries.count == 1)
-        #expect(FileManager.default.fileExists(atPath: project.package.fileURL(path).path))
-        await session.close()
-    }
-
     // Another process took `edit.lock` after this one opened: nothing is written, and the project is read-only.
     try await withTemporaryDirectory { dir in
         let project = try await ImportFixture.package(in: dir, formatVersion: 2)
@@ -292,11 +358,81 @@ private enum ImportFixture {
         let image = dir.appending(path: "Background.png")
         try ImportFixture.image().write(to: image)
 
-        #expect(await session.importAsset(image) == nil)
+        #expect(await session.importAsset(image) == .notEditable)
         #expect(session.access == .readOnly(.otherAppStartedEditing))
         #expect(session.document == .legacy(for: project))
         #expect(try await ImportFixture.hash(project.package) == before)
         await session.close()
         #expect(try await ImportFixture.hash(project.package) == before)
+    }
+}
+
+@MainActor @Test func aFailedUpgradeOfAnImportIsTriedAgain() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await ImportFixture.package(in: dir, formatVersion: 2)
+        let fails = ImportFixture.Flag(true)
+        var context = ImportFixture.context(caches: dir.appending(path: "Caches"))
+        context.upgradeIO = ImportFixture.failingUpgrade(while: fails)
+        let session = try await EditSession.open(project.package.url, take: nil, context: context)
+        let png = try ImportFixture.image()
+        let image = dir.appending(path: "Background.png")
+        try png.write(to: image)
+
+        // The disk is full: the upgrade waits and is tried again, and the import with it; nothing is copied into the
+        // version 2 package meanwhile.
+        let importing = Task { await session.importAsset(image) }
+        #expect(await eventually(timeout: .seconds(20)) { session.notices.contains(.saveFailed(.ENOSPC)) })
+        #expect(session.access == .editable)
+        #expect(!FileManager.default.fileExists(atPath: project.package.assetsURL.path))
+        #expect(try ImportFixture.manifest(project.package).formatVersion == 2)
+        fails.set(false)
+        let path = "assets/\(ImportFixture.hash(png)).png"
+        #expect(await importing.value == .imported(path))
+        #expect(try ImportFixture.manifest(project.package).formatVersion == 3)
+        #expect(try EditLogReader.read(project.package.editLogURL).entries.count == 1)
+        #expect(try Data(contentsOf: project.package.fileURL(path)) == png)
+        #expect(session.notices.isEmpty)
+        await session.close()
+    }
+
+    // Given up by its caller while the upgrade still fails: it says why, and the upgrade goes on being tried.
+    try await withTemporaryDirectory { dir in
+        let project = try await ImportFixture.package(in: dir, formatVersion: 2)
+        let fails = ImportFixture.Flag(true)
+        var context = ImportFixture.context(caches: dir.appending(path: "Caches"))
+        context.upgradeIO = ImportFixture.failingUpgrade(while: fails)
+        let session = try await EditSession.open(project.package.url, take: nil, context: context)
+        let image = dir.appending(path: "Background.png")
+        try ImportFixture.image().write(to: image)
+        let importing = Task { await session.importAsset(image) }
+        #expect(await eventually(timeout: .seconds(20)) { session.notices.contains(.saveFailed(.ENOSPC)) })
+        importing.cancel()
+        #expect(await importing.value == .saveFailed(.ENOSPC))
+        #expect(!FileManager.default.fileExists(atPath: project.package.assetsURL.path))
+        fails.set(false)
+        #expect(await eventually(timeout: .seconds(20)) { session.notices.isEmpty })
+        #expect(try ImportFixture.manifest(project.package).formatVersion == 3)
+        await session.close()
+    }
+}
+
+@MainActor @Test func importIntoAPackageAnotherAppChangedOpensItAgain() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await ImportFixture.package(in: dir, formatVersion: 2)
+        let caches = dir.appending(path: "Caches")
+        let session = try await EditSession.open(project.package.url, take: nil, context: ImportFixture.context(caches: caches))
+        // Another process upgrades the package with an edit of its own after this one opened, and lets it go.
+        try await ImportFixture.upgradeElsewhere(project, caches: caches)
+        let image = dir.appending(path: "Background.png")
+        try ImportFixture.image().write(to: image)
+
+        #expect(await session.importAsset(image) == .notEditable)
+        #expect(session.notices.contains(.reopenedAfterOtherApp))
+        #expect(session.document.style.padding == 0.3)
+        #expect(!FileManager.default.fileExists(atPath: project.package.assetsURL.path))
+        #expect(try EditLogReader.read(project.package.editLogURL).entries.count == 2)
+        // It is a version 3 project now: the next import goes in.
+        #expect(ImportFixture.path(await session.importAsset(image)) != nil)
+        await session.close()
     }
 }

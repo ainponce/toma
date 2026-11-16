@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
+import Dispatch
 import Foundation
 import ProjectFormat
 
@@ -8,6 +9,9 @@ import ProjectFormat
 /// `DurableFile.writeAtomically`). Its image background, an `image(file: "assets/<sha>.<ext>")` of the project it was
 /// saved from, is copied next to it as `<sha>.<ext>`, so new projects can take it into their own `assets/`
 /// (`EditSession.open`) under the same path.
+///
+/// `save` and `reset` write and full-sync, so they run on the store's own serial queue, one at a time and never on the
+/// caller's thread (never the main thread's), each file through a temporary file of a name of its own.
 public final class DefaultStyleStore: Sendable {
     /// `~/Library/Application Support/Toma/Style/`. Computed: a stored `static var` is not concurrency-safe.
     public static var defaultDirectory: URL {
@@ -18,6 +22,8 @@ public final class DefaultStyleStore: Sendable {
     public let directory: URL
 
     private static let fileName = "default-style.json"
+    /// Where `save` and `reset` run, one at a time.
+    private let queue = DispatchQueue(label: "dev.toma.DefaultStyleStore", qos: .userInitiated)
 
     public init(directory: URL) {
         self.directory = directory
@@ -40,7 +46,22 @@ public final class DefaultStyleStore: Sendable {
     /// the folder (once: the name is its content's) and saved with the same path; without `package`, or if the file cannot
     /// be read there (`SafePackageFile`, by the rules of `PackageFileKind.asset`), Toma's background is saved in its
     /// place. Then the folder keeps no other image. Throws what creating the folder or writing a file throws.
-    public func save(_ style: DefaultStyle, from package: ProjectPackage?) throws {
+    public func save(_ style: DefaultStyle, from package: ProjectPackage?) async throws {
+        try await onQueue { try self.write(style, from: package) }
+    }
+
+    /// Back to Toma's style: the saved style and its image go.
+    public func reset() async throws {
+        try await onQueue {
+            guard unlink(self.directory.appending(path: Self.fileName).path) == 0 || errno == ENOENT else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+            self.removeImages(except: nil)
+        }
+    }
+
+    /// `save`, on the queue.
+    private func write(_ style: DefaultStyle, from package: ProjectPackage?) throws {
         var style = style
         var image: String?
         if case let .image(file) = style.style.background {
@@ -51,16 +72,8 @@ public final class DefaultStyleStore: Sendable {
             }
         }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(style), to: directory.appending(path: Self.fileName))
+        try Self.writeAtomically(try ProjectJSON.encoder().encode(style), to: directory.appending(path: Self.fileName))
         removeImages(except: image)
-    }
-
-    /// Back to Toma's style: the saved style and its image go.
-    public func reset() throws {
-        guard unlink(directory.appending(path: Self.fileName).path) == 0 || errno == ENOENT else {
-            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
-        }
-        removeImages(except: nil)
     }
 
     // MARK: - What a new project takes
@@ -74,12 +87,13 @@ public final class DefaultStyleStore: Sendable {
     }
 
     /// The background a new document of `package` starts with for the default style's `background`: an image is copied
-    /// from the style folder `directory` into the package's `assets/` (`AssetImport.copy`) and named where it is there;
-    /// without the folder, or if it cannot be copied, Toma's background. Anything else, as it is.
+    /// from the style folder `directory` into the package's `assets/` (`AssetImport.copy`) and named where it is there, if
+    /// it decodes as the package's asset reader decodes one; without the folder, or if it does not decode or cannot be
+    /// copied, Toma's background. Anything else, as it is.
     static func background(_ background: Background, from directory: URL?, into package: ProjectPackage) -> Background {
         guard case let .image(file) = background else { return background }
-        guard let directory, let name = assetName(file),
-            let copied = try? AssetImport.copy(directory.appending(path: name), into: package)
+        guard let directory, let name = assetName(file), case let url = directory.appending(path: name), AssetImport.decodes(url),
+            let copied = try? AssetImport.copy(url, into: package)
         else { return DefaultStyle.toma.style.background }
         return .image(file: copied)
     }
@@ -100,8 +114,49 @@ public final class DefaultStyleStore: Sendable {
         if lstat(target.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG { return true }
         guard let data = SafePackageFile.read(file, in: package, as: .asset) else { return false }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        try DurableFile.writeAtomically(data, to: target)
+        try Self.writeAtomically(data, to: target)
         return true
+    }
+
+    /// Runs `body` on the queue, and waits for it without blocking the caller's thread.
+    private func onQueue(_ body: @escaping @Sendable () throws -> Void) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+            queue.async { continuation.resume(with: Result { try body() }) }
+        }
+    }
+
+    /// Replaces `url` with `data` as `DurableFile.writeAtomically(_:to:)` does, through a temporary file of a name of its
+    /// own (`.<name>.<UUID>.tmp`), so two writers never write one temporary file.
+    private static func writeAtomically(_ data: Data, to url: URL) throws {
+        let folder = url.deletingLastPathComponent()
+        let temporary = folder.appending(path: ".\(url.lastPathComponent).\(UUID().uuidString).tmp")
+        let fd = open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        do {
+            try data.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) in
+                var written = 0
+                while written < bytes.count {
+                    let count = Darwin.write(fd, bytes.baseAddress! + written, bytes.count - written)
+                    if count < 0 {
+                        if errno == EINTR { continue }
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                    written += count
+                }
+            }
+            try DurableFile.fullSync(fd)
+        } catch {
+            close(fd)
+            unlink(temporary.path)
+            throw error
+        }
+        close(fd)
+        guard rename(temporary.path, url.path) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            unlink(temporary.path)
+            throw error
+        }
+        try DurableFile.syncDirectory(folder)
     }
 
     /// Removes the images of the folder, but `kept`: an earlier style's are no longer needed. What cannot be removed stays.

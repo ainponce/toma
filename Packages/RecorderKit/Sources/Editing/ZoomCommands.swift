@@ -13,9 +13,9 @@ import ProjectFormat
 ///   source shown at its output end in the same clip.
 /// - Blocks never overlap on the track: a new one goes only in free space, at least `minimumDuration` long, and a move
 ///   or a trim stops at the block next to it and at the ends of the output.
-/// - Touching an automatic block (moving, trimming or changing it) makes it the user's (`origin: .user`), which the
-///   planner never replaces; deleting one keeps its source range in `zoom.suppressed`, so planning again does not put it
-///   back.
+/// - Touching an automatic block (trimming or changing it) makes it the user's (`origin: .user`), which the planner never
+///   replaces. Moving one makes it a block of the user's with a new id, and deleting one goes: either way its source
+///   range goes into `zoom.suppressed`, so planning again never fills the place it left, whatever the settings.
 /// - The `target` of a step, which joins a burst of steps into one undo group, is the id of the block it acts on (several
 ///   in the order of the document, joined by commas), or the pointer of the setting.
 public enum ZoomCommands {
@@ -48,18 +48,33 @@ public enum ZoomCommands {
     }
 
     /// Moves block `id` so its output range starts at `toOutputStart`, as long as it is in the output: it stops at the
-    /// blocks before and after it and at the ends of the output. `nil` if it stays where it is, if there is no such block
-    /// or it shows nothing.
-    public static func move(_ doc: EditDocument, id: String, toOutputStart: Int64) -> EditStep? {
+    /// blocks before and after it and at the ends of the output. An automatic block becomes one of the user's with the id
+    /// `makeID("z-")` (the old one, from its planned place, would be planned again there), which goes where its start puts
+    /// it in the list, and its old source range goes into `zoom.suppressed` (as a deletion's does): the planner never
+    /// fills that place again, even with other settings or once the moved block is deleted. The step's target is the
+    /// block's id after the move. `nil` if it stays where it is, if there is no such block or it shows nothing.
+    public static func move(_ doc: EditDocument, id: String, toOutputStart: Int64, makeID: (String) -> String) -> EditStep? {
         let track = ZoomTrack(doc)
         guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }), let current = track.outputs[k] else { return nil }
         let room = track.room(around: k)
         let length = current.upperBound - current.lowerBound
         let start = min(max(toOutputStart, room.lowerBound), max(room.upperBound - length, room.lowerBound))
         guard start != current.lowerBound, let source = track.source(of: start..<(start + length)) else { return nil }
-        var region = doc.zoom.regions[k]
+        let old = doc.zoom.regions[k]
+        var region = old
         (region.take, region.start, region.end) = (source.take, source.start, source.end)
-        return touched(doc, k, region, label: .zoomMove)
+        guard old.origin == .auto else { return touched(doc, k, region, label: .zoomMove) }
+        var ids = Set(doc.zoom.regions.map(\.id))
+        region.id = DocumentIDs.new("z-", makeID, avoiding: &ids)
+        region.origin = .user
+        var rest = doc.zoom.regions
+        rest.remove(at: k)
+        var changes = DocumentChanges()
+        changes.remove(old, from: .zoomRegions, at: k)
+        changes.insert(region, into: .zoomRegions, at: rest.firstIndex { $0.start > region.start } ?? rest.count)
+        let range = SourceRange(take: old.take, start: old.start, end: old.end)
+        if !doc.zoom.suppressed.contains(range) { changes.insert(range, into: .zoomSuppressed, at: doc.zoom.suppressed.count) }
+        return changes.step(label: .zoomMove, target: region.id)
     }
 
     /// Moves `edge` of block `id` to output instant `toOutput`: it stops at the block next to it and at the ends of the
@@ -141,17 +156,27 @@ public enum ZoomCommands {
     }
 
     /// Plans the automatic blocks of `take` again with `settings` (`AutoZoomPlanner`, which leaves the user's blocks and
-    /// the suppressed ranges alone), in one step: `/zoom/auto` set to `settings`, the automatic blocks of `take` that were
-    /// not touched removed and the planned ones inserted, each before the first block kept that starts after it. A planned
-    /// block the document has already, the same, stays as it is; one whose id a block kept has (an automatic block the
-    /// user moved keeps the id of its planned place) is left out, so no two blocks share an id. With `enabled` off, it
-    /// only removes. Without anything to change, the step has no changes.
+    /// the suppressed ranges alone), in one step: `/zoom/auto` set to `settings`, and the blocks as `replanned` gives them.
+    /// With `enabled` off, it only removes. Without anything to change, the step has no changes.
     public static func regenerate(_ doc: EditDocument, take: TakeRecord, events: [InputEvent], settings: AutoZoomSettings) -> EditStep {
-        func untouched(_ region: ZoomRegion) -> Bool { region.origin == .auto && region.take == take.id }
         var planned = doc
         planned.zoom.auto = settings
+        var changes = DocumentChanges()
+        changes.set(["zoom", "auto"], from: doc.zoom.auto, to: settings)
+        changes.edit(.zoomRegions, from: doc.zoom.regions, to: replanned(planned, take: take, events: events), id: \.id)
+        return changes.stepEvenIfEmpty(label: .zoomRegenerate, target: "/zoom/auto")
+    }
+
+    /// The blocks of `doc` with the automatic ones of `take` that were not touched planned again (`AutoZoomPlanner`, with
+    /// the document as it is: its settings, its stage, its user's blocks and suppressed ranges; nothing with `enabled`
+    /// off): the others kept in their order, each planned one before the first kept that starts after it. A planned block
+    /// the document has already, the same, stays where it is; one whose id a kept block has is left out, so no two blocks
+    /// share an id. What `regenerate` and `StyleCommands.applyDefaultStyle` write.
+    static func replanned(_ doc: EditDocument, take: TakeRecord, events: [InputEvent]) -> [ZoomRegion] {
+        func untouched(_ region: ZoomRegion) -> Bool { region.origin == .auto && region.take == take.id }
+        var planned = doc
         planned.zoom.regions = doc.zoom.regions.filter { !untouched($0) }
-        let made = settings.enabled ? AutoZoomPlanner.plan(take: take, events: events, document: planned) : []
+        let made = doc.zoom.auto.enabled ? AutoZoomPlanner.plan(take: take, events: events, document: planned) : []
 
         let taken = Set(planned.zoom.regions.map(\.id))
         let old = Dictionary(doc.zoom.regions.filter(untouched).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -168,11 +193,7 @@ public enum ZoomCommands {
             regions.append(region)
         }
         regions += kept[next...]
-
-        var changes = DocumentChanges()
-        changes.set(["zoom", "auto"], from: doc.zoom.auto, to: settings)
-        changes.edit(.zoomRegions, from: doc.zoom.regions, to: regions, id: \.id)
-        return changes.stepEvenIfEmpty(label: .zoomRegenerate, target: "/zoom/auto")
+        return regions
     }
 
     /// "Show Zooms" (design §5.4): off, no block zooms, and none is deleted.

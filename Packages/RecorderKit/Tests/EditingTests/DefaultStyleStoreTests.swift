@@ -28,15 +28,19 @@ private enum StoreFixture {
             styleDirectory: styleDirectory)
     }
 
-    /// A take of 1 s of one display, in a new version 3 package `<name>.toma` that was never opened. Written off the
-    /// main actor, where the tests' sessions live.
-    @concurrent static func package(in dir: URL, name: String) async throws -> LoadedProject {
-        let builder = try TakeBuilder(in: dir, name: name, formatVersion: 3)
+    /// A take of 1 s of one display with a click at 0.5 s, in a new package `<name>.toma` of `formatVersion` that was never
+    /// opened. Written off the main actor, where the tests' sessions live.
+    @concurrent static func package(in dir: URL, name: String, formatVersion: Int = 3) async throws -> LoadedProject {
+        let builder = try TakeBuilder(in: dir, name: name, formatVersion: formatVersion)
         let frame = Rect(x: 0, y: 0, width: 640, height: 360)
         try await builder.addVideoTrack(
             id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: frame, pixelScale: 1),
             segments: [VideoSegmentSpec(start: base, seconds: 1, framesPerSecond: 10)])
         try builder.addEvents([InputEvent(t: base.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: frame, scale: 1))])
+        try builder.addEvents([
+            InputEvent(t: base.adding(seconds: 0.5), kind: .mouseDown(.left, x: 320, y: 180)),
+            InputEvent(t: base.adding(seconds: 0.55), kind: .mouseUp(.left, x: 320, y: 180)),
+        ])
         return try builder.write()
     }
 
@@ -60,9 +64,9 @@ private enum StoreFixture {
     static func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 }
 
-@Test func defaultStyleStoreRoundTripsAndFallsBack() throws {
+@Test func defaultStyleStoreRoundTripsAndFallsBack() async throws {
     #expect(DefaultStyleStore.defaultDirectory.standardizedFileURL.path.hasSuffix("/Library/Application Support/Toma/Style"))
-    try withTemporaryDirectory { dir in
+    try await withTemporaryDirectory { dir in
         let store = DefaultStyleStore(directory: dir.appending(path: "Style", directoryHint: .isDirectory))
         let file = store.directory.appending(path: "default-style.json")
         // None saved: Toma's.
@@ -73,7 +77,7 @@ private enum StoreFixture {
         style.style.background = .wallpaper("dune-1")
         style.cursor.scale = 2
         style.zoomAuto.depth = 2.5
-        try store.save(style, from: nil)
+        try await store.save(style, from: nil)
         #expect(store.load() == style)
         #expect(try Data(contentsOf: file) == ProjectJSON.encoder().encode(style))
 
@@ -81,11 +85,11 @@ private enum StoreFixture {
         try Data("{\"style\":".utf8).write(to: file)
         #expect(store.load() == .toma)
         // Reset: Toma's, and nothing left.
-        try store.save(style, from: nil)
-        try store.reset()
+        try await store.save(style, from: nil)
+        try await store.reset()
         #expect(store.load() == .toma)
         #expect(!StoreFixture.exists(file))
-        try store.reset()
+        try await store.reset()
 
         // An image named anywhere but `assets/`, and one saved without the package it is in: Toma's background.
         var outside = style
@@ -95,7 +99,7 @@ private enum StoreFixture {
         #expect(store.load().style.padding == 0.1)
         var image = style
         image.style.background = .image(file: "assets/\(String(repeating: "a", count: 32)).png")
-        try store.save(image, from: nil)
+        try await store.save(image, from: nil)
         #expect(store.load().style.background == DefaultStyle.toma.style.background)
     }
 }
@@ -115,7 +119,7 @@ private enum StoreFixture {
 
         // Saved from the project it is in: copied to `Style/<sha>.png`, named as it was.
         let store = DefaultStyleStore(directory: dir.appending(path: "Style", directoryHint: .isDirectory))
-        try store.save(style, from: source.package)
+        try await store.save(style, from: source.package)
         #expect(try Data(contentsOf: store.directory.appending(path: name)) == png)
         #expect(store.load() == style)
 
@@ -149,7 +153,7 @@ private enum StoreFixture {
         }
 
         // A new project read without being opened is never shown with an image it may not hold, and nothing is written.
-        try store.save(style, from: source.package)
+        try await store.save(style, from: source.package)
         let unopened = try await StoreFixture.package(in: dir, name: "Unopened")
         let (_, read) = try EditSession.readDocument(
             unopened.package.url, take: nil,
@@ -157,11 +161,74 @@ private enum StoreFixture {
         #expect(read.style.background == DefaultStyle.toma.style.background)
         #expect(!StoreFixture.exists(unopened.package.assetsURL))
 
+        // An image there that does not decode is not taken in either.
+        try Data("not a picture".utf8).write(to: store.directory.appending(path: name))
+        let damaged = try await StoreFixture.package(in: dir, name: "Damaged")
+        let third = try await EditSession.open(
+            damaged.package.url, take: nil,
+            context: StoreFixture.context(caches: caches, defaultStyle: style, styleDirectory: store.directory))
+        #expect(third.document.style.background == DefaultStyle.toma.style.background)
+        #expect(!StoreFixture.exists(damaged.package.assetsURL))
+        await third.close()
+        try FileManager.default.removeItem(at: store.directory.appending(path: name))
+        try await store.save(style, from: source.package)
+
         // Another style lets the image go from `Style/`; so does going back to Toma's.
-        try store.save(.toma, from: nil)
+        try await store.save(.toma, from: nil)
         #expect(!StoreFixture.exists(store.directory.appending(path: name)))
-        try store.save(style, from: source.package)
-        try store.reset()
+        try await store.save(style, from: source.package)
+        try await store.reset()
         #expect(try FileManager.default.contentsOfDirectory(atPath: store.directory.path).isEmpty)
+    }
+}
+
+@MainActor @Test func applyingTheDefaultStyleBringsItsImageInOneStep() async throws {
+    try await withTemporaryDirectory { dir in
+        let caches = dir.appending(path: "Caches")
+        let source = try await StoreFixture.package(in: dir, name: "Source")
+        let png = try StoreFixture.png()
+        let picked = dir.appending(path: "Background.png")
+        try png.write(to: picked)
+        let file = try AssetImport.copy(picked, into: source.package)
+        var style = DefaultStyle.toma
+        style.style.background = .image(file: file)
+        let store = DefaultStyleStore(directory: dir.appending(path: "Style", directoryHint: .isDirectory))
+        try await store.save(style, from: source.package)
+
+        // A version 2 project, as phase 1a left it: the banner's "Apply Default Style".
+        let old = try await StoreFixture.package(in: dir, name: "Old", formatVersion: 2)
+        let session = try await EditSession.open(
+            old.package.url, take: nil, context: StoreFixture.context(caches: caches, defaultStyle: .toma, styleDirectory: nil))
+        let legacy = session.document
+        #expect(legacy.zoom.regions.isEmpty)
+        #expect(await session.applyDefaultStyle(store.load(), styleDirectory: store.directory) == .applied)
+        #expect(await session.flushed() == 2)
+        // The image is in the package, named in the step, and the click is zoomed on: one undo.
+        #expect(session.document.style.background == .image(file: file))
+        #expect(try Data(contentsOf: old.package.fileURL(file)) == png)
+        #expect(session.document.zoom.auto == DefaultStyle.toma.zoomAuto)
+        #expect(session.document.zoom.regions.count == 1)
+        #expect(session.document.cursor.style == .toma)
+        #expect(session.undoLabel == .applyDefaultStyle)
+        #expect(session.undo() == .applied)
+        var undone = session.document
+        undone.logSequence = legacy.logSequence
+        #expect(undone == legacy)
+        #expect(session.undoLabel == nil)
+        await session.close()
+
+        // Without its image in `Style/`, or without the folder: the classic gradient in its place.
+        try FileManager.default.removeItem(at: store.directory.appending(path: String(file.dropFirst("assets/".count))))
+        for (index, folder) in [store.directory, nil].enumerated() {
+            let other = try await StoreFixture.package(in: dir, name: "Other \(index)", formatVersion: 2)
+            let session = try await EditSession.open(
+                other.package.url, take: nil, context: StoreFixture.context(caches: caches, defaultStyle: .toma, styleDirectory: nil))
+            #expect(await session.applyDefaultStyle(style, styleDirectory: folder) == .pendingUpgrade)
+            #expect(session.document.style.background == .tomaClassic)
+            #expect(session.document.style.shadow == DefaultStyle.toma.style.shadow)
+            #expect(await session.flushed() == 2)
+            #expect(!StoreFixture.exists(other.package.assetsURL))
+            await session.close()
+        }
     }
 }

@@ -149,9 +149,21 @@ public enum SafePackageFile {
     }
 }
 
+extension PackageFileKind {
+    /// The longest side a wallpaper photo or an asset is decoded to: twice the largest output, 4K (3 840).
+    public static let largestDecodedSide = 2 * 3_840
+
+    /// The image of `data`, the bytes of a file of this kind, decoded as the package's readers decode it
+    /// (`BoundedImage.decode` with this kind's formats and size): a cursor image as stored, a wallpaper photo or an asset
+    /// reduced to `largestDecodedSide`. `nil` if it does not decode so. The one rule, so a file the editor takes in (an
+    /// imported image) is one the render draws.
+    public func decodedImage(_ data: Data) -> CGImage? {
+        let longSide = self == .cursorImage ? nil : Self.largestDecodedSide
+        return BoundedImage.decode(data, maxPixelSide: maxPixelSide, reducedTo: longSide, allowedTypes: imageTypes)
+    }
+}
+
 extension ProjectPackage {
-    /// The longest side `wallpaper(take:displayID:)` and `asset(_:)` decode to: twice the largest output, 4K (3 840).
-    private static let largestDecodedSide = 2 * 3_840
 
     /// The image `takes/<take>/cursors/<hash>.png`, a `cursorImage` event's, or `nil` if it is absent or breaks the
     /// rules of `PackageFileKind.cursorImage`. `hash` and `take` come from the package and are checked whole before
@@ -163,19 +175,18 @@ extension ProjectPackage {
     /// The image `takes/<take>/wallpapers/display-<displayID>.png` decoded with its longer side reduced to 7 680 pixels
     /// at most, or `nil` if it is absent or breaks the rules of `PackageFileKind.wallpaper`.
     public func wallpaper(take: String, displayID: UInt32) -> CGImage? {
-        image(at: "takes/\(take)/wallpapers/display-\(displayID).png", as: .wallpaper, reducedTo: Self.largestDecodedSide)
+        image(at: "takes/\(take)/wallpapers/display-\(displayID).png", as: .wallpaper)
     }
 
     /// The image `file` (`"assets/<sha>.<ext>"`, as the document names it) decoded with its longer side reduced to
     /// 7 680 pixels at most and turned upright by its EXIF orientation, or `nil` if it is absent or breaks the rules
     /// of `PackageFileKind.asset`.
     public func asset(_ file: String) -> CGImage? {
-        image(at: file, as: .asset, reducedTo: Self.largestDecodedSide)
+        image(at: file, as: .asset)
     }
 
-    /// Each image comes out as `BoundedImage.decode` gives it: 8-bit RGBA with premultiplied alpha.
-    private func image(at relativePath: String, as kind: PackageFileKind, reducedTo longSide: Int? = nil) -> CGImage? {
-        guard let data = SafePackageFile.read(relativePath, in: self, as: kind) else { return nil }
-        return BoundedImage.decode(data, maxPixelSide: kind.maxPixelSide, reducedTo: longSide, allowedTypes: kind.imageTypes)
+    /// Each image comes out as `PackageFileKind.decodedImage` gives it: 8-bit RGBA with premultiplied alpha.
+    private func image(at relativePath: String, as kind: PackageFileKind) -> CGImage? {
+        SafePackageFile.read(relativePath, in: self, as: kind).flatMap(kind.decodedImage)
     }
 }

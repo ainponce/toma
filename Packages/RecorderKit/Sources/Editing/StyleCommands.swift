@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import ProjectFormat
 
 /// The commands of the panel's style values (design §5.4) and of the Project menu (§5.1), as pure functions of the
@@ -10,46 +11,78 @@ public enum StyleCommands {
     /// The frame rates of the Project menu: `EditDocument.frameRates`.
     public static let frameRates = EditDocument.frameRates
 
-    /// Sets the value at `pointer` (`/style/padding`, `/cursor/scale`…) to `value`, as the step `label` with the pointer
-    /// as its target, so a burst of steps on one control is one undo (design §6.4). `nil` if the pointer names nothing in
-    /// the document (an optional value that is not there: one is added or taken away with its parent's `set`), names
-    /// `documentVersion` or `logSequence`, which no edit changes, if `value` is what is there or cannot be encoded.
+    /// The values `set` changes: the panel's style values, whose every value draws (design §5.4). What has a rule of its
+    /// own goes through its command instead: the clips, the blocks and the changes of the tracks (their ranges, their ids,
+    /// "touching an automatic one makes it the user's"), the automatic zoom's settings (planned again:
+    /// `ZoomCommands.regenerate`), the camera's styles (`TrackCommands`), the screens, the aspect and the frame rate.
+    static let styleValues: [[String]] = [
+        ["style"], ["cursor"], ["zoom", "show"], ["zoom", "spring"], ["zoom", "motionBlur"], ["camera", "show"], ["audio"],
+    ]
+
+    /// Sets the style value at `pointer` (`/style/padding`, `/cursor/scale`, `/audio/tracks/take-001~1mic/gain`…) to
+    /// `value`, as the step `label` with the pointer as its target, so a burst of steps on one control is one undo
+    /// (design §6.4). `nil` for a pointer outside `styleValues`, one that names nothing in the document (an optional value
+    /// that is not there: one is added or taken away with its parent's `set`), if `value` is what is there or cannot be
+    /// encoded.
     public static func set(_ doc: EditDocument, _ pointer: String, _ value: some Encodable, label: EditLabel) -> EditStep? {
-        guard let path = try? JSONPointer(pointer), let before = DocumentValues.value(at: path, in: doc),
-            let after = try? JSONValue(encoding: value), after != before
+        guard let path = try? JSONPointer(pointer),
+            styleValues.contains(where: { path.components.starts(with: $0) })
         else { return nil }
-        return EditStep(label: label, target: path.string, changes: [.set(path: path, before: before, after: after)])
+        return setting(doc, path, value, label: label)
     }
 
     /// The shape of the output (design §5.2): the stage rearranges itself, and the zooms, kept in the screen's
     /// coordinates, still hold.
     public static func setAspect(_ doc: EditDocument, _ aspect: Aspect) -> EditStep? {
-        set(doc, "/aspect", aspect, label: .aspect)
+        setting(doc, JSONPointer(components: ["aspect"]), aspect, label: .aspect)
     }
 
     /// The project's frame rate, one of `frameRates`; `nil` for any other.
     public static func setFrameRate(_ doc: EditDocument, _ fps: Int) -> EditStep? {
         guard frameRates.contains(fps) else { return nil }
-        return set(doc, "/frameRate", fps, label: .frameRate)
+        return setting(doc, JSONPointer(components: ["frameRate"]), fps, label: .frameRate)
     }
 
-    /// "Apply Default Style" (design §5.4 and §5.9), one step: the stage of `style` (with mipmapped sampling and the
-    /// spring between shapes, as a new document has them: `NewDocument`), its whole cursor and the zoom's settings
-    /// (`show`, `auto`, `spring` and `motionBlur`). Never the sequence, the screens, the zoom blocks, the camera, the
-    /// sound, the aspect nor the frame rate. The blocks are not planned again here: that is `ZoomCommands.regenerate`.
-    /// An image background names `assets/<sha>.<ext>`: the caller copies it into the package first (`importAsset` of
-    /// `Style/<sha>.<ext>`, which gives the same path). `nil` if the document has all of it already.
-    public static func applyDefaultStyle(_ doc: EditDocument, _ style: DefaultStyle) -> EditStep? {
-        var stage = style.style
-        stage.screenSampling = .mipmapped
-        stage.geometryTransition = .spring
+    /// The `set` of the value at `path` to `value`; `nil` if the path names nothing, or the value is what is there or
+    /// cannot be encoded.
+    private static func setting(_ doc: EditDocument, _ path: JSONPointer, _ value: some Encodable, label: EditLabel) -> EditStep? {
+        guard let before = DocumentValues.value(at: path, in: doc), let after = try? JSONValue(encoding: value), after != before
+        else { return nil }
+        return EditStep(label: label, target: path.string, changes: [.set(path: path, before: before, after: after)])
+    }
+
+    /// "Apply Default Style" (design §5.4 and §5.9), one step, as a new document of `take` would have it (`NewDocument`):
+    /// the stage of `style`, with mipmapped sampling and the spring between shapes; its whole cursor, drawn from the
+    /// recorded images if `events` has a `cursorImage` and as Toma's arrow if not; the zoom's settings (`show`, `auto`,
+    /// `spring` and `motionBlur`); and, as with any change of the automatic zoom's settings (design §5.4), the automatic
+    /// blocks of `take` that were not touched planned again for the document so styled (`ZoomCommands.replanned`). Never
+    /// the sequence, the screens, the user's blocks, the camera, the sound, the aspect nor the frame rate.
+    ///
+    /// The background is `style`'s as it is: an image one must be in the package already (`EditSession.applyDefaultStyle`
+    /// brings it from the style's folder, or falls back to the classic gradient). `nil` if the document has all of it
+    /// already, or a value cannot be encoded.
+    public static func applyDefaultStyle(
+        _ doc: EditDocument, _ style: DefaultStyle, take: TakeRecord, events: [InputEvent]
+    ) -> EditStep? {
+        var styled = doc
+        styled.style = style.style
+        styled.style.screenSampling = .mipmapped
+        styled.style.geometryTransition = .spring
+        styled.cursor = style.cursor
+        let recordedImages = events.contains { if case .cursorImage = $0.kind { true } else { false } }
+        styled.cursor.style = recordedImages ? .system : .toma
+        styled.zoom.show = style.zoomShow
+        styled.zoom.auto = style.zoomAuto
+        styled.zoom.spring = style.zoomSpring
+        styled.zoom.motionBlur = style.zoomMotionBlur
         var changes = DocumentChanges()
-        changes.set(["style"], from: doc.style, to: stage)
-        changes.set(["cursor"], from: doc.cursor, to: style.cursor)
-        changes.set(["zoom", "show"], from: doc.zoom.show, to: style.zoomShow)
-        changes.set(["zoom", "auto"], from: doc.zoom.auto, to: style.zoomAuto)
-        changes.set(["zoom", "spring"], from: doc.zoom.spring, to: style.zoomSpring)
-        changes.set(["zoom", "motionBlur"], from: doc.zoom.motionBlur, to: style.zoomMotionBlur)
+        changes.set(["style"], from: doc.style, to: styled.style)
+        changes.set(["cursor"], from: doc.cursor, to: styled.cursor)
+        changes.set(["zoom", "show"], from: doc.zoom.show, to: styled.zoom.show)
+        changes.set(["zoom", "auto"], from: doc.zoom.auto, to: styled.zoom.auto)
+        changes.set(["zoom", "spring"], from: doc.zoom.spring, to: styled.zoom.spring)
+        changes.set(["zoom", "motionBlur"], from: doc.zoom.motionBlur, to: styled.zoom.motionBlur)
+        changes.edit(.zoomRegions, from: doc.zoom.regions, to: ZoomCommands.replanned(styled, take: take, events: events), id: \.id)
         return changes.step(label: .applyDefaultStyle, target: "/style")
     }
 }
