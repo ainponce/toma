@@ -6,7 +6,8 @@ import ImageIO
 import Metal
 import ProjectFormat
 import RecorderKitTestSupport
-import Render
+// @testable for `FrameEvaluator.frame(at:)`, which takes every cursor image as readable.
+@testable import Render
 import Testing
 
 // The drawn cursor (design §7.5): the recorded images or Toma's cursors, placed by their hotspot, sized from the
@@ -34,6 +35,30 @@ private func redPNG(width: Int, height: Int) throws -> Data {
         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
     context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
     context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    let image = try #require(context.makeImage())
+    let data = NSMutableData()
+    let destination = try #require(CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil))
+    CGImageDestinationAddImage(destination, image, nil)
+    try #require(CGImageDestinationFinalize(destination))
+    return data as Data
+}
+
+/// A PNG of `width` × `height` opaque pixels: red in the top-left quarter, green in the top-right one, blue across the
+/// bottom half. Flipped either way, or placed by the wrong point, it shows.
+private func quartersPNG(width: Int, height: Int) throws -> Data {
+    let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+    let context = try #require(CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    // Rows from the top, RGBA.
+    let pixels = try #require(context.data).bindMemory(to: UInt8.self, capacity: width * height * 4)
+    for y in 0..<height {
+        for x in 0..<width {
+            let rgb: (UInt8, UInt8, UInt8) = y >= height / 2 ? (0, 0, 255) : x < width / 2 ? (255, 0, 0) : (0, 255, 0)
+            let i = (y * width + x) * 4
+            (pixels[i], pixels[i + 1], pixels[i + 2], pixels[i + 3]) = (rgb.0, rgb.1, rgb.2, 255)
+        }
+    }
     let image = try #require(context.makeImage())
     let data = NSMutableData()
     let destination = try #require(CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil))
@@ -136,6 +161,43 @@ func recordedImageIsPlacedByItsHotspot() async throws {
         let centre = SIMD2(
             Double(drawn.x.lowerBound + drawn.x.upperBound + 1) / 2, Double(drawn.y.lowerBound + drawn.y.upperBound + 1) / 2)
         #expect(abs(centre.x - layer.hotspot.x) <= 1 && abs(centre.y - layer.hotspot.y) <= 1, "\(centre) vs \(layer.hotspot)")
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func anImageIsDrawnUprightWithItsOwnHotspotAtThePointer() async throws {
+    try await withTemporaryDirectory { dir in
+        // 32 × 48 pt at 2×, its hotspot in its bottom-left part, a quarter across and three quarters down.
+        let project = try await cursorProject(in: dir) { builder in
+            try builder.addCursorImage(quartersPNG(width: 64, height: 96), hotspot: [0.25, 0.75], size: [32, 48], at: base)
+        }
+        let system = document(project, style: .system)
+        let layer = try #require(evaluate(project, system).cursor)
+        #expect(layer.hotspotFraction == [0.25, 0.75] && abs(layer.aspect - 2.0 / 3) < 1e-12)
+        let height = layer.height, width = layer.height * layer.aspect
+        let left = layer.hotspot.x - 0.25 * width, top = layer.hotspot.y - 0.75 * height
+
+        let bytes = try await render(project, system)
+        // The pointer is on the blue half, a quarter in from the left.
+        let point = pixel(bytes, width: size.x, x: Int(layer.hotspot.x), y: Int(layer.hotspot.y))
+        #expect(isClose(point, [255, 0, 0, 255], tolerance: 3), "\(point)")
+        // Red top left, green top right, blue below: each where the image puts it.
+        let quarters: [(color: SIMD4<Float>, x: ClosedRange<Double>, y: ClosedRange<Double>)] = [
+            ([0, 0, 255, 255], left...(left + width / 2), top...(top + height / 2)),
+            ([0, 255, 0, 255], (left + width / 2)...(left + width), top...(top + height / 2)),
+            ([255, 0, 0, 255], left...(left + width), (top + height / 2)...(top + height)),
+        ]
+        for quarter in quarters {
+            let drawn = try #require(box(of: quarter.color, in: bytes, width: size.x), "\(quarter.color)")
+            // A box of pixels, from the first one's left edge to past the last one; colours mix over a pixel or two
+            // where they meet.
+            let x = Double(drawn.x.lowerBound)...Double(drawn.x.upperBound + 1)
+            let y = Double(drawn.y.lowerBound)...Double(drawn.y.upperBound + 1)
+            for (got, expected) in [(x.lowerBound, quarter.x.lowerBound), (x.upperBound, quarter.x.upperBound),
+                                    (y.lowerBound, quarter.y.lowerBound), (y.upperBound, quarter.y.upperBound)] {
+                #expect(abs(got - expected) <= 2, "\(quarter.color): \(x) × \(y), expected \(quarter.x) × \(quarter.y)")
+            }
+        }
     }
 }
 
@@ -269,9 +331,12 @@ private func cursorImage(_ t: Double, size: SIMD2<Double>, kind: CursorKind? = n
     #expect(recorded?.hotspotFraction == [0.25, 0.5] && recorded?.aspect == 0.75)
     // Before the first image, the arrow: 24 pt × 1.5 × 0.5.
     #expect(layer(at: 0.25, document) == CursorLayer(hotspot: [160, 90], height: 18))
-    // In Toma's style, an image without a kind is drawn as recorded; with one, Toma's cursor of that kind, 24 pt.
+    // In Toma's style everything is 24 pt tall: an image without a kind is drawn as recorded, at 24 pt; with one,
+    // Toma's cursor of that kind.
     document.cursor.style = .toma
-    #expect(layer(at: 1, document) == recorded)
+    var recordedInToma = recorded
+    recordedInToma?.height = 18
+    #expect(layer(at: 1, document) == recordedInToma)
     let iBeam = [events[0], cursorImage(0.5, size: [24, 32], kind: .iBeam)]
     let toma = FrameEvaluator(take: take, events: iBeam, document: document, outputSize: [320, 180]).frame(at: 1).cursor
     #expect(toma == CursorLayer(
@@ -330,6 +395,14 @@ func opacityAndThePressAreDrawnAroundTheHotspot() throws {
     pressed.clickScale = 0.5
     let half = try #require(box(of: red, in: try draw(pressed), width: 200))
     #expect(half.x == 92...107 && half.y == 64...95)
+    // An off-centre hotspot stays at the point, whole and pressed: the image goes a quarter left and three quarters up.
+    var offCentre = full
+    offCentre.hotspotFraction = [0.25, 0.75]
+    let placed = try #require(box(of: red, in: try draw(offCentre), width: 200))
+    #expect(placed.x == 92...123 && placed.y == 32...95)
+    offCentre.clickScale = 0.5
+    let shrunk = try #require(box(of: red, in: try draw(offCentre), width: 200))
+    #expect(shrunk.x == 96...111 && shrunk.y == 56...87)
     // At half opacity, half the red over the black.
     var faded = full
     faded.opacity = 0.5

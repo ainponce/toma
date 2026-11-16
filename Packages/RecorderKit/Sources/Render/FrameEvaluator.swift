@@ -32,8 +32,8 @@ import ProjectFormat
 ///     renderer says which can, `frame(at:cursorImageIsReadable:)`) or has no usable size, Toma's arrow.
 ///   - `toma`: Toma's cursor of that `cursorImage`'s `kind`; without a `kind`, the recorded image as in `system`;
 ///     without images (takes before 1b), the arrow.
-///   It is `scale × its height in points × the screen's rect height / the region's height` tall: Toma's cursors are
-///   24 pt, a recorded image its `size.height`.
+///   It is `scale × its height in points × the screen's rect height / the region's height` tall: in `toma`, 24 pt,
+///   whatever it is drawn with; in `system`, a recorded image's `size.height` (and the arrow's 24 pt).
 /// - Camera (`camera.show`): the camera's bubble (`CameraBubble`, the zoom's rule too): the first camera track with a
 ///   segment, from the start of its first segment on, at the `CameraStyleTimeline` of the take's `camera.initial` and
 ///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
@@ -98,13 +98,15 @@ public struct FrameEvaluator: Sendable {
         self.init(take: take, events: events, document: document, outputSize: outputSize)
     }
 
-    /// The frame at `outputTime`, with every recorded cursor image readable.
-    public func frame(at outputTime: Double) -> RenderFrame {
+    /// The frame at `outputTime` with every recorded cursor image taken as readable: for tests, which know. Anything that
+    /// draws asks `frame(at:cursorImageIsReadable:)` with the images it can read, or it would draw another image in the
+    /// place, the hotspot and the aspect of one it cannot.
+    func frame(at outputTime: Double) -> RenderFrame {
         frame(at: outputTime) { _ in true }
     }
 
     /// The frame at `outputTime`, with the recorded cursor images `cursorImageIsReadable` says can be read (by hash):
-    /// the renderer's, which draws the arrow for one it cannot read.
+    /// Toma's arrow is drawn for one it cannot read (the renderer's, `CursorImages`).
     public func frame(at outputTime: Double, cursorImageIsReadable: (_ hash: String) throws -> Bool) rethrows -> RenderFrame {
         var frame = RenderFrame(
             outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle,
@@ -228,7 +230,7 @@ public struct FrameEvaluator: Sendable {
         else { return .toma(.arrow) }
         return Look(
             image: .recorded(hash: recorded.hash), hotspot: recorded.hotspot.clamped(lowerBound: .zero, upperBound: .one),
-            aspect: size.x / size.y, pointHeight: size.y)
+            aspect: size.x / size.y, pointHeight: document.cursor.style == .toma ? 24 : size.y)
     }
 
     /// The camera at source instant `source` and output time `output`, from the start of its first segment on.
