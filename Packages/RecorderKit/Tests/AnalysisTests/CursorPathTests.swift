@@ -416,3 +416,38 @@ private struct PathRandom: RandomNumberGenerator {
         return z ^ (z >> 31)
     }
 }
+
+/// Every bit of a sample of the path.
+private func bits(_ sample: CursorSample?) -> [UInt64]? {
+    guard let sample else { return nil }
+    let values = [sample.position.x, sample.position.y, sample.opacity, sample.clickScale]
+    return values.map(\.bitPattern) + [sample.pressed ? 1 : 0]
+}
+
+@Test(arguments: [CursorSmoothing.off, fast, medium, smooth])
+func aSpanAndTheReaderGiveTheSampleOfEachInstant(smoothing: CursorSmoothing) {
+    // Hidden when idle (the opacity moves too), clicks landing, a checkpoint, the first step and the output's end.
+    let path = cursorPath(
+        [moveTo(0.4, curve(0.4))] + curveEvents.filter { $0.t >= sourceTime(0.4) } + positions(from: 4, to: 7) { _ in [300, 300] },
+        smoothing, hideWhenIdle: true, sequence: [pathClip(1, from: 0, to: 8)])
+    let h = TimeMap.frameTime(1, frameRate: 24) / 2
+    for centre in [0.0, 0.39, 0.4, 0.41, 0.999, 1.0, 1.234, 2.5, 7.99, 8, 9] {
+        let t = outputTime(centre)
+        let span = path.span(from: t - h, through: t + h)
+        // On and off the grid, inside the span, and out of it (worked out on its own).
+        for τ in Array(stride(from: t - h, through: t + h, by: 1_234_567)) + [t, t - h - 5_000_000, t + h + 1, t + 2 * h, -1] {
+            #expect(bits(span.sample(atOutput: τ)) == bits(path.sample(atOutput: τ)), "\(smoothing) at \(τ)")
+        }
+    }
+    // At the first click's step, the click's point itself, read either way.
+    if case .spring = smoothing {
+        let click = StepGrid.outputTime(ofStep: StepGrid.nearestStep(toOutput: outputTime(1.234)))
+        #expect(path.sample(atOutput: click)?.position == curve(1.234))
+        #expect(path.span(from: click, through: click).sample(atOutput: click)?.position == curve(1.234))
+    }
+    // The reader, forward, back, across checkpoints and past the end: the sample of each step.
+    var reader = CursorPath.Reader(path)
+    for s in [0, 1, 239, 240, 241, 598, 599, 600, 601, 300, 1199, 1200, 4799, 4800, 4801, 5000, 10] {
+        #expect(bits(reader.sample(atStep: s)) == bits(path.sample(atStep: s)), "\(smoothing) step \(s)")
+    }
+}

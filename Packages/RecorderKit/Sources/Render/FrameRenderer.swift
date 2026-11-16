@@ -35,18 +35,19 @@ public enum RenderError: Error, Equatable {
 /// decoder position per track it reads, so two consumers reading different times would keep sending
 /// them back and forth, reopening a reader for nearly every frame.
 ///
-/// Decoding is synchronous, on the caller's thread: the first frame read from each segment loads its
-/// track and decodes from the keyframe before it, and so does every scrub (a step back, or a jump of
-/// 2 s or more). Reading forward frame by frame only decodes the frames in between. So is a background image's: the
-/// first frame that shows it decodes it (unless another renderer holds it already) and covers and blurs it, waiting
-/// for the GPU (`BackgroundImages`); the frames after it reuse that. A blurred wallpaper is drawn and blurred the same
-/// way, once. A window frame's title is drawn by CoreText the first time it is shown (`TitleTexture`), and reused the
-/// same way. So is a cursor's image: each of Toma's cursors is drawn, and each image the take recorded read and uploaded,
-/// the first time a frame shows it (`CursorImages`), and reused. A screen sampled with mipmaps (`ScreenLayer.mipmapped`)
-/// is not: every frame copies the part shown of its decoded frame and makes its mipmaps on the GPU (`Compositor`). A
-/// sharp wallpaper is drawn by its shader, except under the zoom camera's motion blur: there, its mesh gradient is drawn
-/// once into a texture of the output's size (`BackgroundImages`, like a blurred one's) and each subsample reads it,
-/// rather than working it out again up to 16 times over the whole output.
+/// Decoding is synchronous, on the caller's thread: the first frame read from each segment loads its track and decodes
+/// from the keyframe before it, and so does every scrub (a step back, or a jump of 2 s or more). Reading forward frame
+/// by frame only decodes the frames in between. So is a background image's: the first frame that shows it decodes it
+/// (unless another renderer holds it already) and covers and blurs it, waiting for the GPU (`BackgroundImages`); the
+/// frames after it reuse that. A blurred wallpaper is drawn and blurred the same way, once. A window frame's title is
+/// drawn by CoreText the first time it is shown (`TitleTexture`), and reused the same way; under the zoom camera, again
+/// at each step of √2 of the depth, so it stays sharp. So is a cursor's image: each of Toma's cursors is drawn, and
+/// each image the take recorded read and uploaded, the first time a frame shows it (`CursorImages`), and reused. A
+/// screen sampled with mipmaps (`ScreenLayer.mipmapped`) is not: every frame copies the part shown of its decoded frame
+/// and makes its mipmaps on the GPU (`Compositor`). A sharp wallpaper is drawn by its shader, except under the zoom
+/// camera's motion blur: there, its mesh gradient is drawn once into a texture of the output's size
+/// (`BackgroundImages`, like a blurred one's) and each subsample reads it, rather than working it out again up to 16
+/// times over the whole output.
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
@@ -152,7 +153,7 @@ public final class FrameRenderer: @unchecked Sendable {
             let screen = try frame.screen.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let camera = try frame.camera.flatMap { try texture(of: reader(for: $0.trackID), at: $0.sourceTime, until: commandBuffer) }
             let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: outputSize)
-            let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0) }
+            let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0, scale: TitleTexture.scale(for: frame)) }
             // Every cursor of the frame, blurred or not, is drawn with the image of its time.
             let image = frame.cursor?.image ?? frame.subframes.lazy.compactMap(\.cursor).first?.image ?? frame.cursorSamples.first?.image
             let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))
