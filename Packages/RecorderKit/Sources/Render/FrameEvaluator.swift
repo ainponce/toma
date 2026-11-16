@@ -34,6 +34,14 @@ import ProjectFormat
 ///     without images (takes before 1b), the arrow.
 ///   It is `scale × its height in points × the screen's rect height / the region's height` tall: in `toma`, 24 pt,
 ///   whatever it is drawn with; in `system`, a recorded image's `size.height` (and the arrow's 24 pt).
+/// - Click effects (`cursor.clickEffect`, `ClickEffects`), with the cursor shown: those of the cursor path's clicks
+///   (the `mouseDown`s inside a kept clip, `CursorPath.clicks`), each as it was at its own instant (the source instant
+///   its output time shows): on the screen shown then, at its point in the region that screen showed, and of the
+///   height of the cursor drawn then, `h`, as a fraction of the screen's rect. A frame draws it on its screen's rect,
+///   so it stays on the clicked point however the region moves after it, and keeps its size when the cursor's image
+///   changes; none for a click off that region or while its window was not on screen, nor while another screen is
+///   shown or the window is not on screen. A click's press ends when no button is down any more
+///   (`CursorPath.releases`).
 /// - Camera (`camera.show`): the camera's bubble (`CameraBubble`, the zoom's rule too): the first camera track with a
 ///   segment, from the start of its first segment on, at the `CameraStyleTimeline` of the take's `camera.initial` and
 ///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
@@ -62,6 +70,9 @@ public struct FrameEvaluator: Sendable {
     private let bubble: CameraBubble?
     /// The take's `cursorImage` events, in time order.
     private let cursorImages: [RecordedCursor]
+    /// The output times of the cursor path's clicks, and where each was at its own instant (`nil`: none shown).
+    private let clicks: [Int64]
+    private let clickPlaces: [ClickPlace?]
 
     /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`.
     public init(
@@ -82,6 +93,10 @@ public struct FrameEvaluator: Sendable {
         cursorImages = events.sortedByTime().compactMap { event in
             guard case let .cursorImage(hash, hotspot, size, kind) = event.kind else { return nil }
             return RecordedCursor(t: event.t, hash: hash, hotspot: hotspot, size: size, kind: kind)
+        }
+        clicks = paths.cursor.clicks.map(\.output)
+        clickPlaces = paths.cursor.clicks.map { click in
+            ClickPlace(click, take: take.id, sequence: document.sequence, timeMap: timeMap, stage: paths.stage)
         }
     }
 
@@ -135,6 +150,16 @@ public struct FrameEvaluator: Sendable {
             if document.cursor.show, view.onScreen, let region = view.region {
                 frame.cursor = try cursor(
                     at: output, source: source, in: region, shownIn: rect, cursorImageIsReadable: cursorImageIsReadable)
+                frame.clickEffects = try ClickEffects.layers(
+                    atOutput: output, clicks: clicks, releases: paths.cursor.releases, effect: document.cursor.clickEffect
+                ) { index in
+                    // As the cursor was drawn at the click, on this frame's rect.
+                    guard let click = clickPlaces[index], click.track == trackID else { return nil }
+                    let look = try look(at: click.source, cursorImageIsReadable: cursorImageIsReadable)
+                    return (
+                        SIMD2(rect.x, rect.y) + click.point * SIMD2(rect.width, rect.height),
+                        document.cursor.scale * look.pointHeight * rect.height / click.regionHeight)
+                }
             }
         }
         frame.camera = camera(at: source, output: output)
@@ -211,6 +236,35 @@ public struct FrameEvaluator: Sendable {
             height: document.cursor.scale * look.pointHeight * rect.height / region.height,
             image: look.image, hotspotFraction: look.hotspot, aspect: look.aspect, opacity: sample.opacity,
             clickScale: sample.clickScale)
+    }
+
+    /// A click as its effect keeps it: what the frame at its output time showed of it, as the cursor is placed there.
+    private struct ClickPlace: Sendable {
+        /// The screen shown.
+        var track: String
+        /// Where the click is in the region that screen showed: 0, 0 is its top-left corner, 1, 1 its bottom-right one.
+        var point: SIMD2<Double>
+        /// That region's height, in points.
+        var regionHeight: Double
+        /// The source instant shown: the cursor drawn then gives the effect's size.
+        var source: HostTime
+
+        /// `nil` when that frame showed no screen of `take`, or the window was not on screen, or the click is off the
+        /// region.
+        init?(
+            _ click: (output: Int64, point: SIMD2<Double>), take: String, sequence: [Clip], timeMap: TimeMap,
+            stage: StagePoints
+        ) {
+            guard let shown = timeMap.source(atOutput: click.output), sequence[shown.clip].take == take,
+                  case let (track, view)? = stage.shownScreen(at: shown.source), view.onScreen, let region = view.region
+            else { return nil }
+            let global = CGPoint(x: click.point.x, y: click.point.y)
+            guard CursorGeometry.contains(global, region) else { return nil }
+            self.track = track
+            point = CursorGeometry.normalized(global, in: region)
+            regionHeight = region.height
+            source = shown.source
+        }
     }
 
     /// What the cursor is drawn with at source instant `source`, by the document's `cursor.style` (see the type's notes).

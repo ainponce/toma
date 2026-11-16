@@ -139,6 +139,12 @@ public enum ClipSpeed {
     }
 }
 
+extension EditDocument {
+    /// The frame rates a document can have (`frameRate`): the editor's frame grid and the export's choices, each on the
+    /// 600 Hz step of the motion (`StepGrid`). A document with another one is never drawn as it is.
+    public static let frameRates = [24, 25, 30, 50, 60]
+}
+
 /// Which recorded screen is shown: `initial` for each take, then from each change on, its track.
 public struct ScreenPlan: Codable, Equatable, Sendable {
     /// The screen track of each take at its start, by take ID.

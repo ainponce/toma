@@ -104,6 +104,24 @@ public final class TakeBuilder {
     /// The take's `cameraStyle`, written with it: how the camera looks from the start. `nil`, as in a take without a
     /// camera or of version 1.
     public var cameraStyle: CameraStyle?
+    /// The HEVC encoder the video segments are written with: the one VideoToolbox picks by default (the hardware
+    /// encoder, or its software encoder when the hardware one takes no more sessions), as the recorder writes them.
+    ///
+    /// With `.hardwareOnly`, a segment whose writer fails, as it does when the media engine takes no more sessions
+    /// (other processes hold them), is written again from its first frame every `hardwareEncoderRetryInterval` seconds
+    /// until it is written, and the builder throws once `hardwareEncoderTimeout` seconds passed without that: it is
+    /// never written by another encoder, whose bitstream decodes to other pixels. While other checkouts run their tests,
+    /// the media engine has been seen to take no session for 90 s.
+    public var videoEncoder: VideoEncoderChoice = .any
+    public var hardwareEncoderTimeout = 300.0
+    public var hardwareEncoderRetryInterval = 0.5
+    /// Makes the writer of a video segment for `url`, at `framesPerSecond`, with `encoder`: a `FragmentedTrackWriter`
+    /// outside real time. Tests replace it, for one to make the hardware encoder look busy.
+    public var makeVideoWriter: VideoWriterFactory = { url, framesPerSecond, encoder in
+        try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: framesPerSecond), realTime: false, videoEncoder: encoder)
+    }
+
+    public typealias VideoWriterFactory = (_ url: URL, _ framesPerSecond: Int, _ encoder: VideoEncoderChoice) throws -> FragmentedTrackWriter
 
     private let takeID = "take-001"
     private var tracks: [TrackRecord] = []
@@ -142,17 +160,41 @@ public final class TakeBuilder {
         try addTrack(id: id, kind: kind, source: source)
         for spec in segments {
             let (index, url) = try nextSegment(of: id, start: spec.start)
-            let writer = try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: spec.framesPerSecond), realTime: false)
             let first = framesWritten[id, default: 0]
             let count = Int((spec.seconds * Double(spec.framesPerSecond)).rounded())
-            for i in 0..<count {
-                let pts = spec.start.adding(seconds: Double(i) / Double(spec.framesPerSecond))
-                let sample = SampleFactory.videoSample(width: spec.width, height: spec.height, pts: pts, frameIndex: first + i)
-                try writer.append(spec.transform?(first + i, sample) ?? sample)
-            }
+            let end = try await writeVideoSegment(spec, to: url, frames: first..<(first + count))
             framesWritten[id] = first + count
-            let end = try await close(writer, at: spec.start.adding(seconds: spec.seconds), leaveOpen: spec.leaveOpen, url: url)
             try record(index: index, of: id, url: url, start: spec.start, end: end, endReason: spec.endReason)
+        }
+    }
+
+    /// Writes the frames `frames` of a track as the segment `spec` at `url` and returns where it ends; with
+    /// `.hardwareOnly`, again and again while it fails, as `videoEncoder` says.
+    private nonisolated(nonsending) func writeVideoSegment(
+        _ spec: VideoSegmentSpec, to url: URL, frames: Range<Int>
+    ) async throws -> HostTime {
+        let deadline = Date().addingTimeInterval(hardwareEncoderTimeout)
+        while true {
+            do {
+                let writer = try makeVideoWriter(url, spec.framesPerSecond, videoEncoder)
+                for (i, frameIndex) in frames.enumerated() {
+                    let pts = spec.start.adding(seconds: Double(i) / Double(spec.framesPerSecond))
+                    let sample = SampleFactory.videoSample(width: spec.width, height: spec.height, pts: pts, frameIndex: frameIndex)
+                    try writer.append(spec.transform?(frameIndex, sample) ?? sample)
+                }
+                return try await close(writer, at: spec.start.adding(seconds: spec.seconds), leaveOpen: spec.leaveOpen, url: url)
+            } catch {
+                guard videoEncoder == .hardwareOnly else { throw error }
+                // What a failed writer left; a new one refuses a path that is there.
+                try? FileManager.default.removeItem(at: url)
+                guard Date() < deadline else {
+                    throw TestSupportError.failed("""
+                        \(url.lastPathComponent): the hardware HEVC encoder wrote nothing for \(hardwareEncoderTimeout) s (the \
+                        media engine takes no more sessions while other processes hold them); last error: \(error)
+                        """)
+                }
+                try await Task.sleep(for: .seconds(hardwareEncoderRetryInterval))
+            }
         }
     }
 
