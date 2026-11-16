@@ -43,11 +43,12 @@ public struct CameraCard: Equatable, Sendable {
     }
 }
 
-/// Where the zoom acts (1c design §5.4).
+/// Where the zoom acts, and whether the background moves with it (1c design §5.4).
 public enum ScreenMode: Equatable, Sendable {
-    /// Over the whole stage, as in 1b.
+    /// Over the whole stage, background included, as in 1b: Bubble and Screen only.
     case stage
-    /// Inside the screen's card, with the background still: a split.
+    /// Inside the screen's card, with the background still: a split, and the camera layouts, whose screen is hidden (no
+    /// zoom is seen under them).
     case card
 }
 
@@ -129,7 +130,8 @@ public enum CameraLayoutGeometry {
     ///
     /// What a layout does not show stays where the Bubble layout has it, at `hiddenScale` around its centre, with opacity 0;
     /// without `bubble`, the camera of Bubble and Screen only is an empty rect at the output's centre, with opacity 0. The
-    /// camera's border and shadow weigh 1 everywhere but in Camera full screen. Only a split is in `.card` mode.
+    /// camera's border and shadow weigh 1 everywhere but in Camera full screen. Bubble and Screen only are in `.stage`
+    /// mode; Split, Camera only and Camera full screen in `.card`, with the background still (§5.4).
     public static func geometry(
         kind: LayoutKind, split: SplitLayout?, bubble: CameraFrame?, output: SIMD2<Double>, padding: Double,
         cornerRadius: Double, screenAspect: Double?
@@ -158,12 +160,12 @@ public enum CameraLayoutGeometry {
         case .cameraOnly:
             let area = StageLayout.screenRect(contentAspect: nil, padding: padding, outputSize: output)
             let camera = centred(keptInCameraAspects(SIMD2(area.width, area.height)), in: area)
-            return LayoutGeometry(screen: hidden(stage), camera: card(camera), mode: .stage)
+            return LayoutGeometry(screen: hidden(stage), camera: card(camera), mode: .card)
         case .cameraFull:
             let camera = CameraCard(
                 rect: Rect(x: 0, y: 0, width: output.x, height: output.y), cornerRadius: 0, opacity: 1, borderWeight: 0,
                 shadowWeight: 0)
-            return LayoutGeometry(screen: hidden(stage), camera: camera, mode: .stage)
+            return LayoutGeometry(screen: hidden(stage), camera: camera, mode: .card)
         }
     }
 

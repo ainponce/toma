@@ -220,8 +220,30 @@ private func expectSize(_ rect: Rect, _ width: Double, _ height: Double, sourceL
     }
 
     @Test func splitIsCardMode() {
+        // The zoom moves the whole stage only while the screen is shown on it; a split zooms inside its card, and the two
+        // camera layouts keep the background still (1c design §5.4).
         for kind in LayoutKind.allCases {
-            #expect(geometry(kind, size(1920, 1080)).mode == (kind == .split ? .card : .stage), "\(kind)")
+            let expected: ScreenMode = kind == .bubble || kind == .screenOnly ? .stage : .card
+            #expect(geometry(kind, size(1920, 1080)).mode == expected, "\(kind)")
+        }
+    }
+
+    @Test func cameraLayoutsKeepTheBackgroundStillInEveryFormat() {
+        let outputs = [
+            size(1920, 1080), size(1080, 1920), size(1080, 1080), size(1080, 1350), size(1440, 1080), size(1080, 1440),
+            size(1512, 982),
+        ]
+        for output in outputs {
+            for screenAspect in [16.0 / 9, 16.0 / 10, 4.0 / 3, 9.0 / 16, 1, nil] {
+                for padding in [0, newPadding, 0.2] {
+                    for kind in [LayoutKind.cameraOnly, .cameraFull] {
+                        for frame in [bubble(output), nil] {
+                            let g = geometry(kind, output, screenAspect: screenAspect, padding: padding, bubble: .some(frame))
+                            #expect(g.mode == .card, "\(kind) in \(output.x)×\(output.y), screen \(String(describing: screenAspect))")
+                        }
+                    }
+                }
+            }
         }
     }
 
