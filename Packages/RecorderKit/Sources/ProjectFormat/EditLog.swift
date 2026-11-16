@@ -300,7 +300,8 @@ public enum EditLogReader {
 }
 
 /// Reads the files of the package that must never be followed through a symlink nor block on a FIFO: `edit.json`,
-/// `edit-log.jsonl` and the manifest that is read again before the package moves to v3.
+/// `edit-log.jsonl`, the manifest and each take's `events.jsonl` (`regularFile(_:in:)`, through no link inside the
+/// package).
 public enum SafeRead {
     /// The bytes of the regular file at `url`, read from a descriptor opened with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK |
     /// O_CLOEXEC` and checked with `fstat`: a symlink throws `ELOOP`, and a FIFO or anything else that is not a regular
@@ -319,6 +320,17 @@ public enum SafeRead {
         defer { close(fd) }
         guard size <= maxBytes else { throw POSIXError(.EFBIG) }
         return try readToEnd(fd, capacity: Int(size), limit: maxBytes)
+    }
+
+    /// The bytes of the regular file at `relativePath` inside `folder` (`takes/take-001/events.jsonl` of a package), read
+    /// as `regularFile(at:)` reads them but reached from `folder` one component at a time, each opened with `openat` and
+    /// `O_NOFOLLOW` from the one before it: a link anywhere below `folder`, a folder on the way included, throws `ELOOP`
+    /// and is never followed, even one swapped in midway. `folder` itself may be reached through links (the user's own,
+    /// `/var`). A component that is empty, `.` or `..` throws `EINVAL`, and one on the way that is not a folder `ENOTDIR`.
+    public static func regularFile(_ relativePath: String, in folder: URL) throws -> Data {
+        let (fd, size) = try openRegularFile(relativePath, in: folder)
+        defer { close(fd) }
+        return try readToEnd(fd, capacity: Int(size), limit: nil)
     }
 
     /// Everything from `fd` to its end; with a `limit`, `EFBIG` once more than `limit` bytes were read.
@@ -349,6 +361,43 @@ public enum SafeRead {
     static func openRegularFile(_ url: URL, flags: Int32) throws -> (fd: Int32, size: off_t) {
         let fd = open(url.path, flags | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else { throw POSIXError.current() }
+        return (fd, try regularSize(of: fd))
+    }
+
+    /// `openRegularFile(_:flags:)` for `relativePath` inside `folder`, read-only, as `regularFile(_:in:)` reaches it.
+    static func openRegularFile(_ relativePath: String, in folder: URL) throws -> (fd: Int32, size: off_t) {
+        let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+        guard let name = components.last, components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+            throw POSIXError(.EINVAL)
+        }
+        var directory = open(folder.path, O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_CLOEXEC)
+        guard directory >= 0 else { throw POSIXError.current() }
+        for component in components.dropLast() {
+            let next = openat(directory, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+            guard next >= 0 else {
+                var error = POSIXError.current()
+                // With `O_DIRECTORY`, a link is refused as not being a folder: say it is a link.
+                var info = stat()
+                if error.code == .ENOTDIR, fstatat(directory, component, &info, AT_SYMLINK_NOFOLLOW) == 0,
+                    info.st_mode & S_IFMT == S_IFLNK
+                {
+                    error = POSIXError(.ELOOP)
+                }
+                close(directory)
+                throw error
+            }
+            close(directory)
+            directory = next
+        }
+        let fd = openat(directory, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
+        let openError = fd < 0 ? POSIXError.current() : nil
+        close(directory)
+        if let openError { throw openError }
+        return (fd, try regularSize(of: fd))
+    }
+
+    /// The size of the regular file open on `fd`; `EFTYPE`, and `fd` closed, for anything else.
+    private static func regularSize(of fd: Int32) throws -> off_t {
         var info = stat()
         guard fstat(fd, &info) == 0 else {
             let error = POSIXError.current()
@@ -359,7 +408,7 @@ public enum SafeRead {
             close(fd)
             throw POSIXError(.EFTYPE)
         }
-        return (fd, info.st_size)
+        return info.st_size
     }
 }
 

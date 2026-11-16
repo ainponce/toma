@@ -4,7 +4,8 @@ import Foundation
 import ProjectFormat
 import Synchronization
 
-/// The volume an item is on, as the library needs it to decide what it may look at by itself (design §6.5, §6.8).
+/// The volume an item is on, as the library needs it to decide what it may look at by itself (design §6.5, §6.8): only
+/// what the system answers at once. Its free space, which takes a few milliseconds to work out, is `freeSpace(of:)`.
 public struct VolumeInfo: Equatable, Sendable {
     /// `volumeUUIDStringKey`; the volume's mount point for one that has no UUID.
     public var uuid: String
@@ -18,14 +19,15 @@ public struct VolumeInfo: Equatable, Sendable {
     public var isNetwork: Bool
     /// The item is synced: iCloud Drive or a file provider (`~/Library/CloudStorage`).
     public var isSynced: Bool
-    /// The free space, in bytes.
-    public var availableBytes: Int64
     /// The volume cannot be written to (`volumeIsReadOnlyKey`): its projects open only to be looked at.
     public var isReadOnly: Bool
+    /// The folder the volume is mounted at (`volumeURLKey`): `/`, `/System/Volumes/Data`, `/Volumes/Trabajo`; empty if
+    /// the system does not say.
+    public var mountPath: String
 
     public init(
-        uuid: String, name: String, isInternal: Bool, isRemovable: Bool, isNetwork: Bool, isSynced: Bool, availableBytes: Int64,
-        isReadOnly: Bool = false
+        uuid: String, name: String, isInternal: Bool, isRemovable: Bool, isNetwork: Bool, isSynced: Bool,
+        isReadOnly: Bool = false, mountPath: String
     ) {
         self.uuid = uuid
         self.name = name
@@ -33,8 +35,8 @@ public struct VolumeInfo: Equatable, Sendable {
         self.isRemovable = isRemovable
         self.isNetwork = isNetwork
         self.isSynced = isSynced
-        self.availableBytes = availableBytes
         self.isReadOnly = isReadOnly
+        self.mountPath = mountPath
     }
 }
 
@@ -71,8 +73,12 @@ public protocol LibraryFileSystem: Sendable {
     func list(_ directory: URL) throws -> [URL]
     /// The item at `url` itself; its `addedToDirectory` only `withAddedDate`, which asks the disk once more.
     func stat(_ url: URL, withAddedDate: Bool) throws -> FileStat
-    /// The volume `url` is on.
+    /// The volume `url` is on, at once: asked for every project the library looks at.
     func volume(of url: URL) throws -> VolumeInfo
+    /// The free space of the volume `url` is on, in bytes. It takes the system a few milliseconds (it counts what it
+    /// could purge), so it is asked only where it is shown or needed (the sidebar's footer, a copy, the alert of the
+    /// trash), never for each project.
+    func freeSpace(of url: URL) throws -> Int64
     /// The bytes of the regular file at `url`, which must not be larger than `maxBytes`.
     func read(_ url: URL, maxBytes: Int) throws -> Data
     /// The space everything inside the folder `package` takes on its disk, in bytes.
@@ -139,17 +145,15 @@ public struct SystemFileSystem: LibraryFileSystem {
             addedToDirectory: withAddedDate ? Self.addedToDirectory(url) : nil)
     }
 
-    /// With `URLResourceValues`, read again on every call. Synced: an item iCloud or a file provider syncs
-    /// (`isUbiquitousItemKey`) or one in `SyncedFolders`, the folders 1b refuses to record into for the same reason.
-    /// Free space: the larger of the space for important usage, which counts what the system would purge, and the space
-    /// free right now (a disk image gives 0 for the first).
+    /// With `URLResourceValues`, read again on every call, without the free space (`freeSpace(of:)`). Synced: an item
+    /// iCloud or a file provider syncs (`isUbiquitousItemKey`) or one in `SyncedFolders`, the folders 1b refuses to
+    /// record into for the same reason.
     public func volume(of url: URL) throws -> VolumeInfo {
         var url = url
         url.removeAllCachedResourceValues()
         let values = try url.resourceValues(forKeys: [
             .volumeUUIDStringKey, .volumeURLKey, .volumeLocalizedNameKey, .volumeNameKey, .volumeIsInternalKey,
-            .volumeIsRemovableKey, .volumeIsEjectableKey, .volumeIsLocalKey, .isUbiquitousItemKey,
-            .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey, .volumeIsReadOnlyKey,
+            .volumeIsRemovableKey, .volumeIsEjectableKey, .volumeIsLocalKey, .isUbiquitousItemKey, .volumeIsReadOnlyKey,
         ])
         guard let uuid = values.volumeUUIDString ?? values.volume?.path else { throw CocoaError(.fileReadUnknown) }
         return VolumeInfo(
@@ -159,8 +163,19 @@ public struct SystemFileSystem: LibraryFileSystem {
             isRemovable: values.volumeIsRemovable == true || values.volumeIsEjectable == true,
             isNetwork: values.volumeIsLocal != true,
             isSynced: values.isUbiquitousItem == true || SyncedFolders.contains(url),
-            availableBytes: max(values.volumeAvailableCapacityForImportantUsage ?? 0, Int64(values.volumeAvailableCapacity ?? 0)),
-            isReadOnly: values.volumeIsReadOnly == true)
+            isReadOnly: values.volumeIsReadOnly == true,
+            mountPath: values.volume?.path ?? "")
+    }
+
+    /// The larger of the space for important usage, which counts what the system would purge, and the space free right
+    /// now (a disk image gives 0 for the first), with `URLResourceValues` read again.
+    public func freeSpace(of url: URL) throws -> Int64 {
+        var url = url
+        url.removeAllCachedResourceValues()
+        let values = try url.resourceValues(forKeys: [
+            .volumeAvailableCapacityForImportantUsageKey, .volumeAvailableCapacityKey,
+        ])
+        return max(values.volumeAvailableCapacityForImportantUsage ?? 0, Int64(values.volumeAvailableCapacity ?? 0))
     }
 
     /// With `SafeRead.regularFile(at:maxBytes:)`: `ELOOP` for a link (`O_NOFOLLOW`), `EFTYPE` at once for a FIFO or
