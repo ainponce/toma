@@ -209,6 +209,16 @@
         }
       }
     },
+    "Angle" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ángulo"
+          }
+        }
+      }
+    },
     "Another app changed this project, and this version of Toma can't open it now." : {
       "comment" : "Why a project couldn't be opened: another process changed it into one this version can't read",
       "localizations" : {
@@ -252,6 +262,16 @@
         }
       }
     },
+    "Appearance" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apariencia"
+          }
+        }
+      }
+    },
     "Apply Default Style" : {
       "comment" : "The banner of a project of an earlier version",
       "localizations" : {
@@ -284,12 +304,44 @@
         }
       }
     },
+    "Audio" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio"
+          }
+        }
+      }
+    },
     "Audio and Script" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Audio y guion"
+          }
+        }
+      }
+    },
+    "Aurora" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aurora"
+          }
+        }
+      }
+    },
+    "Background" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondo"
           }
         }
       }
@@ -301,6 +353,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Antes de la cuenta regresiva, Toma corre el atajo con el texto “on”. Si responde “changed”, Toma lo corre con “off” al terminar la grabación. El README del proyecto explica cómo crearlo."
+          }
+        }
+      }
+    },
+    "Berry" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mora"
+          }
+        }
+      }
+    },
+    "Blur" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfoque"
           }
         }
       }
@@ -416,6 +488,16 @@
         }
       }
     },
+    "Choose Image…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir imagen…"
+          }
+        }
+      }
+    },
     "Choose on Screen" : {
       "localizations" : {
         "es" : {
@@ -433,6 +515,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Círculo"
+          }
+        }
+      }
+    },
+    "Citrus" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cítrico"
           }
         }
       }
@@ -477,6 +569,17 @@
         }
       }
     },
+    "Color" : {
+      "comment" : "A background type, and a colour swatch",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color"
+          }
+        }
+      }
+    },
     "Coming in phase 2." : {
       "localizations" : {
         "es" : {
@@ -487,12 +590,42 @@
         }
       }
     },
+    "Coral" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Coral"
+          }
+        }
+      }
+    },
+    "Corners" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esquinas"
+          }
+        }
+      }
+    },
     "Couldn't export the video" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't open the image." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo abrir la imagen."
           }
         }
       }
@@ -598,6 +731,37 @@
         }
       }
     },
+    "Cursor" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cursor"
+          }
+        }
+      }
+    },
+    "Custom" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personalizado"
+          }
+        }
+      }
+    },
+    "Dark" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oscura"
+          }
+        }
+      }
+    },
     "Desktop" : {
       "comment" : "A display's only desktop (Space), and the open island's section of desktops",
       "localizations" : {
@@ -681,6 +845,26 @@
         }
       }
     },
+    "Dune" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Duna"
+          }
+        }
+      }
+    },
+    "Dusk" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Crepúsculo"
+          }
+        }
+      }
+    },
     "Edit" : {
       "comment" : "The teleprompter: edit its script",
       "localizations" : {
@@ -692,6 +876,16 @@
         }
       }
     },
+    "Ember" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brasa"
+          }
+        }
+      }
+    },
     "Encoder load %@" : {
       "comment" : "How much of the encoder's budget the take would use, as 42 %",
       "localizations" : {
@@ -699,6 +893,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Carga del codificador %@"
+          }
+        }
+      }
+    },
+    "End Color" : {
+      "comment" : "A custom gradient's second colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color final"
           }
         }
       }
@@ -766,6 +971,16 @@
         }
       }
     },
+    "Forest" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bosque"
+          }
+        }
+      }
+    },
     "Format" : {
       "comment" : "The editor's format selector: the project's aspect",
       "localizations" : {
@@ -773,6 +988,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Formato"
+          }
+        }
+      }
+    },
+    "Frame" : {
+      "comment" : "The panel's tab and the frame selector",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marco"
           }
         }
       }
@@ -830,6 +1056,26 @@
         }
       }
     },
+    "Gradient" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Degradado"
+          }
+        }
+      }
+    },
+    "Graphite" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grafito"
+          }
+        }
+      }
+    },
     "Grid" : {
       "localizations" : {
         "es" : {
@@ -882,6 +1128,16 @@
         }
       }
     },
+    "Ice" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hielo"
+          }
+        }
+      }
+    },
     "If it isn't being recorded now, click Recover. Nothing recorded is deleted." : {
       "localizations" : {
         "es" : {
@@ -913,6 +1169,16 @@
         }
       }
     },
+    "Image" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagen"
+          }
+        }
+      }
+    },
     "Key %lld" : {
       "comment" : "A key the keyboard layout has no character for, named by its key code, in a keyboard shortcut",
       "localizations" : {
@@ -920,6 +1186,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tecla %lld"
+          }
+        }
+      }
+    },
+    "Lake" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lago"
           }
         }
       }
@@ -942,6 +1218,26 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Más tarde"
+          }
+        }
+      }
+    },
+    "Lavender" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lavanda"
+          }
+        }
+      }
+    },
+    "Light" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clara"
           }
         }
       }
@@ -983,6 +1279,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Marcador puesto."
+          }
+        }
+      }
+    },
+    "Meadow" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Prado"
           }
         }
       }
@@ -1048,12 +1354,42 @@
         }
       }
     },
+    "Midnight" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medianoche"
+          }
+        }
+      }
+    },
+    "Mint" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Menta"
+          }
+        }
+      }
+    },
     "Mission Control" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mission Control"
+          }
+        }
+      }
+    },
+    "Mist" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Niebla"
           }
         }
       }
@@ -1297,6 +1633,16 @@
         }
       }
     },
+    "Ocean" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Océano"
+          }
+        }
+      }
+    },
     "Off" : {
       "comment" : "Microphone: none",
       "localizations" : {
@@ -1401,6 +1747,27 @@
         }
       }
     },
+    "Padding" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Margen"
+          }
+        }
+      }
+    },
+    "Panel" : {
+      "comment" : "The editor's panel (VoiceOver)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Panel"
+          }
+        }
+      }
+    },
     "Part of the recording couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -1461,6 +1828,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "En pausa."
+          }
+        }
+      }
+    },
+    "Peach" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Durazno"
           }
         }
       }
@@ -1751,6 +2128,16 @@
         }
       }
     },
+    "Remove Image" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar la imagen"
+          }
+        }
+      }
+    },
     "Remove Shortcut" : {
       "localizations" : {
         "es" : {
@@ -1803,6 +2190,16 @@
         }
       }
     },
+    "Restore Toma's Style" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volver al estilo de Toma"
+          }
+        }
+      }
+    },
     "Resume" : {
       "localizations" : {
         "es" : {
@@ -1820,6 +2217,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuadrado redondeado"
+          }
+        }
+      }
+    },
+    "Sand" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arena"
           }
         }
       }
@@ -1870,6 +2277,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Falló el guardado de la cámara. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
+    "Saving the image…" : {
+      "comment" : "A background image being copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardando la imagen…"
           }
         }
       }
@@ -1980,6 +2398,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ajustes…"
+          }
+        }
+      }
+    },
+    "Shadow" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sombra"
           }
         }
       }
@@ -2148,6 +2576,17 @@
         }
       }
     },
+    "Start Color" : {
+      "comment" : "A custom gradient's first colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color inicial"
+          }
+        }
+      }
+    },
     "Starting recording…" : {
       "localizations" : {
         "es" : {
@@ -2168,6 +2607,16 @@
         }
       }
     },
+    "Steel" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acero"
+          }
+        }
+      }
+    },
     "Stop" : {
       "localizations" : {
         "es" : {
@@ -2184,6 +2633,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Detener grabación"
+          }
+        }
+      }
+    },
+    "Sunset" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Atardecer"
           }
         }
       }
@@ -2440,6 +2899,17 @@
         }
       }
     },
+    "The image couldn't be saved." : {
+      "comment" : "A background image that could not be copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar la imagen."
+          }
+        }
+      }
+    },
     "The last change couldn't be saved yet. Saving it is tried again every few seconds." : {
       "comment" : "Editor banner (amber): an edit waits in memory after an error other than a full disk",
       "localizations" : {
@@ -2588,6 +3058,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The style couldn't be saved." : {
+      "comment" : "The style for new projects could not be saved",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar el estilo."
           }
         }
       }
@@ -3010,6 +3491,16 @@
         }
       }
     },
+    "This recording has no photo of the desktop." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no tiene una foto del escritorio."
+          }
+        }
+      }
+    },
     "This recording has no screen to export." : {
       "localizations" : {
         "es" : {
@@ -3060,6 +3551,16 @@
         }
       }
     },
+    "Title" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título"
+          }
+        }
+      }
+    },
     "To record system audio, first turn it on in the recording control to give permission. Recording without it." : {
       "localizations" : {
         "es" : {
@@ -3091,12 +3592,33 @@
         }
       }
     },
+    "Toma Classic" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma clásico"
+          }
+        }
+      }
+    },
     "Turn on Do Not Disturb with a shortcut" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Activar No Molestar con un atajo"
+          }
+        }
+      }
+    },
+    "Type" : {
+      "comment" : "The background's type selector",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tipo"
           }
         }
       }
@@ -3122,6 +3644,16 @@
         }
       }
     },
+    "Use This Style for New Projects" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar este estilo en los proyectos nuevos"
+          }
+        }
+      }
+    },
     "Vertical" : {
       "comment" : "The camera bubble's shape: a 3:4 box",
       "localizations" : {
@@ -3140,6 +3672,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Visualización"
+          }
+        }
+      }
+    },
+    "Wallpaper" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondo de pantalla"
           }
         }
       }
@@ -3215,6 +3757,16 @@
         }
       }
     },
+    "Window Buttons" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Botones de la ventana"
+          }
+        }
+      }
+    },
     "Window capture is paused. Still trying to restart it." : {
       "localizations" : {
         "es" : {
@@ -3262,6 +3814,44 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escribir el guion…"
+          }
+        }
+      }
+    },
+    "Zoom" : {
+      "comment" : "The panel's tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zoom"
+          }
+        }
+      }
+    },
+    "frame.none" : {
+      "comment" : "The panel's frame selector: no frame (not the generic \"None\")",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "macOS Window" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ventana de macOS"
           }
         }
       }

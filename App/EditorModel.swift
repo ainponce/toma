@@ -20,6 +20,22 @@ enum EditorSelection: Equatable {
     case screenChange(String)
 }
 
+/// The import of a background image, as the panel shows it.
+enum ImageImportState: Equatable {
+    case idle
+    /// Copying it into the project; a full disk makes it wait (the amber banner says so) until it is cancelled.
+    case importing
+    case notAnImage
+    case saveFailed
+}
+
+/// "Use This Style for New Projects" and "Restore Toma's Style", as the panel shows them.
+enum StyleStoreState: Equatable {
+    case idle
+    case working
+    case failed
+}
+
 /// A strip above the preview (design §5.9): one at a time, the most pressing.
 enum EditorBanner: Equatable {
     /// The last change could not be saved yet (amber).
@@ -89,6 +105,17 @@ final class EditorModel {
     var selection: EditorSelection?
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
+    /// The image the background is being imported from (the panel's "Choose Image…").
+    var imageImport = ImageImportState.idle
+    @ObservationIgnored var importTask: Task<Void, Never>?
+    /// Saving or restoring the style for new projects is under way, or failed.
+    var styleStore = StyleStoreState.idle
+    /// The take has a photo of the desktop (`wallpapers/`) the Desktop background can show.
+    private(set) var hasDesktopPhoto = false
+    /// The take has a camera: the panel's Camera tab exists.
+    private(set) var hasCamera = false
+    /// The edit session, for what the panel does with it (`EditorModel+Panel`).
+    var panelSession: EditSession? { session }
 
     /// Whether the session can change the project, as it last said.
     private(set) var access = EditAccess.readOnly(.openElsewhere)
@@ -277,6 +304,9 @@ final class EditorModel {
         shownRevision = revision
         timeline = Timeline(document, revision: revision)
         self.document = document
+        hasCamera = project.take.tracks.contains { $0.kind == .camera && !$0.segments.isEmpty }
+        hasDesktopPhoto = false
+        Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
         previewAspect = document.aspect
         durationSeconds = timeline?.map.durationSeconds ?? 0
         state = .ready
@@ -307,6 +337,16 @@ final class EditorModel {
             } else if isPlaying {
                 startClock(at: clockSeconds())
             }
+        }
+    }
+
+    /// Whether the take has a photo of the desktop of the first screen shown, read off the main thread.
+    private static func findDesktopPhoto(in project: LoadedProject, document: EditDocument, found: @escaping @MainActor (Bool) -> Void) {
+        let take = project.take, package = project.package
+        let display = document.screens.initial[take.id].flatMap(take.track).flatMap { $0.kind.isScreen ? $0.source.displayID : nil }
+        Task {
+            let has = await Task.detached { display.map { package.wallpaper(take: take.id, displayID: $0) != nil } ?? false }.value
+            found(has)
         }
     }
 

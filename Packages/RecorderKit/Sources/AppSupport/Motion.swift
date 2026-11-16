@@ -28,6 +28,18 @@ public enum Motion {
     public static let bubbleRelease = Spring(damping: 0.82, response: 0.50)
     /// The camera bubble's shape and size (also in the render of style changes).
     public static let bubbleShape = Spring(damping: 0.95, response: 0.50)
+    /// The panel's content when its tab or what it shows changes: a fade with a rise of 6 pt.
+    public static let panelSwap = Spring(damping: 1.0, response: 0.30)
+    /// Clips and blocks of the timeline settling (after a delete, a trim, a snap).
+    public static let trackItem = Spring(damping: 0.90, response: 0.30)
+    /// The timeline's scale with the keyboard or the buttons.
+    public static let timelineZoom = Spring(damping: 1.0, response: 0.28)
+    /// The timeline scrolling by itself.
+    public static let timelineScroll = Spring(damping: 1.0, response: 0.36)
+    /// The highlight when the pointer goes over clips, blocks and edges.
+    public static let hover = Spring(damping: 1.0, response: 0.20)
+    /// How far, in points, the panel's content rises as it appears.
+    public static let panelSwapRise = 6.0
 
     /// How long after the island starts to change a state's content starts to appear.
     public static let contentDelay: Duration = .milliseconds(60)
