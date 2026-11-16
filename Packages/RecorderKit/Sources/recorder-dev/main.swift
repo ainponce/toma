@@ -878,11 +878,18 @@ struct BenchGIF: AsyncParsableCommand {
             let preview = try await GIFEstimate.preview(
                 project: project, document: document, settings: settings, playhead: (range.end - range.start) / 2)
             let previewed = Date().timeIntervalSince(started)
-            let result = try await GIFEstimate.estimate(project: project, document: document, settings: settings, preview: preview)
+            var firstAt: Double?
+            var result: GIFEstimateResult?
+            for try await estimate in GIFEstimate.estimates(project: project, document: document, settings: settings, preview: preview) {
+                if firstAt == nil { firstAt = Date().timeIntervalSince(started) }
+                result = estimate
+            }
             let elapsed = Date().timeIntervalSince(started)
+            guard let result else { throw ExitCode.failure }
             print(String(
-                format: "preview %.2f s (%d bytes), then estimate: both in %.2f s; estimate %d bytes for %.1f s, %d frames, warnings %@",
-                previewed, preview.count, elapsed, result.bytes, result.seconds, result.frames, String(describing: result.warnings)))
+                format: "preview %.2f s (%d bytes); first estimate %.2f s; refined estimate %.2f s: %d bytes for %.1f s, %d frames, warnings %@",
+                previewed, preview.count, firstAt ?? elapsed, elapsed, result.bytes, result.seconds, result.frames,
+                String(describing: result.warnings)))
             print("peak memory: \(peakFootprint().map { "\($0 >> 20) MB" } ?? "unknown")")
             print(String(format: "load average: %.2f", load))
             return

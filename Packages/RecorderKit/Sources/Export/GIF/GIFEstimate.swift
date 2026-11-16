@@ -92,27 +92,67 @@ public enum GIFEstimate {
 
     /// The GIF's size: the bytes a second of `sampleRanges` encoded for real, times the range's length, at two digits. A
     /// `preview` already made (by `preview(...)`) counts as one of the stretches, in place of the first (the estimate does not
-    /// know where the playhead was; the preview is 3 s of real content either way).
+    /// know where the playhead was; the preview is 3 s of real content either way). All the stretches are drawn by one
+    /// renderer.
     public static func estimate(
         project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?
     ) async throws -> GIFEstimateResult {
         let exporter = GIFExporter(project: project, document: document, settings: settings)
-        return try await estimate(settings: settings, preview: preview) { try await exporter.encodeInMemory(range: $0) }
+        let renderer = try exporter.makeRenderer()
+        return try await estimate(settings: settings, preview: preview, first: nil) {
+            try await exporter.encodeInMemory(range: $0, renderer: renderer)
+        }
     }
 
-    /// `estimate(project:…)` with the encoding of a stretch given (the tests count its calls).
+    /// The estimate in two steps, for the export sheet: with a `preview` (and a range long enough to be sampled), first
+    /// the estimate of the preview alone, as soon as it is called, and then the refined one, once the other stretches are
+    /// encoded; the stream then ends. Without one, only the refined estimate. Cancel the task iterating it, or stop
+    /// iterating, to stop the encoding.
+    public static func estimates(
+        project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?
+    ) -> AsyncThrowingStream<GIFEstimateResult, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let exporter = GIFExporter(project: project, document: document, settings: settings)
+                    let renderer = try exporter.makeRenderer()
+                    let final = try await estimate(settings: settings, preview: preview, first: { continuation.yield($0) }) {
+                        try await exporter.encodeInMemory(range: $0, renderer: renderer)
+                    }
+                    continuation.yield(final)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// `estimate(project:…)` with the encoding of a stretch given (the tests count its calls). `first` is told the
+    /// estimate of `preview` alone before any stretch is encoded, when it takes part (a range of up to `sampleCount`
+    /// seconds is encoded whole and `preview` is ignored).
     static func estimate(
-        settings: GIFSettings, preview: Data?, encode: (ExportRange) async throws -> Data
+        settings: GIFSettings, preview: Data?, first: ((GIFEstimateResult) -> Void)?,
+        encode: (ExportRange) async throws -> Data
     ) async throws -> GIFEstimateResult {
         let range = settings.range
         let samples = sampleRanges(range)
+        let length = Double(range.end - range.start) / 1e9
+        func result(bytes: Int64, seconds: Double) -> GIFEstimateResult {
+            let estimated = roundedToTwoDigits(Int64((Double(bytes) / seconds * length).rounded()))
+            return GIFEstimateResult(
+                bytes: estimated, seconds: length, frames: range.frameCount(fps: settings.fps),
+                warnings: warnings(bytes: estimated, seconds: length))
+        }
         var bytes: Int64 = 0
         var seconds = 0.0
         var skipped: Int?
-        if samples.count > 1, let preview, let length = duration(of: preview) {
+        if samples.count > 1, let preview, let previewLength = duration(of: preview), previewLength > 0 {
             skipped = 0
             bytes += Int64(preview.count)
-            seconds += length
+            seconds += previewLength
+            first?(result(bytes: bytes, seconds: seconds))
         }
         for (i, sample) in samples.enumerated() where i != skipped {
             try Task.checkCancellation()
@@ -120,11 +160,7 @@ public enum GIFEstimate {
             seconds += Double(sample.end - sample.start) / 1e9
         }
         guard seconds > 0 else { throw GIFExportError.rangeShorterThanAFrame }
-        let length = Double(range.end - range.start) / 1e9
-        let estimated = roundedToTwoDigits(Int64((Double(bytes) / seconds * length).rounded()))
-        return GIFEstimateResult(
-            bytes: estimated, seconds: length, frames: range.frameCount(fps: settings.fps),
-            warnings: warnings(bytes: estimated, seconds: length))
+        return result(bytes: bytes, seconds: seconds)
     }
 
     /// The seconds a GIF plays once (the sum of its images' delays), or `nil` if it is not one.
