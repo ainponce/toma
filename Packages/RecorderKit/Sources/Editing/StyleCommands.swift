@@ -64,17 +64,45 @@ public enum StyleCommands {
     public static func applyDefaultStyle(
         _ doc: EditDocument, _ style: DefaultStyle, take: TakeRecord, events: [InputEvent]
     ) -> EditStep? {
-        var styled = doc
-        styled.style = style.style
-        styled.style.screenSampling = .mipmapped
-        styled.style.geometryTransition = .spring
-        styled.cursor = style.cursor
+        changes(doc, look: style, camera: nil, take: take, events: events).step(label: .applyDefaultStyle, target: "/style")
+    }
+
+    /// "Apply" a named style (1c design §8), one step (`.styleApply`, the style's id its target): what
+    /// `applyDefaultStyle` does with its look (the stage, the whole cursor, the zoom's settings, and the automatic blocks
+    /// of `take` that were not touched planned again), and its camera's look: mirror, border, shadow, the project's layout
+    /// with its split, and the size's reference. The values are copied: the project is not linked to the style (§4.6).
+    /// Never the bubble's shape, size or place (`camera.initial` and `changes`), whether the camera shows, the aspect,
+    /// the frame rate, the audio, the sequence, the screens nor any block.
+    ///
+    /// The background is the style's as it is, as with `applyDefaultStyle`: an image one must be in the package already
+    /// (`EditSession.applyStyle` brings it from the style's package). `nil` if the document has all of it already, or a
+    /// value cannot be encoded.
+    public static func applyStyle(_ doc: EditDocument, _ style: NamedStyle, take: TakeRecord, events: [InputEvent]) -> EditStep? {
+        changes(doc, look: style.look, camera: style.camera, take: take, events: events).step(label: .styleApply, target: style.id)
+    }
+
+    /// The style whose values the project has exactly (1c design §8: the row Style of the panel): the first of `styles`
+    /// that "Apply" would change nothing of, then Toma's style (`NamedStyle.toma`), or else `.custom`. What depends on the
+    /// take and not on the style is not compared: the zoom's blocks and whether the cursor is drawn from its recorded
+    /// images or as Toma's arrow.
+    public static func matchingStyle(_ doc: EditDocument, among styles: [NamedStyle]) -> StyleMatch {
+        func matches(_ look: DefaultStyle, _ camera: CameraLook) -> Bool {
+            styled(doc, look: look, camera: camera, cursor: doc.cursor.style) == doc
+        }
+        if let style = styles.first(where: { matches($0.look, $0.camera) }) {
+            return style.id == NamedStyle.tomaStyleID ? .toma : .named(style.id)
+        }
+        return matches(.toma, .newProjects) ? .toma : .custom
+    }
+
+    /// The changes "Apply" makes to `doc` (`applyDefaultStyle` without `camera`, `applyStyle` with it), in this order: the
+    /// stage, the cursor, the zoom's settings, the camera's look, and the automatic blocks planned again for the document
+    /// so styled.
+    private static func changes(
+        _ doc: EditDocument, look: DefaultStyle, camera: CameraLook?, take: TakeRecord, events: [InputEvent]
+    ) -> DocumentChanges {
         let recordedImages = events.contains { if case .cursorImage = $0.kind { true } else { false } }
-        styled.cursor.style = recordedImages ? .system : .toma
-        styled.zoom.show = style.zoomShow
-        styled.zoom.auto = style.zoomAuto
-        styled.zoom.spring = style.zoomSpring
-        styled.zoom.motionBlur = style.zoomMotionBlur
+        let styled = styled(doc, look: look, camera: camera, cursor: recordedImages ? .system : .toma)
         var changes = DocumentChanges()
         changes.set(["style"], from: doc.style, to: styled.style)
         changes.set(["cursor"], from: doc.cursor, to: styled.cursor)
@@ -82,9 +110,44 @@ public enum StyleCommands {
         changes.set(["zoom", "auto"], from: doc.zoom.auto, to: styled.zoom.auto)
         changes.set(["zoom", "spring"], from: doc.zoom.spring, to: styled.zoom.spring)
         changes.set(["zoom", "motionBlur"], from: doc.zoom.motionBlur, to: styled.zoom.motionBlur)
+        if camera != nil {
+            changes.set(["camera", "mirror"], from: doc.camera.mirror, to: styled.camera.mirror)
+            changes.set(["camera", "border"], from: doc.camera.border, to: styled.camera.border)
+            changes.set(["camera", "shadow"], from: doc.camera.shadow, to: styled.camera.shadow)
+            changes.set(["camera", "layout"], from: doc.camera.layout, to: styled.camera.layout)
+            changes.set(["camera", "sizeReference"], from: doc.camera.sizeReference, to: styled.camera.sizeReference)
+        }
         changes.edit(.zoomRegions, from: doc.zoom.regions, to: ZoomCommands.replanned(styled, take: take, events: events), id: \.id)
-        return changes.step(label: .applyDefaultStyle, target: "/style")
+        return changes
     }
+
+    /// `doc` with `look` and `camera` as "Apply" puts them, its zoom's blocks as they are: the stage of `look` with
+    /// mipmapped sampling and the spring between shapes, its cursor drawn as `cursor`, its zoom's settings, and the look of
+    /// `camera` (`CameraLook.applied(to:)`), if any.
+    private static func styled(_ doc: EditDocument, look: DefaultStyle, camera: CameraLook?, cursor: CursorLook) -> EditDocument {
+        var styled = doc
+        styled.style = look.style
+        styled.style.screenSampling = .mipmapped
+        styled.style.geometryTransition = .spring
+        styled.cursor = look.cursor
+        styled.cursor.style = cursor
+        styled.zoom.show = look.zoomShow
+        styled.zoom.auto = look.zoomAuto
+        styled.zoom.spring = look.zoomSpring
+        styled.zoom.motionBlur = look.zoomMotionBlur
+        if let camera { styled.camera = camera.applied(to: doc.camera) }
+        return styled
+    }
+}
+
+/// Which style a project is in (1c design §8), as the row Style of the panel names it.
+public enum StyleMatch: Equatable, Sendable {
+    /// The saved style of this id.
+    case named(String)
+    /// Toma's style.
+    case toma
+    /// None: "Custom".
+    case custom
 }
 
 // MARK: - What the commands share
