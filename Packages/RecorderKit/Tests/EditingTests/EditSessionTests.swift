@@ -388,16 +388,16 @@ private enum SessionFixture {
         let context = SessionFixture.context(caches: dir.appending(path: "Caches"))
         await (try await SessionFixture.open(project, context)).close()
         var json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: project.package.editURL)) as? [String: Any])
-        json["documentVersion"] = 2
+        json["documentVersion"] = 3
         try JSONSerialization.data(withJSONObject: json).write(to: project.package.editURL)
         let before = try treeHash(project.package.url)
 
         let session = try await SessionFixture.open(project, context)
-        #expect(session.access == .readOnly(.newerDocument(2)))
+        #expect(session.access == .readOnly(.newerDocument(3)))
         #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .refused)
         await session.close()
         #expect(try treeHash(project.package.url) == before)
-        #expect(throws: EditDocumentError.newerVersion(2)) {
+        #expect(throws: EditDocumentError.newerVersion(3)) {
             try EditSession.readDocument(project.package.url, take: nil, context: context)
         }
     }

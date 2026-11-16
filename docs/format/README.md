@@ -515,6 +515,129 @@ Compatibilidad:
 - Un paquete v1 o v2 se lee como siempre: no tiene `projectID` ni `upgradedFrom`, y su id es el derivado.
 - **Un paquete v1 o v2 se queda en su versión hasta que el usuario lo edita.** Abrirlo, reproducirlo y exportarlo no escriben nada en el paquete. La primera edición lo pasa a la versión 3: el manifiesto se reescribe con `formatVersion: 3`, `upgradedFrom` y el `projectID` derivado (así su carpeta de cachés sigue siendo la misma), y nada más cambia: las tomas conservan su contenido v1 o v2, que la versión 3 sabe leer.
 
+## Cambios del documento 2
+
+El documento de edición (`edit.json`, y el documento del `create` de `edit-log.jsonl`) tiene su propia versión, `documentVersion`, dentro de la versión 3 del formato. El hito 1b escribe la 1; desde el hito 1c es la 2 (`EditDocument.currentVersion`), que suma a la cámara los layouts (en la interfaz, «disposiciones») y su aspecto. El paquete sigue en `formatVersion: 3`.
+
+La sección `camera` de un proyecto nuevo con tres bloques (el segundo fue Burbuja antes de pasar a Dividida, y el layout del proyecto estuvo un rato en Dividida: los dos conservan esos ajustes), como la escribe `ProjectJSON.encoder()`:
+
+```json
+{
+  "border" : {
+    "color" : [
+      1,
+      1,
+      1,
+      1
+    ],
+    "width" : 0
+  },
+  "changes" : [
+    {
+      "id" : "k-1c2d0a9e",
+      "origin" : "recorded",
+      "style" : {
+        "anchor" : "topLeading",
+        "shape" : "circle",
+        "size" : 0.24
+      },
+      "t" : 81290000000000,
+      "take" : "take-001"
+    }
+  ],
+  "initial" : {
+    "take-001" : {
+      "anchor" : "bottomTrailing",
+      "shape" : "circle",
+      "size" : 0.24
+    }
+  },
+  "layout" : {
+    "kind" : "bubble",
+    "split" : {
+      "side" : "end"
+    }
+  },
+  "layoutRules" : "cameraLayout-1",
+  "layouts" : [
+    {
+      "end" : 81239567890123,
+      "id" : "l-5b0e19c2",
+      "instant" : false,
+      "kind" : "cameraFull",
+      "start" : 81234567890123,
+      "take" : "take-001"
+    },
+    {
+      "bubble" : {
+        "style" : {
+          "anchor" : "bottomTrailing",
+          "shape" : "circle",
+          "size" : 0.24
+        }
+      },
+      "end" : 81300000000000,
+      "id" : "l-0a77de31",
+      "instant" : false,
+      "kind" : "split",
+      "split" : {
+        "share" : 0.34,
+        "side" : "end"
+      },
+      "start" : 81280000000000,
+      "take" : "take-001"
+    },
+    {
+      "bubble" : {
+        "style" : {
+          "anchor" : "topLeading",
+          "shape" : "roundedSquare",
+          "size" : 0.33
+        }
+      },
+      "end" : 81320000000000,
+      "id" : "l-c4e2a913",
+      "instant" : true,
+      "kind" : "bubble",
+      "start" : 81310000000000,
+      "take" : "take-001"
+    }
+  ],
+  "mirror" : true,
+  "shadow" : 0.4,
+  "show" : true,
+  "sizeReference" : "shortSide",
+  "spring" : {
+    "damping" : 0.95,
+    "response" : 0.5
+  }
+}
+```
+
+| Campo | Significado |
+|---|---|
+| `show`, `initial`, `changes` | Como en el documento 1 |
+| `layout` | El layout del proyecto, el que rige fuera de los bloques: `kind` (`bubble`, `screenOnly`, `split`, `cameraOnly` o `cameraFull`) y, opcional, `split`. Su Burbuja es siempre la de la toma (`initial` y `changes`): no tiene subobjeto `bubble` |
+| `layouts[]` | Los bloques: `id` (`l-` y 8 hex al azar), `take`, `start` y `end` (`HostTime` de la fuente, `end` excluido), `kind`, `instant` y los subobjetos opcionales `bubble` y `split`. Ordenados y sin superponerse dentro de cada toma |
+| `bubble` (en un bloque) | `style`, un `CameraStyle` completo. Está desde que el bloque fue Burbuja por primera vez y nunca se borra; un bloque con `kind: bubble` sin `bubble` es un documento inválido |
+| `split` (en un bloque o en `layout`) | `side` (`start` o `end`) y, opcional, `share` (de 0,25 a 0,60; sin él, la parte automática). Se escribe la primera vez que el bloque o el proyecto pasa a Dividida, con `side: end`, y nunca se borra |
+| `mirror` | Espejar la cámara |
+| `border` | `width` de 0 a 1 (ancho = `width × 0,012 ×` lado corto de la salida) y `color` (RGBA sRGB de 0 a 1, escrito tal cual, como los colores del fondo) |
+| `shadow` | Sombra de la cámara, de 0 a 1 |
+| `sizeReference` | `height` (la burbuja medida contra el alto de la salida, lo de 1a y 1b) o `shortSide` (contra el lado corto) |
+| `spring` | El resorte de las transiciones de layout, guardado en números como todos |
+| `layoutRules` | La versión de las reglas de geometría, transiciones y zoom de los layouts (`cameraLayout-1`); el código conserva las versiones viejas |
+
+- Los ocho campos nuevos son obligatorios en un documento 2, y los opcionales (`split`, `share`, `bubble`) se omiten cuando no están, nunca se escriben como `null`.
+- **Un `kind` desconocido hace inválido el documento** (no se adivina), lo mismo que un `side` o un `sizeReference` desconocidos: el documento está dañado, no es más nuevo. Un layout nuevo en el futuro suma su propio subobjeto y su `kind`, y sube `documentVersion`.
+- El registro suma la colección `/camera/layouts` para `insert`, `remove` y `replace`, como `/zoom/regions`.
+
+**Migración desde el documento 1.** Una función pura sobre el JSON: agrega a `camera` `layout = {"kind":"bubble"}`, `layouts = []`, `mirror = false`, `border = {"width":0,"color":[1,1,1,1]}`, `shadow = 0`, `sizeReference = "height"`, `spring = {"damping":0.95,"response":0.5}` y `layoutRules = "cameraLayout-1"` (los pisa si ya estaban) y pone `documentVersion` en 2. Nada más cambia: con esos valores, el render es el de 1b byte a byte.
+
+- Un lector del documento 2 lee uno del documento 1 migrándolo, esté donde esté (el `edit.json` o el `create` del registro), y rechaza uno más nuevo antes de leer el resto, como 1b: una app de 1b rechaza así un documento 2: dice que el proyecto es de una versión más nueva y no escribe nada en el paquete.
+- La migración es aditiva: solo agrega campos, así que una operación de 1b significa lo mismo antes y después de migrar. Ninguna escribe un campo agregado ni uno que lo contenga (la raíz o `/camera` entera).
+- **Antes de la primera edición, en el disco sigue siendo v1.** Un proyecto de 1b que en 1c solo se abre, se reproduce o se exporta no cambia, y la app de 1b lo sigue abriendo: la versión 2 existe en memoria hasta que el usuario edita.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/`, porque todo lo que contiene se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.

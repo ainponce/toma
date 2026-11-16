@@ -10,7 +10,7 @@ let app = AppInfo(name: "Toma", version: "0.2.0")
 /// The document every log of these tests starts from, small so that applying lines is cheap.
 enum SmallDocument {
     static let document = EditDocument(
-        documentVersion: 1,
+        documentVersion: EditDocument.currentVersion,
         logSequence: 0,
         aspect: .landscape,
         frameRate: 60,

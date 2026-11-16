@@ -35,7 +35,7 @@ private func at(_ seq: Int, _ document: EditDocument) -> EditDocument {
 /// A small document and its exact compact form, for the `create` line of design §6.3.
 private enum SmallDocument {
     static let document = EditDocument(
-        documentVersion: 1,
+        documentVersion: EditDocument.currentVersion,
         logSequence: 0,
         aspect: .landscape,
         frameRate: 60,
@@ -56,9 +56,11 @@ private enum SmallDocument {
         camera: CameraPlan(show: true, initial: [:], changes: []),
         audio: AudioPlan(limiter: false, tracks: [:]))
 
-    static let json = #"{"aspect":"16:9","audio":{"limiter":false,"tracks":{}},"camera":{"changes":[],"initial":{},"show":true},"#
+    static let json = #"{"aspect":"16:9","audio":{"limiter":false,"tracks":{}},"camera":{"border":{"color":[1,1,1,1],"width":0},"#
+        + #""changes":[],"initial":{},"layout":{"kind":"bubble"},"layoutRules":"cameraLayout-1","layouts":[],"mirror":false,"#
+        + #""shadow":0,"show":true,"sizeReference":"height","spring":{"damping":0.95,"response":0.5}},"#
         + #""cursor":{"clickEffect":"none","clickSound":"none","clickSoundGain":0.5,"hideWhenIdle":false,"idleDelay":2,"#
-        + #""motionBlur":0,"scale":1,"show":true,"smoothing":"off","style":"toma"},"documentVersion":1,"frameRate":60,"#
+        + #""motionBlur":0,"scale":1,"show":true,"smoothing":"off","style":"toma"},"documentVersion":2,"frameRate":60,"#
         + #""logSequence":0,"screens":{"changes":[],"initial":{"take-001":"display-1"}},"#
         + #""sequence":[{"end":2000,"id":"c-00000001","speed":1,"start":1000,"take":"take-001"}],"#
         + #""style":{"background":{"type":"wallpaper","wallpaper":"aurora-1"},"backgroundBlur":0,"cornerRadius":0.012,"#
@@ -245,20 +247,20 @@ private enum SmallDocument {
     try withTemporaryDirectory { dir in
         let url = dir.appending(path: "edit-log.jsonl")
         let line = try EditLogEntry.create(seq: 1, document: DesignExample.document, app: app).jsonLine()
-        let newer = line.replacingOccurrences(of: #""documentVersion":1"#, with: #""documentVersion":2"#)
+        let newer = line.replacingOccurrences(of: #""documentVersion":2"#, with: #""documentVersion":3"#)
         #expect(newer != line)
-        #expect(throws: EditDocumentError.newerVersion(2)) { try EditLogEntry(jsonLine: newer) }
+        #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogEntry(jsonLine: newer) }
         // Thrown, never read as damage, which would be repaired: a newer app wrote it.
         try Data((newer + "\n").utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(2)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogReader.read(url) }
 
         // The same for a `migrate` to a newer documentVersion; one to this app's is a line like any other.
         let padding = try doLine(2, group: 2, try set("/style/padding", 0.08, 0.1)).jsonLine()
-        for (to, refused) in [(2, true), (1, false)] {
-            let migrate = try EditLogEntry.migrate(seq: 3, from: 1, to: to).jsonLine()
+        for (to, refused) in [(3, true), (2, false)] {
+            let migrate = try EditLogEntry.migrate(seq: 3, from: 2, to: to).jsonLine()
             try Data([line, padding, migrate].map { $0 + "\n" }.joined().utf8).write(to: url)
             if refused {
-                #expect(throws: EditDocumentError.newerVersion(2)) { try EditLogReader.read(url) }
+                #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogReader.read(url) }
             } else {
                 #expect(try EditLogReader.read(url).entries.count == 3)
             }
