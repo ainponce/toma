@@ -68,6 +68,32 @@ import Testing
         #expect(rig.events.isEmpty, "nothing is cancelled, closed or replied")
     }
 
+    /// «Cancelar» to the unsaved edits during a logout cancels it: the app stays, and is not powering off any more, so a
+    /// later ⌘Q during an export asks before it cancels it (final fix wave re-review).
+    @Test func answeringNoWhilePoweringOffEndsThePowerOff() async {
+        let rig = EditorsQuitRig(timeLimit: .never)
+        rig.sequencer.powerOff(isRecording: false)
+        #expect(rig.sequencer.isPoweringOff)
+        let logout = TerminationDecision.decide(
+            isRecording: false, isExporting: true, isPoweringOff: rig.sequencer.isPoweringOff, hasEditSessions: true,
+            hasUnsavedEdits: true)
+        #expect(logout.questions == [.unsavedEdits])
+        #expect(rig.sequencer.shouldTerminate(logout) { _ in false } == .terminateCancel)
+        #expect(!rig.sequencer.isPoweringOff)
+        await settle()
+        #expect(rig.events.isEmpty, "nothing cancelled, closed or replied")
+
+        // ⌘Q later, the edits saved by then, the export still running: it is asked about.
+        let quit = TerminationDecision.decide(
+            isRecording: false, isExporting: true, isPoweringOff: rig.sequencer.isPoweringOff, hasEditSessions: true)
+        #expect(quit.questions == [.cancelExport])
+        var asked: [TerminationQuestion] = []
+        #expect(rig.sequencer.shouldTerminate(quit) { asked.append($0); return false } == .terminateCancel)
+        #expect(asked == [.cancelExport])
+        await settle()
+        #expect(rig.events.isEmpty)
+    }
+
     @Test func theOldEntryPointNeverQuitsLosingEdits() async {
         let rig = EditorsQuitRig(timeLimit: .never)
         let decision = TerminationDecision.decide(

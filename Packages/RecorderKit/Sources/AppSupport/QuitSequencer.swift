@@ -58,10 +58,14 @@ public final class QuitSequencer {
     }
 
     /// The answer to `applicationShouldTerminate` for `decision`: `ask` asks the user each of its questions, in order,
-    /// and the first `false` keeps the app running (`.terminateCancel`) with nothing done. After `.terminateLater`,
-    /// `reply` is called once.
+    /// and the first `false` keeps the app running (`.terminateCancel`) with nothing done. Answered "no" while powering
+    /// off, the app cancels the logout, restart or shutdown: it is not powering off any more, so a later quit asks again
+    /// before it cancels an export. After `.terminateLater`, `reply` is called once.
     public func shouldTerminate(_ decision: TerminationDecision, ask: (TerminationQuestion) -> Bool) -> NSApplication.TerminateReply {
-        for question in decision.questions where !ask(question) { return .terminateCancel }
+        for question in decision.questions where !ask(question) {
+            isPoweringOff = false
+            return .terminateCancel
+        }
         if decision.closesEditors { closesEditors = true }
         if decision.cancelsExports {
             cancelExportsThenQuit()
