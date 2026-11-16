@@ -208,10 +208,23 @@ public final class GIFExporter: Sendable {
     ///   be drawn or quantized on the GPU.
     @concurrent
     public func encodeInMemory(range: ExportRange) async throws -> Data {
+        try await encodeInMemory(range: range, renderer: nil)
+    }
+
+    /// The renderer a run draws with, for `encodeInMemory(range:renderer:)` to reuse across several runs.
+    func makeRenderer() throws -> FrameRenderer {
+        try GIFEncoding.makeRenderer(project: project, document: document, size: settings.outputSize(aspect: document.aspect))
+    }
+
+    /// `encodeInMemory(range:)` drawing with `renderer` (from `makeRenderer()`) instead of a new one: the same bytes. One
+    /// run at a time per renderer.
+    @concurrent
+    func encodeInMemory(range: ExportRange, renderer: FrameRenderer?) async throws -> Data {
         guard !Task.isCancelled else { throw GIFExportError.cancelled }
         guard range.lastsAFrame(fps: settings.fps) else { throw GIFExportError.rangeShorterThanAFrame }
         do {
-            let encoder = try GIFEncoding(project: project, document: document, settings: settings, range: range, paletteSink: paletteSink)
+            let encoder = try GIFEncoding(
+                project: project, document: document, settings: settings, range: range, paletteSink: paletteSink, renderer: renderer)
             let pipe = try MemoryPipe()
             do {
                 _ = try await encoder.run(into: pipe.writeEnd, loops: settings.loops, progress: nil)
@@ -294,13 +307,13 @@ private final class GIFEncoding: @unchecked Sendable {
 
     init(
         project: LoadedProject, document: EditDocument, settings: GIFSettings, range: ExportRange,
-        paletteSink: GIFExporter.PaletteSink?
+        paletteSink: GIFExporter.PaletteSink?, renderer: FrameRenderer? = nil
     ) throws {
         size = settings.outputSize(aspect: document.aspect)
-        // The motion blur's shutter is a fraction of a frame of the project, not of the GIF (1c design §7.2).
-        renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: document.frameRate)
-        quantizer = try GIFQuantizer(device: renderer.device)
-        guard let drawCommands = renderer.device.makeCommandQueue(), let mapCommands = renderer.device.makeCommandQueue() else {
+        let drawing = try renderer ?? Self.makeRenderer(project: project, document: document, size: size)
+        self.renderer = drawing
+        quantizer = try GIFQuantizer(device: drawing.device)
+        guard let drawCommands = drawing.device.makeCommandQueue(), let mapCommands = drawing.device.makeCommandQueue() else {
             throw RenderError.metalResourceUnavailable("GIF command queue")
         }
         self.drawCommands = drawCommands
@@ -308,6 +321,11 @@ private final class GIFEncoding: @unchecked Sendable {
         self.range = range
         self.settings = settings
         self.paletteSink = paletteSink
+    }
+
+    /// The motion blur's shutter is a fraction of a frame of the project, not of the GIF (1c design §7.2).
+    static func makeRenderer(project: LoadedProject, document: EditDocument, size: SIMD2<Int>) throws -> FrameRenderer {
+        try FrameRenderer(project: project, document: document, outputSize: size, frameRate: document.frameRate)
     }
 
     /// Images coded at once at most: the performance cores but one (1c design §7.2, step 6), at least one.
