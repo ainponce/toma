@@ -173,8 +173,8 @@ private enum SessionFixture {
             #expect(session.document == .legacy(for: project))
             #expect(session.notices == [.legacyLook])
             #expect(session.access == .editable)
-            // Task 12b upgrades it with the first edit.
-            #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .refused)
+            // Only the first edit writes (PackageUpgradeTests); there is nothing to undo before it.
+            #expect(session.undo() == .refused)
             #expect(await session.flushed() == 0)
             #expect(!session.hasUnsavedChanges)
             await session.close()
@@ -700,6 +700,45 @@ private enum SessionFixture {
         await session.close()
         #expect(try SessionFixture.entries(movedPackage).map(\.seq) == [1, 2, 3])
         #expect(!FileManager.default.fileExists(atPath: project.package.url.path))
+    }
+}
+
+@MainActor @Test func closingAMovedPackageNeverTouchesTheLockAtItsOldPath() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await SessionFixture.package(in: dir)
+        let session = try await SessionFixture.open(project, SessionFixture.context(caches: dir.appending(path: "Caches")))
+        let moved = ProjectPackage(url: dir.appending(path: "Moved.toma", directoryHint: .isDirectory))
+        try FileManager.default.moveItem(at: project.package.url, to: moved.url)
+        // Another package at the old path, edited by another process.
+        try FileManager.default.createDirectory(at: project.package.url, withIntermediateDirectories: false)
+        let other = try RecordingLock.acquire(at: project.package.editLockURL, info: .current(now: Date()))
+        defer { other.release() }
+        await session.close()
+        #expect(FileManager.default.fileExists(atPath: project.package.editLockURL.path))
+        #expect(RecordingLock.isHeld(at: project.package.editLockURL))
+        // The moved package's own lock file goes.
+        #expect(!FileManager.default.fileExists(atPath: moved.editLockURL.path))
+    }
+}
+
+@MainActor @Test func aJournalFailingBeforeTheSessionListensStillRestartsTheLog() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await SessionFixture.package(in: dir)
+        let io = SessionFixture.IO()
+        // The `create` written at opening fails as it does in a log removed under the journal, before the session is
+        // there to listen.
+        io.failWrites(with: .ENOENT)
+        let session = try await SessionFixture.open(
+            project, SessionFixture.context(caches: dir.appending(path: "Caches"), io: io.io))
+        io.failWrites(with: nil)
+        #expect(session.notices.contains(.saveFailed(.ENOENT)))
+        // It is acted on all the same: the log is set aside and a new one starts with the document.
+        #expect(await eventually { (try? SessionFixture.damagedCopies(project.package).count) == 1 })
+        #expect(await eventually { !session.hasUnsavedChanges })
+        #expect(session.document.logSequence == 2)
+        #expect(
+            try SessionFixture.entries(project.package) == [.create(seq: 2, document: session.document, app: SessionFixture.app)])
+        await session.close()
     }
 }
 
