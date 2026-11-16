@@ -27,7 +27,7 @@ let package = Package(
         .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
         .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
-        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording"]),
+        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing"]),
         // Shared by every test target; not a product.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture"]),
         .executableTarget(
@@ -50,7 +50,8 @@ let package = Package(
             name: "ExportTests",
             dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
-            name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
+            name: "AppSupportTests",
+            dependencies: ["AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport"]),
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]

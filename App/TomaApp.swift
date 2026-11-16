@@ -14,6 +14,7 @@ struct TomaApp: App {
         } label: {
             MenuBarIcon(recording: appDelegate.recording)
         }
+        .commands { EditorCommands() }
     }
 }
 
