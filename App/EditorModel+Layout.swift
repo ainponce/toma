@@ -31,6 +31,45 @@ extension EditorModel {
         }
     }
 
+    /// A new layout block (design §5.5): from a double click on the Camera track (`click`), from "Disposición ▾" (`kind`) or
+    /// from the shortcuts (`kind`, at the playhead or over the marked range). It is the one selected; its layout is the last
+    /// one chosen for a block (`LayoutTrackRules.newBlock`), and `kind`, when given, is chosen now.
+    @discardableResult
+    func addLayoutBlock(click: Int64? = nil, kind: LayoutKind? = nil) -> Bool {
+        guard canEdit, let document, let map = panelTimeMap else { return false }
+        let plan = LayoutTrackRules.newBlock(
+            playhead: playheadNanoseconds, click: click, marks: timelineMarks.range, lastKind: kind ?? lastBlockLayout)
+        let step = plan.range.map { LayoutCommands.add(document, kind: plan.kind, output: $0, timeMap: map, makeID: Self.newID) }
+            ?? LayoutCommands.add(document, kind: plan.kind, at: plan.start, timeMap: map, makeID: Self.newID)
+        guard let step, perform(step) != .refused else { return false }
+        selection = .layoutBlock(step.target)
+        rememberBlockLayout(plan.kind)
+        return true
+    }
+
+    /// ⌥1 … ⌥5: the selected block takes the layout, or, without one, a block of it is made at the playhead or over the
+    /// marked range (`LayoutTrackRules.shortcutAction`). Whether there was anything to do: a take without a camera has none.
+    @discardableResult
+    func applyLayoutShortcut(_ kind: LayoutKind) -> Bool {
+        guard canEdit, hasCamera, let document else { return false }
+        switch LayoutTrackRules.shortcutAction(selectedBlock: selectedLayoutBlock, in: document) {
+        case let .change(id):
+            setLayoutKind(kind, target: .block(id: id, output: 0))
+            return true
+        case .create:
+            return addLayoutBlock(kind: kind)
+        }
+    }
+
+    /// The edge of block `id` brought to the playhead (VoiceOver's "trim"), in one step.
+    @discardableResult
+    func trimLayoutBlock(_ id: String, edge: ClipEdge) -> Bool {
+        guard canEdit, let document, let map = panelTimeMap,
+            let step = LayoutCommands.trim(document, id: id, edge: edge, toOutput: playheadNanoseconds, timeMap: map)
+        else { return false }
+        return perform(step) != .refused
+    }
+
     /// Transición: Suave · Instantánea.
     func setLayoutInstant(_ id: String, _ instant: Bool) {
         guard let document else { return }
@@ -95,6 +134,6 @@ extension EditorModel {
     /// The layouts' timeline of the document, for what the list of changes says of the blocks (`hiddenBy`).
     var layoutTimeline: LayoutTimeline? {
         guard let document, let map = panelTimeMap, let take = panelSession?.project.take else { return nil }
-        return LayoutTimeline(document: document, take: take, timeMap: map, cameraReadable: true)
+        return LayoutTimeline(document: document, take: take, timeMap: map, cameraReadable: !cameraUnreadable)
     }
 }

@@ -133,6 +133,9 @@ final class EditorModel {
     private(set) var hasDesktopPhoto = false
     /// The take has a camera: the panel's Camera tab exists.
     private(set) var hasCamera = false
+    /// No camera track of the take has anything to read (`LayoutTrackRules.cameraReadable`): the layouts that need the camera
+    /// show only the screen, and the Camera track says so. Set by the timeline once it has looked at the files.
+    var cameraUnreadable = false
     /// The take saved the shapes of the cursor (`cursorImage` events): macOS's cursor can be drawn.
     private(set) var hasCursorImages = false
     /// The take has clicks to make zooms from; without them the Zoom tab says so.

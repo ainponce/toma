@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
+import ProjectFormat
 import Testing
 
 @Suite struct KeyboardCommandsTests {
@@ -170,7 +171,7 @@ import Testing
         let once: [EditorCommand] = [
             .playPause, .shuttle(1), .shuttle(-2), .stop, .start, .end, .split, .delete, .markIn, .markOut, .clearMarks,
             .trimStartToPlayhead, .trimEndToPlayhead, .addZoom, .toggleSnapping, .fitTimeline, .deselect, .tab(1), .togglePanel,
-            .export, .open,
+            .export, .open, .layout(.split),
         ]
         for command in repeating { #expect(command.repeats, "\(command)") }
         for command in once { #expect(!command.repeats, "\(command)") }
@@ -260,5 +261,25 @@ import Testing
         #expect(TimelineMarks(in: 3).range == nil)
         #expect(TimelineMarks(out: 9).range == nil)
         #expect(TimelineMarks(in: 9, out: 9).range == nil)
+    }
+
+    @Test func optionDigitsPickLayouts() {
+        let picks: [(String, LayoutKind)] = [
+            ("1", .bubble), ("2", .screenOnly), ("3", .split), ("4", .cameraOnly), ("5", .cameraFull),
+        ]
+        for (digit, kind) in picks {
+            #expect(command(digit, [.option], focus: .preview) == .layout(kind))
+            #expect(command(digit, [.option], focus: .timeline) == .layout(kind))
+            // Never in a text field, nor on a control of the panel or of a bar.
+            for focus in [EditorFocus.textField, .panel, .toolbar] { #expect(command(digit, [.option], focus: focus) == nil) }
+            // Without ⌥ it is a digit (typed), and with ⌘ it is the panel's tab, as before.
+            #expect(command(digit, [], focus: .preview) == nil)
+            #expect(command(digit, [.option, .shift], focus: .preview) == nil)
+            #expect(command(digit, [.option, .command], focus: .preview) == nil)
+        }
+        #expect(command("6", [.option], focus: .preview) == nil)
+        #expect(command("0", [.option], focus: .preview) == nil)
+        // The key an event with ⌥ gives (`charactersIgnoringModifiers`).
+        #expect(EditorKey(characters: "3", unmodified: "3", modifiers: [.option]) == EditorKey(key: "3", modifiers: [.option]))
     }
 }

@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppKit
 import AppSupport
 import Editing
@@ -51,7 +52,9 @@ struct TrackItems<Info> {
 ///   the same cut) is not seen.
 /// - Zoom: each block over the output its kept source is seen in (`TimeMap.outputRange(ofSource:take:)`: the cuts
 ///   inside it closed); a block all in a cut is not seen, and comes back if that part is brought back by a trim.
-/// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it).
+/// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it), and
+///   each layout block where the preview shows it (`LayoutTimeline.blockOutputs`); a change inside a block is not seen while
+///   it rules (`LayoutTimeline.hiddenChanges`).
 /// - The ruler's markers: each `marker` event of the take at its instant, if it is kept.
 struct TimelineContent {
     struct ClipInfo {
@@ -68,6 +71,21 @@ struct TimelineContent {
 
     struct Screen {
         var name: String
+    }
+
+    /// A layout block of the Camera track (design §5.5).
+    struct LayoutBlockInfo {
+        var kind: LayoutKind
+        /// Where the camera is in a split; `nil` in any other layout.
+        var side: CameraSide?
+        var instant: Bool
+    }
+
+    /// A change of the camera's style.
+    struct CameraChangeInfo {
+        /// The layout of the block that hides it while it rules; `nil` outside the blocks.
+        var hiddenBy: LayoutKind?
+        var hidingBlock: String?
     }
 
     struct AudioTrack {
@@ -87,7 +105,15 @@ struct TimelineContent {
     let clips: TrackItems<ClipInfo>
     let screens: TrackItems<Screen>
     let zooms: TrackItems<Zoom>
-    let cameraChanges: TrackItems<Void>
+    let cameraChanges: TrackItems<CameraChangeInfo>
+    /// The layout blocks, where the preview shows them.
+    let layoutBlocks: TrackItems<LayoutBlockInfo>
+    /// The ids of `layoutBlocks`, to tell a block from a camera change under the mouse.
+    let layoutBlockIDs: Set<String>
+    /// How a split sits in this project's format: the side its block label says.
+    let splitOrientation: SplitOrientation
+    /// The layout outside the blocks (the header's second line).
+    let projectLayout: LayoutKind
     /// In order.
     let markers: [Int64]
     /// The spans of the screen or the camera that could not be read (`MissingVideo`), in order.
@@ -138,8 +164,30 @@ struct TimelineContent {
                 id: region.id, output: output,
                 info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
         })
+        let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080)
+        let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
+        splitOrientation = orientation
+        projectLayout = document.camera.layout.kind
+        var blockItems: [TrackItems<LayoutBlockInfo>.Item] = []
+        for (k, range) in LayoutTimeline.blockOutputs(of: document, timeMap: map).enumerated() {
+            guard let range, !range.isEmpty else { continue }
+            let block = document.camera.layouts[k]
+            blockItems.append(.init(
+                id: block.id, output: range,
+                info: LayoutBlockInfo(
+                    kind: block.kind, side: block.kind == .split ? block.split?.side ?? .end : nil, instant: block.instant)))
+        }
+        layoutBlocks = TrackItems(blockItems)
+        layoutBlockIDs = Set(blockItems.map(\.id))
+        let hidden = document.camera.layouts.isEmpty
+            ? [:] : LayoutTimeline(document: document, take: take, timeMap: map, cameraReadable: true).hiddenChanges(document)
+        let kinds = Dictionary(document.camera.layouts.map { ($0.id, $0.kind) }, uniquingKeysWith: { first, _ in first })
         cameraChanges = TrackItems(document.camera.changes.compactMap { change in
-            map.output(atSource: change.t, take: change.take).map { .init(id: change.id, output: $0..<$0, info: ()) }
+            map.output(atSource: change.t, take: change.take).map {
+                let block = hidden[change.id]
+                return .init(
+                    id: change.id, output: $0..<$0, info: CameraChangeInfo(hiddenBy: block.flatMap { kinds[$0] }, hidingBlock: block))
+            }
         })
         markers = events.compactMap { event in
             guard case .marker = event.kind else { return nil }
@@ -277,6 +325,33 @@ final class BlockLayer: CAShapeLayer {
     }
 }
 
+/// A layout block of the Camera track: filled, with the layout's symbol and its name; an instant one has square corners
+/// where a smooth one has rounded ones (design §5.5).
+final class LayoutBlockLayer: CAShapeLayer {
+    let icon = CALayer()
+    let label = CATextLayer()
+    var labelText: String?
+    var symbol: String?
+    var drawnShape: (size: CGSize, instant: Bool)?
+
+    override init() {
+        super.init()
+        TimelineText.setUp(label, size: 10, weight: .semibold)
+        icon.contentsGravity = .resizeAspect
+        addSublayer(icon)
+        addSublayer(label)
+    }
+
+    override init(layer: Any) {
+        super.init(layer: layer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+}
+
 /// A stretch of the Screen track, with the screen's name.
 final class SpanLayer: CALayer {
     let label = CATextLayer()
@@ -322,7 +397,9 @@ final class TimelineTracks {
     private let hatches: LayerPool<CAShapeLayer>
     private let blocks: LayerPool<BlockLayer>
     private let spans: LayerPool<SpanLayer>
+    private let layouts: LayerPool<LayoutBlockLayer>
     private let diamonds: LayerPool<CALayer>
+    private let cameraNotice = CATextLayer()
     private var waveforms: [String: CAShapeLayer] = [:]
 
     /// The thumbnails, and the waveforms worked out so far by audio track.
@@ -332,6 +409,8 @@ final class TimelineTracks {
     var thumbnailArrived: () -> Void = {}
     /// The items that are selected (outlined in the accent color), by id.
     var selected: Set<String> = []
+    /// The camera cannot be read: the row says so, and the layouts that need it show only the screen.
+    var cameraUnreadable = false
     /// This update moves the items to their new places with `Motion.trackItem` (after an edit), not at once.
     var settling = false
 
@@ -373,11 +452,21 @@ final class TimelineTracks {
         }
         spans = LayerPool(parent: rows) { SpanLayer() }
         blocks = LayerPool(parent: rows) { BlockLayer() }
+        layouts = LayerPool(parent: rows) {
+            let block = LayoutBlockLayer()
+            block.lineWidth = 1
+            block.zPosition = 1
+            return block
+        }
         diamonds = LayerPool(parent: rows) {
             let diamond = CALayer()
             diamond.setAffineTransform(CGAffineTransform(rotationAngle: .pi / 4))
+            diamond.zPosition = 2
             return diamond
         }
+        TimelineText.setUp(cameraNotice, size: 10, weight: .regular)
+        cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
+        rows.addSublayer(cameraNotice)
         layer.addSublayer(separators)
         separators.lineWidth = 1
         separators.fillColor = nil
@@ -397,7 +486,7 @@ final class TimelineTracks {
         }
         separators.path = lines
 
-        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, diamonds.begin] { pool() }
+        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin] { pool() }
         var wanted: Set<ThumbnailKey> = []
         var shownWaveforms: Set<String> = []
         for row in geometry.rows {
@@ -412,7 +501,7 @@ final class TimelineTracks {
                 shownWaveforms.insert(id)
             }
         }
-        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, diamonds.end] { pool() }
+        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end] { pool() }
         for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
             waveform.removeFromSuperlayer()
             waveforms[id] = nil
@@ -433,7 +522,7 @@ final class TimelineTracks {
 
     /// Forgets the layers, so the next update makes them again with new colors.
     func reset() {
-        for pool in [clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, diamonds.removeAll] {
+        for pool in [clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, layouts.removeAll, diamonds.removeAll] {
             pool()
         }
         tileKeys = [:]
@@ -454,7 +543,7 @@ final class TimelineTracks {
     /// How many layers the rows have in sight now, for the benchmark.
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
-            + diamonds.shownCount + waveforms.count
+            + layouts.shownCount + diamonds.shownCount + waveforms.count
     }
 
     // MARK: - Video
@@ -684,6 +773,8 @@ final class TimelineTracks {
     private func layOutCamera(
         _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
     ) {
+        layOutCameraNotice(row, geometry, palette)
+        layOutLayoutBlocks(content, row, geometry, palette)
         let side = 9.0
         // An instant is in sight while its diamond is.
         let margin = Int64(side / geometry.scale * 1e9)
@@ -697,6 +788,8 @@ final class TimelineTracks {
             let isSelected = selected.contains(item.id)
             diamond.borderColor = isSelected ? palette.selection : palette.contrastBorder
             diamond.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
+            // Inside a block it is not seen while the block rules: dimmed, and its help says so (the view's tooltip).
+            diamond.opacity = item.info.hiddenBy == nil ? 1 : Float(LayoutTrackRules.dimmedDiamondOpacity)
             diamond.bounds = CGRect(x: 0, y: 0, width: side, height: side)
             let previous = diamond.position
             let position = CGPoint(x: geometry.snapped(geometry.x(item.output.lowerBound)), y: row.top + row.height / 2)
@@ -708,6 +801,95 @@ final class TimelineTracks {
                 diamond.add(move, forKey: "settle")
             }
         }
+    }
+
+    /// "The camera can't be read: only the screen is shown." at the row's left, under the blocks.
+    private func layOutCameraNotice(_ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette) {
+        cameraNotice.isHidden = !cameraUnreadable
+        guard cameraUnreadable else { return }
+        cameraNotice.contentsScale = geometry.backingScale
+        cameraNotice.foregroundColor = palette.label
+        cameraNotice.frame = CGRect(x: 8, y: row.top + (row.height - 13) / 2, width: max(geometry.areaWidth - 16, 0), height: 13)
+    }
+
+    /// The layout blocks: the symbol and the name of the layout (with a split, where the camera is), filled; selected, with
+    /// an outline in the accent color; an instant one with square corners.
+    private func layOutLayoutBlocks(
+        _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
+    ) {
+        let top = row.top + 3, height = row.height - 6
+        let (lower, upper) = geometry.visibleOutput
+        content.layoutBlocks.forEach(from: lower, to: upper) { item in
+            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
+            let (block, isNew) = layouts.layer(item.id)
+            if isNew {
+                block.label.contentsScale = geometry.backingScale
+                block.icon.contentsScale = geometry.backingScale
+                block.fillColor = palette.layoutFill
+                block.label.foregroundColor = palette.layoutText
+            }
+            let isSelected = selected.contains(item.id)
+            block.strokeColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : nil)
+            block.lineWidth = isSelected ? 2 : 1
+            let previousPath = block.path
+            place(block, rect, isNew: isNew)
+            let shape = (size: rect.size, instant: item.info.instant)
+            if block.drawnShape?.size != shape.size || block.drawnShape?.instant != shape.instant {
+                block.drawnShape = shape
+                let radius = item.info.instant ? 0 : min(5, rect.width / 2, rect.height / 2)
+                block.path = CGPath(
+                    roundedRect: CGRect(origin: .zero, size: rect.size).insetBy(dx: 0.5, dy: 0.5), cornerWidth: max(radius - 0.5, 0),
+                    cornerHeight: max(radius - 0.5, 0), transform: nil)
+                if settling, !isNew, let previousPath, let path = block.path, Self.sameShape(previousPath, path) {
+                    let morph = CASpringAnimation(keyPath: "path", spring: Motion.trackItem)
+                    morph.fromValue = previousPath
+                    morph.toValue = path
+                    block.add(morph, forKey: "settleShape")
+                }
+            }
+            let symbol = LayoutTrackRules.symbol(item.info.kind, orientation: content.splitOrientation)
+            if block.symbol != symbol {
+                block.symbol = symbol
+                block.icon.contents = Self.symbolImage(symbol, scale: geometry.backingScale)
+            }
+            let text = Self.title(item.info, orientation: content.splitOrientation)
+            if block.labelText != text {
+                block.labelText = text
+                block.label.string = text
+            }
+            let left = max(5, -rect.minX + 5)
+            block.icon.frame = CGRect(x: left, y: (height - 12) / 2, width: 12, height: 12)
+            block.icon.isHidden = rect.width < 22
+            block.label.frame = CGRect(x: left + 16, y: (height - 13) / 2, width: max(rect.width - left - 19, 0), height: 13)
+            block.label.isHidden = rect.width < 60
+        }
+    }
+
+    /// The name of a block's layout, with the side of the camera in a split (design §5.5).
+    static func title(_ info: TimelineContent.LayoutBlockInfo, orientation: SplitOrientation) -> String {
+        guard info.kind == .split, let side = info.side else { return LayoutNames.name(info.kind) }
+        switch LayoutTrackRules.labelSide(side, orientation: orientation) {
+        case .left: return String(localized: "Split · camera on the left")
+        case .right: return String(localized: "Split · camera on the right")
+        case .top: return String(localized: "Split · camera on top")
+        case .bottom: return String(localized: "Split · camera at the bottom")
+        }
+    }
+
+    private static var symbols: [String: CGImage] = [:]
+
+    /// The symbol in white, at the block's text size, for a display of `scale` pixels per point.
+    private static func symbolImage(_ name: String, scale: Double) -> CGImage? {
+        let key = "\(name)@\(scale)"
+        if let image = symbols[key] { return image }
+        let configuration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
+            .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
+        else { return nil }
+        var rect = CGRect(origin: .zero, size: image.size)
+        let drawn = image.cgImage(forProposedRect: &rect, context: nil, hints: [.ctm: AffineTransform(scaleByX: scale, byY: scale)])
+        if let drawn { symbols[key] = drawn }
+        return drawn
     }
 
     // MARK: - Audio
