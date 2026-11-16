@@ -40,7 +40,8 @@ public enum RenderError: Error, Equatable {
 /// 2 s or more). Reading forward frame by frame only decodes the frames in between. So is a background image's: the
 /// first frame that shows it decodes it (unless another renderer holds it already) and covers and blurs it, waiting
 /// for the GPU (`BackgroundImages`); the frames after it reuse that. A blurred wallpaper is drawn and blurred the same
-/// way, once.
+/// way, once. A window frame's title is drawn by CoreText the first time it is shown (`TitleTexture`), and reused the
+/// same way.
 ///
 /// Thread-safe: frames are encoded one at a time.
 public final class FrameRenderer: @unchecked Sendable {
@@ -56,6 +57,8 @@ public final class FrameRenderer: @unchecked Sendable {
     private let compositor: Compositor
     /// The textures of the frames' background images; used with `lock` held.
     let backgroundImages: BackgroundImages
+    /// The texture of the frames' window title; used with `lock` held.
+    let titleTexture: TitleTexture
     private let cursorTexture: any MTLTexture
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
@@ -116,6 +119,7 @@ public final class FrameRenderer: @unchecked Sendable {
         textureCache = cache
         compositor = try Compositor(device: device)
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
+        titleTexture = TitleTexture(device: device)
         cursorTexture = try CursorSprite.makeTexture(device: device)
         evaluator = FrameEvaluator(take: project.take, events: project.events, document: document, outputSize: outputSize)
         package = project.package
@@ -142,9 +146,10 @@ public final class FrameRenderer: @unchecked Sendable {
             default:
                 backgroundImage = nil
             }
+            let windowTitle = try frame.windowFrame.flatMap { try titleTexture.texture(for: $0) }
             compositor.encode(
-                frame, screen: screen, camera: camera, cursor: cursorTexture, backgroundImage: backgroundImage, into: target,
-                commandBuffer: commandBuffer)
+                frame, screen: screen, camera: camera, cursor: cursorTexture, backgroundImage: backgroundImage,
+                windowTitle: windowTitle, into: target, commandBuffer: commandBuffer)
         }
     }
 
