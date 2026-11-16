@@ -1,14 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
-import Export
+import AppSupport
 import Observation
-import ProjectFormat
-import Recovery
-import Render
 import SwiftUI
-import Synchronization
-import UniformTypeIdentifiers
-import os
 
 /// Allows one export at a time in the whole app: blocking reads of several exports at once starve each other.
 @MainActor @Observable
@@ -20,12 +14,26 @@ final class ExportGate {
     @ObservationIgnored var busyChanged: () -> Void = {}
 }
 
-/// A window showing one take of a project: preview, playback, scrubbing and MP4 export.
+/// The editor's window of one project (design §5.1): a unified toolbar with the bar (`EditorToolbar`) and, as content,
+/// a vertical split whose top is a horizontal split of the preview (`PreviewArea`) and the panel's place (Task 37 adds
+/// the system's inspector, `NSSplitViewItem(inspectorWithViewController:)`, `EditorPanel`), and whose bottom is the timeline's place
+/// (Task 40, its divider between `EditorLayout.timelineHeightRange`). Each part is SwiftUI in an `NSHostingController`
+/// whose view has the part's identifier (`preview`, `inspector`, `timeline`); the preview's bridges its `.toolbar` and
+/// title to the window (`sceneBridgingOptions`), without which the bar would not appear.
 @MainActor
 final class EditorWindowController: NSWindowController, NSWindowDelegate {
     let packageURL: URL
     private let model: EditorModel
+    /// The panel's width and what it can be resized to.
+    private static let panelWidth: CGFloat = 300
+    private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
     private let onClose: () -> Void
+    /// Top to bottom: `horizontalSplit`, then the timeline.
+    private let verticalSplit = NSSplitViewController()
+    /// Left to right: the preview, then the panel.
+    private let horizontalSplit = NSSplitViewController()
+    /// Follows the window's toolbar, which SwiftUI gives it after it is made.
+    private var toolbarObservation: NSKeyValueObservation?
 
     init(
         packageURL: URL, takeID: String?, exportGate: ExportGate, onRecovered: @escaping (URL) -> Void,
@@ -35,19 +43,48 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         self.onClose = onClose
         model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
         model.onRecovered = onRecovered
+        let visible = NSScreen.main?.visibleFrame ?? NSRect(origin: .zero, size: EditorLayout.minimumSize)
+        let size = EditorLayout.initialSize(visible: visible.size)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 960, height: 640),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            contentRect: NSRect(origin: .zero, size: size), styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered, defer: false)
-        window.title = packageURL.deletingPathExtension().lastPathComponent
+        window.title = model.name
         window.representedURL = packageURL
+        // The name is the bar's first item.
+        window.titleVisibility = .hidden
+        window.toolbarStyle = .unified
         window.isReleasedWhenClosed = false
-        let hosting = NSHostingController(rootView: EditorView(model: model))
-        hosting.sizingOptions = [.minSize]
-        window.contentViewController = hosting
-        window.setContentSize(NSSize(width: 960, height: 640))
-        window.center()
         super.init(window: window)
+
+        let preview = NSHostingController(rootView: EditorPreviewPane(model: model) { [weak self] in self?.togglePanel(nil) })
+        preview.sceneBridgingOptions = [.toolbars, .title]
+        // The window's size is its own (design §5.1), not what SwiftUI would like.
+        preview.sizingOptions = []
+        preview.view.identifier = NSUserInterfaceItemIdentifier("preview")
+        horizontalSplit.splitView.isVertical = true
+        horizontalSplit.addSplitViewItem(NSSplitViewItem(viewController: preview))
+        // The panel is the system's inspector (decision 31): 300 pt, between 260 and 380.
+        let panel = NSHostingController(rootView: EditorPanel(model: model))
+        panel.sizingOptions = []
+        panel.preferredContentSize = NSSize(width: Self.panelWidth, height: 0)
+        panel.view.identifier = NSUserInterfaceItemIdentifier("inspector")
+        let inspector = NSSplitViewItem(inspectorWithViewController: panel)
+        inspector.minimumThickness = Self.panelWidthRange.lowerBound
+        inspector.maximumThickness = Self.panelWidthRange.upperBound
+        inspector.canCollapse = true
+        inspector.isCollapsed = !model.panelVisible
+        horizontalSplit.addSplitViewItem(inspector)
+        verticalSplit.splitView.isVertical = false
+        verticalSplit.addSplitViewItem(NSSplitViewItem(viewController: horizontalSplit))
+        window.contentViewController = verticalSplit
+        keepMinimumSize()
+        toolbarObservation = window.observe(\.toolbar) { [weak self] _, _ in
+            // Once the bar is laid out.
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.keepMinimumSize() } }
+        }
+        window.setFrame(
+            NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height),
+            display: false)
         window.delegate = self
         model.window = window
         model.load()
@@ -62,7 +99,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     func reloadIfNeeded() {
         switch model.state {
         case .failed, .unfinished: model.load()
-        case .loading, .recovering, .ready: break
+        case .opening, .recovering, .ready, .newerDocument: break
         }
     }
 
@@ -71,386 +108,113 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         await model.cancelExportAndWait()
     }
 
+    // MARK: - The panel
+
+    /// View ▸ Show Panel / Hide Panel (⌥⌘I) and the bar's `sidebar.right`: the inspector of the horizontal split, once
+    /// there is one (Task 37), collapses or expands.
+    @objc func togglePanel(_ sender: Any?) {
+        model.panelVisible.toggle()
+        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = model.panelVisible }
+        guard let inspector = horizontalSplit.splitViewItems.first(where: { $0.behavior == .inspector }) else { return }
+        inspector.animator().isCollapsed = !model.panelVisible
+    }
+
+    // MARK: - Window
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        KeyEditorPanel.shared.isVisible = model.panelVisible
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        KeyEditorPanel.shared.isVisible = nil
+    }
+
+    /// The window's least size is `EditorLayout.minimumSize`, its bar included. AppKit keeps it as the content's least
+    /// size, which the bar SwiftUI adds later would make taller: it is set from what the title bar and the bar take now.
+    private func keepMinimumSize() {
+        guard let window, let content = window.contentView else { return }
+        let minimum = EditorLayout.minimumSize
+        let decoration = window.frame.height - content.frame.height
+        window.contentMinSize = NSSize(width: minimum.width, height: minimum.height - max(decoration, 0))
+    }
+
     func windowWillClose(_ notification: Notification) {
+        if window?.isKeyWindow == true { KeyEditorPanel.shared.isVisible = nil }
         model.close()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
     }
-}
 
-// MARK: - Model
+    #if DEBUG
+    // MARK: - -TomaDumpEditorStructure
 
-/// The output size of the preview in phase 0.
-private let previewOutputSize: SIMD2<Int> = [1920, 1080]
-
-@MainActor @Observable
-final class EditorModel {
-    enum State {
-        case loading
-        case ready(PreviewRenderer)
-        /// Take `takeID` is still marked as being recorded: it can be recovered from here.
-        case unfinished(takeID: String)
-        case recovering
-        case failed(String)
+    /// The project opened, or could not be, and the bar has its items.
+    var structureIsSettled: Bool {
+        model.state != .opening && model.state != .recovering && !toolbarIdentifiers.isEmpty
     }
 
-    enum ExportState: Equatable {
-        case idle
-        case running(progress: Double)
-        case finished(URL)
+    /// The identifiers of the editor's items of the bar, from left to right as they are shown (AppKit lists the centered
+    /// item first).
+    var toolbarIdentifiers: [String] {
+        let items = (window?.toolbar?.items ?? []).enumerated().filter { $0.element.itemIdentifier.rawValue.hasPrefix("editor.") }
+        func x(_ item: NSToolbarItem) -> CGFloat? {
+            guard let view = item.view, view.window != nil else { return nil }
+            return view.convert(view.bounds, to: nil).minX
+        }
+        return items.sorted { a, b in
+            guard let xa = x(a.element), let xb = x(b.element) else { return a.offset < b.offset }
+            return xa < xb
+        }.map(\.element.itemIdentifier.rawValue)
     }
 
-    let packageURL: URL
-    let takeID: String?
-    private(set) var state = State.loading
-    private(set) var duration = 0.0
-    private(set) var currentTime = 0.0
-    private(set) var isPlaying = false
-    private(set) var exportState = ExportState.idle
-    var canExport: Bool { project != nil && !exportGate.isBusy }
-
-    @ObservationIgnored weak var window: NSWindow?
-    /// Called with the project once it was recovered from this editor; set by the app delegate.
-    @ObservationIgnored var onRecovered: (URL) -> Void = { _ in }
-    @ObservationIgnored private let exportGate: ExportGate
-    @ObservationIgnored private var project: LoadedProject?
-    @ObservationIgnored private var exportTask: Task<Void, Never>?
-    @ObservationIgnored private var resumeAfterScrub = false
-    @ObservationIgnored private var closed = false
-    @ObservationIgnored private var lastPublished: ContinuousClock.Instant?
-
-    private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "Editor")
-
-    /// While playing, the time shown is published at most this often.
-    private static let playbackPublishInterval = Duration.milliseconds(100)
-
-    init(packageURL: URL, takeID: String?, exportGate: ExportGate) {
-        self.packageURL = packageURL
-        self.takeID = takeID
-        self.exportGate = exportGate
-    }
-
-    private var preview: PreviewRenderer? {
-        if case .ready(let preview) = state { preview } else { nil }
-    }
-
-    // MARK: Loading
-
-    /// Reads the take and prepares the preview on `PreviewPreparation`'s queue, never on the main thread or
-    /// a Swift concurrency thread: reading the events and the first frame of a segment blocks.
-    func load() {
-        state = .loading
-        let url = packageURL, take = takeID
-        Task {
-            do {
-                let prepared = try await PreviewPreparation.prepare(url: url, take: take, outputSize: previewOutputSize)
-                guard !closed else { return }
-                project = prepared.project
-                duration = prepared.duration
-                currentTime = 0
-                isPlaying = false
-                state = .ready(prepared.preview)
-            } catch PreviewPreparationError.unfinished(let takeID) {
-                guard !closed else { return }
-                state = .unfinished(takeID: takeID)
-            } catch PreviewPreparationError.cannotDraw(let reason) {
-                Self.logger.error("Cannot draw the first frame: \(reason, privacy: .public)")
-                state = .failed(String(localized: "Couldn't draw the preview."))
-            } catch {
-                Self.logger.error("Cannot open \(url.path, privacy: .public): \(String(describing: error), privacy: .public)")
-                state = .failed(userFacingDescription(of: error))
+    /// The identifiers of the splits' parts, in order, the splits inside a split in its place.
+    var splitIdentifiers: [String] {
+        func parts(of split: NSSplitViewController) -> [String] {
+            split.splitViewItems.flatMap { item -> [String] in
+                if let inner = item.viewController as? NSSplitViewController { return parts(of: inner) }
+                return [item.viewController.view.identifier?.rawValue ?? "?"]
             }
         }
+        return parts(of: verticalSplit)
     }
-
-    /// Recovers the unfinished take from what is on disk, wherever the project is (the menu's recovery only
-    /// looks in the projects folder), and loads it. `TakeRecovery` refuses a take that is being recorded and
-    /// a project of a newer format, and never deletes recorded data.
-    func recover() {
-        guard case .unfinished(let takeID) = state else { return }
-        state = .recovering
-        let package = ProjectPackage(url: packageURL)
-        Task {
-            do {
-                // Off the main thread: recovery reads every open segment.
-                let take = try await Task.detached(priority: .userInitiated) {
-                    try await TakeRecovery.recover(package: package, takeID: takeID)
-                }.value
-                Self.logger.notice("Recovered \(take.id, privacy: .public) of \(package.url.path, privacy: .public) from its editor")
-                guard !closed else { return }
-                onRecovered(packageURL)
-                load()
-            } catch {
-                Self.logger.error("Cannot recover \(takeID, privacy: .public) of \(package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
-                guard !closed else { return }
-                state = .unfinished(takeID: takeID)
-                showAlert(String(localized: "Couldn't recover the recording"), informative: userFacingDescription(of: error), style: .warning)
-            }
-        }
-    }
-
-    // MARK: Playback
-
-    func togglePlay() {
-        guard let preview else { return }
-        if !preview.isPlaying, preview.currentTime >= duration { preview.currentTime = 0 }
-        preview.isPlaying.toggle()
-        sync()
-    }
-
-    func seek(to time: Double) {
-        guard let preview else { return }
-        preview.currentTime = time
-        sync()
-    }
-
-    /// Dragging the time bar pauses playback until it is let go.
-    func scrubbing(_ editing: Bool) {
-        guard let preview else { return }
-        if editing {
-            resumeAfterScrub = preview.isPlaying
-            preview.isPlaying = false
-        } else if resumeAfterScrub {
-            resumeAfterScrub = false
-            preview.isPlaying = true
-        }
-        sync()
-    }
-
-    /// After every frame drawn: playing moves the time, and stops at the end. While it plays, the time is
-    /// published at most every `playbackPublishInterval`, not on every frame.
-    func previewDidDraw() {
-        guard let preview else { return }
-        if isPlaying, preview.isPlaying, let lastPublished,
-           ContinuousClock.now - lastPublished < Self.playbackPublishInterval {
-            return
-        }
-        sync()
-    }
-
-    private func sync() {
-        guard let preview else { return }
-        let time = preview.currentTime, playing = preview.isPlaying
-        lastPublished = .now
-        if currentTime != time { currentTime = time }
-        if isPlaying != playing { isPlaying = playing }
-    }
-
-    // MARK: Export
-
-    func exportMP4() {
-        guard canExport, let window else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.mpeg4Movie]
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = packageURL.deletingPathExtension().lastPathComponent + ".mp4"
-        panel.directoryURL = packageURL.deletingLastPathComponent()
-        Task {
-            guard await panel.beginSheetModal(for: window) == .OK, let destination = panel.url else { return }
-            startExport(to: destination)
-        }
-    }
-
-    private func startExport(to destination: URL) {
-        guard canExport, let project else { return }
-        exportGate.isBusy = true
-        exportState = .running(progress: 0)
-        let exporter = MP4Exporter(project: project)
-        let throttle = ProgressThrottle()
-        // Called off the main thread, per frame.
-        let progress: @Sendable (Double) -> Void = { [weak self] value in
-            guard throttle.shouldReport(value) else { return }
-            Task { @MainActor in self?.exportProgressed(value) }
-        }
-        exportTask = Task {
-            do {
-                let summary = try await exporter.export(to: destination, progress: progress)
-                exportState = .finished(destination)
-                var leftOut: [String] = []
-                let systemAudio = Set(project.take.tracks.filter { $0.kind == .systemAudio }.map(\.id))
-                let systemAudioGaps = summary.missingAudio.filter { systemAudio.contains($0.track) }.count
-                let microphoneGaps = summary.missingAudio.count - systemAudioGaps
-                if microphoneGaps > 0 {
-                    leftOut.append(String(localized: "The video was exported, but \(microphoneGaps) parts have no sound: their microphone audio couldn't be read."))
-                }
-                if systemAudioGaps > 0 {
-                    leftOut.append(String(localized: "The video was exported, but \(systemAudioGaps) parts have no system audio: it couldn't be read."))
-                }
-                let cameras = Set(project.take.tracks.filter { $0.kind == .camera }.map(\.id))
-                let cameraGaps = summary.missingVideo.filter { cameras.contains($0.track) }.count
-                let screenGaps = summary.missingVideo.count - cameraGaps
-                if screenGaps > 0 {
-                    leftOut.append(String(localized: "The video was exported, but \(screenGaps) parts of the screen couldn't be read: they show the frame before them."))
-                }
-                if cameraGaps > 0 {
-                    leftOut.append(String(localized: "The video was exported, but \(cameraGaps) parts of the camera couldn't be read: they show the frame before them."))
-                }
-                if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
-            } catch let error where Self.isCancellation(error) {
-                exportState = .idle
-            } catch {
-                Self.logger.error("Export to \(destination.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-                exportState = .idle
-                showAlert(String(localized: "Couldn't export the video"), informative: userFacingDescription(of: error), style: .warning)
-            }
-            exportGate.isBusy = false
-            exportTask = nil
-        }
-    }
-
-    func cancelExport() {
-        exportTask?.cancel()
-    }
-
-    /// Cancels an export in progress and waits for its task to end: the exporter has removed its partial file.
-    func cancelExportAndWait() async {
-        guard let exportTask else { return }
-        exportTask.cancel()
-        await exportTask.value
-    }
-
-    private func exportProgressed(_ value: Double) {
-        guard case .running(let progress) = exportState, value > progress else { return }
-        exportState = .running(progress: value)
-    }
-
-    private static func isCancellation(_ error: any Error) -> Bool {
-        error is CancellationError || (error as? ExportError) == .cancelled
-    }
-
-    // MARK: Closing
-
-    /// The window closed: playback stops and an export in progress is cancelled.
-    func close() {
-        closed = true
-        preview?.isPlaying = false
-        exportTask?.cancel()
-    }
-
-    private func showAlert(_ message: String, informative: String = "", style: NSAlert.Style) {
-        let alert = NSAlert()
-        alert.alertStyle = style
-        alert.messageText = message
-        alert.informativeText = informative
-        if let window, window.isVisible {
-            alert.beginSheetModal(for: window)
-        } else {
-            alert.runModal()
-        }
-    }
+    #endif
 }
 
-/// Lets export progress through at most every half percent, so the main thread is not called per frame.
-private final class ProgressThrottle: Sendable {
-    private let last = Mutex(-1.0)
-
-    func shouldReport(_ value: Double) -> Bool {
-        last.withLock { last in
-            guard value >= 1 || value - last >= 0.005 else { return false }
-            last = value
-            return true
-        }
-    }
-}
-
-// MARK: - View
-
-struct EditorView: View {
+/// The preview's part with the bar, which its hosting controller bridges to the window's toolbar.
+private struct EditorPreviewPane: View {
     let model: EditorModel
+    let togglePanel: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            if case .ready = model.state {
-                Divider()
-                controls
-                    .padding(12)
+        PreviewArea(model: model)
+            .toolbar(id: "editor") {
+                EditorToolbar(model: model, togglePanel: togglePanel)
             }
-        }
-        .frame(minWidth: 520, minHeight: 360)
     }
+}
 
-    @ViewBuilder
-    private var content: some View {
-        switch model.state {
-        case .loading:
-            ProgressView("Loading…")
-        case .unfinished:
-            ContentUnavailableView {
-                Label("This recording hasn't finished saving", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text("If it isn't being recorded now, click Recover. Nothing recorded is deleted.")
-            } actions: {
-                Button("Recover") { model.recover() }
-                    .keyboardShortcut(.defaultAction)
+/// The key editor's panel, for the View menu's item: SwiftUI's commands do not see an AppKit window's responder chain.
+/// An `ObservableObject`, which commands follow (`@ObservedObject`).
+@MainActor
+final class KeyEditorPanel: ObservableObject {
+    static let shared = KeyEditorPanel()
+    /// Whether the key editor shows its panel; `nil` while no editor is the key window.
+    @Published var isVisible: Bool?
+}
+
+/// View ▸ Show Panel / Hide Panel (⌥⌘I), in SwiftUI's View menu with the sidebar's commands (`InspectorCommands` is for
+/// SwiftUI's scenes only), sent along the responder chain to the key editor.
+struct EditorCommands: Commands {
+    @ObservedObject var panel = KeyEditorPanel.shared
+
+    var body: some Commands {
+        CommandGroup(after: .sidebar) {
+            let isVisible = panel.isVisible
+            Button(isVisible == false ? LocalizedStringKey("Show Panel") : LocalizedStringKey("Hide Panel")) {
+                NSApp.sendAction(#selector(EditorWindowController.togglePanel(_:)), to: nil, from: nil)
             }
-        case .recovering:
-            ProgressView("Recovering…")
-        case .failed(let message):
-            ContentUnavailableView {
-                Label("Couldn't open the project", systemImage: "exclamationmark.triangle")
-            } description: {
-                Text(message)
-            }
-        case .ready(let preview):
-            PreviewView(preview: preview, isPlaying: model.isPlaying, time: model.currentTime, onDraw: model.previewDidDraw)
-                .aspectRatio(CGFloat(previewOutputSize.x) / CGFloat(previewOutputSize.y), contentMode: .fit)
-                .padding(16)
+            .keyboardShortcut("i", modifiers: [.command, .option])
+            .disabled(isVisible == nil)
         }
-    }
-
-    private var controls: some View {
-        HStack(spacing: 12) {
-            Button {
-                model.togglePlay()
-            } label: {
-                if model.isPlaying {
-                    Label("Pause", systemImage: "pause.fill")
-                } else {
-                    Label("Play", systemImage: "play.fill")
-                }
-            }
-            .labelStyle(.iconOnly)
-            .frame(width: 24)
-            .keyboardShortcut(.space, modifiers: [])
-
-            Slider(
-                value: Binding(get: { model.currentTime }, set: { model.seek(to: $0) }),
-                in: 0...max(model.duration, 0.001),
-                onEditingChanged: { model.scrubbing($0) })
-
-            Text(verbatim: "\(Self.timecode(model.currentTime, duration: model.duration)) / \(Self.timecode(model.duration, duration: model.duration))")
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-
-            exportControls
-        }
-    }
-
-    @ViewBuilder
-    private var exportControls: some View {
-        switch model.exportState {
-        case .running(let progress):
-            ProgressView(value: progress) {
-                Text("Exporting…")
-            }
-            .frame(width: 140)
-            Button("Cancel") { model.cancelExport() }
-        case .idle, .finished:
-            if case .finished(let url) = model.exportState {
-                Text("Export finished.")
-                    .foregroundStyle(.secondary)
-                Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([url]) }
-            }
-            Button("Export MP4…") { model.exportMP4() }
-                .disabled(!model.canExport)
-        }
-    }
-
-    /// `m:ss`, or `h:mm:ss` when the take lasts an hour or more; whole seconds, rounded down.
-    private static func timecode(_ seconds: Double, duration: Double) -> String {
-        let whole = Duration.seconds(max(0, seconds).rounded(.down))
-        return whole.formatted(.time(pattern: duration >= 3600 ? .hourMinuteSecond : .minuteSecond))
     }
 }

@@ -27,13 +27,14 @@ let package = Package(
         .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
         .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
-        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording"]),
+        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing"]),
         // Shared by every test target; not a product.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture"]),
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
                 "ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Export", "Editing", "Analysis", "Render",
+                "Library",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
@@ -50,8 +51,9 @@ let package = Package(
             name: "ExportTests",
             dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
-            name: "AppSupportTests", dependencies: ["AppSupport", "ProjectFormat", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
-        .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "RecorderKitTestSupport"]),
+            name: "AppSupportTests",
+            dependencies: ["AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport"]),
+        .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )
