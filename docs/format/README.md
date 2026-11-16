@@ -396,11 +396,11 @@ Mientras se graba una toma existe `takes/<toma>/.reserve`: 8 MiB de ceros escrit
 
 ## `wallpapers/`
 
-Opcional (versión 2). `takes/<toma>/wallpapers/display-<CGDirectDisplayID>.png` es una foto del fondo de pantalla de una pantalla que graba la toma, sacada al empezar a grabar: una por pantalla grabada (en modo Área, la del área; en modo Ventana, la que tiene la mayor parte de la ventana en ese momento). Es el fondo tal como se ve en el escritorio de ese momento (dinámico, en mosaico o el propio de ese escritorio), sin los íconos, los widgets, el Dock, la barra de menús ni ninguna ventana, con los píxeles de la pantalla, en sRGB. Es para el fondo "blur del escritorio original" del editor (spec §13), que llega con el editor con estilo.
+Opcional (versión 2). `takes/<toma>/wallpapers/display-<CGDirectDisplayID>.png` es una foto del fondo de pantalla de una pantalla que graba la toma, sacada al empezar a grabar: una por pantalla grabada (en modo Área, la del área; en modo Ventana, la que tiene la mayor parte de la ventana en ese momento). Es el fondo tal como se ve en el escritorio de ese momento (dinámico, en mosaico o el propio de ese escritorio), sin los íconos, los widgets, el Dock, la barra de menús ni ninguna ventana, con los píxeles de la pantalla, en sRGB. La captura incluye solo las ventanas que están al nivel del escritorio o por debajo (las del fondo): una ventana que aparece mientras se saca la foto (una notificación, por ejemplo) nunca queda en ella. Si ninguna ventana está a ese nivel, no hay foto. Es para el fondo "blur del escritorio original" del editor (spec §13), que llega con el editor con estilo.
 
 - Es una carpeta común, nunca un enlace simbólico (ver [Rutas](#el-paquete)).
 - Cada foto se escribe una sola vez y nunca sobre otra: `display-<id>.png.tmp` forzado a disco con `F_FULLFSYNC`, movido con `renamex_np(2)` y `RENAME_EXCL` (si ya hay algo con ese nombre, no se toca y el temporal se borra), y la carpeta forzada a disco.
-- Puede faltar la carpeta, o la foto de alguna pantalla: en una toma de la versión 1, en las de `recorder-dev`, o si la foto no se pudo sacar en 3 s o guardar (la toma sigue igual y la app lo anota en su registro). Nada depende de ella para leer o exportar una toma.
+- Puede faltar la carpeta, o la foto de alguna pantalla: en una toma de la versión 1, en las de `recorder-dev`, o si la foto no se pudo sacar en 3 s, no había ventana del fondo o no se pudo guardar (la toma sigue igual y la app lo anota en su registro). Nada depende de ella para leer o exportar una toma.
 - En un volumen sin `RENAME_EXCL` (exFAT o SMB, por ejemplo) `renamex_np` da `ENOTSUP`: ninguna foto se guarda, no queda ningún archivo a medias, la app lo anota y la toma sigue igual.
 - La recuperación no la toca.
 

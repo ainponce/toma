@@ -9,11 +9,12 @@ import os
 /// (`WallpaperSnapshot.capture`; if that fails, the wallpaper's image where macOS draws it, `WallpaperLayout`, over the
 /// fill color). The covers ignore the mouse (a click goes to the desktop below), are on every desktop, never take the
 /// keyboard and never activate the app. Each desktop can have its own wallpaper, so a change of desktop captures it
-/// again; a change of the screens' arrangement or resolution fits the covers to their screens again, and closes the
-/// cover of a screen that is gone. Each capture has `WallpaperSnapshot.captureTimeLimit`: a ScreenCaptureKit that does
-/// not answer holds the countdown back that long at most for each screen, and its cover draws the wallpaper's image
-/// instead. The take records them on purpose (`TakePreparation.includedWindowIDs`): the video shows the wallpaper where
-/// the icons are. Finder's settings are never touched.
+/// again; a change of the screens' arrangement or resolution fits the covers to their screens again, takes the cover of
+/// a screen that is gone off the screen (kept, with its window ID, until `hide()`) and puts it back when that screen
+/// returns. The screens are captured at the same time, each with `WallpaperSnapshot.captureTimeLimit`: a
+/// ScreenCaptureKit that does not answer holds the countdown back that long at most, and the cover draws the
+/// wallpaper's image instead. The take records them on purpose (`TakePreparation.includedWindowIDs`): the video shows
+/// the wallpaper where the icons are. Finder's settings are never touched.
 @MainActor
 final class DesktopCoverController {
     /// Just above the desktop's icons, far under the windows of every app.
@@ -31,20 +32,17 @@ final class DesktopCoverController {
     /// Changed by every `hide()`: a `show()` that was still capturing then puts nothing up.
     private var generation = 0
 
-    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "DesktopCover")
+    nonisolated private static let logger = Logger(subsystem: "dev.toma.Toma", category: "DesktopCover")
 
     /// Puts a cover over the desktop of every screen, each with its wallpaper, and returns their window IDs once
     /// they are on the screen. Covers already up stay as they are.
     func show() async -> [UInt32] {
         guard covers.isEmpty else { return windowIDs }
         let started = generation
-        var wallpapers: [(screen: NSScreen, displayID: UInt32, wallpaper: Wallpaper)] = []
-        for screen in NSScreen.screens {
-            guard let displayID = screen.displayID else { continue }
-            wallpapers.append((screen, displayID, await Self.wallpaper(of: displayID, on: screen)))
-        }
+        let screens = NSScreen.screens.compactMap { screen in screen.displayID.map { (screen: screen, displayID: $0) } }
+        let wallpapers = await Self.wallpapers(of: screens)
         guard generation == started else { return [] }
-        for (screen, displayID, wallpaper) in wallpapers {
+        for ((screen, displayID), wallpaper) in zip(screens, wallpapers) {
             let view = WallpaperView(frame: NSRect(origin: .zero, size: screen.frame.size))
             view.show(wallpaper)
             let panel = FloatingPanel(contentRect: screen.frame, level: Self.level, ignoresMouseEvents: true)
@@ -90,35 +88,37 @@ final class DesktopCoverController {
         observers = [(workspace, spaces), (app, screens)]
     }
 
-    /// Each cover over its screen's frame now, drawn again. The cover of a screen that is gone is closed: macOS would
-    /// move it to another screen, over that one's cover. Its window ID stays in the take's request, where a missing
-    /// window is only logged.
+    /// Each cover over its screen's frame now, drawn again. The cover of a screen that is gone is taken off the screen
+    /// but kept: macOS would move it to another screen, over that one's cover, and a new window would not be in the
+    /// take's request (its displays' filter keeps the covers by window ID, also off the screen). When the screen
+    /// returns, its cover goes back over it.
     private func refit() {
-        covers.removeAll { cover in
-            if let screen = Self.screen(cover.displayID) {
-                cover.panel.setFrame(screen.frame, display: false)
-                return false
+        for cover in covers {
+            guard let screen = Self.screen(cover.displayID) else {
+                if cover.panel.isVisible {
+                    Self.logger.notice("Display \(cover.displayID, privacy: .public) is gone: its cover is put away")
+                    cover.panel.orderOut(nil)
+                }
+                continue
             }
-            Self.logger.notice("Display \(cover.displayID, privacy: .public) is gone: its cover is closed")
-            cover.panel.orderOut(nil)
-            cover.panel.close()
-            return true
+            cover.panel.setFrame(screen.frame, display: false)
+            if !cover.panel.isVisible {
+                Self.logger.notice("Display \(cover.displayID, privacy: .public) is back: its cover is up again")
+                cover.panel.orderFrontRegardless()
+            }
         }
         redraw()
     }
 
-    /// Captures each screen's wallpaper again, as the desktop now on it shows it, and draws it; a redraw still
-    /// capturing is given up.
+    /// Captures the wallpaper of each screen with a cover again, as the desktop now on it shows it, and draws it; a
+    /// redraw still capturing is given up.
     private func redraw() {
         redrawing?.cancel()
-        let covers = covers
+        let shown = covers.compactMap { cover in Self.screen(cover.displayID).map { (cover: cover, screen: $0) } }
         redrawing = Task {
-            for cover in covers {
-                guard let screen = Self.screen(cover.displayID) else { continue }
-                let wallpaper = await Self.wallpaper(of: cover.displayID, on: screen)
-                guard !Task.isCancelled else { return }
-                cover.view.show(wallpaper)
-            }
+            let wallpapers = await Self.wallpapers(of: shown.map { (screen: $0.screen, displayID: $0.cover.displayID) })
+            guard !Task.isCancelled else { return }
+            for (item, wallpaper) in zip(shown, wallpapers) { item.cover.view.show(wallpaper) }
         }
     }
 
@@ -126,17 +126,31 @@ final class DesktopCoverController {
         NSScreen.screens.first { $0.displayID == displayID }
     }
 
-    /// The wallpaper as it is seen; if it cannot be captured within `captureTimeLimit`, its image as macOS draws it.
-    private static func wallpaper(of displayID: UInt32, on screen: NSScreen) async -> Wallpaper {
+    /// The wallpaper of each of `screens` as it is seen, in their order, all captured at the same time; one that cannot
+    /// be captured within `captureTimeLimit` is its image as macOS draws it.
+    private static func wallpapers(of screens: [(screen: NSScreen, displayID: UInt32)]) async -> [Wallpaper] {
+        let displayIDs = screens.map(\.displayID)
+        let captured = await withTaskGroup(of: (index: Int, image: CGImage?).self) { group in
+            for (index, displayID) in displayIDs.enumerated() {
+                group.addTask { (index, await capture(displayID)) }
+            }
+            var images = [CGImage?](repeating: nil, count: displayIDs.count)
+            for await result in group { images[result.index] = result.image }
+            return images
+        }
+        return zip(screens, captured).map { screen, image in image.map(Wallpaper.captured) ?? picture(on: screen.screen) }
+    }
+
+    /// The wallpaper of `displayID` as it is seen; `nil`, logged, if it cannot be captured within `captureTimeLimit`.
+    nonisolated private static func capture(_ displayID: UInt32) async -> CGImage? {
         do {
-            let captured = try await withTimeLimit(WallpaperSnapshot.captureTimeLimit) {
+            return try await withTimeLimit(WallpaperSnapshot.captureTimeLimit) {
                 try await WallpaperSnapshot.capture(displayID: displayID)
             }
-            return .captured(captured)
         } catch {
             logger.error(
                 "Cannot capture the wallpaper of display \(displayID, privacy: .public), drawing its image: \(String(describing: error), privacy: .public)")
-            return picture(on: screen)
+            return nil
         }
     }
 

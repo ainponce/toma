@@ -7,7 +7,7 @@ import Recording
 import ScreenCaptureKit
 import UniformTypeIdentifiers
 
-/// A window on the screen as ScreenCaptureKit lists it: what the wallpaper's capture leaves out.
+/// A window on the screen as ScreenCaptureKit lists it: what the wallpaper's capture keeps or leaves out.
 public struct DesktopWindowInfo: Equatable, Sendable {
     /// Its `CGWindowID`.
     public var windowID: UInt32
@@ -26,6 +26,8 @@ public enum WallpaperSnapshotError: Error, Equatable {
     case noScreenRecordingAccess
     /// The display is not among the shareable displays (disconnected or asleep).
     case displayNotFound(displayID: UInt32)
+    /// No window on the screen is at or below the desktop's level: there is no wallpaper to capture.
+    case noDesktopPicture(displayID: UInt32)
     /// ImageIO could not make a PNG of the image.
     case encodingFailed
 }
@@ -89,13 +91,14 @@ public enum WallpaperSnapshot {
         return data as Data
     }
 
-    /// What the wallpaper's capture leaves out, in the order given: every window above the desktop's level
-    /// (`desktopLevel`) — the desktop's icons and widgets, the covers over them, the Dock, the menu bar and every
-    /// app's windows. The wallpaper is at the desktop's level.
-    public static func excludedWindowIDs(
+    /// What the wallpaper's capture keeps, in the order given: the windows at or below the desktop's level
+    /// (`desktopLevel`), where the wallpaper is. Everything above it is left out: the desktop's icons and widgets,
+    /// the covers over them, the Dock, the menu bar and every app's windows, also one that appears after the windows
+    /// were listed (a notification, a palette that shows again): the capture only has the windows it names.
+    public static func desktopPictureWindowIDs(
         _ windows: [DesktopWindowInfo], desktopLevel: Int = Int(CGWindowLevelForKey(.desktopWindow))
     ) -> [UInt32] {
-        windows.filter { $0.layer > desktopLevel }.map(\.windowID)
+        windows.filter { $0.layer <= desktopLevel }.map(\.windowID)
     }
 
     /// The displays of `displays` whose wallpaper a take of `selection` keeps, in track order: the ones it records in
@@ -121,18 +124,21 @@ public enum WallpaperSnapshot {
     }
 
     /// Captures the wallpaper of `displayID` at the display's own pixels, as the take records it (BGRA in sRGB, no
-    /// cursor: `DisplayCaptureSource.makeConfiguration`): `SCScreenshotManager` with the on-screen windows, desktop
-    /// windows included, and every one above the desktop left out (`excludedWindowIDs`). Throws without Screen
-    /// Recording, never asking for it. It has no time limit of its own: `save` and the covers give it `captureTimeLimit`.
+    /// cursor: `DisplayCaptureSource.makeConfiguration`): `SCScreenshotManager` with only the on-screen windows at or
+    /// below the desktop's level (`desktopPictureWindowIDs`), so a window that appears meanwhile is never in it.
+    /// Throws without Screen Recording, never asking for it, and when no window is at the desktop's level
+    /// (`noDesktopPicture`). It has no time limit of its own: `save` and the covers give it `captureTimeLimit`.
     public static func capture(displayID: UInt32) async throws -> CGImage {
         guard CGPreflightScreenCaptureAccess() else { throw WallpaperSnapshotError.noScreenRecordingAccess }
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         guard let display = content.displays.first(where: { $0.displayID == displayID }) else {
             throw WallpaperSnapshotError.displayNotFound(displayID: displayID)
         }
-        let excluded = Set(
-            excludedWindowIDs(content.windows.map { DesktopWindowInfo(windowID: $0.windowID, layer: $0.windowLayer) }))
-        let filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { excluded.contains($0.windowID) })
+        let kept = Set(
+            desktopPictureWindowIDs(content.windows.map { DesktopWindowInfo(windowID: $0.windowID, layer: $0.windowLayer) }))
+        let windows = content.windows.filter { kept.contains($0.windowID) }
+        guard !windows.isEmpty else { throw WallpaperSnapshotError.noDesktopPicture(displayID: displayID) }
+        let filter = SCContentFilter(display: display, including: windows)
         let configuration = DisplayCaptureSource.makeConfiguration(
             contentRect: filter.contentRect, pointPixelScale: Double(filter.pointPixelScale), framesPerSecond: 1)
         return try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)

@@ -99,7 +99,7 @@ import UniformTypeIdentifiers
         }
     }
 
-    @Test func wallpaperCaptureExcludesEverythingAboveTheDesktop() {
+    @Test func wallpaperCaptureKeepsOnlyTheDesktopPicture() {
         let desktop = Int(CGWindowLevelForKey(.desktopWindow))
         let icons = Int(CGWindowLevelForKey(.desktopIconWindow))
         let windows = [
@@ -109,8 +109,11 @@ import UniformTypeIdentifiers
             DesktopWindowInfo(windowID: 13, layer: 20),  // the Dock
             DesktopWindowInfo(windowID: 14, layer: 0),  // a window
         ]
-        #expect(WallpaperSnapshot.excludedWindowIDs(windows) == [11, 12, 13, 14])
-        #expect(WallpaperSnapshot.excludedWindowIDs(windows, desktopLevel: 0) == [13])
+        // Only the wallpaper is captured: a window that is not listed (a notification that came meanwhile) never is.
+        #expect(WallpaperSnapshot.desktopPictureWindowIDs(windows) == [10])
+        #expect(WallpaperSnapshot.desktopPictureWindowIDs(windows, desktopLevel: 0) == [10, 11, 12, 14])
+        // Nothing at the desktop's level: no wallpaper to capture, and `capture` throws.
+        #expect(WallpaperSnapshot.desktopPictureWindowIDs(Array(windows.dropFirst())).isEmpty)
     }
 
     @Test func wallpaperSnapshotsAreOfTheRecordedDisplays() {
