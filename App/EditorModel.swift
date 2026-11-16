@@ -20,6 +20,7 @@ enum EditorSelection: Equatable {
     case zooms(Set<String>)
     case cameraChange(String)
     case screenChange(String)
+    case layoutBlock(String)
 }
 
 /// A track of sound of the take, as a row of the Audio tab.
@@ -175,6 +176,16 @@ final class EditorModel {
     /// The playhead is being dragged on the timeline's ruler.
     @ObservationIgnored private var isScrubbing = false
     @ObservationIgnored private var editorState = EditorState()
+
+    /// The layout of the last block made or changed in this project (1c decision 10), which the next one takes.
+    var lastBlockLayout: LayoutKind? { editorState.lastBlockLayout }
+
+    /// Remembers `kind` as the last block layout, in the window's state (never in the document).
+    func rememberBlockLayout(_ kind: LayoutKind) {
+        guard editorState.lastBlockLayout != kind else { return }
+        editorState.lastBlockLayout = kind
+        if let caches = session?.caches { editorState.save(caches) }
+    }
     /// Banners closed in this window (the legacy one is remembered in the project's caches).
     @ObservationIgnored private var dismissedRecovery = false
     @ObservationIgnored private var dismissedReopened = false
@@ -643,6 +654,8 @@ final class EditorModel {
             if !document.camera.changes.contains(where: { $0.id == id }) { selection = nil }
         case let .screenChange(id)?:
             if !document.screens.changes.contains(where: { $0.id == id }) { selection = nil }
+        case let .layoutBlock(id)?:
+            if !document.camera.layouts.contains(where: { $0.id == id }) { selection = nil }
         case nil:
             break
         }

@@ -423,6 +423,17 @@
         }
       }
     },
+    "Automatic" : {
+      "comment" : "Camera tab: the split's size is chosen by Toma",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Automático"
+          }
+        }
+      }
+    },
     "Automatic Zoom" : {
       "comment" : "The Zoom tab",
       "localizations" : {
@@ -488,12 +499,45 @@
         }
       }
     },
+    "Black" : {
+      "comment" : "Colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Negro"
+          }
+        }
+      }
+    },
     "Blur" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Desenfoque"
+          }
+        }
+      }
+    },
+    "Border" : {
+      "comment" : "Camera tab: the camera's border",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borde"
+          }
+        }
+      }
+    },
+    "Border Color" : {
+      "comment" : "Camera tab: the colour of the camera's border",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color del borde"
           }
         }
       }
@@ -531,6 +575,17 @@
         }
       }
     },
+    "Bubble" : {
+      "comment" : "Layout name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Burbuja"
+          }
+        }
+      }
+    },
     "By App" : {
       "localizations" : {
         "es" : {
@@ -547,6 +602,50 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cámara"
+          }
+        }
+      }
+    },
+    "Camera Look" : {
+      "comment" : "Camera tab: section of mirror, border and shadow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aspecto de la cámara"
+          }
+        }
+      }
+    },
+    "Camera Only" : {
+      "comment" : "Layout name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo cámara"
+          }
+        }
+      }
+    },
+    "Camera Side" : {
+      "comment" : "Camera tab: the side of the camera in a split",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lado de la cámara"
+          }
+        }
+      }
+    },
+    "Camera Size" : {
+      "comment" : "Camera tab: the camera's part of a split",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño de la cámara"
           }
         }
       }
@@ -1102,6 +1201,28 @@
         }
       }
     },
+    "Delete All Changes" : {
+      "comment" : "Camera tab: removes every change of the recording",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar todos los cambios"
+          }
+        }
+      }
+    },
+    "Delete Block" : {
+      "comment" : "Camera tab: deletes the selected layout block",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el bloque"
+          }
+        }
+      }
+    },
     "Delete Change" : {
       "comment" : "The Camera tab: a button",
       "localizations" : {
@@ -1304,6 +1425,17 @@
         }
       }
     },
+    "Editing: the block at %@" : {
+      "comment" : "Camera tab: what the layout controls edit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se edita: el bloque de %@"
+          }
+        }
+      }
+    },
     "Editing: the change at %@" : {
       "comment" : "The Camera tab: what the controls edit at the playhead; a time like 0:42",
       "localizations" : {
@@ -1322,6 +1454,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se edita: el estilo inicial"
+          }
+        }
+      }
+    },
+    "Editing: the project layout" : {
+      "comment" : "Camera tab: what the layout controls edit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se edita: la disposición del proyecto"
           }
         }
       }
@@ -1539,12 +1682,34 @@
         }
       }
     },
+    "From %1$@ to %2$@" : {
+      "comment" : "Camera tab: the selected block's range",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De %1$@ a %2$@"
+          }
+        }
+      }
+    },
     "From Other Desktops" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "De otros escritorios"
+          }
+        }
+      }
+    },
+    "Full-Screen Camera" : {
+      "comment" : "Layout name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cámara a pantalla completa"
           }
         }
       }
@@ -1597,6 +1762,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grafito"
+          }
+        }
+      }
+    },
+    "Gray" : {
+      "comment" : "Colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Gris"
           }
         }
       }
@@ -1823,6 +1999,28 @@
         }
       }
     },
+    "Layout" : {
+      "comment" : "Camera tab: the layout of the camera",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disposición"
+          }
+        }
+      }
+    },
+    "Layout, %1$@, %2$d of %3$d" : {
+      "comment" : "VoiceOver: a layout tile",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Disposición, %1$@, %2$d de %3$d"
+          }
+        }
+      }
+    },
     "Left" : {
       "comment" : "A place of the camera bubble",
       "localizations" : {
@@ -2005,6 +2203,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Menta"
+          }
+        }
+      }
+    },
+    "Mirror" : {
+      "comment" : "Camera tab: flips the camera",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Espejar"
           }
         }
       }
@@ -2321,6 +2530,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Todavía no se pidió"
+          }
+        }
+      }
+    },
+    "Not shown while the “%@” block rules; it still counts afterwards." : {
+      "comment" : "Help of a camera change inside a layout block",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ve mientras rige el bloque «%@»; después sigue contando."
           }
         }
       }
@@ -3165,6 +3385,17 @@
         }
       }
     },
+    "Screen Only" : {
+      "comment" : "Layout name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo pantalla"
+          }
+        }
+      }
+    },
     "Screen Recording" : {
       "localizations" : {
         "es" : {
@@ -3211,6 +3442,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Para grabar hace falta el permiso de grabación de pantalla. El micrófono es opcional."
+          }
+        }
+      }
+    },
+    "Selected Block" : {
+      "comment" : "Camera tab: card of the selected layout block",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bloque seleccionado"
           }
         }
       }
@@ -3504,6 +3746,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Velocidad"
+          }
+        }
+      }
+    },
+    "Split Screen" : {
+      "comment" : "Layout name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pantalla dividida"
           }
         }
       }
@@ -4004,6 +4257,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La grabación no está en este proyecto."
+          }
+        }
+      }
+    },
+    "The recording's changes only show outside blocks, with the Bubble layout; those inside still count afterwards." : {
+      "comment" : "Camera tab: note under the list of changes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los cambios de la toma solo se ven fuera de los bloques, con la disposición Burbuja; los de adentro siguen contando después."
           }
         }
       }
@@ -4699,6 +4963,17 @@
         }
       }
     },
+    "Transition" : {
+      "comment" : "Camera tab: how a block starts and ends",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transición"
+          }
+        }
+      }
+    },
     "Trim Layout Block" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): an edge of a camera layout block was trimmed",
       "localizations" : {
@@ -4716,6 +4991,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Activar No Molestar con un atajo"
+          }
+        }
+      }
+    },
+    "Turquoise" : {
+      "comment" : "Colour of Toma's style",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Turquesa"
           }
         }
       }
@@ -4813,6 +5099,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Video"
+          }
+        }
+      }
+    },
+    "Violet" : {
+      "comment" : "Colour of Toma's style",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Violeta"
           }
         }
       }
@@ -4916,6 +5213,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Al detener"
+          }
+        }
+      }
+    },
+    "White" : {
+      "comment" : "Colour",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blanco"
           }
         }
       }
@@ -5044,6 +5352,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "hidden by the “%1$@” block at %2$@" : {
+      "comment" : "Camera tab: a change of the recording hidden by a layout block",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "oculto por el bloque «%1$@» de %2$@"
           }
         }
       }
