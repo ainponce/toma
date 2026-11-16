@@ -3,9 +3,9 @@ import ProjectFormat
 import Recording
 
 /// The app's sources for one take: ScreenCaptureKit displays and windows, the camera of the shared
-/// `CameraSessionHost`, the Core Audio microphone and system audio, and the cursor and the geometry of what is
-/// recorded. Make one for each take: it remembers the windows and the display scales it made the sources with,
-/// for `input`.
+/// `CameraSessionHost`, the Core Audio microphone and system audio, and the cursor (its position and its images) and
+/// the geometry of what is recorded. Make one for each take: it remembers the windows and the display scales it made
+/// the sources with, for `input`.
 public final class LiveCaptureSourceFactory: CaptureSourceFactory {
     private let cameraHost: CameraSessionHost
     private let onWindowVisibilityChange: @Sendable (WindowVisibility) -> Void
@@ -61,11 +61,11 @@ public final class LiveCaptureSourceFactory: CaptureSourceFactory {
         }
     }
 
-    /// The cursor, the geometry of `displayIDs` (with the pixels per point their tracks record: one at `.points`, as
-    /// their first `displayGeometry` says) and, with a window, where the window `window` made is and whether it can
-    /// be seen, which goes to `onWindowVisibilityChange`.
+    /// The cursor and the images of its shapes, the geometry of `displayIDs` (with the pixels per point their tracks
+    /// record: one at `.points`, as their first `displayGeometry` says) and, with a window, where the window `window`
+    /// made is and whether it can be seen, which goes to `onWindowVisibilityChange`.
     public func input(windowTrack: (trackID: String, windowID: UInt32)?, displayIDs: [UInt32]) -> any InputRecorder {
-        var recorders: [any InputRecorder] = [CursorRecorder()]
+        var recorders: [any InputRecorder] = [CursorRecorder(), CursorImageRecorder()]
         if !displayIDs.isEmpty {
             let scales = displayScales
             recorders.append(DisplayGeometryRecorder(displayIDs: displayIDs, query: { displayID in

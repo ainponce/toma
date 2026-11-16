@@ -150,9 +150,10 @@ struct Record: AsyncParsableCommand {
             the apps' sound. macOS does not say whether System Audio Recording was allowed: if it was refused, \
             the track is silent.
 
-            The cursor is sampled at 120 Hz, but clicks may be missing: a command-line tool has no \
-            NSApplication, and the mouse-button monitors may not deliver there. The displays' geometry is logged \
-            when it changes, and the window's at 10 Hz.
+            The cursor is sampled at 120 Hz, but clicks may be missing: a command-line tool does not run \
+            NSApplication's event loop, and the mouse-button monitors may not deliver there. Each new shape of the \
+            cursor is saved in the take's cursors/ folder, as macOS gives it (none if it gives no image). The \
+            displays' geometry is logged when it changes, and the window's at 10 Hz.
             """
     )
 
@@ -226,7 +227,9 @@ struct Record: AsyncParsableCommand {
         var sources: [any CaptureSource] = await MainActor.run {
             displayIDs.map { DisplayCaptureSource(displayID: $0, framesPerSecond: fps, scale: scale, captureArea: captureArea) }
         }
-        var input: [any InputRecorder] = [CursorRecorder()]
+        // Without an NSApplication, AppKit gives no arrow nor I-beam, and the cursor images would never get those kinds.
+        await MainActor.run { _ = NSApplication.shared }
+        var input: [any InputRecorder] = [CursorRecorder(), CursorImageRecorder()]
         if !displayIDs.isEmpty {
             // The scale the tracks record, as their first displayGeometry says.
             input.append(DisplayGeometryRecorder(displayIDs: displayIDs, query: { displayID in

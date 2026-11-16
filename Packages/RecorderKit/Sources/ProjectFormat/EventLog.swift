@@ -30,6 +30,9 @@ public final class EventLogWriter: Sendable {
     public static let flushInterval: Duration = .milliseconds(250)
     public static let syncInterval: Duration = .seconds(2)
 
+    /// The file it appends to.
+    public let url: URL
+
     /// The only state `append` touches, so it never waits for disk I/O.
     private struct Pending {
         var bytes: [UInt8] = []
@@ -86,6 +89,7 @@ public final class EventLogWriter: Sendable {
             throw error
         }
 
+        self.url = url
         file = Mutex(FileState(fd: fd))
         self.io = io
         ticksPerSync = max(1, Int((syncInterval / flushInterval).rounded()))

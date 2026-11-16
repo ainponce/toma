@@ -450,9 +450,17 @@ Una sola pasada de fin de hito, contra la app de esta rama, en orden: la prepara
 
 ### 2. Detalle por área
 
+**Imágenes del cursor** (16)
+- En macOS 15 y en macOS 26, grabar una toma con el cursor en I-beam (un campo de texto), en la mano (un enlace en Safari), en las flechas de redimensionar (el borde lateral, el de arriba y una esquina de una ventana) y en uno propio de una app (una de dibujo): `takes/<toma>/cursors/` tiene una imagen por forma (una sola aunque la forma vuelva varias veces), el editor muestra cada una y, en estilo Toma, los bordes salen con las flechas de Toma (la esquina, con la imagen grabada).
+- En `events.jsonl` de esa toma, los `cursorImage` del I-beam, la mano y los bordes tienen `"kind"` (`iBeam`, `pointingHand`, `resizeLeftRight`, `resizeUpDown`); el de la esquina y el de la app de dibujo, no.
+- Toma no aparece en ninguna lista nueva de Ajustes del Sistema ▸ Privacidad y seguridad.
+- Grabando con el cursor quieto, el uso de CPU de Toma (Monitor de Actividad) es a lo sumo 2 puntos más que con la copia del hito 1a en la misma toma: anotar los dos números.
+- Con Accesibilidad ▸ Pantalla ▸ Puntero en el tamaño más grande, o con otros colores del puntero, y con un pincel grande en una app de dibujo, grabar 10 s moviéndolo: ninguna imagen de `cursors/` pasa de 512 px de lado (un cursor de más de 128 pt se guarda a menos de 4 píxeles por punto), el editor muestra el puntero grabado de su tamaño, no la flecha de Toma, y anotar el tamaño en píxeles de las imágenes y si tienen `"kind"`.
+
 | Comprobación | Fecha | macOS | Resultado |
 |---|---|---|---|
 | 0. Preparación: copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
+| 2. Imágenes del cursor (macOS 15 y 26) | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 
