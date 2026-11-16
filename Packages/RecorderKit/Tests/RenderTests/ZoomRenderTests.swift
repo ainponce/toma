@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Analysis
+import CoreText
 import Foundation
 import Metal
 import ProjectFormat
@@ -363,4 +364,76 @@ func aMovingZoomDrawsTheTitleAFewTimes() throws {
     // ⌈log√2 3⌉ + 1 = 5 at most: 1, √2, 2, 2√2 and 4.
     #expect(titles.drawCount <= Int((2 * log2(3.0)).rounded(.up)) + 1 && titles.drawCount == scales.count, "\(scales.sorted())")
     #expect(scales.count > 2)
+}
+
+/// The rows of `bytes` (`width` pixels across) where `isInk` holds for some pixel, from the first to the last: how tall
+/// the ink is.
+private func inkHeight(_ bytes: [UInt8], width: Int, isInk: (Int) -> Bool) -> Int {
+    var rows: [Int] = []
+    for y in 0..<(bytes.count / 4 / width) where (0..<width).contains(where: { isInk(y * width + $0) }) { rows.append(y) }
+    guard let first = rows.first, let last = rows.last else { return 0 }
+    return last - first + 1
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func theTitlesGlyphsFollowTheBarAndTheScale() throws {
+    // Capitals with flat tops and bottoms: their ink is the font's cap height.
+    let titles = TitleTexture(device: try #require(MTLCreateSystemDefaultDevice()))
+    for barHeight in [18.0, 28, 40] {
+        let layer = WindowFrameLayer(
+            rect: Rect(x: 100, y: 50, width: 600, height: 400), barHeight: barHeight, appearance: .light, title: "HELL",
+            buttons: true, cornerRadius: 8)
+        for scale in [1, 2.0.squareRoot(), 2, 4] {
+            let texture = try #require(try titles.texture(for: layer, scale: scale))
+            var bytes = [UInt8](repeating: 0, count: texture.width * texture.height * 4)
+            texture.getBytes(
+                &bytes, bytesPerRow: texture.width * 4, from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+            // At 13/28 of the bar's height in pixels of the texture: the bar's size, at the scale asked for.
+            let font = try #require(TitleTexture.font(size: barHeight * scale * 13 / 28))
+            #expect(abs(CTFontGetSize(font) - barHeight * scale * 13 / 28) < 1e-3, "\(CTFontGetSize(font))")
+            let ink = inkHeight(bytes, width: texture.width) { bytes[$0 * 4 + 3] >= 128 }
+            let cap = CTFontGetCapHeight(font)
+            #expect(abs(Double(ink) - cap) <= 1, "bar \(barHeight) × \(scale): ink \(ink), cap \(cap)")
+        }
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func theDrawnTitleGrowsWithTheZoomWithoutJumps() throws {
+    let take = StageDrawing.bareTake()
+    let drawer = try StageDrawing.Drawer()
+    let titles = TitleTexture(device: drawer.device)
+    /// The title's ink drawn at `depth` (1: none), zoomed in on the bar's middle: the rows its pixels change.
+    func drawnInk(atDepth depth: Double) throws -> Int {
+        var document = EditDocument.legacy(take: take, events: [])
+        document.style.frame = .macWindow(appearance: .light, title: "HELL", buttons: false)
+        if depth > 1 {
+            document.zoom.regions = [StageDrawing.zoom(1, from: 0, to: 3, depth: depth, focus: .fixed(x: 0.5, y: 0), instant: true)]
+        }
+        let frame = FrameEvaluator(take: take, events: [], document: document, outputSize: size).frame(at: 1)
+        #expect(abs((frame.stage?.depth ?? 1) - depth) < 1e-9)
+        let window = try #require(frame.windowFrame)
+        let title = try #require(try titles.texture(for: window, scale: TitleTexture.scale(for: frame)))
+        func draw(_ title: (any MTLTexture)?) throws -> [UInt8] {
+            let target = try StageDrawing.target(device: drawer.device, size: size)
+            let commandBuffer = try #require(drawer.queue.makeCommandBuffer())
+            try drawer.compositor.encode(
+                frame, screen: drawer.screen, camera: nil, cursor: drawer.cursor, windowTitle: title, into: target,
+                commandBuffer: commandBuffer)
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            return StageDrawing.bytes(of: target)
+        }
+        let with = try draw(title), without = try draw(nil)
+        // Dark letters over the light bar: where they cover more than half of a pixel (the bar is 236, the letters take up
+        // to 200 off it).
+        return inkHeight(with, width: size.x) { i in Int(without[i * 4]) - Int(with[i * 4]) >= 100 }
+    }
+    let unzoomed = try drawnInk(atDepth: 1)
+    #expect(unzoomed > 5)
+    // Through every step of √2 and just past it: always the unzoomed ink times the depth.
+    for depth in [1.2, 1.41, 1.42, 1.7, 1.99, 2.0, 2.01, 2.4, 2.82, 2.83, 3] {
+        let ink = try drawnInk(atDepth: depth)
+        #expect(abs(Double(ink) - Double(unzoomed) * depth) <= 1, "depth \(depth): \(ink) px, unzoomed \(unzoomed) px")
+    }
 }
