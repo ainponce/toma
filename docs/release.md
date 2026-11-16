@@ -514,6 +514,17 @@ Con una toma real con cámara y cursor, abierta en el editor. Solo se ve con la 
 - **Cámara.** Forma, Tamaño (los tres botones y la barra de 10 a 45) y la grilla de 3×3 (con el centro apagado y las flechas del teclado con la grilla enfocada) cambian la burbuja de la vista previa sin espera. Con el cabezal antes de todo cambio dice "Se edita: el estilo inicial"; sobre un cambio, "Se edita: el cambio de 0:42". "Agregar un cambio en el cabezal" agrega uno con el estilo de ahí, y "Borrar el cambio" deja seguir el anterior; elegir una fila lleva el cabezal a ese cambio. Un cambio dentro de un corte no aparece en la lista.
 - Una toma sin cámara no tiene la pestaña Cámara; una toma sin imágenes del cursor muestra la nota "Esta toma no guardó la forma del cursor: se usa la flecha de Toma."
 
+**La línea de tiempo: editar con el mouse** (41)
+
+Con una toma real abierta en el editor. Solo se ve con la app; ningún agente tiene permiso de Pantalla.
+- **Cortar y recortar.** Dividir (botón de la barra de pistas y menú del tramo) corta el tramo en el cabezal; arrastrar el borde de un tramo (a 6 pt, el cursor pasa a flechas izquierda-derecha) lo recorta con la etiqueta "−1,20 s · 0:18,40", los demás tramos se corren y el cabezal sigue en su cuadro. Un solo ⌘Z deshace cada corte o recorte.
+- **Velocidad.** Poner 2× un tramo desde el menú de la barra y desde el menú contextual; "Velocidad personalizada…" acepta de 0,25 a 16; el menú muestra la nota del sonido.
+- **Zooms.** Crear uno arrastrando en un lugar vacío de la pista Zoom (menos de 0,3 s no crea nada) y con doble clic (3 s); moverlo, recortar sus bordes; mover uno automático lo vuelve del usuario y su lugar viejo no se vuelve a llenar. Menú contextual: Profundidad, Enfoque, Instantánea, Borrar.
+- **Rombos y pantallas.** Arrastrar un rombo de la cámara y el límite entre dos pantallas; "Mostrar «nombre»" y "Seguir el cursor" en el menú de una pantalla.
+- **Selección y ajuste.** ⇧-clic suma solo en la misma pista; clic en vacío deselecciona y mueve el cabezal; ⌥ + arrastre en la regla marca un rango; los bordes se pegan a 8 pt (el botón Ajuste lo apaga, ⌘ lo invierte mientras se arrastra). Pasar el mouse resalta tramos, bloques y bordes; al borrar o deshacer, los elementos se acomodan con resorte (con Reducir movimiento, un fundido).
+- Borrar el único tramo muestra "Tiene que quedar al menos un tramo.".
+- Deshacer y rehacer muchos pasos; `kill -9` a la app en medio de una edición y, al reabrir, todo está y deshacer llega hasta la primera edición.
+
 **El panel: Zoom y Audio** (39)
 
 Con una toma real (clics, tipeo, micrófono y audio del sistema), abierta en el editor. Ningún agente puede grabarla.

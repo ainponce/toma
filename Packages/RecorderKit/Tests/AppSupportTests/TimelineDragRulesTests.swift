@@ -94,4 +94,20 @@ import Testing
         #expect(TimelineDragRules.isDrag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 13, y: 10)))
         #expect(TimelineDragRules.isDrag(from: CGPoint(x: 10, y: 10), to: CGPoint(x: 10, y: 6)))
     }
+
+    @Test func theScaleSliderIsLogarithmic() {
+        // Fitted at 10 pt/s: the slider's two ends are the fit and 600 pt/s, and the middle is the geometric mean.
+        #expect(TimelineDragRules.sliderValue(scale: 10, fit: 10) == 0)
+        #expect(TimelineDragRules.sliderValue(scale: 600, fit: 10) == 1)
+        #expect(abs(TimelineDragRules.sliderScale(value: 0.5, fit: 10) - (10 * 600).squareRoot()) < 1e-9)
+        for value in [0.0, 0.25, 0.7, 1] {
+            let back = TimelineDragRules.sliderValue(scale: TimelineDragRules.sliderScale(value: value, fit: 3), fit: 3)
+            #expect(abs(back - value) < 1e-12)
+        }
+        // Outside the range, or with nothing to fit, it holds to the ends.
+        #expect(TimelineDragRules.sliderValue(scale: 5000, fit: 10) == 1)
+        #expect(TimelineDragRules.sliderValue(scale: 1, fit: 10) == 0)
+        #expect(TimelineDragRules.sliderValue(scale: 100, fit: 600) == 0)
+        #expect(TimelineDragRules.sliderScale(value: 0.5, fit: 600) == 600)
+    }
 }

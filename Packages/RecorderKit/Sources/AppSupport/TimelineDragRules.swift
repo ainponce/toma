@@ -103,4 +103,21 @@ public enum TimelineDragRules {
         let time = Timecode.precise(Double(position) / 1e9, total: Double(total) / 1e9, locale: locale)
         return change + " \u{00B7} " + time
     }
+
+    // MARK: - The scale's slider
+
+    /// Where `scale` is on the bar's slider, from 0 (`fit`, the whole sequence in the width) to 1 (`TimelineLayout.maxPointsPerSecond`),
+    /// by the logarithm: equal steps change the scale by the same ratio. 0 when there is no range.
+    public static func sliderValue(scale: Double, fit: Double) -> Double {
+        let top = TimelineLayout.maxPointsPerSecond
+        guard fit > 0, fit < top, scale > 0, scale.isFinite else { return 0 }
+        return min(max(log(scale / fit) / log(top / fit), 0), 1)
+    }
+
+    /// The scale at `value` of the slider (0 to 1), the inverse of `sliderValue(scale:fit:)`.
+    public static func sliderScale(value: Double, fit: Double) -> Double {
+        let top = TimelineLayout.maxPointsPerSecond
+        guard fit > 0, fit < top, value.isFinite else { return min(max(fit, 0), top) }
+        return fit * pow(top / fit, min(max(value, 0), 1))
+    }
 }

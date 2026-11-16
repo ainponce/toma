@@ -37,6 +37,22 @@ struct TimelineGeometry {
     /// The output times at the area's left and right edges.
     var visibleOutput: (lower: Int64, upper: Int64) { (output(atX: 0), output(atX: areaWidth)) }
 
+    /// The frame of `item` in the area (from its left and from its top, the ruler first), as it is drawn: its rectangle in
+    /// its row, or a square on the diamond of a camera change; `nil` if its row or it is out of sight.
+    func itemFrame(of item: TimelineItem) -> CGRect? {
+        guard let row = rows.first(where: { $0.track == item.track }) else { return nil }
+        let top = TimelineLayout.rulerHeight + row.top - verticalOffset
+        switch item.track {
+        case .video, .screen: return itemRect(item.output, top: top + 2, height: row.height - 4, gap: 1)
+        case .zoom: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
+        case .camera:
+            let x = snapped(self.x(item.output.lowerBound))
+            guard x > -8, x < areaWidth + 8 else { return nil }
+            return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
+        case .ruler, .audio: return nil
+        }
+    }
+
     /// `x` on the display's pixels.
     func snapped(_ x: Double) -> Double {
         (x * backingScale).rounded() / backingScale
@@ -63,6 +79,8 @@ struct TimelinePalette {
     var zoomFill, zoomAutoFill, zoomStroke, zoomText, zoomAutoText: CGColor
     var screenFill, screenText, camera, microphone, systemAudio: CGColor
     var marker, marksFill, marksEdge, playhead, contrastBorder: CGColor
+    /// The selection's outline, the hovered item's wash and the label of a drag.
+    var selection, hoverFill, dragLabelFill, dragLabelText: CGColor
     var increaseContrast: Bool
 
     @MainActor
@@ -84,6 +102,8 @@ struct TimelinePalette {
                 systemAudio: NSColor.systemBlue.withAlphaComponent(0.85).cgColor, marker: NSColor.systemOrange.cgColor,
                 marksFill: NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor, marksEdge: NSColor.controlAccentColor.cgColor,
                 playhead: NSColor.systemRed.cgColor, contrastBorder: NSColor.labelColor.cgColor,
+                selection: NSColor.controlAccentColor.cgColor, hoverFill: NSColor.labelColor.withAlphaComponent(0.12).cgColor,
+                dragLabelFill: NSColor.black.withAlphaComponent(0.75).cgColor, dragLabelText: NSColor.white.cgColor,
                 increaseContrast: NSWorkspace.shared.accessibilityDisplayShouldIncreaseContrast)
         }
         return palette!
@@ -192,17 +212,38 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     var onScrub: (Int64) -> Void = { _ in }
     var onScrubEnd: () -> Void = {}
     var onMute: (_ track: String, _ muted: Bool) -> Void = { _, _ in }
+    /// What is selected, by id: drawn outlined in the accent color.
+    var selected: Set<String> = [] {
+        didSet { if selected != oldValue { tracks.selected = selected; needsLayout = true } }
+    }
+    /// Edges snap (design §5.5): N, and the bar's button, toggle it; ⌘ held while dragging inverts it.
+    var snapping = true {
+        didSet { if snapping != oldValue { onSnappingChange() } }
+    }
+    var onSnappingChange: () -> Void = {}
+    /// The scale changed (the bar's slider follows it).
+    var onScaleChange: () -> Void = {}
+    /// The mouse's editing of the timeline: its drags, hover and menus.
+    private(set) lazy var interaction = TimelineInteraction(view: self)
 
     let tracks = TimelineTracks()
     private(set) var content: TimelineContent?
     /// What `content` was made from.
     private var shown: (take: TakeRecord, document: EditDocument, missing: [ClosedRange<Double>])?
+    private var shownEvents: [InputEvent] = []
+    /// The document a drag shows while it lasts, and until the committed one arrives (`show`): the timeline follows it.
+    private var preview: EditDocument?
+    /// The next layout settles the items to their new places with `Motion.trackItem`.
+    private var settleNext = false
+    private var notifiedScale = 0.0
+    private var notifiedFit = 0.0
+    private var itemsCache: [TimelineItem]?
 
     // MARK: Scale and scroll
 
     private(set) var scale = TimelineLayout.maxPointsPerSecond
     private(set) var offset = 0.0
-    private var verticalOffset = 0.0
+    private(set) var verticalOffset = 0.0
     /// The whole sequence is in the width, and stays so.
     private var fitted = true
     /// ⌘+, ⌘− or ⇧Z under way: the scale's spring (`Self.springValue(ofScale:)`), the scale it goes to, and the output
@@ -222,13 +263,15 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private let areaView = TimelineAreaView()
     private let ruler = TimelineRuler()
     private let playheadLayer = CALayer()
+    let overlay = CALayer()
+    private var trackingArea: NSTrackingArea?
     private let playheadLine = CALayer()
     private let playheadHead = CAShapeLayer()
     private let headerColumn = FlippedView()
     private let headerRows = FlippedView()
     private let headerSeparator = NSBox()
     private var headers: [TrackHeaderView] = []
-    private var palette: TimelinePalette
+    private(set) var palette: TimelinePalette
     private var displayObserver: NSObjectProtocol?
     /// Where the help over the hatching is.
     private var helpRect: CGRect?
@@ -250,6 +293,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         area.addSublayer(tracks.layer)
         playheadLayer.addSublayer(playheadLine)
         playheadLayer.addSublayer(playheadHead)
+        area.addSublayer(overlay)
         area.addSublayer(playheadLayer)
         tracks.thumbnailArrived = { [weak self] in self?.needsLayout = true }
         displayObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -284,19 +328,51 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     /// Shows `document` of `take` (with `events`' markers), the spans in `missing` hatched; `nil`, nothing (the project is
     /// opening or cannot be shown).
     func show(take: TakeRecord, events: [InputEvent], document: EditDocument, missing: [ClosedRange<Double>]) {
-        if let shown, shown.take == take, shown.document == document, shown.missing == missing { return }
-        let rows = content?.layout.tracks
+        if let shown, shown.take == take, shown.document == document, shown.missing == missing, preview == nil { return }
+        // A document that is not the one on screen moves the items to their places, unless a drag showed it already.
+        settleNext = content != nil && preview == nil && shown?.document != document
+        preview = nil
         shown = (take, document, missing)
-        let content = TimelineContent(take: take, events: events, document: document, missing: missing)
+        shownEvents = events
+        rebuildContent()
+    }
+
+    /// Shows `document` instead of the committed one while a drag lasts (`nil`: the committed one again). The next `show`
+    /// puts the committed one back.
+    func setPreview(_ document: EditDocument?) {
+        guard shown != nil, document != preview else { return }
+        preview = document
+        rebuildContent()
+    }
+
+    private func rebuildContent() {
+        guard let shown else { return }
+        let rows = content?.layout.tracks
+        let content = TimelineContent(take: shown.take, events: shownEvents, document: preview ?? shown.document, missing: shown.missing)
         self.content = content
+        itemsCache = nil
         if content.layout.tracks != rows { makeHeaders() } else { updateHeaders() }
         needsLayout = true
+    }
+
+    /// The items the mouse can point at, in the order of their tracks.
+    var hitItems: [TimelineItem] {
+        if let itemsCache { return itemsCache }
+        guard let content else { return [] }
+        let items = content.clips.items.map { TimelineItem(id: $0.id, track: .video, output: $0.output) }
+            + content.screens.items.map { TimelineItem(id: $0.id, track: .screen, output: $0.output) }
+            + content.zooms.items.map { TimelineItem(id: $0.id, track: .zoom, output: $0.output) }
+            + content.cameraChanges.items.map { TimelineItem(id: $0.id, track: .camera, output: $0.output) }
+        itemsCache = items
+        return items
     }
 
     func showNothing() {
         guard shown != nil else { return }
         shown = nil
+        preview = nil
         content = nil
+        itemsCache = nil
         fitted = true
         stopAnimations()
         makeHeaders()
@@ -348,12 +424,22 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
             return
         }
         ruler.update(content!, geometry, palette, marks: marks)
+        tracks.settling = settleNext && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        if settleNext, NSWorkspace.shared.accessibilityDisplayShouldReduceMotion { fade() }
+        settleNext = false
         tracks.update(content!, geometry, palette)
+        tracks.settling = false
         placeHeaders(geometry)
         placePlayhead(geometry)
+        interaction.viewDidLayout(geometry)
+        let fit = TimelineLayout.fitScale(duration: durationSeconds, width: areaWidth)
+        if scale != notifiedScale || fit != notifiedFit {
+            (notifiedScale, notifiedFit) = (scale, fit)
+            onScaleChange()
+        }
     }
 
-    private func geometry() -> TimelineGeometry? {
+    func geometry() -> TimelineGeometry? {
         guard let content else { return nil }
         var top = 0.0
         let rows = content.layout.tracks.dropFirst().map { row in
@@ -603,27 +689,70 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        let point = convert(event.locationInWindow, from: nil)
-        guard content != nil, point.x >= TimelineLayout.headerWidth, point.y < TimelineLayout.rulerHeight else { return }
-        scrubbing = true
-        scrub(at: point.x)
+        interaction.mouseDown(event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard scrubbing else { return }
-        scrub(at: convert(event.locationInWindow, from: nil).x)
+        interaction.mouseDragged(event)
     }
 
     override func mouseUp(with event: NSEvent) {
+        interaction.mouseUp(event)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        interaction.mouseMoved(event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        interaction.mouseExited()
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        interaction.mouseMoved(event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        interaction.menu(for: event)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let trackingArea { removeTrackingArea(trackingArea) }
+        let area = NSTrackingArea(
+            rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .cursorUpdate, .activeInKeyWindow, .inVisibleRect],
+            owner: self, userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
+    }
+
+    /// The playhead moves to the output time at `x` (from the view's left edge), as a click or a drag on the ruler does.
+    func scrub(at x: Double) {
+        scrubbing = true
+        scrub(toX: x)
+    }
+
+    func endScrub() {
         guard scrubbing else { return }
         scrubbing = false
         onScrubEnd()
     }
 
-    private func scrub(at x: Double) {
+    func scrub(toX x: Double) {
         guard let content else { return }
         let τ = content.layout.output(atX: x, scale: scale, offset: offset)
         onScrub(min(max(τ, 0), content.map.duration))
+    }
+
+    /// The scale changes to `scale` (clamped to its range) around the playhead, following the slider 1:1.
+    func setScale(_ scale: Double) {
+        stopAnimations()
+        zoom(to: scale, anchorX: anchorX(), animated: false)
+    }
+
+    /// The range of scales, from the whole sequence in the width to 600 pt per second.
+    var scaleRange: ClosedRange<Double> {
+        TimelineLayout.fitScale(duration: durationSeconds, width: areaWidth)...TimelineLayout.maxPointsPerSecond
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
@@ -864,6 +993,7 @@ private final class TrackHeaderView: NSView {
 final class TimelineViewController: NSViewController {
     private let model: EditorModel
     private let timeline = EditorTimelineView()
+    private let bar = TimelineBar()
     /// The package and the take the caches read, and the work of the waveforms.
     private var cachesFor: (url: URL, take: TakeRecord)?
     private var waveformWork: [Task<Void, Never>] = []
@@ -888,7 +1018,7 @@ final class TimelineViewController: NSViewController {
     }
 
     override func loadView() {
-        view = timeline
+        view = TimelineContainer(bar: bar, timeline: timeline)
     }
 
     override func viewDidLoad() {
@@ -897,8 +1027,29 @@ final class TimelineViewController: NSViewController {
         timeline.onScrub = { [weak model] τ in model?.scrub(toSeconds: Double(τ) / 1e9) }
         timeline.onScrubEnd = { [weak model] in model?.endScrub() }
         timeline.onMute = { [weak self] track, muted in self?.setMuted(track, muted) }
+        timeline.interaction.model = model
+        wireBar()
         followContent()
+        followBar()
         followPlayhead()
+    }
+
+    /// The bar's controls do what the timeline's menus do, and follow its scale and its snapping.
+    private func wireBar() {
+        bar.onSplit = { [weak model] in model?.splitAtPlayhead() }
+        bar.onSpeed = { [weak model] in model?.setSpeed($0) }
+        bar.onCustomSpeed = { [weak timeline] in timeline?.interaction.askCustomSpeed() }
+        bar.onAddZoom = { [weak model] in model?.addZoom() }
+        bar.onSnapping = { [weak timeline] in timeline?.snapping = $0 }
+        bar.onScale = { [weak timeline] in timeline?.setScale($0) }
+        bar.onZoomIn = { [weak timeline] in timeline?.zoomIn() }
+        bar.onZoomOut = { [weak timeline] in timeline?.zoomOut() }
+        bar.onFit = { [weak timeline] in timeline?.fitToWindow() }
+        timeline.onSnappingChange = { [weak self] in self.map { $0.bar.setSnapping($0.timeline.snapping) } }
+        timeline.onScaleChange = { [weak self] in
+            guard let self else { return }
+            bar.setScale(timeline.scale, fit: timeline.scaleRange.lowerBound)
+        }
     }
 
     /// The document, the spans that could not be read and whether it can be edited, as the model has them now and each
@@ -909,6 +1060,17 @@ final class TimelineViewController: NSViewController {
             showContent()
         } onChange: { [weak self] in
             Task { @MainActor in self?.followContent() }
+        }
+    }
+
+    /// What the bar enables and shows: whether the document can be edited, and the speed of what the menu applies to.
+    private func followBar() {
+        guard !stopped else { return }
+        withObservationTracking {
+            bar.setEnabled(model.canEdit, hasClip: !model.speedTargets.isEmpty)
+            bar.setSpeed(model.speedOfTargets)
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.followBar() }
         }
     }
 
@@ -927,6 +1089,8 @@ final class TimelineViewController: NSViewController {
     private func showContent() {
         let missing = model.missingVideo
         timeline.canEdit = model.canEdit
+        timeline.marks = model.timelineMarks
+        timeline.selected = Self.selectedIDs(model.selection)
         guard model.state == .ready, let document = model.document, let project = model.overlayProject else {
             timeline.showNothing()
             return
@@ -953,6 +1117,14 @@ final class TimelineViewController: NSViewController {
                 guard !Task.isCancelled else { return }
                 self?.timeline.setWaveform(levels, for: track.id)
             }
+        }
+    }
+
+    private static func selectedIDs(_ selection: EditorSelection?) -> Set<String> {
+        switch selection {
+        case let .clips(ids)?, let .zooms(ids)?: ids
+        case let .cameraChange(id)?, let .screenChange(id)?: [id]
+        case nil: []
         }
     }
 
@@ -983,7 +1155,7 @@ enum TimelineBench {
     static func run(editor: NSView) {
         let snapshots = ProcessInfo.processInfo.environment["TOMA_BENCH_TIMELINE_SNAPSHOTS"].map { URL(fileURLWithPath: $0) }
         print("editor timeline: \(Int(editor.frame.width)) × \(Int(editor.frame.height)) pt")
-        if let snapshots, let editor = editor as? EditorTimelineView {
+        if let snapshots, let editor = editor.subviews.compactMap({ $0 as? EditorTimelineView }).first ?? editor as? EditorTimelineView {
             snapshot(editor, to: snapshots.appending(path: "timeline-editor.png"))
         }
         let (project, document) = makeProject()

@@ -23,6 +23,83 @@
         }
       }
     },
+    "Add Zoom" : {
+      "comment" : "The timeline's track bar: makes a zoom block of 3 s at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar zoom"
+          }
+        }
+      }
+    },
+    "Center of the Screen" : {
+      "comment" : "The timeline's menu of a zoom: the focus is fixed in the middle",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Centro de la pantalla"
+          }
+        }
+      }
+    },
+    "Custom Speed…" : {
+      "comment" : "The speed menu of the timeline: asks for any speed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Velocidad personalizada…"
+          }
+        }
+      }
+    },
+    "Custom Speed" : {
+      "comment" : "The sheet that asks for a clip's speed: its title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Velocidad personalizada"
+          }
+        }
+      }
+    },
+    "Delete" : {
+      "comment" : "The timeline's menu of a clip: deletes what is selected",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar"
+          }
+        }
+      }
+    },
+    "Fit to Window" : {
+      "comment" : "The timeline's track bar: the whole sequence in the width",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajustar a la ventana"
+          }
+        }
+      }
+    },
+    "From 0.25× to 16×." : {
+      "comment" : "The sheet that asks for a clip's speed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De 0,25× a 16×."
+          }
+        }
+      }
+    },
     "%lld markers" : {
       "comment" : "A saved take: how many markers it has",
       "localizations" : {
@@ -2915,6 +2992,17 @@
         }
       }
     },
+    "Show “%@”" : {
+      "comment" : "The timeline's menu of a screen's stretch: shows that screen there; the screen's name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar «%@»"
+          }
+        }
+      }
+    },
     "Show Camera" : {
       "comment" : "The Camera tab: whether the camera shows",
       "localizations" : {
@@ -3023,6 +3111,17 @@
         }
       }
     },
+    "Snapping" : {
+      "comment" : "The timeline's track bar: edges stick to the playhead and to other edges",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajuste"
+          }
+        }
+      }
+    },
     "Soft" : {
       "comment" : "The Cursor tab: a click sound",
       "localizations" : {
@@ -3122,6 +3221,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Velocidad"
+          }
+        }
+      }
+    },
+    "Split" : {
+      "comment" : "The timeline's track bar and a clip's menu: cuts the clip in two",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dividir"
           }
         }
       }
@@ -3917,6 +4027,17 @@
         }
       }
     },
+    "There has to be at least one clip." : {
+      "comment" : "The timeline: what is said when the last clip is deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tiene que quedar al menos un tramo."
+          }
+        }
+      }
+    },
     "There isn't enough free disk space to record (%@ available)." : {
       "localizations" : {
         "es" : {
@@ -4178,6 +4299,17 @@
         }
       }
     },
+    "Timeline Scale" : {
+      "comment" : "The timeline's track bar: the scale's slider",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escala de la línea de tiempo"
+          }
+        }
+      }
+    },
     "Title" : {
       "localizations" : {
         "es" : {
@@ -4301,6 +4433,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escribir el atajo"
+          }
+        }
+      }
+    },
+    "Up to 4× the sound speeds up without changing pitch; faster, the clip has no sound." : {
+      "comment" : "The speed menu of the timeline: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hasta 4× el sonido se acelera sin cambiar el tono; más rápido, el tramo va sin sonido."
           }
         }
       }
@@ -4533,6 +4676,17 @@
         }
       }
     },
+    "Zoom In" : {
+      "comment" : "The timeline's track bar: a larger scale",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acercar"
+          }
+        }
+      }
+    },
     "Zoom On" : {
       "comment" : "The Zoom tab: what triggers an automatic zoom",
       "localizations" : {
@@ -4622,6 +4776,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Medio"
+          }
+        }
+      }
+    },
+    "Zoom Out" : {
+      "comment" : "The timeline's track bar: a smaller scale",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alejar"
           }
         }
       }

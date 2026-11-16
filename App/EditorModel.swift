@@ -118,6 +118,8 @@ final class EditorModel {
     /// "Apply Default Style" is under way.
     private(set) var isApplyingDefaultStyle = false
     var selection: EditorSelection?
+    /// The in and out marks of the timeline's ruler (I and O, or ⌥ and a drag), in output nanoseconds.
+    var timelineMarks = TimelineMarks()
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
     /// The image the background is being imported from (the panel's "Choose Image…").
@@ -502,21 +504,23 @@ final class EditorModel {
 
     /// The step the gesture has now: the preview shows the document with its changes applied; if they do not apply, the
     /// document without them.
-    func updateGesture(_ step: EditStep) {
+    func updateGesture(_ step: EditStep?) {
         guard isGesturing else { return }
         gestureStep = step
         showGesture()
     }
 
-    /// Ends the gesture with one `perform` of its last step (none if it never had one).
-    func endGesture() {
-        guard isGesturing else { return }
+    /// Ends the gesture with one `perform` of its last step (none if it never had one); whether it changed the document.
+    @discardableResult
+    func endGesture() -> Bool {
+        guard isGesturing else { return false }
         isGesturing = false
         let step = gestureStep
         gestureStep = nil
         gestureLook = { $0 }
-        if let step, perform(step) != .refused { return }
+        if let step, perform(step) != .refused { return true }
         showSessionRevision()
+        return false
     }
 
     /// Ends the gesture without a change: the preview goes back to the document.
