@@ -44,7 +44,7 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
 /// The editor's panel, the content of the system's inspector (`NSSplitViewItem(inspectorWithViewController:)`, decision 31):
 /// the tabs on top, with an indicator that moves by `Motion.selector`, and under them the tab's controls, which change with
 /// `Motion.panelSwap` (a fade with a rise of 6 pt; with "Reduce motion", a fade). It shows what is selected: a zoom, Zoom; a
-/// change of the camera, Camera. The tabs of the camera, the cursor, the zoom and the audio are those of their own tasks.
+/// change of the camera, Camera. The tabs of the zoom and the audio are those of their own task.
 struct EditorPanel: View {
     let model: EditorModel
 
@@ -115,8 +115,10 @@ struct EditorPanel: View {
             switch tab {
             case .background: BackgroundTab(model: model, style: document.style)
             case .frame: FrameTab(model: model, style: document.style)
+            case .camera: CameraTab(model: model, document: document)
+            case .cursor: CursorTab(model: model, cursor: document.cursor)
             // Their tasks fill these in.
-            case .camera, .cursor, .zoom, .audio: Color.clear.frame(height: 1)
+            case .zoom, .audio: Color.clear.frame(height: 1)
             }
         }
     }

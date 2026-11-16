@@ -147,12 +147,34 @@
         }
       }
     },
+    "Add Change at Playhead" : {
+      "comment" : "The Camera tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar un cambio en el cabezal"
+          }
+        }
+      }
+    },
     "Adjust Area" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ajustar el área"
+          }
+        }
+      }
+    },
+    "After %@ s" : {
+      "comment" : "The Cursor tab: seconds without moving before the cursor hides",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Después de %@ s"
           }
         }
       }
@@ -377,6 +399,39 @@
         }
       }
     },
+    "Bottom" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo"
+          }
+        }
+      }
+    },
+    "Bottom Left" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo a la izquierda"
+          }
+        }
+      }
+    },
+    "Bottom Right" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo a la derecha"
+          }
+        }
+      }
+    },
     "By App" : {
       "localizations" : {
         "es" : {
@@ -468,6 +523,17 @@
         }
       }
     },
+    "Changes During the Recording" : {
+      "comment" : "The Camera tab: the list of changes of the camera's style",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambios durante la toma"
+          }
+        }
+      }
+    },
     "Check for Updates…" : {
       "localizations" : {
         "es" : {
@@ -525,6 +591,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cítrico"
+          }
+        }
+      }
+    },
+    "Click Effect" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Efecto de clic"
+          }
+        }
+      }
+    },
+    "Click Sound" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sonido de clic"
           }
         }
       }
@@ -762,6 +850,17 @@
         }
       }
     },
+    "Delete Change" : {
+      "comment" : "The Camera tab: a button",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el cambio"
+          }
+        }
+      }
+    },
     "Desktop" : {
       "comment" : "A display's only desktop (Space), and the open island's section of desktops",
       "localizations" : {
@@ -811,6 +910,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Listo"
+          }
+        }
+      }
+    },
+    "Drag the bubble in the preview to place it." : {
+      "comment" : "The Camera tab: how to place the bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar la burbuja en la vista previa para ubicarla."
           }
         }
       }
@@ -872,6 +982,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Editar"
+          }
+        }
+      }
+    },
+    "Editing: the change at %@" : {
+      "comment" : "The Camera tab: what the controls edit at the playhead; a time like 0:42",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se edita: el cambio de %@"
+          }
+        }
+      }
+    },
+    "Editing: the initial style" : {
+      "comment" : "The Camera tab: what the controls edit at the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se edita: el estilo inicial"
           }
         }
       }
@@ -956,6 +1088,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Exportando…"
+          }
+        }
+      }
+    },
+    "Fast" : {
+      "comment" : "The Cursor tab: smoothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rápido"
           }
         }
       }
@@ -1107,6 +1250,17 @@
         }
       }
     },
+    "Hide When Still" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar cuando no se mueve"
+          }
+        }
+      }
+    },
     "Hide desktop icons while recording" : {
       "localizations" : {
         "es" : {
@@ -1232,6 +1386,17 @@
         }
       }
     },
+    "Left" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Izquierda"
+          }
+        }
+      }
+    },
     "Light" : {
       "localizations" : {
         "es" : {
@@ -1289,6 +1454,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Prado"
+          }
+        }
+      }
+    },
+    "Mechanical" : {
+      "comment" : "The Cursor tab: a click sound",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mecánico"
           }
         }
       }
@@ -1390,6 +1566,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Niebla"
+          }
+        }
+      }
+    },
+    "Motion Blur" : {
+      "comment" : "The Cursor tab and the Zoom tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfoque de movimiento"
           }
         }
       }
@@ -1883,6 +2070,17 @@
         }
       }
     },
+    "Position" : {
+      "comment" : "The camera's place: the grid of 8 places",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Posición"
+          }
+        }
+      }
+    },
     "Preview" : {
       "comment" : "VoiceOver: the editor's preview",
       "localizations" : {
@@ -2210,6 +2408,28 @@
         }
       }
     },
+    "Right" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Derecha"
+          }
+        }
+      }
+    },
+    "Ripple" : {
+      "comment" : "The Cursor tab: a click effect",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ondas"
+          }
+        }
+      }
+    },
     "Rounded Square" : {
       "comment" : "The camera bubble's shape",
       "localizations" : {
@@ -2412,6 +2632,17 @@
         }
       }
     },
+    "Shape" : {
+      "comment" : "The camera bubble's shape",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Forma"
+          }
+        }
+      }
+    },
     "Shortcut Not Found" : {
       "localizations" : {
         "es" : {
@@ -2438,6 +2669,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Los atajos necesitan ⌘ o ⌃."
+          }
+        }
+      }
+    },
+    "Show Camera" : {
+      "comment" : "The Camera tab: whether the camera shows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar la cámara"
+          }
+        }
+      }
+    },
+    "Show Cursor" : {
+      "comment" : "The Cursor tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar el cursor"
           }
         }
       }
@@ -2473,6 +2726,17 @@
         }
       }
     },
+    "Size" : {
+      "comment" : "The camera's size, or the cursor's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño"
+          }
+        }
+      }
+    },
     "Small" : {
       "comment" : "The camera bubble's size",
       "localizations" : {
@@ -2480,6 +2744,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chica"
+          }
+        }
+      }
+    },
+    "Smooth" : {
+      "comment" : "The Cursor tab: smoothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suave"
+          }
+        }
+      }
+    },
+    "Smoothing" : {
+      "comment" : "The Cursor tab: how the cursor follows the recorded one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suavizado"
+          }
+        }
+      }
+    },
+    "Soft" : {
+      "comment" : "The Cursor tab: a click sound",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suave"
           }
         }
       }
@@ -2576,6 +2873,17 @@
         }
       }
     },
+    "Square" : {
+      "comment" : "The camera bubble's shape: a square with rounded corners",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadrado"
+          }
+        }
+      }
+    },
     "Start Color" : {
       "comment" : "A custom gradient's first colour",
       "localizations" : {
@@ -2633,6 +2941,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Detener grabación"
+          }
+        }
+      }
+    },
+    "Style" : {
+      "comment" : "The Cursor tab: the cursor's look",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Estilo"
           }
         }
       }
@@ -3491,6 +3810,17 @@
         }
       }
     },
+    "This recording didn't save the cursor's shape: Toma's arrow is used." : {
+      "comment" : "The Cursor tab: a note",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta toma no guardó la forma del cursor: se usa la flecha de Toma."
+          }
+        }
+      }
+    },
     "This recording has no photo of the desktop." : {
       "localizations" : {
         "es" : {
@@ -3592,12 +3922,56 @@
         }
       }
     },
+    "Toma" : {
+      "comment" : "The Cursor tab: Toma's own arrow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma"
+          }
+        }
+      }
+    },
     "Toma Classic" : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Toma clásico"
+          }
+        }
+      }
+    },
+    "Top" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arriba"
+          }
+        }
+      }
+    },
+    "Top Left" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arriba a la izquierda"
+          }
+        }
+      }
+    },
+    "Top Right" : {
+      "comment" : "A place of the camera bubble",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arriba a la derecha"
           }
         }
       }
@@ -3672,6 +4046,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Visualización"
+          }
+        }
+      }
+    },
+    "Volume" : {
+      "comment" : "The Cursor tab: the click sound's volume; the Audio tab: a track's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen"
           }
         }
       }
@@ -3829,6 +4214,23 @@
         }
       }
     },
+    "cursor.none" : {
+      "comment" : "The Cursor tab: no click effect or sound (not the generic \"None\")",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguno"
+          }
+        }
+      }
+    },
     "frame.none" : {
       "comment" : "The panel's frame selector: no frame (not the generic \"None\")",
       "localizations" : {
@@ -3842,6 +4244,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "macOS (as recorded)" : {
+      "comment" : "The Cursor tab: the cursor the take recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "macOS (el de la grabación)"
           }
         }
       }
@@ -3862,6 +4275,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    },
+    "smoothing.medium" : {
+      "comment" : "The Cursor tab: the middle smoothing (not the camera's \"Medium\")",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medium"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medio"
           }
         }
       }

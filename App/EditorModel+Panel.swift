@@ -29,6 +29,59 @@ extension EditorModel {
         if isGesturing { updateGesture(step) } else { perform(step) }
     }
 
+    // MARK: - Camera
+
+    /// The document's time map, for what the panel places at the playhead.
+    var panelTimeMap: TimeMap? { document.map { TimeMap(sequence: $0.sequence) } }
+
+    /// "Show Camera".
+    func setCameraShow(_ show: Bool) {
+        guard let document, let step = TrackCommands.setCameraShow(document, show) else { return }
+        perform(step)
+    }
+
+    /// Edits the camera style that rules at the playhead (`TrackCommands.setCameraStyle`): the take's initial one, or the
+    /// change there, which is the user's then. A drag of the size bar is a gesture.
+    func setCameraStyle(_ style: CameraStyle) {
+        guard let document, let map = panelTimeMap,
+            let step = TrackCommands.setCameraStyle(document, atOutput: playheadNanoseconds, timeMap: map, style)
+        else { return }
+        if isGesturing { updateGesture(step) } else { perform(step) }
+    }
+
+    /// "Add Change at Playhead": a change of the user's with the style that rules there, which is then selected.
+    func addCameraChange() {
+        guard let document, let map = panelTimeMap else { return }
+        var made: String?
+        let step = TrackCommands.addCameraChange(document, atOutput: playheadNanoseconds, timeMap: map) { prefix in
+            let id = Self.newID(prefix)
+            made = id
+            return id
+        }
+        guard let step, perform(step) != .refused, let made else { return }
+        selection = .cameraChange(made)
+    }
+
+    /// "Delete Change": the one before it, or the initial style, rules from then on.
+    func deleteCameraChange(_ id: String) {
+        guard let document, let step = TrackCommands.deleteCameraChange(document, id: id) else { return }
+        perform(step)
+    }
+
+    /// Selects change `id` of the list and puts the playhead on it, so what the panel edits is that change.
+    func selectCameraChange(_ id: String, output: Int64) {
+        selection = .cameraChange(id)
+        guard let rate = document?.frameRate else { return }
+        // The first frame of the grid at or after the change: the frame before it would show the style before.
+        var frame = Int((Double(output) * Double(rate) / 1e9).rounded(.up))
+        while Int64(TimeMap.frameTime(frame, frameRate: rate)) < output { frame += 1 }
+        seek(frame: frame)
+    }
+
+    private static func newID(_ prefix: String) -> String {
+        prefix + String(format: "%08x", UInt32.random(in: .min ... .max))
+    }
+
     // MARK: - Image
 
     /// "Choose Image…": the file is copied into the project (`importAsset`), then it is the background.

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
+import ProjectFormat
 import Testing
 
 @Suite struct PanelValuesTests {
@@ -44,5 +45,29 @@ import Testing
         #expect(close(down.start.y, 0) && close(down.end.y, 1))
         let classic = PanelValues.gradientEnds(angle: 135)
         #expect(classic.start.x < 0.5 && classic.start.y < 0.5 && classic.end.x > 0.5 && classic.end.y > 0.5)
+    }
+
+    @Test func cameraCursorAndAudioValuesMapAndStayInRange() {
+        // Small, Medium and Large are on the bar.
+        #expect(close(PanelValues.cameraSize(percent: 17), CameraStyle.small))
+        #expect(close(PanelValues.cameraSize(percent: 24), CameraStyle.medium))
+        #expect(close(PanelValues.cameraSize(percent: 33), CameraStyle.large))
+        #expect(PanelValues.percent(cameraSize: CameraStyle.large) == 33)
+        #expect(close(PanelValues.cameraSize(percent: 99), 0.45) && PanelValues.percent(cameraSize: 0.05) == 10)
+        #expect(close(PanelValues.clickSoundGain(percent: 50), 0.5) && PanelValues.percent(clickSoundGain: 0.5) == 50)
+        #expect(close(PanelValues.trackGain(percent: 200), 2) && PanelValues.percent(trackGain: 1) == 100)
+        #expect(close(PanelValues.trackGain(percent: 250), 2) && PanelValues.percent(trackGain: .nan) == 0)
+        #expect(PanelValues.idleDelayRange == 1...5 && PanelValues.idleDelayStep == 0.5)
+    }
+
+    @Test func cursorSmoothingPresetsAreTheDesignSprings() {
+        #expect(CursorSmoothingPreset.allCases == [.off, .fast, .medium, .smooth])
+        #expect(CursorSmoothingPreset.off.smoothing == .off)
+        #expect(CursorSmoothingPreset.fast.smoothing == .spring(SpringSpec(damping: 1.0, response: 0.10)))
+        #expect(CursorSmoothingPreset.medium.smoothing == .spring(SpringSpec(damping: 1.0, response: 0.16)))
+        #expect(CursorSmoothingPreset.smooth.smoothing == .spring(SpringSpec(damping: 0.92, response: 0.26)))
+        // The project's default is Medium; a spring that is none of them is none.
+        #expect(CursorSmoothingPreset(DefaultStyle.toma.cursor.smoothing) == .medium)
+        #expect(CursorSmoothingPreset(.spring(SpringSpec(damping: 0.5, response: 0.5))) == nil)
     }
 }

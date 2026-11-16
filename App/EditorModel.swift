@@ -114,6 +114,8 @@ final class EditorModel {
     private(set) var hasDesktopPhoto = false
     /// The take has a camera: the panel's Camera tab exists.
     private(set) var hasCamera = false
+    /// The take saved the shapes of the cursor (`cursorImage` events): macOS's cursor can be drawn.
+    private(set) var hasCursorImages = false
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
 
@@ -305,6 +307,7 @@ final class EditorModel {
         timeline = Timeline(document, revision: revision)
         self.document = document
         hasCamera = project.take.tracks.contains { $0.kind == .camera && !$0.segments.isEmpty }
+        hasCursorImages = project.events.contains { if case .cursorImage = $0.kind { true } else { false } }
         hasDesktopPhoto = false
         Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
         previewAspect = document.aspect

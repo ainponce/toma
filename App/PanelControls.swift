@@ -50,6 +50,8 @@ struct PanelSlider: View {
     /// The document's value as the slider shows it.
     let value: Int
     var range: ClosedRange<Int> = PanelValues.sliderRange
+    /// What follows the number ("%"); the number alone is what a screen reader reads.
+    var unit = ""
     let set: (Int) -> Void
 
     @State private var dragged: Int?
@@ -60,7 +62,7 @@ struct PanelSlider: View {
             HStack {
                 Text(title)
                 Spacer()
-                Text(verbatim: "\(shown)")
+                Text(verbatim: "\(shown)\(unit)")
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
             }
