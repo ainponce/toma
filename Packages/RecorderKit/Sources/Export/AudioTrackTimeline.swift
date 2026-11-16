@@ -3,28 +3,32 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import ProjectFormat
+import Synchronization
 import os
 
-/// One audio track of a take, a microphone or system audio, as one continuous stream of 48 kHz Float32 PCM on the
-/// export's timeline, read in order (`AudioMix` adds the tracks together).
+/// One audio track of a take, a microphone or system audio, as one continuous stream of 48 kHz Float32 PCM on the take's
+/// timeline, whose frame 0 is host time `origin` (`TakeTimeline.bounds`, where the legacy document starts). A `Reader`
+/// reads any range of it (`EditedMix` reads the ranges its clips keep).
 ///
-/// Each segment is placed by host time: its frames go to output time `host − timelineStart`, where a frame's host
-/// time comes from its segment's clock map (`ClockMap`), made from the track's own `audioClock` anchors. Segments
-/// that are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a file of 0 bytes or none) and
-/// files that cannot be read are silence, listed in `missingAudio`; so is every gap between segments longer than
-/// `maxClosedGap` (a gap is not missing audio: nothing was recorded there). A shorter gap (or overlap) after audio is
-/// closed: the next segment follows on where the audio before it ended, which shifts that segment, and only it, by
-/// up to `maxClosedGap` (20 ms) from its host time. Output before the first segment, after the last and past
-/// `totalFrames` is silence too.
+/// Each segment is placed by host time: its frames go to timeline frame `(host − origin) × 48 kHz`, where a frame's host
+/// time comes from its segment's clock map (`ClockMap`), made from the track's own `audioClock` anchors. Segments that
+/// are not `SegmentAvailability.present` (marked `.empty` or `.unreadable`, a file of 0 bytes or none) and files that
+/// cannot be read are silence, listed in `missing`; so is every gap between segments longer than `maxClosedGap` (a gap
+/// is not missing audio: nothing was recorded there). A shorter gap (or overlap) after audio is closed: the next segment
+/// follows on where the audio before it ended, which shifts that segment, and only it, by up to `maxClosedGap` (20 ms)
+/// from its host time. Before frame 0, before the first segment and after the last there is silence too.
+///
+/// Where each segment's audio goes is settled once, by `load`, the way the export read the track in order from frame 0
+/// before 1b: every segment that is heard is decoded to its end beforehand, so where its audio ends, which is where the
+/// next one follows on from over a closed gap, comes from that reading and never from what a reader has decoded so
+/// far. A range of the stream is then the same whatever was read before it.
 ///
 /// The stream has the `channels` it was loaded with, 1 or 2 (`channelCount(of:in:)` says how many the track needs):
 /// a segment with that many goes as it is, a mono one goes to both channels, and any other is mixed down with every
 /// channel at unity gain into each, clipped to full scale. That keeps the level of the one or two live inputs a
 /// multichannel interface usually has; AVFoundation's own downmix gives silence for a discrete layout
 /// (`kAudioChannelLayoutTag_DiscreteInOrder`).
-///
-/// Not thread-safe: one owner reads it, from one thread at a time.
-final class AudioTrackTimeline {
+final class AudioTrackTimeline: Sendable {
     static let sampleRate = 48_000.0
     /// The longest gap between two segments that is closed instead of filled with silence.
     static let maxClosedGap = 0.020
@@ -32,28 +36,25 @@ final class AudioTrackTimeline {
     /// rate for the later one to be used: 5000 ppm, well beyond any real device clock.
     static let maxClockDeviation = 0.005
 
-    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
+    fileprivate static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
-    /// The track's ID (`TrackRecord.id`), for `missingAudio`.
+    /// The track's ID (`TrackRecord.id`), for `MissingAudio`.
     let track: String
-    /// Channels of the stream: what `read(into:frames:)` interleaves.
+    /// Channels of the stream: what a `Reader` interleaves.
     let channels: Int
-    /// Length of the stream, in frames.
-    let totalFrames: Int64
-    /// Output frame of the next frame read.
-    private(set) var position: Int64 = 0
-    /// Spans that are silent because a segment's audio could not be used, as they were found: the
-    /// segments that could not be opened when loading, then the ones that failed while reading.
-    private(set) var missingAudio: [MissingAudio]
-
-    private let segments: [Segment]
-    private var nextSegment = 0
-    private var active: SegmentReader?
-    /// Where the audio placed last ended, in output frames.
-    private var lastAudioEnd: Int64?
+    /// The segments that are heard, in order, over timeline frames that never overlap.
+    let placed: [Placed]
+    /// Spans of the source that are silent because a segment's audio could not be used, in the order of the segments:
+    /// those that could not be opened, then where reading one stopped.
+    let missing: [MissingSpan]
+    /// The segments `load` decoded to find where their audio ends.
+    var decodedSegments: Int { placed.count }
 
     /// A segment that can be read, and where its frames go.
-    struct Segment {
+    ///
+    /// Unchecked because `AVAssetTrack` is not marked `Sendable`: a segment never changes once loaded, and its track,
+    /// with its properties loaded, is only handed to a new `AVAssetReaderTrackOutput` whenever a reader opens the file.
+    struct Segment: @unchecked Sendable {
         /// `SegmentRecord.file`.
         var file: String
         var asset: AVURLAsset
@@ -63,8 +64,26 @@ final class AudioTrackTimeline {
         var channels: Int
         /// Frames of the file at `sampleRate`, when its track says.
         var frames: Double?
-        /// Output seconds of the segment's recorded span, for `missingAudio`.
-        var span: (start: Double, end: Double)
+        /// Host time of the segment's recorded span: its start, and its end or the next segment's start (`nil` when
+        /// there is neither), for `missing`.
+        var start: HostTime
+        var end: HostTime?
+    }
+
+    /// A segment as it is heard: its audio over timeline frames `start ..< end`, where `segment.map` (shifted to close a
+    /// gap, if it was) puts it.
+    struct Placed: Sendable {
+        var segment: Segment
+        var start: Int64
+        var end: Int64
+    }
+
+    /// Source host times `start ..< end` (to the end of the take when `end` is `nil`) of the track left silent.
+    struct MissingSpan: Sendable {
+        var file: String
+        var start: HostTime
+        var end: HostTime?
+        var reason: MissingAudio.Reason
     }
 
     /// The audio of one segment's file, as far as reading it needs, or why it cannot be used.
@@ -73,45 +92,101 @@ final class AudioTrackTimeline {
         case unusable(MissingAudio.Reason)
     }
 
-    /// `track` of `project` on a timeline whose frame 0 is host time `timelineStart`, `totalFrames` long, with
-    /// `channels` channels (1 or 2). Loads every segment's track, so the stream can then be read without waiting.
+    /// `track` of `project` on a timeline whose frame 0 is host time `origin`, with `channels` channels (1 or 2). Opens
+    /// every segment's track and decodes the segments that are heard to their end (on a thread of its own, never on
+    /// Swift's cooperative pool), so the stream can then be read from anywhere without waiting.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while loading.
-    static func load(
-        _ project: LoadedProject, track: TrackRecord, timelineStart: HostTime, totalFrames: Int64, channels: Int
-    ) async throws -> AudioTrackTimeline {
+    static func load(_ project: LoadedProject, track: TrackRecord, origin: HostTime, channels: Int) async throws -> AudioTrackTimeline {
         precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
         let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
-        let duration = Double(max(0, totalFrames)) / sampleRate
         var segments: [Segment] = []
-        var missing: [MissingAudio] = []
+        var missing: [MissingSpan] = []
         var rejectedAnchors = 0
         for (k, record) in records.enumerated() {
             guard !Task.isCancelled else { throw ExportError.cancelled }
             let next = k + 1 < records.count ? records[k + 1].startHostTime : nil
-            // Where the segment's audio would go, for the summary: up to its end, the next segment or the export's end.
-            let start = record.startHostTime.seconds(since: timelineStart)
-            let end = (record.endHostTime ?? next).map { $0.seconds(since: timelineStart) } ?? duration
+            // Where the segment's audio would be, for `missing`: up to its end, the next segment or the end of the take.
+            let end = record.endHostTime ?? next
             switch await openAudio(of: record, in: project.package) {
             case let .audio(asset, audioTrack, sourceRate, sourceChannels, frames):
                 let anchors = clockAnchors(of: track.id, from: record.startHostTime, before: next, sourceRate: sourceRate, in: project.events)
                 rejectedAnchors += anchors.rejected
                 let map = ClockMap(
-                    start: record.startHostTime, anchors: anchors.kept, sourceRate: sourceRate,
-                    timelineStart: timelineStart, outputRate: sampleRate)
+                    start: record.startHostTime, anchors: anchors.kept, sourceRate: sourceRate, timelineStart: origin, outputRate: sampleRate)
                 segments.append(Segment(
                     file: record.file, asset: asset, track: audioTrack, map: map, channels: sourceChannels, frames: frames,
-                    span: (start, end)))
+                    start: record.startHostTime, end: end))
             case .unusable(let reason):
                 logger.error("Audio segment \(record.file, privacy: .public): \(String(describing: reason), privacy: .public); exporting silence")
-                if let entry = missingEntry(track: track.id, file: record.file, start: start, end: end, duration: duration, reason: reason) {
-                    missing.append(entry)
-                }
+                missing.append(MissingSpan(file: record.file, start: record.startHostTime, end: end, reason: reason))
             }
         }
         if rejectedAnchors > 0 {
             logger.error("Audio track \(track.id, privacy: .public): \(rejectedAnchors) audio clock anchor(s) out of order or off by more than 5000 ppm; not used")
         }
-        return AudioTrackTimeline(track: track.id, segments: segments, missingAudio: missing, channels: channels, totalFrames: totalFrames)
+        let cancelled = CancellationFlag()
+        let (placed, unread) = try await withTaskCancellationHandler {
+            try await offTheCooperativePool { [segments] in try place(segments, origin: origin, channels: channels, cancelled: cancelled) }
+        } onCancel: {
+            cancelled.cancel()
+        }
+        return AudioTrackTimeline(track: track.id, channels: channels, placed: placed, missing: missing + unread)
+    }
+
+    /// Where the audio of each of `segments` (in time order) is heard, as reading the track in order from frame 0 finds
+    /// it: each segment from where the one before ended (frame 0 for the first), shifted to follow on from there over a
+    /// closed gap, skipped if its audio ends before that frame, decoded to find where its audio ends. Also the spans of
+    /// the segments that could not be read, from where reading stopped.
+    private static func place(
+        _ segments: [Segment], origin: HostTime, channels: Int, cancelled: CancellationFlag
+    ) throws -> (placed: [Placed], missing: [MissingSpan]) {
+        var placed: [Placed] = []
+        var missing: [MissingSpan] = []
+        // Where the audio placed last ended, and where the next segment's reading begins.
+        var lastAudioEnd: Int64?
+        var reading: Int64 = 0
+        for var segment in segments {
+            if cancelled.isCancelled { throw ExportError.cancelled }
+            if let end = lastAudioEnd {
+                let gap = segment.map.output(atDecoded: 0) - Double(end)
+                if abs(gap) <= maxClosedGap * sampleRate { segment.map.shift(by: -gap) }
+            }
+            if let frames = segment.frames, segment.map.output(atDecoded: frames) <= Double(reading) { continue }
+            let decoded: (frames: Int64, failure: String?)
+            do {
+                decoded = try SegmentDecoder.length(of: segment, channels: channels, cancelled: cancelled)
+            } catch ExportError.cancelled {
+                throw ExportError.cancelled
+            } catch {
+                logger.error("Audio segment \(segment.file, privacy: .public): cannot be read (\(String(describing: error), privacy: .public)); exporting silence")
+                missing.append(MissingSpan(file: segment.file, start: segment.start, end: segment.end, reason: .cannotOpen(String(describing: error))))
+                continue
+            }
+            let start = max(reading, Int64(segment.map.output(atDecoded: 0).rounded(.up)))
+            let end = audioEnd(of: segment.map, decodedFrames: decoded.frames, from: start)
+            placed.append(Placed(segment: segment, start: start, end: end))
+            if let failure = decoded.failure {
+                missing.append(MissingSpan(
+                    file: segment.file, start: origin.adding(seconds: Double(end) / sampleRate), end: segment.end,
+                    reason: .readFailed(failure)))
+            }
+            lastAudioEnd = end
+            reading = end
+        }
+        return (placed, missing)
+    }
+
+    /// The first timeline frame from `start` on where `map` shows no decoded frame of the `decodedFrames` there are:
+    /// where a reader of the segment, reading in order from `start`, runs out (`SegmentReader.read`).
+    static func audioEnd(of map: ClockMap, decodedFrames: Int64, from start: Int64) -> Int64 {
+        func runsOut(_ frame: Int64) -> Bool {
+            max(0, map.decoded(atOutput: Double(frame))).rounded(.down) >= Double(decodedFrames)
+        }
+        // From where the last frame goes, the first frame there or next to it.
+        var frame = max(start, Int64(map.output(atDecoded: Double(decodedFrames)).rounded(.up)))
+        while frame > start, runsOut(frame - 1) { frame -= 1 }
+        while !runsOut(frame) { frame += 1 }
+        return frame
     }
 
     /// The channels the stream of `track` needs: 1 if every segment that can be opened is mono, 2 otherwise.
@@ -201,77 +276,87 @@ final class AudioTrackTimeline {
         return (kept, rejected)
     }
 
-    private init(track: String, segments: [Segment], missingAudio: [MissingAudio], channels: Int, totalFrames: Int64) {
+    private init(track: String, channels: Int, placed: [Placed], missing: [MissingSpan]) {
         self.track = track
-        self.segments = segments
-        self.missingAudio = missingAudio
         self.channels = channels
-        self.totalFrames = max(0, totalFrames)
+        self.placed = placed
+        self.missing = missing
     }
 
-    /// Reads the next `frames` frames of the stream into `samples`, which then holds exactly `frames × channels`
-    /// values, interleaved: zeros where there is no audio (gaps, before the first segment, after the last, past
-    /// `totalFrames`).
-    func read(into samples: inout [Float], frames: Int) {
-        samples.removeAll(keepingCapacity: true)
-        samples.append(contentsOf: repeatElement(0, count: frames * channels))
-        fill(&samples, frames: Int(min(Int64(frames), max(0, totalFrames - position))))
-        position += Int64(frames)
-    }
+    /// Reads ranges of the stream, from anywhere: the reader of the segment being read is kept while the ranges go
+    /// forward, and opened again from the segment's start when one goes back, so a range is the same however it is
+    /// reached.
+    ///
+    /// Not thread-safe: one owner reads it, from one thread at a time.
+    final class Reader {
+        let timeline: AudioTrackTimeline
+        /// The reader open, of `timeline.placed[segment]`.
+        private var active: (segment: Int, reader: SegmentReader)?
 
-    /// Writes output frames `position ..< position + count` into `samples`, which starts silent.
-    private func fill(_ samples: inout [Float], frames count: Int) {
-        var i = 0
-        while i < count {
-            let frame = position + Int64(i)
-            guard let segment = active ?? activateNext(at: frame) else { return }  // no more audio: silence
-            if frame < segment.firstOutputFrame {
-                i += Int(min(Int64(count - i), segment.firstOutputFrame - frame))  // silence until it starts
-                continue
+        init(_ timeline: AudioTrackTimeline) {
+            self.timeline = timeline
+        }
+
+        /// Reads timeline frames `frames` into `samples`, which then holds exactly `frames.count × channels` values,
+        /// interleaved: zeros where there is no audio (gaps, before the first segment, after the last).
+        func read(_ frames: Range<Int64>, into samples: inout [Float]) {
+            let channels = timeline.channels
+            samples.removeAll(keepingCapacity: true)
+            samples.append(contentsOf: repeatElement(0, count: frames.count * channels))
+            let placed = timeline.placed
+            // The first segment whose audio ends after the range starts.
+            var low = 0, high = placed.count
+            while low < high {
+                let middle = (low + high) / 2
+                if placed[middle].end <= frames.lowerBound { low = middle + 1 } else { high = middle }
             }
-            if segment.read(outputFrame: frame, into: &samples, at: i * channels) {
-                i += 1
-            } else {
-                if let failure = segment.readFailure {
-                    note(segment.segment, from: Double(frame) / Self.sampleRate, .readFailed(failure))
+            var k = low
+            while k < placed.count, placed[k].start < frames.upperBound {
+                let from = max(frames.lowerBound, placed[k].start), to = min(frames.upperBound, placed[k].end)
+                if from < to, let reader = reader(of: k, from: from) {
+                    var frame = from
+                    while frame < to, reader.read(frame: frame, into: &samples, at: Int(frame - frames.lowerBound) * channels) {
+                        frame += 1
+                    }
                 }
-                lastAudioEnd = frame
-                active = nil
+                k += 1
             }
         }
-    }
 
-    /// Opens the next segment that still has audio at or after output frame `frame`. A segment that starts
-    /// within `maxClosedGap` of where the audio before it ended follows on from there.
-    private func activateNext(at frame: Int64) -> SegmentReader? {
-        while nextSegment < segments.count {
-            var segment = segments[nextSegment]
-            nextSegment += 1
-            if let end = lastAudioEnd {
-                let gap = segment.map.output(atDecoded: 0) - Double(end)
-                if abs(gap) <= Self.maxClosedGap * Self.sampleRate { segment.map.shift(by: -gap) }
-            }
-            if let frames = segment.frames, segment.map.output(atDecoded: frames) <= Double(frame) { continue }
+        /// A reader of segment `k` that can read on from `frame`: the one already open if it has not read past it,
+        /// otherwise a new one; `nil` if the segment's file can no longer be read.
+        private func reader(of k: Int, from frame: Int64) -> SegmentReader? {
+            if let active, active.segment == k, active.reader.canRead(from: frame) { return active.reader }
+            active = nil
             do {
-                active = try SegmentReader(segment, channels: channels)
-                return active
+                let reader = try SegmentReader(timeline.placed[k].segment, channels: timeline.channels)
+                active = (k, reader)
+                return reader
             } catch {
-                Self.logger.error(
-                    "Audio segment \(segment.file, privacy: .public): cannot be read (\(String(describing: error), privacy: .public)); exporting silence")
-                note(segment, from: segment.span.start, .cannotOpen(String(describing: error)))
+                AudioTrackTimeline.logger.error(
+                    "Audio segment \(self.timeline.placed[k].segment.file, privacy: .public): cannot be read again (\(String(describing: error), privacy: .public)); silence")
+                return nil
             }
         }
-        return nil
     }
+}
 
-    /// Adds `segment`'s span from output second `start` on to `missingAudio`.
-    private func note(_ segment: Segment, from start: Double, _ reason: MissingAudio.Reason) {
-        let duration = Double(totalFrames) / Self.sampleRate
-        if let entry = Self.missingEntry(
-            track: track, file: segment.file, start: start, end: segment.span.end, duration: duration, reason: reason) {
-            missingAudio.append(entry)
+/// Runs `body` on a thread of its own and waits for it without holding a thread of Swift's cooperative pool: decoding
+/// blocks in `copyNextSampleBuffer` until AVFoundation's own reads finish, and with every thread of the pool blocked that
+/// way those reads would never run.
+func offTheCooperativePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+    try await withCheckedThrowingContinuation { continuation in
+        DispatchQueue(label: "dev.toma.AudioDecoding", qos: .userInitiated).async {
+            continuation.resume(with: Result(catching: body))
         }
     }
+}
+
+/// Set once its task is cancelled, for work that runs off the task.
+final class CancellationFlag: Sendable {
+    private let flag = Atomic(false)
+    var isCancelled: Bool { flag.load(ordering: .relaxed) }
+    func cancel() { flag.store(true, ordering: .relaxed) }
 }
 
 /// Where the frames of one audio segment go: a piecewise-linear map between its frames, decoded at
@@ -302,6 +387,13 @@ struct ClockMap {
         return knots[k].decoded + (output - knots[k].output) * slope(after: k)
     }
 
+    /// `decoded(atOutput:interval:)` with the interval found from the first knot: the same value as when it is walked
+    /// to in order.
+    func decoded(atOutput output: Double) -> Double {
+        var k = 0
+        return decoded(atOutput: output, interval: &k)
+    }
+
     /// The output frame (fractional) where decoded frame `decoded` goes.
     func output(atDecoded decoded: Double) -> Double {
         // The knot that starts the interval: the last one at or before `decoded`, the first before them all.
@@ -322,38 +414,26 @@ struct ClockMap {
     }
 }
 
-/// Reads one segment's frames in order, decoded to interleaved Float32 at the output rate and mixed to the
-/// stream's channels, and resamples them onto output frames through its clock map (linear interpolation).
-private final class SegmentReader {
-    let segment: AudioTrackTimeline.Segment
-    let firstOutputFrame: Int64
+/// Decodes one segment's file in order, to interleaved Float32 at the output rate mixed to the stream's channels.
+private final class SegmentDecoder {
     /// Why reading stopped before the end of the file, if it did.
-    private(set) var readFailure: String?
+    private(set) var failure: String?
 
     /// `SegmentRecord.file`, for the log.
     private let file: String
     private let reader: AVAssetReader
     private let output: AVAssetReaderTrackOutput
-    private let map: ClockMap
-    /// The interval of `map` the last frame read was in.
-    private var knot = 0
-    /// Channels of the stream (what `buffer` holds) and of the file.
+    /// Channels of the stream (what `next()` gives) and of the file.
     private let channels: Int
     private let sourceChannels: Int
-    /// Decoded frames held, interleaved, from decoded frame `bufferStart`.
-    private var buffer: [Float] = []
-    private var bufferStart: Int64 = 0
     private var finished = false
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
 
     init(_ segment: AudioTrackTimeline.Segment, channels: Int) throws {
-        self.segment = segment
         file = segment.file
-        map = segment.map
         self.channels = channels
         sourceChannels = segment.channels
-        firstOutputFrame = Int64(segment.map.output(atDecoded: 0).rounded(.up))
         reader = try AVAssetReader(asset: segment.asset)
         output = AVAssetReaderTrackOutput(track: segment.track, outputSettings: [
             AVFormatIDKey: kAudioFormatLinearPCM,
@@ -376,9 +456,90 @@ private final class SegmentReader {
         reader.cancelReading()
     }
 
-    /// Writes the segment's sound at output frame `frame` into `samples` at `offset`. Returns false, writing
-    /// nothing, once the segment has no frame there: it has ended.
-    func read(outputFrame frame: Int64, into samples: inout [Float], at offset: Int) -> Bool {
+    /// The decoded frames of `segment`, as a reader gets them, and why reading stopped early if it did.
+    /// - Throws: what opening the file throws, or `ExportError.cancelled` once `cancelled` is set.
+    static func length(of segment: AudioTrackTimeline.Segment, channels: Int, cancelled: CancellationFlag) throws -> (frames: Int64, failure: String?) {
+        let decoder = try SegmentDecoder(segment, channels: channels)
+        var frames: Int64 = 0
+        while let block = decoder.next() {
+            if cancelled.isCancelled { throw ExportError.cancelled }
+            frames += Int64(block.count / channels)
+        }
+        return (frames, decoder.failure)
+    }
+
+    /// The next decoded frames, interleaved with the stream's channels; `nil` once the file is read to its end or
+    /// reading stopped (`failure` says why).
+    func next() -> [Float]? {
+        while !finished {
+            guard let sample = output.copyNextSampleBuffer() else {
+                finished = true
+                if reader.status == .failed {
+                    let error = reader.error.map { String(describing: $0) } ?? "the reader failed"
+                    failure = error
+                    Self.logger.error("Audio segment \(self.file, privacy: .public): reading stopped (\(error, privacy: .public)); silence after it")
+                }
+                return nil
+            }
+            guard let block = CMSampleBufferGetDataBuffer(sample) else { continue }
+            var decoded = [Float](repeating: 0, count: CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size)
+            let status = decoded.withUnsafeMutableBytes { bytes in
+                CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: bytes.count, destination: bytes.baseAddress!)
+            }
+            guard status == noErr else {
+                finished = true
+                failure = "cannot copy decoded audio (OSStatus \(status))"
+                Self.logger.error("Audio segment \(self.file, privacy: .public): cannot copy decoded audio (OSStatus \(status)); silence after it")
+                return nil
+            }
+            if sourceChannels == channels { return decoded }
+            // Mono to both channels, or every channel at unity gain into each, clipped.
+            var mixed: [Float] = []
+            mixed.reserveCapacity(decoded.count / sourceChannels * channels)
+            for frame in stride(from: 0, to: decoded.count - sourceChannels + 1, by: sourceChannels) {
+                var sum: Float = 0
+                for c in 0..<sourceChannels { sum += decoded[frame + c] }
+                let value = min(max(sum, -1), 1)
+                for _ in 0..<channels { mixed.append(value) }
+            }
+            return mixed
+        }
+        return nil
+    }
+}
+
+/// Reads one segment's frames forward, decoded by a `SegmentDecoder`, and resamples them onto timeline frames through
+/// its clock map (linear interpolation).
+private final class SegmentReader {
+    private let decoder: SegmentDecoder
+    private let map: ClockMap
+    /// The interval of `map` the last frame read was in.
+    private var knot = 0
+    /// Channels of the stream: what `buffer` holds.
+    private let channels: Int
+    /// Decoded frames held, interleaved, from decoded frame `bufferStart`.
+    private var buffer: [Float] = []
+    private var bufferStart: Int64 = 0
+    /// The last timeline frame read: the reader only goes forward from it.
+    private var lastFrame = Int64.min
+
+    init(_ segment: AudioTrackTimeline.Segment, channels: Int) throws {
+        decoder = try SegmentDecoder(segment, channels: channels)
+        map = segment.map
+        self.channels = channels
+    }
+
+    /// Whether timeline frame `frame` can be read: none before the last one read.
+    func canRead(from frame: Int64) -> Bool {
+        frame >= lastFrame
+    }
+
+    /// Writes the segment's sound at timeline frame `frame` into `samples` at `offset`. Returns false, writing nothing,
+    /// once the segment has no frame there: it has ended.
+    /// - Precondition: `canRead(from: frame)`.
+    func read(frame: Int64, into samples: inout [Float], at offset: Int) -> Bool {
+        precondition(canRead(from: frame), "SegmentReader: frame \(frame) is before \(lastFrame)")
+        lastFrame = frame
         let position = max(0, map.decoded(atOutput: Double(frame), interval: &knot))
         let first = Int64(position.rounded(.down))
         guard hasFrame(first, keeping: first) else { return false }
@@ -399,9 +560,10 @@ private final class SegmentReader {
 
     /// Whether decoded frame `frame` is held, decoding up to it if needed. Frames before `keep` may be let go.
     private func hasFrame(_ frame: Int64, keeping keep: Int64) -> Bool {
-        while frame >= bufferEnd, !finished {
+        while frame >= bufferEnd {
             discard(before: keep)
-            decodeNext()
+            guard let decoded = decoder.next() else { break }
+            buffer.append(contentsOf: decoded)
         }
         return frame >= bufferStart && frame < bufferEnd
     }
@@ -412,40 +574,5 @@ private final class SegmentReader {
         guard stale > 8192 else { return }
         buffer.removeFirst(Int(stale) * channels)
         bufferStart += stale
-    }
-
-    private func decodeNext() {
-        guard let sample = output.copyNextSampleBuffer() else {
-            finished = true
-            if reader.status == .failed {
-                let error = reader.error.map { String(describing: $0) } ?? "the reader failed"
-                readFailure = error
-                Self.logger.error("Audio segment \(self.file, privacy: .public): reading stopped (\(error, privacy: .public)); silence after it")
-            }
-            return
-        }
-        guard let block = CMSampleBufferGetDataBuffer(sample) else { return }
-        var decoded = [Float](repeating: 0, count: CMBlockBufferGetDataLength(block) / MemoryLayout<Float>.size)
-        let status = decoded.withUnsafeMutableBytes { bytes in
-            CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: bytes.count, destination: bytes.baseAddress!)
-        }
-        guard status == noErr else {
-            finished = true
-            readFailure = "cannot copy decoded audio (OSStatus \(status))"
-            Self.logger.error("Audio segment \(self.file, privacy: .public): cannot copy decoded audio (OSStatus \(status)); silence after it")
-            return
-        }
-        if sourceChannels == channels {
-            buffer.append(contentsOf: decoded)
-            return
-        }
-        // Mono to both channels, or every channel at unity gain into each, clipped.
-        buffer.reserveCapacity(buffer.count + decoded.count / sourceChannels * channels)
-        for frame in stride(from: 0, to: decoded.count - sourceChannels + 1, by: sourceChannels) {
-            var sum: Float = 0
-            for c in 0..<sourceChannels { sum += decoded[frame + c] }
-            let mixed = min(max(sum, -1), 1)
-            for _ in 0..<channels { buffer.append(mixed) }
-        }
     }
 }
