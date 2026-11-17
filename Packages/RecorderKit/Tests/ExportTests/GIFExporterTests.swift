@@ -298,7 +298,7 @@ private func fill(_ folder: URL, leaving: Int) throws {
         try await withTemporaryDirectory { dir in
             let project = try await movingTake(in: dir, seconds: 1)
             let document = edit(of: project)
-            // (end − start) × fps = 1 000 000 005 ns: one frame, the next one (at 66 666 667 ns) is not before the end.
+            // (end − start + 1) × fps ≥ 10⁹ ns: one frame, the next one (at 66 666 667 ns) is not more than 1 ns before the end.
             let range = ExportRange(start: 500_000_000, end: 566_666_667)
             #expect(range.frameCount(fps: 15) == 1)
             let destination = dir.appending(path: "one.gif")
@@ -321,8 +321,8 @@ private func fill(_ folder: URL, leaving: Int) throws {
             let destination = dir.appending(path: "short.gif")
             await #expect(throws: GIFExportError.rangeShorterThanAFrame) { try await exporter.export(to: destination) { _ in } }
             await #expect(throws: GIFExportError.rangeShorterThanAFrame) { try await exporter.encodeInMemory(range: short) }
-            // One nanosecond short of a frame at 15 fps, and an empty range.
-            for range in [ExportRange(start: 0, end: 66_666_666), ExportRange(start: 400_000_000, end: 400_000_000)] {
+            // Two nanoseconds short of a frame at 15 fps (one is within the rounding of the marks), and an empty range.
+            for range in [ExportRange(start: 0, end: 66_666_665), ExportRange(start: 400_000_000, end: 400_000_000)] {
                 await #expect(throws: GIFExportError.rangeShorterThanAFrame) { try await exporter.encodeInMemory(range: range) }
             }
             #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasSuffix(".gif") }.isEmpty)

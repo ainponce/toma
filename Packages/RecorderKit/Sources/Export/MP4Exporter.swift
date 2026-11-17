@@ -26,6 +26,14 @@ import os
 ///
 /// It exports the document it was given, a copy: what is edited while it runs changes nothing in it (design §5.6).
 ///
+/// Given a range of the output (`ExportRange`, 1c design §7.1), it exports that part alone: frame `n` is the one drawn
+/// at `range.frameTime(n, fps:)`, for the frames `range.frameCount(fps:)` counts before its end (the range cut to the
+/// video first: from 0 to where the whole export's last frame ends), and the audio is the mix's frames from
+/// `round(start × 48 000 / 10⁹)` on, as long as those frames last (`EditedMix.frames(of:frameCount:framesPerSecond:)`):
+/// the same samples the whole video plays there, with no fade of its own at the range's edges. The summary lists what
+/// was left out within the range, in seconds of its MP4. Without a range, or with the whole output
+/// (`ExportRange.whole`), it is the export of 1b, frame for frame and sample for sample.
+///
 /// The frames go through a pipeline (design §7.9): up to `ExportSettings.framesInFlight` of them drawn at once
 /// (`FrameRenderer.render(at:into:completion:)`, which decodes ahead along the export's frame grid), while the writer
 /// encodes the ones before them. Each is appended to the writer on the export's queue, in frame order, once the GPU
@@ -48,20 +56,24 @@ public final class MP4Exporter: Sendable {
     public let project: LoadedProject
     public let document: EditDocument
     public let settings: ExportSettings
+    /// The part of the output it exports: all of it when `nil`.
+    public let range: ExportRange?
     /// For tests: sees each frame's pixel buffer on the export's queue, in frame order, right before it is appended.
     let frameSink: FrameSink?
 
     /// What a test's `frameSink` is given: the frame's index and the pixel buffer drawn for it.
     typealias FrameSink = @Sendable (_ frame: Int, _ pixelBuffer: CVPixelBuffer) -> Void
 
-    public convenience init(project: LoadedProject, document: EditDocument, settings: ExportSettings) {
-        self.init(project: project, document: document, settings: settings, frameSink: nil)
+    /// The export of `range` of `document`'s output, of all of it when `nil`.
+    public convenience init(project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil) {
+        self.init(project: project, document: document, settings: settings, range: range, frameSink: nil)
     }
 
-    init(project: LoadedProject, document: EditDocument, settings: ExportSettings, frameSink: FrameSink?) {
+    init(project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil, frameSink: FrameSink?) {
         self.project = project
         self.document = document
         self.settings = settings
+        self.range = range
         self.frameSink = frameSink
     }
 
@@ -81,8 +93,9 @@ public final class MP4Exporter: Sendable {
     /// file is in place. Cancel that task to stop: the export ends between two frames and throws
     /// `ExportError.cancelled`. One export at a time per destination: they would share the partial file.
     /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, `nothingToExport` for a document
-    ///   that lasts no time, `noDisplayTrack` for the legacy document of a take without screen segments; then
-    ///   `writerFailed`, `cancelled`), or the `RenderError` of a frame that could not be drawn.
+    ///   that lasts no time or a range that lasts less than a frame of the video, `noDisplayTrack` for the legacy
+    ///   document of a take without screen segments; then `writerFailed`, `cancelled`), or the `RenderError` of a frame
+    ///   that could not be drawn.
     @concurrent @discardableResult
     public func export(to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> ExportSummary {
         guard !Task.isCancelled else { throw ExportError.cancelled }
@@ -94,10 +107,14 @@ public final class MP4Exporter: Sendable {
         let fps = settings.framesPerSecond
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
 
+        let timeMap = TimeMap(sequence: document.sequence)
+        let part = try Self.part(of: range, in: timeMap, framesPerSecond: fps)
+        let frameCount = part?.frameCount(fps: fps) ?? timeMap.frameCount(frameRate: fps)
+
         let renderer = try FrameRenderer(project: project, document: document, outputSize: settings.outputSize, frameRate: fps)
-        let frameCount = TimeMap(sequence: document.sequence).frameCount(frameRate: fps)
         let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps)
-        let audio = mix.hasSound ? try AudioMix(mix: mix) : nil
+        let audioFrames = Self.audioFrames(of: part, frameCount: frameCount, framesPerSecond: fps, mix: mix)
+        let audio = mix.hasSound ? try AudioMix(mix: mix, frames: audioFrames) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
@@ -105,7 +122,8 @@ public final class MP4Exporter: Sendable {
         let summary: ExportSummary
         do {
             let session = try ExportSession(
-                url: partial, settings: settings, renderer: renderer, frameCount: frameCount, audio: audio, frameSink: frameSink)
+                url: partial, settings: settings, renderer: renderer, start: part?.start ?? 0, frameCount: frameCount, audio: audio,
+                frameSink: frameSink)
             try await withTaskCancellationHandler {
                 try await session.run(progress: progress)
             } onCancel: {
@@ -114,9 +132,16 @@ public final class MP4Exporter: Sendable {
             try Self.fullSync(partial)
             guard !Task.isCancelled else { throw ExportError.cancelled }
             try Self.move(partial, to: destination)
+            var missingAudio = session.missingAudio, missingVideo = renderer.missingVideo
+            if let part {
+                let seconds = { (frames: Int64) in Double(frames) / AudioTrackTimeline.sampleRate }
+                missingAudio = Self.within(seconds(audioFrames.lowerBound)...seconds(audioFrames.upperBound), missingAudio)
+                let end = part.start + TimeMap.frameTime(frameCount, frameRate: fps)
+                missingVideo = Self.within((Double(part.start) / 1e9)...(Double(end) / 1e9), missingVideo)
+            }
             summary = ExportSummary(
-                missingAudio: session.missingAudio.sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) },
-                missingVideo: renderer.missingVideo)
+                missingAudio: missingAudio.sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) },
+                missingVideo: missingVideo)
         } catch {
             if unlink(partial.path) != 0 {
                 let code = errno
@@ -142,19 +167,25 @@ public final class MP4Exporter: Sendable {
         try await mixSamples(of: project, document: .legacy(for: project), framesPerSecond: framesPerSecond)
     }
 
-    /// The samples the AAC encoder gets when `document` of `project` is exported at `framesPerSecond`: every block of its
-    /// mix (`AudioMix`), one after the other, interleaved Float32, over the frames of video rounded to 48 kHz; empty when
-    /// the export has no audio.
+    /// The samples the AAC encoder gets when `range` of `document` of `project` (all of it when `nil`) is exported at
+    /// `framesPerSecond`: every block of its mix (`AudioMix`), one after the other, interleaved Float32, over the frames
+    /// of video rounded to 48 kHz; empty when the export has no audio.
     /// - Throws: what `export` throws before it writes anything (`nothingToExport`, `noDisplayTrack`, `writerFailed`
     ///   for a frame rate that is not positive), or what reading or mixing the audio throws.
-    static func mixSamples(of project: LoadedProject, document: EditDocument, framesPerSecond: Int) async throws -> [Float] {
+    static func mixSamples(
+        of project: LoadedProject, document: EditDocument, framesPerSecond: Int, range: ExportRange? = nil
+    ) async throws -> [Float] {
         if let refusal = refusal(of: document, of: project) { throw refusal }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
+        let timeMap = TimeMap(sequence: document.sequence)
+        let part = try part(of: range, in: timeMap, framesPerSecond: framesPerSecond)
+        let frameCount = part?.frameCount(fps: framesPerSecond) ?? timeMap.frameCount(frameRate: framesPerSecond)
         let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond)
         guard mix.hasSound else { return [] }
+        let frames = audioFrames(of: part, frameCount: frameCount, framesPerSecond: framesPerSecond, mix: mix)
         // Mixing decodes: off the cooperative pool, as the export's own queue does it.
         return try await offTheCooperativePool {
-            let audio = try AudioMix(mix: mix)
+            let audio = try AudioMix(mix: mix, frames: frames)
             var samples: [Float] = []
             samples.reserveCapacity(Int(audio.totalFrames) * audio.channels)
             while let block = try audio.nextBlock() {
@@ -179,6 +210,40 @@ public final class MP4Exporter: Sendable {
         guard TimeMap(sequence: document.sequence).duration > 0 else { return .nothingToExport }
         let screenRecorded = ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false
         return screenRecorded || document != .legacy(for: project) ? nil : .noDisplayTrack
+    }
+
+    /// The part of the output that the export of `range` draws at `fps`, for a document whose output is `timeMap`: `nil`
+    /// for all of it, which `range` is when `nil` or `ExportRange.whole(timeMap)` (the export of 1b:
+    /// `TimeMap.frameCount(frameRate:)` frames from 0, one at least); otherwise the range cut to the video, from 0 to where
+    /// the whole export's last frame ends (`TimeMap.frameTime(_:frameRate:)` of its frame count), so a range up to the
+    /// end of the video ends with it.
+    /// - Throws: `ExportError.nothingToExport` when what is left of the range lasts less than a frame at `fps`
+    ///   (`ExportRange.lastsAFrame(fps:)`, the rule the GIF refuses it by).
+    private static func part(of range: ExportRange?, in timeMap: TimeMap, framesPerSecond fps: Int) throws -> ExportRange? {
+        guard let range, range != .whole(timeMap) else { return nil }
+        let videoEnd = TimeMap.frameTime(timeMap.frameCount(frameRate: fps), frameRate: fps)
+        let part = ExportRange(start: max(range.start, 0), end: min(range.end, videoEnd))
+        guard part.lastsAFrame(fps: fps) else { throw ExportError.nothingToExport }
+        return part
+    }
+
+    /// The output frames of `mix` that the export of `part` (all of it when `nil`) plays with `frameCount` frames at `fps`.
+    private static func audioFrames(of part: ExportRange?, frameCount: Int, framesPerSecond fps: Int, mix: EditedMix) -> Range<Int64> {
+        part.map { EditedMix.frames(of: $0, frameCount: frameCount, framesPerSecond: fps) } ?? 0..<mix.totalFrames
+    }
+
+    /// The spans of `missing` that overlap `window` (output seconds of the whole video), cut to it, in seconds from its
+    /// start. A span that only touches it is left out; one of no length (a single instant) is kept where that instant
+    /// is in it.
+    private static func within<Span: LeftOutSpan>(_ window: ClosedRange<Double>, _ missing: [Span]) -> [Span] {
+        missing.compactMap { span in
+            let from = max(span.start, window.lowerBound), to = min(span.end, window.upperBound)
+            guard span.start < span.end ? from < to : window.contains(span.start) else { return nil }
+            var part = span
+            part.start = from - window.lowerBound
+            part.end = to - window.lowerBound
+            return part
+        }
     }
 
     /// The H.264 settings of the video of `settings`: High profile, CABAC, tagged Rec.709, at `averageBitRate`. Whichever
@@ -312,6 +377,8 @@ private final class ExportSession: @unchecked Sendable {
     private let audio: AudioMix?
     private let renderer: FrameRenderer
     private let settings: ExportSettings
+    /// The output time of frame 0, in nanoseconds: the start of the range exported, 0 for the whole video.
+    private let start: Int64
     private let frameCount: Int
     private let frameSink: MP4Exporter.FrameSink?
     private let queue = DispatchQueue(label: MP4Exporter.queueLabel, qos: .userInitiated)
@@ -321,7 +388,7 @@ private final class ExportSession: @unchecked Sendable {
 
     /// Creates the writer of `url` (the file appears when writing starts) and its inputs.
     init(
-        url: URL, settings: ExportSettings, renderer: FrameRenderer, frameCount: Int, audio: AudioMix?,
+        url: URL, settings: ExportSettings, renderer: FrameRenderer, start: Int64, frameCount: Int, audio: AudioMix?,
         frameSink: MP4Exporter.FrameSink?
     ) throws {
         let writer: AVAssetWriter
@@ -373,6 +440,7 @@ private final class ExportSession: @unchecked Sendable {
         self.audio = audio
         self.renderer = renderer
         self.settings = settings
+        self.start = start
         self.frameCount = frameCount
         self.frameSink = frameSink
     }
@@ -491,10 +559,12 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// The output seconds of frame `frame`: `TimeMap.frameTime(frame, frameRate: fps)`, which the renderer rounds back to
-    /// those nanoseconds exactly (they are far below 2⁵¹).
+    /// The output seconds of frame `frame`: `start + TimeMap.frameTime(frame, frameRate: fps)` (`ExportRange.frameTime`),
+    /// which the renderer rounds back to those nanoseconds exactly (they are far below 2⁵¹). Off the grid of the
+    /// export's frame rate (a range that starts between its frames), the renderer decodes each frame's when it is asked
+    /// for, not ahead (`FrameRenderer.render(at:into:completion:)`): the same bytes.
     private func time(ofFrame frame: Int) -> Double {
-        Double(TimeMap.frameTime(frame, frameRate: settings.framesPerSecond)) / 1e9
+        Double(start + TimeMap.frameTime(frame, frameRate: settings.framesPerSecond)) / 1e9
     }
 
     /// A buffer of the writer's pool for a frame, tagged as what the file says: the frame's values are encoded as they
@@ -569,6 +639,15 @@ private final class DrawnFrame: @unchecked Sendable {
         lock.withLock { outcome = error.map { .failure($0) } ?? .success(()) }
     }
 }
+
+/// A span of the export's summary: what was left out, from `start` to `end` in output seconds.
+private protocol LeftOutSpan {
+    var start: Double { get set }
+    var end: Double { get set }
+}
+
+extension MissingAudio: LeftOutSpan {}
+extension MissingVideo: LeftOutSpan {}
 
 extension ExportError {
     /// Whether `error` says the disk is full: AVFoundation's `diskFull`, `ENOSPC` or `EDQUOT`, Foundation's out of

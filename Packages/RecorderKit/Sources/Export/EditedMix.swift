@@ -29,6 +29,9 @@ import Synchronization
 ///   not sound.
 /// - The mix lasts `totalFrames`, what the video lasts at its frame rate (`totalFrames(frameCount:framesPerSecond:)`):
 ///   past the content, silence; before its end, the content is cut.
+/// - The export of a range of the output (`ExportRange`, 1c design §7.1) plays the frames of this mix from the range's
+///   start on (`frames(of:frameCount:framesPerSecond:)`), as the whole video plays them: the range's edges get no fade
+///   of their own.
 ///
 /// A range of the mix is the same whatever was rendered before it, rendered without a preroll. With the limiter, whose
 /// gain depends on the frames before, a range that does not follow on from the one rendered last starts a limiter
@@ -204,6 +207,14 @@ public final class EditedMix: Sendable {
     /// The frames of audio that `frameCount` frames of video at `fps` last: `round(frameCount / fps × 48 000)`.
     static func totalFrames(frameCount: Int, framesPerSecond fps: Int) -> Int64 {
         Int64((Double(frameCount) / Double(fps) * AudioTrackTimeline.sampleRate).rounded())
+    }
+
+    /// The output frames of the mix that the export of `range` plays, drawing `frameCount` frames at `fps` from its
+    /// start: from `round(start × 48 000 / 10⁹)` on, as many as those frames last (`totalFrames(frameCount:framesPerSecond:)`).
+    /// For the whole output (`ExportRange.whole`, with the video's frames), `0 ..< totalFrames`.
+    static func frames(of range: ExportRange, frameCount: Int, framesPerSecond fps: Int) -> Range<Int64> {
+        let first = frames(ofNanoseconds: range.start)
+        return first..<(first + totalFrames(frameCount: frameCount, framesPerSecond: fps))
     }
 
     /// `round(ns × 48 000 / 10⁹)`, halves away from zero, in integers (exact for any `ns`).

@@ -87,7 +87,8 @@ public enum ExportError: Error, Equatable {
     /// The destination is a folder, or inside a project package (`*.toma`), which an export never writes into.
     case destinationNotAllowed
     /// The document's clips last no time, as those of a take that recorded nothing (no segment of a screen, an audio
-    /// track or the camera) do: there is nothing to export, and nothing is written.
+    /// track or the camera) do, or the range asked for (`MP4Exporter.range`) lasts less than a frame of the video:
+    /// there is nothing to export, and nothing is written.
     case nothingToExport
 }
 
