@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
+import Library
 import ProjectFormat
 import SwiftUI
 
-/// The editor's bar (design §5.2), in the window's unified toolbar: on the left the project's name and what the output
-/// lasts, in the middle the format, on the right the panel's button and Export. Each item has the identifier
-/// `-TomaDumpEditorStructure` prints.
+/// The editor's bar (design §5.2), in the window's unified toolbar: on the left the project's name (which a click edits,
+/// design §6.7) and what the output lasts, in the middle the format, on the right the panel's button and Export. Each item
+/// has the identifier `-TomaDumpEditorStructure` prints.
 struct EditorToolbar: CustomizableToolbarContent {
     let model: EditorModel
     /// Shows or hides the panel.
@@ -13,10 +14,11 @@ struct EditorToolbar: CustomizableToolbarContent {
 
     var body: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.name", placement: .navigation) {
-            Text(verbatim: model.name)
-                .font(.headline)
-                .lineLimit(1)
-                .help(Text(verbatim: model.name))
+            if let actions = model.projectActions {
+                EditorNameField(model: model, actions: actions)
+            } else {
+                EditorNameField.name(model.name)
+            }
         }
         .customizationBehavior(.disabled)
         ToolbarItem(id: "editor.duration", placement: .navigation) {
@@ -40,6 +42,82 @@ struct EditorToolbar: CustomizableToolbarContent {
             ExportControl(model: model)
         }
         .customizationBehavior(.disabled)
+    }
+}
+
+/// The project's name in the bar (design §6.7): a click on it edits it, as File ▸ Rename does; ↩ renames the package, Esc
+/// and leaving it with a name that cannot be used leave it as it was; beside the field, what is wrong with the name as it
+/// is typed, or what the disk said (the library's words). Renaming is not an edit of the document: what is typed is
+/// undone in the field, never in the editor's history.
+private struct EditorNameField: View {
+    let model: EditorModel
+    let actions: EditorProjectActions
+
+    var body: some View {
+        if actions.isRenaming {
+            EditorNameEditor(actions: actions, name: model.name)
+        } else {
+            HStack(spacing: 6) {
+                Self.name(model.name)
+                    .contentShape(Rectangle())
+                    .onTapGesture { actions.startRenaming() }
+                    .accessibilityAddTraits(actions.canRename ? .isButton : [])
+                    .accessibilityAction(named: Text(verbatim: LibraryActions.title(.startRenaming, items: []))) {
+                        actions.startRenaming()
+                    }
+                if actions.isBusy {
+                    // A copy, the trash or a restore under way.
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            }
+        }
+    }
+
+    /// The name as the bar shows it while it is not edited.
+    static func name(_ name: String) -> some View {
+        Text(verbatim: name)
+            .font(.headline)
+            .lineLimit(1)
+            .help(Text(verbatim: name))
+    }
+}
+
+/// The field of `EditorNameField`, made anew each time the name starts being edited, with the name it has.
+private struct EditorNameEditor: View {
+    let actions: EditorProjectActions
+    @State private var text: String
+    @FocusState private var isFocused: Bool
+
+    init(actions: EditorProjectActions, name: String) {
+        self.actions = actions
+        _text = State(initialValue: name)
+    }
+
+    var body: some View {
+        HStack(spacing: 6) {
+            TextField(text: $text) {
+                Text("Name", comment: "A name: a field, a column or an order")
+            }
+            .labelsHidden()
+            .textFieldStyle(.roundedBorder)
+            .frame(width: 220)
+            .focused($isFocused)
+            .onSubmit { actions.commitRename(text, leaving: false) }
+            .onExitCommand { actions.cancelRenaming() }
+            .onChange(of: text) { actions.nameEdited() }
+            .onChange(of: isFocused) { _, focused in
+                if !focused { actions.commitRename(text, leaving: true) }
+            }
+            .onAppear { isFocused = true }
+            if let problem = actions.problem(with: text) {
+                Text(verbatim: LibraryActions.help(problem))
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .help(Text(verbatim: LibraryActions.help(problem)))
+            }
+        }
     }
 }
 

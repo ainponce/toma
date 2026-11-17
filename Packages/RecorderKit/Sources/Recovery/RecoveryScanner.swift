@@ -40,7 +40,9 @@ public enum RecoveryScanner {
             .flatMap { scan(package: ProjectPackage(url: $0)) }
     }
 
-    private static func scan(package: ProjectPackage) -> [ScanResult] {
+    /// Looks at the one package `package` as `scan(directory:)` looks at each (the library's Recuperar on a project,
+    /// 1c design §6.6): its recoverable takes, or why it needs repair.
+    public static func scan(package: ProjectPackage) -> [ScanResult] {
         let manifest: Manifest
         do {
             let data = try Data(contentsOf: package.manifestURL)

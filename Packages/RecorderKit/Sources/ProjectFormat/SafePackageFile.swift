@@ -98,7 +98,8 @@ public enum SafePackageFile {
         let components = relativePath.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
         guard let name = components.last, kind.isValidName(name), kind.livesIn(components.dropLast()) else { return nil }
 
-        var folder = retryingInterrupts { open(package.url.path, O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_CLOEXEC) }
+        // Where the package is now: it may have been renamed since it was opened (`ProjectPackage.handle`).
+        var folder = retryingInterrupts { open(package.currentURL.path, O_RDONLY | O_DIRECTORY | O_NONBLOCK | O_CLOEXEC) }
         guard folder >= 0 else { return nil }
         for component in components.dropLast() {
             let next = retryingInterrupts { openat(folder, component, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC) }

@@ -40,6 +40,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         get { model.onAccessChanged }
         set { model.onAccessChanged = newValue }
     }
+    /// The package is somewhere else now (renamed or moved while open); set by the app delegate, which tells the library.
+    var onPackageMoved: () -> Void = {}
+    /// What the editor does with its project as a whole (design §6.7).
+    let projectActions: EditorProjectActions
+    /// What is typed in the bar's name while it is edited, undone there (`windowWillReturnUndoManager`); emptied when the
+    /// editing ends, so nothing typed there is undone later in another field.
+    let nameUndoManager = UndoManager()
+    private var editingEnded: (any NSObjectProtocol)?
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
@@ -55,12 +63,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var timelineItem: NSSplitViewItem?
 
     init(
-        packageURL: URL, takeID: String?, exportGate: ExportGate, onRecovered: @escaping (URL) -> Void,
-        onClose: @escaping () -> Void
+        packageURL: URL, takeID: String?, exportGate: ExportGate, projectHost: EditorProjectHost,
+        onRecovered: @escaping (URL) -> Void, onClose: @escaping () -> Void
     ) {
         self.packageURL = packageURL
         self.onClose = onClose
-        model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
+        let model = EditorModel(
+            packageURL: packageURL, takeID: takeID, exportGate: exportGate, projectsFolder: projectHost.projectsFolder)
+        self.model = model
+        projectActions = EditorProjectActions(model: model, host: projectHost)
+        model.projectActions = projectActions
         model.onRecovered = onRecovered
         timeline = TimelineViewController(model: model)
         keyboard = EditorKeyboard(model: model, timeline: timeline.timelineView)
@@ -78,6 +90,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.autorecalculatesKeyViewLoop = true
         window.keyboard = keyboard
         super.init(window: window)
+        projectActions.closeWindow = { [weak self] in await self?.closeAsking() ?? true }
+        editingEnded = NotificationCenter.default.addObserver(
+            forName: NSText.didEndEditingNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let text = note.object as? NSText
+            MainActor.assumeIsolated {
+                guard let self, text?.window === self.window else { return }
+                self.nameUndoManager.removeAllActions()
+            }
+        }
+        model.onLocationChanged = { [weak self] in self?.packageMoved() }
         keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
         model.askCustomSpeed = { [weak timeline] in timeline?.timelineView.interaction.askCustomSpeed() }
         // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
@@ -139,11 +162,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         nil
     }
 
-    /// Loads the project again if it could not be shown, for example after it was recovered.
+    /// Loads the project again if it could not be shown, for example after it was recovered; one shown is looked at again,
+    /// in case it went into the trash or out of it (opened again from there, design §6.4).
     func reloadIfNeeded() {
         switch model.state {
         case .failed, .unfinished: model.load()
-        case .opening, .recovering, .ready, .newerDocument: break
+        case .ready: model.packageMayHaveMoved()
+        case .opening, .recovering, .newerDocument: break
         }
     }
 
@@ -166,6 +191,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         KeyEditor.shared.follow(model)
+        // The library or the Finder may have renamed it, or restored it from the trash, meanwhile.
+        model.packageMayHaveMoved()
+    }
+
+    /// The window shows the package where it is now: its name (the Window menu's) and its proxy icon.
+    private func packageMoved() {
+        window?.title = model.name
+        window?.representedURL = model.location
+        onPackageMoved()
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -200,9 +234,26 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let editingEnded { NotificationCenter.default.removeObserver(editingEnded) }
+        editingEnded = nil
         closeForQuit()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
+    }
+
+    /// Closes the window for the library or Move to Trash (design §6.3), and returns once its session closed (a session
+    /// still opening too): what was pending written and `edit.lock` let go. While its export runs it asks first, as
+    /// closing the window does (`confirmCancellingTheExport`); `false`, and the window stays, if the user keeps it.
+    /// Changes that couldn't be saved were refused before (`losesEditsIfClosed`).
+    func closeAsking() async -> Bool {
+        guard !model.closed else {
+            await model.waitUntilClosed()
+            return true
+        }
+        if model.isExporting, !(await confirmCancellingTheExport()) { return false }
+        window?.close()
+        await model.waitUntilClosed()
+        return true
     }
 
     /// The window closes, or the app quits with it open: the timeline stops and the model closes (its state written, its

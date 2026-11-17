@@ -155,13 +155,17 @@ final class LibraryActions: LibraryActionHost {
     }
 
     func isOpenHere(_ url: URL) -> Bool { model?.isOpenHere(url) ?? false }
+    func holdsEditLock(_ url: URL) -> Bool { model?.host.holdsEditLock(url) ?? false }
+    func isRenaming(_ identity: Library.PackageIdentity) -> Bool { renaming == identity }
     func hasUnsavedChanges(_ url: URL) -> Bool { model?.host.hasUnsavedChanges(url) ?? false }
-    func close(_ url: URL) async { await model?.host.close(url) }
+    func close(_ url: URL) async -> Bool { await model?.host.close(url) ?? false }
     func editContext() async -> EditContext? { await model?.madeContext() }
 
-    /// The cards settle with `Motion.trackItem`; one that leaves the section shrinks to 90 % and fades (design §9).
+    /// The cards settle with `Motion.trackItem`; one that leaves the section shrinks to 90 % and fades (design §9). The app
+    /// is told: an editor may have it open.
     func showMoved(_ identity: Library.PackageIdentity, to url: URL, place: Place) {
         withAnimation(Self.settling) { model?.showMoved(identity, to: url, place: place) }
+        model?.host.moved()
     }
 
     func forget(_ identities: [Library.PackageIdentity]) {
@@ -195,9 +199,12 @@ final class LibraryActions: LibraryActionHost {
 
     func look(at urls: [URL]) { model?.look(at: urls) }
 
+    /// The section changes only if the one shown does not show them all (N3: a package dropped while it is in Favorites
+    /// stays there).
     func select(_ identities: Set<Library.PackageIdentity>, in section: LibrarySection) {
         guard let model else { return }
-        if model.section != section { model.section = section }
+        let shown = Set(model.shown.map(\.summary.identity))
+        if model.section != section, !identities.isSubset(of: shown) { model.section = section }
         model.select(identities)
     }
 
@@ -390,6 +397,10 @@ extension LibraryActions {
         case .copyCannotBeOpened: String(localized: "the copy can't be opened", comment: "The library: why Duplicate As kept the format")
         case .copyCannotBeEdited: String(localized: "the copy can't be edited", comment: "The library: why Duplicate As kept the format")
         case .editNotSaved: String(localized: "the change couldn't be saved", comment: "The library: why Duplicate As kept the format")
+        case .editorKeptOpen:
+            String(
+                localized: "its window stayed open to finish its export",
+                comment: "The library: why a project open in an editor did not go to the trash: the user kept its export running")
         case .other: String(localized: "the disk didn't allow it", comment: "The library: why an action failed")
         }
     }

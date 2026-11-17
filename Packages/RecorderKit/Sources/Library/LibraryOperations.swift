@@ -10,13 +10,16 @@ import Synchronization
 public protocol LibraryAppState: Sendable {
     /// A take is being recorded, any take: the heavy work of the library pauses, and nothing is renamed meanwhile.
     func isRecording() -> Bool
-    /// An editor window of this app has the package at `url` open.
+    /// An editor window of this app has the package at `url` open, also for viewing only.
     func isOpenHere(_ url: URL) -> Bool
+    /// That editor holds the package's `edit.lock` (it can edit it): the lock is not asked about before a rename, which it
+    /// goes on writing through. An editor open for viewing only does not hold it.
+    func holdsEditLock(_ url: URL) -> Bool
     /// The editor of the package at `url` has changes it could not write (1b §5.9: the disk is full).
     func hasUnsavedChanges(_ url: URL) -> Bool
-    /// Closes the editor window of the package at `url`, which writes what is pending and lets go of its `edit.lock`;
-    /// returns once it did.
-    func close(_ url: URL) async
+    /// Closes the editor window of the package at `url`, which writes what is pending and lets go of its `edit.lock`, and
+    /// returns once it did: `true`. `false` if it stays open: asked first because its export runs, the user kept it.
+    func close(_ url: URL) async -> Bool
 }
 
 /// Why an action of the library did not happen (design §6.3, §10); the app says it in words. After any of them the
@@ -38,6 +41,8 @@ public enum LibraryFailure: Error, Equatable, Sendable {
     case outsideProjectsFolder
     /// The copy to undo was opened or changed since it was made.
     case copyOpenedOrChanged
+    /// The project's editor stayed open: asked whether to close it while its export ran, the user kept it.
+    case editorKeptOpen
     /// That many projects could not be deleted: they are still in the trash, under their names.
     case someNotDeleted(Int)
     /// The disk refused, with this error.
@@ -127,11 +132,11 @@ public final class LibraryOperations: Sendable {
     /// only in how it is written (case, normalization) renames it too, and its own name does nothing.
     ///
     /// Refused while a take is being recorded, for a name that is not valid or is taken in that folder (`.name`), and if
-    /// another app holds a lock of the project, found just before (an editor of this app holds its own `edit.lock`,
-    /// which is not asked about: that editor keeps writing into the renamed package).
+    /// another app holds a lock of the project, found just before (an editor of this app that holds its own `edit.lock`,
+    /// `holdsEditLock`, is not asked about: that editor keeps writing into the renamed package).
     public func rename(_ url: URL, to name: String) async -> Result<URL, LibraryFailure> {
         if app.isRecording() { return .failure(.recording) }
-        let ownEditor = app.isOpenHere(url)
+        let ownEditor = app.holdsEditLock(url)
         return await onDisk { [self] in
             let folder = url.deletingLastPathComponent()
             let valid: String
@@ -270,14 +275,15 @@ public final class LibraryOperations: Sendable {
     ///
     /// Refused while a take is being recorded, for a package out of the projects folder or already in its trash
     /// (`.outsideProjectsFolder`: the library does not trash what it does not keep, design §4.5), if its editor has
-    /// changes it could not write, and if another app holds a lock of it. If an editor of this app has it open, its
-    /// window is closed first, which writes what is pending and lets go of its lock; then the locks are asked about.
+    /// changes it could not write, and if another app holds a lock of it. If an editor of this app has it open (also for
+    /// viewing only), its window is closed first, which writes what is pending and lets go of its lock; then the locks are
+    /// asked about. If that editor stays open (the user kept its export running), nothing moves: `.editorKeptOpen`.
     public func moveToTrash(_ url: URL) async -> Result<URL, LibraryFailure> {
         if app.isRecording() { return .failure(.recording) }
         let place = await onDisk { [self] in place(ofFolder: url.deletingLastPathComponent()) }
         guard place == .projects else { return .failure(.outsideProjectsFolder) }
         if app.hasUnsavedChanges(url) { return .failure(.unsavedChanges) }
-        if app.isOpenHere(url) { await app.close(url) }
+        if app.isOpenHere(url), !(await app.close(url)) { return .failure(.editorKeptOpen) }
         let moved = await onDisk { [self] () -> Result<Trashed, LibraryFailure> in
             if let refusal = lockRefusal(of: url, editLock: true) { return .failure(refusal) }
             return moveIntoTrash(url)
@@ -314,7 +320,8 @@ public final class LibraryOperations: Sendable {
     // MARK: - Delete
 
     /// Deletes forever the packages at `urls`, which are all in the trash (otherwise nothing happens:
-    /// `.outsideProjectsFolder`). Those this app has open (to look at) are closed first. Then each, once its locks are
+    /// `.outsideProjectsFolder`). Those this app has open (to look at) are closed first, and one whose editor stays open
+    /// (the user kept its export running) is not deleted. Then each, once its locks are
     /// found free, is renamed to `Trash/.deleting-<UUID>` within the trash itself (through a descriptor of it that is not
     /// a link): from that moment it is in no list, and a crash leaves it for `finishPendingDeletions`. Its locks are asked
     /// again under that name, where nothing can open it anew, and one found taken goes back to its name. Then they are
@@ -323,8 +330,8 @@ public final class LibraryOperations: Sendable {
     /// begins and ends. Returns once all are deleted.
     ///
     /// A package that could not be deleted goes back to its name in the trash (with « 2»… if it is taken), with what
-    /// was left of it. `.openElsewhere` if the only one asked for has a lock taken; otherwise those with a lock taken and
-    /// those that could not be deleted are `.someNotDeleted`. But if one could not go back to its name either, it is not
+    /// was left of it. `.editorKeptOpen` if the only one asked for stayed open here, `.openElsewhere` if it has a lock
+    /// taken; otherwise those kept open, those with a lock taken and those that could not be deleted are `.someNotDeleted`. But if one could not go back to its name either, it is not
     /// in the trash's list any more (`finishPendingDeletions` deletes it the next time, unless its locks are taken then):
     /// `.posix` with the error of that rename, before anything else. Deleting forever cannot be undone.
     public func deleteForever(
@@ -342,9 +349,15 @@ public final class LibraryOperations: Sendable {
     ) async -> LibraryDeletion {
         let inTrash = await onDisk { [self] in urls.allSatisfy(isInTrash) }
         guard inTrash else { return LibraryDeletion(deleted: [], failure: .outsideProjectsFolder) }
-        for url in urls where app.isOpenHere(url) { await app.close(url) }
+        // Those open here, also for viewing only, are closed first; one whose editor stays open is not deleted.
+        var keptOpen: [URL] = []
+        for url in urls where app.isOpenHere(url) {
+            if !(await app.close(url)) { keptOpen.append(url) }
+        }
+        let kept = keptOpen.count
+        let toMark = urls.filter { !keptOpen.contains($0) }
         let total = urls.count
-        let marked = await onDisk { [self] in markForDeletion(urls) }
+        let marked = await onDisk { [self] in markForDeletion(toMark) }
         let deleted = await onDisk(.utility) { [self] in
             deleteMarked(marked.pending, alreadyGone: marked.gone, total: total, progress: progress)
         }
@@ -356,8 +369,9 @@ public final class LibraryOperations: Sendable {
         }
         let done = deleted.identities
         if let stuck = marked.stuck ?? deleted.stuck { return LibraryDeletion(deleted: done, failure: .posix(stuck)) }
-        let notDeleted = marked.locked + marked.failed + deleted.failed
+        let notDeleted = kept + marked.locked + marked.failed + deleted.failed
         if notDeleted == 0 { return LibraryDeletion(deleted: done) }
+        if total == 1, kept == 1 { return LibraryDeletion(deleted: done, failure: .editorKeptOpen) }
         if total == 1, marked.locked == 1 { return LibraryDeletion(deleted: done, failure: .openElsewhere) }
         return LibraryDeletion(deleted: done, failure: .someNotDeleted(notDeleted))
     }

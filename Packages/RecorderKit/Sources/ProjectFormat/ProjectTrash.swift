@@ -17,6 +17,24 @@ public enum ProjectTrash {
         projectsFolder.appendingPathComponent(folderName, isDirectory: true)
     }
 
+    /// Whether the item at `url` is inside the trash of `projectsFolder`, at any depth (not the trash itself), by the real
+    /// paths of both (links followed, as the Finder opens a package), the trash's name in any case, as the volume takes it:
+    /// a project there opens read-only (1c decision 36). `false` if either is not there. Reads the disk: never on the main
+    /// thread.
+    public static func contains(_ url: URL, projectsFolder: URL) -> Bool {
+        guard let projects = realPath(projectsFolder), let item = realPath(url) else { return false }
+        let folder = (projects as NSString).pathComponents, components = (item as NSString).pathComponents
+        guard components.count > folder.count + 1, components.starts(with: folder) else { return false }
+        return components[folder.count].caseInsensitiveCompare(folderName) == .orderedSame
+    }
+
+    /// `realpath(3)` of `url`: `nil` if it is not there.
+    private static func realPath(_ url: URL) -> String? {
+        guard let resolved = Darwin.realpath(url.path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     /// Moves `package` into the trash of `projectsFolder`, creating the trash if needed, and returns where
     /// it is now: under its own name, with ` 2`, ` 3`, … added while a project of that name is in the
     /// trash (`move(_:into:as:)`). The trash is inside the projects folder, so this is a rename on the same

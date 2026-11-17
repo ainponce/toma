@@ -15,6 +15,7 @@ final class LaunchLibraryState: LibraryAppState {
 
     func isRecording() -> Bool { recording.withLock { $0 } }
     func isOpenHere(_ url: URL) -> Bool { false }
+    func holdsEditLock(_ url: URL) -> Bool { false }
     func hasUnsavedChanges(_ url: URL) -> Bool { false }
-    func close(_ url: URL) async {}
+    func close(_ url: URL) async -> Bool { true }
 }

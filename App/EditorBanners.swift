@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Editing
+import Library
 import SwiftUI
 
 /// The strip above the preview (design §5.9) with the model's banner, if there is one: its sentence, "Apply Default
-/// Style" on a project of an earlier version, and a button to close the ones that can be closed. A change that could not
-/// be saved is amber.
+/// Style" on a project of an earlier version, Restaurar on one in the trash (1c design §6.4), and a button to close the
+/// ones that can be closed. A change that could not be saved is amber.
 struct EditorBanners: View {
     let model: EditorModel
 
@@ -31,6 +32,14 @@ struct EditorBanners: View {
                         }
                         Button("Apply Default Style") { model.applyDefaultStyle() }
                             .disabled(!model.canEdit || model.isApplyingDefaultStyle)
+                    }
+                    if banner == .readOnly(.inTrash), let actions = model.projectActions {
+                        if actions.isBusy {
+                            ProgressView()
+                                .controlSize(.small)
+                        }
+                        Button(LibraryActions.title(.restore, items: [])) { actions.restore() }
+                            .disabled(!actions.canRestore)
                     }
                     if Self.canClose(banner) {
                         Button {
@@ -113,6 +122,10 @@ struct EditorBanners: View {
             String(localized: "This project was edited with a newer version of Toma. Update Toma to open it.")
         case .unreadable:
             String(localized: "Another app changed this project, and this version of Toma can't open it now.")
+        case .inTrash:
+            String(
+                localized: "This project is in the trash: it opens read-only.",
+                comment: "Editor banner: a project of the trash, which can be looked at, not edited; Restore is beside it")
         }
     }
 }

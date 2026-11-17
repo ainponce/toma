@@ -98,6 +98,40 @@ private func drawn(_ renderer: FrameRenderer, at t: Double) async throws -> [UIn
     }
 }
 
+/// A package renamed while it is read (1c Task 39, I1): a reader opens a segment only when a frame first needs it, so with
+/// a `PackageHandle` that follows the package the segment after a pause, and a camera track first read after the rename,
+/// are still read where the package is now; without one (by the path it had), they are shown with the frame before.
+@Test func aPackageRenamedWhileItIsReadIsStillRead() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir, name: "Before")
+        try await builder.addVideoTrack(
+            id: trackID, source: displaySource(globalFrame: screenFrame),
+            segments: [VideoSegmentSpec(start: base, seconds: 1), VideoSegmentSpec(start: base.adding(seconds: 1.5), seconds: 1)])
+        try await builder.addVideoTrack(
+            id: cameraID, kind: .camera, source: cameraSource, segments: [VideoSegmentSpec(start: base, seconds: 2.5)])
+        let project = try builder.write()
+        let display = try #require(project.take.track(trackID)), camera = try #require(project.take.track(cameraID))
+        let handle = try #require(PackageHandle(url: project.package.url))
+        let followed = ProjectPackage(url: project.package.url, handle: handle)
+        let following = TrackFrameReader(package: followed, track: display)
+        let byPath = TrackFrameReader(package: project.package, track: display)
+        #expect(try await index(following, at: base.adding(seconds: 0.5)) == 15)
+        #expect(try await index(byPath, at: base.adding(seconds: 0.5)) == 15)
+
+        let renamed = dir.appending(path: "After.toma", directoryHint: .isDirectory)
+        try FileManager.default.moveItem(at: project.package.url, to: renamed)
+        #expect(followed.currentURL.resolvingSymlinksInPath().path == renamed.resolvingSymlinksInPath().path)
+        #expect(followed.url == project.package.url, "the path it was opened by stays its identity")
+
+        let afterThePause = base.adding(seconds: 1.6 + 1.0 / 60)
+        #expect(try await index(following, at: afterThePause) == 33)
+        #expect(try await index(byPath, at: afterThePause) == 29, "by its old path, the frame before")
+        let cameraReader = TrackFrameReader(package: followed, track: camera)
+        #expect(try await index(cameraReader, at: base.adding(seconds: 1)) == 30)
+        #expect(following.gaps.isEmpty && cameraReader.gaps.isEmpty)
+    }
+}
+
 @Test func readerTreatsEmptyUnreadableAndMissingSegmentsAsGaps() async throws {
     try await withTemporaryDirectory { dir in
         let builder = try TakeBuilder(in: dir)

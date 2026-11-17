@@ -5,9 +5,15 @@ import ProjectFormat
 /// `TimeMap`, the whole video or the stretch between the marks.
 ///
 /// Frame `n` of an export at `fps` frames per second is at `start + round(n / fps × 10⁹)` ns (`TimeMap.frameTime`); the
-/// export's frames are those that fall before `end`. A range lasts at least a frame when `(end − start) × fps` is at
-/// least 10⁹ ns: a shorter one is not exported (`GIFExportError.rangeShorterThanAFrame`), though its first frame falls
-/// before its end.
+/// export's frames are those that start more than 1 ns before `end`. A range lasts at least a frame when
+/// `(end − start + 1) × fps` is at least 10⁹ ns: a shorter one is not exported (`GIFExportError.rangeShorterThanAFrame`;
+/// `ExportError.nothingToExport` for the MP4), though its first frame falls before its end.
+///
+/// The nanosecond is the rounding of the marks. They sit on the document's frame grid, each rounded to the nanosecond
+/// (`TimeMap.frameTime`), so the length between two of them can be 1 ns more or less than that many frames rounded once.
+/// Without it, a frame starting 1 ns before the O mark (the frame at the mark) would be exported, and some ranges of
+/// exactly one frame would be refused: with it, marks `k` frames of the document apart give the frames of the export
+/// that start within those `k` frames, at every rate of the document and of the export.
 public struct ExportRange: Equatable, Sendable {
     public var start: Int64
     public var end: Int64
@@ -22,12 +28,13 @@ public struct ExportRange: Equatable, Sendable {
         ExportRange(start: 0, end: timeMap.duration)
     }
 
-    /// How many frames at `fps` fall before `end`: the `n` from 0 with `frameTime(n, fps:)` before it; none for an empty
-    /// range.
+    /// How many frames at `fps` the range holds: the `n` from 0 whose offset `TimeMap.frameTime(n, frameRate: fps)` is
+    /// more than 1 ns before `end − start`; none for an empty range.
     public func frameCount(fps: Int) -> Int {
         precondition(fps > 0, "an export of \(fps) frames per second")
         guard end > start else { return 0 }
-        let length = end - start
+        // A frame that starts 1 ns before the end is the frame at the end, rounded.
+        let length = end - start - 1
         // About the count, then exactly: the frames' offsets grow with `n`.
         var count = max(0, Int((Double(length) * Double(fps) / 1e9).rounded(.up)))
         while count > 0, TimeMap.frameTime(count - 1, frameRate: fps) >= length { count -= 1 }
@@ -40,10 +47,12 @@ public struct ExportRange: Equatable, Sendable {
         start + TimeMap.frameTime(n, frameRate: fps)
     }
 
-    /// Whether the range lasts at least a frame at `fps`: `(end − start) × fps ≥ 10⁹`.
-    func lastsAFrame(fps: Int) -> Bool {
+    /// Whether the range lasts at least a frame at `fps`, give or take the marks' nanosecond: `(end − start + 1) × fps ≥
+    /// 10⁹`. An export of a range that does not is refused, and the export sheet disables Export for it (1c design §7.1).
+    public func lastsAFrame(fps: Int) -> Bool {
         guard fps > 0, end > start else { return false }
+        // (end − start + 1) × fps ≥ 10⁹, without the + 1 overflowing.
         let (product, overflow) = (end - start).multipliedReportingOverflow(by: Int64(fps))
-        return overflow || product >= 1_000_000_000
+        return overflow || product >= 1_000_000_000 - Int64(fps)
     }
 }
