@@ -66,6 +66,25 @@ import simd
 ///   after the last never rules. Each style is measured against `camera.sizeReference` (the output's height, as in 1b,
 ///   or its shorter side), and the camera is drawn with the document's look: mirrored, with its border and its shadow
 ///   (`cameraLayer`, 1c design §14.3).
+/// - Camera layouts (`camera.layout` and `camera.layouts`, 1c design §5; plan decision 13): a document whose layouts are
+///   trivial (`LayoutTimeline.isTrivial`: no block shown and the project's layout Bubble, as every document of 1b) is
+///   drawn as these notes say, by 1b's path untouched. Any other one by the layouts' path, from the frame 1b's path makes
+///   (`laidOut`): what is shown is `LayoutTimeline.geometry(atOutput:_:)` at the output time, with the aspect of the
+///   screen's group as it animates (the whole window, bar included, with a frame) and the bubble as it is presented
+///   (measured against `camera.sizeReference`). The timeline is built once for the scene, with the camera readable as
+///   the scene is given it (plan decision 40), and blends the layouts at their borders in one composition (§14.2).
+///   - The screen's group (the screens, the window frame, the shadow, the cursor and the click effects) is moved and
+///     scaled from where 1b's path places it onto the screen's card, with the card's corners (a window's worked out from
+///     them by the rule above, `windowCorners`), and fades at the card's opacity as one group
+///     (`RenderFrame.screenOpacity`): nothing of it where the card is hidden. The shadow keeps its blur.
+///   - The zoom acts over the whole stage in the Bubble and Screen only, and goes to rest in the layouts of cards (a
+///     split, Camera only, Camera full screen), blended by `LayoutTimeline.cardWeight(atOutput:)`: a split's screen is
+///     shown in its card without the zoom.
+///   - The camera fills its card (`cameraLayer`, with the card's opacity and its border and shadow weights), and is
+///     none where the card is hidden. Before the camera's first frame, a card shows that frame (§5.1); the Bubble's is
+///     hidden then, as in 1b.
+///   - With the camera opaque over the whole output and the screen hidden (Camera full screen settled, §14.4), the frame
+///     is the camera alone (`RenderFrame.coveredByCamera`).
 /// - Zoom camera (design §7.4): the stage is drawn through the zoom camera's path (`ZoomCameraPath.state(atOutput:)`) at
 ///   the output time, in this output's pixels (`RenderFrame.stage`, `nil` at rest), its centre placed again with
 ///   `StageCrop` over the screen's rect at this size (the window's with a frame; the stage without a screen): the path
@@ -134,12 +153,29 @@ public struct FrameEvaluator: Sendable {
     /// `zoom.motionBlur` and `cursor.motionBlur`, from 0 to 1 (0 if not a number).
     private let zoomShutter: Double
     private let cursorShutter: Double
+    /// Which layout rules at each output instant, and what is shown as they change: built once for the scene.
+    private let layouts: LayoutTimeline
+
+    /// The two ways a frame is drawn (plan decision 13).
+    enum Path {
+        /// 1b's, untouched: a document whose layouts are trivial.
+        case legacy
+        /// The camera layouts' (`laidOut`).
+        case layouts
+    }
+
+    /// For tests: the path every frame takes; when `nil`, 1b's for a document whose layouts are trivial
+    /// (`LayoutTimeline.isTrivial`) and the layouts' for any other.
+    var forcedPath: Path?
 
     /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`. `frameRate`: the frames per
     /// second the output is drawn at, whose frame the motion blur's shutters are fractions of; the document's when `nil`.
+    /// `cameraReadable`: some camera track of the take has a segment that can be read (plan decision 40, which the renderer
+    /// finds in the package); without one, or without a camera track with a segment, the layouts that need the camera are
+    /// shown as Screen only.
     public init(
         take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>, paths: MotionPaths? = nil,
-        frameRate: Int? = nil
+        frameRate: Int? = nil, cameraReadable: Bool = true
     ) {
         let timeMap = TimeMap(sequence: document.sequence)
         self.document = document
@@ -170,6 +206,7 @@ public struct FrameEvaluator: Sendable {
         func shutter(_ value: Double) -> Double { value.isNaN ? 0 : min(max(value, 0), 1) }
         zoomShutter = shutter(document.zoom.motionBlur)
         cursorShutter = shutter(document.cursor.motionBlur)
+        layouts = LayoutTimeline(document: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable && bubble != nil)
     }
 
     /// The same document, motion paths and frames per second drawn at `outputSize`: only what depends on the size (the
@@ -250,8 +287,7 @@ public struct FrameEvaluator: Sendable {
                 // its screen's top ones under the bar.
                 let recordedWindow = windowTrackIDs.contains(trackID)
                 func window(_ placement: ScreenPlacement) -> (layer: WindowFrameLayer, cornerRadius: Double) {
-                    let top = min(styleCorners, Self.windowCornerBars * placement.barHeight)
-                    let bottom = recordedWindow ? styleCorners : top
+                    let (top, bottom) = Self.windowCorners(styleCorners, barHeight: placement.barHeight, recordedWindow: recordedWindow)
                     return (WindowFrameLayer(
                         rect: placement.window, barHeight: placement.barHeight, appearance: appearance, title: title, buttons: buttons,
                         cornerRadius: top, bottomCornerRadius: bottom, screenTopCornerRadius: recordedWindow ? bottom : 0), bottom)
@@ -319,8 +355,148 @@ public struct FrameEvaluator: Sendable {
         } else if let cursorPlace, let cursorSpan {
             blur(&frame, at: output, zoom: nil, screen: screenRect, cursor: (cursorSpan, cursorEnds, cursorPlace))
         }
-        frame.camera = camera(at: source, output: output)
+        guard (forcedPath ?? (layouts.isTrivial ? .legacy : .layouts)) == .layouts else {
+            frame.camera = camera(at: source, output: output)
+            return frame
+        }
+        return laidOut(frame, source: source, output: output)
+    }
+
+    /// `frame`, which 1b's path made for output time `output` showing source instant `source` (the screen's group where
+    /// the Bubble layout has it, the zoom over the whole stage, no camera), laid out by the camera layouts (see the type's
+    /// notes).
+    private func laidOut(_ frame: RenderFrame, source: HostTime, output: Int64) -> RenderFrame {
+        var frame = frame
+        let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        let reference = document.camera.sizeReference
+        // Where 1b's path placed the screen's group, unzoomed: the whole window with a frame.
+        let placed = frame.windowFrame?.rect ?? frame.screen?.rect
+        let aspect = placed.flatMap { $0.width > 0 && $0.height > 0 ? $0.width / $0.height : nil }
+        let geometry = layouts.geometry(atOutput: output, LayoutInputs(
+            output: size, padding: document.style.padding, cornerRadius: document.style.cornerRadius, screenAspect: aspect,
+            takeBubble: bubble?.frame(atOutput: output, host: source, output: size, reference: reference), sizeReference: reference))
+
+        // The zoom, on its way to rest as the layouts go to cards.
+        let cardWeight = layouts.cardWeight(atOutput: output)
+        frame.stage = frame.stage.flatMap { Self.stage($0, towardRest: cardWeight, outputSize: outputSize) }
+        frame.subframes = frame.subframes.map { subframe in
+            StageSubframe(
+                stage: Self.stage(subframe.stage, towardRest: cardWeight, outputSize: outputSize) ?? .identity(outputSize: outputSize),
+                cursor: subframe.cursor)
+        }
+
+        let card = geometry.screen
+        frame.screenOpacity = card.opacity
+        if card.opacity > 0, let placed, placed.width > 0 {
+            place(&frame, from: placed, onto: card)
+        } else {
+            // Nothing of the screen's group is seen.
+            (frame.screen, frame.previousScreen, frame.windowFrame, frame.settledWindowFrame) = (nil, nil, nil, nil)
+            (frame.shadow, frame.cursor, frame.clickEffects, frame.cursorSamples, frame.subframes) = (nil, nil, [], [], [])
+        }
+
+        // The camera in its card: before its first frame, that frame (1c design §5.1). The Bubble's card is hidden then.
+        frame.camera = nil
+        let camera = geometry.camera
+        if camera.opacity > 0, let bubble {
+            frame.camera = Self.cameraLayer(
+                trackID: bubble.trackID, sourceTime: max(source, bubble.start),
+                frame: CameraFrame(rect: camera.rect, cornerRadius: camera.cornerRadius), opacity: camera.opacity,
+                borderWeight: camera.borderWeight, shadowWeight: camera.shadowWeight, look: document.camera, output: size)
+        }
+        if let layer = frame.camera, card.opacity <= 0, Self.covers(layer, output: size) {
+            return RenderFrame(
+                outputSize: frame.outputSize, gradientStart: frame.gradientStart, gradientEnd: frame.gradientEnd,
+                gradientAngleDegrees: frame.gradientAngleDegrees, camera: layer, background: frame.background, screenOpacity: 0,
+                coveredByCamera: true)
+        }
         return frame
+    }
+
+    /// Moves and scales the screen's group of `frame`, which 1b's path placed in `placed`, onto `card` by `s`, the card's
+    /// width over `placed`'s (both of the group's aspect): the screens, the window frame (its bar `s` times as tall, its
+    /// corners worked out from the card's, `windowCorners`), the shadow (cast by them, of the same blur), the cursors and
+    /// the click effects (`s` times as large). All of it fades at the card's opacity `o` as one group: the screen at `o`
+    /// times its own (below 1 while it fades in over the screen being left during a change of screen, `f`), the one being
+    /// left at `o·(1 − f) / (1 − o·f)`, so the two together are the change at `o`.
+    private func place(_ frame: inout RenderFrame, from placed: Rect, onto card: ScreenCard) {
+        let scale = card.rect.width / placed.width, opacity = card.opacity
+        func point(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(card.rect.x, card.rect.y) + (p - SIMD2(placed.x, placed.y)) * scale }
+        func rect(_ r: Rect) -> Rect {
+            let origin = point(SIMD2(r.x, r.y))
+            return Rect(x: origin.x, y: origin.y, width: r.width * scale, height: r.height * scale)
+        }
+        func cursor(_ layer: CursorLayer?) -> CursorLayer? {
+            layer.map { layer in
+                var placed = layer
+                placed.hotspot = point(layer.hotspot)
+                placed.height = layer.height * scale
+                placed.opacity = layer.opacity * opacity
+                return placed
+            }
+        }
+        var corners = card.cornerRadius
+        if var window = frame.windowFrame {
+            let recordedWindow = frame.screen.map { windowTrackIDs.contains($0.trackID) } ?? false
+            window.rect = rect(window.rect)
+            window.barHeight *= scale
+            let (top, bottom) = Self.windowCorners(corners, barHeight: window.barHeight, recordedWindow: recordedWindow)
+            (window.cornerRadius, window.bottomCornerRadius, window.screenTopCornerRadius) = (top, bottom, recordedWindow ? bottom : 0)
+            frame.windowFrame = window
+            corners = bottom
+        }
+        if var settled = frame.settledWindowFrame {
+            settled.rect = rect(settled.rect)
+            settled.barHeight *= scale
+            frame.settledWindowFrame = settled
+        }
+        if var shadow = frame.shadow {
+            shadow.rect = rect(shadow.rect)
+            shadow.cornerRadius = corners
+            frame.shadow = shadow
+        }
+        let fadingIn = frame.screen?.opacity ?? 1
+        if var screen = frame.screen {
+            screen.rect = rect(screen.rect)
+            screen.cornerRadius = corners
+            screen.opacity = opacity * fadingIn
+            frame.screen = screen
+        }
+        if var previous = frame.previousScreen {
+            let shown = opacity * fadingIn
+            previous.rect = rect(previous.rect)
+            previous.cornerRadius = corners
+            previous.opacity = shown < 1 ? opacity * (1 - fadingIn) / (1 - shown) : 0
+            frame.previousScreen = previous
+        }
+        frame.cursor = cursor(frame.cursor)
+        frame.cursorSamples = frame.cursorSamples.compactMap(cursor)
+        frame.subframes = frame.subframes.map { StageSubframe(stage: $0.stage, cursor: cursor($0.cursor)) }
+        frame.clickEffects = frame.clickEffects.map { effect in
+            var placed = effect
+            placed.center = point(effect.center)
+            placed.radius = effect.radius * scale
+            placed.thickness = effect.thickness * scale
+            placed.opacity = effect.opacity * opacity
+            return placed
+        }
+    }
+
+    /// `stage` `weight` of the way to rest (`StageTransform.identity`), its depth and centre blended as the layouts blend
+    /// their numbers (all of it at 0, exactly); `nil` at a depth of 1 or less, as at rest.
+    private static func stage(_ stage: StageTransform, towardRest weight: Double, outputSize: SIMD2<Int>) -> StageTransform? {
+        let rest = StageTransform.identity(outputSize: outputSize)
+        let blended = StageTransform(
+            depth: stage.depth * (1 - weight) + rest.depth * weight, center: stage.center * (1 - weight) + rest.center * weight)
+        return blended.depth > 1 ? blended : nil
+    }
+
+    /// Whether `camera` covers every pixel of an output `output` big, opaque: at full opacity (only then is it opaque;
+    /// below, what is under it shows, however little), with square corners, over all of it.
+    private static func covers(_ camera: CameraLayer, output: SIMD2<Double>) -> Bool {
+        let rect = camera.rect
+        return camera.opacity >= 1 && camera.cornerRadius <= 0 && rect.x <= 0 && rect.y <= 0 && rect.x + rect.width >= output.x
+            && rect.y + rect.height >= output.y
     }
 
     /// The output times of the ends of a shutter of `shutter` frames about `output`, held to the side of `output` of the
@@ -430,6 +606,14 @@ public struct FrameEvaluator: Sendable {
     /// The largest corners of a window frame, in heights of its bar. Corners of about 1.37 bars touch the first button's
     /// rim; at 1.3 the rim is 0.03 bars inside them.
     static let windowCornerBars = 1.3
+
+    /// The corners of a window frame whose bar is `barHeight` tall, around a screen with corners of `corners`: its top
+    /// ones never more than `windowCornerBars` bars, so they never cut its first button; its bottom ones (and its screen's
+    /// top ones under the bar) `corners` around a window the take recorded, its top ones otherwise.
+    static func windowCorners(_ corners: Double, barHeight: Double, recordedWindow: Bool) -> (top: Double, bottom: Double) {
+        let top = min(corners, windowCornerBars * barHeight)
+        return (top, recordedWindow ? corners : top)
+    }
 
     /// A gradient as the shader takes it.
     private typealias Gradient = (start: SIMD4<Float>, end: SIMD4<Float>, angle: Float)

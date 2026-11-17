@@ -246,6 +246,16 @@ public enum ShaderSource {
         return float4(0.0, 0.0, 0.0, cameraShadowAlpha(in.p, u, camera, opacity));
     }
 
+    // The screen's shadow in the camera layouts, under the screen's group fading at `opacity` (`RenderFrame.screenOpacity`):
+    // as the camera's (`cameraShadowAlpha`), with `group` the image of the group's shape (the window with a frame, the
+    // screen's rounded rect without), so the group hides its own shadow at any opacity. Premultiplied black.
+    fragment float4 screenShadowFragment(QuadOut in [[stage_in]],
+                                         constant ShadowUniforms &u [[buffer(0)]],
+                                         constant QuadUniforms &group [[buffer(1)]],
+                                         constant float &opacity [[buffer(2)]]) {
+        return float4(0.0, 0.0, 0.0, cameraShadowAlpha(in.p, u, group, opacity));
+    }
+
     struct CameraBorderUniforms {
         float4 color;   // sRGB, not premultiplied
         float width;    // output pixels, above 0
@@ -297,9 +307,9 @@ public enum ShaderSource {
     // A window frame's title bar (`WindowFrameLayer`), over a quad around it: the window's rounded rect down to one pixel
     // under the screen's top edge (and behind the screen's round top corners), so the screen, drawn over it, leaves no
     // seam of background where they meet; in the bar's colour, with the buttons' antialiased circles. Opaque,
-    // premultiplied by how much of the pixel it covers.
-    fragment float4 windowBarFragment(QuadOut in [[stage_in]],
-                                      constant WindowBarUniforms &u [[buffer(0)]]) {
+    // premultiplied by how much of the pixel it covers. The one body of `windowBarFragment` and
+    // `fadingWindowBarFragment`.
+    static float4 windowBar(QuadOut in, constant WindowBarUniforms &u) {
         float2 halfSize = u.windowSize * 0.5;
         float window = roundedRectDistance(in.p - (u.windowOrigin + halfSize), halfSize, u.radius, u.bottomRadius);
         float bar = in.p.y - (u.barBottom + 1.0 + u.below);
@@ -314,6 +324,25 @@ public enum ShaderSource {
             }
         }
         return float4(color, 1.0) * coverage;
+    }
+
+    // The title bar (`windowBar`).
+    fragment float4 windowBarFragment(QuadOut in [[stage_in]],
+                                      constant WindowBarUniforms &u [[buffer(0)]]) {
+        return windowBar(in, u);
+    }
+
+    // The title bar (`windowBar`) in the screen's group fading at `opacity` (`RenderFrame.screenOpacity`), under the screen
+    // drawn over it next at `opacity` (`screen`'s image, `imageCoverage`): at `opacity` where the screen is not, and under
+    // it only what the screen lets through, so the bar and the screen over it are the window at `opacity`, never the bar
+    // seen through the screen where it goes on under it. At 1, the bar wherever the screen does not cover it whole.
+    fragment float4 fadingWindowBarFragment(QuadOut in [[stage_in]],
+                                            constant WindowBarUniforms &u [[buffer(0)]],
+                                            constant QuadUniforms &screen [[buffer(1)]],
+                                            constant float &opacity [[buffer(2)]]) {
+        float covered = imageCoverage(in.p, screen);
+        float shown = covered * opacity;
+        return shown < 1.0 ? windowBar(in, u) * (opacity * (1.0 - covered) / (1.0 - shown)) : float4(0.0);
     }
 
     struct WallpaperUniforms {

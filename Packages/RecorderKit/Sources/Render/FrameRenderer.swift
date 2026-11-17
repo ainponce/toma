@@ -82,6 +82,9 @@ public final class FrameRenderer: @unchecked Sendable {
     private let events: [InputEvent]
     /// The frames per second scenes are drawn at; the document's when `nil`.
     private let frameRateOverride: Int?
+    /// Some camera track of the take has a segment that can be read (plan decision 40: one that is not empty nor
+    /// unreadable and whose file is there, `SegmentAvailability`), which every scene's layouts are given.
+    private let cameraReadable: Bool
     /// The reader of each track read so far, by track ID, made the first time a frame (or `missingVideo`) needs it.
     private let readers = Mutex<[String: TrackFrameReader]>([:])
     private let compositor: Compositor
@@ -205,9 +208,14 @@ public final class FrameRenderer: @unchecked Sendable {
         compositor = try Compositor(device: device)
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
         cursorImages = try CursorImages(device: device, package: project.package, take: project.take.id)
+        let cameraReadable = project.take.tracks.contains { track in
+            track.kind == .camera && track.segments.contains { SegmentAvailability.classify($0, in: project.package) == .present }
+        }
         current = Mutex(FrameEvaluator(
-            take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate))
+            take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate,
+            cameraReadable: cameraReadable))
         frameRateOverride = frameRate
+        self.cameraReadable = cameraReadable
         package = project.package
         take = project.take
         events = project.events
@@ -215,10 +223,11 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// A scene of this renderer's take: `document` at `outputSize`, with `paths` (`MotionPaths(take:events:document:)` of
     /// `document`, built off the main thread), at the renderer's frames per second (the document's unless the renderer was
-    /// given some). Cheap: the paths are what costs.
+    /// given some), with the camera readable as the renderer found it. Cheap: the paths are what costs.
     public func makeScene(document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
         FrameEvaluator(
-            take: take, events: events, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride)
+            take: take, events: events, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride,
+            cameraReadable: cameraReadable)
     }
 
     /// Makes `scene` the renderer's scene, and its size the one `encode(at:into:commandBuffer:)` checks: what was decoded

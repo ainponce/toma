@@ -16,7 +16,7 @@ public struct RenderFrame: Equatable, Sendable {
     /// `nil` when the cursor's position is unknown or off what is shown of the screen. In stage coordinates: output
     /// pixels with the stage unzoomed. While it is hidden (`opacity` 0) nothing is drawn of it.
     public var cursor: CursorLayer?
-    /// `nil` when the take has no camera, and before its first frame.
+    /// `nil` when the take has no camera, before its first frame in the Bubble, and where a layout hides it.
     public var camera: CameraLayer?
     /// What is drawn behind everything: the gradient above (today's), a colour, a wallpaper or an image (with the
     /// gradient above, Toma classic, when it cannot be read).
@@ -48,6 +48,17 @@ public struct RenderFrame: Equatable, Sendable {
     /// step of √2 at a time (`TitleTexture.scale(for:)`), onto `windowFrame`'s bar. `nil` otherwise: the title is
     /// `windowFrame`'s own.
     public var settledWindowFrame: WindowFrameLayer?
+    /// On the camera layouts' path (1c design §5.3 and §14.2, plan decision 13), the opacity of the screen's group: the
+    /// screen with its shadow, its window frame and its title, its cursor and its click effects, which fade together (0
+    /// to 1). The shadow and the window's bar are drawn at it only where what goes over them lets them through, so the
+    /// shadow, the bar and the screen are exactly the group drawn opaque and then blended; the title is drawn at it over
+    /// the bar. The screens' own opacities (`ScreenLayer.opacity`), the cursor's and the click effects' already carry it.
+    /// `nil` on 1b's path: all of it drawn as in 1b.
+    public var screenOpacity: Double?
+    /// The camera covers every pixel of the output, opaque: Camera full screen settled (1c design §14.4). Nothing under it
+    /// is drawn, neither the background nor the screen with its shadow, window frame, cursor and click effects, and the
+    /// frame is the one they would give under it. `false` on 1b's path and wherever anything shows past the camera.
+    public var coveredByCamera: Bool
 
     public init(
         outputSize: SIMD2<Int>,
@@ -65,7 +76,9 @@ public struct RenderFrame: Equatable, Sendable {
         subframes: [StageSubframe] = [],
         cursorSamples: [CursorLayer] = [],
         previousScreen: ScreenLayer? = nil,
-        settledWindowFrame: WindowFrameLayer? = nil
+        settledWindowFrame: WindowFrameLayer? = nil,
+        screenOpacity: Double? = nil,
+        coveredByCamera: Bool = false
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -83,6 +96,8 @@ public struct RenderFrame: Equatable, Sendable {
         self.cursorSamples = cursorSamples
         self.previousScreen = previousScreen
         self.settledWindowFrame = settledWindowFrame
+        self.screenOpacity = screenOpacity
+        self.coveredByCamera = coveredByCamera
     }
 }
 
@@ -188,7 +203,7 @@ public struct ScreenLayer: Equatable, Sendable {
     /// drawn much smaller than recorded; bilinear, as in phase 0 and 1a, otherwise.
     public var mipmapped: Bool
     /// 1 opaque, as the recorded video always is; below it while it fades in over the screen going away
-    /// (`RenderFrame.previousScreen`), 0 not drawn.
+    /// (`RenderFrame.previousScreen`), or with its group in the camera layouts (`RenderFrame.screenOpacity`); 0 not drawn.
     public var opacity: Double
 
     public init(
@@ -249,7 +264,8 @@ public struct CameraLayer: Equatable, Sendable {
     public var opacity: Double
     /// `nil` without one.
     public var border: CameraBorderLayer?
-    /// Under the camera, drawn before it, at its opacity times `opacity`; `nil` without one.
+    /// Under the camera, drawn before it; `nil` without one. It fades with the camera as one group, so the camera hides
+    /// its own shadow at any opacity, as it does opaque.
     public var shadow: ShadowLayer?
 
     public init(
