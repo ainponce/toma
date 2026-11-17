@@ -54,7 +54,11 @@ let package = Package(
             ]),
         .testTarget(
             name: "AppSupportTests",
-            dependencies: ["AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport"]),
+            dependencies: [
+                "AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport",
+                // Only the tests: they tie what the export sheet remembers to Export's own values (plan decision 41).
+                "Export",
+            ]),
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]

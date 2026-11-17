@@ -270,7 +270,7 @@ final class EditorModel {
 
     /// While playing, the label is updated at most this often (ten times a second).
     private static let labelInterval = 0.1
-    /// How long "Export finished · Show in Finder" stays.
+    /// How long "Export finished · Show in Finder · Copy" stays.
     private static let exportFinishedDuration = Duration.seconds(8)
     /// The shorter side of the export the paused preview is drawn at: the resolution the export sheet remembers (1080
     /// until something is exported, plan decision 11), followed as it changes (`exportPreferencesChanged`).
@@ -1093,16 +1093,29 @@ final class EditorModel {
 
     // MARK: - Export
 
-    /// Exports `document`, the copy the export sheet took (what is edited meanwhile is not in it), with the sheet's
-    /// `settings`, from the package where it is now (`ExportSheet`). One export at a time in the whole app (`ExportGate`):
-    /// `false`, and nothing done, while another one runs or the project cannot be exported.
-    func startExport(_ document: EditDocument, settings: ExportSettings, to destination: URL) -> Bool {
+    /// What the export sheet asked to export (1c design §7.1).
+    enum ExportJob: Sendable {
+        /// An MP4 with `settings`, of `range`, or of the whole video for `nil` (as in 1b).
+        case mp4(ExportSettings, range: ExportRange?)
+        /// A GIF of `settings.range`.
+        case gif(GIFSettings)
+    }
+
+    /// The project the export sheet's GIF estimate and preview are made of: the session's, read from where its package is
+    /// now; `nil` without a session.
+    var exportProject: LoadedProject? { session.map { currentProject(of: $0) } }
+
+    /// Exports `document`, the copy the export sheet took (what is edited meanwhile is not in it), as `job` says, from the
+    /// package where it is now (`ExportSheet`). An MP4 and a GIF are the same to the rest of the app: one export at a time
+    /// in the whole app (`ExportGate`), the bar's ring with "Cancel Export", and closing the window or quitting asks first
+    /// while it runs (`isExporting`, the gate). `false`, and nothing done, while another one runs or the project cannot be
+    /// exported.
+    func startExport(_ document: EditDocument, _ job: ExportJob, to destination: URL) -> Bool {
         guard canExport, let session else { return false }
         let project = currentProject(of: session)
         exportGate.isBusy = true
         exportFinishedTask?.cancel()
         exportState = .running(progress: 0)
-        let exporter = MP4Exporter(project: project, document: document, settings: settings)
         let throttle = ProgressThrottle()
         // Called off the main thread, per frame.
         let progress: @Sendable (Double) -> Void = { [weak self] value in
@@ -1111,26 +1124,89 @@ final class EditorModel {
         }
         exportTask = Task {
             do {
-                let summary = try await exporter.export(to: destination, progress: progress)
-                exportState = .finished(destination)
-                exportFinishedTask = Task {
-                    try? await Task.sleep(for: Self.exportFinishedDuration)
-                    guard !Task.isCancelled, exportState == .finished(destination) else { return }
-                    exportState = .idle
+                switch job {
+                case let .mp4(settings, range):
+                    let exporter = MP4Exporter(project: project, document: document, settings: settings, range: range)
+                    let summary = try await exporter.export(to: destination, progress: progress)
+                    exportFinished(at: destination)
+                    let leftOut = Self.leftOut(summary, take: project.take)
+                    if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
+                case let .gif(settings):
+                    let exporter = GIFExporter(project: project, document: document, settings: settings)
+                    try await exporter.export(to: destination, progress: progress)
+                    exportFinished(at: destination)
                 }
-                let leftOut = Self.leftOut(summary, take: project.take)
-                if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
             } catch let error where Self.isCancellation(error) {
                 exportState = .idle
             } catch {
                 Self.logger.error("Export to \(destination.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                 exportState = .idle
-                showAlert(String(localized: "Couldn't export the video"), informative: userFacingDescription(of: error), style: .warning)
+                switch job {
+                case .mp4:
+                    showAlert(String(localized: "Couldn't export the video"), informative: userFacingDescription(of: error), style: .warning)
+                case .gif:
+                    showAlert(Self.gifExportFailure(error, destination: destination), style: .warning)
+                }
             }
             exportGate.isBusy = false
             exportTask = nil
         }
         return true
+    }
+
+    /// "Export finished · Show in Finder · Copy" in the bar, for `exportFinishedDuration`.
+    private func exportFinished(at destination: URL) {
+        exportState = .finished(destination)
+        exportFinishedTask = Task {
+            try? await Task.sleep(for: Self.exportFinishedDuration)
+            guard !Task.isCancelled, exportState == .finished(destination) else { return }
+            exportState = .idle
+        }
+    }
+
+    /// "Couldn't export the GIF: …" (1c design §7.4) with why, in words: `GIFExportError` (a write that failed says which
+    /// error, by name for the common ones), and the `ExportError` and `RenderError` the GIF's export also throws (a
+    /// destination it never writes to, a frame the GPU could not draw).
+    private static func gifExportFailure(_ error: any Error, destination: URL) -> String {
+        let reason: String =
+            switch error {
+            case GIFExportError.diskFull, ExportError.diskFull:
+                // The library's words for it, the same in the GIF's alert.
+                String(localized: "the disk is full")
+            // The library's words for the common ones.
+            case GIFExportError.write(.EACCES), GIFExportError.write(.EPERM):
+                String(localized: "there's no permission")
+            case GIFExportError.write(.EROFS):
+                String(localized: "the disk is read-only")
+            case GIFExportError.write(.EIO):
+                String(localized: "the disk failed")
+            case GIFExportError.write(let code):
+                String(localized: "the file couldn't be written (error \(code.rawValue))", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            case GIFExportError.rangeShorterThanAFrame, ExportError.nothingToExport:
+                String(localized: "the range lasts less than a frame", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            case ExportError.destinationNotAllowed where isInsideAProject(destination):
+                String(localized: "it can't be saved inside a project; choose a folder outside it", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            case ExportError.destinationNotAllowed:
+                // A folder or a link where the GIF would go.
+                String(localized: "it can't be saved there", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            case RenderError.noMetalDevice:
+                String(localized: "this Mac has no graphics device to draw it", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            case is RenderError:
+                String(localized: "its frames couldn't be drawn", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            default:
+                String(localized: "an unexpected error occurred", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            }
+        return String(format: String(localized: "Couldn't export the GIF: %@", comment: "An alert: a GIF export that failed, and why"), reason)
+    }
+
+    /// Whether `destination` is inside a project package (`*.toma`), where an export never writes, as given or with its
+    /// links resolved.
+    private static func isInsideAProject(_ destination: URL) -> Bool {
+        [destination.standardizedFileURL, destination.resolvingSymlinksInPath()].contains { url in
+            url.pathComponents.dropLast().contains {
+                ($0 as NSString).pathExtension.lowercased() == ProjectPackage.fileExtension.lowercased()
+            }
+        }
     }
 
     /// What the export had to leave out, one sentence for each kind.
@@ -1173,13 +1249,22 @@ final class EditorModel {
         NSWorkspace.shared.activateFileViewerSelecting([url])
     }
 
+    /// Copy, once an export finished (1c decision 24): the file (its URL) on the clipboard, to paste it into Slack, Mail
+    /// or an issue on GitHub as the file itself.
+    func copyExport() {
+        guard case let .finished(url) = exportState else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([url as NSURL])
+    }
+
     private func exportProgressed(_ value: Double) {
         guard case .running(let progress) = exportState, value > progress else { return }
         exportState = .running(progress: value)
     }
 
     private static func isCancellation(_ error: any Error) -> Bool {
-        error is CancellationError || (error as? ExportError) == .cancelled
+        error is CancellationError || (error as? ExportError) == .cancelled || (error as? GIFExportError) == .cancelled
     }
 
     // MARK: - Where the package is
@@ -1251,8 +1336,8 @@ final class EditorModel {
 
     // MARK: - Closing
 
-    /// The window closed, or the app quits: its state is written, playback stops, an export in progress is cancelled (the
-    /// window asked first), and the session closes (its last lines, snapshot and lock), off the main thread (`closing`). An "Apply Default Style" waiting for room on a full disk gives up as
+    /// The window closed, or the app quits: its state is written, playback stops, the export sheet ends if it is up, an
+    /// export in progress is cancelled (the window asked first), and the session closes (its last lines, snapshot and lock), off the main thread (`closing`). An "Apply Default Style" waiting for room on a full disk gives up as
     /// the session closes, without applying anything (cancelling its task would apply Toma's gradient instead).
     func close() {
         guard !closed else { return }
@@ -1263,6 +1348,8 @@ final class EditorModel {
         preferencesObserver = nil
         openTask?.cancel()
         followCursorTask?.cancel()
+        // An export sheet still over the window ends: its GIF preview and estimate stop, and the project it holds goes.
+        endExportSheet()
         let export = exportTask
         export?.cancel()
         exportFinishedTask?.cancel()

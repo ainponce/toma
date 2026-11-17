@@ -268,6 +268,40 @@ func rangeWithoutAFrameIsRefused() async throws {
     }
 }
 
+/// Marks dragged to the end of a video that is not on the MP4's grid: the range is cut where the export of all of it
+/// ends (`TimeMap.exportEnd`, its last whole frame), and what is left is checked, as the export sheet checks it
+/// (`ExportRangeRules.canExport(kind:range:duration:fps:)`, which calls the same two rules).
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func marksDraggedToTheEndAreCutToTheLastWholeFrame() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await take(in: dir)
+        // 6.015 s of output: at 24 fps, 144 frames (144.36 rounded), the last one ending at 6 s.
+        var document = edit(of: project)
+        document.sequence = [clip(1, from: 0, to: 1), clip(2, from: 1.5, to: 6.515)]
+        let duration = TimeMap(sequence: document.sequence).duration
+        #expect(duration == 6_015_000_000)
+        #expect(TimeMap.exportEnd(duration: duration, frameRate: 24) == 6_000_000_000)
+        let folder = dir.appending(path: "out")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        let settings = ExportSettings(outputSize: [320, 180], framesPerSecond: 24)
+        // From frame 358 of 60 fps to the end: 48.3 ms, a frame of 24 fps; cut at 6 s, 33.3 ms, not one.
+        let marks = ExportRange(start: TimeMap.frameTime(358, frameRate: 60), end: duration)
+        #expect(marks.lastsAFrame(fps: 24))
+        await #expect(throws: ExportError.nothingToExport) {
+            try await MP4Exporter(project: project, document: document, settings: settings, range: marks)
+                .export(to: folder.appending(path: "out.mp4")) { _ in }
+        }
+        await #expect(throws: ExportError.nothingToExport) {
+            try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 24, range: marks)
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
+        // From frame 357, 50 ms after the cut: its frames.
+        let earlier = ExportRange(start: TimeMap.frameTime(357, frameRate: 60), end: duration)
+        let samples = try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 24, range: earlier)
+        #expect(!samples.isEmpty)
+    }
+}
+
 /// What the export left out is listed in seconds of the range's MP4, and only what falls in it.
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func leftOutIsListedWithinTheRange() async throws {

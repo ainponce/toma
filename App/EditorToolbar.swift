@@ -170,7 +170,8 @@ struct FormatMenu: View {
 }
 
 /// Export (⌘E), prominent, which opens the export sheet (`ExportSheet`); while exporting, a ring of its progress with
-/// "Cancel Export"; once done, "Export finished · Show in Finder" for 8 seconds.
+/// "Cancel Export"; once done, "Export finished · Show in Finder · Copy" for 8 seconds, for an MP4 and a GIF alike (1c
+/// decision 24: Copy puts the file on the clipboard).
 private struct ExportControl: View {
     let model: EditorModel
 
@@ -194,6 +195,11 @@ private struct ExportControl: View {
                 Text("Export finished")
                     .foregroundStyle(.secondary)
                 Button("Show in Finder") { model.showExportInFinder() }
+                Button {
+                    model.copyExport()
+                } label: {
+                    Text("Copy", comment: "The editor's bar after an export: puts the exported file on the clipboard")
+                }
             }
             .fixedSize()
         case .idle:
