@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 VERSION ?=
 
-.PHONY: project test tsan crash-test golden golden-record golden-fixtures golden-accept build install release
+.PHONY: project test tsan crash-test golden golden-record golden-fixtures golden-accept build install release golden-1c golden-1c-record
 
 project:
 	xcodegen generate
@@ -127,6 +127,84 @@ golden-record:
 		echo "recorded $(GOLDEN_DIR) from $$(cat "$(GOLDEN_DIR)/COMMIT")"; \
 	else \
 		rm -rf "$(GOLDEN_DIR).partial"; echo "nothing recorded in $(GOLDEN_DIR)" >&2; \
+	fi; \
+	exit $$status
+
+# The golden files of milestone 1c (plan 1c decision 2): the frames and the mix of the edit documents of 1b
+# (documentVersion 1) of GoldenDocuments (frames.bin and frames.bin.mix), with those documents as 1b writes them
+# (documents/<case>.json), recorded once from the commit that closes milestone 1b on main, a commit with no change to the
+# app's sources (only test code and this Makefile), outside git, with fixtures.sha (the digests of the cases' video the
+# frames were drawn from, which tell a change of the render from other video of the encoder), VERSION (the fingerprint
+# of scripts/golden-system.sh) and COMMIT (the commit they were recorded from). They live next to 1b's in the main
+# checkout. Recording needs EditDocument.currentVersion 1, which no code of 1c has; with 1c's code the same documents,
+# migrated, must draw and sound the same. Record them with the Mac doing no other video work.
+GOLDEN_1C_DIR ?= $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-1c
+GOLDEN_1C = $(abspath $(GOLDEN_1C_DIR))
+GOLDEN_1C_SRC = $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-1c-src
+GOLDEN_1C_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden1cFramesMatch|golden1cMixMatches'
+# Sets $$commit to the commit the golden files of 1c were recorded from.
+GOLDEN_1C_COMMIT = commit=$$(cat "$(GOLDEN_1C)/COMMIT" 2>/dev/null \
+	|| echo "<the commit \"test: golden frames and mix of 1b documents, recorded from the commit that closes milestone 1b\">")
+# Records them again from $$commit, in a worktree of that commit, with the ones there moved aside.
+GOLDEN_1C_RECORD_AGAIN = mv '$(GOLDEN_1C)' '$(GOLDEN_1C).old' && git worktree add '$(GOLDEN_1C_SRC)' $$commit \
+	&& make -C '$(GOLDEN_1C_SRC)' golden-1c-record GOLDEN_1C_DIR='$(GOLDEN_1C)' && git worktree remove '$(GOLDEN_1C_SRC)'
+# Whether both golden tests of 1c ran and passed, from the output of GOLDEN_1C_TESTS in file $(1): a filter that matches
+# no test exits with 0 too.
+GOLDEN_1C_RAN = { grep -qF 'golden1cFramesMatch() passed' "$(1)" && grep -qF 'golden1cMixMatches() passed' "$(1)" \
+	|| { echo "golden1cFramesMatch and golden1cMixMatches did not both run and pass: nothing was compared" >&2; false; }; }
+
+golden-1c golden-1c-record: SHELL := /bin/bash
+
+golden-1c:
+	@$(GOLDEN_1C_COMMIT); \
+	for file in frames.bin frames.bin.mix documents fixtures.sha COMMIT; do \
+		if [ ! -e "$(GOLDEN_1C)/$$file" ]; then \
+			echo "no $(GOLDEN_1C)/$$file: the golden files of 1c are recorded whole, once; record them again from the commit in $(GOLDEN_1C_DIR)/COMMIT, never from later code (plan 1c decision 2):" >&2; \
+			echo "  $(GOLDEN_1C_RECORD_AGAIN)" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	if [ ! -f "$(GOLDEN_1C)/VERSION" ]; then \
+		echo "no $(GOLDEN_1C)/VERSION, the fingerprint of the system the golden files of 1c were recorded on: they cannot be compared without it; record them again from the commit in $(GOLDEN_1C_DIR)/COMMIT, never from later code (plan 1c decision 2):" >&2; \
+		echo "  $(GOLDEN_1C_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	now=$$(mktemp -t toma-golden-1c); \
+	bash scripts/golden-system.sh > "$$now" || { rm -f "$$now"; echo "scripts/golden-system.sh failed: no fingerprint of this system to compare" >&2; exit 1; }; \
+	if ! cmp -s "$(GOLDEN_1C)/VERSION" "$$now"; then \
+		echo "the system changed since the golden files in $(GOLDEN_1C) were recorded (< then, > now):" >&2; \
+		diff "$(GOLDEN_1C)/VERSION" "$$now" >&2; \
+		rm -f "$$now"; \
+		echo "record them again from the commit in $(GOLDEN_1C_DIR)/COMMIT, never from later code (plan 1c decision 2):" >&2; \
+		echo "  $(GOLDEN_1C_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	rm -f "$$now"
+	@set -o pipefail; log=$$(mktemp -t toma-golden-1c); \
+	TOMA_GOLDEN_1C_DIR="$(GOLDEN_1C)" $(GOLDEN_1C_TESTS) 2>&1 | tee "$$log" && $(call GOLDEN_1C_RAN,$$log); \
+	status=$$?; rm -f "$$log"; exit $$status
+
+# Records into $(GOLDEN_1C).partial and moves that into place only once both tests passed and VERSION and COMMIT are
+# written: the golden files of 1c are there whole or not at all.
+golden-1c-record:
+	@$(GOLDEN_1C_COMMIT); \
+	if [ -e "$(GOLDEN_1C)" ]; then \
+		echo "$(GOLDEN_1C) is already there: the golden files of 1c are recorded once, from the commit that closes milestone 1b, never over others (plan 1c decision 2)." >&2; \
+		echo "To record them again from the commit in $(GOLDEN_1C_DIR)/COMMIT, never from later code (plan 1c decision 2): $(GOLDEN_1C_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi
+	@test -z "$$(git status --porcelain)" || { echo "this checkout has uncommitted changes: the golden files of 1c are recorded from a commit, which they name in COMMIT" >&2; exit 1; }
+	@set -o pipefail; log=$$(mktemp -t toma-golden-1c); \
+	rm -rf "$(GOLDEN_1C).partial" && mkdir -p "$(GOLDEN_1C).partial" && \
+	TOMA_GOLDEN_1C_DIR="$(GOLDEN_1C).partial" TOMA_GOLDEN_RECORD=1 $(GOLDEN_1C_TESTS) 2>&1 | tee "$$log" && \
+	$(call GOLDEN_1C_RAN,$$log) && \
+	bash scripts/golden-system.sh > "$(GOLDEN_1C).partial/VERSION" && git rev-parse HEAD > "$(GOLDEN_1C).partial/COMMIT" && \
+	test ! -e "$(GOLDEN_1C)" && mv "$(GOLDEN_1C).partial" "$(GOLDEN_1C)"; \
+	status=$$?; rm -f "$$log"; \
+	if [ $$status -eq 0 ]; then \
+		echo "recorded $(GOLDEN_1C) from $$(cat "$(GOLDEN_1C)/COMMIT")"; \
+	else \
+		rm -rf "$(GOLDEN_1C).partial"; echo "nothing recorded in $(GOLDEN_1C)" >&2; \
 	fi; \
 	exit $$status
 
