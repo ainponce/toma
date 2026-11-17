@@ -478,6 +478,10 @@ private protocol CursorSteps {
 extension CursorPath {
     /// The spring simulated from the checkpoint before the step.
     fileprivate struct FromCheckpoint: CursorSteps {
+        /// Never read. An empty struct has no storage of its own, so every local one would share one address, and the
+        /// Thread Sanitizer would take two threads passing theirs `inout` for a race on it.
+        private var unused: UInt8 = 0
+
         func state(atStep s: Int, of motion: Motion) -> State? {
             var simulation = motion.simulation(from: s)
             motion.advance(&simulation, to: s)
