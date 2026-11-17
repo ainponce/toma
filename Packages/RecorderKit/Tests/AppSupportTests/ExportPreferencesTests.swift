@@ -49,6 +49,67 @@ import Testing
         }
     }
 
+    @Test func gifPreferencesDefaultAndRoundTrip() throws {
+        let defaults = ExportPreferences()
+        #expect(defaults.kind == .mp4)
+        #expect(defaults.gif == GIFPreferences(longSide: 800, fps: 15, quality: "balanced", dither: true, loops: true))
+        #expect(GIFPreferences() == defaults.gif)
+        #expect(GIFPreferences.longSides == [480, 640, 800, 1080, 1280, 1920])
+        #expect(GIFPreferences.framesPerSecond == [10, 15, 20, 25, 30])
+        #expect(GIFPreferences.qualities == ["light", "balanced", "high"])
+        #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data("{}".utf8)) == defaults)
+        #expect(try JSONDecoder().decode(GIFPreferences.self, from: Data("{}".utf8)) == GIFPreferences())
+
+        // What 1b saved, without `kind` or `gif`: theirs by default, and the rest kept.
+        let of1b = try JSONDecoder().decode(ExportPreferences.self, from: Data(#"{"shortSide":1440,"highQuality":true}"#.utf8))
+        #expect(of1b == ExportPreferences(shortSide: 1440, highQuality: true, kind: .mp4, gif: GIFPreferences()))
+
+        // Every value the sheet offers comes back as it went.
+        for kind in [ExportKind.mp4, .gif] {
+            for (i, longSide) in GIFPreferences.longSides.enumerated() {
+                let gif = GIFPreferences(
+                    longSide: longSide, fps: GIFPreferences.framesPerSecond[i % 5], quality: GIFPreferences.qualities[i % 3],
+                    dither: i.isMultiple(of: 2), loops: i % 3 != 0)
+                let preferences = ExportPreferences(shortSide: 720, highQuality: true, kind: kind, gif: gif)
+                #expect(try JSONDecoder().decode(ExportPreferences.self, from: JSONEncoder().encode(preferences)) == preferences)
+            }
+        }
+
+        // A field of the GIF missing takes its default; the others are kept.
+        #expect(try JSONDecoder().decode(GIFPreferences.self, from: Data(#"{"fps":25,"loops":false}"#.utf8))
+            == GIFPreferences(longSide: 800, fps: 25, quality: "balanced", dither: true, loops: false))
+        #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data(#"{"kind":"gif","gif":{"longSide":1280}}"#.utf8))
+            == ExportPreferences(kind: .gif, gif: GIFPreferences(longSide: 1280)))
+    }
+
+    @Test func aGIFValueTheSheetDoesNotOfferTakesItsDefault() throws {
+        // Saved by hand, or by a version with other sizes, rates or qualities: the sheet would have nothing to show.
+        let json = #"{"longSide":700,"fps":60,"quality":"best","dither":false,"loops":false}"#
+        #expect(try JSONDecoder().decode(GIFPreferences.self, from: Data(json.utf8))
+            == GIFPreferences(longSide: 800, fps: 15, quality: "balanced", dither: false, loops: false))
+        let wrongTypes = #"{"longSide":"800","fps":15.5,"quality":2,"dither":"yes","loops":1}"#
+        #expect(try JSONDecoder().decode(GIFPreferences.self, from: Data(wrongTypes.utf8)) == GIFPreferences())
+        // A kind it doesn't know, or a `gif` that isn't one: their defaults, and the rest kept.
+        let unknown = #"{"shortSide":2160,"kind":"webm","gif":[1,2]}"#
+        #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data(unknown.utf8)) == ExportPreferences(shortSide: 2160))
+    }
+
+    @Test func anExportRemembersItsKindAndItsOwnOptions() {
+        let remembered = ExportPreferences(
+            shortSide: 1440, highQuality: true, kind: .mp4, gif: GIFPreferences(longSide: 640, fps: 10, quality: "light"))
+        let chosen = ExportPreferences(
+            shortSide: 2160, highQuality: false, kind: .mp4,
+            gif: GIFPreferences(longSide: 1080, fps: 25, quality: "high", dither: false, loops: false))
+        // A GIF: the kind and the GIF's options; the MP4's resolution and quality as they were (the paused preview is drawn
+        // at that resolution).
+        #expect(remembered.remembering(.gif, chosen: chosen)
+            == ExportPreferences(shortSide: 1440, highQuality: true, kind: .gif, gif: chosen.gif))
+        // An MP4: the kind and the MP4's options; the GIF's as they were.
+        let gifFirst = ExportPreferences(shortSide: 1440, highQuality: true, kind: .gif, gif: remembered.gif)
+        #expect(gifFirst.remembering(.mp4, chosen: chosen)
+            == ExportPreferences(shortSide: 2160, highQuality: false, kind: .mp4, gif: remembered.gif))
+    }
+
     @Test func theRecordedShortSideIsInPixels() {
         // A Retina display, recorded at 2 pixels per point: 1512 × 982 points.
         let display = Self.track(.display, frame: Rect(x: 0, y: 0, width: 1512, height: 982), scale: 2)

@@ -204,6 +204,28 @@
         }
       }
     },
+    "A GIF longer than a minute is heavy. Mark a range (I and O) or export MP4." : {
+      "comment" : "The export sheet: a GIF of more than 60 s",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un GIF de más de un minuto pesa mucho. Conviene marcar un rango (I y O) o exportar en MP4."
+          }
+        }
+      }
+    },
+    "A GIF this heavy is better exported as MP4." : {
+      "comment" : "The export sheet: a GIF estimated at more than 50 MB",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un GIF así pesa mucho: conviene exportar en MP4."
+          }
+        }
+      }
+    },
     "A file isn't inside the project." : {
       "localizations" : {
         "es" : {
@@ -245,6 +267,17 @@
         }
       }
     },
+    "About %1$@ · %2$@ · %3$d frames" : {
+      "comment" : "The export sheet: the GIF's estimated size, how long it lasts and its frames",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aprox. %1$@ · %2$@ · %3$d cuadros"
+          }
+        }
+      }
+    },
     "About %@" : {
       "comment" : "The export sheet: the MP4's estimated size, as “120 MB”",
       "localizations" : {
@@ -272,6 +305,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Licencias de terceros…"
+          }
+        }
+      }
+    },
+    "Actual Size" : {
+      "comment" : "The export sheet: the GIF's preview 1:1 with the screen's pixels",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tamaño real"
           }
         }
       }
@@ -443,6 +487,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ángulo"
+          }
+        }
+      }
+    },
+    "Animated GIF" : {
+      "comment" : "The export sheet: Export As a GIF",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "GIF animado"
           }
         }
       }
@@ -662,6 +717,17 @@
         }
       }
     },
+    "Balanced" : {
+      "comment" : "The export sheet: a GIF of up to 256 colours per frame (Spanish: feminine, la calidad)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Equilibrada"
+          }
+        }
+      }
+    },
     "Before the Click" : {
       "comment" : "The Zoom tab: seconds a zoom starts before the first click",
       "localizations" : {
@@ -690,6 +756,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mora"
+          }
+        }
+      }
+    },
+    "Between the Marks (%1$@–%2$@)" : {
+      "comment" : "The export sheet's Range: from the in mark to the out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entre las marcas (%1$@–%2$@)"
           }
         }
       }
@@ -787,6 +864,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Por app"
+          }
+        }
+      }
+    },
+    "Calculating…" : {
+      "comment" : "The export sheet: while the GIF's size is being estimated",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calculando…"
           }
         }
       }
@@ -1379,6 +1467,17 @@
         }
       }
     },
+    "Copy" : {
+      "comment" : "The editor's bar after an export: puts the exported file on the clipboard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar"
+          }
+        }
+      }
+    },
     "Coral" : {
       "localizations" : {
         "es" : {
@@ -1449,6 +1548,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo duplicar «%1$@»: %2$@"
+          }
+        }
+      }
+    },
+    "Couldn't export the GIF: %@" : {
+      "comment" : "An alert: a GIF export that failed, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo exportar el GIF: %@"
           }
         }
       }
@@ -1913,6 +2023,17 @@
         }
       }
     },
+    "Dithering" : {
+      "comment" : "The export sheet: the GIF's ordered dither",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tramado"
+          }
+        }
+      }
+    },
     "Do Not Disturb" : {
       "localizations" : {
         "es" : {
@@ -2189,6 +2310,17 @@
         }
       }
     },
+    "Export As" : {
+      "comment" : "The export sheet: a video or a GIF",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportar como"
+          }
+        }
+      }
+    },
     "Export MP4…" : {
       "localizations" : {
         "es" : {
@@ -2444,6 +2576,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cámara a pantalla completa"
+          }
+        }
+      }
+    },
+    "GIF Preview" : {
+      "comment" : "VoiceOver: the export sheet's preview of the GIF",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vista previa del GIF"
+          }
+        }
+      }
+    },
+    "GIFs have no sound." : {
+      "comment" : "The export sheet: a GIF exports no audio",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los GIF no tienen sonido."
           }
         }
       }
@@ -2941,6 +3095,24 @@
         }
       }
     },
+    "Light (GIF quality)" : {
+      "comment" : "The export sheet: a GIF of up to 128 colours per frame (Spanish: feminine, la calidad)",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Liviana"
+          }
+        }
+      }
+    },
     "Loading…" : {
       "localizations" : {
         "es" : {
@@ -2973,12 +3145,45 @@
         }
       }
     },
+    "Loop Forever" : {
+      "comment" : "The export sheet: the GIF plays in a loop; otherwise once",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetir siempre"
+          }
+        }
+      }
+    },
     "Low disk space: %@ left." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "Queda poco espacio en el disco: %@."
+          }
+        }
+      }
+    },
+    "MP4 Video" : {
+      "comment" : "The export sheet: Export As a video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video MP4"
+          }
+        }
+      }
+    },
+    "Making the preview…" : {
+      "comment" : "The export sheet: while the GIF's preview is made",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Generando la vista previa…"
           }
         }
       }
@@ -3761,6 +3966,17 @@
         }
       }
     },
+    "Over 10 MB, some sites don't show it." : {
+      "comment" : "The export sheet: a GIF estimated at more than 10 MB",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con más de 10 MB, algunos sitios no lo muestran."
+          }
+        }
+      }
+    },
     "Padding" : {
       "localizations" : {
         "es" : {
@@ -3908,6 +4124,17 @@
         }
       }
     },
+    "Playing" : {
+      "comment" : "VoiceOver: the GIF's preview while it plays",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En reproducción"
+          }
+        }
+      }
+    },
     "Points" : {
       "comment" : "Display resolution: one pixel per point",
       "localizations" : {
@@ -4033,6 +4260,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Salir igual"
+          }
+        }
+      }
+    },
+    "Range" : {
+      "comment" : "The export sheet: what part of the video is exported",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rango"
           }
         }
       }
@@ -5750,6 +5988,17 @@
         }
       }
     },
+    "The range has to last at least one frame." : {
+      "comment" : "The export sheet: a range shorter than a frame; Export is disabled",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El rango tiene que durar al menos un cuadro."
+          }
+        }
+      }
+    },
     "The recording closed with an error: %@" : {
       "localizations" : {
         "es" : {
@@ -6988,6 +7237,17 @@
         }
       }
     },
+    "Whole Video" : {
+      "comment" : "The export sheet's Range: all of the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todo el video"
+          }
+        }
+      }
+    },
     "Window" : {
       "comment" : "What to record: one window",
       "localizations" : {
@@ -7159,6 +7419,17 @@
         }
       }
     },
+    "an unexpected error occurred" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "ocurrió un error inesperado"
+          }
+        }
+      }
+    },
     "as Grid" : {
       "comment" : "The library's bar: the view",
       "localizations" : {
@@ -7259,6 +7530,17 @@
         }
       }
     },
+    "it can't be saved there; choose a folder outside the project" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se puede guardar ahí; elegir una carpeta fuera del proyecto"
+          }
+        }
+      }
+    },
     "it isn't a regular file" : {
       "comment" : "The library: why a part of a project can't be read",
       "localizations" : {
@@ -7332,6 +7614,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "su editor tiene cambios que no se pudieron guardar"
+          }
+        }
+      }
+    },
+    "its frames couldn't be drawn" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudieron dibujar sus cuadros"
           }
         }
       }
@@ -7577,6 +7870,17 @@
         }
       }
     },
+    "the file couldn't be written" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo escribir el archivo"
+          }
+        }
+      }
+    },
     "the name can't be used" : {
       "comment" : "The library: why an action failed",
       "localizations" : {
@@ -7610,6 +7914,17 @@
         }
       }
     },
+    "the range lasts less than a frame" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "el rango dura menos de un cuadro"
+          }
+        }
+      }
+    },
     "there's no permission" : {
       "comment" : "The library: why a part of a project can't be read",
       "localizations" : {
@@ -7617,6 +7932,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "no hay permiso"
+          }
+        }
+      }
+    },
+    "this Mac has no graphics device to draw it" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "esta Mac no tiene un dispositivo gráfico para dibujarlo"
           }
         }
       }
