@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 @testable import AppSupport
+import Synchronization
 import Testing
 
 /// When a quit answered `.terminateLater` goes ahead: once the exports have ended (their partial files
@@ -236,6 +237,26 @@ import Testing
         #expect(rig.calls.closesEnded == 2)
     }
 
+    /// A take started while the copies were waited for gets the same time limit as the first close (N4): if it is not
+    /// closed by then, the quit goes ahead without it.
+    @Test func aTakeStartedWhileTheCopiesAreWaitedForKeepsTheTimeLimit() async {
+        let rig = QuitRig(timeLimit: .passesAfterTheFirst)
+        rig.work.beginCopy()
+        #expect(rig.sequencer.shouldTerminate(.finishCopiesFirst, confirmCancelExport: nobodyIsAsked) == .terminateLater)
+        await waitUntil { rig.calls.closesEnded == 1 }
+        rig.take.close()  // a take starts, and does not close
+
+        rig.copyEnds()
+        await waitUntil { !rig.calls.replies.isEmpty }
+        #expect(rig.calls.replies == [false])
+        #expect(rig.calls.closeCalls == 2 && rig.calls.closesEnded == 1, "the quit did not wait for the second take")
+
+        rig.take.open()
+        await waitUntil { rig.calls.closesEnded == 2 }
+        await settle()
+        #expect(rig.calls.replies == [false], "only the first answer replies")
+    }
+
     /// The take did not close within the time limit: the quit goes ahead without waiting for a copy it keeps paused (its
     /// hidden folder is removed at the next launch).
     @Test func copiesAreNotWaitedForOnceTheTimeLimitPasses() async {
@@ -339,11 +360,30 @@ private enum TimeLimit {
     case never
     /// It has passed by the time it is waited for.
     case alreadyPassed
+    /// The first wait does not pass while a test runs (as `never`); every later one has passed (as `alreadyPassed`).
+    case passesAfterTheFirst
 
     var sleep: @Sendable (Duration) async throws -> Void {
         switch self {
         case .never: { _ in try await Task.sleep(for: .seconds(3600)) }
         case .alreadyPassed: { _ in }
+        case .passesAfterTheFirst:
+            { [waits = Waits()] _ in
+                if waits.next() == 1 { try await Task.sleep(for: .seconds(3600)) }
+            }
+        }
+    }
+}
+
+/// How many times a time limit was waited for, from any thread.
+private final class Waits: Sendable {
+    private let count = Mutex(0)
+
+    /// The number of this wait: 1 for the first.
+    func next() -> Int {
+        count.withLock { count in
+            count += 1
+            return count
         }
     }
 }

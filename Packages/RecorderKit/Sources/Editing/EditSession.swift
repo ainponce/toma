@@ -30,13 +30,18 @@ public struct EditContext: Sendable {
     /// The camera a new project starts with (1c design §13.3): that of the style of the new projects, mirrored and with a
     /// shadow in Toma's.
     public var cameraLook: CameraLook = .newProjects
+    /// With a reason, the project opens read-only for it, whatever it holds (1c decision 36: `.inTrash`, a project of the
+    /// trash): `edit.lock` is never taken nor asked about, and nothing is written into the package, not even a new
+    /// project's first document or the truncation of a log cut short. A document of a newer version still opens as
+    /// `.newerDocument`.
+    public var forcedReadOnly: ReadOnlyReason?
 
     public init(
         app: AppInfo, cachesRoot: URL, defaultStyle: DefaultStyle, now: @escaping @Sendable () -> Date,
         makeID: @escaping @Sendable (String) -> String,
         compaction: (maxBytes: Int, maxEntries: Int) = (LogCompaction.maxBytes, LogCompaction.maxEntries),
         journalIO: EditJournalIO = .system, upgradeIO: PackageUpgradeIO = .system, styleDirectory: URL? = nil,
-        cameraLook: CameraLook = .newProjects
+        cameraLook: CameraLook = .newProjects, forcedReadOnly: ReadOnlyReason? = nil
     ) {
         self.app = app
         self.cachesRoot = cachesRoot
@@ -48,6 +53,7 @@ public struct EditContext: Sendable {
         self.upgradeIO = upgradeIO
         self.styleDirectory = styleDirectory
         self.cameraLook = cameraLook
+        self.forcedReadOnly = forcedReadOnly
     }
 }
 
@@ -76,6 +82,9 @@ public enum ReadOnlyReason: Equatable, Sendable {
     /// no longer decodes, a take it removed): as with `newerDocument`, there is nothing to show (the legacy document is
     /// only a placeholder: it would show what the other app cut); the app says the project could not be opened.
     case unreadable
+    /// The project is in the trash (`<projects folder>/Trash/`), which the app asks for with `EditContext.forcedReadOnly`
+    /// (1c decision 36): it can be looked at, not edited, since emptying the trash would delete it.
+    case inTrash
 }
 
 /// What a session has to tell (design §5.9).
@@ -1185,15 +1194,19 @@ private enum Opening {
 
         guard project.manifest.formatVersion >= 3 else {
             // Nothing is written to a version 1 or 2 package until its first edit, which upgrades it and writes the
-            // `create` of this document: the lock is only asked about.
+            // `create` of this document: the lock is only asked about, and not even that when it opens read-only anyway.
             opened.notices = [.legacyLook]
-            if RecordingLock.isHeld(at: package.editLockURL) {
+            if let forced = context.forcedReadOnly {
+                opened.access = .readOnly(forced)
+            } else if RecordingLock.isHeld(at: package.editLockURL) {
                 opened.access = .readOnly(.openElsewhere)
             } else {
                 opened.pendingCreate = opened.document
             }
             return opened
         }
+        // Read-only whatever it holds: without the lock, and nothing written (no new document, no repair of the log).
+        if let forced = context.forcedReadOnly { return try readOnly(opened, forced, context: context) }
         let lock: HeldRecordingLock
         do {
             // Another opener's `RecordingLock.isHeld` takes the lock for a moment: that is not another app editing.

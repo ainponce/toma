@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
+import Editing
 import Foundation
 import Library
 import ProjectFormat
@@ -615,6 +616,48 @@ private func failure(of result: Result<Void, LibraryFailure>) -> LibraryFailure?
         #expect(try await rig.operations.undoDuplicate(record).get().lastPathComponent == "x copia.toma")
         #expect(Set(rig.probes.paths) == lockPaths(of: record.copy, takes: takes))
         await rig.records.flush()
+    }
+}
+
+/// What the app says of a project its editor has open, with a `close` of its own.
+private final class EditorHere: LibraryAppState {
+    private let closeEditor: @MainActor @Sendable () async -> Void
+
+    init(close: @escaping @MainActor @Sendable () async -> Void) {
+        closeEditor = close
+    }
+
+    func isRecording() -> Bool { false }
+    func isOpenHere(_ url: URL) -> Bool { true }
+    func hasUnsavedChanges(_ url: URL) -> Bool { false }
+    func close(_ url: URL) async { await closeEditor() }
+}
+
+/// A project open in this app's editor holds its `edit.lock` (design §6.3): moving it to the trash closes the editor
+/// first, and once its session let go of the lock the project goes. A `close` that leaves the session open (as the app's
+/// was before Task 39 wired it) finds the editor's own lock and says the project is open in another app.
+@MainActor @Test func trashingAProjectOpenHereWaitsForItsEditorToLetGo() async throws {
+    try await withTemporaryDirectory { folder in
+        let projects = folder.appending(path: "Projects", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        let url = try #require(try await LibraryFixtures.folder(in: projects, kinds: [.v3]).first)
+        let context = EditContext(
+            app: app, cachesRoot: folder.appending(path: "Caches", directoryHint: .isDirectory), defaultStyle: .toma,
+            now: { Date(timeIntervalSince1970: 1_794_800_000) }, makeID: { $0 + "00000001" })
+        let session = try await EditSession.open(url, take: nil, context: context)
+        #expect(session.access == .editable)
+        let records = LibraryRecordsStore(url: folder.appending(path: "library.json"))
+        func operations(_ app: EditorHere) -> LibraryOperations {
+            LibraryOperations(projectsFolder: projects, fileSystem: SystemFileSystem(), records: records, app: app)
+        }
+
+        #expect(await operations(EditorHere {}).moveToTrash(url) == .failure(.openElsewhere))
+        #expect(try names(in: projects).contains(url.lastPathComponent))
+
+        let trashed = try await operations(EditorHere { await session.close() }).moveToTrash(url).get()
+        #expect(trashed.deletingLastPathComponent().lastPathComponent == ProjectTrash.folderName)
+        #expect(!session.hasUnsavedChanges)
+        await records.flush()
     }
 }
 

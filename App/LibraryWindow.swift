@@ -24,6 +24,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var searchItem: NSSearchToolbarItem?
     /// The frame is saved once a move has settled.
     private var frameSave: Task<Void, Never>?
+    /// Edit ▸ Undo and Redo of the library's actions.
+    private lazy var libraryUndoManager = LibraryUndoManager(model: model)
+    /// What is typed in a text field of the window, undone there.
+    private let textUndoManager = UndoManager()
 
     private static let viewIdentifier = NSToolbarItem.Identifier("library.view")
     private static let sortIdentifier = NSToolbarItem.Identifier("library.sort")
@@ -261,6 +265,17 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     func windowDidBecomeKey(_ notification: Notification) {
         model.windowBecameKey()
+        KeyLibrary.shared.follow(model)
+    }
+
+    func windowDidResignKey(_ notification: Notification) {
+        KeyLibrary.shared.stopFollowing(model)
+    }
+
+    /// Edit ▸ Undo and Redo (⌘Z, ⇧⌘Z): the library's history (`LibraryUndoManager`), unless a text field is being edited
+    /// (a name, the search), whose typing they undo then.
+    func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
+        window.firstResponder is NSText ? textUndoManager : libraryUndoManager
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -282,6 +297,7 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 
     func windowWillClose(_ notification: Notification) {
+        KeyLibrary.shared.stopFollowing(model)
         frameSave?.cancel()
         saveFrame()
         Task {
@@ -292,10 +308,37 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
     }
 }
 
+/// Edit ▸ Undo and Redo (⌘Z, ⇧⌘Z) of the library's window (design §6.3): its history (`LibraryActionRunner`), whose steps
+/// are undone and done again whole, as the window's own buttons did; the window validates the items with it and sends them
+/// through it, so a key and the menu are the same one command. Nothing is registered in it.
+final class LibraryUndoManager: UndoManager {
+    private weak var model: LibraryModel?
+
+    init(model: LibraryModel) {
+        self.model = model
+        super.init()
+        disableUndoRegistration()
+    }
+
+    override var canUndo: Bool { model?.actions.canUndo == true && !LibraryWork.shared.isStopped }
+    override var canRedo: Bool { model?.actions.canRedo == true && !LibraryWork.shared.isStopped }
+    override var undoActionName: String { "" }
+    override var redoActionName: String { "" }
+
+    override func undo() {
+        model?.perform(.undo)
+    }
+
+    override func redo() {
+        model?.perform(.redo)
+    }
+}
+
 /// The library's content beside the sidebar (design §6.1): a strip if there is one, what an action could not do, in the
 /// trash its Vaciar la papelera…, then the grid or the list, or what an empty section says (design §10), with the trash
-/// notice under them; ⌘1, ⌘2, ⌘F, ⌘O and ⌘↓, as the Finder has them, and the actions' ⌘D, ⌘⌫, ⌘Z and ⇧⌘Z (design §6.3).
-/// Packages dropped on it go to Other places, or are shown if they are in the projects folder (design §6.2).
+/// notice under them; ⌘1, ⌘2, ⌘F, ⌘O and ⌘↓, as the Finder has them, and the actions' ⌘D and ⌘⌫ (design §6.3); ⌘Z and
+/// ⇧⌘Z are Edit ▸ Undo and Redo's (`LibraryUndoManager`). Packages dropped on it go to Other places, or are shown if they
+/// are in the projects folder (design §6.2).
 struct LibraryContentView: View {
     let model: LibraryModel
     /// ⌘F: the toolbar's search field takes the keys.
@@ -365,18 +408,6 @@ struct LibraryContentView: View {
             }
             .keyboardShortcut(.delete, modifiers: .command)
             .disabled(model.selection.selected.isEmpty)
-            Button(LibraryActions.undoTitle) {
-                guard !LibraryActions.textFieldTakes(Selector(("undo:"))) else { return }
-                model.perform(.undo)
-            }
-            .keyboardShortcut("z", modifiers: .command)
-            .disabled(!model.actions.canUndo)
-            Button(LibraryActions.title(.redo, items: [])) {
-                guard !LibraryActions.textFieldTakes(Selector(("redo:"))) else { return }
-                model.perform(.redo)
-            }
-            .keyboardShortcut("z", modifiers: [.command, .shift])
-            .disabled(!model.actions.canRedo)
         }
         .opacity(0)
         .frame(width: 0, height: 0)

@@ -14,8 +14,8 @@ import os
 /// lines on their way to the disk get their last attempt) and waited for, within `editorsTimeLimit`. Last, once the take
 /// is closed, the library's copies are waited for, without a time limit: a copy is never left half done (design §6.8),
 /// and a take pauses a copy without clones, so they are not waited for when the take did not close in time. A take
-/// started while the copies are waited for is closed before the quit goes ahead. The library's copies and its gate are
-/// `LibraryWork`'s.
+/// started while the copies are waited for is closed before the quit goes ahead, within the same time limit. The
+/// library's copies and its gate are `LibraryWork`'s.
 @MainActor
 public final class QuitSequencer {
     /// How long quitting waits for the take to close.
@@ -179,8 +179,10 @@ public final class QuitSequencer {
         Task {
             if closesEditors { await closeEditorsWithinTimeLimit() }
             // Also a copy a command already under way began while the editors closed.
-            if takeClosed, copying || libraryWork.isCopying { await finishCopies() }
-            reply(takeClosed)
+            var closed = takeClosed
+            if takeClosed, copying || libraryWork.isCopying { closed = await finishCopies() }
+            if !closed, takeClosed { logQuittingBeforeTheTakeClosed() }
+            reply(closed)
         }
     }
 
@@ -206,13 +208,32 @@ public final class QuitSequencer {
     /// Returns once the library's copies are done (a copy the take paused goes on once it is closed; it is never left
     /// half done, design §6.8), without a time limit, and the take is closed after them: one started while they were
     /// waited for (a copy's last step, "Duplicar como"'s first edit, or since the take was closed) is closed before the
-    /// quit goes ahead, and closing costs nothing without one.
-    private func finishCopies() async {
+    /// quit goes ahead, with the same `quitTimeLimit` as the first close, and closing costs nothing without one. Whether
+    /// the take closed: one that did not within the limit is not waited for, nor are the copies it keeps paused.
+    private func finishCopies() async -> Bool {
         Self.logger.notice("Quitting while the library copies a project: waiting for the copy")
         repeat {
             await libraryWork.waitForCopies()
-            await closeTake()
+            guard await closeTakeWithinTimeLimitAgain() else { return false }
         } while libraryWork.isCopying
+        return true
+    }
+
+    /// Closes the take once more, and returns whether it closed within `quitTimeLimit`; one that did not goes on closing.
+    private func closeTakeWithinTimeLimitAgain() async -> Bool {
+        let first = FirstOf()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let deadline = Task {
+                try? await sleep(Self.quitTimeLimit)
+                guard !Task.isCancelled, first.take() else { return }
+                continuation.resume(returning: false)
+            }
+            Task {
+                await closeTake()
+                deadline.cancel()
+                if first.take() { continuation.resume(returning: true) }
+            }
+        }
     }
 
     /// Not "the take stays recoverable": a start still waiting for the answer to the microphone prompt has

@@ -60,6 +60,12 @@ struct LibraryHost {
     var hasUnsavedChanges: (URL) -> Bool = { _ in false }
     /// Opens 1b's recovery on the package at the URL, a take that did not finish saving (design §6.6: Recuperar).
     var recover: (URL) -> Void = { _ in }
+    /// An action of the library moved a package (renamed it, or into or out of the trash): the app tells it again where
+    /// the packages its editors have open are (`setOpenEditors`), and an editor of one shows where it is now.
+    var moved: () -> Void = {}
+    /// The records (`library.json`) of `LibraryPaths.records`, if the app keeps the one store of them it shares with the
+    /// editors' actions; otherwise the window reads its own.
+    var records: (@Sendable () async -> LibraryRecordsStore)?
 }
 
 /// A section of the grid: a date group when it is sorted by date, otherwise all the cards with no heading.
@@ -248,8 +254,12 @@ final class LibraryModel {
         started = true
         let paths = self.paths, fileSystem = self.fileSystem
         let index = Task.detached(priority: .userInitiated) { LibraryIndex.load(from: paths.index) }
-        // `LibraryRecordsStore` reads its file as it is made: never on the main thread.
-        let store = Task.detached(priority: .userInitiated) { LibraryRecordsStore(url: paths.records) }
+        // `LibraryRecordsStore` reads its file as it is made: never on the main thread. The app's, if it keeps one.
+        let shared = host.records
+        let store = Task.detached(priority: .userInitiated) { () -> LibraryRecordsStore in
+            if let shared { return await shared() }
+            return LibraryRecordsStore(url: paths.records)
+        }
         let context = Task.detached(priority: .utility) { Self.makeContext() }
         contextTask = context
         let volume = Task.detached(priority: .utility) { Self.lookAtVolume(of: paths.projectsFolder, fileSystem) }
@@ -853,6 +863,11 @@ extension LibraryModel {
     /// Whether an editor of this app has the package at `url` open, as the app last said.
     func isOpenHere(_ url: URL) -> Bool {
         live.openHere.contains(url.standardizedFileURL.path)
+    }
+
+    /// Whether that editor opened it read-only because another app has it open (its `edit.lock` is the other app's).
+    func isOpenElsewhere(_ url: URL) -> Bool {
+        live.openElsewhere.contains(url.standardizedFileURL.path)
     }
 
     /// The project known at `url`, if any.

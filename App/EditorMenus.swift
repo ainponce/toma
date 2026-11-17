@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import Editing
+import Library
 import Observation
 import ProjectFormat
 import SwiftUI
@@ -112,8 +113,11 @@ extension EditorModel {
 // MARK: - The window
 
 extension EditorWindowController {
+    /// The session's edits (`EditorUndoManager`); while the bar's name is being edited, what is typed in it: renaming is
+    /// not an edit of the document (design §6.7).
     @objc func windowWillReturnUndoManager(_ window: NSWindow) -> UndoManager? {
-        model.undoManager
+        if projectActions.isRenaming, window.firstResponder is NSText { return nameUndoManager }
+        return model.undoManager
     }
 
     /// Closing while a change couldn't be saved (the amber banner is up) asks first (design §5.9): "Keep Open", the default,
@@ -193,13 +197,13 @@ extension EditorWindowController {
 
     /// Whether this editor has the package `identity` open: its package where it is now (it may have been moved while
     /// open), or the path it was opened from until its session opens.
-    func showsPackage(_ identity: PackageIdentity) -> Bool {
-        PackageIdentity(currentPackageURL) == identity
+    func showsPackage(_ identity: AppSupport.PackageIdentity) -> Bool {
+        AppSupport.PackageIdentity(currentPackageURL) == identity
     }
 
-    /// Where its package is now: the session follows it when it is moved while open.
+    /// Where its package is now: the session follows it when it is moved while open; once closed, where it was last seen.
     var currentPackageURL: URL {
-        (model.panelSession?.packageURL ?? packageURL).standardizedFileURL
+        model.currentLocation.standardizedFileURL
     }
 }
 
@@ -222,10 +226,21 @@ final class KeyEditor: ObservableObject {
         var speed: Double?
     }
 
+    /// What the File menu offers for the key editor's project as a whole (design §6.7).
+    struct ProjectFile: Equatable {
+        var canRename: Bool
+        var canDuplicate: Bool
+        /// The formats of Duplicate As: the two the project is not in.
+        var otherAspects: [Aspect]
+        var canMoveToTrash: Bool
+    }
+
     /// Whether the key editor shows its panel; `nil` while no editor is the key window.
     @Published private(set) var panelVisible: Bool?
     /// The key editor's project; `nil` while no editor is the key window or its project is not open.
     @Published private(set) var project: Project?
+    /// What File offers for the key editor's project; `nil` while no editor is the key window.
+    @Published private(set) var file: ProjectFile?
     private weak var model: EditorModel?
     /// Grows with each editor followed: an observation of the one before is not renewed.
     private var generation = 0
@@ -259,42 +274,142 @@ final class KeyEditor: ObservableObject {
         model?.askCustomSpeed()
     }
 
+    func rename() {
+        model?.projectActions?.startRenaming()
+    }
+
+    func duplicate(as aspect: Aspect?) {
+        model?.projectActions?.duplicate(as: aspect)
+    }
+
+    func showInFinder() {
+        model?.projectActions?.showInFinder()
+    }
+
+    func moveToTrash() {
+        model?.projectActions?.moveToTrash()
+    }
+
     private func follow(_ model: EditorModel?) {
         self.model = model
         generation += 1
         track(generation)
     }
 
-    /// Reads the followed model's panel and project, and reads them again when what was read changes.
+    /// Reads the followed model's panel, project and what File offers, and reads them again when what was read changes.
     private func track(_ generation: Int) {
         guard generation == self.generation else { return }
-        let (panel, next) = withObservationTracking {
-            (model?.panelVisible, model.flatMap { model in
-                model.document.map {
-                    Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets)
+        let (panel, next, nextFile) = withObservationTracking {
+            (
+                model?.panelVisible,
+                model.flatMap { model in
+                    model.document.map {
+                        Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets)
+                    }
+                },
+                model?.projectActions.map { actions in
+                    ProjectFile(
+                        canRename: actions.canRename && !actions.isRenaming, canDuplicate: actions.canDuplicate,
+                        otherAspects: actions.otherAspects, canMoveToTrash: actions.canMoveToTrash)
                 }
-            })
+            )
         } onChange: { [weak self] in
             // Before the change: read once it is made.
             Task { @MainActor in self?.track(generation) }
         }
         if panelVisible != panel { panelVisible = panel }
         if project != next { project = next }
+        if file != nextFile { file = nextFile }
     }
 }
 
-/// File ▸ Open… (⌘O, design §5.1), and the editor's Project menu: Format (16:9 · 9:16 · 1:1, as the bar's selector),
-/// Frames per Second (24 · 25 · 30 · 50 · 60) and the Speed of the selected clips, or of the one under the playhead (the
-/// track bar's presets and "Custom Speed…", for the keyboard: design §5.10), of the key editor's project, each an edit
-/// that is undone like any other. The project's frames per second change only here.
+/// The library whose window is key, for File ▸ Rename (design §11): whether it renames a card now, followed through the
+/// model's observation, as `KeyEditor` follows an editor. Its window's delegate says when it becomes key and stops being
+/// key.
+@MainActor
+final class KeyLibrary: ObservableObject {
+    static let shared = KeyLibrary()
+
+    /// Whether Rename edits the name of the one card selected; `nil` while the library is not the key window.
+    @Published private(set) var canRename: Bool?
+    private weak var model: LibraryModel?
+    /// Grows with each library followed: an observation of the one before is not renewed.
+    private var generation = 0
+
+    private init() {}
+
+    func follow(_ model: LibraryModel) {
+        follow(Optional(model))
+    }
+
+    func stopFollowing(_ model: LibraryModel) {
+        guard self.model === model else { return }
+        follow(nil)
+    }
+
+    /// File ▸ Rename: the name of the card selected is edited.
+    func rename() {
+        guard let model else { return }
+        model.perform(.startRenaming, on: model.selection.selected)
+    }
+
+    private func follow(_ model: LibraryModel?) {
+        self.model = model
+        generation += 1
+        track(generation)
+    }
+
+    private func track(_ generation: Int) {
+        guard generation == self.generation else { return }
+        let next = withObservationTracking {
+            model.map { model -> Bool in
+                guard model.actions.renaming == nil, model.selection.selected.count == 1, let id = model.selection.selected.first,
+                    let item = model.shown.first(where: { $0.summary.identity == id })
+                else { return false }
+                return LibraryActionRules.reaches(.startRenaming, item, busy: model.actions.busy[id] != nil)
+            }
+        } onChange: { [weak self] in
+            Task { @MainActor in self?.track(generation) }
+        }
+        if canRename != next { canRename = next }
+    }
+}
+
+/// File ▸ Open… (⌘O, design §5.1); then, of the key editor's project as a whole (1c design §6.7): Rename (also of the
+/// key library's card, §11), Duplicate (⇧⌘S), Duplicate As ▸ (the two other formats), Show in Finder and Move to Trash
+/// (which closes the window); none of them takes a key the library's window has (⌘D, ⌘⌫). And the editor's Project menu:
+/// Format (16:9 · 9:16 · 1:1, as the bar's selector), Frames per Second (24 · 25 · 30 · 50 · 60) and the Speed of the
+/// selected clips, or of the one under the playhead (the track bar's presets and "Custom Speed…", for the keyboard: design
+/// §5.10), of the key editor's project, each an edit that is undone like any other. The project's frames per second
+/// change only here.
 struct ProjectCommands: Commands {
     let app: AppDelegate
     @ObservedObject var editor = KeyEditor.shared
+    @ObservedObject var library = KeyLibrary.shared
 
     var body: some Commands {
         CommandGroup(after: .newItem) {
             Button("Open…") { app.openProject() }
                 .keyboardShortcut("o")
+            Divider()
+            let file = editor.file
+            Button(LibraryActions.title(.startRenaming, items: [])) {
+                if file != nil { editor.rename() } else { library.rename() }
+            }
+            .disabled(!(file?.canRename ?? library.canRename ?? false))
+            Button(LibraryActions.title(.duplicate, items: [])) { editor.duplicate(as: nil) }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+                .disabled(file?.canDuplicate != true)
+            Menu(LibraryActions.duplicateAsTitle) {
+                ForEach(file?.otherAspects ?? [], id: \.self) { aspect in
+                    Button(LibraryActions.title(aspect)) { editor.duplicate(as: aspect) }
+                }
+            }
+            .disabled(file?.canDuplicate != true || file?.otherAspects.isEmpty != false)
+            Button(String(localized: "Show in Finder")) { editor.showInFinder() }
+                .disabled(file == nil)
+            Button(LibraryActions.title(.moveToTrash, items: [])) { editor.moveToTrash() }
+                .disabled(file?.canMoveToTrash != true)
         }
         CommandMenu("Project") {
             let project = editor.project

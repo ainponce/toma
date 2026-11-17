@@ -25,6 +25,17 @@ final class RecoveryPrompt {
     /// Scans `folder`. At launch it only speaks up when there is something to recover, or a damaged project
     /// it has not mentioned before; from the menu it also says when there is nothing.
     func run(in folder: URL, atLaunch: Bool) async {
+        await run(atLaunch: atLaunch, asking: true) { RecoveryScanner.scan(directory: folder) }
+    }
+
+    /// Scans the one package at `url` (the library's Recuperar, 1c design §6.6): what it has to recover is recovered
+    /// without asking again, since that is what the user asked for; if there is nothing, it says so, as the menu does.
+    func run(package url: URL) async {
+        await run(atLaunch: false, asking: false) { RecoveryScanner.scan(package: ProjectPackage(url: url)) }
+    }
+
+    /// Scans with `scan`, off the main thread, and offers to recover what it found (`asking`), or recovers it at once.
+    private func run(atLaunch: Bool, asking: Bool, scan: @escaping @Sendable () -> [ScanResult]) async {
         guard !isRunning else {
             if !atLaunch {
                 let alert = NSAlert()
@@ -36,7 +47,7 @@ final class RecoveryPrompt {
         isRunning = true
         defer { isRunning = false }
 
-        let results = await Task.detached(priority: .userInitiated) { RecoveryScanner.scan(directory: folder) }.value
+        let results = await Task.detached(priority: .userInitiated) { scan() }.value
         var recoverable: [(package: ProjectPackage, takeID: String)] = []
         var damaged: [RepairNotice] = []
         for result in results {
@@ -68,14 +79,17 @@ final class RecoveryPrompt {
             return
         }
 
-        let alert = NSAlert()
-        alert.messageText = String(localized: "We found \(recoverable.count) recordings that didn't finish saving. Recover them?")
-        alert.informativeText = Self.repairList(mentioned)
-        alert.addButton(withTitle: String(localized: "Recover"))
-        alert.addButton(withTitle: String(localized: "Later", comment: "Button: leave the unfinished recordings as they are for now"))
-        let response = show(alert)
+        var recovers = true
+        if asking {
+            let alert = NSAlert()
+            alert.messageText = String(localized: "We found \(recoverable.count) recordings that didn't finish saving. Recover them?")
+            alert.informativeText = Self.repairList(mentioned)
+            alert.addButton(withTitle: String(localized: "Recover"))
+            alert.addButton(withTitle: String(localized: "Later", comment: "Button: leave the unfinished recordings as they are for now"))
+            recovers = show(alert) == .alertFirstButtonReturn
+        }
         repairNotices.markShown(mentioned)
-        guard response == .alertFirstButtonReturn else { return }
+        guard recovers else { return }
 
         let takes = recoverable
         let (closed, failures) = await Task.detached(priority: .userInitiated) { await Self.recover(takes) }.value

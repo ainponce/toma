@@ -6261,6 +6261,17 @@
         }
       }
     },
+    "This project is in the trash: it opens read-only." : {
+      "comment" : "Editor banner: a project of the trash, which can be looked at, not edited; Restore is beside it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto está en la papelera: se abre solo para ver."
+          }
+        }
+      }
+    },
     "This project is on a disk that can't be written to: changes can't be saved." : {
       "comment" : "Editor banner: the project's disk or folder can't be written",
       "localizations" : {

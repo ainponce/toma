@@ -22,6 +22,9 @@ public protocol LibraryActionHost: AnyObject, Sendable {
     func hasUnsavedChanges(_ url: URL) -> Bool
     /// Closes the editor of the package at `url`, which writes what is pending and lets go of its lock; returns once it did.
     func close(_ url: URL) async
+    /// The field where the name of `identity` is edited is still open: a name the disk refuses is said beside it
+    /// (`nameRefusal`); once it is closed (Esc after ↩), in `messages`.
+    func isRenaming(_ identity: PackageIdentity) -> Bool
     /// The context documents are edited with, once it is made; `nil` only if it never will be (the window closed).
     func editContext() async -> EditContext?
 
@@ -96,7 +99,8 @@ public final class LibraryActionRunner {
         public var paused: Bool
     }
 
-    /// The disk refused the name asked for a project (taken meanwhile, too long for it): what the field beside it says.
+    /// The disk refused the name asked for a project (taken meanwhile, too long for it): what the field beside it says,
+    /// while it is open; once it is closed, the refusal is one of `messages`.
     public struct NameRefusal: Equatable, Sendable {
         public var identity: PackageIdentity
         public var problem: NameProblem
@@ -252,7 +256,7 @@ public final class LibraryActionRunner {
                 guard renamed != url else { return }
                 record([.renamed(from: url, to: renamed)])
                 moved(id, from: url, to: renamed)
-            case .failure(.name(let problem)):
+            case .failure(.name(let problem)) where host?.isRenaming(id) == true:
                 nameRefusal = NameRefusal(identity: id, problem: problem)
             case .failure(let failure):
                 report([.of(failure, doing: .rename, name: summary.name, isElsewhere: summary.place == .elsewhere)])

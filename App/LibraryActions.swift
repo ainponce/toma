@@ -154,14 +154,23 @@ final class LibraryActions: LibraryActionHost {
         await model?.locate(summary) ?? URL(filePath: summary.path, directoryHint: .isDirectory)
     }
 
-    func isOpenHere(_ url: URL) -> Bool { model?.isOpenHere(url) ?? false }
+    /// An editor of this app holds the package's `edit.lock`: one open read-only because another app has it does not, so
+    /// the lock is asked about before a rename (design §6.6).
+    func isOpenHere(_ url: URL) -> Bool {
+        guard let model else { return false }
+        return model.isOpenHere(url) && !model.isOpenElsewhere(url)
+    }
+
+    func isRenaming(_ identity: Library.PackageIdentity) -> Bool { renaming == identity }
     func hasUnsavedChanges(_ url: URL) -> Bool { model?.host.hasUnsavedChanges(url) ?? false }
     func close(_ url: URL) async { await model?.host.close(url) }
     func editContext() async -> EditContext? { await model?.madeContext() }
 
-    /// The cards settle with `Motion.trackItem`; one that leaves the section shrinks to 90 % and fades (design §9).
+    /// The cards settle with `Motion.trackItem`; one that leaves the section shrinks to 90 % and fades (design §9). The app
+    /// is told: an editor may have it open.
     func showMoved(_ identity: Library.PackageIdentity, to url: URL, place: Place) {
         withAnimation(Self.settling) { model?.showMoved(identity, to: url, place: place) }
+        model?.host.moved()
     }
 
     func forget(_ identities: [Library.PackageIdentity]) {
@@ -195,9 +204,12 @@ final class LibraryActions: LibraryActionHost {
 
     func look(at urls: [URL]) { model?.look(at: urls) }
 
+    /// The section changes only if the one shown does not show them all (N3: a package dropped while it is in Favorites
+    /// stays there).
     func select(_ identities: Set<Library.PackageIdentity>, in section: LibrarySection) {
         guard let model else { return }
-        if model.section != section { model.section = section }
+        let shown = Set(model.shown.map(\.summary.identity))
+        if model.section != section, !identities.isSubset(of: shown) { model.section = section }
         model.select(identities)
     }
 

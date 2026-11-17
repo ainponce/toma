@@ -40,6 +40,12 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         get { model.onAccessChanged }
         set { model.onAccessChanged = newValue }
     }
+    /// The package is somewhere else now (renamed or moved while open); set by the app delegate, which tells the library.
+    var onPackageMoved: () -> Void = {}
+    /// What the editor does with its project as a whole (design §6.7).
+    let projectActions: EditorProjectActions
+    /// What is typed in the bar's name while it is edited, undone there (`windowWillReturnUndoManager`).
+    let nameUndoManager = UndoManager()
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
@@ -55,12 +61,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     private var timelineItem: NSSplitViewItem?
 
     init(
-        packageURL: URL, takeID: String?, exportGate: ExportGate, onRecovered: @escaping (URL) -> Void,
-        onClose: @escaping () -> Void
+        packageURL: URL, takeID: String?, exportGate: ExportGate, projectHost: EditorProjectHost,
+        onRecovered: @escaping (URL) -> Void, onClose: @escaping () -> Void
     ) {
         self.packageURL = packageURL
         self.onClose = onClose
-        model = EditorModel(packageURL: packageURL, takeID: takeID, exportGate: exportGate)
+        let model = EditorModel(
+            packageURL: packageURL, takeID: takeID, exportGate: exportGate, projectsFolder: projectHost.projectsFolder)
+        self.model = model
+        projectActions = EditorProjectActions(model: model, host: projectHost)
+        model.projectActions = projectActions
         model.onRecovered = onRecovered
         timeline = TimelineViewController(model: model)
         keyboard = EditorKeyboard(model: model, timeline: timeline.timelineView)
@@ -78,6 +88,8 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.autorecalculatesKeyViewLoop = true
         window.keyboard = keyboard
         super.init(window: window)
+        projectActions.closeWindow = { [weak self] in await self?.closeAndWait() }
+        model.onLocationChanged = { [weak self] in self?.packageMoved() }
         keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
         model.askCustomSpeed = { [weak timeline] in timeline?.timelineView.interaction.askCustomSpeed() }
         // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
@@ -166,6 +178,15 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
 
     func windowDidBecomeKey(_ notification: Notification) {
         KeyEditor.shared.follow(model)
+        // The library or the Finder may have renamed it, or restored it from the trash, meanwhile.
+        model.packageMayHaveMoved()
+    }
+
+    /// The window shows the package where it is now: its name (the Window menu's) and its proxy icon.
+    private func packageMoved() {
+        window?.title = model.name
+        window?.representedURL = model.location
+        onPackageMoved()
     }
 
     func windowDidResignKey(_ notification: Notification) {
@@ -203,6 +224,14 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         closeForQuit()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
+    }
+
+    /// Closes the window without asking (the library, or Move to Trash, asked what it had to: `EditorClosing`'s amber
+    /// banner refuses it before) and returns once its session closed: what was pending written and `edit.lock` let go
+    /// (design §6.3). An export in progress is cancelled, as closing does.
+    func closeAndWait() async {
+        window?.close()
+        await model.waitUntilClosed()
     }
 
     /// The window closes, or the app quits with it open: the timeline stops and the model closes (its state written, its
