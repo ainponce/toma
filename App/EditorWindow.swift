@@ -44,8 +44,10 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     var onPackageMoved: () -> Void = {}
     /// What the editor does with its project as a whole (design §6.7).
     let projectActions: EditorProjectActions
-    /// What is typed in the bar's name while it is edited, undone there (`windowWillReturnUndoManager`).
+    /// What is typed in the bar's name while it is edited, undone there (`windowWillReturnUndoManager`); emptied when the
+    /// editing ends, so nothing typed there is undone later in another field.
     let nameUndoManager = UndoManager()
+    private var editingEnded: (any NSObjectProtocol)?
     /// The panel's width and what it can be resized to.
     private static let panelWidth: CGFloat = 300
     private static let panelWidthRange: ClosedRange<CGFloat> = 260...380
@@ -88,7 +90,16 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.autorecalculatesKeyViewLoop = true
         window.keyboard = keyboard
         super.init(window: window)
-        projectActions.closeWindow = { [weak self] in await self?.closeAndWait() }
+        projectActions.closeWindow = { [weak self] in await self?.closeAsking() ?? true }
+        editingEnded = NotificationCenter.default.addObserver(
+            forName: NSText.didEndEditingNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let text = note.object as? NSText
+            MainActor.assumeIsolated {
+                guard let self, text?.window === self.window else { return }
+                self.nameUndoManager.removeAllActions()
+            }
+        }
         model.onLocationChanged = { [weak self] in self?.packageMoved() }
         keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
         model.askCustomSpeed = { [weak timeline] in timeline?.timelineView.interaction.askCustomSpeed() }
@@ -151,11 +162,13 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         nil
     }
 
-    /// Loads the project again if it could not be shown, for example after it was recovered.
+    /// Loads the project again if it could not be shown, for example after it was recovered; one shown is looked at again,
+    /// in case it went into the trash or out of it (opened again from there, design §6.4).
     func reloadIfNeeded() {
         switch model.state {
         case .failed, .unfinished: model.load()
-        case .opening, .recovering, .ready, .newerDocument: break
+        case .ready: model.packageMayHaveMoved()
+        case .opening, .recovering, .newerDocument: break
         }
     }
 
@@ -221,17 +234,26 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        if let editingEnded { NotificationCenter.default.removeObserver(editingEnded) }
+        editingEnded = nil
         closeForQuit()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
     }
 
-    /// Closes the window without asking (the library, or Move to Trash, asked what it had to: `EditorClosing`'s amber
-    /// banner refuses it before) and returns once its session closed: what was pending written and `edit.lock` let go
-    /// (design §6.3). An export in progress is cancelled, as closing does.
-    func closeAndWait() async {
+    /// Closes the window for the library or Move to Trash (design §6.3), and returns once its session closed (a session
+    /// still opening too): what was pending written and `edit.lock` let go. While its export runs it asks first, as
+    /// closing the window does (`confirmCancellingTheExport`); `false`, and the window stays, if the user keeps it.
+    /// Changes that couldn't be saved were refused before (`losesEditsIfClosed`).
+    func closeAsking() async -> Bool {
+        guard !model.closed else {
+            await model.waitUntilClosed()
+            return true
+        }
+        if model.isExporting, !(await confirmCancellingTheExport()) { return false }
         window?.close()
         await model.waitUntilClosed()
+        return true
     }
 
     /// The window closes, or the app quits with it open: the timeline stops and the model closes (its state written, its

@@ -55,8 +55,13 @@ private final class Copies: Sendable {
 
     func locate(_ summary: ProjectSummary) async -> URL { URL(filePath: summary.path, directoryHint: .isDirectory) }
     func isOpenHere(_ url: URL) -> Bool { open.contains(url.standardizedFileURL.path) }
+    func holdsEditLock(_ url: URL) -> Bool { isOpenHere(url) }
     func hasUnsavedChanges(_ url: URL) -> Bool { false }
-    func close(_ url: URL) async { open.remove(url.standardizedFileURL.path) }
+
+    func close(_ url: URL) async -> Bool {
+        open.remove(url.standardizedFileURL.path)
+        return true
+    }
     func isRenaming(_ identity: PackageIdentity) -> Bool { renaming == identity }
     func editContext() async -> EditContext? { await context() }
 

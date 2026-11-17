@@ -181,6 +181,28 @@ extension EditorWindowController {
         }
     }
 
+    /// "An export is in progress. Close the window and cancel it?" over the window, brought forward, as closing it asks:
+    /// whether the user said Close. Not while another question is up.
+    func confirmCancellingTheExport() async -> Bool {
+        guard let window, !model.isAskingToClose else { return false }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(
+            localized: "An export is in progress. Close the window and cancel it?", comment: "Closing an editor's window while its export runs")
+        alert.informativeText = String(localized: "The video being exported isn't saved. The project isn't changed.")
+        let answers = ExportClosingAnswer.allCases
+        for answer in answers {
+            alert.addButton(withTitle: Self.title(answer)).hasDestructiveAction = answer.closesTheWindow
+        }
+        model.isAskingToClose = true
+        defer { model.isAskingToClose = false }
+        NSApp.activate()
+        window.makeKeyAndOrderFront(nil)
+        let response = window.isVisible ? await alert.beginSheetModal(for: window) : alert.runModal()
+        let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        return answers.indices.contains(index) && answers[index].closesTheWindow
+    }
+
     private static func title(_ answer: UnsavedChangesAnswer) -> String {
         switch answer {
         case .keepOpen: String(localized: "Keep Open", comment: "Closing with unsaved changes: the window stays open (the default)")
@@ -204,6 +226,11 @@ extension EditorWindowController {
     /// Where its package is now: the session follows it when it is moved while open; once closed, where it was last seen.
     var currentPackageURL: URL {
         model.currentLocation.standardizedFileURL
+    }
+
+    /// Where its package is, and the path it was opened from, for the library (`EditorPlace`).
+    var place: EditorPlace {
+        EditorPlace(openedFrom: packageURL, firstSeen: model.firstSeen, current: currentPackageURL)
     }
 }
 

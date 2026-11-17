@@ -154,16 +154,11 @@ final class LibraryActions: LibraryActionHost {
         await model?.locate(summary) ?? URL(filePath: summary.path, directoryHint: .isDirectory)
     }
 
-    /// An editor of this app holds the package's `edit.lock`: one open read-only because another app has it does not, so
-    /// the lock is asked about before a rename (design §6.6).
-    func isOpenHere(_ url: URL) -> Bool {
-        guard let model else { return false }
-        return model.isOpenHere(url) && !model.isOpenElsewhere(url)
-    }
-
+    func isOpenHere(_ url: URL) -> Bool { model?.isOpenHere(url) ?? false }
+    func holdsEditLock(_ url: URL) -> Bool { model?.host.holdsEditLock(url) ?? false }
     func isRenaming(_ identity: Library.PackageIdentity) -> Bool { renaming == identity }
     func hasUnsavedChanges(_ url: URL) -> Bool { model?.host.hasUnsavedChanges(url) ?? false }
-    func close(_ url: URL) async { await model?.host.close(url) }
+    func close(_ url: URL) async -> Bool { await model?.host.close(url) ?? false }
     func editContext() async -> EditContext? { await model?.madeContext() }
 
     /// The cards settle with `Motion.trackItem`; one that leaves the section shrinks to 90 % and fades (design §9). The app
@@ -402,6 +397,10 @@ extension LibraryActions {
         case .copyCannotBeOpened: String(localized: "the copy can't be opened", comment: "The library: why Duplicate As kept the format")
         case .copyCannotBeEdited: String(localized: "the copy can't be edited", comment: "The library: why Duplicate As kept the format")
         case .editNotSaved: String(localized: "the change couldn't be saved", comment: "The library: why Duplicate As kept the format")
+        case .editorKeptOpen:
+            String(
+                localized: "its window stayed open to finish its export",
+                comment: "The library: why a project open in an editor did not go to the trash: the user kept its export running")
         case .other: String(localized: "the disk didn't allow it", comment: "The library: why an action failed")
         }
     }

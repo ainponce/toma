@@ -95,8 +95,8 @@ public enum SegmentMedia {
 }
 
 extension ProjectPackage {
-    /// The file a manifest path (relative to the package root) names.
+    /// The file a manifest path (relative to the package root) names, where the package is now (`currentURL`).
     public func fileURL(_ relativePath: String) -> URL {
-        url.appendingPathComponent(relativePath, isDirectory: false)
+        currentURL.appendingPathComponent(relativePath, isDirectory: false)
     }
 }

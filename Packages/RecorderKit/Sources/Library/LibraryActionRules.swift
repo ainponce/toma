@@ -153,6 +153,8 @@ public enum LibraryReason: Hashable, Sendable {
     case copyCannotBeEdited
     /// The copy's edit could not be written.
     case editNotSaved
+    /// Its editor stayed open: the user kept its export running.
+    case editorKeptOpen
     /// Anything else the disk refused.
     case other
 }
@@ -194,6 +196,7 @@ public enum LibraryMessage: Hashable, Sendable {
             default: return .couldNot(doing, name: name, .notThere)
             }
         case .unsavedChanges: return .couldNot(doing, name: name, .unsavedChanges)
+        case .editorKeptOpen: return .couldNot(doing, name: name, .editorKeptOpen)
         case .name(let problem): return .couldNot(doing, name: name, reason(problem))
         case .posix(let code): return .couldNot(doing, name: name, reason(code))
         }
@@ -202,7 +205,7 @@ public enum LibraryMessage: Hashable, Sendable {
     /// What deleting `names` for good tells when it failed: one project by its name, several by how many.
     public static func ofDeletion(_ failure: LibraryFailure, names: [String]) -> LibraryMessage {
         switch failure {
-        case .recording, .openElsewhere, .someNotDeleted:
+        case .recording, .openElsewhere, .someNotDeleted, .editorKeptOpen:
             return of(failure, doing: .delete, name: names.first ?? "", isElsewhere: false)
         case .outsideProjectsFolder, .posix:
             guard names.count == 1 else { return .notDeleted(count: names.count) }

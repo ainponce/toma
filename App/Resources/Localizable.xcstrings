@@ -7336,6 +7336,17 @@
         }
       }
     },
+    "its window stayed open to finish its export" : {
+      "comment" : "The library: why a project open in an editor did not go to the trash: the user kept its export running",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "su ventana quedó abierta para terminar la exportación"
+          }
+        }
+      }
+    },
     "landscape" : {
       "comment" : "The library: what follows a project's name in a 16:9 copy's name («Demo horizontal»)",
       "localizations" : {

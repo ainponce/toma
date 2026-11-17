@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editors: [URL: EditorWindowController] = [:]
     /// The editors whose windows closed and whose sessions are still closing (`EditorModel.closing`), by a number of
     /// their own, with where their packages were: a quit waits for them too, and the library counts them as open.
-    private var closingEditors: [Int: (url: URL, task: Task<Void, Never>)] = [:]
+    private var closingEditors: [Int: (place: EditorPlace, task: Task<Void, Never>)] = [:]
     private var closedEditors = 0
     private var onboarding: OnboardingWindowController?
     private var notices: ThirdPartyNoticesWindowController?
@@ -316,10 +316,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let model = LibraryModel(
                 paths: .standard(projectsFolder: recording.projectsFolder),
                 host: LibraryHost(
-                    open: { [weak self] url in self?.showEditor(for: url, take: nil) },
+                    open: { [weak self] url in
+                        // Once a quit began, no editor opens (a copy that "Duplicar como" opens): the quit closed them.
+                        guard !LibraryWork.shared.isStopped else { return }
+                        self?.showEditor(for: url, take: nil)
+                    },
                     record: { [weak self] in self?.island?.invoke() },
                     recordShortcut: { [weak self] in self?.hotKeys.bindings.combos[.islandOrStop]?.displayString ?? "" },
-                    close: { [weak self] url in await self?.closeEditor(at: url) },
+                    close: { [weak self] url in await self?.closeEditor(at: url) ?? true },
+                    holdsEditLock: { [weak self] url in self?.editor(at: url)?.model.access == .editable },
                     hasUnsavedChanges: { [weak self] url in self?.editor(at: url)?.model.losesEditsIfClosed ?? false },
                     recover: { [weak self] url in self?.recoverPackage(url) },
                     moved: { [weak self] in self?.libraryMovedPackages() },
@@ -500,13 +505,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// After recovery: every recovered project is the last project in turn, open editors on them load again,
-    /// and a few more open (`RecoveredProjects`); the recovery alert has listed them all.
+    /// and a few more open (`RecoveredProjects`); the recovery alert has listed them all. The library looks at them again
+    /// (its Recuperar, design §6.6: a card of Other places is not watched).
     private func showRecovered(_ urls: [URL]) {
         guard let last = urls.last else { return }
         recording.noteRecovered(last)
-        let (reload, open) = RecoveredProjects.editors(recovered: urls, openEditors: Set(editors.keys))
-        for url in reload { editors[url]?.reloadIfNeeded() }
+        let openPaths = editors.values.reduce(into: Set<URL>()) { $0.formUnion($1.place.paths) }
+        let (reload, open) = RecoveredProjects.editors(recovered: urls, openEditors: openPaths)
+        for url in reload { editor(at: url)?.reloadIfNeeded() }
         for url in open { showEditor(for: url, take: nil) }
+        library?.model.look(at: urls)
     }
 
     /// Opens the project at `url` in an editor. One open already (also through a symlink, or after it was moved) comes to
@@ -533,7 +541,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] in
             guard let self, let made, made.window?.isVisible != true else { return }  // shown again meanwhile
             editors = editors.filter { $0.value !== made }
-            if let closing = made.model.closing { keep(closing, of: made.currentPackageURL) }
+            if let closing = made.model.closing { keep(closing, of: made.place) }
             updateActivationPolicy()
             // What the editor wrote as it closed, where its package is now.
             tellLibraryEditors()
@@ -562,12 +570,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Keeps the closing of an editor's session whose window closed, of the package at `url`, until it ends, for a quit
+    /// Keeps the closing of an editor's session whose window closed, of the package at `place`, until it ends, for a quit
     /// and the library to wait for.
-    private func keep(_ closing: Task<Void, Never>, of url: URL) {
+    private func keep(_ closing: Task<Void, Never>, of place: EditorPlace) {
         closedEditors += 1
         let number = closedEditors
-        closingEditors[number] = (url.standardizedFileURL, closing)
+        closingEditors[number] = (place, closing)
         Task {
             await closing.value
             closingEditors[number] = nil
@@ -587,20 +595,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             moved: { [weak self] in self?.tellLibraryEditors() })
     }
 
-    /// The editor whose package is at `url` now: it follows a package renamed or moved while open. Otherwise the one opened
-    /// from `url` (its session names the package by its real path, which differs when the projects folder is reached
-    /// through a link).
+    /// The editor whose package `url` names now (`EditorPlace`): it follows a package renamed or moved while open, and a
+    /// project that took the path of one that moved is another one's.
     private func editor(at url: URL) -> EditorWindowController? {
-        let key = url.standardizedFileURL
-        return editors.values.first { $0.currentPackageURL == key } ?? editors[key]
+        let open = Array(editors.values)
+        return EditorPlace.index(at: url, in: open.map(\.place)).map { open[$0] }
     }
 
-    /// The library's `close` (design §6.3): the window of the editor of the package at `url` closes, and this returns once
-    /// its session closed (what was pending written, `edit.lock` let go), and that of a window closed just before.
-    private func closeEditor(at url: URL) async {
+    /// The library's `close` (design §6.3): the window of the editor of the package at `url` closes, after asking if its
+    /// export runs, and this returns once its session closed (what was pending written, `edit.lock` let go), and that of
+    /// a window closed just before. `false` if the user kept the window open.
+    private func closeEditor(at url: URL) async -> Bool {
         let key = url.standardizedFileURL
-        if let editor = editor(at: key) { await editor.closeAndWait() }
-        for closing in Array(closingEditors.values) where closing.url == key { await closing.task.value }
+        if let editor = editor(at: key), !(await editor.closeAsking()) { return false }
+        for closing in Array(closingEditors.values) where EditorPlace.index(at: key, in: [closing.place]) != nil {
+            await closing.task.value
+        }
+        return true
     }
 
     /// The library moved packages: the editors that have one of them open show where it is now (one restored from the
@@ -650,15 +661,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if !urls.isEmpty { model.look(at: urls) }
     }
 
-    /// The library is told which packages the editors have open: where they are now, and where they were opened from (the
-    /// same package, by the path the library knows it by, unless it moved: `editor(at:)`), those of windows whose sessions
-    /// are still closing too; and which of them another app has too.
+    /// The library is told which packages the editors have open, by the paths that name them now (`EditorPlace`: where they
+    /// are, and where they were opened from while they have not moved), those of windows whose sessions are still closing
+    /// too; and which of them another app has too.
     private func tellLibraryEditors() {
         guard let model = library?.model else { return }
-        let open = editors.flatMap { [$0.key, $0.value.currentPackageURL] } + closingEditors.values.map(\.url)
-        model.setOpenEditors(Set(open))
-        let elsewhere = editors.filter { $0.value.isOpenElsewhere }
-        model.setOpenElsewhere(Set(elsewhere.flatMap { [$0.key, $0.value.currentPackageURL] }))
+        let open = editors.values.map(\.place) + closingEditors.values.map(\.place)
+        model.setOpenEditors(open.reduce(into: Set()) { $0.formUnion($1.paths) })
+        let elsewhere = editors.values.filter(\.isOpenElsewhere).map(\.place)
+        model.setOpenElsewhere(elsewhere.reduce(into: Set()) { $0.formUnion($1.paths) })
     }
 
     /// An editor changed its project: the library looks at it once the edits pause.

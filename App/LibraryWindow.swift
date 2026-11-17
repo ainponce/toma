@@ -26,8 +26,10 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
     private var frameSave: Task<Void, Never>?
     /// Edit ▸ Undo and Redo of the library's actions.
     private lazy var libraryUndoManager = LibraryUndoManager(model: model)
-    /// What is typed in a text field of the window, undone there.
+    /// What is typed in a text field of the window, undone there; emptied when the editing ends, so nothing typed in one
+    /// field is undone later in another.
     private let textUndoManager = UndoManager()
+    private var editingEnded: (any NSObjectProtocol)?
 
     private static let viewIdentifier = NSToolbarItem.Identifier("library.view")
     private static let sortIdentifier = NSToolbarItem.Identifier("library.sort")
@@ -59,6 +61,15 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
         window.toolbar = toolbar
         window.delegate = self
         followTheModel()
+        editingEnded = NotificationCenter.default.addObserver(
+            forName: NSText.didEndEditingNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let text = note.object as? NSText
+            MainActor.assumeIsolated {
+                guard let self, text?.window === self.window else { return }
+                self.textUndoManager.removeAllActions()
+            }
+        }
     }
 
     @available(*, unavailable)
@@ -298,6 +309,8 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
 
     func windowWillClose(_ notification: Notification) {
         KeyLibrary.shared.stopFollowing(model)
+        if let editingEnded { NotificationCenter.default.removeObserver(editingEnded) }
+        editingEnded = nil
         frameSave?.cancel()
         saveFrame()
         Task {

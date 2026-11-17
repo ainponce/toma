@@ -45,7 +45,6 @@ public final class TrackFrameReader: @unchecked Sendable {
         var file: String
         var start: HostTime
         var end: HostTime?
-        var url: URL
         /// False once it is known to hold nothing readable.
         var usable: Bool
         /// Its file and video track, loaded once. The asset is kept because a track does not retain it.
@@ -109,6 +108,8 @@ public final class TrackFrameReader: @unchecked Sendable {
     private let lock = NSLock()
     /// The track read (`TrackRecord.id`).
     let trackID: String
+    /// Its files are found in it when they are opened: where it is then, if it follows the package (`handle`).
+    private let package: ProjectPackage
     private var segments: [Segment]
     private var open: OpenReader?
     private var openedReaders = 0
@@ -131,14 +132,15 @@ public final class TrackFrameReader: @unchecked Sendable {
     var gaps: [Gap] { lock.withLock { recordedGaps } }
 
     /// Never throws and reads nothing yet: every segment is classified without opening it, and opened when it
-    /// is first needed.
+    /// is first needed, where the package is then (`ProjectPackage.fileURL`).
     public init(package: ProjectPackage, track: TrackRecord) {
         trackID = track.id
+        self.package = package
         let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
         segments = records.map { record in
             Segment(
                 index: record.index, file: record.file, start: record.startHostTime, end: record.endHostTime,
-                url: package.fileURL(record.file), usable: true, media: nil, retryAfter: nil, loadFailure: nil, failure: nil)
+                usable: true, media: nil, retryAfter: nil, loadFailure: nil, failure: nil)
         }
         for (k, record) in records.enumerated() {
             let reason: MissingVideo.Reason
@@ -427,7 +429,7 @@ public final class TrackFrameReader: @unchecked Sendable {
         // A load that failed never succeeds: it is not tried again.
         if segments[k].loadFailure != nil { return nil }
         if let retryAfter = segments[k].retryAfter, HostTime.now() < retryAfter { return nil }
-        let asset = AVURLAsset(url: segments[k].url)
+        let asset = AVURLAsset(url: package.fileURL(segments[k].file))
         switch trackLoader(asset) {
         case .loaded(let track):
             segments[k].media = (asset, track)

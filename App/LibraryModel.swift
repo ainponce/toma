@@ -54,8 +54,11 @@ struct LibraryHost {
     /// The shortcut that opens the island, as the empty library names it: the user's.
     var recordShortcut: () -> String = { HotKeyBindings.defaults.combos[.islandOrStop]?.displayString ?? "" }
     /// Closes the editor window of the package at the URL, which writes what is pending and lets go of its `edit.lock`,
-    /// and returns once it did: before the project goes to the trash or is deleted (design §6.3).
-    var close: (URL) async -> Void = { _ in }
+    /// and returns once it did: before the project goes to the trash or is deleted (design §6.3). It asks first if that
+    /// editor's export runs: `false` if the user kept it open.
+    var close: (URL) async -> Bool = { _ in true }
+    /// Whether the editor of the package at the URL holds its `edit.lock`: it can edit it (not one open for viewing only).
+    var holdsEditLock: (URL) -> Bool = { _ in false }
     /// Whether the editor of the package at the URL has changes it could not write (1b §5.9: the disk is full).
     var hasUnsavedChanges: (URL) -> Bool = { _ in false }
     /// Opens 1b's recovery on the package at the URL, a take that did not finish saving (design §6.6: Recuperar).
@@ -863,11 +866,6 @@ extension LibraryModel {
     /// Whether an editor of this app has the package at `url` open, as the app last said.
     func isOpenHere(_ url: URL) -> Bool {
         live.openHere.contains(url.standardizedFileURL.path)
-    }
-
-    /// Whether that editor opened it read-only because another app has it open (its `edit.lock` is the other app's).
-    func isOpenElsewhere(_ url: URL) -> Bool {
-        live.openElsewhere.contains(url.standardizedFileURL.path)
     }
 
     /// The project known at `url`, if any.

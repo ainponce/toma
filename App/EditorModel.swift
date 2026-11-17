@@ -101,6 +101,9 @@ final class EditorModel {
     /// Where the package was last seen: where it was opened, then where its session finds it (renamed or moved while
     /// open, design §6.7). It opens again from here.
     private(set) var location: URL
+    /// Where the first session found the package (its real path), once one opened: until the package moves from there, the
+    /// path it was opened from still names it (`EditorPlace`).
+    @ObservationIgnored private(set) var firstSeen: URL?
     /// The session's document, the one edits apply to; `nil` until the session opens.
     private(set) var document: EditDocument?
     /// What the output lasts, in seconds.
@@ -192,13 +195,19 @@ final class EditorModel {
         default: false
         }
     }
-    /// The project is in the trash: it opened read-only (1c decision 36), with Restaurar in its banner.
-    var isInTrash: Bool { access == .readOnly(.inTrash) }
+    /// The package is in the trash of the projects folder, as last looked at (when it opened, and when it may have moved):
+    /// it opens for viewing only (1c decision 36), with Restaurar, and a take there that did not finish saving is offered
+    /// to be restored, never recovered.
+    private(set) var isInTrash = false
+    /// Whether the package is being looked at again (`packageMayHaveMoved`): one look at a time.
+    @ObservationIgnored private var isLookingAtTheTrash = false
     /// "Custom Speed…" of the Project menu: the timeline's sheet; set by the window.
     @ObservationIgnored var askCustomSpeed: () -> Void = {}
 
     @ObservationIgnored private let exportGate: ExportGate
     @ObservationIgnored private var session: EditSession?
+    /// The session's package folder, held open for the readers (`currentProject(of:)`); let go with the session.
+    @ObservationIgnored private var packageHandle: PackageHandle?
     @ObservationIgnored private var renderer: FrameRenderer?
     @ObservationIgnored private var engine: PreviewEngine?
     @ObservationIgnored private var builder: RevisionBuilder?
@@ -329,19 +338,24 @@ final class EditorModel {
         let url = location, take = takeID, projectsFolder = projectsFolder
         previous?.onChange = nil
         session = nil
+        packageHandle = nil
         openTask = Task {
             // Its lock would make the project open read-only.
             await previous?.close()
-            // A take still marked as being recorded is not opened: opening a version 3 project writes its document.
-            let (unfinished, inTrash) = await Task.detached {
-                (Self.unfinishedTake(at: url, take: take), ProjectTrash.contains(url, projectsFolder: projectsFolder))
-            }.value
-            if let unfinished {
-                guard !closed else { return }
-                state = .unfinished(takeID: unfinished)
+            // The trash first, then a take still marked as being recorded, which is not opened: opening a version 3 project
+            // writes its document (`EditorOpening`).
+            let opening = await Task.detached { EditorOpening.of(url, take: take, projectsFolder: projectsFolder) }.value
+            guard !closed else { return }
+            isInTrash = opening.isInTrash
+            let forced: ReadOnlyReason?
+            switch opening {
+            case .unfinished(let takeID, _):
+                state = .unfinished(takeID: takeID)
                 return
+            case .session(let reason):
+                forced = reason
             }
-            let context = await Self.editContext(forcedReadOnly: inTrash ? .inTrash : nil)
+            let context = await Self.editContext(forcedReadOnly: forced)
             let session: EditSession
             do {
                 session = try await EditSession.open(url, take: take, context: context)
@@ -375,6 +389,7 @@ final class EditorModel {
         access = session.access
         onAccessChanged()
         session.onChange = { [weak self] in self?.sessionChanged() }
+        if firstSeen == nil { firstSeen = session.packageURL.standardizedFileURL }
         noteLocation(session.packageURL)
         if let shown = Self.unshowable(session.access) {
             show(shown)
@@ -382,6 +397,11 @@ final class EditorModel {
         }
         // Read already before the window showed, unless its manifest could not be read then.
         await restoreWindowState(sessionCaches: session.caches)
+        // The package's folder, held open off the main thread: what the preview and the export open later is found where
+        // the package is then, also after a rename (design §6.7).
+        let at = session.packageURL
+        packageHandle = await Task.detached { PackageHandle(url: at) }.value
+        guard !closed, self.session === session else { return }
         let document = session.document, revision = session.revision
         let project = currentProject(of: session)
         let size = previewSize(of: document)
@@ -475,19 +495,11 @@ final class EditorModel {
         }
     }
 
-    /// A take still marked as being recorded, by its manifest: the take asked for, or the last one.
-    private nonisolated static func unfinishedTake(at url: URL, take: String?) -> String? {
-        guard let data = try? SafeRead.regularFile(at: ProjectPackage(url: url).manifestURL),
-            let manifest = try? ProjectJSON.decoder().decode(Manifest.self, from: data)
-        else { return nil }
-        let record = take.map { id in manifest.takes.first { $0.id == id } } ?? manifest.takes.last
-        return record?.status == .recording ? record?.id : nil
-    }
-
-    /// The project at the package's current place: the package may have been moved while open.
+    /// The project at the package's current place: the package may have been moved while open. Its readers find its files
+    /// where it is when they open them (`packageHandle`), also after it moves again.
     private func currentProject(of session: EditSession) -> LoadedProject {
         var project = session.project
-        project.package = ProjectPackage(url: session.packageURL)
+        project.package = ProjectPackage(url: session.packageURL, handle: packageHandle)
         return project
     }
 
@@ -543,12 +555,21 @@ final class EditorModel {
     /// Recovers the unfinished take from what is on disk, wherever the project is (the menu's recovery only
     /// looks in the projects folder), and loads it. `TakeRecovery` refuses a take that is being recorded and
     /// a project of a newer format, and never deletes recorded data.
+    ///
+    /// Never in the trash (Task 39, ruling 2): recovery writes into the package, which emptying the trash would delete; it
+    /// is restored first. Asked again here, wherever it went since it was opened.
     func recover() {
-        guard case .unfinished(let takeID) = state else { return }
+        guard case .unfinished(let takeID) = state, !isInTrash else { return }
         state = .recovering
-        let url = location
+        let url = location, projectsFolder = projectsFolder
         let package = ProjectPackage(url: url)
         Task {
+            guard await Task.detached(operation: { EditorOpening.mayRecover(url, projectsFolder: projectsFolder) }).value else {
+                guard !closed else { return }
+                isInTrash = true
+                state = .unfinished(takeID: takeID)
+                return
+            }
             do {
                 // Off the main thread: recovery reads every open segment.
                 let take = try await Task.detached(priority: .userInitiated) {
@@ -1168,17 +1189,34 @@ final class EditorModel {
         session?.packageURL.standardizedFileURL ?? location
     }
 
-    /// The package was renamed or moved, by this editor or by the library (design §6.7): the name and the window follow it,
-    /// and the session goes on writing into it. Restored from the trash while open here, it opens again editable.
+    /// The package was renamed or moved, by this editor, the library or the Finder (design §6.7): the name and the window
+    /// follow it, and the session goes on writing into it. If it went into the trash or out of it, it opens again, for
+    /// viewing only or editable (1c decision 36), once, after one look at where it is; a take that did not finish saving
+    /// only switches between Recover and Restore. An editable one with changes that couldn't be saved stays as it is:
+    /// opening again would lose them.
     func packageMayHaveMoved() {
         guard !closed else { return }
         if let session { noteLocation(session.packageURL) }
-        guard isInTrash, state == .ready else { return }
-        let url = location, projectsFolder = projectsFolder
+        switch state {
+        case .ready, .unfinished: break
+        case .opening, .recovering, .failed, .newerDocument: return
+        }
+        guard !isLookingAtTheTrash else { return }
+        isLookingAtTheTrash = true
+        let url = location, projectsFolder = projectsFolder, wasInTrash = isInTrash
         Task {
-            let stillInTrash = await Task.detached { ProjectTrash.contains(url, projectsFolder: projectsFolder) }.value
-            guard !closed, isInTrash, location == url, !stillInTrash else { return }
-            load()
+            let inTrash = await Task.detached { ProjectTrash.contains(url, projectsFolder: projectsFolder) }.value
+            isLookingAtTheTrash = false
+            guard !closed, location == url, isInTrash == wasInTrash, inTrash != wasInTrash else { return }
+            switch state {
+            case .ready:
+                guard !(inTrash && losesEditsIfClosed) else { return }
+                load()
+            case .unfinished:
+                isInTrash = inTrash
+            case .opening, .recovering, .failed, .newerDocument:
+                break
+            }
         }
     }
 
@@ -1232,11 +1270,15 @@ final class EditorModel {
         session?.onChange = nil
         // Where it was last seen, for who looks at it once it closed.
         if let session { noteLocation(session.packageURL) }
-        closing = Task { [session] in
+        // A session still opening (at first, or again after Restore) closes itself once it has opened: waited for too, so
+        // that once this ends no `edit.lock` of this editor is held.
+        closing = Task { [session, openTask] in
+            await openTask?.value
             await session?.close()
             await export?.value
         }
         session = nil
+        packageHandle = nil
     }
 
     /// Returns once `close()` has closed the session and the export it cancelled has ended.

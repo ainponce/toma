@@ -40,8 +40,9 @@ final class EditorProjectActions {
     /// An action on the project is under way.
     private(set) var isBusy = false
 
-    /// Closes the editor's window and returns once its session closed; set by the window.
-    @ObservationIgnored var closeWindow: @MainActor @Sendable () async -> Void = {}
+    /// Closes the editor's window, asking first while its export runs, and returns once its session closed; `false` if the
+    /// user kept it open. Set by the window.
+    @ObservationIgnored var closeWindow: @MainActor @Sendable () async -> Bool = { true }
     @ObservationIgnored private weak var model: EditorModel?
     @ObservationIgnored private let host: EditorProjectHost
 
@@ -68,7 +69,15 @@ final class EditorProjectActions {
         return [model.location, model.packageURL].contains { !isElsewhere($0) }
     }
 
-    var canRestore: Bool { isFree && model?.isInTrash == true }
+    /// Restore, in the trash: from the banner of a project opened for viewing, or in place of Recover for a take that did
+    /// not finish saving (Task 39, ruling 2).
+    var canRestore: Bool {
+        guard !isBusy, !LibraryWork.shared.isStopped, let model, model.isInTrash else { return false }
+        switch model.state {
+        case .ready, .unfinished: return true
+        case .opening, .recovering, .failed, .newerDocument: return false
+        }
+    }
 
     /// The formats Duplicate As offers: the two the project is not in.
     var otherAspects: [Aspect] {
@@ -131,7 +140,7 @@ final class EditorProjectActions {
         Task {
             defer { isBusy = false }
             // This editor's own `edit.lock` is not asked about: it goes on writing into the renamed package.
-            switch await operations(openHere: ownLock).rename(url, to: name) {
+            switch await operations(openHere: true, holdsLock: ownLock).rename(url, to: name) {
             case .success(let renamed):
                 isRenaming = false
                 model.follow(to: renamed)
@@ -165,7 +174,8 @@ final class EditorProjectActions {
             }
             await model.flushed()
             let url = model.currentLocation
-            let operations = await operations(openHere: model.access == .editable, unsaved: model.hasUnsavedChanges)
+            let operations = await operations(
+                openHere: true, holdsLock: model.access == .editable, unsaved: model.hasUnsavedChanges)
             let existing = await operations.namesOfProjects(in: url.deletingLastPathComponent())
             let words = LibraryActions.words
             let name =
@@ -189,6 +199,8 @@ final class EditorProjectActions {
                     return
                 }
             }
+            // Once a quit began, no editor opens: the quit closed the editors already.
+            guard !LibraryWork.shared.isStopped else { return }
             host.open(made.copy)
         }
     }
@@ -214,9 +226,10 @@ final class EditorProjectActions {
         }
         isBusy = true
         let url = model.currentLocation, name = model.name, unsaved = model.losesEditsIfClosed
+        let holdsLock = model.access == .editable
         Task {
             defer { isBusy = false }
-            switch await operations(openHere: true, unsaved: unsaved).moveToTrash(url) {
+            switch await operations(openHere: true, holdsLock: holdsLock, unsaved: unsaved).moveToTrash(url) {
             case .success(let trashed):
                 // Where it came from is on the disk before anything else: Restore goes back there.
                 await host.records().flush()
@@ -250,10 +263,12 @@ final class EditorProjectActions {
 
     // MARK: -
 
-    /// The library's operations on this editor's package, told what the app knows of it: whether this editor holds its
-    /// `edit.lock` (`openHere`) and has changes not on the disk (`unsaved`).
-    private func operations(openHere: Bool = false, unsaved: Bool = false) async -> LibraryOperations {
-        let app = EditorPackageState(isRecording: host.isRecording, openHere: openHere, unsaved: unsaved, close: closeWindow)
+    /// The library's operations on this editor's package, told what the app knows of it: whether this editor is to be
+    /// closed before the package goes to the trash (`openHere`), whether it holds the package's `edit.lock` (`holdsLock`)
+    /// and whether it has changes not on the disk (`unsaved`).
+    private func operations(openHere: Bool = false, holdsLock: Bool = false, unsaved: Bool = false) async -> LibraryOperations {
+        let app = EditorPackageState(
+            isRecording: host.isRecording, openHere: openHere, holdsLock: holdsLock, unsaved: unsaved, close: closeWindow)
         return LibraryOperations(
             projectsFolder: host.projectsFolder, fileSystem: SystemFileSystem(), records: await host.records(), app: app)
     }
@@ -281,21 +296,24 @@ final class EditorProjectActions {
 private final class EditorPackageState: LibraryAppState {
     private let recording: @Sendable () -> Bool
     private let openHere: Bool
+    private let holdsLock: Bool
     private let unsaved: Bool
-    private let closeWindow: @MainActor @Sendable () async -> Void
+    private let closeWindow: @MainActor @Sendable () async -> Bool
 
     init(
-        isRecording: @escaping @Sendable () -> Bool, openHere: Bool, unsaved: Bool,
-        close: @escaping @MainActor @Sendable () async -> Void
+        isRecording: @escaping @Sendable () -> Bool, openHere: Bool, holdsLock: Bool, unsaved: Bool,
+        close: @escaping @MainActor @Sendable () async -> Bool
     ) {
         recording = isRecording
         self.openHere = openHere
+        self.holdsLock = holdsLock
         self.unsaved = unsaved
         closeWindow = close
     }
 
     func isRecording() -> Bool { recording() }
     func isOpenHere(_ url: URL) -> Bool { openHere }
+    func holdsEditLock(_ url: URL) -> Bool { holdsLock }
     func hasUnsavedChanges(_ url: URL) -> Bool { unsaved }
-    func close(_ url: URL) async { await closeWindow() }
+    func close(_ url: URL) async -> Bool { await closeWindow() }
 }

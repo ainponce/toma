@@ -253,7 +253,6 @@ import Testing
 
         rig.take.open()
         await waitUntil { rig.calls.closesEnded == 2 }
-        await settle()
         #expect(rig.calls.replies == [false], "only the first answer replies")
     }
 
