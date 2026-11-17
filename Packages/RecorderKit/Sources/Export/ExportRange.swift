@@ -48,11 +48,9 @@ public struct ExportRange: Equatable, Sendable {
     }
 
     /// Whether the range lasts at least a frame at `fps`, give or take the marks' nanosecond: `(end − start + 1) × fps ≥
-    /// 10⁹`. An export of a range that does not is refused, and the export sheet disables Export for it (1c design §7.1).
+    /// 10⁹` (`TimeMap.lastsAFrame`, the one rule the export sheet checks too). An export of a range that does not is
+    /// refused, and the export sheet disables Export for it (1c design §7.1).
     public func lastsAFrame(fps: Int) -> Bool {
-        guard fps > 0, end > start else { return false }
-        // (end − start + 1) × fps ≥ 10⁹, without the + 1 overflowing.
-        let (product, overflow) = (end - start).multipliedReportingOverflow(by: Int64(fps))
-        return overflow || product >= 1_000_000_000 - Int64(fps)
+        TimeMap.lastsAFrame(start: start, end: end, frameRate: fps)
     }
 }

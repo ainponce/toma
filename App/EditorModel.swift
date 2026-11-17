@@ -1145,7 +1145,7 @@ final class EditorModel {
                 case .mp4:
                     showAlert(String(localized: "Couldn't export the video"), informative: userFacingDescription(of: error), style: .warning)
                 case .gif:
-                    showAlert(Self.gifExportFailure(error), style: .warning)
+                    showAlert(Self.gifExportFailure(error, destination: destination), style: .warning)
                 }
             }
             exportGate.isBusy = false
@@ -1164,32 +1164,49 @@ final class EditorModel {
         }
     }
 
-    /// "Couldn't export the GIF: …" (1c design §7.4) with why, in words: `GIFExportError`, and the `ExportError` and
-    /// `RenderError` the GIF's export also throws (a destination it never writes to, a frame the GPU could not draw).
-    private static func gifExportFailure(_ error: any Error) -> String {
+    /// "Couldn't export the GIF: …" (1c design §7.4) with why, in words: `GIFExportError` (a write that failed says which
+    /// error, by name for the common ones), and the `ExportError` and `RenderError` the GIF's export also throws (a
+    /// destination it never writes to, a frame the GPU could not draw).
+    private static func gifExportFailure(_ error: any Error, destination: URL) -> String {
         let reason: String =
             switch error {
             case GIFExportError.diskFull, ExportError.diskFull:
                 // The library's words for it, the same in the GIF's alert.
                 String(localized: "the disk is full")
-            case GIFExportError.write, ExportError.writerFailed:
-                String(localized: "the file couldn't be written", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            // The library's words for the common ones.
+            case GIFExportError.write(.EACCES), GIFExportError.write(.EPERM):
+                String(localized: "there's no permission")
+            case GIFExportError.write(.EROFS):
+                String(localized: "the disk is read-only")
+            case GIFExportError.write(.EIO):
+                String(localized: "the disk failed")
+            case GIFExportError.write(let code):
+                String(localized: "the file couldn't be written (error \(code.rawValue))", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
             case GIFExportError.rangeShorterThanAFrame, ExportError.nothingToExport:
                 String(localized: "the range lasts less than a frame", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+            case ExportError.destinationNotAllowed where isInsideAProject(destination):
+                String(localized: "it can't be saved inside a project; choose a folder outside it", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
             case ExportError.destinationNotAllowed:
-                String(
-                    localized: "it can't be saved there; choose a folder outside the project",
-                    comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+                // A folder or a link where the GIF would go.
+                String(localized: "it can't be saved there", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
             case RenderError.noMetalDevice:
-                String(
-                    localized: "this Mac has no graphics device to draw it",
-                    comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
+                String(localized: "this Mac has no graphics device to draw it", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
             case is RenderError:
                 String(localized: "its frames couldn't be drawn", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
             default:
                 String(localized: "an unexpected error occurred", comment: "Why a GIF couldn't be exported, after “Couldn't export the GIF:”")
             }
         return String(format: String(localized: "Couldn't export the GIF: %@", comment: "An alert: a GIF export that failed, and why"), reason)
+    }
+
+    /// Whether `destination` is inside a project package (`*.toma`), where an export never writes, as given or with its
+    /// links resolved.
+    private static func isInsideAProject(_ destination: URL) -> Bool {
+        [destination.standardizedFileURL, destination.resolvingSymlinksInPath()].contains { url in
+            url.pathComponents.dropLast().contains {
+                ($0 as NSString).pathExtension.lowercased() == ProjectPackage.fileExtension.lowercased()
+            }
+        }
     }
 
     /// What the export had to leave out, one sentence for each kind.
@@ -1319,8 +1336,8 @@ final class EditorModel {
 
     // MARK: - Closing
 
-    /// The window closed, or the app quits: its state is written, playback stops, an export in progress is cancelled (the
-    /// window asked first), and the session closes (its last lines, snapshot and lock), off the main thread (`closing`). An "Apply Default Style" waiting for room on a full disk gives up as
+    /// The window closed, or the app quits: its state is written, playback stops, the export sheet ends if it is up, an
+    /// export in progress is cancelled (the window asked first), and the session closes (its last lines, snapshot and lock), off the main thread (`closing`). An "Apply Default Style" waiting for room on a full disk gives up as
     /// the session closes, without applying anything (cancelling its task would apply Toma's gradient instead).
     func close() {
         guard !closed else { return }
@@ -1331,6 +1348,8 @@ final class EditorModel {
         preferencesObserver = nil
         openTask?.cancel()
         followCursorTask?.cancel()
+        // An export sheet still over the window ends: its GIF preview and estimate stop, and the project it holds goes.
+        endExportSheet()
         let export = exportTask
         export?.cancel()
         exportFinishedTask?.cancel()

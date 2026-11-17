@@ -150,7 +150,32 @@ public struct TimeMap: Equatable, Sendable {
 
     /// The frames of the output at `frameRate`: `round(D / 10⁹ × frameRate)`, at least 1.
     public func frameCount(frameRate: Int) -> Int {
-        max(1, Int((durationSeconds * Double(frameRate)).rounded()))
+        Self.frameCount(duration: duration, frameRate: frameRate)
+    }
+
+    /// The frames of an output of `duration` ns at `frameRate`: `round(D / 10⁹ × frameRate)`, at least 1.
+    public static func frameCount(duration: Int64, frameRate: Int) -> Int {
+        max(1, Int((Double(duration) / 1e9 * Double(frameRate)).rounded()))
+    }
+
+    /// Where the export of all of an output of `duration` ns at `frameRate` ends: the end of its last whole frame,
+    /// `frameTime(frameCount(duration:frameRate:), frameRate:)`, up to half a frame before or after `duration`. The MP4 of
+    /// a range is cut there, and the export sheet checks the range so cut (1c design §7.1).
+    public static func exportEnd(duration: Int64, frameRate: Int) -> Int64 {
+        frameTime(frameCount(duration: duration, frameRate: frameRate), frameRate: frameRate)
+    }
+
+    /// Whether output `[start, end)` lasts at least a frame at `frameRate`, give or take the marks' nanosecond:
+    /// `(end − start + 1) × frameRate ≥ 10⁹`. The one rule of the exporters (`ExportRange.lastsAFrame`) and of the export
+    /// sheet (`ExportRangeRules.canExport`), which disables Export for a range that fails it (1c design §7.1).
+    ///
+    /// The nanosecond is the rounding of the marks: they sit on the document's frame grid, each rounded to the nanosecond
+    /// (`frameTime`), so the length between two of them can be 1 ns more or less than that many frames rounded once.
+    public static func lastsAFrame(start: Int64, end: Int64, frameRate: Int) -> Bool {
+        guard frameRate > 0, end > start else { return false }
+        // (end − start + 1) × frameRate ≥ 10⁹, without the + 1 overflowing.
+        let (product, overflow) = (end - start).multipliedReportingOverflow(by: Int64(frameRate))
+        return overflow || product >= 1_000_000_000 - Int64(frameRate)
     }
 
     // MARK: - Private

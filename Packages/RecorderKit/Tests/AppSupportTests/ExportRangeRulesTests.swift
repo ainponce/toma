@@ -56,6 +56,37 @@ import Testing
         #expect(ExportRangeRules.canExport(0..<Int64.max, fps: 60))
     }
 
+    /// An MP4 of a part of the video is cut, as `MP4Exporter` cuts it, where the export of all of it ends (its last whole
+    /// frame, `TimeMap.exportEnd`) before the sheet checks it: marks dragged to the end can last a frame before the cut and
+    /// not after it. A GIF is never cut.
+    @Test func anMP4OfMarksDraggedToTheEndIsCheckedAsTheExporterCutsIt() {
+        // 10.015 s of a 60 fps document; the MP4 at 24 fps, whose last whole frame ends at 10 s.
+        let duration: Int64 = 10_015_000_000
+        let marks: Range<Int64> = TimeMap.frameTime(598, frameRate: 60)..<duration
+        #expect(marks.lowerBound == 9_966_666_667)
+        // Uncut, 48.3 ms: more than a frame of 24 fps (41.7 ms).
+        #expect(ExportRangeRules.canExport(marks, fps: 24))
+        // Cut, 33.3 ms: less.
+        let cut: Range<Int64> = 9_966_666_667..<10_000_000_000
+        #expect(ExportRangeRules.exported(kind: .mp4, range: marks, duration: duration, fps: 24) == cut)
+        #expect(!ExportRangeRules.canExport(kind: .mp4, range: marks, duration: duration, fps: 24))
+        // From frame 597 of the document, 50 ms after the cut: a frame.
+        let earlier: Range<Int64> = TimeMap.frameTime(597, frameRate: 60)..<duration
+        #expect(ExportRangeRules.canExport(kind: .mp4, range: earlier, duration: duration, fps: 24))
+        // The GIF of the same marks is not cut.
+        #expect(ExportRangeRules.exported(kind: .gif, range: marks, duration: duration, fps: 24) == marks)
+        #expect(ExportRangeRules.canExport(kind: .gif, range: marks, duration: duration, fps: 24))
+        // Marks all past the cut leave nothing, at the cut.
+        let pastTheCut: Range<Int64> = 10_005_000_000..<duration
+        let nothing: Range<Int64> = 10_000_000_000..<10_000_000_000
+        #expect(ExportRangeRules.exported(kind: .mp4, range: pastTheCut, duration: duration, fps: 24) == nothing)
+        #expect(!ExportRangeRules.canExport(kind: .mp4, range: pastTheCut, duration: duration, fps: 24))
+        // The MP4 of the whole video is 1b's export: never cut, and never refused, even of less than a frame (one frame).
+        #expect(ExportRangeRules.exported(kind: .mp4, range: 0..<duration, duration: duration, fps: 24) == nil)
+        #expect(ExportRangeRules.canExport(kind: .mp4, range: 0..<10_000_000, duration: 10_000_000, fps: 24))
+        #expect(!ExportRangeRules.canExport(kind: .gif, range: 0..<10_000_000, duration: 10_000_000, fps: 24))
+    }
+
     /// The rule of `ExportRange.lastsAFrame(fps:)` (Export: Task 23's sweep): marks `k` frames of the document apart, on
     /// its grid, last a frame of the export exactly when `k × export ≥ document` frames per second, at every rate.
     @Test func marksOnTheGridLastAFrameAsTheExporterSays() {

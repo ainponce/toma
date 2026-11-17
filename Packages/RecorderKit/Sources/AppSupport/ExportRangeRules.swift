@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import ProjectFormat
 
 /// The export sheet's Range (1c design §7.1): the whole video, or the stretch between the timeline's marks, as output
 /// nanoseconds `[start, end)` of the document's `TimeMap`. The app makes the `ExportRange` the exporters take from it.
@@ -19,14 +20,33 @@ public enum ExportRangeRules {
         }
     }
 
-    /// Whether `range` lasts at least a frame at `fps`, give or take the marks' nanosecond: `(end − start + 1) × fps ≥
-    /// 10⁹`, the rule the exporters check (`ExportRange.lastsAFrame(fps:)`, which the sheet asks). A shorter one is
-    /// not exported, and the sheet disables Export: "The range has to last at least one frame."
+    /// Whether `range` lasts at least a frame at `fps`, give or take the marks' nanosecond: `TimeMap.lastsAFrame`, the one
+    /// rule the exporters check too (`ExportRange.lastsAFrame(fps:)`). A shorter range is not exported, and the sheet
+    /// disables Export: "The range has to last at least one frame."
     public static func canExport(_ range: Range<Int64>, fps: Int) -> Bool {
-        guard fps > 0, !range.isEmpty else { return false }
-        // (end − start + 1) × fps ≥ 10⁹, without the + 1 overflowing.
-        let (product, overflow) = (range.upperBound - range.lowerBound).multipliedReportingOverflow(by: Int64(fps))
-        return overflow || product >= 1_000_000_000 - Int64(fps)
+        TimeMap.lastsAFrame(start: range.lowerBound, end: range.upperBound, frameRate: fps)
+    }
+
+    /// What the exporter draws of `range` of a video of `duration` ns, as `kind` at `fps`: `nil` for the MP4 of all of it,
+    /// 1b's export, which is never cut nor refused (a frame at least); for the MP4 of a part, the range cut, as
+    /// `MP4Exporter` cuts it, to where the export of all of it ends (`TimeMap.exportEnd`, its last whole frame, up to half
+    /// a frame before the video's end); for a GIF, the range itself.
+    public static func exported(kind: ExportKind, range: Range<Int64>, duration: Int64, fps: Int) -> Range<Int64>? {
+        switch kind {
+        case .gif:
+            return range
+        case .mp4:
+            guard range != 0..<duration else { return nil }
+            let end = min(range.upperBound, TimeMap.exportEnd(duration: duration, frameRate: fps))
+            let start = min(max(range.lowerBound, 0), end)
+            return start..<end
+        }
+    }
+
+    /// Whether the sheet can export `range` as `kind` at `fps`: what the exporter draws of it (`exported`) lasts at least
+    /// a frame (`canExport(_:fps:)`). Export is disabled otherwise.
+    public static func canExport(kind: ExportKind, range: Range<Int64>, duration: Int64, fps: Int) -> Bool {
+        exported(kind: kind, range: range, duration: duration, fps: fps).map { canExport($0, fps: fps) } ?? true
     }
 
     /// `range` within `[0, duration)`; empty at the nearer end if it is all outside.

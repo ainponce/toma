@@ -215,13 +215,13 @@ public final class MP4Exporter: Sendable {
     /// The part of the output that the export of `range` draws at `fps`, for a document whose output is `timeMap`: `nil`
     /// for all of it, which `range` is when `nil` or `ExportRange.whole(timeMap)` (the export of 1b:
     /// `TimeMap.frameCount(frameRate:)` frames from 0, one at least); otherwise the range cut to the video, from 0 to where
-    /// the whole export's last frame ends (`TimeMap.frameTime(_:frameRate:)` of its frame count), so a range up to the
-    /// end of the video ends with it.
+    /// the whole export's last frame ends (`TimeMap.exportEnd(duration:frameRate:)`, where the export sheet cuts it too
+    /// before checking it), so a range up to the end of the video ends with it.
     /// - Throws: `ExportError.nothingToExport` when what is left of the range lasts less than a frame at `fps`
     ///   (`ExportRange.lastsAFrame(fps:)`, the rule the GIF refuses it by).
     private static func part(of range: ExportRange?, in timeMap: TimeMap, framesPerSecond fps: Int) throws -> ExportRange? {
         guard let range, range != .whole(timeMap) else { return nil }
-        let videoEnd = TimeMap.frameTime(timeMap.frameCount(frameRate: fps), frameRate: fps)
+        let videoEnd = TimeMap.exportEnd(duration: timeMap.duration, frameRate: fps)
         let part = ExportRange(start: max(range.start, 0), end: min(range.end, videoEnd))
         guard part.lastsAFrame(fps: fps) else { throw ExportError.nothingToExport }
         return part

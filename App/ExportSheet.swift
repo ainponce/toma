@@ -14,7 +14,8 @@ import os
 /// (`ExportPreferences`, in the app's settings); the MP4's frames per second at the project's, every time; the range at
 /// its default for the kind (`ExportRangeRules.defaultRange`) until one is chosen.
 ///
-/// For a GIF it also makes the preview and the estimate (1c design §7.3), as the sheet asks (`makePreviewAndEstimate`).
+/// For a GIF it also makes the preview and the estimate (1c design §7.3) as the options change (`optionsChanged(to:)`),
+/// until the sheet ends (`stop()`).
 @MainActor @Observable
 final class ExportChoices {
     /// The sheet's Range.
@@ -85,11 +86,9 @@ final class ExportChoices {
     @ObservationIgnored private var rangeWasChosen = false
     /// Counts the requests, so a request that was replaced never shows what it made.
     @ObservationIgnored private var generation = 0
-    /// A preview was asked for already: the next ones wait for the options to settle.
-    @ObservationIgnored private var askedBefore = false
-
-    /// How long after the last change the preview and the estimate are made again (1c design §7.3).
-    private static let settleDelay = Duration.milliseconds(300)
+    /// The preview and the estimate of the latest options: the first at once, each change 300 ms after it (1c design
+    /// §7.3), a change cancelling the work before it; stopped when the sheet ends.
+    @ObservationIgnored private let work = SettlingWork<GIFRequest>(settle: .milliseconds(300))
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "ExportSheet")
 
     init(document: EditDocument, project: LoadedProject, marks: TimelineMarks, playhead: Int64, remembered: ExportPreferences) {
@@ -142,13 +141,12 @@ final class ExportChoices {
     /// The frames per second of what is exported: the MP4's or the GIF's.
     var exportFramesPerSecond: Int { kind == .gif ? gifFramesPerSecond : framesPerSecond }
 
-    /// Whether the range lasts at least a frame of the export, as the exporters check it (`ExportRange.lastsAFrame`):
-    /// without it, Export is disabled and the sheet says "The range has to last at least one frame." The sheet's rule in
-    /// AppSupport, `ExportRangeRules.canExport`, is the same (tested on every pair of marks on the grid).
+    /// Whether what the exporter draws of the range lasts at least a frame of the export
+    /// (`ExportRangeRules.canExport(kind:range:duration:fps:)`: the MP4 of a part cut where `MP4Exporter` cuts it, then
+    /// `TimeMap.lastsAFrame`, the one rule `ExportRange.lastsAFrame` is too). Without it, Export is disabled and the sheet
+    /// says "The range has to last at least one frame."
     var lastsAFrame: Bool {
-        let lasts = exportRange.lastsAFrame(fps: exportFramesPerSecond)
-        assert(lasts == ExportRangeRules.canExport(range, fps: exportFramesPerSecond), "the sheet's rule and the exporters' differ")
-        return lasts
+        ExportRangeRules.canExport(kind: kind, range: range, duration: duration, fps: exportFramesPerSecond)
     }
 
     /// The MP4 these choices make of the document.
@@ -209,25 +207,32 @@ final class ExportChoices {
             start: range.lowerBound, end: range.upperBound)
     }
 
-    /// Makes the GIF's preview and estimate for `request`, as the sheet's task for it: the first time at once, then
-    /// `settleDelay` after the last change (a change cancels the task and asks again, and closing the sheet cancels it).
-    /// The preview first, 3 s from the playhead; then the estimate, first from the preview alone and then refined
-    /// (`GIFEstimate.estimates`). For `nil`, nothing is shown.
-    func makePreviewAndEstimate(for request: GIFRequest?) async {
+    /// The options are now `request` (and when the sheet appears): what was shown for the options before goes, and the
+    /// preview and the estimate are made for it, the first time at once and from then on 300 ms after the last change
+    /// (`SettlingWork`). The preview first, 3 s from the playhead; then the estimate, first from the preview alone and
+    /// then refined (`GIFEstimate.estimates`). For `nil` (an MP4, or a range that does not last a frame), nothing.
+    func optionsChanged(to request: GIFRequest?) {
         generation += 1
         let current = generation
         estimate = nil
         estimateFailed = false
-        guard let request else {
-            preview = nil
-            isMakingPreview = false
-            return
+        isMakingPreview = request != nil
+        if request == nil { preview = nil }
+        work.run(for: request) { [weak self] request in
+            await self?.makePreviewAndEstimate(for: request, generation: current)
         }
-        isMakingPreview = true
+    }
+
+    /// The sheet ended: the preview and the estimate under way are cancelled, and none is made again. The work holds
+    /// these choices weakly, so they go, with the project and its package's open folder, as soon as it notices.
+    func stop() {
+        generation += 1
+        work.stop()
+    }
+
+    private func makePreviewAndEstimate(for request: GIFRequest, generation current: Int) async {
         let settings = request.settings
         do {
-            if askedBefore { try await Task.sleep(for: Self.settleDelay) }
-            askedBefore = true
             let data = try await GIFEstimate.preview(project: project, document: document, settings: settings, playhead: playhead)
             guard current == generation, !Task.isCancelled else { return }
             preview = GIFPreviewImage(data, id: current)
@@ -241,18 +246,21 @@ final class ExportChoices {
                 (error as? GIFExportError) != .cancelled
             else { return }
             Self.logger.error("The GIF's preview or estimate failed: \(String(describing: error), privacy: .public)")
+            // Neither the preview nor the estimate of other options is shown for these.
             isMakingPreview = false
+            preview = nil
             estimateFailed = true
         }
     }
 
-    /// "About 3.1 MB · 0:10 · 156 frames", once there is an estimate.
+    /// "About 3.1 MB · 0:10 · 156 frames" ("1 frame" for one), once there is an estimate.
     var estimateText: String? {
         estimate.map { estimate in
-            String(
-                format: String(localized: "About %1$@ · %2$@ · %3$d frames", comment: "The export sheet: the GIF's estimated size, how long it lasts and its frames"),
+            // The catalog's plural of argument 3 (`%#@frames@`) is chosen by the formatting with the locale.
+            String.localizedStringWithFormat(
+                String(localized: "About %1$@ · %2$@ · %3$d frames", comment: "The export sheet: the GIF's estimated size, how long it lasts and its frames"),
                 ByteCountFormatter.string(fromByteCount: estimate.bytes, countStyle: .file), Timecode.duration(estimate.seconds),
-                Int32(clamping: estimate.frames))
+                estimate.frames)
         }
     }
 
@@ -278,23 +286,6 @@ final class ExportChoices {
         case .over50MB:
             String(localized: "A GIF this heavy is better exported as MP4.", comment: "The export sheet: a GIF estimated at more than 50 MB")
         }
-    }
-}
-
-/// The preview GIF as `NSImageView` plays it: decoded by ImageIO (`NSImage`), set to loop whatever "Loop Forever" says
-/// (the preview plays in a loop, 1c design §7.3), with its size in pixels.
-struct GIFPreviewImage {
-    /// Which request made it.
-    let id: Int
-    let image: NSImage
-    let pixels: CGSize
-
-    init?(_ data: Data, id: Int) {
-        guard let image = NSImage(data: data), let rep = image.representations.first as? NSBitmapImageRep else { return nil }
-        rep.setProperty(.loopCount, withValue: 0)
-        self.id = id
-        self.image = image
-        pixels = CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
     }
 }
 
@@ -342,7 +333,10 @@ struct ExportSheet: View {
         }
         .frame(width: choices.kind == .gif ? 740 : 440)
         .fixedSize(horizontal: false, vertical: true)
-        .task(id: request) { await choices.makePreviewAndEstimate(for: request) }
+        // The preview and the estimate follow the options; the sheet's end stops them (`EditorModel.endExportSheet`), and
+        // so does its view going, whichever comes first.
+        .onChange(of: request, initial: true) { _, request in choices.optionsChanged(to: request) }
+        .onDisappear { choices.stop() }
         .onChange(of: choices.estimateText) { _, text in
             // VoiceOver says the estimate as it changes (1c design §11).
             if let text { AccessibilityNotification.Announcement(text).post() }
@@ -476,129 +470,6 @@ struct ExportSheet: View {
     }
 }
 
-/// The GIF's preview (1c design §7.3): the real GIF, in a loop, fitted to 320 × 180 pt; Actual Size shows it 1:1 with
-/// the screen's pixels in a view that scrolls (the dither is only judged so). With "Reduce motion" it does not start by
-/// itself: the first frame, and a button to play it. "Making the preview…" over it while it is made again. VoiceOver
-/// calls it "GIF Preview" and says whether it plays.
-private struct GIFPreviewBox: View {
-    let choices: ExportChoices
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var actualSize = false
-    /// Played or paused with the button; `nil`: as "Reduce motion" says.
-    @State private var playing: Bool?
-
-    private var isPlaying: Bool { playing ?? !reduceMotion }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            ZStack {
-                Rectangle().fill(.quaternary)
-                GIFPreviewView(preview: choices.preview, actualSize: actualSize, playing: isPlaying)
-                    .opacity(choices.isMakingPreview ? 0.4 : 1)
-                if choices.isMakingPreview {
-                    Text("Making the preview…", comment: "The export sheet: while the GIF's preview is made")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .transition(.opacity)
-                }
-            }
-            .frame(width: 320, height: 180)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
-            .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: choices.isMakingPreview)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text("GIF Preview", comment: "VoiceOver: the export sheet's preview of the GIF"))
-            .accessibilityValue(
-                isPlaying
-                    ? Text("Playing", comment: "VoiceOver: the GIF's preview while it plays")
-                    : Text("Paused"))
-            .accessibilityAddTraits(.isImage)
-            HStack(spacing: 8) {
-                Toggle(isOn: $actualSize) {
-                    Text("Actual Size", comment: "The export sheet: the GIF's preview 1:1 with the screen's pixels")
-                }
-                .toggleStyle(.button)
-                if reduceMotion {
-                    Button {
-                        playing = !isPlaying
-                    } label: {
-                        Label(isPlaying ? LocalizedStringKey("Pause") : LocalizedStringKey("Play"), systemImage: isPlaying ? "pause.fill" : "play.fill")
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// The preview in an `NSImageView`, which plays the GIF, inside a scroll view: fitted to it, or 1:1 with the screen's
-/// pixels and scrolled to the middle.
-private struct GIFPreviewView: NSViewRepresentable {
-    let preview: GIFPreviewImage?
-    let actualSize: Bool
-    let playing: Bool
-
-    final class Coordinator {
-        /// The `GIFPreviewImage.id` shown.
-        var shown: Int?
-        var wasActualSize = false
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let imageView = NSImageView()
-        imageView.imageFrameStyle = .none
-        imageView.imageAlignment = .alignCenter
-        imageView.isEditable = false
-        // The SwiftUI view around it is the accessibility element ("GIF Preview").
-        imageView.setAccessibilityElement(false)
-        let scroll = NSScrollView()
-        scroll.drawsBackground = false
-        scroll.borderType = .noBorder
-        scroll.autohidesScrollers = true
-        scroll.documentView = imageView
-        return scroll
-    }
-
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
-        guard let imageView = scroll.documentView as? NSImageView else { return }
-        let coordinator = context.coordinator
-        if coordinator.shown != preview?.id {
-            coordinator.shown = preview?.id
-            imageView.image = preview?.image
-        }
-        imageView.animates = playing
-        if !playing, let rep = preview?.image.representations.first as? NSBitmapImageRep {
-            // Paused, the first frame.
-            rep.setProperty(.currentFrame, withValue: 0)
-            imageView.needsDisplay = true
-        }
-        let box = scroll.contentSize
-        if actualSize, let preview {
-            // One pixel of the GIF on one pixel of the screen.
-            let scale = scroll.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
-            let size = NSSize(width: preview.pixels.width / scale, height: preview.pixels.height / scale)
-            preview.image.size = size
-            imageView.imageScaling = .scaleNone
-            imageView.autoresizingMask = []
-            imageView.frame = NSRect(x: 0, y: 0, width: max(size.width, box.width), height: max(size.height, box.height))
-            scroll.hasHorizontalScroller = size.width > box.width
-            scroll.hasVerticalScroller = size.height > box.height
-            if !coordinator.wasActualSize {
-                let middle = NSPoint(x: (imageView.frame.width - box.width) / 2, y: (imageView.frame.height - box.height) / 2)
-                scroll.contentView.scroll(to: middle)
-                scroll.reflectScrolledClipView(scroll.contentView)
-            }
-        } else {
-            imageView.imageScaling = .scaleProportionallyUpOrDown
-            imageView.autoresizingMask = [.width, .height]
-            imageView.frame = NSRect(origin: .zero, size: box)
-            scroll.hasHorizontalScroller = false
-            scroll.hasVerticalScroller = false
-        }
-        coordinator.wasActualSize = actualSize && preview != nil
-    }
-}
-
 extension Notification.Name {
     /// The export sheet remembers another resolution or quality: each editor draws its paused preview at the resolution
     /// (plan decision 11).
@@ -620,9 +491,10 @@ extension EditorModel {
                 guard let window, let sheet = window.attachedSheet else { return }
                 // The document as it is when "Export…" is chosen.
                 let document = export ? self?.panelSession?.document : nil
-                window.endSheet(sheet)
+                let job = choices.job, kind = choices.kind, preferences = choices.preferences
+                Self.end(sheet, of: window, choices: choices)
                 guard let self, let document else { return }
-                chooseDestination(of: document, job: choices.job, kind: choices.kind, remembering: choices.preferences)
+                chooseDestination(of: document, job: job, kind: kind, remembering: preferences)
             })
         // Sized by its content (the hosting controller's standard bounds).
         let sheet = NSWindow(
@@ -630,6 +502,28 @@ extension EditorModel {
         sheet.isReleasedWhenClosed = false
         sheet.contentViewController = host
         window.beginSheet(sheet)
+    }
+
+    /// The window closes with the export sheet over it (the library's Move to Trash, quitting): the sheet ends as Cancel
+    /// ends it (`end(_:of:choices:)`).
+    func endExportSheet() {
+        guard let window, let sheet = window.attachedSheet,
+            let host = sheet.contentViewController as? NSHostingController<ExportSheet>
+        else { return }
+        Self.end(sheet, of: window, choices: host.rootView.choices)
+    }
+
+    /// Ends the export sheet: its GIF preview and estimate stop at once (`ExportChoices.stop()`), and, on the next turn
+    /// (out of the button's action that may have called this), its content goes and it closes. `endSheet` alone would keep
+    /// the sheet's window, its view, its choices and the project they hold (its package's open folder) for as long as the
+    /// app runs.
+    private static func end(_ sheet: NSWindow, of window: NSWindow, choices: ExportChoices) {
+        choices.stop()
+        window.endSheet(sheet)
+        Task { @MainActor in
+            sheet.contentViewController = nil
+            sheet.close()
+        }
     }
 
     /// The save panel, as a sheet, then the export of `document` as `job` says; once it starts, the sheet remembers what

@@ -270,10 +270,60 @@
     "About %1$@ · %2$@ · %3$d frames" : {
       "comment" : "The export sheet: the GIF's estimated size, how long it lasts and its frames",
       "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "About %1$@ · %2$@ · %#@frames@"
+          },
+          "substitutions" : {
+            "frames" : {
+              "argNum" : 3,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg frame"
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg frames"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Aprox. %1$@ · %2$@ · %3$d cuadros"
+            "value" : "Aprox. %1$@ · %2$@ · %#@frames@"
+          },
+          "substitutions" : {
+            "frames" : {
+              "argNum" : 3,
+              "formatSpecifier" : "lld",
+              "variations" : {
+                "plural" : {
+                  "one" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg cuadro"
+                    }
+                  },
+                  "other" : {
+                    "stringUnit" : {
+                      "state" : "translated",
+                      "value" : "%arg cuadros"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -7530,13 +7580,24 @@
         }
       }
     },
-    "it can't be saved there; choose a folder outside the project" : {
+    "it can't be saved inside a project; choose a folder outside it" : {
       "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "no se puede guardar ahí; elegir una carpeta fuera del proyecto"
+            "value" : "no se puede guardar dentro de un proyecto; elegir una carpeta fuera de él"
+          }
+        }
+      }
+    },
+    "it can't be saved there" : {
+      "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se puede guardar ahí"
           }
         }
       }
@@ -7870,13 +7931,13 @@
         }
       }
     },
-    "the file couldn't be written" : {
+    "the file couldn't be written (error %d)" : {
       "comment" : "Why a GIF couldn't be exported, after “Couldn't export the GIF:”",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "no se pudo escribir el archivo"
+            "value" : "no se pudo escribir el archivo (error %d)"
           }
         }
       }

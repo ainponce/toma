@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
+import Export
 import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
@@ -80,6 +81,19 @@ import Testing
             == GIFPreferences(longSide: 800, fps: 25, quality: "balanced", dither: true, loops: false))
         #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data(#"{"kind":"gif","gif":{"longSide":1280}}"#.utf8))
             == ExportPreferences(kind: .gif, gif: GIFPreferences(longSide: 1280)))
+    }
+
+    /// What the sheet remembers are the values of Export's own types (plan decision 41: `AppSupport` does not see them, so
+    /// this test ties them): the GIF's sizes, rates and qualities, its defaults, and the MP4's resolutions.
+    @Test func theRememberedValuesAreExportsOwn() {
+        #expect(GIFPreferences.longSides == GIFSettings.longSides)
+        #expect(GIFPreferences.framesPerSecond == GIFSettings.framesPerSecond)
+        #expect(GIFPreferences.qualities == GIFQuality.allCases.map(\.rawValue))
+        let gif = GIFSettings(range: ExportRange(start: 0, end: 1_000_000_000))
+        #expect(GIFPreferences() == GIFPreferences(
+            longSide: gif.longSide, fps: gif.fps, quality: gif.quality.rawValue, dither: gif.dither, loops: gif.loops))
+        #expect(ExportPreferences.shortSides == ExportResolution.allCases.map(\.rawValue))
+        #expect(ExportResolution(rawValue: ExportPreferences().shortSide) == .p1080)
     }
 
     @Test func aGIFValueTheSheetDoesNotOfferTakesItsDefault() throws {

@@ -297,6 +297,42 @@ private let twoClips = TimeMap(sequence: [
     #expect(TimeMap.outputNanoseconds(seconds: 1.0 / 60) == TimeMap.frameTime(1, frameRate: 60))
     #expect(twoClips.frameCount(frameRate: 60) == 80)
     #expect(twoClips.frameCount(frameRate: 30) == 40)
+    #expect(TimeMap.frameCount(duration: twoClips.duration, frameRate: 60) == 80)
+    #expect(TimeMap.frameCount(duration: 0, frameRate: 60) == 1)
+}
+
+/// The one rule of a range that lasts a frame (the exporters' and the export sheet's): from a start off any grid, the
+/// shortest length that lasts a frame at each rate the sheet offers, and 1 ns less, which does not: `⌈10⁹ / fps⌉ − 1`,
+/// the frame's length rounded up, less the marks' nanosecond.
+@Test func aRangeLastsAFrameFromTheFramesLengthLessANanosecond() {
+    let shortest: [(fps: Int, length: Int64)] = [
+        (10, 99_999_999), (15, 66_666_666), (20, 49_999_999), (24, 41_666_666), (25, 39_999_999), (30, 33_333_333),
+        (50, 19_999_999), (60, 16_666_666),
+    ]
+    let start: Int64 = 1_234_567_891
+    for (fps, length) in shortest {
+        #expect(TimeMap.lastsAFrame(start: start, end: start + length, frameRate: fps), "\(fps) fps, \(length) ns")
+        #expect(TimeMap.lastsAFrame(start: start, end: start + length + 1, frameRate: fps), "\(fps) fps, \(length + 1) ns")
+        #expect(!TimeMap.lastsAFrame(start: start, end: start + length - 1, frameRate: fps), "\(fps) fps, \(length - 1) ns")
+        #expect(!TimeMap.lastsAFrame(start: start, end: start + length - 2, frameRate: fps), "\(fps) fps, \(length - 2) ns")
+    }
+    // Nothing, backwards, or no frame rate never lasts a frame; a range too long to multiply does.
+    #expect(!TimeMap.lastsAFrame(start: 5, end: 5, frameRate: 30))
+    #expect(!TimeMap.lastsAFrame(start: 6, end: 5, frameRate: 30))
+    #expect(!TimeMap.lastsAFrame(start: 0, end: 1_000_000_000, frameRate: 0))
+    #expect(!TimeMap.lastsAFrame(start: 0, end: 1_000_000_000, frameRate: -15))
+    #expect(TimeMap.lastsAFrame(start: 0, end: .max, frameRate: 60))
+}
+
+/// An export of all of an output ends where its last whole frame ends, up to half a frame before or after the output.
+@Test func theExportEndsWithItsLastWholeFrame() {
+    // 10.015 s at 24 fps is 240 frames (240.36 rounded): it ends at 10 s.
+    #expect(TimeMap.exportEnd(duration: 10_015_000_000, frameRate: 24) == 10_000_000_000)
+    // 10.03 s is 240.72 frames: 241, ending 11.7 ms after the output.
+    #expect(TimeMap.exportEnd(duration: 10_030_000_000, frameRate: 24) == TimeMap.frameTime(241, frameRate: 24))
+    // On the grid, the output's own end.
+    #expect(TimeMap.exportEnd(duration: twoClips.duration, frameRate: 60) == TimeMap.frameTime(80, frameRate: 60))
+    #expect(TimeMap.exportEnd(duration: 6_000_000_000, frameRate: 24) == 6_000_000_000)
 }
 
 /// The SplitMix64 generator (Steele, Lea and Flood), for a fixed seed's sequence of numbers on every run.
