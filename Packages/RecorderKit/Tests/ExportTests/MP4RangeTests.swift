@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import CoreMedia
 import CoreVideo
 import CryptoKit
 @testable import Export
@@ -16,9 +17,9 @@ import Testing
 
 private func at(_ seconds: Double) -> HostTime { base.adding(seconds: seconds) }
 
-/// Clip `number` of the take over the source seconds `[from, to)` from `base`.
-private func clip(_ number: Int, from: Double, to: Double) -> Clip {
-    Clip(id: String(format: "c-%08x", number), take: takeID, start: at(from), end: at(to), speed: 1)
+/// Clip `number` of the take over the source seconds `[from, to)` from `base`, at `speed`.
+private func clip(_ number: Int, from: Double, to: Double, speed: Double = 1) -> Clip {
+    Clip(id: String(format: "c-%08x", number), take: takeID, start: at(from), end: at(to), speed: speed)
 }
 
 /// What a test's frame sink saw: each frame's index and the SHA-256 of its bytes, and the bytes of every frame.
@@ -84,6 +85,15 @@ private func export(
 /// Every decoded frame of `url`, in presentation order.
 private func decodedFrames(of url: URL) async throws -> [DecodedFrame] {
     try await readVideoFrames(of: url, into: [DecodedFrame]()) { $0.append($1) }
+}
+
+/// Whether `a` and `b` are the same audio decoded: from the same time, as many samples, each within 10⁻⁵ (−100 dB).
+///
+/// Not bit for bit: under load, two exports of the same samples have decoded a few ulps apart (2.4 × 10⁻⁷ at most), while
+/// one sample of shift moves the take's 440 Hz sine by up to 0.014. What the exports give the encoder is compared bit for
+/// bit instead (`MP4Exporter.mixSamples`).
+private func sameAudioDecoded(_ a: (start: Double, samples: [Float]), _ b: (start: Double, samples: [Float])) -> Bool {
+    a.start == b.start && a.samples.count == b.samples.count && zip(a.samples, b.samples).allSatisfy { abs($0 - $1) <= 1e-5 }
 }
 
 /// Whether `a` and `b` are the same frames decoded: at the same times, showing the same frames of the screen, alike.
@@ -185,8 +195,8 @@ func noRangeIsTodaysExport() async throws {
         #expect(sameFramesDecoded(try await decodedFrames(of: whole), decoded1b), "the same frames decoded")
         let audio1b = try await decodedAudio(of: destination)
         let audioNil = try await decodedAudio(of: noRange), audioWhole = try await decodedAudio(of: whole)
-        #expect(audioNil.start == audio1b.start && audioNil.samples == audio1b.samples, "the same audio")
-        #expect(audioWhole.start == audio1b.start && audioWhole.samples == audio1b.samples, "the same audio")
+        #expect(sameAudioDecoded(audioNil, audio1b), "the same audio decoded")
+        #expect(sameAudioDecoded(audioWhole, audio1b), "the same audio decoded")
         #expect(summaryNil == summary1b && summaryWhole == summary1b)
 
         let mix1b = try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 30)
@@ -227,7 +237,7 @@ func rangeWithoutAFrameIsRefused() async throws {
         let settings = ExportSettings(outputSize: [320, 180], framesPerSecond: 30)
         let ranges = [
             ExportRange(start: 2_000_000_000, end: 2_010_000_000),  // 10 ms
-            ExportRange(start: 2_000_000_000, end: 2_033_333_333),  // 1 ns short of a frame
+            ExportRange(start: 2_000_000_000, end: 2_033_333_332),  // 2 ns short of a frame (1 ns is the marks' rounding)
             ExportRange(start: 2_000_000_000, end: 2_000_000_000),
             ExportRange(start: 3_000_000_000, end: 2_000_000_000),
             ExportRange(start: 6_000_000_000, end: 7_000_000_000),  // after the video's 6 s
@@ -242,13 +252,19 @@ func rangeWithoutAFrameIsRefused() async throws {
             }
         }
         #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).isEmpty)
-        // Exactly a frame is one frame: at 60 fps, 16 666 667 ns. (At 30 fps none is: the shortest range that lasts a
-        // frame, 33 333 334 ns, holds frame 1 too, at 33 333 333 ns.)
-        let seen = SeenFrames()
-        try await export(
-            project, document, settings: ExportSettings(outputSize: [320, 180], framesPerSecond: 60),
-            range: ExportRange(start: 2_000_000_000, end: 2_016_666_667), to: folder, name: "one", seen: seen)
-        #expect(seen.frames.map(\.index) == [0])
+        // Marks a frame apart are one frame, though on the grid of 30 fps they are 33 333 333 or 33 333 334 ns apart
+        // (frames 60 to 61, and 1 to 2): frame 1 of the second, at 33 333 333 ns, starts 1 ns before its end.
+        let oneFrame = [
+            ExportRange(start: TimeMap.frameTime(60, frameRate: 30), end: TimeMap.frameTime(61, frameRate: 30)),
+            ExportRange(start: TimeMap.frameTime(1, frameRate: 30), end: TimeMap.frameTime(2, frameRate: 30)),
+        ]
+        #expect(oneFrame.map { $0.end - $0.start } == [33_333_333, 33_333_334])
+        for (k, range) in oneFrame.enumerated() {
+            let seen = SeenFrames()
+            try await export(project, document, settings: settings, range: range, to: folder, name: "one-\(k)", seen: seen)
+            #expect(seen.frames.map(\.index) == [0], "\(range)")
+            #expect(try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 30, range: range).count == 1_600)
+        }
     }
 }
 
@@ -284,5 +300,87 @@ func leftOutIsListedWithinTheRange() async throws {
             project, document, settings: settings, range: ExportRange(start: 2_200_000_000, end: 2_800_000_000), to: dir, name: "none"
         ).summary
         #expect(none == ExportSummary())
+    }
+}
+
+/// Marks on the document's frame grid (`TimeMap.frameTime`, rounded to the nanosecond), `k` frames of the document
+/// apart, hold the frames of the export that start within those `k` frames, `⌈k × export rate / document rate⌉`, and
+/// last a frame of the export when `k / document rate ≥ 1 / export rate`: at every position on the grid, at every rate
+/// of a document and of an export (the GIF's 10 to 30, the MP4's 24 to 60).
+@Test func marksOnTheGridHoldTheFramesBetweenThem() {
+    var wrong: [String] = []
+    for documentRate in [24, 25, 30, 50, 60] {
+        for exportRate in [10, 15, 20, 24, 25, 30, 50, 60] {
+            // The grid's rounding repeats every second, so marks from each frame of the first second cover it.
+            for i in 0..<documentRate {
+                for k in 1...(2 * documentRate) {
+                    let range = ExportRange(
+                        start: TimeMap.frameTime(i, frameRate: documentRate), end: TimeMap.frameTime(i + k, frameRate: documentRate))
+                    let frames = (k * exportRate + documentRate - 1) / documentRate
+                    let lasts = k * exportRate >= documentRate
+                    if range.frameCount(fps: exportRate) != frames || range.lastsAFrame(fps: exportRate) != lasts {
+                        wrong.append("\(documentRate) → \(exportRate) fps, frames \(i) to \(i + k): \(range.frameCount(fps: exportRate)) frames, "
+                            + "lasts a frame \(range.lastsAFrame(fps: exportRate)); \(frames) and \(lasts) expected")
+                    }
+                }
+            }
+        }
+    }
+    #expect(wrong.isEmpty, "\(wrong.count) mark pairs: \(wrong.prefix(5))")
+}
+
+/// The presentation times of the decoded frames of `url` whose centre is white: the flashes.
+private func whiteFrameTimes(of url: URL) async throws -> [Double] {
+    try await readVideoFrames(of: url, into: [Double]()) { times, frame in
+        let p = pixel(frame.bytes, width: frame.width, x: frame.width / 2, y: frame.height / 2)
+        if p.x > 240, p.y > 240, p.z > 240 { times.append(frame.time) }
+    }
+}
+
+/// A range from 1 s and a quarter of a frame into a 1× clip, across the cut, to inside a clip at 2×: at both ends, the
+/// flash and the 1000 Hz burst recorded at the same instant are where the edit puts them in the range's MP4.
+///
+/// The screen flashes from source 1.2 s (frames 36 to 38) and 5.6 s (frames 168 to 173), with a burst there of 0.1 and
+/// 0.2 s. Output 1.2 s is 0.191 667 s into the range, and source 5.6 s, at 2× after the cut at source 2 s to 3 s, is
+/// output 3.3 s, 2.291 667 s into it: the bursts start there. The frames of the range, at 30 fps from a quarter of a
+/// frame past 1 s, sample the source a quarter of a frame and, at 2×, half a frame from its frames' edges: the first
+/// white ones are the frames after those instants, 6 and 69, at 0.2 and 2.3 s, three each (at 2×, six of the source).
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func rangeAcrossACutIntoAFasterClipKeepsSync() async throws {
+    try await withTemporaryDirectory { dir in
+        let builder = try TakeBuilder(in: dir, name: "Sync")
+        let flashes = Set(36..<39).union(168..<174)
+        try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [
+            VideoSegmentSpec(start: base, seconds: 8) { frame, sample in
+                flashes.contains(frame) ? whiteVideoSample(width: 640, height: 360, pts: sample.presentationTimeStamp) : sample
+            },
+        ])
+        let first = toneBurst(at: at(1.2), start: base, skewPPM: 0, frequency: 1000, channels: 1, seconds: 0.1)
+        let second = toneBurst(at: at(5.6), start: base, skewPPM: 0, frequency: 1000, channels: 1, seconds: 0.2)
+        try await builder.addAudioTrack(id: micID, source: micSource, segments: [
+            AudioSegmentSpec(start: base, seconds: 8, amplitude: 0) { block, sample in second(block, first(block, sample)) },
+        ])
+        let project = try builder.write()
+        var document = EditDocument.legacy(for: project)
+        document.sequence = [clip(1, from: 0, to: 2), clip(2, from: 3, to: 7, speed: 2)]  // 4 s of output, the cut at 2 s
+        let range = ExportRange(start: 1_008_333_333, end: 3_500_000_000)
+        let (destination, _) = try await export(
+            project, document, settings: ExportSettings(outputSize: [320, 180], framesPerSecond: 30), range: range, to: dir, name: "sync")
+
+        let times = try await readVideoFrames(of: destination, into: [Double]()) { $0.append($1.time) }
+        #expect(times.count == 75)
+        let whites = try await whiteFrameTimes(of: destination)
+        let expected = [6, 7, 8, 69, 70, 71].map { Double($0) / 30 }
+        #expect(whites.count == expected.count && zip(whites, expected).allSatisfy { abs($0 - $1) < 1e-6 }, "white frames at \(whites)")
+        for (flash, burst) in [(0.2, 0.191_667), (2.3, 2.291_667)] {
+            let onset = try await toneOnset(in: destination, frequency: 1000, near: burst, window: 0.15)
+            #expect(abs(onset - burst) < 0.003, "the burst at \(onset) s, \(burst) s expected, the flash at \(flash) s")
+        }
+
+        // The audio is the whole mix's from output 1 008 333 333 ns, 48 400 frames in, across the cut and the stretch.
+        let whole = try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 30)
+        let part = try await MP4Exporter.mixSamples(of: project, document: document, framesPerSecond: 30, range: range)
+        #expect(part.count == 120_000)
+        #expect(part == Array(whole[48_400..<168_400]))
     }
 }

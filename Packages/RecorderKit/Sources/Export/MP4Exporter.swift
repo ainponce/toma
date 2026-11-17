@@ -27,7 +27,7 @@ import os
 /// It exports the document it was given, a copy: what is edited while it runs changes nothing in it (design §5.6).
 ///
 /// Given a range of the output (`ExportRange`, 1c design §7.1), it exports that part alone: frame `n` is the one drawn
-/// at `range.frameTime(n, fps:)`, for the `range.frameCount(fps:)` frames that fall before its end (the range cut to the
+/// at `range.frameTime(n, fps:)`, for the frames `range.frameCount(fps:)` counts before its end (the range cut to the
 /// video first: from 0 to where the whole export's last frame ends), and the audio is the mix's frames from
 /// `round(start × 48 000 / 10⁹)` on, as long as those frames last (`EditedMix.frames(of:frameCount:framesPerSecond:)`):
 /// the same samples the whole video plays there, with no fade of its own at the range's edges. The summary lists what
@@ -218,7 +218,7 @@ public final class MP4Exporter: Sendable {
     /// the whole export's last frame ends (`TimeMap.frameTime(_:frameRate:)` of its frame count), so a range up to the
     /// end of the video ends with it.
     /// - Throws: `ExportError.nothingToExport` when what is left of the range lasts less than a frame at `fps`
-    ///   (`(end − start) × fps < 10⁹` ns, as the GIF refuses it).
+    ///   (`ExportRange.lastsAFrame(fps:)`, the rule the GIF refuses it by).
     private static func part(of range: ExportRange?, in timeMap: TimeMap, framesPerSecond fps: Int) throws -> ExportRange? {
         guard let range, range != .whole(timeMap) else { return nil }
         let videoEnd = TimeMap.frameTime(timeMap.frameCount(frameRate: fps), frameRate: fps)
