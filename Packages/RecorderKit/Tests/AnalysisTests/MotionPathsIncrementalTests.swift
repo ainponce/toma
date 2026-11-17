@@ -491,7 +491,7 @@ extension ZoomFixtures {
         }
 
         /// The first instant at which the camera's bubble can differ: that of the first of the take's changes, placed in
-        /// the output, that differs; 0 when it shows or starts otherwise; none when it is hidden in both.
+        /// the output, that differs; 0 when it shows, starts or is measured otherwise; none when it is hidden in both.
         @Test func theBubbleChangesFromItsFirstChangeThatDiffers() {
             let clips = [zoomClip(1, from: 0, to: 20)]
             let styles = [CameraStyle(shape: .portrait, size: 0.2, anchor: .top), CameraStyle(shape: .landscape, size: 0.3, anchor: .leading)]
@@ -506,15 +506,17 @@ extension ZoomFixtures {
                     camera, TimeMap(sequence: clips), edited, TimeMap(sequence: sequence), take: zoomTakeID)
             }
             var moved = camera, added = camera, restyled = camera, other = camera, initial = camera, hidden = camera
+            var measured = camera
             moved.changes[1].t = source(11)
             added.changes.append(CameraChange(id: "k-00000003", take: zoomTakeID, t: source(7), style: styles[0], origin: .user))
             restyled.changes[0].style = styles[1]
             other.changes.append(CameraChange(id: "k-00000004", take: "take-002", t: source(1), style: styles[0], origin: .user))
             initial.initial[zoomTakeID] = styles[1]
             hidden.show = false
+            measured.sizeReference = .shortSide
             #expect(first(camera) == nil && first(other) == nil)
             #expect(first(moved) == output(9) && first(added) == output(7) && first(restyled) == output(5))
-            #expect(first(initial) == 0 && first(hidden) == 0)
+            #expect(first(initial) == 0 && first(hidden) == 0 && first(measured) == 0)
             // Placed by the edited time map: a cut of 1 s before the second change brings it to 8 s.
             #expect(first(camera, [zoomClip(1, from: 0, to: 7), zoomClip(2, from: 8, to: 20)]) == output(8))
             var bothHidden = hidden

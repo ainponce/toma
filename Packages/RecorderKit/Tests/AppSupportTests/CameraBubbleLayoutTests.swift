@@ -55,6 +55,29 @@ import Testing
         #expect(circle.first { $0.anchor == .topLeading }?.rect == Rect(x: 24, y: 24, width: 180, height: 180))
     }
 
+    @Test func theEditorsPlacesAreMeasuredAsTheRenderMeasuresThem() {
+        // A tall region: against its short side (1c design §5.2), a Medium circle is 0.24 × 750 = 180 pt, at 24 pt from the
+        // edges; against its height, as the live bubble is, 0.24 × 1200 = 288 pt.
+        let tall = Rect(x: 0, y: 0, width: 750, height: 1200)
+        let places = CameraBubbleLayout.anchorFrames(style: .default, region: tall, reference: .shortSide)
+        for place in places {
+            var anchored = CameraStyle.default
+            anchored.anchor = place.anchor
+            #expect(place.rect == anchored.frame(in: tall, reference: .shortSide).rect)
+        }
+        #expect(places.first { $0.anchor == .bottomTrailing }?.rect == Rect(x: 750 - 180 - 24, y: 1200 - 180 - 24, width: 180, height: 180))
+        #expect(CameraBubbleLayout.anchorFrames(style: .default, region: tall).allSatisfy { abs($0.rect.width - 288) < 1e-9 })
+        // Let go still at the bottom, a bit right of the middle: nearest the small bubble's middle place (285, 996), and the
+        // big one's bottom right place (423.6, 873.6) rather than its middle one (231, 873.6).
+        let origin = CGPoint(x: 340, y: 996)
+        func anchor(_ reference: SizeReference) -> CameraAnchor {
+            CameraBubbleLayout.releaseAnchor(origin: origin, velocity: .zero, style: .default, region: tall, reference: reference)
+        }
+        #expect(anchor(.shortSide) == .bottom)
+        #expect(anchor(.height) == .bottomTrailing)
+        #expect(CameraBubbleLayout.releaseAnchor(origin: origin, velocity: .zero, style: .default, region: tall) == .bottomTrailing)
+    }
+
     @Test func bubbleRegionIsTheChosenDisplayUnderThePointer() {
         let displays = [
             DisplayInfo(id: 1, frame: Rect(x: 0, y: 0, width: 1512, height: 982), scale: 2, isMain: true, maximumFramesPerSecond: 120),

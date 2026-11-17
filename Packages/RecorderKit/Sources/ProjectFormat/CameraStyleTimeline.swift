@@ -33,26 +33,29 @@ public struct CameraStyleTimeline: Equatable, Sendable {
             .map { Change(t: $0.element.t, style: $0.element.style) }
     }
 
-    /// The camera at output time `τ` in an output of `output` pixels.
-    public func frame(atOutput τ: Int64, output: SIMD2<Double>) -> CameraFrame {
+    /// The camera at output time `τ` in an output of `output` pixels, each style placed with `CameraStyle
+    /// .frame(in:reference:)`: against the output's height, as in 1b, bit for bit (`frame(in:)`), or against its shorter
+    /// side (1c design §5.2).
+    public func frame(atOutput τ: Int64, output: SIMD2<Double>, reference: SizeReference = .height) -> CameraFrame {
         let region = Rect(x: 0, y: 0, width: output.x, height: output.y)
+        func frame(_ style: CameraStyle) -> CameraFrame { style.frame(in: region, reference: reference) }
         // Index of the first change after `τ`.
         var low = 0, high = changes.count
         while low < high {
             let mid = (low + high) / 2
             if changes[mid].t <= τ { low = mid + 1 } else { high = mid }
         }
-        guard low > 0 else { return initial.frame(in: region) }
+        guard low > 0 else { return frame(initial) }
         // Settled: exactly the last style.
-        if Self.seconds(τ, since: changes[low - 1].t) >= Self.settleSeconds { return changes[low - 1].style.frame(in: region) }
+        if Self.seconds(τ, since: changes[low - 1].t) >= Self.settleSeconds { return frame(changes[low - 1].style) }
         // A change made once the one before it had settled starts from that one's style exactly: go back to the
         // first change of the burst that ends at `τ`, and play the burst forward from there.
         var first = low - 1
         while first > 0, Self.seconds(changes[first].t, since: changes[first - 1].t) < Self.settleSeconds { first -= 1 }
-        var shown = first == 0 ? initial.frame(in: region) : changes[first - 1].style.frame(in: region)
+        var shown = first == 0 ? frame(initial) : frame(changes[first - 1].style)
         for k in first..<low {
             let until = k + 1 < low ? changes[k + 1].t : τ
-            shown = Self.blend(shown, changes[k].style.frame(in: region), Self.progress(seconds: Self.seconds(until, since: changes[k].t)))
+            shown = Self.blend(shown, frame(changes[k].style), Self.progress(seconds: Self.seconds(until, since: changes[k].t)))
         }
         return shown
     }

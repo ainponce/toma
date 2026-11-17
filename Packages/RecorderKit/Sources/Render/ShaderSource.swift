@@ -200,14 +200,13 @@ public enum ShaderSource {
         return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.5066282746 * sigma);
     }
 
-    // The shadow of a rounded box blurred by a Gaussian (Evan Wallace's, `ShadowMath`): the rows blurred along x,
-    // integrated along y at `ShadowMath.ySamples` samples, at the middle of equal steps over [-3 sigma, 3 sigma] clipped to
-    // the box. Premultiplied black at that alpha times the opacity.
-    fragment float4 shadowFragment(QuadOut in [[stage_in]],
-                                   constant ShadowUniforms &u [[buffer(0)]]) {
+    // The shadow of a rounded box blurred by a Gaussian (Evan Wallace's, `ShadowMath`) at `point`, before its opacity:
+    // the rows blurred along x, integrated along y at `ShadowMath.ySamples` samples, at the middle of equal steps over
+    // [-3 sigma, 3 sigma] clipped to the box.
+    static float shadowValue(float2 point, constant ShadowUniforms &u) {
         float2 centre = (u.lower + u.upper) * 0.5;
         float2 halfSize = (u.upper - u.lower) * 0.5;
-        float2 p = in.p - centre;
+        float2 p = point - centre;
         float low = p.y - halfSize.y;
         float high = p.y + halfSize.y;
         float start = min(max(-3.0 * u.sigma, low), high);
@@ -219,7 +218,64 @@ public enum ShaderSource {
             value += shadowRow(p.x, p.y - y, u.sigma, u.corner, halfSize) * shadowGaussian(y, u.sigma) * span;
             y += span;
         }
-        return float4(0.0, 0.0, 0.0, u.opacity * value);
+        return value;
+    }
+
+    // The shadow (`shadowValue`): premultiplied black at that alpha times the opacity.
+    fragment float4 shadowFragment(QuadOut in [[stage_in]],
+                                   constant ShadowUniforms &u [[buffer(0)]]) {
+        return float4(0.0, 0.0, 0.0, u.opacity * shadowValue(in.p, u));
+    }
+
+    // The camera's shadow (`shadowValue`, at its opacity) under the camera, whose rounded rect is `camera`'s image
+    // (`imageCoverage`), drawn over it next at `opacity`: at `opacity` where the camera is not, and under the camera only
+    // what the camera lets through, so the two drawn one after the other are the shadow with the camera over it, together
+    // at `opacity`. The camera hides its own shadow at any opacity, as it does opaque.
+    static float cameraShadowAlpha(float2 p, constant ShadowUniforms &u, constant QuadUniforms &camera, float opacity) {
+        float shadow = u.opacity * shadowValue(p, u);
+        float covered = imageCoverage(p, camera);
+        float shown = covered * opacity;
+        return shown < 1.0 ? shadow * opacity * (1.0 - covered) / (1.0 - shown) : 0.0;
+    }
+
+    // The camera's shadow (`cameraShadowAlpha`): premultiplied black.
+    fragment float4 cameraShadowFragment(QuadOut in [[stage_in]],
+                                         constant ShadowUniforms &u [[buffer(0)]],
+                                         constant QuadUniforms &camera [[buffer(1)]],
+                                         constant float &opacity [[buffer(2)]]) {
+        return float4(0.0, 0.0, 0.0, cameraShadowAlpha(in.p, u, camera, opacity));
+    }
+
+    struct CameraBorderUniforms {
+        float4 color;   // sRGB, not premultiplied
+        float width;    // output pixels, above 0
+        float padding0;
+        float padding1;
+        float padding2;
+    };
+
+    // The camera's picture (`screenColor`'s) with its border over it: a stroke `width` wide inside its rounded rect, along
+    // its edge and antialiased as the edge is, the picture filling the rect under it. Premultiplied: of the part of the
+    // pixel inside the rect, the part in the stroke shows the border's colour over the picture.
+    static float4 borderedCameraColor(QuadOut in, constant QuadUniforms &u, constant CameraBorderUniforms &b,
+                                      texture2d<float> source, sampler linearSampler) {
+        float2 halfSize = u.contentSize * 0.5;
+        float radius = min(u.radius, min(halfSize.x, halfSize.y));
+        float d = roundedRectDistance(in.p - (u.contentOrigin + halfSize), halfSize, radius);
+        float coverage = clamp(0.5 - d, 0.0, 1.0);
+        float stroke = (coverage - clamp(0.5 - (d + b.width), 0.0, 1.0)) * b.color.a;
+        float3 picture = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
+        return float4(picture * (coverage - stroke) + b.color.rgb * stroke, coverage);
+    }
+
+    // The camera with its border (`borderedCameraColor`) at `opacity`.
+    fragment float4 borderedCameraFragment(QuadOut in [[stage_in]],
+                                           constant QuadUniforms &u [[buffer(0)]],
+                                           constant float &opacity [[buffer(1)]],
+                                           constant CameraBorderUniforms &b [[buffer(2)]],
+                                           texture2d<float> source [[texture(0)]],
+                                           sampler linearSampler [[sampler(0)]]) {
+        return borderedCameraColor(in, u, b, source, linearSampler) * opacity;
     }
 
     struct WindowBarUniforms {
@@ -494,13 +550,36 @@ public enum ShaderSource {
         return out;
     }
 
-    // The camera (`screenColor`) into the target of the motion blur's pass.
+    // The camera (`screenColor`) at `opacity` into the target of the motion blur's pass: at 1, exactly as without it.
     fragment TargetOut cameraTargetFragment(QuadOut in [[stage_in]],
                                             constant QuadUniforms &u [[buffer(0)]],
+                                            constant float &opacity [[buffer(1)]],
                                             texture2d<float> source [[texture(0)]],
                                             sampler linearSampler [[sampler(0)]]) {
         TargetOut out;
-        out.color = screenColor(in, u, source, linearSampler);
+        out.color = screenColor(in, u, source, linearSampler) * opacity;
+        return out;
+    }
+
+    // The camera with its border (`borderedCameraColor`) at `opacity` into the target of the motion blur's pass.
+    fragment TargetOut borderedCameraTargetFragment(QuadOut in [[stage_in]],
+                                                    constant QuadUniforms &u [[buffer(0)]],
+                                                    constant float &opacity [[buffer(1)]],
+                                                    constant CameraBorderUniforms &b [[buffer(2)]],
+                                                    texture2d<float> source [[texture(0)]],
+                                                    sampler linearSampler [[sampler(0)]]) {
+        TargetOut out;
+        out.color = borderedCameraColor(in, u, b, source, linearSampler) * opacity;
+        return out;
+    }
+
+    // The camera's shadow (`cameraShadowAlpha`) into the target of the motion blur's pass.
+    fragment TargetOut cameraShadowTargetFragment(QuadOut in [[stage_in]],
+                                                  constant ShadowUniforms &u [[buffer(0)]],
+                                                  constant QuadUniforms &camera [[buffer(1)]],
+                                                  constant float &opacity [[buffer(2)]]) {
+        TargetOut out;
+        out.color = float4(0.0, 0.0, 0.0, cameraShadowAlpha(in.p, u, camera, opacity));
         return out;
     }
     """#

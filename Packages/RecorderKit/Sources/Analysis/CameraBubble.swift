@@ -30,10 +30,11 @@ public struct CameraBubble: Sendable {
             })
     }
 
-    /// The bubble at output time `τ`, showing source instant `host`, in an output `output` big (pixels, or stage units):
+    /// The bubble at output time `τ`, showing source instant `host`, in an output `output` big (pixels, or stage units),
+    /// measured against `reference` (the document's `camera.sizeReference`; the output's height, as in 1b, by default):
     /// `nil` before `start`.
-    public func frame(atOutput τ: Int64, host: HostTime, output: SIMD2<Double>) -> CameraFrame? {
+    public func frame(atOutput τ: Int64, host: HostTime, output: SIMD2<Double>, reference: SizeReference = .height) -> CameraFrame? {
         guard host >= start else { return nil }
-        return timeline.frame(atOutput: τ, output: output)
+        return timeline.frame(atOutput: τ, output: output, reference: reference)
     }
 }

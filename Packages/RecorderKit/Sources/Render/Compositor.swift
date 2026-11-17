@@ -5,8 +5,9 @@ import ProjectFormat
 import Synchronization
 
 /// Draws a `RenderFrame` into a `.bgra8Unorm` target: the stage (the background, the shadow, the window frame, the screen
-/// — over the one being left during a change of screen — and the cursor), the click effects and the camera, in that
-/// order, blended premultiplied "over"; before it, for a screen sampled with mipmaps, a blit pass that makes them.
+/// — over the one being left during a change of screen — and the cursor), the click effects and the camera (its shadow,
+/// its picture and its border), in that order, blended premultiplied "over"; before it, for a screen sampled with
+/// mipmaps, a blit pass that makes them.
 ///
 /// - Without a motion blur, in one render pass that starts by clearing the target: the stage through the frame's zoom
 ///   camera (`RenderFrame.stage`), exactly as without a zoom when it has none or is at rest.
@@ -35,6 +36,8 @@ public final class Compositor: @unchecked Sendable {
     /// What draws the stage into a subsample of the motion blur's pass.
     private let subsample: StagePipelines
     private let clickEffectPipeline: any MTLRenderPipelineState
+    /// What draws the camera straight into the target.
+    private let directCamera: CameraPipelines
     /// The rest of the motion blur's pass.
     private let blur: BlurPipelines
     private let screenSampler: any MTLSamplerState
@@ -52,6 +55,8 @@ public final class Compositor: @unchecked Sendable {
             MemoryLayout<ClickEffectUniforms>.stride == 32, "ClickEffectUniforms must keep the layout of the shaders' struct: 32 bytes")
         precondition(MemoryLayout<ShadowUniforms>.stride == 32, "ShadowUniforms must keep the layout of the shaders' struct: 32 bytes")
         precondition(MemoryLayout<StageMapping>.stride == 16, "StageMapping must keep the layout of the shaders' struct: 16 bytes")
+        precondition(
+            MemoryLayout<CameraBorderUniforms>.stride == 32, "CameraBorderUniforms must keep the layout of the shaders' struct: 32 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)
@@ -113,6 +118,10 @@ public final class Compositor: @unchecked Sendable {
         direct = try stagePipelines(into: .target)
         subsample = try stagePipelines(into: .blurPass(writing: 0))
         clickEffectPipeline = try pipeline(vertex: "quadVertex", fragment: "clickEffectFragment", blending: .over)
+        directCamera = try CameraPipelines(
+            picture: direct.screen,
+            bordered: pipeline(vertex: "quadVertex", fragment: "borderedCameraFragment", blending: .over),
+            shadow: pipeline(vertex: "quadVertex", fragment: "cameraShadowFragment", blending: .over))
         blur = try BlurPipelines(
             accumulate: pipeline(vertex: "gradientVertex", fragment: "accumulateFragment", blending: .none, into: .blurPass(writing: 1)),
             cursorSample: pipeline(vertex: "quadVertex", fragment: "cursorSampleFragment", blending: .add, into: .blurPass(writing: 1)),
@@ -121,7 +130,12 @@ public final class Compositor: @unchecked Sendable {
                 vertex: "gradientVertex", fragment: "resolveCursorFragment", blending: .none, into: .blurPass(writing: 2)),
             clickEffect: pipeline(
                 vertex: "quadVertex", fragment: "clickEffectTargetFragment", blending: .over, into: .blurPass(writing: 2)),
-            camera: pipeline(vertex: "quadVertex", fragment: "cameraTargetFragment", blending: .over, into: .blurPass(writing: 2)))
+            camera: CameraPipelines(
+                picture: pipeline(vertex: "quadVertex", fragment: "cameraTargetFragment", blending: .over, into: .blurPass(writing: 2)),
+                bordered: pipeline(
+                    vertex: "quadVertex", fragment: "borderedCameraTargetFragment", blending: .over, into: .blurPass(writing: 2)),
+                shadow: pipeline(
+                    vertex: "quadVertex", fragment: "cameraShadowTargetFragment", blending: .over, into: .blurPass(writing: 2))))
 
         let sampler = MTLSamplerDescriptor()
         sampler.minFilter = .linear
@@ -150,8 +164,9 @@ public final class Compositor: @unchecked Sendable {
     /// shadow (`frame.shadow`) only with the screen, under it and the window frame. The cursor only when `frame.cursor`
     /// is set, shown (opacity above 0) and of some size, with `cursor` the texture of its image (`CursorImages`), which
     /// every cursor of the frame (its subframes', its samples) is drawn with; the click effects over it
-    /// (`frame.clickEffects`); the camera only when `frame.camera` is set and `camera` is given, filling its rect without
-    /// stretching (cropped, centred, to the rect's shape). An `.image` background is `backgroundImage`, the texture
+    /// (`frame.clickEffects`); the camera only when `frame.camera` is set, shown (opacity above 0) and `camera` is given,
+    /// filling its rect without stretching (cropped, centred, to the rect's shape), with its look (its shadow, its picture
+    /// flipped, its border) at its opacity in the same pass. An `.image` background is `backgroundImage`, the texture
     /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn
     /// directly without `backgroundImage`; with one, its mesh gradient, blurred or not
     /// (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A window frame's title is `windowTitle`,
@@ -236,7 +251,7 @@ public final class Compositor: @unchecked Sendable {
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             drawOverTheStage(
-                frame, through: stage, camera: camera, clickEffect: blur.clickEffect, cameraPipeline: blur.camera, encoder: encoder,
+                frame, through: stage, camera: camera, clickEffect: blur.clickEffect, cameraPipelines: blur.camera, encoder: encoder,
                 counts: &counts)
             encoder.endEncoding()
             return
@@ -247,7 +262,7 @@ public final class Compositor: @unchecked Sendable {
             frame, through: stage, cursor: frame.cursor, textures: textures, pipelines: direct, targetSize: targetSize, encoder: encoder,
             counts: &counts)
         drawOverTheStage(
-            frame, through: stage, camera: camera, clickEffect: clickEffectPipeline, cameraPipeline: direct.screen, encoder: encoder,
+            frame, through: stage, camera: camera, clickEffect: clickEffectPipeline, cameraPipelines: directCamera, encoder: encoder,
             counts: &counts)
         encoder.endEncoding()
     }
@@ -407,7 +422,7 @@ public final class Compositor: @unchecked Sendable {
                 frame, through: stage, textures: textures, targetSize: targetSize, viewport: viewport, pipelines: pipelines,
                 encoder: encoder)
             if let shadow, textures.screen != nil {
-                drawShadow(shadow, viewport: viewport, pipelines: pipelines, encoder: encoder)
+                drawShadow(shadow, viewport: viewport, pipeline: pipelines.shadow, encoder: encoder)
             }
         }
         if bands != nil { encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: targetSize.x, height: targetSize.y)) }
@@ -455,10 +470,10 @@ public final class Compositor: @unchecked Sendable {
     }
 
     /// Draws what goes over the stage of `frame`: its click effects through `stage` (design §7.2, step 6), never blurred,
-    /// with `clickEffect`, then the camera in output space (step 7) with `cameraPipeline`.
+    /// with `clickEffect`, then the camera in output space (step 7) with `cameraPipelines`.
     private func drawOverTheStage(
         _ frame: RenderFrame, through stage: StageTransform?, camera: (any MTLTexture)?, clickEffect: any MTLRenderPipelineState,
-        cameraPipeline: any MTLRenderPipelineState, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
+        cameraPipelines: CameraPipelines, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
     ) {
         // 6. Click effects, over the cursor.
         drawClickEffects(
@@ -466,11 +481,38 @@ public final class Compositor: @unchecked Sendable {
 
         // 7. Camera, over everything.
         if let layer = frame.camera, let camera {
-            let fill = Self.aspectFill(SIMD2(Double(camera.width), Double(camera.height)), in: layer.rect)
-            drawImage(
-                camera, in: layer.rect, cornerRadius: layer.cornerRadius, uvOrigin: fill.origin, uvSize: fill.size,
-                pipeline: cameraPipeline, viewport: SIMD2<Float>(Float(frame.outputSize.x), Float(frame.outputSize.y)), encoder: encoder)
+            drawCamera(layer, texture: camera, outputSize: frame.outputSize, pipelines: cameraPipelines, encoder: encoder, counts: &counts)
         }
+    }
+
+    /// Draws the camera `layer` with `texture`, its frame (design §7.2, step 7, and 1c design §14.3), in output space with
+    /// `pipelines`: its shadow first, then its picture filling its rect without stretching (cropped, centred, to the
+    /// rect's shape), flipped with `mirror` (`u` becomes `1 − u` across that crop), and its border over the picture in the
+    /// same drawing, all at its opacity (0 to 1). Nothing of one hidden (its opacity not above 0, or not a number). With
+    /// no shadow and no border, the one drawing of 1b, with its values: at opacity 1, the picture exactly as opaque as
+    /// ever.
+    private func drawCamera(
+        _ layer: CameraLayer, texture: any MTLTexture, outputSize: SIMD2<Int>, pipelines: CameraPipelines,
+        encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
+    ) {
+        let opacity = layer.opacity.isNaN ? 0 : min(layer.opacity, 1)
+        guard opacity > 0 else { return }
+        let viewport = SIMD2<Float>(Float(outputSize.x), Float(outputSize.y))
+        if let shadow = layer.shadow, drawShadow(
+            shadow, under: (layer.rect, layer.cornerRadius, opacity), viewport: viewport, pipeline: pipelines.shadow, encoder: encoder)
+        {
+            counts.cameraShadows += 1
+        }
+        var fill = Self.aspectFill(SIMD2(Double(texture.width), Double(texture.height)), in: layer.rect)
+        if layer.mirror {
+            fill = (SIMD2(fill.origin.x + fill.size.x, fill.origin.y), SIMD2(-fill.size.x, fill.size.y))
+        }
+        let border = layer.border.flatMap { $0.width > 0 && $0.width.isFinite ? $0 : nil }
+        drawImage(
+            texture, in: layer.rect, cornerRadius: layer.cornerRadius, uvOrigin: fill.origin, uvSize: fill.size, opacity: opacity,
+            border: border, pipeline: border == nil ? pipelines.picture : pipelines.bordered, viewport: viewport, encoder: encoder)
+        counts.cameras += 1
+        if border != nil { counts.cameraBorders += 1 }
     }
 
     /// Draws the background of `frame` over the whole target, through `stage`: the gradient as today when it is drawn as
@@ -700,23 +742,38 @@ public final class Compositor: @unchecked Sendable {
         }
     }
 
-    /// Draws `layer` (`shadowFragment`) over a quad of its box and 3σ and a pixel more on every side: past 3σ of its box
-    /// the shadow is under 0.35 / 255, which rounds to nothing in every output. Nothing of a layer `ShadowMath.Box`
-    /// leaves out.
+    /// Draws `layer` with `pipeline` (`shadowFragment`) over a quad of its box and 3σ and a pixel more on every side: past
+    /// 3σ of its box the shadow is under 0.35 / 255, which rounds to nothing in every output. The camera's (`camera`: its
+    /// rect and corners, in output pixels, and the opacity it is drawn at next) with `cameraShadowFragment`, which takes the
+    /// camera's rounded rect as the image of a quad (`imageCoverage`). Nothing of a layer `ShadowMath.Box` leaves out:
+    /// returns whether it drew it.
+    @discardableResult
     private func drawShadow(
-        _ layer: ShadowLayer, viewport: SIMD2<Float>, pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
-    ) {
-        guard let box = ShadowMath.Box(layer) else { return }
+        _ layer: ShadowLayer, under camera: (rect: Rect, cornerRadius: Double, opacity: Double)? = nil, viewport: SIMD2<Float>,
+        pipeline: any MTLRenderPipelineState, encoder: any MTLRenderCommandEncoder
+    ) -> Bool {
+        guard let box = ShadowMath.Box(layer) else { return false }
         let reach = 3 * box.sigma + 1
         let origin = box.lower - reach, size = box.upper - box.lower + 2 * reach
         var quad = QuadUniforms(
             viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
             uvSize: .one, radius: 0)
         var uniforms = ShadowUniforms(lower: box.lower, upper: box.upper, sigma: box.sigma, corner: box.corner, opacity: box.opacity)
-        encoder.setRenderPipelineState(pipelines.shadow)
+        encoder.setRenderPipelineState(pipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShadowUniforms>.stride, index: 0)
+        if let camera {
+            let rect = camera.rect
+            let cameraOrigin = SIMD2(Float(rect.x), Float(rect.y)), cameraSize = SIMD2(Float(rect.width), Float(rect.height))
+            var shape = QuadUniforms(
+                viewport: viewport, origin: cameraOrigin, size: cameraSize, contentOrigin: cameraOrigin, contentSize: cameraSize,
+                uvOrigin: .zero, uvSize: .one, radius: Float(max(camera.cornerRadius, 0)))
+            var opacity = Float(camera.opacity)
+            encoder.setFragmentBytes(&shape, length: MemoryLayout<QuadUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 2)
+        }
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+        return true
     }
 
     /// Draws the title bar of `window` with its buttons (`windowBarFragment`), over a quad one pixel larger than the bar
@@ -751,12 +808,13 @@ public final class Compositor: @unchecked Sendable {
     /// `texture` made of that part's whole pixels alone keeps all of what is outside it out (`image(of:in:commandBuffer:)`).
     /// With a `shape`, the rounded rect that cuts it is that one (with `cornerRadius` at its top and `bottomRadius` at its
     /// bottom), and `rect`'s own edges are square but for its top corners of `imageTopRadius`. At `opacity` (0 to 1; at 1
-    /// exactly as opaque as ever): a screen's while it fades in. Nothing for an empty rect.
+    /// exactly as opaque as ever): a screen's while it fades in, the camera's. With a `border`, the camera's, which
+    /// `pipeline` draws over it (`borderedCameraFragment`). Nothing for an empty rect.
     private func drawImage(
         _ texture: any MTLTexture, in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>,
         clampsToCrop: Bool = false, shape: (rect: Rect, bottomRadius: Double, imageTopRadius: Double)? = nil,
-        mipmapped: Bool = false, opacity: Double = 1, pipeline: any MTLRenderPipelineState, viewport: SIMD2<Float>,
-        encoder: any MTLRenderCommandEncoder
+        mipmapped: Bool = false, opacity: Double = 1, border: CameraBorderLayer? = nil, pipeline: any MTLRenderPipelineState,
+        viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
         var quad = QuadUniforms(
@@ -778,6 +836,10 @@ public final class Compositor: @unchecked Sendable {
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&alpha, length: MemoryLayout<Float>.stride, index: 1)
+        if let border {
+            var uniforms = CameraBorderUniforms(color: border.color, width: Float(border.width))
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CameraBorderUniforms>.stride, index: 2)
+        }
         encoder.setFragmentTexture(texture, index: 0)
         encoder.setFragmentSamplerState(mipmapped ? trilinearSampler : screenSampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
@@ -807,6 +869,12 @@ struct DrawCounts: Equatable, Sendable {
     var clickEffects = 0
     /// Subsamples of the stage added to the motion blur's sum.
     var accumulations = 0
+    /// The camera's picture, with its border or without it.
+    var cameras = 0
+    /// Its shadow.
+    var cameraShadows = 0
+    /// Its pictures drawn with a border.
+    var cameraBorders = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1
@@ -847,7 +915,17 @@ private struct BlurPipelines {
     /// The cursor's sum over the stage into the target.
     let resolveCursor: any MTLRenderPipelineState
     let clickEffect: any MTLRenderPipelineState
-    let camera: any MTLRenderPipelineState
+    let camera: CameraPipelines
+}
+
+/// The pipelines that draw the camera (1c design §14.3) into one layout of attachments.
+private struct CameraPipelines {
+    /// Its picture alone: `screenFragment` into the target, as in 1b, or `cameraTargetFragment`.
+    let picture: any MTLRenderPipelineState
+    /// Its picture with its border over it.
+    let bordered: any MTLRenderPipelineState
+    /// Its shadow, under it.
+    let shadow: any MTLRenderPipelineState
 }
 
 /// The screen's frame as it is sampled: its texture and the part of it shown, as fractions of it.
@@ -938,6 +1016,15 @@ private struct ShadowUniforms {
     var corner: Float
     var opacity: Float
     var padding: Float = 0
+}
+
+/// `CameraBorderUniforms` in `ShaderSource.metal`: 32 bytes.
+private struct CameraBorderUniforms {
+    var color: SIMD4<Float>
+    var width: Float
+    var padding0: Float = 0
+    var padding1: Float = 0
+    var padding2: Float = 0
 }
 
 /// `WindowBarUniforms` in `ShaderSource.metal`: 112 bytes.

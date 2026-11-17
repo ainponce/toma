@@ -167,14 +167,15 @@ public struct MotionPaths: Sendable {
     }
 
     /// The first output instant at which the take's camera bubble (`CameraBubble`) of `new` over `newMap` can differ
-    /// from that of `old` over `oldMap`: `nil` when neither shows one, 0 when only one does or the take's initial style
-    /// differs, otherwise the time of the first of the take's changes, in output time and in order
-    /// (`CameraStyleTimeline`), that differs (a bubble at an instant reads the changes up to it), `nil` without one.
+    /// from that of `old` over `oldMap`: `nil` when neither shows one, 0 when only one does, or the take's initial style
+    /// or what the bubble is measured against (`sizeReference`) differs, otherwise the time of the first of the take's
+    /// changes, in output time and in order (`CameraStyleTimeline`), that differs (a bubble at an instant reads the changes
+    /// up to it), `nil` without one.
     static func firstChangedBubbleOutput(
         _ old: CameraPlan, _ oldMap: TimeMap, _ new: CameraPlan, _ newMap: TimeMap, take: String
     ) -> Int64? {
         guard old.show || new.show else { return nil }
-        guard old.show == new.show, old.initial[take] == new.initial[take] else { return 0 }
+        guard old.show == new.show, old.initial[take] == new.initial[take], old.sizeReference == new.sizeReference else { return 0 }
         /// The take's changes as `CameraBubble` places them, in the order `CameraStyleTimeline` reads them.
         func placed(_ camera: CameraPlan, _ map: TimeMap) -> [(t: Int64, style: CameraStyle)] {
             camera.changes.filter { $0.take == take }

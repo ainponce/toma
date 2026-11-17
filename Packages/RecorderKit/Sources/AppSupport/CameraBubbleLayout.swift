@@ -31,23 +31,29 @@ public enum CameraBubbleLayout {
     /// The span of a drag the release velocity is measured over.
     public static let releaseVelocitySpan = 0.1
 
-    /// The bubble of `style` at each of the 8 places of `region`, in `CameraAnchor.allCases` order.
-    public static func anchorFrames(style: CameraStyle, region: Rect) -> [(anchor: CameraAnchor, rect: Rect)] {
+    /// The bubble of `style` at each of the 8 places of `region`, in `CameraAnchor.allCases` order, measured against
+    /// `reference` (`CameraStyle.frame(in:reference:)`): the region's height, as the live bubble is, or, in the editor's
+    /// preview, the document's `camera.sizeReference`, as the render measures it.
+    public static func anchorFrames(
+        style: CameraStyle, region: Rect, reference: SizeReference = .height
+    ) -> [(anchor: CameraAnchor, rect: Rect)] {
         CameraAnchor.allCases.map { anchor in
             var anchored = style
             anchored.anchor = anchor
-            return (anchor: anchor, rect: anchored.frame(in: region).rect)
+            return (anchor: anchor, rect: anchored.frame(in: region, reference: reference).rect)
         }
     }
 
     /// Where the bubble goes when it is let go at `origin` (its top left) moving at `velocity` (points per
     /// second): the place whose origin is nearest to where it would come to rest, `origin` plus its momentum
-    /// on each axis (`Momentum.project`).
-    public static func releaseAnchor(origin: CGPoint, velocity: CGVector, style: CameraStyle, region: Rect) -> CameraAnchor {
+    /// on each axis (`Momentum.project`), among the places of `anchorFrames(style:region:reference:)`.
+    public static func releaseAnchor(
+        origin: CGPoint, velocity: CGVector, style: CameraStyle, region: Rect, reference: SizeReference = .height
+    ) -> CameraAnchor {
         let x = Double(origin.x) + Momentum.project(velocity: Double(velocity.dx))
         let y = Double(origin.y) + Momentum.project(velocity: Double(velocity.dy))
         func distance(_ rect: Rect) -> Double { ((rect.x - x) * (rect.x - x) + (rect.y - y) * (rect.y - y)).squareRoot() }
-        let places = anchorFrames(style: style, region: region)
+        let places = anchorFrames(style: style, region: region, reference: reference)
         return places.min { distance($0.rect) < distance($1.rect) }?.anchor ?? style.anchor
     }
 
