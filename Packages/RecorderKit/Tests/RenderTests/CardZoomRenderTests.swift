@@ -242,6 +242,17 @@ func blurInTheCardUsesTheCardPath() throws {
     #expect(off.isEmpty, "\(off.prefix(5))")
     // The same bytes twice.
     #expect(try drawer.draw(frame) == blurred)
+    // A sharp wallpaper, drawn once with the rest of the stage: no mesh is made for the subsamples.
+    var walled = frame
+    walled.background = .wallpaper(try #require(WallpaperPreset.preset(id: "aurora-1")), blurSigma: 0)
+    try withTemporaryDirectory { dir in
+        let images = try BackgroundImages(
+            device: drawer.device, library: drawer.compositor.library, package: ProjectPackage(url: dir.appendingPathComponent("A.toma")))
+        #expect(try FrameRenderer.backgroundTexture(of: walled, images: images, outputSize: size) == nil)
+    }
+    var walledOnce = walled
+    walledOnce.subframes = []
+    #expect(sameOutside(try drawer.draw(walled), try drawer.draw(walledOnce), card.rect))
 }
 
 @Test func modeTransitionBlendsTheTransforms() throws {
@@ -297,4 +308,94 @@ func blurInTheCardUsesTheCardPath() throws {
         #expect(simd_length(try #require(start.backgroundTransform).outputPoint(ofStage: q, outputSize: size) - drawn) < 0.01)
         #expect(simd_length(first.content.outputPoint(ofStage: q, outputSize: size) - drawn) < 0.01)
     }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func cardCornersShowNoBackground() throws {
+    let take = cardTake()
+    let events = [StageDrawing.event(0, .cursor(x: 320, y: 180))]
+    let drawer = try StageDrawing.Drawer()
+    for framed in [false, true] {
+        // What the unzoomed screen covers: the split without a zoom, against its background alone.
+        let plainFrame = evaluator(take, document(take, events: events, framed: framed), events: events).frame(at: 2)
+        var bareFrame = plainFrame
+        (bareFrame.screen, bareFrame.cursor) = (nil, nil)
+        let plain = try drawer.draw(plainFrame), bare = try drawer.draw(bareFrame)
+        // The card's crop at each corner of the screen, where the card's corner is the zoomed screen's corner.
+        for (x, y) in [(0.0, 0.0), (1, 0), (0, 1), (1, 1)] {
+            for depth in [2.0, 4.0] {
+                let zoom = [StageDrawing.zoom(1, from: 0, to: 6, depth: depth, focus: .fixed(x: x, y: y), instant: true)]
+                let frame = evaluator(take, document(take, events: events, regions: zoom, framed: framed), events: events).frame(at: 2)
+                let label = "(\(x), \(y)) at \(depth)×, framed \(framed)"
+                #expect(frame.card?.rect == plainFrame.card?.rect && frame.card?.content.depth == depth, "\(label)")
+                // Where the unzoomed screen is drawn, the zoomed one is too: never the bare background.
+                let zoomed = try drawer.draw(frame)
+                let bareInside = (0..<(size.x * size.y)).filter { i in
+                    plain[4 * i..<4 * i + 4] != bare[4 * i..<4 * i + 4] && zoomed[4 * i..<4 * i + 4] == bare[4 * i..<4 * i + 4]
+                }
+                #expect(bareInside.isEmpty, "\(label): \(bareInside.count)")
+                // The cursor's blur draws the stage once around the card's opaque inside: the same frame, within 2 levels.
+                var sampled = frame
+                let cursor = try #require(frame.cursor)
+                sampled.cursorSamples = [cursor, cursor]
+                #expect(StageDrawing.largestDifference(try drawer.draw(sampled), zoomed) <= 2, "\(label)")
+            }
+        }
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func cursorAndClickEffectsAreCutByTheMix() throws {
+    let take = cardTake()
+    // The cursor still at (0.6, 0.5) of the screen, clicked just before the frame with a disc: the 2× zoom at (0.3, 0.3)
+    // draws both past the card's right edge.
+    let events = [
+        StageDrawing.event(0, .cursor(x: 384, y: 180)), StageDrawing.event(1.95, .mouseDown(.left, x: 384, y: 180)),
+        StageDrawing.event(1.98, .mouseUp(.left, x: 384, y: 180)),
+    ]
+    var doc = document(
+        take, events: events, regions: [StageDrawing.zoom(1, from: 0, to: 6, depth: 2, focus: .fixed(x: 0.3, y: 0.3), instant: true)])
+    doc.cursor.clickEffect = "circle-1"
+    let frame = evaluator(take, doc, events: events).frame(at: 2)
+    let card = try #require(frame.card)
+    let cursor = try #require(frame.cursor)
+    let effect = try #require(frame.clickEffects.first)
+    #expect(card.mix == 1 && frame.clickEffects.count == 1)
+    #expect(card.content.outputPoint(ofStage: effect.center, outputSize: size).x > card.rect.x + card.rect.width)
+    let drawer = try StageDrawing.Drawer()
+    /// Each pixel outside the card where `layers` (the cursor or the click effect) change `frame` drawn at the cut's
+    /// strength `mix`, by how much in each channel; through the motion blur's pass with `blurred`.
+    func outside(_ layers: (inout RenderFrame) -> Void, mix: Double, blurred: Bool = false) throws -> [Int: SIMD4<Int>] {
+        var with = frame
+        (with.cursor, with.clickEffects) = (nil, [])
+        with.card?.mix = mix
+        let without = try drawer.draw(with)
+        layers(&with)
+        if blurred { with.cursorSamples = [cursor, cursor] }
+        let drawn = try drawer.draw(with)
+        var changed: [Int: SIMD4<Int>] = [:]
+        for p in differing(drawn, without) where !touches(p.x, p.y, card.rect) {
+            let i = 4 * (p.y * size.x + p.x)
+            changed[p.y * size.x + p.x] = SIMD4((0..<4).map { Int(drawn[i + $0]) - Int(without[i + $0]) })
+        }
+        return changed
+    }
+    let parts: [(name: String, layers: (inout RenderFrame) -> Void)] = [
+        ("cursor", { $0.cursor = cursor }), ("click effect", { $0.clickEffects = [effect] }),
+    ]
+    for (name, layers) in parts {
+        // In the card, cut all of it; at the stage's end of a transition, none; half way, half of it.
+        let none = try outside(layers, mix: 1), all = try outside(layers, mix: 0), half = try outside(layers, mix: 0.5)
+        #expect(none.isEmpty, "\(name): \(none.count)")
+        #expect(all.count > 20, "\(name): \(all.count)")
+        let halved = all.allSatisfy { i, full in
+            let seen = half[i] ?? .zero
+            return (0..<4).allSatisfy { abs(2 * seen[$0] - full[$0]) <= 3 }
+        }
+        #expect(halved, "\(name)")
+    }
+    // The click effect cut in the motion blur's pass too.
+    let clicked = parts[1].layers
+    #expect(try outside(clicked, mix: 1, blurred: true).isEmpty)
+    #expect(try outside(clicked, mix: 0, blurred: true).count > 20)
 }

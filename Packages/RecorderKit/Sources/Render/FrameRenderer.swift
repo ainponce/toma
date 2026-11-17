@@ -338,8 +338,8 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// The texture `frame`'s background is drawn with (`Compositor.encode`'s `backgroundImage`), from `images`, for
     /// frames `outputSize` big: an image's; a blurred wallpaper's mesh gradient, blurred; a sharp wallpaper's mesh
-    /// gradient under the zoom camera's motion blur (`RenderFrame.subframes`) on the stage, which the subsamples read;
-    /// none otherwise (in a card's mode the background is drawn once, a sharp wallpaper by its shader).
+    /// gradient under the zoom camera's motion blur (`RenderFrame.subframes`), which the subsamples read, but in a card's
+    /// mode, whose background is drawn once (`RenderFrame.backgroundTransform`); none otherwise.
     static func backgroundTexture(
         of frame: RenderFrame, images: BackgroundImages, outputSize: SIMD2<Int>
     ) throws -> (any MTLTexture)? {

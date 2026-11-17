@@ -353,7 +353,7 @@ func transitionIsOneComposition() async throws {
     #expect(cameraOnly.frame(at: 4).screen == nil && cameraOnly.frame(at: 4).screenOpacity == 0)
 }
 
-@Test func zoomGoesToRestInTheCards() throws {
+@Test func theZoomMovesIntoTheScreensCard() throws {
     let take = layoutTake()
     // A 2× zoom off the centre over the whole take, and a split from 2 s on.
     let doc = document(of: take, [block(1, .split, from: 2, to: 10)]) { document in
