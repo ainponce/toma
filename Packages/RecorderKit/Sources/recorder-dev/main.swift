@@ -45,8 +45,8 @@ struct SynthRecord: AsyncParsableCommand {
 
             The tracks, in this order: display-1 at the origin of the global space (or, with --window, \
             window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
-            at 1280×720 and 30 fps (--camera), mic, and system-audio in stereo at 48 kHz with a clock that \
-            runs 1500 ppm slow (--system-audio).
+            at 30 fps, 1280×720 unless --camera-width and --camera-height say otherwise (--camera), mic, and system-audio \
+            in stereo at 48 kHz with a clock that runs 1500 ppm slow (--system-audio).
 
             The take's events.jsonl gets synthetic input, the same in every take: the cursor going round a circle \
             about (320, 180), a click every second from 0.5 s, the arrow and from 1 s the I-beam (their images in \
@@ -81,6 +81,12 @@ struct SynthRecord: AsyncParsableCommand {
     @Flag(help: "Also record a synthetic camera, 1280×720 at 30 fps.")
     var camera = false
 
+    @Option(help: "With --camera, the width of the synthetic camera, in pixels.")
+    var cameraWidth = 1280
+
+    @Option(help: "With --camera, the height of the synthetic camera, in pixels.")
+    var cameraHeight = 720
+
     @Flag(help: "Also record synthetic system audio, stereo at 48 kHz, with a clock 1500 ppm slow.")
     var systemAudio = false
 
@@ -90,6 +96,7 @@ struct SynthRecord: AsyncParsableCommand {
         if let staticAfter, staticAfter < 0 { throw ValidationError("--static-after cannot be negative.") }
         guard displays > 0 else { throw ValidationError("--displays must be positive.") }
         if window, displays > 1 { throw ValidationError("--window records no display: leave out --displays.") }
+        guard cameraWidth > 0, cameraHeight > 0 else { throw ValidationError("--camera-width and --camera-height must be positive.") }
     }
 
     func run() async throws {
@@ -104,7 +111,8 @@ struct SynthRecord: AsyncParsableCommand {
             }
         var sources: [any CaptureSource] = screens
         if camera {
-            sources.append(SyntheticVideoSource(trackID: "camera", kind: .camera, width: 1280, height: 720, framesPerSecond: 30))
+            sources.append(SyntheticVideoSource(
+                trackID: "camera", kind: .camera, width: cameraWidth, height: cameraHeight, framesPerSecond: 30))
         }
         sources.append(SyntheticAudioSource())
         if systemAudio {
@@ -964,6 +972,12 @@ struct BenchPreview: AsyncParsableCommand {
             source) at --fps, in a temporary folder, and benchmarks it with --all-on (bench-export's document, everything \
             on) in a process of its own, then removes it. With TOMA_BENCH_VERBOSE=1 in the environment it also prints each \
             drag's release.
+
+            --layouts plays the document with camera layouts that change every 5 s, Bubble (the project's), Split with the \
+            zoom and its motion blur in the screen's card, then Camera full screen, over and over (the camera mirrored, \
+            with a shadow), and prints, instead of scrubbing and releasing, each transition's frames of the grid skipped and \
+            shown late, from its border to 1.5 s after it (1c design §15). With --synthetic, the take lasts 30 s and its \
+            camera is 1920 × 1080 at 30 fps.
             """
     )
 
@@ -975,6 +989,9 @@ struct BenchPreview: AsyncParsableCommand {
 
     @Flag(help: "Play the benchmark's document, everything on, instead of the package's edit.")
     var allOn = false
+
+    @Flag(help: "Change the camera layout every 5 s (Bubble, Split, Camera full screen) and print the transitions' frames.")
+    var layouts = false
 
     @Option(help: "Width of the frames drawn (the export's size), in pixels.")
     var width = 3840
@@ -1011,7 +1028,8 @@ struct BenchPreview: AsyncParsableCommand {
         }
         guard let package else { return }
         let (project, edit) = try readProject(package, raw: false)
-        let document = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: false) : edit
+        let plain = allOn ? try BenchDocument.make(for: project, from: edit, backgroundImage: false) : edit
+        let document = layouts ? BenchDocument.alternatingLayouts(plain) : plain
         print(String(format: "load average: %.2f", loadAverage()))
         // What the source is, when its first segment can be read: one that cannot shows in the bench as missing video,
         // and must not end it.
@@ -1084,6 +1102,32 @@ struct BenchPreview: AsyncParsableCommand {
         if playing.sizes.count > 1, let last = playing.sizes.last {
             printPlaying("playing at \(describe(last.size))", from: playing.start + last.time, through: playing.end)
         }
+        if layouts {
+            // Each border's transition, from the border to 1.5 s after it: the frames of the grid never shown, and those
+            // shown late (a video's frame not decoded in time).
+            let timeline = LayoutTimeline(
+                document: document, take: project.take, timeMap: TimeMap(sequence: document.sequence),
+                cameraReadable: renderer.cameraReadable)
+            // Each frame of the grid presented while playing, and whether it was late.
+            let presented = Dictionary(
+                log.presented(from: playing.start, through: playing.end).map { (Int(($0.seconds * Double(fps)).rounded()), $0.late) },
+                uniquingKeysWith: { $0 || $1 })
+            var skippedInAll = 0, lateInAll = 0
+            for (before, span) in zip(timeline.spans, timeline.spans.dropFirst()) {
+                let border = Double(span.output.lowerBound) / 1e9
+                let grid = (0..<frames).filter { frameSeconds($0) >= border && frameSeconds($0) < border + 1.5 }
+                let skipped = grid.filter { presented[$0] == nil }.count, late = grid.filter { presented[$0] == true }.count
+                skippedInAll += skipped
+                lateInAll += late
+                print(String(
+                    format: "transition at %.2f s, %@ to %@: %d frames, %d skipped, %d late", border, "\(before.kind)", "\(span.kind)",
+                    grid.count, skipped, late))
+            }
+            print("transitions: \(skippedInAll) frames skipped, \(lateInAll) late")
+            print(String(format: "main thread: longest request %.3f ms", playing.longestRequest * 1000))
+            print("peak memory: \(peakFootprint().map { "\($0 >> 20) MB" } ?? "unknown")")
+            return
+        }
 
         // Scrubbing: dragged back and forth over the take, 1.5 s each way, then released at a frame of the grid: slowing
         // down to the end as a hand does, and keeping the speed to the end.
@@ -1143,11 +1187,13 @@ struct BenchPreview: AsyncParsableCommand {
         let folder = FileManager.default.temporaryDirectory.appending(path: "bench-preview-\(UUID().uuidString)", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: folder) }
-        print("recording a synthetic take of \(Int(BenchDocument.seconds)) s, \(sourceWidth) × \(sourceHeight) at \(fps) fps, with a camera, to draw at \(width) × \(height)")
+        let seconds = layouts ? BenchDocument.layoutSeconds : BenchDocument.seconds
+        let camera = layouts ? ["--camera-width", "1920", "--camera-height", "1080"] : []
+        print("recording a synthetic take of \(Int(seconds)) s, \(sourceWidth) × \(sourceHeight) at \(fps) fps, with a camera, to draw at \(width) × \(height)")
         let recorded = try runThisTool([
-            "synth-record", folder.path, "--duration", String(BenchDocument.seconds), "--width", String(sourceWidth), "--height",
+            "synth-record", folder.path, "--duration", String(seconds), "--width", String(sourceWidth), "--height",
             String(sourceHeight), "--fps", String(fps), "--camera",
-        ])
+        ] + camera)
         guard let take = recorded.split(separator: "\n").first.map(String.init), take.hasSuffix(".toma") else {
             printError("error: synth-record printed no package")
             throw ExitCode.failure
@@ -1155,7 +1201,7 @@ struct BenchPreview: AsyncParsableCommand {
         print(try runThisTool([
             "bench-preview", take, "--all-on", "--width", String(width), "--height", String(height), "--fps", String(fps),
             "--view-width", String(viewWidth), "--view-height", String(viewHeight),
-        ]), terminator: "")
+        ] + (layouts ? ["--layouts"] : [])), terminator: "")
     }
 }
 
@@ -1365,6 +1411,30 @@ private func peakFootprint() -> UInt64? {
 enum BenchDocument {
     /// Seconds of the synthetic take.
     static let seconds = 10.0
+    /// Seconds of the synthetic take of `bench-preview --synthetic --layouts`: two rounds of its three layouts.
+    static let layoutSeconds = 30.0
+
+    /// `document` with the camera's layout changing every 5 s of its first clip's source, as `bench-preview --layouts`
+    /// plays it: Bubble (the project's), Split (with the zoom of the document inside the screen's card), Camera full
+    /// screen, and again; the camera shown, mirrored, with the shadow of new projects.
+    static func alternatingLayouts(_ document: EditDocument) -> EditDocument {
+        var document = document
+        guard let clip = document.sequence.first else { return document }
+        let length = clip.end.seconds(since: clip.start)
+        let kinds: [LayoutKind] = [.split, .cameraFull, .bubble]
+        document.camera.layouts = stride(from: 5.0, to: length, by: 5).enumerated().compactMap { k, offset in
+            let kind = kinds[k % kinds.count]
+            guard kind != .bubble else { return nil }
+            return LayoutBlock(
+                id: String(format: "l-%08x", k + 1), take: clip.take, start: clip.start.adding(seconds: offset),
+                end: clip.start.adding(seconds: min(offset + 5, length)), kind: kind, instant: false, bubble: nil,
+                split: kind == .split ? SplitLayout() : nil)
+        }
+        document.camera.show = true
+        document.camera.mirror = true
+        document.camera.shadow = 0.4
+        return document
+    }
 
     /// `edit` (the take's clips and screens) with everything on: see `BenchExport`'s discussion. With `backgroundImage`,
     /// a 7680 × 4320 PNG is written into the package's `assets/` (once) and is the background.

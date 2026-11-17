@@ -64,9 +64,9 @@ private enum GIFCorpus: String, CaseIterable, Sendable, CustomStringConvertible 
     case browserScroll
     /// The `aurora-1` wallpaper around a dark editor with the camera's bubble: a camera of soft noise.
     case wallpaperBubble
-    /// The camera full screen. Until the render draws the camera layouts (Tasks 10 and 11), the same camera recorded as
-    /// the screen and filling the output (no padding, no corners, no cursor) gives the palette the same pixels, as in
-    /// `GIFExporterTests.noisyCameraRefreshesThePaletteWithinBounds`.
+    /// The camera full screen: the project's layout Camera full screen (1c design §5.1) over a take with a lively camera
+    /// (the screen under it is never seen). Until the render drew the camera layouts (Tasks 10 and 11), this take was the
+    /// same camera recorded as the screen and filling the output; Task 13 re-ran the corpus with the layout.
     case cameraFull
 
     var description: String { rawValue }
@@ -94,16 +94,18 @@ private enum GIFCorpus: String, CaseIterable, Sendable, CustomStringConvertible 
                 paintedSample(pts: sample.presentationTimeStamp) { editorScreen($0, code: code, t: Double(index) / Double(corpusFPS)) }
             }
         case .cameraFull:
-            screen = { index, sample in cameraSample(index: index, pts: sample.presentationTimeStamp, lively: true) }
+            // Under the camera, never drawn nor decoded (1c design §14.4).
+            screen = { _, sample in sample }
         }
         func segment(_ paint: @escaping @Sendable (Int, CMSampleBuffer) -> CMSampleBuffer) -> [VideoSegmentSpec] {
             [VideoSegmentSpec(
                 start: base, seconds: corpusSeconds, framesPerSecond: corpusFPS, width: corpusWidth, height: corpusHeight, transform: paint)]
         }
         try await builder.addVideoTrack(id: displayID, source: corpusDisplay, segments: segment(screen))
-        if self == .wallpaperBubble {
+        if self == .wallpaperBubble || self == .cameraFull {
+            let lively = self == .cameraFull
             try await builder.addVideoTrack(id: corpusCameraID, kind: .camera, source: corpusCamera, segments: segment { index, sample in
-                cameraSample(index: index, pts: sample.presentationTimeStamp, lively: false)
+                cameraSample(index: index, pts: sample.presentationTimeStamp, lively: lively)
             })
         }
         try builder.addEvents(cursorEvents)
@@ -125,6 +127,8 @@ private enum GIFCorpus: String, CaseIterable, Sendable, CustomStringConvertible 
             document.style.cornerRadius = 0
             document.style.shadow = 0
             document.cursor.show = false
+            document.camera.show = true
+            document.camera.layout = CameraLayout(kind: .cameraFull)
         }
         return (project, document)
     }
@@ -1377,7 +1381,8 @@ private func tunedGIF(
 }
 
 /// What each take of the corpus gave when gifQuant-1 was frozen (Task 25; the same bytes on every run of this Mac): the
-/// GIF's bytes and the new palettes of its 150 frames.
+/// GIF's bytes and the new palettes of its 150 frames. The camera full screen's are those of the stand-in it had then
+/// (the camera recorded as the screen, filling the output), kept as its budget once the layout drew it (Task 13).
 private let frozenCorpus: [GIFCorpus: (bytes: Int, palettes: Int)] = [
     .tutorial: (1_849_888, 1), .browserScroll: (2_698_969, 2), .wallpaperBubble: (740_716, 1), .cameraFull: (16_573_149, 1),
 ]

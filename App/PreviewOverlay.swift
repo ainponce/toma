@@ -82,6 +82,11 @@ final class PreviewOverlayView: NSView {
         var cornerRadius: Double
         var screenAspect: Double?
 
+        /// The screen's card where the render draws it at the playhead: the split's, or, while the transition into it
+        /// still moves the cards, where it is on the way (the zoom's box goes over it, and there is no handle to drag).
+        var screen = Rect(x: 0, y: 0, width: 0, height: 0)
+        var moving = false
+
         var orientation: SplitOrientation { CameraLayoutGeometry.orientation(output: output) }
 
         /// The cards, with `share` in place of the split's when it is given.
@@ -94,6 +99,8 @@ final class PreviewOverlayView: NSView {
         }
     }
     private var splitState: SplitState?
+    /// The split whose handle shows and can be dragged: not while a transition still moves its cards.
+    private var handleState: SplitState? { splitState.flatMap { $0.moving ? nil : $0 } }
     /// A drag of the handle: the share the pointer says now.
     private var splitDrag: (share: Double?, step: EditStep?)?
     /// The pointer is over the handle (it shows then).
@@ -149,8 +156,8 @@ final class PreviewOverlayView: NSView {
         if case let .zooms(ids)? = selection, ids.count == 1, let id = ids.first,
             let region = document.zoom.regions.first(where: { $0.id == id }), case let .fixed(x, y) = region.focus
         {
-            // In a split, the screen is its card (design §5.7).
-            let screen = splitState.map { SplitHandleGeometry.stageUnits($0.geometry().screen.rect, output: $0.output) }
+            // In a split, the screen is its card (design §5.7), where it is drawn now.
+            let screen = splitState.map { SplitHandleGeometry.stageUnits($0.screen, output: $0.output) }
                 ?? points(of: document, project)?.screenRect(at: region.start) ?? Rect(x: 0, y: 0, width: stage.x, height: stage.y)
             zoom = ZoomBox(
                 id: id, focus: SIMD2(x, y), depth: region.depth ?? document.zoom.auto.depth, screen: screen, stage: stage)
@@ -182,18 +189,35 @@ final class PreviewOverlayView: NSView {
     }
 
     /// The split that rules at output instant `now`, if one does: the block's or the project's, with the screen's aspect at
-    /// the playhead. Documents without layouts (every one of 1b) have none.
+    /// the playhead, and where its cards are drawn then. Documents without layouts (every one of 1b) have none. The camera
+    /// is readable as the renderer finds it, so the layouts are those the frame shows (a take without a camera, or one not
+    /// looked at yet, is Screen only, as the render draws it).
     private func makeSplitState(of document: EditDocument, project: LoadedProject, atOutput now: Int64, timeMap: TimeMap) -> SplitState? {
         guard !document.camera.layouts.isEmpty || document.camera.layout.kind == .split else { return nil }
-        let span = LayoutTimeline(document: document, take: project.take, timeMap: timeMap, cameraReadable: !model.cameraUnreadable)
-            .span(atOutput: now)
+        let layouts = LayoutTimeline(
+            document: document, take: project.take, timeMap: timeMap, cameraReadable: model.renderCameraReadable)
+        let span = layouts.span(atOutput: now)
         guard span.kind == .split else { return nil }
         let size = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080)
         let screen = timeMap.source(atOutput: now).flatMap { points(of: document, project)?.screenRect(at: $0.1) }
-        return SplitState(
+        var state = SplitState(
             blockID: span.blockID, split: span.split ?? SplitLayout(side: .end), output: SIMD2(Double(size.x), Double(size.y)),
             padding: document.style.padding, cornerRadius: document.style.cornerRadius,
             screenAspect: screen.flatMap { $0.height > 0 ? $0.width / $0.height : nil })
+        // Mid-transition the render draws the cards on their way (1c design §5.3): the box goes where the screen is, and the
+        // gap is not where the handle would put it until they settle.
+        let settled = state.geometry()
+        let live = layouts.geometry(atOutput: now, LayoutInputs(
+            output: state.output, padding: state.padding, cornerRadius: state.cornerRadius, screenAspect: state.screenAspect,
+            sizeReference: document.camera.sizeReference))
+        state.screen = live.screen.rect
+        state.moving = !Self.isClose(live.screen.rect, settled.screen.rect) || !Self.isClose(live.camera.rect, settled.camera.rect)
+        return state
+    }
+
+    /// Whether two rects of a 1080 output are the same to within a hundredth of a pixel.
+    private static func isClose(_ a: Rect, _ b: Rect) -> Bool {
+        [a.x - b.x, a.y - b.y, a.width - b.width, a.height - b.height].allSatisfy { abs($0) < 0.01 }
     }
 
     // MARK: - Geometry
@@ -259,7 +283,7 @@ final class PreviewOverlayView: NSView {
             drawBox(viewRect(box(of: shown)))
         }
         if let style = bubbleStyle { drawBubble(style) }
-        if let splitState, overHandle || splitDrag != nil { drawHandle(splitState) }
+        if let state = splitDrag != nil ? splitState : handleState, overHandle || splitDrag != nil { drawHandle(state) }
     }
 
     /// A grip in the middle of the gap, and while it is dragged, the camera's share ("34 %") by it.
@@ -357,7 +381,7 @@ final class PreviewOverlayView: NSView {
         if boxDrag != nil { return .box }
         if bubbleDrag != nil { return .bubble }
         if splitDrag != nil { return .splitHandle }
-        if let state = splitState, handleRects(state).hit.contains(point) { return .splitHandle }
+        if let state = handleState, handleRects(state).hit.contains(point) { return .splitHandle }
         if let style = bubbleStyle, bubbleRect(style).insetBy(dx: -4, dy: -4).contains(point) { return .bubble }
         if let zoom {
             let rect = viewRect(box(of: zoom))
@@ -368,7 +392,7 @@ final class PreviewOverlayView: NSView {
     }
 
     override func resetCursorRects() {
-        if let state = splitState {
+        if let state = handleState {
             addCursorRect(handleRects(state).hit, cursor: state.orientation == .beside ? .resizeLeftRight : .resizeUpDown)
         }
         if let style = bubbleStyle { addCursorRect(bubbleRect(style), cursor: .openHand) }
