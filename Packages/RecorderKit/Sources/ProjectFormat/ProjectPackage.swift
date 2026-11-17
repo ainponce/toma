@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
 import Foundation
+import Synchronization
 
 /// A project on disk: a `.toma` folder that Finder shows as a single document.
 ///
@@ -21,10 +22,30 @@ import Foundation
 public struct ProjectPackage: Sendable, Hashable {
     public static let fileExtension = "toma"
 
+    /// Where the package was when this value was made: its identity (two packages are the same if their `url`s are).
     public let url: URL
+    /// With one, the files a reader opens later are found where the package is now (`currentURL`): an editor's preview
+    /// and export go on reading a package renamed or moved on its disk while they read it (1c Task 39).
+    public let handle: PackageHandle?
 
     public init(url: URL) {
+        self.init(url: url, handle: nil)
+    }
+
+    public init(url: URL, handle: PackageHandle?) {
         self.url = url
+        self.handle = handle
+    }
+
+    /// Where the package is now: where its `handle` finds it, or `url` without one.
+    public var currentURL: URL { handle?.url ?? url }
+
+    public static func == (a: ProjectPackage, b: ProjectPackage) -> Bool {
+        a.url == b.url
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(url)
     }
 
     /// Creates `<directory>/<name>.toma` with `takes/`, `cache/` and an empty manifest of the current format
@@ -179,4 +200,39 @@ public struct ProjectPackage: Sendable, Hashable {
 public enum ProjectPackageError: Error, Equatable {
     /// The URL is not a file inside the package.
     case notInsidePackage(URL)
+}
+
+/// A package's folder, open, so that where it is now can be asked at any time (`F_GETPATH`, which follows a rename or a
+/// move on its disk), for readers that open its files after it moved (`ProjectPackage.handle`). Holds a descriptor of
+/// the folder for as long as it lives, and nothing else: no lock, no write.
+public final class PackageHandle: Sendable {
+    private let descriptor: Int32
+    private let lastSeen: Mutex<URL>
+
+    /// The folder at `url` (a link to it is followed, as the Finder opens a package); `nil` if it cannot be opened. Reads
+    /// the disk: never on the main thread.
+    public init?(url: URL) {
+        let descriptor = open(url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard descriptor >= 0 else { return nil }
+        self.descriptor = descriptor
+        lastSeen = Mutex(url)
+        _ = self.url
+    }
+
+    deinit {
+        close(descriptor)
+    }
+
+    /// Where the folder is now; where it was last seen if that cannot be told (it was deleted).
+    public var url: URL {
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let path = buffer.withUnsafeMutableBufferPointer { buffer -> String? in
+            guard let base = buffer.baseAddress, fcntl(descriptor, F_GETPATH, base) != -1 else { return nil }
+            return String(cString: base)
+        }
+        guard let path else { return lastSeen.withLock { $0 } }
+        let found = URL(fileURLWithPath: path, isDirectory: true)
+        lastSeen.withLock { $0 = found }
+        return found
+    }
 }

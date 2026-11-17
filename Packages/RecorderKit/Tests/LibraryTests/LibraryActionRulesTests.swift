@@ -86,6 +86,8 @@ private func item(
         #expect(of(.recording, .rename) == .recording)
         #expect(of(.openElsewhere, .moveToTrash) == .openElsewhere)
         #expect(of(.copyOpenedOrChanged, .moveToTrash) == .copyOpenedOrChanged)
+        #expect(of(.editorKeptOpen, .moveToTrash) == .couldNot(.moveToTrash, name: "Demo", .editorKeptOpen))
+        #expect(LibraryMessage.ofDeletion(.editorKeptOpen, names: ["Demo"]) == .couldNot(.delete, name: "Demo", .editorKeptOpen))
         #expect(of(.noRoom(needed: 7), .duplicate) == .noRoom(needed: 7))
         #expect(of(.name(.taken), .rename) == .couldNot(.rename, name: "Demo", .nameTaken))
         #expect(of(.name(.tooLong), .duplicate) == .couldNot(.duplicate, name: "Demo", .nameTooLong))

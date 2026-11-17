@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import Editing
+import Library
 import ProjectFormat
 import QuartzCore
 import SwiftUI
@@ -33,6 +34,19 @@ struct PreviewArea: View {
         switch model.state {
         case .opening:
             ProgressView("Opening…")
+        case .unfinished where model.isInTrash:
+            // In the trash it is restored first, never recovered there (Task 39, ruling 2).
+            ContentUnavailableView {
+                Label("This recording hasn't finished saving", systemImage: "exclamationmark.triangle")
+            } description: {
+                Text(verbatim: EditorBanners.text(ReadOnlyReason.inTrash))
+            } actions: {
+                if let actions = model.projectActions {
+                    Button(LibraryActions.title(.restore, items: [])) { actions.restore() }
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(!actions.canRestore)
+                }
+            }
         case .unfinished:
             ContentUnavailableView {
                 Label("This recording hasn't finished saving", systemImage: "exclamationmark.triangle")

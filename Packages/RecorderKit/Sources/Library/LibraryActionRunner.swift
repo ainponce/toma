@@ -16,12 +16,18 @@ public protocol LibraryActionHost: AnyObject, Sendable {
     func identity(at url: URL) -> PackageIdentity?
     /// Where the package of `summary` is now: one of Other places found again by its bookmark, off the main thread.
     func locate(_ summary: ProjectSummary) async -> URL
-    /// An editor of this app has the package at `url` open.
+    /// An editor of this app has the package at `url` open, also for viewing only.
     func isOpenHere(_ url: URL) -> Bool
+    /// That editor holds the package's `edit.lock` (`LibraryAppState.holdsEditLock`).
+    func holdsEditLock(_ url: URL) -> Bool
     /// That editor has changes it could not write.
     func hasUnsavedChanges(_ url: URL) -> Bool
-    /// Closes the editor of the package at `url`, which writes what is pending and lets go of its lock; returns once it did.
-    func close(_ url: URL) async
+    /// Closes the editor of the package at `url`, which writes what is pending and lets go of its lock, asking first if its
+    /// export runs; returns once it did, `false` if the user kept it open.
+    func close(_ url: URL) async -> Bool
+    /// The field where the name of `identity` is edited is still open: a name the disk refuses is said beside it
+    /// (`nameRefusal`); once it is closed (Esc after ↩), in `messages`.
+    func isRenaming(_ identity: PackageIdentity) -> Bool
     /// The context documents are edited with, once it is made; `nil` only if it never will be (the window closed).
     func editContext() async -> EditContext?
 
@@ -96,7 +102,8 @@ public final class LibraryActionRunner {
         public var paused: Bool
     }
 
-    /// The disk refused the name asked for a project (taken meanwhile, too long for it): what the field beside it says.
+    /// The disk refused the name asked for a project (taken meanwhile, too long for it): what the field beside it says,
+    /// while it is open; once it is closed, the refusal is one of `messages`.
     public struct NameRefusal: Equatable, Sendable {
         public var identity: PackageIdentity
         public var problem: NameProblem
@@ -174,7 +181,8 @@ public final class LibraryActionRunner {
         self.copyBegan = copyBegan
         self.copyEnded = copyEnded
         self.firstEdit = firstEdit
-        let appState = NotedAppState(isRecording: isRecording) { [weak host] url in await host?.close(url) }
+        // Without the window, nothing can close an editor: it is kept open.
+        let appState = NotedAppState(isRecording: isRecording) { [weak host] url in await host?.close(url) ?? false }
         self.appState = appState
         operations = LibraryOperations(
             projectsFolder: projectsFolder, fileSystem: fileSystem, records: records, app: appState, isLockHeld: isLockHeld,
@@ -252,7 +260,7 @@ public final class LibraryActionRunner {
                 guard renamed != url else { return }
                 record([.renamed(from: url, to: renamed)])
                 moved(id, from: url, to: renamed)
-            case .failure(.name(let problem)):
+            case .failure(.name(let problem)) where host?.isRenaming(id) == true:
                 nameRefusal = NameRefusal(identity: id, problem: problem)
             case .failure(let failure):
                 report([.of(failure, doing: .rename, name: summary.name, isElsewhere: summary.place == .elsewhere)])
@@ -854,7 +862,9 @@ public final class LibraryActionRunner {
     /// What `LibraryOperations` will ask of the app about `urls`, from what the app says now (design §6.6).
     private func note(_ urls: [URL]) {
         for url in urls {
-            appState.note(url, openHere: host?.isOpenHere(url) ?? false, unsaved: host?.hasUnsavedChanges(url) ?? false)
+            appState.note(
+                url, openHere: host?.isOpenHere(url) ?? false, holdsLock: host?.holdsEditLock(url) ?? false,
+                unsaved: host?.hasUnsavedChanges(url) ?? false)
         }
     }
 
@@ -888,17 +898,17 @@ public final class LibraryActionRunner {
 /// noted it for each package just before acting on it; never by probing a lock.
 final class NotedAppState: LibraryAppState {
     private let isRecordingNow: @Sendable () -> Bool
-    private let closeEditor: @MainActor @Sendable (URL) async -> Void
+    private let closeEditor: @MainActor @Sendable (URL) async -> Bool
     /// By package path.
-    private let noted = Mutex<[String: (openHere: Bool, unsaved: Bool)]>([:])
+    private let noted = Mutex<[String: (openHere: Bool, holdsLock: Bool, unsaved: Bool)]>([:])
 
-    init(isRecording: @escaping @Sendable () -> Bool, close: @escaping @MainActor @Sendable (URL) async -> Void) {
+    init(isRecording: @escaping @Sendable () -> Bool, close: @escaping @MainActor @Sendable (URL) async -> Bool) {
         isRecordingNow = isRecording
         closeEditor = close
     }
 
-    func note(_ url: URL, openHere: Bool, unsaved: Bool) {
-        noted.withLock { $0[url.standardizedFileURL.path] = (openHere, unsaved) }
+    func note(_ url: URL, openHere: Bool, holdsLock: Bool, unsaved: Bool) {
+        noted.withLock { $0[url.standardizedFileURL.path] = (openHere, holdsLock, unsaved) }
     }
 
     func isRecording() -> Bool { isRecordingNow() }
@@ -907,11 +917,15 @@ final class NotedAppState: LibraryAppState {
         noted.withLock { $0[url.standardizedFileURL.path]?.openHere ?? false }
     }
 
+    func holdsEditLock(_ url: URL) -> Bool {
+        noted.withLock { $0[url.standardizedFileURL.path]?.holdsLock ?? false }
+    }
+
     func hasUnsavedChanges(_ url: URL) -> Bool {
         noted.withLock { $0[url.standardizedFileURL.path]?.unsaved ?? false }
     }
 
-    func close(_ url: URL) async {
+    func close(_ url: URL) async -> Bool {
         await closeEditor(url)
     }
 }

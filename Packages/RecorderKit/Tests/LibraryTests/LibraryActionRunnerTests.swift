@@ -38,6 +38,8 @@ private final class Copies: Sendable {
     var shownInFinder: [URL] = []
     var forgotten: [PackageIdentity] = []
     var selected: (ids: Set<PackageIdentity>, section: LibrarySection)?
+    /// The card whose name field is open.
+    var renaming: PackageIdentity?
     var questions: [LibraryDeletionQuestion] = []
     /// What the alert answers; it may do something meanwhile (the Finder, another command).
     var answer: () async -> Bool = { true }
@@ -53,8 +55,14 @@ private final class Copies: Sendable {
 
     func locate(_ summary: ProjectSummary) async -> URL { URL(filePath: summary.path, directoryHint: .isDirectory) }
     func isOpenHere(_ url: URL) -> Bool { open.contains(url.standardizedFileURL.path) }
+    func holdsEditLock(_ url: URL) -> Bool { isOpenHere(url) }
     func hasUnsavedChanges(_ url: URL) -> Bool { false }
-    func close(_ url: URL) async { open.remove(url.standardizedFileURL.path) }
+
+    func close(_ url: URL) async -> Bool {
+        open.remove(url.standardizedFileURL.path)
+        return true
+    }
+    func isRenaming(_ identity: PackageIdentity) -> Bool { renaming == identity }
     func editContext() async -> EditContext? { await context() }
 
     func showMoved(_ identity: PackageIdentity, to url: URL, place: Place) {
@@ -287,6 +295,29 @@ private func context(_ dir: URL) -> EditContext {
             #expect(library.runner.perform(.redo, on: []) == nil, "its card is busy")
             await renaming?.value
             #expect(library.runner.canUndo)
+            await library.records.flush()
+        }
+    }
+
+    /// A name the disk refuses (taken in the folder, though the window did not know it) is said beside the field while
+    /// it is open; once the field closed (Esc after ↩, N2), in the strip: never dropped.
+    @Test func aNameTheDiskRefusesIsToldWhereverTheFieldIs() async throws {
+        try await withTemporaryDirectory { dir in
+            let library = try ActionRig(in: dir)
+            let a = try library.project("A")
+            // On the disk, not in the window.
+            _ = try ProjectPackage.create(in: library.projects, name: "B", app: AppInfo(name: "Tests", version: "0"), now: Date())
+            library.host.renaming = a
+            await library.run(.rename("B"), on: [a])
+            #expect(library.runner.nameRefusal?.identity == a && library.runner.nameRefusal?.problem == .taken)
+            #expect(library.runner.messages.isEmpty)
+
+            library.runner.forgetNameRefusal()
+            library.host.renaming = nil
+            await library.run(.rename("B"), on: [a])
+            #expect(library.runner.nameRefusal == nil)
+            #expect(library.runner.messages == [.couldNot(.rename, name: "A", .nameTaken)])
+            #expect(library.path(a)?.hasSuffix("/A.toma") == true)
             await library.records.flush()
         }
     }

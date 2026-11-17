@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Darwin
+import Editing
 import Foundation
 import Library
 import ProjectFormat
@@ -11,14 +12,17 @@ private let app = AppInfo(name: "Tests", version: "0")
 
 // MARK: - Doubles
 
-/// The app around the library, as each test sets it: whether it records, which packages it has open and which of those
-/// have changes it could not write. `close` closes the window, as the app would.
+/// The app around the library, as each test sets it: whether it records, which packages it has open, which of those
+/// it can edit (it holds their `edit.lock`) and which have changes it could not write. `close` closes the window, as the
+/// app would, unless the user keeps it open (`keptOpen`: its export runs).
 final class FakeAppState: LibraryAppState {
     private struct State {
         var recording = false
         var recordingAnswers = 0
         var open: Set<String> = []
+        var viewOnly: Set<String> = []
         var unsaved: Set<String> = []
+        var keptOpen: Set<String> = []
         var closed: [String] = []
     }
 
@@ -36,10 +40,14 @@ final class FakeAppState: LibraryAppState {
     /// The packages `close` was called for, in order, by path.
     var closed: [String] { state.withLock { $0.closed } }
 
-    func open(_ url: URL, unsaved: Bool = false) {
+    /// `viewOnly`: open read-only (another app held its lock, or it is in the trash), so its editor holds no `edit.lock`.
+    /// `keptOpen`: closing it is refused, as when the user keeps its export running.
+    func open(_ url: URL, unsaved: Bool = false, viewOnly: Bool = false, keptOpen: Bool = false) {
         state.withLock { state in
             state.open.insert(Self.key(url))
             if unsaved { state.unsaved.insert(Self.key(url)) }
+            if viewOnly { state.viewOnly.insert(Self.key(url)) }
+            if keptOpen { state.keptOpen.insert(Self.key(url)) }
         }
     }
 
@@ -52,13 +60,20 @@ final class FakeAppState: LibraryAppState {
 
     func isOpenHere(_ url: URL) -> Bool { state.withLock { $0.open.contains(Self.key(url)) } }
 
+    func holdsEditLock(_ url: URL) -> Bool {
+        state.withLock { $0.open.contains(Self.key(url)) && !$0.viewOnly.contains(Self.key(url)) }
+    }
+
     func hasUnsavedChanges(_ url: URL) -> Bool { state.withLock { $0.unsaved.contains(Self.key(url)) } }
 
-    func close(_ url: URL) async {
+    func close(_ url: URL) async -> Bool {
         state.withLock { state in
-            state.open.remove(Self.key(url))
-            state.unsaved.remove(Self.key(url))
             state.closed.append(Self.key(url))
+            guard !state.keptOpen.contains(Self.key(url)) else { return false }
+            state.open.remove(Self.key(url))
+            state.viewOnly.remove(Self.key(url))
+            state.unsaved.remove(Self.key(url))
+            return true
         }
     }
 
@@ -614,6 +629,92 @@ private func failure(of result: Result<Void, LibraryFailure>) -> LibraryFailure?
 
         #expect(try await rig.operations.undoDuplicate(record).get().lastPathComponent == "x copia.toma")
         #expect(Set(rig.probes.paths) == lockPaths(of: record.copy, takes: takes))
+        await rig.records.flush()
+    }
+}
+
+/// What the app says of a project its editor has open (and can edit), with a `close` of its own.
+private final class EditorHere: LibraryAppState {
+    private let closeEditor: @MainActor @Sendable () async -> Void
+
+    init(close: @escaping @MainActor @Sendable () async -> Void) {
+        closeEditor = close
+    }
+
+    func isRecording() -> Bool { false }
+    func isOpenHere(_ url: URL) -> Bool { true }
+    func holdsEditLock(_ url: URL) -> Bool { true }
+    func hasUnsavedChanges(_ url: URL) -> Bool { false }
+
+    func close(_ url: URL) async -> Bool {
+        await closeEditor()
+        return true
+    }
+}
+
+/// A project open in this app's editor holds its `edit.lock` (design §6.3): moving it to the trash closes the editor
+/// first, and once its session let go of the lock the project goes. A `close` that leaves the session open (as the app's
+/// was before Task 39 wired it) finds the editor's own lock and says the project is open in another app.
+@MainActor @Test func trashingAProjectOpenHereWaitsForItsEditorToLetGo() async throws {
+    try await withTemporaryDirectory { folder in
+        let projects = folder.appending(path: "Projects", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
+        let url = try #require(try await LibraryFixtures.folder(in: projects, kinds: [.v3]).first)
+        let context = EditContext(
+            app: app, cachesRoot: folder.appending(path: "Caches", directoryHint: .isDirectory), defaultStyle: .toma,
+            now: { Date(timeIntervalSince1970: 1_794_800_000) }, makeID: { $0 + "00000001" })
+        let session = try await EditSession.open(url, take: nil, context: context)
+        #expect(session.access == .editable)
+        let records = LibraryRecordsStore(url: folder.appending(path: "library.json"))
+        func operations(_ app: EditorHere) -> LibraryOperations {
+            LibraryOperations(projectsFolder: projects, fileSystem: SystemFileSystem(), records: records, app: app)
+        }
+
+        #expect(await operations(EditorHere {}).moveToTrash(url) == .failure(.openElsewhere))
+        #expect(try names(in: projects).contains(url.lastPathComponent))
+
+        let trashed = try await operations(EditorHere { await session.close() }).moveToTrash(url).get()
+        #expect(trashed.deletingLastPathComponent().lastPathComponent == ProjectTrash.folderName)
+        #expect(!session.hasUnsavedChanges)
+        await records.flush()
+    }
+}
+
+/// Ruling 1 of Task 39: an editor the user keeps open (its export runs) keeps its project where it is, and says so, never
+/// "open in another app": nothing moves and no lock is asked about. A deletion leaves that one and deletes the others.
+@Test func aProjectWhoseEditorIsKeptOpenStaysWhereItIs() async throws {
+    try await withTemporaryDirectory { folder in
+        let rig = try Rig(in: folder)
+        let x = try makeProject("x", in: rig.projects)
+        rig.app.open(x.url, keptOpen: true)
+        #expect(await rig.operations.moveToTrash(x.url) == .failure(.editorKeptOpen))
+        #expect(rig.app.closed == [FakeAppState.key(x.url)])
+        #expect(try names(in: rig.projects) == ["x.toma"])
+        #expect(rig.probes.paths.isEmpty)
+
+        let a = try makeProject("a", in: rig.trash), b = try makeProject("b", in: rig.trash)
+        rig.app.open(a.url, keptOpen: true)
+        #expect(failure(of: await rig.operations.deleteForever([a.url]) { _, _, _ in }) == .editorKeptOpen)
+        #expect(failure(of: await rig.operations.deleteForever([a.url, b.url]) { _, _, _ in }) == .someNotDeleted(1))
+        #expect(try names(in: rig.trash) == ["a.toma"])
+        await rig.records.flush()
+    }
+}
+
+/// M6 of Task 39's review: a project open here for viewing only (another app held its lock) is closed before it goes to
+/// the trash, as design §6.4 asks; its `edit.lock` is not this app's, so it is asked about before a rename.
+@Test func aProjectOpenForViewingIsClosedFirstAndItsLockAskedAbout() async throws {
+    try await withTemporaryDirectory { folder in
+        let rig = try Rig(in: folder)
+        let x = try makeProject("x", in: rig.projects, takes: [])
+        rig.app.open(x.url, viewOnly: true)
+        let y = try await rig.operations.rename(x.url, to: "y").get()
+        #expect(rig.probes.paths == [x.editLockURL.standardizedFileURL.path])
+        rig.probes.reset()
+
+        rig.app.open(y, viewOnly: true)
+        _ = try await rig.operations.moveToTrash(y).get()
+        #expect(rig.app.closed == [FakeAppState.key(y)])
         await rig.records.flush()
     }
 }
