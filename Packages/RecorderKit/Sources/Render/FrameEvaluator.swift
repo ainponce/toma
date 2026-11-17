@@ -77,9 +77,16 @@ import simd
 ///     scaled from where 1b's path places it onto the screen's card, with the card's corners (a window's worked out from
 ///     them by the rule above, `windowCorners`), and fades at the card's opacity as one group
 ///     (`RenderFrame.screenOpacity`): nothing of it where the card is hidden. The shadow keeps its blur.
-///   - The zoom acts over the whole stage in the Bubble and Screen only, and goes to rest in the layouts of cards (a
-///     split, Camera only, Camera full screen), blended by `LayoutTimeline.cardWeight(atOutput:)`: a split's screen is
-///     shown in its card without the zoom.
+///   - The zoom (1c design §5.4) acts over the whole stage in the Bubble and Screen only, as on 1b's path. In the layouts
+///     of cards (a split, Camera only, Camera full screen), the background (with the shadow and the window frame) stays
+///     still and the zoom acts inside the screen's card (`RenderFrame.card`): the screens, the cursor and the click
+///     effects through the card's camera (`MotionPaths.cardZoom`, an identity without a split), its point in focus at
+///     the middle of the screen's rect on the card, cut to that rect with its corners. Between the two, by
+///     `LayoutTimeline.cardWeight(atOutput:)` (`p`), the background's transform is the stage's zoom and the identity
+///     mixed, the content's the stage's zoom and the card's (`StageTransform.mix`), and the cut the screen's rect as the
+///     background's transform draws it, so from the stage to a card nothing jumps. The motion blur in a card follows
+///     the rules below over the content's transform, the travel of the screen's rect's corners, and the cursor placed on
+///     the card; the background is drawn once.
 ///   - The camera fills its card (`cameraLayer`, with the card's opacity and its border and shadow weights), and is
 ///     none where the card is hidden. Before the camera's first frame, a card shows that frame (§5.1); the Bubble's is
 ///     hidden then, as in 1b.
@@ -168,8 +175,9 @@ public struct FrameEvaluator: Sendable {
     /// (`LayoutTimeline.isTrivial`) and the layouts' for any other.
     var forcedPath: Path?
 
-    /// `paths`: the document's (`MotionPaths(take:events:document:)`), built here when `nil`. `frameRate`: the frames per
-    /// second the output is drawn at, whose frame the motion blur's shutters are fractions of; the document's when `nil`.
+    /// `paths`: the document's (`MotionPaths(take:events:document:cameraReadable:)`), built here when `nil`. `frameRate`:
+    /// the frames per second the output is drawn at, whose frame the motion blur's shutters are fractions of; the
+    /// document's when `nil`.
     /// `cameraReadable`: some camera track of the take has a segment that can be read (plan decision 40, which the renderer
     /// finds in the package); without one, or without a camera track with a segment, the layouts that need the camera are
     /// shown as Screen only.
@@ -186,7 +194,7 @@ public struct FrameEvaluator: Sendable {
         self.events = events
         self.outputSize = outputSize
         (background, gradient) = Self.background(of: document.style, take: take, outputSize: outputSize, screens: document.screens)
-        let paths = paths ?? MotionPaths(take: take, events: events, document: document)
+        let paths = paths ?? MotionPaths(take: take, events: events, document: document, cameraReadable: cameraReadable)
         self.paths = paths
         bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
         videoTrackIDs = paths.stage.screenTrackIDs + [bubble?.trackID].compactMap { $0 }
@@ -359,13 +367,25 @@ public struct FrameEvaluator: Sendable {
             frame.camera = camera(at: source, output: output)
             return frame
         }
-        return laidOut(frame, source: source, output: output)
+        let motion = Motion(
+            zoomEnds: zoomEnds, zoomSpan: zoomSpan,
+            cursor: cursorPlace.flatMap { place in cursorSpan.map { (span: $0, ends: cursorEnds, place: place) } })
+        return laidOut(frame, source: source, output: output, motion: motion)
+    }
+
+    /// What 1b's path read of the paths for the motion blur of a frame, which the card's reads again: the ends of the zoom
+    /// camera's shutter (only `t` without one) and the camera over them; the cursor over its own shutter and how it is
+    /// placed (`nil` while it is not drawn or does not blur).
+    private struct Motion {
+        var zoomEnds: [Int64]
+        var zoomSpan: ZoomCameraPath.Span?
+        var cursor: (span: CursorPath.Span, ends: [Int64], place: CursorPlace)?
     }
 
     /// `frame`, which 1b's path made for output time `output` showing source instant `source` (the screen's group where
     /// the Bubble layout has it, the zoom over the whole stage, no camera), laid out by the camera layouts (see the type's
-    /// notes).
-    private func laidOut(_ frame: RenderFrame, source: HostTime, output: Int64) -> RenderFrame {
+    /// notes), with what that path read for its blur, `motion`.
+    private func laidOut(_ frame: RenderFrame, source: HostTime, output: Int64, motion: Motion) -> RenderFrame {
         var frame = frame
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
         let reference = document.camera.sizeReference
@@ -376,19 +396,24 @@ public struct FrameEvaluator: Sendable {
             output: size, padding: document.style.padding, cornerRadius: document.style.cornerRadius, screenAspect: aspect,
             takeBubble: bubble?.frame(atOutput: output, host: source, output: size, reference: reference), sizeReference: reference))
 
-        // The zoom, on its way to rest as the layouts go to cards.
-        let cardWeight = layouts.cardWeight(atOutput: output)
-        frame.stage = frame.stage.flatMap { Self.stage($0, towardRest: cardWeight, outputSize: outputSize) }
-        frame.subframes = frame.subframes.map { subframe in
-            StageSubframe(
-                stage: Self.stage(subframe.stage, towardRest: cardWeight, outputSize: outputSize) ?? .identity(outputSize: outputSize),
-                cursor: subframe.cursor)
+        // From the stage to a card (1c design §5.4): the background goes to rest, and the zoom into the screen's card.
+        let weight = layouts.cardWeight(atOutput: output)
+        let stage = frame.stage ?? .identity(outputSize: outputSize)
+        if weight > 0 {
+            frame.backgroundTransform = .mix(stage, .identity(outputSize: outputSize), weight)
+            frame.stage = nil
         }
 
         let card = geometry.screen
         frame.screenOpacity = card.opacity
         if card.opacity > 0, let placed, placed.width > 0 {
-            place(&frame, from: placed, onto: card)
+            let placing = Placing(from: placed, onto: card)
+            place(&frame, placing)
+            if let background = frame.backgroundTransform {
+                inTheCard(
+                    &frame, at: output, weight: weight, stage: stage, background: background, placed: placed, placing: placing,
+                    motion: motion)
+            }
         } else {
             // Nothing of the screen's group is seen.
             (frame.screen, frame.previousScreen, frame.windowFrame, frame.settledWindowFrame) = (nil, nil, nil, nil)
@@ -413,19 +438,29 @@ public struct FrameEvaluator: Sendable {
         return frame
     }
 
-    /// Moves and scales the screen's group of `frame`, which 1b's path placed in `placed`, onto `card` by `s`, the card's
-    /// width over `placed`'s (both of the group's aspect): the screens, the window frame (its bar `s` times as tall, its
-    /// corners worked out from the card's, `windowCorners`), the shadow (cast by them, of the same blur), the cursors and
-    /// the click effects (`s` times as large). All of it fades at the card's opacity `o` as one group: the screen at `o`
-    /// times its own (below 1 while it fades in over the screen being left during a change of screen, `f`), the one being
-    /// left at `o·(1 − f) / (1 − o·f)`, so the two together are the change at `o`.
-    private func place(_ frame: inout RenderFrame, from placed: Rect, onto card: ScreenCard) {
-        let scale = card.rect.width / placed.width, opacity = card.opacity
-        func point(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(card.rect.x, card.rect.y) + (p - SIMD2(placed.x, placed.y)) * scale }
+    /// How the screen's group goes from where 1b's path placed it, `from`, onto the screen's card `to`, with its corners:
+    /// moved, scaled by `scale`, the card's width over `from`'s (both of the group's aspect), and faded to the card's
+    /// `opacity`.
+    private struct Placing {
+        let from: Rect
+        let to: Rect
+        let cornerRadius: Double
+        let scale: Double
+        let opacity: Double
+
+        init(from placed: Rect, onto card: ScreenCard) {
+            (from, to, cornerRadius) = (placed, card.rect, card.cornerRadius)
+            (scale, opacity) = (card.rect.width / placed.width, card.opacity)
+        }
+
+        func point(_ p: SIMD2<Double>) -> SIMD2<Double> { SIMD2(to.x, to.y) + (p - SIMD2(from.x, from.y)) * scale }
+
         func rect(_ r: Rect) -> Rect {
             let origin = point(SIMD2(r.x, r.y))
             return Rect(x: origin.x, y: origin.y, width: r.width * scale, height: r.height * scale)
         }
+
+        /// `layer` on the card, `scale` times as large, faded with the group.
         func cursor(_ layer: CursorLayer?) -> CursorLayer? {
             layer.map { layer in
                 var placed = layer
@@ -435,7 +470,18 @@ public struct FrameEvaluator: Sendable {
                 return placed
             }
         }
-        var corners = card.cornerRadius
+    }
+
+    /// Moves and scales the screen's group of `frame` as `placing` says, onto the card by `s`, `placing.scale`: the
+    /// screens, the window frame (its bar `s` times as tall, its corners worked out from the card's, `windowCorners`), the
+    /// shadow (cast by them, of the same blur), the cursors and the click effects (`s` times as large). All of it fades at
+    /// the card's opacity `o` as one group: the screen at `o` times its own (below 1 while it fades in over the screen
+    /// being left during a change of screen, `f`), the one being left at `o·(1 − f) / (1 − o·f)`, so the two together are
+    /// the change at `o`.
+    private func place(_ frame: inout RenderFrame, _ placing: Placing) {
+        let scale = placing.scale, opacity = placing.opacity
+        let rect = placing.rect, cursor = placing.cursor
+        var corners = placing.cornerRadius
         if var window = frame.windowFrame {
             let recordedWindow = frame.screen.map { windowTrackIDs.contains($0.trackID) } ?? false
             window.rect = rect(window.rect)
@@ -474,7 +520,7 @@ public struct FrameEvaluator: Sendable {
         frame.subframes = frame.subframes.map { StageSubframe(stage: $0.stage, cursor: cursor($0.cursor)) }
         frame.clickEffects = frame.clickEffects.map { effect in
             var placed = effect
-            placed.center = point(effect.center)
+            placed.center = placing.point(effect.center)
             placed.radius = effect.radius * scale
             placed.thickness = effect.thickness * scale
             placed.opacity = effect.opacity * opacity
@@ -482,13 +528,85 @@ public struct FrameEvaluator: Sendable {
         }
     }
 
-    /// `stage` `weight` of the way to rest (`StageTransform.identity`), its depth and centre blended as the layouts blend
-    /// their numbers (all of it at 0, exactly); `nil` at a depth of 1 or less, as at rest.
-    private static func stage(_ stage: StageTransform, towardRest weight: Double, outputSize: SIMD2<Int>) -> StageTransform? {
-        let rest = StageTransform.identity(outputSize: outputSize)
-        let blended = StageTransform(
-            depth: stage.depth * (1 - weight) + rest.depth * weight, center: stage.center * (1 - weight) + rest.center * weight)
-        return blended.depth > 1 ? blended : nil
+    /// Puts the screen's group of `frame`, placed on its card by `placing`, inside the card (1c design §5.4 and §14.2),
+    /// `weight` of the way from the stage (`LayoutTimeline.cardWeight`, above 0), with `background` the background's
+    /// transform: `RenderFrame.card` and the card's motion blur. `stage` is the stage's zoom at `output`, of 1b's path,
+    /// which placed the group at `placed`; `motion`, what that path read for its blur.
+    private func inTheCard(
+        _ frame: inout RenderFrame, at output: Int64, weight: Double, stage: StageTransform, background: StageTransform,
+        placed: Rect, placing: Placing, motion: Motion
+    ) {
+        guard let screen = frame.screen else { return }
+        let content = screen.rect
+        let cardSpan = motion.zoomEnds.count > 1 ? paths.cardZoom?.span(from: motion.zoomEnds[0], through: motion.zoomEnds[1]) : nil
+        /// The content's transform at output time `t`: the card's camera and the stage's mixed.
+        func transform(_ t: Int64) -> StageTransform {
+            let card = cardTransform(cardSpan?.state(atOutput: t) ?? paths.cardZoom?.state(atOutput: t), content: content)
+            let zoom = t == output
+                ? stage : stageTransform(motion.zoomSpan?.state(atOutput: t) ?? paths.zoom.state(atOutput: t), screen: placed)
+            return .mix(zoom, card, weight)
+        }
+        let now = transform(output)
+        frame.card = CardPlacement(
+            rect: background.outputRect(ofStage: content, outputSize: outputSize), cornerRadius: screen.cornerRadius * background.depth,
+            content: now, mix: weight)
+        cardBlur(&frame, at: output, transform: transform, content: content, depth: now.depth, motion: motion, placing: placing)
+    }
+
+    /// The card's camera `state` (fractions of the screen's content, `CardZoomState`) as a transform of this output's stage,
+    /// over the content placed at `content` (the screen's rect on the card): the content's point at `state.center` drawn
+    /// at the rect's middle, `z` times as large. An identity at rest: no state (no split), a depth of 1 or less, or one
+    /// that is not a number.
+    private func cardTransform(_ state: CardZoomState?, content: Rect) -> StageTransform {
+        guard let state, state.depth > 1, state.depth.isFinite else { return .identity(outputSize: outputSize) }
+        let origin = SIMD2(content.x, content.y), extent = SIMD2(content.width, content.height)
+        let focus = origin + state.center * extent, middle = origin + extent / 2
+        return StageTransform(depth: state.depth, center: focus - (middle - SIMD2<Double>(outputSize) / 2) / state.depth)
+    }
+
+    /// Adds the motion blur of the frame at output time `output` in a card to `frame` (1c design §5.4): `blur`'s rules over
+    /// the content's `transform` at each time, the zoom's samples from how far the corners of the screen's rect `content`
+    /// go over the camera's shutter, the cursor's from how far it goes on the card (placed by `placing`) times `depth`,
+    /// the content's depth at `output`. Its `subframes` (the content's transforms), or its `cursorSamples`, or nothing.
+    private func cardBlur(
+        _ frame: inout RenderFrame, at output: Int64, transform: (Int64) -> StageTransform, content: Rect, depth: Double,
+        motion: Motion, placing: Placing
+    ) {
+        (frame.subframes, frame.cursorSamples) = ([], [])
+        let corners = [
+            SIMD2(content.x, content.y), SIMD2(content.x + content.width, content.y), SIMD2(content.x, content.y + content.height),
+            SIMD2(content.x + content.width, content.y + content.height),
+        ]
+        var zoomSamples = 1
+        if motion.zoomEnds.count > 1 {
+            zoomSamples = MotionBlurPlan.sampleCount(travelPixels: Self.travel(
+                of: corners, from: transform(motion.zoomEnds[0]), to: transform(motion.zoomEnds[1]), outputSize: outputSize))
+        }
+        let cursor = motion.cursor
+        /// The cursor on the card at output time `t`.
+        func placedCursor(atOutput t: Int64) -> CursorLayer? {
+            cursor.flatMap { placing.cursor(cursorLayer($0.span.sample(atOutput: t), $0.place)) }
+        }
+        var cursorSamples = 1
+        if let cursor, let a = placedCursor(atOutput: cursor.ends[0]), let b = placedCursor(atOutput: cursor.ends[1]) {
+            cursorSamples = MotionBlurPlan.sampleCount(travelPixels: simd_length(b.hotspot - a.hotspot) * depth)
+        }
+        if zoomSamples > 1 {
+            let count = max(zoomSamples, cursorSamples)
+            // The card's camera jumps where the stage's does: the same blocks.
+            let stageTimes = sampleTimes(zoomShutter, count: count, at: output, jumps: paths.zoom.jumps)
+            let cursorTimes = cursorSamples > 1 ? sampleTimes(cursorShutter, count: count, at: output, jumps: paths.cursor.jumps) : nil
+            frame.subframes = stageTimes.indices.map { j in
+                StageSubframe(stage: transform(stageTimes[j]), cursor: cursorTimes.map { placedCursor(atOutput: $0[j]) } ?? frame.cursor)
+            }
+        } else if cursorSamples > 1 {
+            let layers = sampleTimes(cursorShutter, count: cursorSamples, at: output, jumps: paths.cursor.jumps).map {
+                placedCursor(atOutput: $0)
+            }
+            guard var hidden = layers.lazy.compactMap({ $0 }).first else { return }
+            hidden.opacity = 0
+            frame.cursorSamples = layers.map { $0 ?? hidden }
+        }
     }
 
     /// Whether `camera` covers every pixel of an output `output` big, opaque: at full opacity (only then is it opaque;
@@ -566,8 +684,15 @@ public struct FrameEvaluator: Sendable {
     /// How far, in output pixels, the corner of the stage that moves most goes from `a` to `b`.
     private static func cornerTravel(_ a: StageTransform, _ b: StageTransform, outputSize: SIMD2<Int>) -> Double {
         let size = SIMD2<Double>(outputSize)
-        return [SIMD2(0, 0), SIMD2(size.x, 0), SIMD2(0, size.y), size].map { corner in
-            simd_length(b.outputPoint(ofStage: corner, outputSize: outputSize) - a.outputPoint(ofStage: corner, outputSize: outputSize))
+        return travel(of: [SIMD2(0, 0), SIMD2(size.x, 0), SIMD2(0, size.y), size], from: a, to: b, outputSize: outputSize)
+    }
+
+    /// How far, in output pixels, the one of stage points `points` that moves most goes from `a` to `b`.
+    private static func travel(
+        of points: [SIMD2<Double>], from a: StageTransform, to b: StageTransform, outputSize: SIMD2<Int>
+    ) -> Double {
+        points.map { point in
+            simd_length(b.outputPoint(ofStage: point, outputSize: outputSize) - a.outputPoint(ofStage: point, outputSize: outputSize))
         }.max() ?? 0
     }
 

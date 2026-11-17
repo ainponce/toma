@@ -44,9 +44,14 @@ public struct ZoomCameraState: Equatable, Sendable {
 ///     bubble is applied after the box, so a bubble too big for the box leaves the cursor out of the box but visible,
 ///     in the frame, on the same target every step. The bubble counts where the render draws the camera, by the one
 ///     rule of both (`CameraBubble`): with `camera.show`, a camera track with a segment, from the start of its first
-///     segment on, measured against the document's `camera.sizeReference`. The cursor is `CursorPath`'s on the step,
-///     read before the camera moves (design §8.6), at its stage point (`StagePoints.stagePoint(global:at:)`); without
-///     one, the target stays.
+///     segment on, measured against the document's `camera.sizeReference`. With camera layouts (a document whose
+///     `LayoutTimeline` is not trivial, with the camera readable as the render reads it, plan decision 40), the bubble is
+///     the layouts' camera in stage units (`LayoutTimeline.geometry(atOutput:_:)`, through a transition into the span
+///     too) only where a Bubble span rules, the take's or a block's with its own bubble, and none where another does:
+///     in Screen only nothing is over the screen, and the cards of the others are beside it or cover it all (1c design
+///     §5.4). A trivial document's is the take's bubble, as in 1b. The cursor is `CursorPath`'s on the step, read before
+///     the camera moves (design §8.6), at its stage point (`StagePoints.stagePoint(global:at:)`); without one, the
+///     target stays.
 /// - The motion: `zoom.spring` (`StepGrid.spring`, the spring read through `StepGrid.stable(_:)` so a document edited
 ///   by hand never stops the render) for `u` and for each axis of the centre, toward the target. On entering or
 ///   leaving an `instant` block, the camera jumps to the target with velocity 0.
@@ -79,26 +84,46 @@ public struct ZoomCameraPath: Sendable {
     /// before the jump through that of the step it jumps on. A motion blur never mixes the two sides.
     public var jumps: [ClosedRange<Int64>] { simulation.jumps }
 
-    public init(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
+    /// `cameraReadable`: some camera track of the take can be read (plan decision 40, `LayoutTimeline.cameraReadable`), as
+    /// the render is told; without one, the layouts that need the camera are Screen only, with no bubble.
+    public init(
+        document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
+        cameraReadable: Bool = true
+    ) {
         self.init(
-            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil)
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil,
+            layouts: Self.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable))
     }
 
     /// The camera of the same take after an edit (`MotionPaths.init(take:events:document:after:)`): bit for bit
-    /// `init(document:timeMap:stage:cursor:take:)`'s (that one without `old`), from `old`'s checkpoints as
+    /// `init(document:timeMap:stage:cursor:take:cameraReadable:)`'s (that one without `old`), from `old`'s checkpoints as
     /// `ZoomSimulation` keeps them. `changed` is the first step at which what the camera reads besides its blocks and
-    /// spring (the time map, the stage, the cursor and the camera's bubble) can differ; `nil`, none of them does.
+    /// spring (the time map, the stage, the cursor, the camera's bubble and the layouts) can differ; `nil`, none of them
+    /// does. `layouts`: `layouts(of:take:timeMap:cameraReadable:)` of the document; with the camera readable when `nil`.
     init(
         document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
-        after old: ZoomCameraPath?, changedFrom changed: Int?
+        after old: ZoomCameraPath?, changedFrom changed: Int?, layouts: LayoutTimeline? = nil
     ) {
+        let layouts = layouts ?? Self.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: true)
+        self.layouts = layouts
         simulation = ZoomSimulation(
             document: document, timeMap: timeMap, cursor: cursor, take: take,
             viewport: StageViewport(
                 stage: stage, bubble: CameraBubble(document: document, take: take, timeMap: timeMap),
-                reference: document.camera.sizeReference),
+                reference: document.camera.sizeReference,
+                layouts: layouts.isTrivial ? nil : StageViewport.Layouts(layouts, document: document, size: stage.stageSize)),
             after: old?.simulation, changedFrom: changed)
     }
+
+    /// The layouts the camera's bubble is read from, as the render reads them (`FrameEvaluator`): with the camera readable
+    /// only where the document shows a camera the take has.
+    static func layouts(of document: EditDocument, take: TakeRecord, timeMap: TimeMap, cameraReadable: Bool) -> LayoutTimeline {
+        let bubble = CameraBubble(document: document, take: take, timeMap: timeMap)
+        return LayoutTimeline(document: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable && bubble != nil)
+    }
+
+    /// The layouts the camera's bubble was read from (`layouts(of:take:timeMap:cameraReadable:)`): what an edit compares.
+    let layouts: LayoutTimeline
 
     /// The camera on step `s` of the grid (held to the steps of the output), placed.
     public func state(atStep s: Int) -> ZoomCameraState {
@@ -161,6 +186,12 @@ public struct ZoomCameraPath: Sendable {
     /// The checkpoint from which the checkpoints are the old simulation's, after an edit of blocks alone; `nil` when
     /// they were all simulated or kept from before the edit.
     var splicedAt: Int? { simulation.splicedAt }
+
+    /// The camera a following target keeps the cursor out from under at output time `τ` (source instant `host`), in stage
+    /// units, before `bubbleMargin` grows it; `nil` where there is none.
+    func avoidedCamera(atOutput τ: Int64, host: HostTime) -> Rect? {
+        simulation.viewport.camera(atOutput: τ, host: host)
+    }
 }
 
 extension ZoomCameraState {
@@ -172,7 +203,7 @@ extension ZoomCameraState {
 
 /// The stage, in stage units: what `ZoomCameraPath` looks over. A fixed focus is measured in the screen's rect and the
 /// crop keeps to it (the whole stage where none is shown); a following target keeps the cursor out from under the
-/// camera's bubble.
+/// camera's bubble, or, with layouts, the layouts' camera where a Bubble span rules (see `ZoomCameraPath`'s notes).
 struct StageViewport: ZoomViewport {
     let size: SIMD2<Double>
     private let stage: StagePoints
@@ -180,16 +211,63 @@ struct StageViewport: ZoomViewport {
     private let bubble: CameraBubble?
     /// What the bubble is measured against, as the render measures it: the document's `camera.sizeReference`.
     private let reference: SizeReference
+    /// A document's layouts that are not trivial; `nil`, the take's bubble alone, as in 1b.
+    private let layouts: Layouts?
 
     /// A bubble whose centre is this close to the output's centre on an axis is on neither side of it (one in the
     /// middle of an edge).
     private static let centred = 1e-9
 
-    init(stage: StagePoints, bubble: CameraBubble?, reference: SizeReference) {
+    init(stage: StagePoints, bubble: CameraBubble?, reference: SizeReference, layouts: Layouts? = nil) {
         size = stage.stageSize
         self.stage = stage
         self.bubble = bubble
         self.reference = reference
+        self.layouts = layouts
+    }
+
+    /// The camera layouts the bubble is read from, and what their geometry reads of the document, in stage units.
+    struct Layouts: Sendable {
+        let timeline: LayoutTimeline
+        /// `StageStyle.padding` and `cornerRadius`.
+        let padding: Double
+        let cornerRadius: Double
+        /// From this long after a border on, its transition has settled (`LayoutTimeline.StepResponse`).
+        let settleSeconds: Double
+        /// For each span, a Bubble block's own bubble over the stage (`CameraStyle.frame(in:reference:)`), as the
+        /// layouts place it; `nil` for the project's, which is the take's.
+        let blockBubbles: [Rect?]
+
+        init(_ timeline: LayoutTimeline, document: EditDocument, size: SIMD2<Double>) {
+            self.timeline = timeline
+            padding = document.style.padding
+            cornerRadius = document.style.cornerRadius
+            settleSeconds = LayoutTimeline.StepResponse(document.camera.spring).settleSeconds
+            let region = Rect(x: 0, y: 0, width: size.x, height: size.y), reference = document.camera.sizeReference
+            blockBubbles = timeline.spans.map { span in
+                span.blockID == nil ? nil : span.bubbleStyle.map { $0.frame(in: region, reference: reference).rect }
+            }
+        }
+
+        /// The span that rules at output time `τ`, as `LayoutTimeline.span(atOutput:)` finds it: the last one starting at
+        /// or before it, the first one before the output.
+        func index(atOutput τ: Int64) -> Int {
+            let spans = timeline.spans
+            var low = 0, high = spans.count
+            while low < high {
+                let mid = (low + high) / 2
+                if spans[mid].output.lowerBound <= τ { low = mid + 1 } else { high = mid }
+            }
+            return max(low - 1, 0)
+        }
+
+        /// Whether the transition at the start of span `k` is under way at output time `τ`, as the timeline blends it: a
+        /// border that is not an edge of an instant block, less than `settleSeconds` before `τ`.
+        func isMoving(border k: Int, at τ: Int64) -> Bool {
+            let spans = timeline.spans
+            guard k > 0, !spans[k].instant, !spans[k - 1].instant else { return false }
+            return CursorPath.seconds(τ, since: spans[k].output.lowerBound) < settleSeconds
+        }
     }
 
     func screen(at host: HostTime?) -> Rect {
@@ -208,14 +286,40 @@ struct StageViewport: ZoomViewport {
         return cleared(target, of: bubble, cursor: point, depth: depth)
     }
 
-    /// The camera's bubble at output time `τ` (source instant `host`), grown by `bubbleMargin`; `nil` where there is
-    /// none.
+    /// The camera at output time `τ` (source instant `host`), grown by `bubbleMargin`; `nil` where there is none.
     private func bubbleRect(atOutput τ: Int64, host: HostTime) -> Rect? {
-        guard let rect = bubble?.frame(atOutput: τ, host: host, output: size, reference: reference)?.rect else { return nil }
+        guard let rect = camera(atOutput: τ, host: host) else { return nil }
         let grow = ZoomCameraPath.bubbleMargin / 2
         return Rect(
             x: rect.x - rect.width * grow, y: rect.y - rect.height * grow, width: rect.width * (1 + ZoomCameraPath.bubbleMargin),
             height: rect.height * (1 + ZoomCameraPath.bubbleMargin))
+    }
+
+    /// The camera the cursor is kept from at output time `τ` (source instant `host`), in stage units: the take's bubble
+    /// without layouts (1b); with them, where a Bubble span rules, the layouts' camera when it is seen (some opacity, some
+    /// size), and none elsewhere (see `ZoomCameraPath`'s notes). `nil` where there is none.
+    func camera(atOutput τ: Int64, host: HostTime) -> Rect? {
+        guard let layouts else { return bubble?.frame(atOutput: τ, host: host, output: size, reference: reference)?.rect }
+        let k = layouts.index(atOutput: τ)
+        guard layouts.timeline.spans[k].kind == .bubble else { return nil }
+        let takeBubble = bubble?.frame(atOutput: τ, host: host, output: size, reference: reference)
+        let rect: Rect
+        if layouts.isMoving(border: k, at: τ) {
+            // A transition into the span: what it shows.
+            let screen = stage.screenRect(at: host)
+            let camera = layouts.timeline.geometry(atOutput: τ, LayoutInputs(
+                output: size, padding: layouts.padding, cornerRadius: layouts.cornerRadius,
+                screenAspect: screen.flatMap { $0.width > 0 && $0.height > 0 ? $0.width / $0.height : nil }, takeBubble: takeBubble,
+                sizeReference: reference)).camera
+            guard camera.opacity > 0 else { return nil }
+            rect = camera.rect
+        } else {
+            // Settled: its block's own bubble or the take's, as `geometry(atOutput:_:)` gives them, but none before the
+            // camera's first frame.
+            guard let takeBubble else { return nil }
+            rect = layouts.blockBubbles[k] ?? takeBubble.rect
+        }
+        return rect.width > 0 && rect.height > 0 ? rect : nil
     }
 
     /// `target` with the cursor at stage point `point` moved out from under `bubble` (see `ZoomCameraPath`'s notes).
@@ -410,7 +514,7 @@ private struct ZoomBlock: Equatable, Sendable {
 struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     /// The last step simulated: the one of the end of the output.
     let lastStep: Int
-    private let viewport: Viewport
+    let viewport: Viewport
     private let spring: SpringSpec
     /// In output order, never overlapping.
     private let blocks: [ZoomBlock]

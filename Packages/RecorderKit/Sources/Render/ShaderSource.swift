@@ -163,6 +163,38 @@ public enum ShaderSource {
         return float4(color, 1.0) * coverage * opacity;
     }
 
+    // What a card's cut (`RenderFrame.card`) lets through of the pixel at p, for what can go past the screen's edge (the
+    // cursor, the click effects): the clip's image (`imageCoverage`), `strength` of it; all of the pixel at 0.
+    static float clipCoverage(float2 p, constant QuadUniforms &clip, float strength) {
+        return mix(1.0, imageCoverage(p, clip), strength);
+    }
+
+    // The screen in a card (`screenFragment`) through the card's content, cut to the card: what both its own image and the
+    // card's (`clip`) cover, the lesser, so where the two edges meet it is antialiased once.
+    fragment float4 clippedScreenFragment(QuadOut in [[stage_in]],
+                                          constant QuadUniforms &u [[buffer(0)]],
+                                          constant float &opacity [[buffer(1)]],
+                                          constant QuadUniforms &clip [[buffer(2)]],
+                                          texture2d<float> source [[texture(0)]],
+                                          sampler linearSampler [[sampler(0)]]) {
+        float coverage = min(imageCoverage(in.p, u), imageCoverage(in.p, clip));
+        float3 color = source.sample(linearSampler, imageUV(in.uv, u, source)).rgb;
+        return float4(color, 1.0) * coverage * opacity;
+    }
+
+    // `mipmappedScreenFragment` cut to a card, as `clippedScreenFragment`.
+    fragment float4 clippedMipmappedScreenFragment(QuadOut in [[stage_in]],
+                                                   constant QuadUniforms &u [[buffer(0)]],
+                                                   constant float &opacity [[buffer(1)]],
+                                                   constant QuadUniforms &clip [[buffer(2)]],
+                                                   texture2d<float> source [[texture(0)]],
+                                                   sampler trilinearSampler [[sampler(0)]]) {
+        float coverage = min(imageCoverage(in.p, u), imageCoverage(in.p, clip));
+        float2 uv = imageUV(in.uv, u, source);
+        float3 color = source.sample(trilinearSampler, uv, gradient2d(dfdx(in.uv), dfdy(in.uv))).rgb;
+        return float4(color, 1.0) * coverage * opacity;
+    }
+
     struct ShadowUniforms {
         float2 lower;       // the box: the rect that casts the shadow, moved down by its offset
         float2 upper;
@@ -493,6 +525,16 @@ public enum ShaderSource {
         return sprite.sample(mipSampler, in.uv) * opacity;
     }
 
+    // The cursor's image at `opacity`, cut to a card (`clipCoverage`).
+    fragment float4 clippedCursorFragment(QuadOut in [[stage_in]],
+                                          constant float &opacity [[buffer(0)]],
+                                          constant QuadUniforms &clip [[buffer(1)]],
+                                          constant float &strength [[buffer(2)]],
+                                          texture2d<float> sprite [[texture(0)]],
+                                          sampler mipSampler [[sampler(0)]]) {
+        return sprite.sample(mipSampler, in.uv) * (opacity * clipCoverage(in.p, clip, strength));
+    }
+
     struct ClickEffectUniforms {
         float2 center;          // output pixels
         float radius;           // a ring's middle circle, or a disc's edge
@@ -523,6 +565,19 @@ public enum ShaderSource {
     fragment float4 clickEffectFragment(QuadOut in [[stage_in]],
                                         constant ClickEffectUniforms &u [[buffer(0)]]) {
         return clickEffect(in.p, u);
+    }
+
+    // A click effect cut to a card (`clipCoverage`).
+    fragment float4 clippedClickEffectFragment(QuadOut in [[stage_in]],
+                                               constant ClickEffectUniforms &u [[buffer(0)]],
+                                               constant QuadUniforms &clip [[buffer(1)]],
+                                               constant float &strength [[buffer(2)]]) {
+        return clickEffect(in.p, u) * clipCoverage(in.p, clip, strength);
+    }
+
+    // Nothing, over the whole target: what a card's content is drawn over in a subsample (`RenderFrame.card`).
+    fragment float4 transparentFragment(GradientOut in [[stage_in]]) {
+        return float4(0.0);
     }
 
     // The motion blur's render pass (`Compositor`): attachment 0 is a subsample of the stage, drawn there by the stage's
@@ -556,6 +611,18 @@ public enum ShaderSource {
         return out;
     }
 
+    // One of the cursor's samples cut to a card (`clippedCursorFragment`), added to the sum.
+    fragment SumOut clippedCursorSampleFragment(QuadOut in [[stage_in]],
+                                                constant float &opacity [[buffer(0)]],
+                                                constant QuadUniforms &clip [[buffer(1)]],
+                                                constant float &strength [[buffer(2)]],
+                                                texture2d<float> sprite [[texture(0)]],
+                                                sampler mipSampler [[sampler(0)]]) {
+        SumOut out;
+        out.sum = sprite.sample(mipSampler, in.uv) * (opacity * clipCoverage(in.p, clip, strength));
+        return out;
+    }
+
     // The average of the subsamples of the stage, into the target.
     fragment TargetOut resolveFragment(float4 sum [[color(1)]]) {
         TargetOut out;
@@ -576,6 +643,16 @@ public enum ShaderSource {
                                                  constant ClickEffectUniforms &u [[buffer(0)]]) {
         TargetOut out;
         out.color = clickEffect(in.p, u);
+        return out;
+    }
+
+    // A click effect cut to a card (`clipCoverage`) into the target of the motion blur's pass.
+    fragment TargetOut clippedClickEffectTargetFragment(QuadOut in [[stage_in]],
+                                                        constant ClickEffectUniforms &u [[buffer(0)]],
+                                                        constant QuadUniforms &clip [[buffer(1)]],
+                                                        constant float &strength [[buffer(2)]]) {
+        TargetOut out;
+        out.color = clickEffect(in.p, u) * clipCoverage(in.p, clip, strength);
         return out;
     }
 

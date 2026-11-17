@@ -310,10 +310,11 @@ extension ZoomFixtures {
                 origin: .user))
             split.camera.layouts.append(splitBlock(9, from: late, to: late + 20))
             size.cursor.scale = 2.5
-            // (cursor, stage's camera, card's camera): the most steps each can simulate.
+            // (cursor, stage's camera, card's camera): the most steps each can simulate. A split keeps no bubble from the
+            // stage's camera's cursor while it rules (1c Task 12), so the stage's camera is simulated again from it.
             let cases: [(String, EditDocument, (Int, Int, Int))] = [
                 ("a zoom moved", moved, (0, tail, tail)), ("a cut", cut, (tail, tail, tail)),
-                ("a change of the bubble", bubble, (0, tail, 0)), ("a split added", split, (0, 0, 0)),
+                ("a change of the bubble", bubble, (0, tail, 0)), ("a split added", split, (0, tail, 0)),
                 ("the cursor's size", size, (0, 0, 0)),
             ]
             for (name, edited, most) in cases {
@@ -406,7 +407,8 @@ extension ZoomFixtures {
 
         /// A split that comes (a block of the camera track), goes and comes back with a zoom edit: the card's camera is
         /// built from output 0 when it appears, dropped when it goes, and, with one before, rebuilt at once with the
-        /// stage's (`MotionPaths.atOnce`); each time with the bits of the paths built from nothing.
+        /// stage's (`MotionPaths.atOnce`); the stage's from the split's border on, where the bubble it keeps the cursor
+        /// from changes; each time with the bits of the paths built from nothing.
         @Test func theCardsCameraComesAndGoes() throws {
             let seconds = 60.0
             let take = zoomTake(camera: true, seconds: seconds + 1)
@@ -432,7 +434,8 @@ extension ZoomFixtures {
                     let card = try #require(paths.cardZoom).simulatedSteps
                     #expect(had && (1..<all).contains(paths.zoom.simulatedSteps) && (1..<all).contains(card))
                 default:
-                    #expect(!had && paths.zoom.simulatedSteps == 0, "\(name)")
+                    // The stage's camera from the split's border on: the bubble kept from its cursor changes there.
+                    #expect(!had && (1..<all).contains(paths.zoom.simulatedSteps), "\(name)")
                     #expect(try #require(paths.cardZoom, "\(name)").simulatedSteps == all, "\(name)")
                 }
             }

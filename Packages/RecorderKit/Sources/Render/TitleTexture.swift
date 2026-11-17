@@ -80,12 +80,14 @@ final class TitleTexture {
     }
 
     /// The scale `frame`'s title is drawn at, of its `source(for:)` (see the type's notes): 1 at rest and without a window
-    /// frame; otherwise the deepest depth of the stage's transforms (its subframes' too), times how much larger the window
-    /// is now than where it goes while it moves, rounded up to √2^k, at most what keeps the texture within `maxSide`
-    /// pixels. `Compositor` and `FrameRenderer` both read it here.
+    /// frame; otherwise the deepest depth of the stage's transforms (its subframes' too; in a card's mode the background's
+    /// alone, which the window frame stays with, drawn once), times how much larger the window is now than where it goes
+    /// while it moves, rounded up to √2^k, at most what keeps the texture within `maxSide` pixels. `Compositor` and
+    /// `FrameRenderer` both read it here.
     static func scale(for frame: RenderFrame) -> Double {
         guard let window = frame.windowFrame else { return 1 }
-        var depth = frame.subframes.map(\.stage.depth).reduce(frame.stage?.depth ?? 1, max)
+        var depth = frame.isCardMode
+            ? frame.backgroundTransform?.depth ?? 1 : frame.subframes.map(\.stage.depth).reduce(frame.stage?.depth ?? 1, max)
         let source = frame.settledWindowFrame ?? window
         if let settled = frame.settledWindowFrame {
             let larger = max(window.rect.width / settled.rect.width, window.barHeight / settled.barHeight)

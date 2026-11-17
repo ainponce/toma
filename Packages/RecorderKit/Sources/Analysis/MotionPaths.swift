@@ -17,13 +17,17 @@ public struct MotionPaths: Sendable {
     /// What of the document they were built from.
     private let inputs: Inputs
 
-    public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
+    /// `cameraReadable`: some camera track of the take can be read (plan decision 40, `LayoutTimeline.cameraReadable`),
+    /// as the render is told (`FrameRenderer.cameraReadable`): the zoom camera's layouts see the camera as the render
+    /// does (`ZoomCameraPath`).
+    public init(take: TakeRecord, events: [InputEvent], document: EditDocument, cameraReadable: Bool = true) {
         timeMap = TimeMap(sequence: document.sequence)
         stage = StagePoints(take: take, events: events, document: document)
         cursor = CursorPath(take: take, events: events, style: document.cursor, timeMap: timeMap)
-        zoom = ZoomCameraPath(document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take)
+        zoom = ZoomCameraPath(
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, cameraReadable: cameraReadable)
         cardZoom = CardZoomPath(document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take)
-        inputs = Inputs(document)
+        inputs = Inputs(document, cameraReadable: cameraReadable)
     }
 
     /// The paths of `document` after an edit of the document `old` was built from, of the same take and events (design
@@ -40,18 +44,22 @@ public struct MotionPaths: Sendable {
     ///   end of the shorter output, and the whole of it with another smoothing. Its raw inputs are `old`'s over the
     ///   same time map, and its idle opacity too with the same idle settings.
     /// - The zoom's blocks on the grid and its spring, which each camera compares itself; the take's camera bubble for
-    ///   the stage's camera (its first change placed otherwise; the whole of it when it shows or starts otherwise).
+    ///   the stage's camera (its first change placed otherwise; the whole of it when it shows or starts otherwise), and
+    ///   the layouts it reads that bubble from where a Bubble span rules (`firstChangedLayoutOutput`).
     /// - The stage (the screens, the aspect, the padding and whether there is a window frame): the whole of both
     ///   cameras, and it is built again.
-    /// - The layouts only decide whether there is a card's camera: one that was not there is simulated from output 0.
+    /// - For the card's camera, the layouts only decide whether there is one: one that was not there is simulated from
+    ///   output 0.
     ///
     /// After an edit of zoom blocks alone, each camera also takes the old one's tail from the first checkpoint after the
     /// blocks it changed on which it is the old camera again, bit for bit (`ZoomSimulation`). The stage's camera and the
     /// card's are built at once, on two threads: they read the same cursor and stage and nothing of each other.
     ///
-    /// Built off the main thread, like `init(take:events:document:)`.
-    public init(take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths) {
-        let inputs = Inputs(document)
+    /// Built off the main thread, like `init(take:events:document:cameraReadable:)`, with the camera readable as there.
+    public init(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths, cameraReadable: Bool = true
+    ) {
+        let inputs = Inputs(document, cameraReadable: cameraReadable)
         guard inputs != old.inputs else {
             self = old
             return
@@ -67,12 +75,16 @@ public struct MotionPaths: Sendable {
         let changed = sameStage ? [timeChanged, cursorChanged].compactMap { $0 }.min() : 0
         let bubbleChanged = Self.firstChangedBubbleOutput(
             old.inputs.camera, old.timeMap, document.camera, timeMap, take: take.id).map(StepGrid.firstStep(atOrAfter:))
-        let zoomChanged = [changed, bubbleChanged].compactMap { $0 }.min()
+        let layouts = ZoomCameraPath.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable)
+        let layoutsChanged = Self.firstChangedLayoutOutput(
+            old.zoom.layouts, layouts, sameSpring: old.inputs.camera.spring == document.camera.spring
+        ).map(StepGrid.firstStep(atOrAfter:))
+        let zoomChanged = [changed, bubbleChanged, layoutsChanged].compactMap { $0 }.min()
         (zoom, cardZoom) = Self.atOnce(
             {
                 ZoomCameraPath(
                     document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.zoom,
-                    changedFrom: zoomChanged)
+                    changedFrom: zoomChanged, layouts: layouts)
             },
             {
                 CardZoomPath(
@@ -96,17 +108,18 @@ public struct MotionPaths: Sendable {
         return (first.value!, second.value!)
     }
 
-    /// Whether these are the paths of `document` too (of the same take and events): it differs from the one they were
-    /// built from in nothing they read (the clips, the screens, the aspect, the window frame and the padding, the cursor,
-    /// the zoom and the camera, whose layouts decide whether there is a card's zoom), as after an edit of the background,
-    /// the shadow or the corners. Then a new revision keeps them rather than building them again (about 100 ms for an
-    /// hour of take).
+    /// Whether these are the paths of `document` too (of the same take and events, with the camera as readable): it
+    /// differs from the one they were built from in nothing they read (the clips, the screens, the aspect, the window
+    /// frame and the padding, the cursor, the zoom and the camera, whose layouts decide whether there is a card's zoom and
+    /// where the stage's keeps the cursor from the bubble), as after an edit of the background, the shadow or the corners.
+    /// Then a new revision keeps them rather than building them again (about 100 ms for an hour of take).
     public func areThePaths(of document: EditDocument) -> Bool {
-        inputs == Inputs(document)
+        inputs == Inputs(document, cameraReadable: inputs.cameraReadable)
     }
 
-    /// Everything of a document the paths read (`StagePoints`, `CursorPath`, `ZoomCameraPath`, `CameraBubble`, and
-    /// `CardZoomPath`: the project's layout and the blocks', which make a split, over the same stage, cursor and zoom).
+    /// Everything of a document the paths read (`StagePoints`, `CursorPath`, `ZoomCameraPath`, `CameraBubble`, the
+    /// layouts, and `CardZoomPath`: the project's layout and the blocks', which make a split, over the same stage, cursor
+    /// and zoom), and whether the camera can be read.
     private struct Inputs: Equatable, Sendable {
         let sequence: [Clip]
         let screens: ScreenPlan
@@ -117,8 +130,9 @@ public struct MotionPaths: Sendable {
         let zoom: ZoomPlan
         /// With `layout` and `layouts`.
         let camera: CameraPlan
+        let cameraReadable: Bool
 
-        init(_ document: EditDocument) {
+        init(_ document: EditDocument, cameraReadable: Bool) {
             sequence = document.sequence
             screens = document.screens
             aspect = document.aspect
@@ -127,6 +141,7 @@ public struct MotionPaths: Sendable {
             cursor = document.cursor
             zoom = document.zoom
             camera = document.camera
+            self.cameraReadable = cameraReadable
         }
 
         /// What `StagePoints` reads: the screens, the aspect, the padding and whether there is a window frame (its
@@ -164,6 +179,25 @@ public struct MotionPaths: Sendable {
         }
         guard old.count != new.count else { return nil }
         return min(oldMap.duration, newMap.duration)
+    }
+
+    /// The first output instant at which the camera the stage's zoom keeps the cursor from (`ZoomCameraPath`'s notes) can
+    /// differ between the layouts `old` and `new` (`ZoomCameraPath.layouts`), the take's bubble aside: `nil` when both are
+    /// trivial (that bubble alone in both); 0 with another spring (`sameSpring` false); otherwise the start of the first
+    /// span that differs but for where it ends (or that only one has). Before it, the span that rules and every span a
+    /// transition there reads are the same in both, and a trivial document's bubble is the settled one of the project's
+    /// Bubble span, so the camera is too. `nil` when every span is the same.
+    static func firstChangedLayoutOutput(_ old: LayoutTimeline, _ new: LayoutTimeline, sameSpring: Bool) -> Int64? {
+        guard !old.isTrivial || !new.isTrivial else { return nil }
+        guard sameSpring else { return 0 }
+        func start(_ span: LayoutSpan) -> LayoutSpan {
+            var start = span
+            start.output = span.output.lowerBound..<span.output.lowerBound
+            return start
+        }
+        let common = min(old.spans.count, new.spans.count)
+        let k = (0..<common).first { start(old.spans[$0]) != start(new.spans[$0]) } ?? common
+        return [old.spans, new.spans].compactMap { k < $0.count ? $0[k].output.lowerBound : nil }.min()
     }
 
     /// The first output instant at which the take's camera bubble (`CameraBubble`) of `new` over `newMap` can differ
