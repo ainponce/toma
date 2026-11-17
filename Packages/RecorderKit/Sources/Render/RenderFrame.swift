@@ -14,7 +14,8 @@ public struct RenderFrame: Equatable, Sendable {
     /// `globalFrame`).
     public var screen: ScreenLayer?
     /// `nil` when the cursor's position is unknown or off what is shown of the screen. In stage coordinates: output
-    /// pixels with the stage unzoomed. While it is hidden (`opacity` 0) nothing is drawn of it.
+    /// pixels with the stage unzoomed. While it is hidden (`opacity` 0) nothing is drawn of it. In a card (`card`), drawn
+    /// through the card's content and cut to it, like the screen.
     public var cursor: CursorLayer?
     /// `nil` when the take has no camera, before its first frame in the Bubble, and where a layout hides it.
     public var camera: CameraLayer?
@@ -25,21 +26,27 @@ public struct RenderFrame: Equatable, Sendable {
     /// shown.
     public var windowFrame: WindowFrameLayer?
     /// The click effects shown (`ClickEffects`), in click order: in stage coordinates like the cursor, drawn over it
-    /// and never blurred. None without an effect.
+    /// and never blurred (in a card, through the card's content and cut to it). None without an effect.
     public var clickEffects: [ClickEffectLayer]
     /// The shadow under `screen`, or under the whole window with `windowFrame`; `nil` without a shadow (`style.shadow`
     /// 0) and when no screen is shown.
     public var shadow: ShadowLayer?
     /// The zoom camera at the frame's time (design §7.4): how the stage is drawn without `subframes`, and how the click
-    /// effects always are. `nil`, like an identity, draws the stage as it is, as without a zoom.
+    /// effects always are. `nil`, like an identity, draws the stage as it is, as without a zoom. In a card
+    /// (`backgroundTransform`), `nil`: the background goes through `backgroundTransform` and the screen's content through
+    /// `card`'s.
     public var stage: StageTransform?
     /// The motion blur of the zoom camera (design §7.2 and §7.4): with any, the stage is drawn once for each, through its
     /// transform and with its cursor instead of `stage` and `cursor`, and they are averaged in their order before the
     /// click effects and the camera are drawn. Empty: the stage drawn once, directly into the target, as without a blur.
+    /// In a card (1c design §5.4), each is the card's content (the screens and the cursor) through its transform, cut to
+    /// the card, and their average is drawn over the rest of the stage, drawn once through `backgroundTransform`: the
+    /// background is the same as without the blur.
     public var subframes: [StageSubframe]
     /// The motion blur of the cursor with the zoom camera still (design §7.5): without `subframes`, with any, the stage is
     /// drawn once through `stage` and these cursors, averaged, over it instead of `cursor`. In stage coordinates, like
-    /// `cursor`, each with its own position, opacity and press and the image of `cursor`.
+    /// `cursor`, each with its own position, opacity and press and the image of `cursor`. In a card, through its content
+    /// and cut to it.
     public var cursorSamples: [CursorLayer]
     /// During a change of screen with `GeometryTransitions.spring` (design §7.6), the screen going away: drawn under
     /// `screen`, in its rect and cut as it is, while `screen` fades in over it (`ScreenLayer.opacity`). `nil` otherwise.
@@ -59,6 +66,17 @@ public struct RenderFrame: Equatable, Sendable {
     /// is drawn, neither the background nor the screen with its shadow, window frame, cursor and click effects, and the
     /// frame is the one they would give under it. `false` on 1b's path and wherever anything shows past the camera.
     public var coveredByCamera: Bool
+    /// The screen's card, when the zoom acts inside it (1c design §5.4 and §14.2): the screens, the cursor and the click
+    /// effects are drawn through its content's transform and cut to it, and the window frame and the shadow stay with the
+    /// background (`backgroundTransform`). `nil` on the stage (1b's mode), and where the screen's group is not drawn.
+    public var card: CardPlacement?
+    /// How the background is drawn in a card's mode (1c design §5.4 and §14.2), the shadow and the window frame with it:
+    /// still (an identity) in a card, the stage's zoom (`StageTransform.mix`) on the way between the two during a
+    /// transition. `nil` on the stage, 1b's mode: everything through `stage`.
+    public var backgroundTransform: StageTransform?
+
+    /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
+    var isCardMode: Bool { card != nil || backgroundTransform != nil }
 
     public init(
         outputSize: SIMD2<Int>,
@@ -78,7 +96,9 @@ public struct RenderFrame: Equatable, Sendable {
         previousScreen: ScreenLayer? = nil,
         settledWindowFrame: WindowFrameLayer? = nil,
         screenOpacity: Double? = nil,
-        coveredByCamera: Bool = false
+        coveredByCamera: Bool = false,
+        card: CardPlacement? = nil,
+        backgroundTransform: StageTransform? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -98,6 +118,33 @@ public struct RenderFrame: Equatable, Sendable {
         self.settledWindowFrame = settledWindowFrame
         self.screenOpacity = screenOpacity
         self.coveredByCamera = coveredByCamera
+        self.card = card
+        self.backgroundTransform = backgroundTransform
+    }
+}
+
+/// The screen's card where the zoom acts inside it (1c design §5.4 and §14.2): a Split settled, or the way to or from one.
+public struct CardPlacement: Equatable, Sendable {
+    /// What the card's content is cut to: the screen's rect (under the bar with a window frame) as `backgroundTransform`
+    /// draws it, in output pixels. With a window frame, the window drawn the same way cuts it too, as it cuts the screen.
+    public var rect: Rect
+    /// In output pixels: the screen's corners (without a window frame).
+    public var cornerRadius: Double
+    /// How the screen's content (the screens, the cursor and the click effects, in stage coordinates) is drawn: the card's
+    /// zoom (`MotionPaths.cardZoom`) over the screen's rect in a card, mixed with the stage's zoom during a transition
+    /// (`StageTransform.mix`). The cursor is as many times larger as its depth.
+    public var content: StageTransform
+    /// How far from the stage to the card (`LayoutTimeline.cardWeight`): 1 in a card, between 0 and 1 (a little past them
+    /// with the spring) during a transition, by which the transforms and the cut are mixed. What goes past the screen's
+    /// edge on the stage, the cursor and the click effects, is cut by this much of the cut, read from 0 to 1, so it is not
+    /// cut on the stage nor at a transition's start.
+    public var mix: Double
+
+    public init(rect: Rect, cornerRadius: Double, content: StageTransform, mix: Double) {
+        self.rect = rect
+        self.cornerRadius = cornerRadius
+        self.content = content
+        self.mix = mix
     }
 }
 
@@ -128,6 +175,15 @@ public struct StageTransform: Equatable, Sendable {
     func outputRect(ofStage rect: Rect, outputSize: SIMD2<Int>) -> Rect {
         let origin = outputPoint(ofStage: SIMD2(rect.x, rect.y), outputSize: outputSize)
         return Rect(x: origin.x, y: origin.y, width: rect.width * depth, height: rect.height * depth)
+    }
+
+    /// `a` and `b` mixed at `p` as the layouts mix their numbers (1c design §5.3 and §5.4): every stage point drawn at
+    /// `1 − p` times where `a` draws it plus `p` times where `b` does, in any output. So the depth is mixed linearly and a
+    /// rect is drawn at the two drawings of it mixed; `b` itself, exactly, at `p` 1.
+    static func mix(_ a: StageTransform, _ b: StageTransform, _ p: Double) -> StageTransform {
+        let depth = a.depth * (1 - p) + b.depth * p
+        // `centre × depth` is `a`'s and `b`'s mixed: `b.center` plus `a`'s offset from it, in its share of the depth.
+        return StageTransform(depth: depth, center: b.center + (a.center - b.center) * (a.depth * (1 - p) / depth))
     }
 }
 

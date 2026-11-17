@@ -57,9 +57,9 @@ public enum LayoutTrackRules {
     }
 
     /// The camera of `take` can be read (plan decision 40): some camera track has a segment `availability` finds present.
-    /// A take without a camera track has none to read.
+    /// A take without a camera track has none to read. The render's rule (`LayoutTimeline.cameraReadable`).
     public static func cameraReadable(take: TakeRecord, availability: (SegmentRecord) -> SegmentAvailability) -> Bool {
-        take.tracks.contains { $0.kind == .camera && $0.segments.contains { availability($0) == .present } }
+        LayoutTimeline.cameraReadable(take: take, availability: availability)
     }
 
     // MARK: - The preview and the keys

@@ -1025,10 +1025,15 @@ struct BenchPreview: AsyncParsableCommand {
             print("source: the first segment of the screen cannot be read")
         }
 
+        // The renderer first: the paths see the camera as it reads it (plan decision 40), as the app's do.
+        let size = SIMD2(width, height)
+        let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: fps)
+
         // The motion paths: of the take, and of an hour.
         let clock = ContinuousClock()
         var started = clock.now
-        let paths = MotionPaths(take: project.take, events: project.events, document: document)
+        let paths = MotionPaths(
+            take: project.take, events: project.events, document: document, cameraReadable: renderer.cameraReadable)
         let takePaths = clock.now - started
         let takeSeconds = TimeMap(sequence: document.sequence).durationSeconds
         print("paths: \(milliseconds(takePaths)) ms for \(String(format: "%.1f", takeSeconds)) s of take")
@@ -1036,13 +1041,11 @@ struct BenchPreview: AsyncParsableCommand {
         var hourBest = Duration.seconds(3600)
         for _ in 0..<3 {
             started = clock.now
-            _ = MotionPaths(take: hour.take, events: hour.events, document: hour.document)
+            _ = MotionPaths(take: hour.take, events: hour.events, document: hour.document, cameraReadable: renderer.cameraReadable)
             hourBest = min(hourBest, clock.now - started)
         }
         print("paths of an hour: \(milliseconds(hourBest)) ms (best of 3; \(hour.events.count) events, \(hour.document.zoom.regions.count) zoom blocks)")
 
-        let size = SIMD2(width, height)
-        let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: fps)
         renderer.setScene(renderer.makeScene(document: document, paths: paths, outputSize: size))
         let layer = CAMetalLayer()
         CATransaction.begin()

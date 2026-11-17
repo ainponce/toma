@@ -223,6 +223,76 @@ extension ZoomFixtures {
             }
         }
 
+        @Test func screenOnlyBlockHasNoAvoidZone() {
+            // The bubble and the cursor of `cursorUnderTheBubbleCountsAsOutside`: a circle at the bottom centre, the cursor
+            // inside the central box but under it from 4 s.
+            let bubble = CameraStyle(shape: .circle, size: 0.40, anchor: .bottom)
+            let middle = SIMD2(8.0 / 9, 0.5)
+            let events = [pointer(0, global(middle)), pointer(4, global(SIMD2(middle.x, 0.6)))]
+            let regions = [block(1, from: 1, to: 12)]
+            let take = zoomTake(camera: true)
+            func screenOnly(from: Double, to: Double) -> LayoutBlock {
+                LayoutBlock(
+                    id: "l-00000001", take: zoomTakeID, start: source(from), end: source(to), kind: .screenOnly, instant: false)
+            }
+            // The trivial document, as in 1b: under the bubble, the target moves.
+            let trivial = paths(zoomDocument(regions: regions, bubble: bubble), events: events, take: take).zoom
+            #expect(!near(trivial.camera(atStep: step(4)).target, middle))
+            // In a Screen only block nothing is kept from the cursor: the target and the centre stay. The project's layout
+            // Screen only, the same.
+            let documents = [
+                zoomDocument(regions: regions, bubble: bubble, layouts: [screenOnly(from: 0, to: 20)]),
+                zoomDocument(regions: regions, bubble: bubble, layouts: [screenOnly(from: 3, to: 6)]),
+                zoomDocument(regions: regions, bubble: bubble, layout: CameraLayout(kind: .screenOnly)),
+            ]
+            for (k, document) in documents.enumerated() {
+                let zoom = paths(document, events: events, take: take).zoom
+                #expect(near(zoom.camera(atStep: step(4)).target, middle), "\(k)")
+                #expect(near(zoom.state(atStep: step(5.5)).center, middle), "\(k)")
+            }
+            // After the block from 3 s to 6 s the Bubble rules again and its camera, coming back, keeps the cursor out.
+            let after = paths(documents[1], events: events, take: take).zoom
+            #expect(!near(after.camera(atStep: step(7)).target, middle))
+        }
+
+        @Test func theZoneIsTheLayoutsCameraWhereABubbleRules() {
+            // Every layout, a Bubble block with its own bubble, an instant one, borders close together, with padding.
+            let take = zoomTake(camera: true)
+            let bubble = CameraStyle(shape: .circle, size: 0.30, anchor: .bottomTrailing)
+            let own = BubbleLayout(style: CameraStyle(shape: .roundedSquare, size: 0.25, anchor: .topLeading))
+            func layoutBlock(_ number: Int, _ kind: LayoutKind, from: Double, to: Double, instant: Bool = false) -> LayoutBlock {
+                LayoutBlock(
+                    id: "l-0000000\(number)", take: zoomTakeID, start: source(from), end: source(to), kind: kind, instant: instant,
+                    bubble: kind == .bubble ? own : nil, split: kind == .split ? SplitLayout() : nil)
+            }
+            let blocks = [
+                layoutBlock(1, .bubble, from: 1, to: 3), layoutBlock(2, .split, from: 3.4, to: 5),
+                layoutBlock(3, .screenOnly, from: 5.2, to: 6), layoutBlock(4, .cameraOnly, from: 7, to: 8),
+                layoutBlock(5, .bubble, from: 9, to: 10, instant: true),
+                layoutBlock(6, .cameraFull, from: 11, to: 12),
+            ]
+            let document = zoomDocument(padding: 0.05, regions: [block(1, from: 0, to: 15)], bubble: bubble, layouts: blocks)
+            let motion = paths(document, take: take)
+            let timeMap = motion.timeMap, stageSize = motion.stage.stageSize
+            let layouts = LayoutTimeline(document: document, take: take, timeMap: timeMap, cameraReadable: true)
+            let camera = CameraBubble(document: document, take: take, timeMap: timeMap)
+            var bubbles = 0, none = 0
+            for τ in stride(from: Int64(0), to: output(16), by: 3_000_000) {
+                let host = timeMap.source(atOutput: τ)!.source
+                let screen = motion.stage.screenRect(at: host)
+                let geometry = layouts.geometry(atOutput: τ, LayoutInputs(
+                    output: stageSize, padding: 0.05, cornerRadius: document.style.cornerRadius,
+                    screenAspect: screen.map { $0.width / $0.height },
+                    takeBubble: camera?.frame(atOutput: τ, host: host, output: stageSize, reference: .height), sizeReference: .height))
+                let seen = geometry.camera.opacity > 0 && geometry.camera.rect.width > 0 && geometry.camera.rect.height > 0
+                let expected = layouts.span(atOutput: τ).kind == .bubble && seen ? geometry.camera.rect : nil
+                let zone = motion.zoom.avoidedCamera(atOutput: τ, host: host)
+                #expect(zone == expected, "at \(τ)")
+                if expected == nil { none += 1 } else { bubbles += 1 }
+            }
+            #expect(bubbles > 1_000 && none > 1_000)
+        }
+
         @Test func theBubbleIsMeasuredAsTheRenderMeasuresIt() {
             // 9:16 of the 1440×900 display, without padding: the screen is 0.5625 × 0.3516 from y 0.3242. A circle of 0.40 at
             // the bottom centre is, against the output's height (1b), 0.40 tall from y 0.568, from 0.552 grown; against its

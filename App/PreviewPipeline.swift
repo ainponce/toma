@@ -70,7 +70,7 @@ final class RevisionBuilder: Sendable {
     /// The paths of `document`: those last built if they are its, otherwise new ones. On `queue`.
     private func paths(of document: EditDocument) -> MotionPaths {
         if let last = state.withLock({ $0.paths }), last.areThePaths(of: document) { return last }
-        let paths = MotionPaths(take: take, events: events, document: document)
+        let paths = MotionPaths(take: take, events: events, document: document, cameraReadable: renderer.cameraReadable)
         state.withLock { $0.paths = paths }
         return paths
     }

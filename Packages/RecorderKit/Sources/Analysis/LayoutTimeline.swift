@@ -138,6 +138,14 @@ public struct LayoutTimeline: Sendable {
         response = StepResponse(camera.spring)
     }
 
+    /// Whether the camera of `take` can be read (plan decision 40): some camera track has a segment that `availability`
+    /// finds present (not empty nor unreadable, and its file there: `SegmentAvailability`). A take without a camera track
+    /// has none to read. The one rule the render (`FrameRenderer`), the zoom's paths and the editor (`LayoutTrackRules`) go
+    /// by, so they all see the same layouts.
+    public static func cameraReadable(take: TakeRecord, availability: (SegmentRecord) -> SegmentAvailability) -> Bool {
+        take.tracks.contains { $0.kind == .camera && $0.segments.contains { availability($0) == .present } }
+    }
+
     /// The blocks of take `take` of `document` where the output shows them, as the type's notes place them: each one's index
     /// in `camera.layouts` and its output range, in output order (the document's among those that start together), never
     /// overlapping. A block that shows nothing (in a cut, or entirely inside the one before it) is not there.

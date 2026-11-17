@@ -353,7 +353,7 @@ func transitionIsOneComposition() async throws {
     #expect(cameraOnly.frame(at: 4).screen == nil && cameraOnly.frame(at: 4).screenOpacity == 0)
 }
 
-@Test func zoomGoesToRestInTheCards() throws {
+@Test func theZoomMovesIntoTheScreensCard() throws {
     let take = layoutTake()
     // A 2× zoom off the centre over the whole take, and a split from 2 s on.
     let doc = document(of: take, [block(1, .split, from: 2, to: 10)]) { document in
@@ -365,10 +365,48 @@ func transitionIsOneComposition() async throws {
     // Over the whole stage in the Bubble, as 1b's path draws it.
     let zoomed = try #require(scene.frame(at: 1.5).stage)
     #expect(zoomed == evaluator(take, doc, path: .legacy).frame(at: 1.5).stage && zoomed.depth == 2)
-    // On its way to rest through the transition, and at rest in the split.
-    let between = try #require(scene.frame(at: 2.2).stage)
+    #expect(scene.frame(at: 1.5).backgroundTransform == nil)
+    // The background on its way to rest through the transition, and at rest in the split, where the zoom goes on inside
+    // the screen's card (Task 12).
+    let between = try #require(scene.frame(at: 2.2).backgroundTransform)
     #expect(between.depth > 1 && between.depth < 2, "\(between.depth)")
-    #expect(scene.frame(at: 4).stage == nil)
+    let split = scene.frame(at: 4)
+    #expect(split.stage == nil && split.backgroundTransform == .identity(outputSize: size) && split.card?.content.depth == 2)
+}
+
+@Test func leavingCameraFullBringsTheScreenBack() throws {
+    let take = layoutTake()
+    let events = [InputEvent(t: base, kind: .cursor(x: 320, y: 180))]
+    // Camera full screen from 0 to 2 s, then the project's Bubble, with a window frame and a shadow.
+    let doc = document(of: take, [block(1, .cameraFull, from: 0, to: 2)]) { document in
+        document.style.frame = .macWindow(appearance: .dark, title: "Toma", buttons: true)
+        document.style.shadow = 0.5
+    }
+    let scene = FrameEvaluator(take: take, events: events, document: doc, outputSize: size)
+    let whole = Rect(x: 0, y: 0, width: Double(size.x), height: Double(size.y))
+    // Settled, and at the border itself: the camera alone.
+    for t in [1.9, 2.0] {
+        let covered = scene.frame(at: t)
+        #expect(covered.coveredByCamera && covered.screen == nil && covered.windowFrame == nil && covered.cursor == nil, "\(t)")
+    }
+    // The first frame after the border: no longer covered; the group back, faint, with its window frame, its shadow and
+    // its cursor; the camera on its way from the whole output to the bubble.
+    let first = scene.frame(at: 2 + 1 / Double(doc.frameRate))
+    #expect(!first.coveredByCamera)
+    let opacity = try #require(first.screenOpacity)
+    #expect(opacity > 0 && opacity < 0.5, "\(opacity)")
+    let screen = try #require(first.screen)
+    #expect(screen.opacity == opacity && first.windowFrame != nil && first.shadow != nil)
+    #expect(first.cursor?.opacity == opacity)
+    let camera = try #require(first.camera)
+    let bubble = try #require(scene.frame(at: 4).camera)
+    #expect(isBetween(camera.rect, whole, bubble.rect) && camera.opacity == 1)
+    // Settled in the Bubble: all of the group, as 1b's path draws it.
+    let back = scene.frame(at: 4)
+    #expect(back.screenOpacity == 1 && !back.coveredByCamera && back.windowFrame != nil && back.cursor?.opacity == 1)
+    var legacy = scene
+    legacy.forcedPath = .legacy
+    #expect(back.camera == legacy.frame(at: 4).camera)
 }
 
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
@@ -377,13 +415,15 @@ func cameraOnlyBeforeTheFirstCameraFrameShowsIt() async throws {
         // The camera starts 0.5 s into the take, with `SampleFactory`'s frames: frame 0 is its own colour.
         let project = try await layoutProject(in: dir, cameraStart: 0.5, green: false)
         let first = base.adding(seconds: 0.5)
-        for kind in [LayoutKind.cameraOnly, .cameraFull] {
+        // A split's camera card too, rather than an empty card that pops in as the camera starts (plan decision 43).
+        for kind in [LayoutKind.cameraOnly, .cameraFull, .split] {
             let doc = document(of: project.take, [block(1, kind, from: 0, to: 4)])
             let frame = evaluator(project.take, doc).frame(at: 0.2)
             let camera = try #require(frame.camera, "\(kind)")
             #expect(camera.sourceTime == first && camera.opacity == 1, "\(kind)")
-            // Nothing of the screen is drawn, nor decoded.
-            #expect(frame.screen == nil && frame.previousScreen == nil && frame.shadow == nil && frame.cursor == nil, "\(kind)")
+            // Nothing of the screen is drawn, nor decoded, but in the split, beside the camera.
+            let hidden = frame.screen == nil && frame.previousScreen == nil && frame.shadow == nil && frame.cursor == nil
+            #expect(hidden == (kind != .split), "\(kind)")
             let shown = try #require(try await render(project, doc, at: [0.2]).first)
             // Away from the moving white square along the frame's top row.
             let x = Int(camera.rect.x + camera.rect.width / 2), y = Int(camera.rect.y + camera.rect.height * 0.75)
