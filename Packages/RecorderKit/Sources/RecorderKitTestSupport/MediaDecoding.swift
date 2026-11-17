@@ -2,18 +2,12 @@
 import AVFoundation
 import CoreMedia
 import CoreVideo
+import CryptoKit
 import Foundation
 import SyntheticCapture
 
 private enum TrackReadError: Error {
     case cannotAddOutput, didNotStart
-}
-
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread.
-private func onOwnThread<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
 }
 
 /// Reads every sample of `track` with `outputSettings` and folds them into `initial` with `fold`.
@@ -28,7 +22,7 @@ public func readTrack<T: Sendable>(
 ) async throws -> T {
     // Handed over to the reading thread, and not used here again until it is done.
     nonisolated(unsafe) let track = track
-    let (value, status) = try await onOwnThread { () throws -> (T, AVAssetReader.Status) in
+    let (value, status) = try await offThePool { () throws -> (T, AVAssetReader.Status) in
         let reader = try AVAssetReader(asset: asset)
         let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
         guard reader.canAdd(output) else { throw TrackReadError.cannotAddOutput }
@@ -110,4 +104,34 @@ public func decodedAudioChannels(of url: URL) async throws -> (channels: Int, sa
         samples += chunk
     }
     return (channels, samples)
+}
+
+/// SHA-256, in hex, of the coded video of the movie at `url`: every sample's presentation time and its HEVC NAL units
+/// but the SEI ones (types 39 and 40, the encoder's prefix SEI differs in every file), in order.
+///
+/// What tells two writes of the same frames by the same encoder (the same digest) from writes by another one, or by
+/// the same one behaving otherwise: the hardware and the software encoder write other bitstreams, which decode to
+/// pixels a level or a few apart (the golden flake of milestone 1b). Samples are read with 4-byte NAL lengths, as
+/// `FragmentedTrackWriter` writes them.
+public func encodedVideoDigest(of url: URL) async throws -> String {
+    let asset = AVURLAsset(url: url)
+    let track = try unwrap(try await asset.loadTracks(withMediaType: .video).first, "a video track in \(url.lastPathComponent)")
+    let coded = try await readTrack(track, of: asset, outputSettings: nil, into: Data()) { coded, sample in
+        guard let buffer = CMSampleBufferGetDataBuffer(sample) else { return }
+        let length = CMBlockBufferGetDataLength(buffer)
+        var bytes = [UInt8](repeating: 0, count: length)
+        let status = CMBlockBufferCopyDataBytes(buffer, atOffset: 0, dataLength: length, destination: &bytes)
+        guard status == noErr else { throw NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+        var pts = sample.presentationTimeStamp.value
+        withUnsafeBytes(of: &pts) { coded.append(contentsOf: $0) }
+        var i = 0
+        while i + 4 <= bytes.count {
+            let size = Int(bytes[i]) << 24 | Int(bytes[i + 1]) << 16 | Int(bytes[i + 2]) << 8 | Int(bytes[i + 3])
+            let end = min(bytes.count, i + 4 + size)
+            let type = i + 4 < end ? Int(bytes[i + 4] >> 1) & 0x3F : -1
+            if type != 39 && type != 40 { coded.append(contentsOf: bytes[i..<end]) }
+            i = end
+        }
+    }
+    return SHA256.hash(data: coded).map { String(format: "%02x", $0) }.joined()
 }

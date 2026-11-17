@@ -49,7 +49,9 @@ let package = Package(
             dependencies: ["Render", "Analysis", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
             name: "ExportTests",
-            dependencies: ["Export", "Render", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
+            dependencies: [
+                "Export", "Render", "Analysis", "Recording", "Recovery", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport",
+            ]),
         .testTarget(
             name: "AppSupportTests",
             dependencies: ["AppSupport", "ProjectFormat", "Recording", "Analysis", "Editing", "SyntheticCapture", "RecorderKitTestSupport"]),

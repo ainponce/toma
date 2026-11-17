@@ -37,6 +37,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let recovery = RecoveryPrompt()
     private let exportGate = ExportGate()
     private var editors: [URL: EditorWindowController] = [:]
+    /// The editors whose windows closed and whose sessions are still closing (`EditorModel.closing`), by a number of
+    /// their own: a quit waits for them too.
+    private var closingEditors: [Int: Task<Void, Never>] = [:]
+    private var closedEditors = 0
     private var onboarding: OnboardingWindowController?
     private var notices: ThirdPartyNoticesWindowController?
     private var settings: SettingsWindowController?
@@ -59,14 +63,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The recording control at the notch; made once the app has launched.
     private var island: IslandPanel?
     private var powerOffObserver: (any NSObjectProtocol)?
-    /// Closes the take and cancels the exports before a quit goes ahead. Its time limit runs on the suspending
-    /// clock: it stops counting while the Mac sleeps, so closing the lid after quitting does not use it up and
-    /// quit before the take is closed.
+    /// Cancels the exports, closes the take and the editors, and waits for the library's copies (`LibraryWork.shared`, its
+    /// default) before a quit goes ahead. Its time limits run on the suspending clock: they stop counting while the Mac
+    /// sleeps, so closing the lid after quitting does not use them up and quit before the take is closed.
     private lazy var quit = QuitSequencer(
         closeTake: { [recording] in await recording.stop(openingEditor: false) },
         cancelExports: { [weak self] in
             guard let self else { return }
             for editor in Array(editors.values) { await editor.cancelExportAndWait() }
+        },
+        closeEditors: { [weak self] in
+            guard let self else { return }
+            // Every one closed first, so none takes an edit while another's session closes; then all waited for, those
+            // of windows closed just before too.
+            let open = Array(editors.values)
+            for editor in open { editor.closeForQuit() }
+            for editor in open { await editor.model.waitUntilClosed() }
+            for closing in Array(closingEditors.values) { await closing.value }
         },
         reply: { _ in NSApp.reply(toApplicationShouldTerminate: true) },
         sleep: { try await Task.sleep(for: $0, clock: .suspending) })
@@ -161,15 +174,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Nothing in progress is lost to a quit (`TerminationDecision`): the take is closed and the exports are
-    /// cancelled first, within `QuitSequencer.quitTimeLimit` for the take, and the library's copies are waited for;
-    /// the user is asked before an export is cancelled, unless the Mac is powering off. A start that ended without a
-    /// take counts as a take while Do Not Disturb goes off.
+    /// Nothing in progress is lost to a quit (`TerminationDecision`): edits an editor couldn't save are asked about first
+    /// (as closing its window asks, also while powering off); the take is closed and the exports are cancelled, within
+    /// `QuitSequencer.quitTimeLimit` for the take; the user is asked before an export is cancelled, unless the Mac is
+    /// powering off; then the editors' sessions are closed and waited for, within `QuitSequencer.editorsTimeLimit`; last,
+    /// the library's copies are waited for (`LibraryWork`). A start that ended without a take counts as a take while Do
+    /// Not Disturb goes off.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // An editor whose window is closing counts until it leaves `editors`: its session is closing.
         let decision = TerminationDecision.decide(
             isRecording: recording.isRecording || recording.isEndingHooks, isExporting: exportGate.isBusy,
-            isPoweringOff: quit.isPoweringOff, isCopying: LibraryWork.shared.isCopying)
-        return quit.shouldTerminate(decision) { confirmCancellingExport() }
+            isPoweringOff: quit.isPoweringOff, isCopying: LibraryWork.shared.isCopying,
+            hasEditSessions: !editors.isEmpty || !closingEditors.isEmpty,
+            hasUnsavedEdits: editors.values.contains { !$0.model.closed && $0.model.losesEditsIfClosed })
+        return quit.shouldTerminate(decision) { question in
+            switch question {
+            case .unsavedEdits: confirmQuittingWithUnsavedEdits()
+            case .cancelExport: confirmCancellingExport()
+            }
+        }
+    }
+
+    /// "Some changes couldn't be saved · If you quit now, they're lost." with "Cancel", the default, and "Quit Anyway".
+    private func confirmQuittingWithUnsavedEdits() -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(
+            localized: "Some changes couldn't be saved", comment: "Closing an editor whose last changes are not on the disk")
+        alert.informativeText = String(
+            localized: "If you quit now, they're lost.", comment: "Quitting while an editor's last changes are not on the disk")
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        let quit = alert.addButton(withTitle: String(
+            localized: "Quit Anyway", comment: "Quitting while an editor's last changes are not on the disk: they are lost"))
+        quit.hasDestructiveAction = true
+        NSApp.activate()
+        return alert.runModal() == .alertSecondButtonReturn
     }
 
     private func confirmCancellingExport() -> Bool {
@@ -209,9 +248,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         false
     }
 
-    /// The editors' windows close with the app: their states are written as when one closes (design §5.1), and waited for.
+    /// The editors' windows close with the app: their states were written as their sessions closed for the quit
+    /// (`QuitSequencer`), as when one closes (design §5.1); any still open is written now, and all are waited for.
     func applicationWillTerminate(_ notification: Notification) {
-        for editor in editors.values { editor.writeStateBeforeQuit() }
+        for editor in editors.values where !editor.model.closed { editor.writeStateBeforeQuit() }
         EditorStateWriter.flush()
     }
 
@@ -477,6 +517,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] in
             guard let self, let made, made.window?.isVisible != true else { return }  // shown again meanwhile
             editors = editors.filter { $0.value !== made }
+            if let closing = made.model.closing { keep(closing) }
             updateActivationPolicy()
             // What the editor wrote as it closed.
             tellLibraryEditors()
@@ -498,6 +539,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Gone meanwhile: nothing to show.
             guard editors.values.contains(where: { $0 === editor }) else { return }
             present(editor)
+        }
+    }
+
+    /// Keeps the closing of an editor's session whose window closed until it ends, for a quit to wait for.
+    private func keep(_ closing: Task<Void, Never>) {
+        closedEditors += 1
+        let number = closedEditors
+        closingEditors[number] = closing
+        Task {
+            await closing.value
+            closingEditors[number] = nil
         }
     }
 

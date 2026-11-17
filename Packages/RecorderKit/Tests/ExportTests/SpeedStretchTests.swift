@@ -46,14 +46,6 @@ private func burst(at start: Double, seconds: Double = 0.05, takeSeconds: Double
     return [AudioSegmentSpec(start: base, seconds: takeSeconds, amplitude: 0, transform: tone)]
 }
 
-/// Runs `body` on a thread of its own: reading the mix decodes, which blocks in `copyNextSampleBuffer`, and many tests
-/// blocking Swift's cooperative pool at once hang the run.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `mix.render` of `frames` (by default the whole mix) with `preroll`, read off the cooperative pool.
 private func rendered(_ mix: EditedMix, _ frames: Range<Int64>? = nil, preroll: Double = 0) async throws -> [Float] {
     let range = frames ?? 0..<mix.totalFrames

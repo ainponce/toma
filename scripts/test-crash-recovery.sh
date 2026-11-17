@@ -199,17 +199,41 @@ legacy_copy() {
   fi
 }
 
+# Runs edit-stress on package $1 with the flags after $2, killed at random, again and again (killed after 5 and then 10
+# s) until a run reports a step saved past seq $2 (a run killed before its first saved step tells nothing), and checks
+# the package after each: it must open again and take edits. Fails after three runs that saved nothing. Sets EXPECT to
+# the seq the last run saved.
+reopened_and_edited() {
+  local PKG=$1 AFTER
+  EXPECT=$2
+  shift 2
+  for AFTER in "$(kill_time)" 5 10; do
+    stress_run "$PKG" "$AFTER" "$@"
+    if [ "$CONFIRMED" -gt "$EXPECT" ]; then
+      EXPECT=$CONFIRMED
+      edit_check "$PKG" "$EXPECT" "$* after the kill"
+      return
+    fi
+    edit_check "$PKG" "$EXPECT" "$* killed after $AFTER s before a saved step"
+  done
+  echo "FAIL: edit-stress $* saved no step past seq $EXPECT in three runs: the package does not take edits again"
+  exit 1
+}
+
 # The editor (Task 13). First the first edit of a version 1 and of a version 2 package, killed by edit-stress itself
 # after each step of the upgrade to version 3 (design §6.1: edit.lock taken, the manifest rewritten, the log written):
 # the package must be the one it was (but for a stale edit.lock), a version 3 one with no edit, or one whose log holds
-# that edit; then it must open and take edits again (one run killed at random). Then 100 edit-stress runs on one 3 s
+# that edit; then it must open and take edits again (a run killed at random that saved a step). Then a version 3
+# package killed by edit-stress itself in the compaction of its log, after each step of the swap (the snapshot written,
+# the new log written and synced, renamed over the old one): every step reported saved must be in the log, and it must
+# open and take edits again. Then 100 edit-stress runs on one 3 s
 # take, seeds 1…100, the even ones with --compact-every 50 (compacting at opening and at closing, which they do every 60
 # steps), each killed with SIGKILL at a random moment from 0.2 to 2.0 s. After every kill, edit-check must find in the
 # log every step reported saved by then (by that run or an earlier one, since the log never goes back), the project
 # must open with the log's replay, undoing every group must lead back to the document it started with, and nothing may
 # change a byte of the package meanwhile (edit-check writes nothing; no run touches takes/).
 edit_case() {
-  local PKG SEED HIGH=0 RUNS=0 TAKES VERSION POINT COPY ORIGINAL EXPECT FLAGS
+  local PKG SEED HIGH=0 RUNS=0 TAKES VERSION POINT COPY ORIGINAL EXPECT FLAGS LINES STATE=good
   EDIT_TMP=$(mktemp -d)
   echo "== editor: synth-record --duration 3 (in $EDIT_TMP)"
   "$BIN" synth-record "$EDIT_TMP" --duration 3 > "$EDIT_TMP/out"
@@ -250,17 +274,49 @@ edit_case() {
           ;;
       esac
       edit_check "$COPY" "$EXPECT" "--kill-in-upgrade $POINT"
-      stress_run "$COPY" "$(kill_time)" --seed "$SEED"
-      if [ "$CONFIRMED" -gt "$EXPECT" ]; then EXPECT=$CONFIRMED; fi
-      edit_check "$COPY" "$EXPECT" "--seed $SEED after --kill-in-upgrade $POINT"
+      reopened_and_edited "$COPY" "$EXPECT" --seed "$SEED"
       if [ "$(package_hash "$COPY/takes")" != "$(package_hash "$PKG/takes")" ]; then
         echo "FAIL: the editor changed takes/ of the version $VERSION package"
         exit 1
       fi
-      echo "opened again and edited: saved up to seq $EXPECT at least"
+      echo "opened again and edited: saved up to seq $EXPECT"
     done
   done
   echo "edit upgrade case passed (versions 1 and 2, killed after each of the 3 steps)"
+
+  for POINT in after-snapshot after-temporary after-rename; do
+    SEED=$((SEED + 1))
+    COPY="$EDIT_TMP/compact-$POINT.toma"
+    cp -R "$PKG" "$COPY"
+    echo "== editor: a compaction of the log, kill -9 $POINT"
+    # Compacting when the log has more than 5 lines: at the first close, after 60 steps.
+    stress_run "$COPY" self --seed "$SEED" --compact-every 5 --kill-in-compaction "$POINT"
+    if [ "$CONFIRMED" -lt 60 ]; then
+      echo "FAIL: edit-stress --kill-in-compaction $POINT saved only up to seq $CONFIRMED before the compaction"
+      exit 1
+    fi
+    # Killed where it says: the old log whole beside an empty or a whole new one, or the new one in its place.
+    LINES=$(wc -l < "$COPY/edit-log.jsonl" | tr -d " ")
+    case $POINT in
+      after-snapshot) if [ ! -f "$COPY/edit-log.jsonl.tmp" ] || [ -s "$COPY/edit-log.jsonl.tmp" ] || [ "$LINES" -lt "$CONFIRMED" ]; then STATE=bad; fi ;;
+      after-temporary) if [ ! -s "$COPY/edit-log.jsonl.tmp" ] || [ "$LINES" -lt "$CONFIRMED" ]; then STATE=bad; fi ;;
+      after-rename) if [ -e "$COPY/edit-log.jsonl.tmp" ] || [ "$LINES" -ge "$CONFIRMED" ]; then STATE=bad; fi ;;
+    esac
+    if [ "$STATE" = bad ]; then
+      echo "FAIL: after a kill $POINT the log has $LINES lines for seq $CONFIRMED, and edit-log.jsonl.tmp is:"
+      ls -l "$COPY/edit-log.jsonl.tmp" 2>&1
+      exit 1
+    fi
+    EXPECT=$CONFIRMED
+    edit_check "$COPY" "$EXPECT" "--kill-in-compaction $POINT"
+    reopened_and_edited "$COPY" "$EXPECT" --seed "$SEED"
+    if [ "$(package_hash "$COPY/takes")" != "$(package_hash "$PKG/takes")" ]; then
+      echo "FAIL: the editor changed takes/ in the compaction case"
+      exit 1
+    fi
+    echo "every saved step kept; opened again and edited: saved up to seq $EXPECT"
+  done
+  echo "edit compaction case passed (killed after each of the 3 steps of the swap)"
 
   TAKES=$(package_hash "$PKG/takes")
   for SEED in $(seq 1 100); do

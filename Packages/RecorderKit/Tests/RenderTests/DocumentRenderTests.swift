@@ -42,16 +42,6 @@ private let cutSequence = [clip(1, from: 0, to: 1), clip(2, from: 2, to: 3)]
     return sample
 }
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread. Drawing decodes,
-/// which blocks in `copyNextSampleBuffer` until AVFoundation's own reads finish: with every thread of the cooperative
-/// pool blocked that way by tests running at once, those reads never run and the whole test run hangs
-/// (`TrackFrameReader`, `readTrack` in RecorderKitTestSupport).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// Whether any pixel of tightly packed BGRA `bytes` is pure red.
 private func containsRed(_ bytes: [UInt8]) -> Bool {
     stride(from: 0, to: bytes.count, by: 4).contains { bytes[$0 + 2] > 250 && bytes[$0 + 1] < 5 && bytes[$0] < 5 }
@@ -128,6 +118,8 @@ func doubleSpeedShowsTwiceTheSource() async throws {
     }
 }
 
+/// What the pointer did inside a cut is never drawn; where it is when the next clip starts is, from that clip's first
+/// instant on (final review B-I1): the last position of the cut, as if the pointer had moved there right then.
 @Test func cursorFromACutIsNotShown() throws {
     let display = Rect(x: 0, y: 0, width: 1920, height: 1080)
     let take = makeTake(tracks: [displayTrack(globalFrame: display, segments: [segment(start: base, end: base.adding(seconds: 3))])])
@@ -143,16 +135,18 @@ func doubleSpeedShowsTwiceTheSource() async throws {
     let wholeRect = try #require(whole.frame(at: 1.5).screen?.rect)
     #expect(abs(try #require(whole.frame(at: 1.5).cursor).hotspot.x - (wholeRect.x + 600.0 / 1920 * wholeRect.width)) < 1e-9)
 
-    // Cut, the first instant after the cut has the cursor where it was before it, as if it had never moved.
+    // Cut, the first instant after the cut has the cursor where the pointer is then, (600, 300); before it, where it was.
     let cut = evaluator(before + inTheCut, sequence: cutSequence)
     let frame = cut.frame(at: 1)
     #expect(frame.screen?.sourceTime == base.adding(seconds: 2))
     let rect = try #require(frame.screen?.rect)
     let hotspot = try #require(frame.cursor).hotspot
-    #expect(abs(hotspot.x - (rect.x + 100.0 / 1920 * rect.width)) < 1e-9 && abs(hotspot.y - (rect.y + 100.0 / 1080 * rect.height)) < 1e-9)
+    #expect(abs(hotspot.x - (rect.x + 600.0 / 1920 * rect.width)) < 1e-9 && abs(hotspot.y - (rect.y + 300.0 / 1080 * rect.height)) < 1e-9)
+    let movedAtTheClip = evaluator(before + [cursor(2, x: 600, y: 300)], sequence: cutSequence)
     for t in [0.9, 1.0, 1.5, 1.99] {
-        #expect(cut.frame(at: t).cursor == evaluator(before, sequence: cutSequence).frame(at: t).cursor, "at \(t) s")
+        #expect(cut.frame(at: t).cursor == movedAtTheClip.frame(at: t).cursor, "at \(t) s")
     }
+    #expect(cut.frame(at: 0.9).cursor == evaluator(before, sequence: cutSequence).frame(at: 0.9).cursor, "nothing of the cut before it")
 }
 
 @Test func cameraHiddenWhenShowIsOff() {

@@ -29,4 +29,46 @@ public enum MotionBlurPlan {
             t + Int64(((Double(j) / Double(count - 1) - 0.5) * open).rounded())
         }
     }
+
+    /// `sampleTimes(at:shutter:frameDuration:count:)` held to the side of `t` of each jump the shutter crosses (final
+    /// review B-M1). `jumps` are where a path goes at once from one value to another, in order and apart: each from its
+    /// last output time at the old value through its first at the new one (an instant zoom block's edge, an unsmoothed
+    /// cursor at a cut). A shutter that crosses one samples only `t`'s side: from the jump's new value on when `t` is at
+    /// or after it, up to its old value when `t` is before it, so the frame is one image and not the two on either side.
+    /// The `count` times are then spread evenly over what is left, `τ_j = a + round(j/(N−1) × (b − a))`, in order; a
+    /// shutter that crosses none gives the same times as without `jumps`.
+    public static func sampleTimes(
+        at t: Int64, shutter: Double, frameDuration: Int64, count: Int, jumps: [ClosedRange<Int64>]
+    ) -> [Int64] {
+        let times = sampleTimes(at: t, shutter: shutter, frameDuration: frameDuration, count: count)
+        guard times.count > 1, let first = times.first, let last = times.last, !jumps.isEmpty else { return times }
+        var (low, high) = (first, last)
+        // The first jump that ends after the shutter opens: the ones before it are behind it.
+        var i = partitionPoint(jumps.count) { jumps[$0].upperBound <= first }
+        while i < jumps.count, jumps[i].lowerBound < last {
+            let jump = jumps[i]
+            if t >= jump.upperBound {
+                low = max(low, jump.upperBound)
+            } else if t <= jump.lowerBound {
+                high = min(high, jump.lowerBound)
+            } else {
+                // `t` is inside the jump itself (between two steps of a path): only `t`.
+                return [t]
+            }
+            i += 1
+        }
+        guard low != first || high != last else { return times }
+        let span = Double(high - low)
+        return (0..<count).map { j in low + Int64((Double(j) / Double(count - 1) * span).rounded()) }
+    }
+
+    /// The first index in `0..<count` for which `isPast` is false, with every true one before every false one.
+    private static func partitionPoint(_ count: Int, _ isPast: (Int) -> Bool) -> Int {
+        var (low, high) = (0, count)
+        while low < high {
+            let mid = (low + high) / 2
+            if isPast(mid) { low = mid + 1 } else { high = mid }
+        }
+        return low
+    }
 }

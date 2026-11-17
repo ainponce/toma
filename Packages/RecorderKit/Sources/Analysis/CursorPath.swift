@@ -23,8 +23,11 @@ public struct CursorSample: Equatable, Sendable {
 /// The path of the drawn cursor of a take in the output (design §8.4–§8.6): where it is, how visible and how pressed.
 ///
 /// The raw positions are the take's `cursor`, `mouseDown` and `mouseUp` events in global points at their output times,
-/// by the rule of the render (`TimeMap.output(ofSampleAt:take:)`): one in a cut between two clips is dropped, one
-/// before the first clip or after the last keeps its time through that clip's mapping. Whether a button is down (any
+/// by the rule of the render (`TimeMap.output(ofSampleAt:take:)`): one before the first clip or after the last keeps its
+/// time through that clip's mapping. In a cut between two clips, the pointer's last position is where it is when the next
+/// clip starts, and is placed there as a change is (`TimeMap.output(ofChangeAt:take:)`; one at that clip's start wins):
+/// the others in the cut are dropped, so nothing of it is drawn, and a pointer that moved there and stood still after is
+/// where it stands (final review B-I1). Whether a button is down (any
 /// button) changes at each `mouseDown` and `mouseUp`, placed as every other change (`TimeMap.output(ofChangeAt:take:)`):
 /// one in a cut rules from the first instant kept after it, so a press or a release the cut leaves out holds from the
 /// next clip on, even with the pointer still. The clicks, and the landings on them, are the `mouseDown`s (of any button)
@@ -55,9 +58,15 @@ public struct CursorPath: Sendable {
     /// reads the buttons (one in a cut, from the next clip on; one after the last clip, never), in output order. Where
     /// the press of the click effects ends.
     public let releases: [Int64]
+    /// Where the cursor jumps, in order: with `off`, at each clip start where a position the pointer took in the cut
+    /// before it is placed (from the output just before it through it). A spring never jumps. A motion blur never mixes
+    /// the two sides.
+    public let jumps: [ClosedRange<Int64>]
 
     /// The raw positions, in output order.
     private let samples: [Sample]
+    /// The outputs at which a position of a cut is placed (`Raw.placedFromCuts`), in order.
+    private let placedFromCuts: [Int64]
     /// Whether a button is down from each change on, in output order.
     private let buttons: [ButtonChange]
     private let idle: IdleVisibility?
@@ -74,9 +83,14 @@ public struct CursorPath: Sendable {
 
     private init(raw: Raw, idle: IdleVisibility?, motion: Motion?, timeMap: TimeMap, style: CursorStyle) {
         samples = raw.samples
+        placedFromCuts = raw.placedFromCuts
         buttons = raw.buttons
         clicks = raw.clicks
         releases = raw.releases
+        switch style.smoothing {
+        case .off: jumps = raw.placedFromCuts.map { ($0 - 1)...$0 }
+        case .spring: jumps = []
+        }
         self.idle = idle
         self.motion = motion
         self.timeMap = timeMap
@@ -85,9 +99,11 @@ public struct CursorPath: Sendable {
 
     /// The path of the same take and events as `old` with `style` over `timeMap`, after an edit (design §8.6): bit for
     /// bit `init(take:events:style:timeMap:)`'s, reusing what of `old` the edit leaves as it was. Over the same time map,
-    /// `old`'s raw positions, presses and clicks, and its `IdleVisibility` with the same idle settings; with the same
-    /// spring (as `StepGrid.stable(_:)` reads it), `old`'s checkpoints before the first step the edit can change
-    /// (`StepGrid.checkpointsKept(changingFrom:)`), the rest simulated from the last of them.
+    /// `old`'s raw positions (those its cuts place at the next clip's start too, and so its `jumps` with `off`), presses
+    /// and clicks, and its `IdleVisibility` with the same idle settings; with the same spring (as `StepGrid.stable(_:)`
+    /// reads it), `old`'s checkpoints before the first step the edit can change (`StepGrid.checkpointsKept(changingFrom:)`),
+    /// the rest simulated from the last of them. A position a cut places is a raw position like any other: the first one
+    /// that differs is where the edit can change the cursor from.
     ///
     /// - Returns: the path, and the first step on which the cursor's position (`sample(atStep:)`'s, its spring's state
     ///   with a spring) can differ from `old`'s: that of the first raw position, button change or click that differs
@@ -127,7 +143,7 @@ public struct CursorPath: Sendable {
 
     /// What it reads of the events, placed over its time map.
     private var raw: Raw {
-        Raw(samples: samples, buttons: buttons, clicks: clicks, releases: releases)
+        Raw(samples: samples, placedFromCuts: placedFromCuts, buttons: buttons, clicks: clicks, releases: releases)
     }
 
     private static func idle(_ raw: Raw, _ style: CursorStyle) -> IdleVisibility? {
@@ -234,17 +250,23 @@ public struct CursorPath: Sendable {
     }
 
     /// What the path reads of the events of its take, placed over a time map (see `CursorPath`'s notes): the raw
-    /// positions, the button changes and the clicks in output order, and the releases.
+    /// positions (with the last one of each cut, at the next clip's start), the button changes and the clicks in output
+    /// order, the releases, and where a position of a cut is placed.
     fileprivate struct Raw: Sendable {
         var samples: [Sample]
+        /// The outputs at which the last position of a cut is placed (the next clip's start), in order: where `off`
+        /// jumps (`CursorPath.jumps`).
+        var placedFromCuts: [Int64]
         var buttons: [ButtonChange]
         var clicks: [(output: Int64, point: SIMD2<Double>)]
         var releases: [Int64]
 
         init(
-            samples: [Sample], buttons: [ButtonChange], clicks: [(output: Int64, point: SIMD2<Double>)], releases: [Int64]
+            samples: [Sample], placedFromCuts: [Int64], buttons: [ButtonChange], clicks: [(output: Int64, point: SIMD2<Double>)],
+            releases: [Int64]
         ) {
             self.samples = samples
+            self.placedFromCuts = placedFromCuts
             self.buttons = buttons
             self.clicks = clicks
             self.releases = releases
@@ -255,6 +277,10 @@ public struct CursorPath: Sendable {
             var buttons: [ButtonChange] = []
             var clicks: [(output: Int64, point: SIMD2<Double>)] = []
             var down = Set<MouseButton>()
+            /// The last position of the cut the events are in, at the output the next clip starts at.
+            var inCut: Sample?
+            /// The outputs where a position of a cut is placed.
+            var placedFromCuts: [Int64] = []
             // Already in time order (as a take's events are recorded), they are what the stable sort would give.
             let inOrder = zip(events, events.dropFirst()).allSatisfy { $0.t <= $1.t }
             for event in inOrder ? events : events.sortedByTime() {
@@ -272,14 +298,29 @@ public struct CursorPath: Sendable {
                 default:
                     break
                 }
-                guard let point = event.kind.pointerPosition, let output = timeMap.output(ofSampleAt: event.t, take: take.id)
-                else { continue }
+                guard let point = event.kind.pointerPosition else { continue }
+                guard let output = timeMap.output(ofSampleAt: event.t, take: take.id) else {
+                    // In a cut: where the pointer is when the next clip starts, placed there as a change is (the last of
+                    // the cut wins); none of the cut is drawn (final review B-I1).
+                    guard let rules = timeMap.output(ofChangeAt: event.t, take: take.id) else { continue }
+                    if let pending = inCut, pending.output != rules { samples.append(pending) }
+                    if inCut?.output != rules { placedFromCuts.append(rules) }
+                    inCut = Sample(output: rules, point: point)
+                    continue
+                }
+                if let pending = inCut {
+                    samples.append(pending)
+                    inCut = nil
+                }
                 samples.append(Sample(output: output, point: point))
                 if case .mouseDown = event.kind, let kept = timeMap.output(atSource: event.t, take: take.id) {
                     clicks.append((kept, point))
                 }
             }
-            self.init(samples: samples, buttons: buttons, clicks: clicks, releases: buttons.filter { !$0.pressed }.map(\.output))
+            if let inCut { samples.append(inCut) }
+            self.init(
+                samples: samples, placedFromCuts: placedFromCuts, buttons: buttons, clicks: clicks,
+                releases: buttons.filter { !$0.pressed }.map(\.output))
         }
 
         /// The first step on which the cursor's position can differ between `old` and `new`: that of the first raw

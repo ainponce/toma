@@ -79,6 +79,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         window.keyboard = keyboard
         super.init(window: window)
         keyboard.togglePanel = { [weak self] in self?.togglePanel(nil) }
+        model.askCustomSpeed = { [weak timeline] in timeline?.timelineView.interaction.askCustomSpeed() }
         // Before the content: a window asked for its undo manager before it has a delegate makes its own and keeps it, and
         // the content's views ask for it. Its delegate's (`windowWillReturnUndoManager`) is Edit ▸ Undo's.
         window.delegate = self
@@ -199,11 +200,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        closeForQuit()
+        // On the next turn: the window is still closing, and dropping this controller releases it.
+        Task { self.onClose() }
+    }
+
+    /// The window closes, or the app quits with it open: the timeline stops and the model closes (its state written, its
+    /// session closing: `EditorModel.closing`). The window itself stays until the app quits.
+    func closeForQuit() {
         timeline.stop()
         KeyEditor.shared.stopFollowing(model)
         model.close()
-        // On the next turn: the window is still closing, and dropping this controller releases it.
-        Task { self.onClose() }
     }
 
     #if DEBUG

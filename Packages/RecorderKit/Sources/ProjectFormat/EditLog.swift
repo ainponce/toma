@@ -204,17 +204,18 @@ public enum EditLogReader {
         return read
     }
 
-    /// Makes the file end at a line break before more lines are appended to it, with the rules of
-    /// `EventLogReader.truncateIncompleteTail`: a last line without its line break that is a complete JSON object gets
-    /// one, and any other is truncated away. Then the `migrate` lines it ends with, which `read` leaves out, are
-    /// truncated away too (1c plan decision 6), except one to a version newer than this app's, which `read` refuses
-    /// and this never touches. The file is full-synced after each change. Returns `true` if the file changed. Opens it
+    /// Makes the file end at a line break before more lines are appended to it, as `EventLogReader.truncateIncompleteTail`
+    /// does but with `read`'s own rule for a whole object (`JSONValue`), so what `read` dropped as cut short is what goes:
+    /// a last line without its line break that is a complete JSON object gets one, and any other is truncated away. Then
+    /// the `migrate` lines it ends with, which `read` leaves out, are truncated away too (1c plan decision 6), except one
+    /// to a version newer than this app's, which `read` refuses and this never touches. The file is full-synced after each
+    /// change. Returns `true` if the file changed. Opens it
     /// without following a symlink (`ELOOP`) and refuses what is not a regular file (`EFTYPE`) without blocking.
     public static func truncateIncompleteTail(_ url: URL) throws -> Bool {
         let (fd, _) = try SafeRead.openRegularFile(url, flags: O_RDWR | O_APPEND)
         let changed: Bool
         do {
-            let endedAtLineBreak = try EventLogReader.endAtLineBoundary(fd)
+            let endedAtLineBreak = try EventLogReader.endAtLineBoundary(fd, isWholeObject: isWholeObject)
             let cutMigrates = try truncateTrailingMigrates(fd)
             changed = endedAtLineBreak || cutMigrates
         } catch {

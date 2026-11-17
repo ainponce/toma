@@ -74,6 +74,10 @@ public struct ZoomCameraPath: Sendable {
 
     private let simulation: ZoomSimulation<StageViewport>
 
+    /// Where the camera jumps (at an instant block's entry and exit), in order: each from the output time of the step
+    /// before the jump through that of the step it jumps on. A motion blur never mixes the two sides.
+    public var jumps: [ClosedRange<Int64>] { simulation.jumps }
+
     public init(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
         self.init(
             document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil)
@@ -366,6 +370,16 @@ private struct ZoomBlock: Equatable, Sendable {
         let changed = old[first..<(old.count - last)] + new[first..<(new.count - last)]
         return (changed.map(\.steps.upperBound).max() ?? 0, old.count - last, new.count - old.count)
     }
+
+    /// Where a camera over `blocks` jumps, in order (final review B-M1): an instant block is entered on its first step
+    /// and left on the one after its last, and the camera jumps there, from the output time of the step before through
+    /// that of the step it jumps on; none on step 0 nor after `lastStep`.
+    static func jumps(of blocks: [ZoomBlock], lastStep: Int) -> [ClosedRange<Int64>] {
+        let steps = Set(blocks.filter { $0.instant && !$0.steps.isEmpty }.flatMap { [$0.steps.lowerBound, $0.steps.upperBound] })
+        return steps.filter { $0 > 0 && $0 <= lastStep }.sorted().map {
+            StepGrid.outputTime(ofStep: $0 - 1)...StepGrid.outputTime(ofStep: $0)
+        }
+    }
 }
 
 /// A zoom camera simulated on `StepGrid` from output 0 over `Viewport` (design §8.3 and §8.6, 1c design §5.4), what
@@ -394,6 +408,9 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     private let spring: SpringSpec
     /// In output order, never overlapping.
     private let blocks: [ZoomBlock]
+    /// Where the camera jumps (`ZoomBlock.jumps(of:lastStep:)`): read from the blocks and the end alone, so an edit's
+    /// rebuild has them as building from nothing does.
+    let jumps: [ClosedRange<Int64>]
     private let takeID: String
     /// The take of each clip of the sequence.
     private let clipTakes: [String]
@@ -426,6 +443,7 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         self.viewport = viewport
         spring = StepGrid.stable(document.zoom.spring)
         blocks = document.zoom.show ? ZoomBlock.blocks(of: document.zoom, take: take.id, timeMap: timeMap) : []
+        jumps = ZoomBlock.jumps(of: blocks, lastStep: lastStep)
         takeID = take.id
         clipTakes = document.sequence.map(\.take)
         self.timeMap = timeMap

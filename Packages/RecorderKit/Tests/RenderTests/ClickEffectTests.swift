@@ -57,14 +57,6 @@ private func everyFrame(_ take: TakeRecord, _ events: [InputEvent], _ document: 
     }
 }
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing a take
-/// opens its files, which blocks (`offThePool` in DocumentRenderTests).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `frame` drawn by a compositor of the default device without a screen or a camera, as BGRA bytes: its cursor with
 /// the texture `cursor` makes, Toma's arrow without one.
 private func composite(_ frame: RenderFrame, cursor: ((any MTLDevice) throws -> any MTLTexture)? = nil) throws -> [UInt8] {

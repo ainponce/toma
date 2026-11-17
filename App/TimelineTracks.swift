@@ -55,7 +55,8 @@ struct TrackItems<Info> {
 /// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it), and
 ///   each layout block where the preview shows it (`LayoutTimeline.blockOutputs`); a change inside a block is not seen while
 ///   it rules (`LayoutTimeline.hiddenChanges`).
-/// - The ruler's markers: each `marker` event of the take at its instant, if it is kept.
+/// - The ruler's markers: each `marker` event of the take at its instant, if it is kept: from the take's marker times,
+///   found once per take (`markerTimes(in:)`), never by going over its events for each revision or drag move.
 struct TimelineContent {
     struct ClipInfo {
         /// Its source's start, in host nanoseconds.
@@ -125,7 +126,16 @@ struct TimelineContent {
     private let initialScreen: String?
     private let screenChanges: [(t: UInt64, track: String)]
 
-    init(take: TakeRecord, events: [InputEvent], document: EditDocument, missing: [ClosedRange<Double>]) {
+    /// The source instants of the take's `marker` events, in order: what the ruler's markers are made from. Goes over
+    /// every event of the take; the editor does it once, off the main thread.
+    static func markerTimes(in events: [InputEvent]) -> [HostTime] {
+        events.compactMap { event -> HostTime? in
+            if case .marker = event.kind { event.t } else { nil }
+        }.sorted()
+    }
+
+    /// `markers`: the take's marker times (`markerTimes(in:)`).
+    init(take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>]) {
         let map = TimeMap(sequence: document.sequence)
         let takeID = document.sequence.first?.take ?? take.id
         layout = TimelineLayout(take: take, document: document)
@@ -189,10 +199,7 @@ struct TimelineContent {
                     id: change.id, output: $0..<$0, info: CameraChangeInfo(hiddenBy: block.flatMap { kinds[$0] }, hidingBlock: block))
             }
         })
-        markers = events.compactMap { event in
-            guard case .marker = event.kind else { return nil }
-            return map.output(atSource: event.t, take: takeID)
-        }.sorted()
+        self.markers = markers.compactMap { map.output(atSource: $0, take: takeID) }.sorted()
         self.missing = missing.map { TimeMap.outputNanoseconds(seconds: $0.lowerBound)..<TimeMap.outputNanoseconds(seconds: $0.upperBound) }
             .filter { !$0.isEmpty }
             .sorted { $0.lowerBound < $1.lowerBound }
@@ -271,7 +278,12 @@ enum TimelineFormat {
     }()
 
     static func multiplier(_ value: Double) -> String {
-        (formatter.string(from: NSNumber(value: value)) ?? String(value)) + "×"
+        number(value) + "×"
+    }
+
+    /// `value` with the decimals it has (two at most) in the user's language: "1,5".
+    static func number(_ value: Double) -> String {
+        formatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 }
 

@@ -5,6 +5,7 @@ import ImageIO
 import ProjectFormat
 import Recording
 import SyntheticCapture
+import VideoToolbox
 
 /// A video segment `TakeBuilder` writes: `seconds` of `SampleFactory` video from `start`, one frame every
 /// `1 / framesPerSecond` s, the file finished at `start + seconds` unless `leaveOpen`.
@@ -104,22 +105,47 @@ public final class TakeBuilder {
     /// The take's `cameraStyle`, written with it: how the camera looks from the start. `nil`, as in a take without a
     /// camera or of version 1.
     public var cameraStyle: CameraStyle?
-    /// The HEVC encoder the video segments are written with: the one VideoToolbox picks by default (the hardware
-    /// encoder, or its software encoder when the hardware one takes no more sessions), as the recorder writes them.
+    /// The HEVC encoder the video segments are written with, `defaultVideoEncoder` unless a test sets another.
     ///
-    /// With `.hardwareOnly`, a segment whose writer fails, as it does when the media engine takes no more sessions
-    /// (other processes hold them), is written again from its first frame every `hardwareEncoderRetryInterval` seconds
-    /// until it is written, and the builder throws once `hardwareEncoderTimeout` seconds passed without that: it is
+    /// With `.hardwareOnly`, a segment whose writer fails in the encoder, as it does when the media engine takes no
+    /// more sessions (other processes hold them), is written again from its first frame every
+    /// `hardwareEncoderRetryInterval` seconds until it is written, and the builder throws once `hardwareEncoderTimeout`
+    /// seconds passed since its first such failure (one wait for the whole take, however many segments it has): it is
     /// never written by another encoder, whose bitstream decodes to other pixels. While other checkouts run their tests,
-    /// the media engine has been seen to take no session for 90 s.
-    public var videoEncoder: VideoEncoderChoice = .any
+    /// the media engine has been seen to take no session for 90 s. Any other error is thrown at once.
+    public var videoEncoder: VideoEncoderChoice = TakeBuilder.defaultVideoEncoder
     public var hardwareEncoderTimeout = 300.0
     public var hardwareEncoderRetryInterval = 0.5
+    /// When this builder stops writing again with `.hardwareOnly`: `hardwareEncoderTimeout` after its first encoder
+    /// failure, `nil` before one.
+    public private(set) var hardwareEncoderDeadline: ContinuousClock.Instant?
     /// Makes the writer of a video segment for `url`, at `framesPerSecond`, with `encoder`: a `FragmentedTrackWriter`
-    /// outside real time. Tests replace it, for one to make the hardware encoder look busy.
+    /// outside real time. Tests replace it, for one to make the hardware encoder look busy: a factory that throws
+    /// `WriterError.appendFailed` stands for a media engine that gives no session, which `.hardwareOnly` waits out.
     public var makeVideoWriter: VideoWriterFactory = { url, framesPerSecond, encoder in
         try FragmentedTrackWriter(url: url, media: .video(framesPerSecond: framesPerSecond), realTime: false, videoEncoder: encoder)
     }
+
+    /// The encoder of every builder's video unless a test sets another: `.hardwareOnly` on a Mac with a hardware HEVC
+    /// encoder, `.any` in CI (`TOMA_CI=1`) or without one.
+    ///
+    /// The tests' fixtures are written outside real time, and with `.any` VideoToolbox writes them with its software
+    /// encoder while the media engine takes no more sessions: 23 s for 3 s of 640 × 480 and 452 s for 1512 × 982 under
+    /// load, against a fraction of a second, which spent the time limits of the tests on their fixtures. Waiting for the
+    /// hardware encoder costs nothing while it is free and little CPU while it is not. A runner's virtual machine need
+    /// not have one, and has no other checkouts to share the engine with.
+    public static let defaultVideoEncoder: VideoEncoderChoice =
+        ProcessInfo.processInfo.environment["TOMA_CI"] != "1" && hasHardwareHEVCEncoder ? .hardwareOnly : .any
+
+    /// Whether VideoToolbox lists a hardware-accelerated HEVC encoder on this Mac.
+    public static let hasHardwareHEVCEncoder: Bool = {
+        var list: CFArray?
+        guard VTCopyVideoEncoderList(nil, &list) == noErr, let encoders = list as? [[String: Any]] else { return false }
+        return encoders.contains { encoder in
+            (encoder[kVTVideoEncoderList_CodecType as String] as? NSNumber)?.uint32Value == kCMVideoCodecType_HEVC
+                && (encoder[kVTVideoEncoderList_IsHardwareAccelerated as String] as? Bool) == true
+        }
+    }()
 
     public typealias VideoWriterFactory = (_ url: URL, _ framesPerSecond: Int, _ encoder: VideoEncoderChoice) throws -> FragmentedTrackWriter
 
@@ -169,32 +195,50 @@ public final class TakeBuilder {
     }
 
     /// Writes the frames `frames` of a track as the segment `spec` at `url` and returns where it ends; with
-    /// `.hardwareOnly`, again and again while it fails, as `videoEncoder` says.
+    /// `.hardwareOnly`, again and again while it fails in the encoder, as `videoEncoder` says.
     private nonisolated(nonsending) func writeVideoSegment(
         _ spec: VideoSegmentSpec, to url: URL, frames: Range<Int>
     ) async throws -> HostTime {
-        let deadline = Date().addingTimeInterval(hardwareEncoderTimeout)
         while true {
+            var writer: FragmentedTrackWriter?
             do {
-                let writer = try makeVideoWriter(url, spec.framesPerSecond, videoEncoder)
+                let made = try makeVideoWriter(url, spec.framesPerSecond, videoEncoder)
+                writer = made
                 for (i, frameIndex) in frames.enumerated() {
                     let pts = spec.start.adding(seconds: Double(i) / Double(spec.framesPerSecond))
                     let sample = SampleFactory.videoSample(width: spec.width, height: spec.height, pts: pts, frameIndex: frameIndex)
-                    try writer.append(spec.transform?(frameIndex, sample) ?? sample)
+                    try made.append(spec.transform?(frameIndex, sample) ?? sample)
                 }
-                return try await close(writer, at: spec.start.adding(seconds: spec.seconds), leaveOpen: spec.leaveOpen, url: url)
+                return try await close(made, at: spec.start.adding(seconds: spec.seconds), leaveOpen: spec.leaveOpen, url: url)
             } catch {
-                guard videoEncoder == .hardwareOnly else { throw error }
+                guard videoEncoder == .hardwareOnly, Self.isEncoderFailure(error, of: writer) else { throw error }
+                writer = nil
                 // What a failed writer left; a new one refuses a path that is there.
                 try? FileManager.default.removeItem(at: url)
-                guard Date() < deadline else {
+                let deadline = hardwareEncoderDeadline ?? ContinuousClock.now + .seconds(hardwareEncoderTimeout)
+                hardwareEncoderDeadline = deadline
+                guard ContinuousClock.now < deadline else {
                     throw TestSupportError.failed("""
-                        \(url.lastPathComponent): the hardware HEVC encoder wrote nothing for \(hardwareEncoderTimeout) s (the \
-                        media engine takes no more sessions while other processes hold them); last error: \(error)
+                        \(url.lastPathComponent): the hardware HEVC encoder still failed \(hardwareEncoderTimeout) s after this \
+                        take's first encoder failure (the media engine takes no more sessions while other processes hold \
+                        them); last error: \(error)
                         """)
                 }
                 try await Task.sleep(for: .seconds(hardwareEncoderRetryInterval))
             }
+        }
+    }
+
+    /// Whether `error`, thrown while writing a segment with `writer` (`nil` when making it threw), is a failure of the
+    /// encoder, which writing again may get past: the writer stopped (`failure`, a session the media engine refused or
+    /// lost), it waited for the encoder past its readiness timeout, or making it threw `appendFailed` (a factory's
+    /// refused session). A refused format or sample is a fault of the segment, which writing again would only repeat.
+    private static func isEncoderFailure(_ error: any Error, of writer: FragmentedTrackWriter?) -> Bool {
+        if writer?.failure != nil { return true }
+        switch error {
+        case WriterError.appendFailed("timeout"): return true
+        case WriterError.appendFailed: return writer == nil
+        default: return false
         }
     }
 

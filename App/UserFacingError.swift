@@ -136,6 +136,8 @@ private func description(of error: ExportError) -> String {
         String(localized: "The export was canceled.")
     case .writerFailed:
         String(localized: "The video file couldn't be written.")
+    case .diskFull:
+        String(localized: "The video file couldn't be written: the disk is full.", comment: "An export that ran out of room on its disk")
     case .noDisplayTrack:
         String(localized: "This recording has no screen to export.")
     case .destinationNotAllowed:

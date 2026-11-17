@@ -76,14 +76,6 @@ private func mouseDown(_ button: MouseButton, at seconds: Double) -> InputEvent 
     InputEvent(t: at(seconds), kind: .mouseDown(button, x: 100, y: 100))
 }
 
-/// Runs `body` on a thread of its own: reading the mix decodes, which blocks in `copyNextSampleBuffer`, and many tests
-/// blocking Swift's cooperative pool at once hang the run.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `mix.render` of `frames` (by default the whole mix), read off the cooperative pool.
 private func rendered(_ mix: EditedMix, _ frames: Range<Int64>? = nil) async throws -> [Float] {
     let range = frames ?? 0..<mix.totalFrames
@@ -606,7 +598,9 @@ func seekLatencyOnALongTake(microphoneRate: Double) async throws {
         #expect(sixty.contentFrames == 48_485)
         let samples = try await rendered(sixty)
         try #require(samples.count == 48_800)
-        #expect(abs(rms(samples, start: 0, from: 47_485.0 / 48_000, to: 48_485.0 / 48_000) - 0.25 / 2.0.squareRoot()) < 0.01)
+        // The content to its end; its last 192 frames fade out, the clip's end being trimmed inside the take.
+        #expect(abs(rms(samples, start: 0, from: 47_293.0 / 48_000, to: 48_293.0 / 48_000) - 0.25 / 2.0.squareRoot()) < 0.01)
+        #expect(samples[48_484] == 0 && samples[48_292] != 0, "the content goes on to its end")
         #expect(samples[48_485...].allSatisfy { $0 == 0 }, "silence after the content")
 
         let twentyFour = sixty.with(document: document, framesPerSecond: 24)

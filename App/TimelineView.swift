@@ -253,7 +253,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private(set) var content: TimelineContent?
     /// What `content` was made from.
     private var shown: (take: TakeRecord, document: EditDocument, missing: [ClosedRange<Double>])?
-    private var shownEvents: [InputEvent] = []
+    /// The take's marker times (`TimelineContent.markerTimes(in:)`).
+    private var shownMarkers: [HostTime] = []
     /// The document a drag shows while it lasts, and until the committed one arrives (`show`): the timeline follows it.
     private var preview: EditDocument?
     /// The next layout settles the items to their new places with `Motion.trackItem`.
@@ -381,15 +382,17 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         accessibility.children() + (super.accessibilityChildren() ?? [])
     }
 
-    /// Shows `document` of `take` (with `events`' markers), the spans in `missing` hatched; `nil`, nothing (the project is
-    /// opening or cannot be shown).
-    func show(take: TakeRecord, events: [InputEvent], document: EditDocument, missing: [ClosedRange<Double>]) {
-        if let shown, shown.take == take, shown.document == document, shown.missing == missing, preview == nil { return }
+    /// Shows `document` of `take` (with its `markers`, `TimelineContent.markerTimes(in:)`), the spans in `missing` hatched;
+    /// `nil`, nothing (the project is opening or cannot be shown).
+    func show(take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>]) {
+        if let shown, shown.take == take, shown.document == document, shown.missing == missing, shownMarkers == markers,
+            preview == nil
+        { return }
         // A document that is not the one on screen moves the items to their places, unless a drag showed it already.
         settleNext = content != nil && preview == nil && shown?.document != document
         preview = nil
         shown = (take, document, missing)
-        shownEvents = events
+        shownMarkers = markers
         rebuildContent()
         NSAccessibility.post(element: self, notification: .layoutChanged)
     }
@@ -405,7 +408,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private func rebuildContent() {
         guard let shown else { return }
         let rows = content?.layout.tracks
-        let content = TimelineContent(take: shown.take, events: shownEvents, document: preview ?? shown.document, missing: shown.missing)
+        let content = TimelineContent(take: shown.take, markers: shownMarkers, document: preview ?? shown.document, missing: shown.missing)
         self.content = content
         itemsCache = nil
         if content.layout.tracks != rows { makeHeaders() } else { updateHeaders() }

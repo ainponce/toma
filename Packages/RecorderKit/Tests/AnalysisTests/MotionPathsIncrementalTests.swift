@@ -214,6 +214,10 @@ extension ZoomFixtures {
             paths.cardZoom?.checkpoints.map(bits) == full.cardZoom?.checkpoints.map(bits), "\(label)", sourceLocation: sourceLocation)
         #expect(paths.cursor.releases == full.cursor.releases, "\(label)", sourceLocation: sourceLocation)
         #expect(clicks(paths) == clicks(full), "\(label)", sourceLocation: sourceLocation)
+        // Where the motion blur is held to one side (1b's final review B-M1).
+        #expect(paths.cursor.jumps == full.cursor.jumps, "\(label)", sourceLocation: sourceLocation)
+        #expect(paths.zoom.jumps == full.zoom.jumps, "\(label)", sourceLocation: sourceLocation)
+        #expect(paths.cardZoom?.jumps == full.cardZoom?.jumps, "\(label)", sourceLocation: sourceLocation)
 
         let frames = full.timeMap.frameCount(frameRate: frameRate) + 1
         let end = TimeMap.frameTime(frames, frameRate: frameRate)

@@ -70,6 +70,11 @@ import Recording
 
     /// `synth-record`'s input in a take of 5 s: the arrow from the start and the I-beam at 1 s with their images, a
     /// click a second, a scroll at 2 s and the windows from 3 to 4 s with a key.
+    ///
+    /// The input's own start is the first click's time less 0.5 s: clicks, the scroll and the keys are logged at times
+    /// computed from it, exactly, however late its timer is. The cursor's images are not: they come from a poll on the
+    /// main queue, which every test of the bundle shares, so under load the arrow's may come late, or after 1 s, when
+    /// only the I-beam is seen.
     @Test func synthRecordWritesTheNewEvents() async throws {
         try await withTemporaryDirectory { dir in
             let package = try ProjectPackage.create(in: dir, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
@@ -83,32 +88,32 @@ import Recording
             _ = try await coordinator.stop()
             let events = try EventLogReader.read(package.eventsURL(take: take)).events
 
+            let downs = events.filter { if case .mouseDown(.left, _, _) = $0.kind { true } else { false } }
+            let start = try #require(downs.first).t.adding(seconds: -0.5)
+
             let images = events.compactMap { event -> (t: HostTime, hash: String, kind: CursorKind?)? in
                 guard case let .cursorImage(hash, _, _, kind) = event.kind else { return nil }
                 return (event.t, hash, kind)
             }
-            #expect(images.map(\.kind) == [.arrow, .iBeam])
-            #expect(Set(images.map(\.hash)).count == 2)
+            #expect([[.arrow, .iBeam], [.iBeam]].contains(images.map(\.kind)), "\(images.map(\.kind))")
+            #expect(Set(images.map(\.hash)).count == images.count)
             for image in images {
                 let url = package.cursorImageURL(take: take, hash: image.hash)
                 let source = try #require(CGImageSourceCreateWithURL(url as CFURL, nil), "\(url.lastPathComponent)")
                 #expect(CGImageSourceCreateImageAtIndex(source, 0, nil) != nil)
             }
-            let start = try #require(images.first?.t)
             #expect(try #require(images.last?.t).seconds(since: start) >= 1)
 
             let scrolls = events.filter { if case .scroll = $0.kind { true } else { false } }
-            #expect(scrolls.count == 1)
-            #expect(scrolls.allSatisfy { abs($0.t.seconds(since: start) - 2) < 0.1 })
+            #expect(scrolls.map { $0.t } == [start.adding(seconds: 2)])
 
             let windows = events.filter { $0.kind == .keyActivity }.map(\.t)
             #expect(windows.count == 4)
             #expect(windows.allSatisfy { $0 == KeyActivityRecorder.windowStart(of: $0) })
             #expect(zip(windows, windows.dropFirst()).allSatisfy { $1.nanoseconds - $0.nanoseconds == KeyActivityRecorder.window })
             let first = try #require(windows.first).seconds(since: start)
-            #expect(first > 2.9 && first <= 3.25, "the first window starts \(first) s in")
+            #expect(first >= 3 && first < 3.25, "the first window starts \(first) s in")
 
-            let downs = events.filter { if case .mouseDown(.left, _, _) = $0.kind { true } else { false } }
             let ups = events.filter { if case .mouseUp(.left, _, _) = $0.kind { true } else { false } }
             #expect(downs.count >= 4 && ups.count >= 4)
             #expect(events.count { if case .cursor = $0.kind { true } else { false } } > 100)

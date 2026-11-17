@@ -44,6 +44,10 @@ public struct CardZoomState: Equatable, Sendable {
 public struct CardZoomPath: Sendable {
     private let simulation: ZoomSimulation<CardViewport>
 
+    /// Where the card's camera jumps (at an instant block's entry and exit), in order, as `ZoomCameraPath.jumps`: a motion
+    /// blur in the card never mixes the two sides.
+    public var jumps: [ClosedRange<Int64>] { simulation.jumps }
+
     /// `nil` when neither the project's layout nor any block is a split.
     public init?(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
         self.init(

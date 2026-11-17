@@ -42,7 +42,9 @@ final class EditorKeyboard {
         guard let model, let timeline else { return false }
         let modifiers = Self.modifiers(event.modifierFlags)
         guard let characters = event.charactersIgnoringModifiers,
-            let key = EditorKey(characters: characters, unmodified: event.characters(byApplyingModifiers: []), modifiers: modifiers)
+            let key = EditorKey(
+                characters: characters, unmodified: event.characters(byApplyingModifiers: []), modifiers: modifiers,
+                keyCode: event.keyCode)
         else { return false }
         commands.shuttle = model.playbackSpeed
         guard let command = commands.command(for: key, focus: Self.focus(of: window.firstResponder, in: window)) else { return false }
@@ -79,6 +81,8 @@ final class EditorKeyboard {
     // MARK: - The commands
 
     private func perform(_ command: EditorCommand, _ model: EditorModel, _ timeline: EditorTimelineView) -> Bool {
+        // A drag's end is an edit made from the document as the drag found it: nothing else edits meanwhile.
+        if command.edits, model.isGesturing { return false }
         switch command {
         case .playPause:
             guard model.canPlay else { return false }
@@ -168,6 +172,8 @@ final class EditorKeyboard {
         case let .layout(kind):
             // The selected block's layout, or a block at the playhead or over the marked range.
             return model.applyLayoutShortcut(kind)
+        case .selectAll:
+            return model.selectAllOfTrack()
         }
     }
 
@@ -204,18 +210,38 @@ extension EditorModel {
     /// ↑ and ↓: the edit point before or after the playhead (the edges of the clips and of the zoom blocks, the camera's
     /// and the screens' changes, the take's markers, the start and the end), paused.
     func goToEditPoint(forward: Bool) -> Bool {
-        guard canPlay, let document, let project = overlayProject else { return false }
+        guard canPlay, let document else { return false }
         if isPlaying { pause() }
         let map = TimeMap(sequence: document.sequence)
-        let markers = project.events.compactMap { event -> HostTime? in
-            if case .marker = event.kind { event.t } else { nil }
-        }
-        let points = EditPoints(document: document, timeMap: map, markers: markers).all
+        let points = EditPoints(document: document, timeMap: map, markers: markerTimes).all
         guard let frame = KeyboardCommands.editPointFrame(
             from: playheadFrame, forward: forward, points: points, frameRate: document.frameRate,
             frameCount: map.frameCount(frameRate: document.frameRate))
         else { return false }
         seek(frame: frame)
+        return true
+    }
+
+    /// ⌘A on the timeline (design §5.5): every item of the track with the focus, the selection's: every zoom block the
+    /// timeline shows when blocks are selected, every clip otherwise. A camera change, a layout block or a change of
+    /// screen is selected one at a time: nothing then.
+    func selectAllOfTrack() -> Bool {
+        guard state == .ready, let document else { return false }
+        let map = TimeMap(sequence: document.sequence)
+        switch selection {
+        case .zooms?:
+            let shown = document.zoom.regions.filter { region in
+                region.start < region.end && !(map.outputRange(ofSource: region.start..<region.end, take: region.take)?.isEmpty ?? true)
+            }
+            guard !shown.isEmpty else { return false }
+            selection = .zooms(Set(shown.map(\.id)))
+        case .clips?, nil:
+            let clips = document.sequence.filter { TimeMap.outputDuration(of: $0) > 0 }
+            guard !clips.isEmpty else { return false }
+            selection = .clips(Set(clips.map(\.id)))
+        case .cameraChange?, .layoutBlock?, .screenChange?:
+            return false
+        }
         return true
     }
 

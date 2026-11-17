@@ -45,10 +45,10 @@ public enum GoldenProjects {
     /// take. `formatVersion` `nil` gives the case's own version (1 for `phaseZero`, 2 for the others); another one is
     /// passed to `TakeBuilder`, for example 3 for `pausedTake` as a version 3 package. `videoEncoder` and
     /// `makeVideoWriter` (when given) are the builder's (`TakeBuilder.videoEncoder`, `TakeBuilder.makeVideoWriter`):
-    /// `goldenFramesEncoder` for frames compared with the golden ones.
+    /// `goldenFramesEncoder` for frames compared with the golden ones, which must be the hardware encoder's even in CI.
     /// - Throws: `TestSupportError.missing` for a name that is not a case, or what writing the take throws.
     public static func make(
-        _ name: String, in dir: URL, formatVersion: Int? = nil, videoEncoder: VideoEncoderChoice = .any,
+        _ name: String, in dir: URL, formatVersion: Int? = nil, videoEncoder: VideoEncoderChoice = TakeBuilder.defaultVideoEncoder,
         makeVideoWriter: TakeBuilder.VideoWriterFactory? = nil
     ) async throws -> LoadedProject {
         func builder(version: Int) throws -> TakeBuilder {
@@ -67,6 +67,20 @@ public enum GoldenProjects {
         case "twoAudioTracks": return try await twoAudioTracks(try builder(version: 2))
         default: throw TestSupportError.missing("golden case \(name)")
         }
+    }
+
+    /// One line per video segment of `project` (display, window and camera tracks, in the take's order),
+    /// `<track> <segment> <digest>` with the `encodedVideoDigest(of:)` of its file: what `goldenFramesMatch` compares
+    /// with the digests recorded next to the golden files, to tell a change of the cases' video (the encoder) from a
+    /// change of the render.
+    public static func videoDigests(of project: LoadedProject) async throws -> [String] {
+        var lines: [String] = []
+        for track in project.take.tracks where [.display, .window, .camera].contains(track.kind) {
+            for segment in track.segments {
+                lines.append("\(track.id) \(segment.index) \(try await encodedVideoDigest(of: project.package.fileURL(segment.file)))")
+            }
+        }
+        return lines
     }
 
     // MARK: - The cases

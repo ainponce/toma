@@ -82,7 +82,7 @@ public final class EventLogWriter: Sendable {
             if created {
                 try DurableFile.syncDirectory(url.deletingLastPathComponent())
             } else {
-                _ = try EventLogReader.endAtLineBoundary(fd)
+                _ = try EventLogReader.endAtLineBoundary(fd, isWholeObject: EventLogReader.isWholeObject)
             }
         } catch {
             Darwin.close(fd)
@@ -341,7 +341,7 @@ public enum EventLogReader {
         let fd = try openRegularFile(url.path)
         let changed: Bool
         do {
-            changed = try endAtLineBoundary(fd)
+            changed = try endAtLineBoundary(fd, isWholeObject: isWholeObject)
         } catch {
             close(fd)
             throw error
@@ -367,8 +367,10 @@ public enum EventLogReader {
         return fd
     }
 
-    /// `truncateIncompleteTail` on a file opened with `O_RDWR | O_APPEND`.
-    static func endAtLineBoundary(_ fd: Int32) throws -> Bool {
+    /// `truncateIncompleteTail` on a file opened with `O_RDWR | O_APPEND`, a last line without its line break kept when
+    /// `isWholeObject` says it is one complete JSON object: this log's rule, or the edit log's (`EditLogReader`), which
+    /// reads its lines with that same rule.
+    static func endAtLineBoundary(_ fd: Int32, isWholeObject: (Data) -> Bool) throws -> Bool {
         var info = stat()
         guard fstat(fd, &info) == 0 else { throw POSIXError.current() }
         let size = info.st_size
@@ -387,7 +389,7 @@ public enum EventLogReader {
     /// Whether `bytes` is one complete JSON object. Every line is one, and no strict prefix of a
     /// JSON object is, so this tells a whole line that lacks its line break from a write cut short,
     /// whatever its `type`.
-    private static func isWholeObject(_ bytes: Data) -> Bool {
+    static func isWholeObject(_ bytes: Data) -> Bool {
         guard let object = try? JSONSerialization.jsonObject(with: bytes) else { return false }
         return object is [String: Any]
     }

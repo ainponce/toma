@@ -16,14 +16,6 @@ import Testing
 private let screenFrame = Rect(x: 0, y: 0, width: 640, height: 360)
 private let white = RGBA(1, 1, 1, 1)
 
-/// Runs `body` on a thread of its own and waits for it without holding a Swift concurrency thread: drawing a take
-/// decodes, which blocks (`offThePool` in DocumentRenderTests).
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// `sample` painted pure blue.
 @Sendable private func paintingBlue(_ frameIndex: Int, _ sample: CMSampleBuffer) -> CMSampleBuffer {
     let pixelBuffer = CMSampleBufferGetImageBuffer(sample)!

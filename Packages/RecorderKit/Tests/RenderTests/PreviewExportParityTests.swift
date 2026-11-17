@@ -33,18 +33,38 @@ private func makePixelBuffer(width: Int, height: Int) throws -> CVPixelBuffer {
     return try #require(created)
 }
 
+/// `renderer`'s frame at `t` drawn through the export path, `render(at:into:)` into a new pixel buffer of
+/// `width` × `height`, as its bytes; off the cooperative pool, since drawing decodes and blocks while it does.
+private func exported(_ renderer: FrameRenderer, at t: Double, width: Int, height: Int) async throws -> [UInt8] {
+    try await offThePool {
+        var created: CVPixelBuffer?
+        let attributes = [
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary,
+            kCVPixelBufferMetalCompatibilityKey: true,
+        ] as CFDictionary
+        let status = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, attributes, &created)
+        guard status == kCVReturnSuccess, let pixelBuffer = created else {
+            throw TestSupportError.failed("no pixel buffer of \(width) × \(height): \(status)")
+        }
+        try renderer.render(at: t, into: pixelBuffer)
+        return packedBytes(of: pixelBuffer)
+    }
+}
+
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
 func renderIsDeterministic() async throws {
     try await withTemporaryDirectory { dir in
         let project = try await movingCursorProject(in: dir)
         let size = SIMD2(1280, 720)
         let renderer = try FrameRenderer(project: project, outputSize: size)
-        let first = try renderer.renderBytes(at: 1.0)
-        let second = try renderer.renderBytes(at: 1.0)
+        let other = try FrameRenderer(project: project, outputSize: size)
+        let (first, second, third) = try await offThePool {
+            (try renderer.renderBytes(at: 1.0), try renderer.renderBytes(at: 1.0), try other.renderBytes(at: 1.0))
+        }
         #expect(first.count == 1280 * 720 * 4)
         #expect(first == second)
         // A second renderer, which decodes the frame with its own reader, draws the same bytes.
-        #expect(try FrameRenderer(project: project, outputSize: size).renderBytes(at: 1.0) == first)
+        #expect(third == first)
         // And it is the frame at 1 s, with the cursor drawn.
         let evaluator = FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: size)
         let frame = evaluator.frame(at: 1.0)
@@ -63,12 +83,10 @@ func previewAndExportPathsMatchBitForBit() async throws {
         let project = try await movingCursorProject(in: dir)
         let renderer = try FrameRenderer(project: project, outputSize: [1280, 720])
         let preview = PreviewRenderer(renderer: renderer)
-        let pixelBuffer = try makePixelBuffer(width: 1280, height: 720)
         var previous: [UInt8]?
         for t in [0, 0.5, 1.7] {
-            try renderer.render(at: t, into: pixelBuffer)
-            let exported = packedBytes(of: pixelBuffer)
-            let previewed = try preview.snapshot(at: t)
+            let exported = try await exported(renderer, at: t, width: 1280, height: 720)
+            let previewed = try await offThePool { try preview.snapshot(at: t) }
             #expect(exported.count == 1280 * 720 * 4)
             #expect(exported == previewed, "at \(t) s")
             #expect(exported != previous, "frames at different times differ")
@@ -94,15 +112,13 @@ func previewAndExportMatchWithCameraAndArea() async throws {
         let project = try builder.write()
         let renderer = try FrameRenderer(project: project, outputSize: [1280, 720])
         let preview = PreviewRenderer(renderer: renderer)
-        let pixelBuffer = try makePixelBuffer(width: 1280, height: 720)
         let evaluator = FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: [1280, 720])
         var previous: [UInt8]?
         for t in [0, 0.5, 1.7] {
             let frame = evaluator.frame(at: t)
             #expect(frame.camera != nil && frame.screen?.crop != Rect(x: 0, y: 0, width: 1, height: 1), "at \(t) s")
-            try renderer.render(at: t, into: pixelBuffer)
-            let exported = packedBytes(of: pixelBuffer)
-            #expect(exported == (try preview.snapshot(at: t)), "at \(t) s")
+            let exported = try await exported(renderer, at: t, width: 1280, height: 720)
+            #expect(exported == (try await offThePool { try preview.snapshot(at: t) }), "at \(t) s")
             #expect(exported != previous, "frames at different times differ")
             previous = exported
             // The camera is drawn: the centre of its rect is the camera's frame of that time.
@@ -136,7 +152,7 @@ func windowSegmentsAtAnotherScaleFillTheWindow() async throws {
         let rect = try #require(
             FrameEvaluator(take: project.take, events: project.events, style: StyleV0(), outputSize: size).frame(at: 0).screen?.rect)
         for (t, index) in [(0.5, 15), (1.5, 45)] {
-            let bytes = try renderer.renderBytes(at: t)
+            let bytes = try await offThePool { try renderer.renderBytes(at: t) }
             func at(_ u: Double, _ v: Double) -> SIMD4<UInt8> {
                 pixel(bytes, width: size.x, x: Int(rect.x + u * rect.width), y: Int(rect.y + v * rect.height))
             }
@@ -158,11 +174,25 @@ func windowSegmentsAtAnotherScaleFillTheWindow() async throws {
 /// cases, must equal that file byte for byte. With `TOMA_GOLDEN_RECORD=1` as well (`make golden-record`, only from Task
 /// 1's commit), it writes them to that file instead, once every check passed, and never over a file already there.
 /// Without the file and without the switch it fails: it never passes without comparing.
+///
+/// Every run writes the cases' video again, with the hardware encoder alone, and the frames are drawn from it. So that a
+/// difference tells the render from the encoder:
+/// - `TOMA_GOLDEN_FIXTURES` names the digests of the cases' video (`GoldenProjects.videoDigests`) recorded next to the
+///   golden files (`make golden-fixtures`, once, after a run whose frames matched). With the video the same as those, a
+///   difference is the render's, and fails at once; with other video, the encoder's, and the cases are written again.
+/// - A difference draws the same packages again: other bytes the second time mean a render that is not deterministic,
+///   which fails at once.
+/// - The cases are written up to `goldenAttempts` times while the difference can be the encoder's, each attempt told
+///   on the standard output. A render that changed differs every time, so the gate still fails on it.
+/// With `TOMA_GOLDEN_FIXTURES_RECORD=1` as well, a run whose frames matched writes the digests to that file, never over
+/// one already there.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_GOLDEN_FILE"] != nil))
 func goldenFramesMatch() async throws {
     let environment = ProcessInfo.processInfo.environment
     let url = URL(fileURLWithPath: try #require(environment["TOMA_GOLDEN_FILE"]))
     let recording = environment["TOMA_GOLDEN_RECORD"] == "1"
+    let fixtures = environment["TOMA_GOLDEN_FIXTURES"].map { URL(fileURLWithPath: $0) }
+    let recordingFixtures = environment["TOMA_GOLDEN_FIXTURES_RECORD"] == "1"
     let exists = FileManager.default.fileExists(atPath: url.path)
     if recording {
         try #require(!exists, "\(url.path) is already there: golden frames are never recorded over others")
@@ -173,42 +203,135 @@ func goldenFramesMatch() async throws {
                 from later code (plan decision 3)
                 """)
     }
-    let size = SIMD2(1280, 720)
-    var bytes: [UInt8] = []
-    // The case and the time of each frame in `bytes`.
-    var frames: [(name: String, time: Double)] = []
-    // Every check is a `#require`: when recording, nothing is written unless they all passed.
-    try await withTemporaryDirectory { dir in
-        for golden in GoldenProjects.cases where !golden.times.isEmpty {
-            let project = try await GoldenProjects.make(golden.name, in: dir, videoEncoder: GoldenProjects.goldenFramesEncoder)
-            try #require(project.manifest.formatVersion == (golden.name == "phaseZero" ? 1 : 2), "\(golden.name) is a v1 or v2 project")
-            let renderer = try FrameRenderer(project: project, outputSize: size)
-            try #require(
-                renderer.duration >= 3 && golden.times.allSatisfy { $0 < renderer.duration },
-                "\(golden.name) lasts \(renderer.duration) s, its times are \(golden.times)")
-            for t in golden.times {
-                bytes += try renderer.renderBytes(at: t)
-                frames.append((golden.name, t))
+    var recordedDigests: [String]?
+    if let fixtures, FileManager.default.fileExists(atPath: fixtures.path) {
+        try #require(!recordingFixtures, "\(fixtures.path) is already there: the digests are recorded once, never over others")
+        recordedDigests = try String(contentsOf: fixtures, encoding: .utf8).split(separator: "\n").map(String.init)
+    } else if recordingFixtures {
+        try #require(fixtures != nil && !recording, "TOMA_GOLDEN_FIXTURES_RECORD=1 needs TOMA_GOLDEN_FIXTURES and golden frames")
+    }
+    let golden = recording ? nil : try Data(contentsOf: url)
+    let attempts = recording ? 1 : goldenAttempts
+    var earlier: [String] = []
+    for attempt in 1...attempts {
+        // Every check is a `#require`: when recording, nothing is written unless they all passed.
+        let outcome = try await withTemporaryDirectory { dir in
+            try await goldenOutcome(in: dir, golden: golden, recordedDigests: recordedDigests)
+        }
+        switch outcome {
+        case let .matched(bytes, digests):
+            if recording {
+                try Data(bytes).write(to: url, options: .withoutOverwriting)
+                return
             }
-            try #require(renderer.missingVideo.isEmpty, "\(golden.name): \(renderer.missingVideo)")
+            if !earlier.isEmpty { print("golden: the frames matched at attempt \(attempt) of \(attempts)") }
+            if let recordedDigests, digests != recordedDigests {
+                print("golden: the frames matched with video other than the recorded digests: \(changes(from: recordedDigests, to: digests))")
+            }
+            if recordingFixtures, let fixtures {
+                try Data((digests.joined(separator: "\n") + "\n").utf8).write(to: fixtures, options: .withoutOverwriting)
+                print("golden: recorded the digests of the cases' video in \(fixtures.path)")
+            } else if recordedDigests == nil {
+                print("golden: no recorded digests of the cases' video: record them once with `make golden-fixtures`")
+            }
+            return
+        case let .differs(reason, encoderMayExplainIt):
+            guard encoderMayExplainIt, attempt < attempts else {
+                Issue.record("""
+                    \(reason)\(earlier.isEmpty ? "" : "; earlier attempts: " + earlier.joined(separator: "; ")). Never \
+                    record the golden frames again from this code, only from Task 1's commit when the system changed (plan \
+                    decision 3)
+                    """)
+                return
+            }
+            earlier.append(reason)
+            print("golden: attempt \(attempt) of \(attempts): \(reason); writing the cases again")
         }
     }
-    if recording {
-        try Data(bytes).write(to: url, options: .withoutOverwriting)
-        return
+}
+
+/// How many times `goldenFramesMatch` writes the cases while a difference can be the encoder's.
+private let goldenAttempts = 3
+
+/// What one attempt of `goldenFramesMatch` found.
+private enum GoldenOutcome {
+    /// The frames drawn equal the golden ones (when recording, there are none to compare with), and the digests of the
+    /// cases' video.
+    case matched(bytes: [UInt8], digests: [String])
+    /// They differ, as `reason` says, and whether the encoder may explain it (the cases may be written again).
+    case differs(reason: String, encoderMayExplainIt: Bool)
+}
+
+/// Writes the golden cases into `dir`, their video by the hardware encoder alone, and draws their frames; compares them
+/// with `golden` (none when recording), drawing them again and looking at `recordedDigests` when they differ.
+private func goldenOutcome(in dir: URL, golden: Data?, recordedDigests: [String]?) async throws -> GoldenOutcome {
+    var cases: [(name: String, project: LoadedProject, times: [Double])] = []
+    var digests: [String] = []
+    for golden in GoldenProjects.cases where !golden.times.isEmpty {
+        let project = try await GoldenProjects.make(golden.name, in: dir, videoEncoder: GoldenProjects.goldenFramesEncoder)
+        try #require(project.manifest.formatVersion == (golden.name == "phaseZero" ? 1 : 2), "\(golden.name) is a v1 or v2 project")
+        digests += try await GoldenProjects.videoDigests(of: project).map { "\(golden.name) \($0)" }
+        cases.append((golden.name, project, golden.times))
     }
-    let golden = try Data(contentsOf: url)
-    try #require(golden.count == bytes.count, "\(golden.count) bytes in \(url.path), \(bytes.count) drawn")
-    guard golden != Data(bytes) else { return }
-    let first = try #require(golden.indices.first { golden[$0] != bytes[$0] })
+    let bytes = try await goldenFrames(of: cases)
+    guard let golden else { return .matched(bytes: bytes, digests: digests) }
+    try #require(golden.count == bytes.count, "\(golden.count) bytes of golden frames, \(bytes.count) drawn")
+    guard golden != Data(bytes) else { return .matched(bytes: bytes, digests: digests) }
+
+    let size = SIMD2(1280, 720)
     let frameBytes = size.x * size.y * 4
+    let frames = cases.flatMap { c in c.times.map { (name: c.name, time: $0) } }
+    let first = try #require(golden.indices.first { golden[$0] != bytes[$0] })
     let frame = frames[first / frameBytes]
     let differing = zip(golden, bytes).reduce(0) { $0 + ($1.0 != $1.1 ? 1 : 0) }
-    Issue.record("""
-        \(differing) bytes differ, the first in \(frame.name) at \(frame.time) s (byte \(first % frameBytes) of its frame): \
-        the render of a v1 or v2 project changed. Never record the golden frames again from this code, only from Task 1's \
-        commit when the system changed (plan decision 3)
-        """)
+    let difference = "\(differing) bytes differ, the first in \(frame.name) at \(frame.time) s (byte \(first % frameBytes) of its frame)"
+    guard try await goldenFrames(of: cases) == bytes else {
+        return .differs(
+            reason: "the render is not deterministic: the same packages drew other bytes the second time (\(difference))",
+            encoderMayExplainIt: false)
+    }
+    guard let recordedDigests else {
+        return .differs(
+            reason: """
+                \(difference); without recorded digests of the cases' video, the render and the encoder cannot be told \
+                apart (`make golden-fixtures`); the video's digests: \(digests.map { String($0.prefix($0.count - 52)) }.joined(separator: ", "))
+                """,
+            encoderMayExplainIt: true)
+    }
+    guard digests == recordedDigests else {
+        return .differs(
+            reason: """
+                the cases' video differs from the recorded digests, so the encoder and not the render: \
+                \(changes(from: recordedDigests, to: digests)) (\(difference))
+                """,
+            encoderMayExplainIt: true)
+    }
+    return .differs(
+        reason: "the render of a v1 or v2 project changed: \(difference), drawn from video with the recorded digests",
+        encoderMayExplainIt: false)
+}
+
+/// The frames of `cases`, drawn by a new `FrameRenderer` for each at 1280 × 720 at its times, off the cooperative pool.
+private func goldenFrames(of cases: [(name: String, project: LoadedProject, times: [Double])]) async throws -> [UInt8] {
+    var bytes: [UInt8] = []
+    for (name, project, times) in cases {
+        let renderer = try FrameRenderer(project: project, outputSize: [1280, 720])
+        try #require(
+            renderer.duration >= 3 && times.allSatisfy { $0 < renderer.duration },
+            "\(name) lasts \(renderer.duration) s, its times are \(times)")
+        bytes += try await offThePool { try times.flatMap { try renderer.renderBytes(at: $0) } }
+        try #require(renderer.missingVideo.isEmpty, "\(name): \(renderer.missingVideo)")
+    }
+    return bytes
+}
+
+/// The segments whose digest is not the recorded one, as `<case> <track> <segment> <recorded> → <now>` (12 digits).
+private func changes(from recorded: [String], to now: [String]) -> String {
+    guard recorded.count == now.count else { return "\(recorded.count) segments recorded, \(now.count) written" }
+    return zip(recorded, now).filter { $0 != $1 }.map { recorded, now in
+        let old = recorded.split(separator: " "), new = now.split(separator: " ")
+        return "\(new.dropLast().joined(separator: " ")) \(old.last?.prefix(12) ?? "?") → \(new.last?.prefix(12) ?? "?")"
+    }.joined(separator: ", ")
 }
 
 /// Makes video writers as VideoToolbox does while the media engine takes no more hardware encoder sessions (other
@@ -249,37 +372,23 @@ private final class BusyMediaEngine: @unchecked Sendable {
 /// video is written again on every run, and while the media engine takes no more hardware encoder sessions,
 /// VideoToolbox writes it with its software encoder, whose bitstream decodes to other pixels. The golden frames are
 /// drawn from the hardware encoder's video whatever the media engine is doing (`GoldenProjects.goldenFramesEncoder`):
-/// `phaseZero` written while the engine is busy for its first video writer draws the frames of `phaseZero` written
-/// while it is free. Not in CI: a virtual machine need not have a hardware HEVC encoder.
-@Test(.enabled(if: MetalCondition.isAvailable && !MetalCondition.isRequired))
+/// `phaseZero` written while the engine is busy for its first video writer waits for the hardware encoder and is never
+/// written by the software one.
+///
+/// The busy engine is simulated by `BusyMediaEngine` (what VideoToolbox does was seen once, in the investigation of
+/// the flake: `golden-flake-report.md`). The frames themselves are compared by `make golden`, which tells the
+/// encoder's video from the render: comparing two encodes here would test the encoder, not Toma's code. Not in CI, nor
+/// without a hardware HEVC encoder: a virtual machine need not have one.
+@Test(.enabled(if: TakeBuilder.hasHardwareHEVCEncoder && !MetalCondition.isRequired))
 func goldenFramesAreDrawnFromTheHardwareEncodersVideo() async throws {
     try await withTemporaryDirectory { dir in
-        let size = SIMD2(1280, 720)
-        let times = try #require(GoldenProjects.cases.first { $0.name == "phaseZero" }).times
-        func make(in name: String, makeVideoWriter: TakeBuilder.VideoWriterFactory? = nil) async throws -> [[UInt8]] {
-            let folder = dir.appendingPathComponent(name, isDirectory: true)
-            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
-            let project = try await GoldenProjects.make(
-                "phaseZero", in: folder, videoEncoder: GoldenProjects.goldenFramesEncoder, makeVideoWriter: makeVideoWriter)
-            let renderer = try FrameRenderer(project: project, outputSize: size)
-            return try await goldenOffThePool { try times.map { try renderer.renderBytes(at: $0) } }
-        }
-        let free = try await make(in: "free")
         let engine = BusyMediaEngine(busyWriters: 1)
-        let busy = try await make(in: "busy", makeVideoWriter: engine.makeWriter)
+        let project = try await GoldenProjects.make(
+            "phaseZero", in: dir, videoEncoder: GoldenProjects.goldenFramesEncoder, makeVideoWriter: engine.makeWriter)
         #expect(engine.fellBack + engine.refused == 1)
         #expect(engine.fellBack == 0, "\(engine.fellBack) segment written by the software encoder")
-        for (k, t) in times.enumerated() {
-            let differing = zip(busy[k], free[k]).filter { $0 != $1 }.count
-            #expect(differing == 0, "\(differing) bytes of the frame at \(t) s differ")
-        }
-    }
-}
-
-/// Runs `body` on a thread of its own: decoding blocks, and must not hold a Swift concurrency thread.
-private func goldenOffThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
+        let segments = try #require(project.take.tracks.first { $0.kind == .display }).segments
+        #expect(segments.count == 1)
     }
 }
 

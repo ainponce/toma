@@ -133,7 +133,7 @@ final class TimelineViewController: NSViewController {
             cachesFor = (project.package.url, project.take)
             makeCaches(project, caches)
         }
-        timeline.show(take: project.take, events: project.events, document: document, missing: missing)
+        timeline.show(take: project.take, markers: model.markerTimes, document: document, missing: missing)
     }
 
     /// The thumbnails' cache, and the waveform of each audio track worked out off the main thread (decoded by the cache on

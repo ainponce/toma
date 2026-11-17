@@ -4,7 +4,7 @@ Gracias por querer ayudar. / Thanks for helping out.
 
 ## Developer Certificate of Origin (DCO)
 
-Todos los commits deben llevar la línea `Signed-off-by` (DCO 1.1, https://developercertificate.org). Se agrega con:
+Todos los commits que no son de merge deben llevar la línea `Signed-off-by` (DCO 1.1, https://developercertificate.org), como lo comprueba la app del DCO de GitHub, que no mira los merges. Los merges también se firman (`git merge --signoff`), aunque nada lo exige. Se agrega con:
 
 ```sh
 git commit -s -m "feat: mensaje"

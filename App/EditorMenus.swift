@@ -87,11 +87,19 @@ final class EditorUndoManager: UndoManager {
 }
 
 extension EditorModel {
-    /// Closing the window now: whether it asks first (`EditorClosing`, design §5.9).
-    var closing: EditorClosing {
+    /// Closing the window now: whether it asks first (`EditorClosing`, design §5.9): about changes that couldn't be
+    /// saved, and about its export in progress.
+    var closingRule: EditorClosing {
         EditorClosing.decide(
             hasUnsavedChanges: panelSession?.hasUnsavedChanges ?? false, notices: panelSession?.notices ?? [],
-            isAsking: isAskingToClose)
+            isExporting: isExporting, isAsking: isAskingToClose)
+    }
+
+    /// What closing the window asks now, in order.
+    var closingQuestions: [EditorClosing.Question] {
+        EditorClosing.questions(
+            hasUnsavedChanges: panelSession?.hasUnsavedChanges ?? false, notices: panelSession?.notices ?? [],
+            isExporting: isExporting)
     }
 
     /// Project ▸ Frames per Second: an edit, undone like any other.
@@ -109,30 +117,53 @@ extension EditorWindowController {
     }
 
     /// Closing while a change couldn't be saved (the amber banner is up) asks first (design §5.9): "Keep Open", the default,
-    /// or "Close Anyway".
+    /// or "Close Anyway"; while its export runs, whether to cancel it, as quitting asks: "Cancel", the default, or "Close".
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        switch model.closing {
+        switch model.closingRule {
         case .close:
             return true
         case .keepOpen:
             return false
         case .ask:
-            askBeforeClosing(sender)
+            askBeforeClosing(sender, answered: [])
             return false
         }
     }
 
-    private func askBeforeClosing(_ window: NSWindow) {
+    /// Asks the first of the questions closing asks now that was not `answered` yes; closes once none is left. Each
+    /// question is read again after an answer: a save may have gone through, or the export ended, meanwhile.
+    private func askBeforeClosing(_ window: NSWindow, answered: [EditorClosing.Question]) {
+        guard let question = model.closingQuestions.first(where: { !answered.contains($0) }) else {
+            // `close()` does not ask again (`windowShouldClose` is for the window's button and ⌘W).
+            window.close()
+            return
+        }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = String(
-            localized: "Some changes couldn't be saved", comment: "Closing an editor whose last changes are not on the disk")
-        alert.informativeText = String(
-            localized: "If the window is closed now, they're lost.", comment: "Closing an editor whose last changes are not on the disk")
-        let answers = UnsavedChangesAnswer.allCases
-        for answer in answers {
-            let button = alert.addButton(withTitle: Self.title(answer))
-            button.hasDestructiveAction = answer.closesTheWindow
+        let closes: [Bool]
+        switch question {
+        case .unsavedChanges:
+            alert.messageText = String(
+                localized: "Some changes couldn't be saved", comment: "Closing an editor whose last changes are not on the disk")
+            alert.informativeText = String(
+                localized: "If the window is closed now, they're lost.", comment: "Closing an editor whose last changes are not on the disk")
+            let answers = UnsavedChangesAnswer.allCases
+            for answer in answers {
+                let button = alert.addButton(withTitle: Self.title(answer))
+                button.hasDestructiveAction = answer.closesTheWindow
+            }
+            closes = answers.map(\.closesTheWindow)
+        case .cancelExport:
+            alert.messageText = String(
+                localized: "An export is in progress. Close the window and cancel it?",
+                comment: "Closing an editor's window while its export runs")
+            alert.informativeText = String(localized: "The video being exported isn't saved. The project isn't changed.")
+            let answers = ExportClosingAnswer.allCases
+            for answer in answers {
+                let button = alert.addButton(withTitle: Self.title(answer))
+                button.hasDestructiveAction = answer.closesTheWindow
+            }
+            closes = answers.map(\.closesTheWindow)
         }
         model.isAskingToClose = true
         alert.beginSheetModal(for: window) { [weak self] response in
@@ -140,9 +171,8 @@ extension EditorWindowController {
                 guard let self else { return }
                 self.model.isAskingToClose = false
                 let index = response.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
-                guard answers.indices.contains(index), answers[index].closesTheWindow else { return }
-                // `close()` does not ask again (`windowShouldClose` is for the window's button and ⌘W).
-                self.window?.close()
+                guard closes.indices.contains(index), closes[index] else { return }
+                self.askBeforeClosing(window, answered: answered + [question])
             }
         }
     }
@@ -151,6 +181,13 @@ extension EditorWindowController {
         switch answer {
         case .keepOpen: String(localized: "Keep Open", comment: "Closing with unsaved changes: the window stays open (the default)")
         case .closeAnyway: String(localized: "Close Anyway", comment: "Closing with unsaved changes: the window closes, losing them")
+        }
+    }
+
+    private static func title(_ answer: ExportClosingAnswer) -> String {
+        switch answer {
+        case .cancel: String(localized: "Cancel")
+        case .close: String(localized: "Close")
         }
     }
 
@@ -181,6 +218,8 @@ final class KeyEditor: ObservableObject {
         var aspect: Aspect
         var frameRate: Int
         var canEdit: Bool
+        /// The speed of the clips a speed applies to (`EditorModel.speedTargets`); `nil` if they differ.
+        var speed: Double?
     }
 
     /// Whether the key editor shows its panel; `nil` while no editor is the key window.
@@ -212,6 +251,14 @@ final class KeyEditor: ObservableObject {
         model?.setFrameRate(fps)
     }
 
+    func setSpeed(_ speed: Double) {
+        model?.setSpeed(speed)
+    }
+
+    func askCustomSpeed() {
+        model?.askCustomSpeed()
+    }
+
     private func follow(_ model: EditorModel?) {
         self.model = model
         generation += 1
@@ -223,7 +270,9 @@ final class KeyEditor: ObservableObject {
         guard generation == self.generation else { return }
         let (panel, next) = withObservationTracking {
             (model?.panelVisible, model.flatMap { model in
-                model.document.map { Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit) }
+                model.document.map {
+                    Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets)
+                }
             })
         } onChange: { [weak self] in
             // Before the change: read once it is made.
@@ -234,9 +283,10 @@ final class KeyEditor: ObservableObject {
     }
 }
 
-/// File ▸ Open… (⌘O, design §5.1), and the editor's Project menu: Format (16:9 · 9:16 · 1:1, as the bar's selector) and
-/// Frames per Second (24 · 25 · 30 · 50 · 60) of the key editor's project, each an edit that is undone like any other.
-/// The project's frames per second change only here.
+/// File ▸ Open… (⌘O, design §5.1), and the editor's Project menu: Format (16:9 · 9:16 · 1:1, as the bar's selector),
+/// Frames per Second (24 · 25 · 30 · 50 · 60) and the Speed of the selected clips, or of the one under the playhead (the
+/// track bar's presets and "Custom Speed…", for the keyboard: design §5.10), of the key editor's project, each an edit
+/// that is undone like any other. The project's frames per second change only here.
 struct ProjectCommands: Commands {
     let app: AppDelegate
     @ObservedObject var editor = KeyEditor.shared
@@ -260,6 +310,14 @@ struct ProjectCommands: Commands {
                 }
             }
             .disabled(project?.canEdit != true)
+            Picker("Speed", selection: Binding(get: { project?.speed }, set: { $0.map(editor.setSpeed) })) {
+                ForEach(SequenceCommands.speedPresets, id: \.self) { speed in
+                    Text(verbatim: TimelineFormat.multiplier(speed)).tag(Optional(speed))
+                }
+            }
+            .disabled(project?.canEdit != true)
+            Button("Custom Speed…") { editor.askCustomSpeed() }
+                .disabled(project?.canEdit != true)
         }
     }
 }

@@ -113,12 +113,21 @@ private func todaysCursor(at τ: Int64, positions: [(t: Int64, point: SIMD2<Doub
     }
     let sequence = [pathClip(1, from: 0, to: 4), pathClip(2, from: 5, to: 8, speed: 2), pathClip(3, from: 9, to: 11, speed: 0.5)]
     let timeMap = TimeMap(sequence: sequence)
-    let today = events.sortedByTime().compactMap { event -> (t: Int64, point: SIMD2<Double>)? in
-        guard let point = event.kind.pointerPosition, let t = timeMap.output(ofSampleAt: event.t, take: pathTakeID) else {
-            return nil
+    // Today's positions, and in each cut its last one at the next clip's start (final review B-I1).
+    var today: [(t: Int64, point: SIMD2<Double>)] = []
+    var inCut: (t: Int64, point: SIMD2<Double>)?
+    for event in events.sortedByTime() {
+        guard let point = event.kind.pointerPosition else { continue }
+        if let t = timeMap.output(ofSampleAt: event.t, take: pathTakeID) {
+            if let cut = inCut { today.append(cut) }
+            inCut = nil
+            today.append((t, point))
+        } else if let t = timeMap.output(ofChangeAt: event.t, take: pathTakeID) {
+            if let cut = inCut, cut.t != t { today.append(cut) }
+            inCut = (t, point)
         }
-        return (t, point)
     }
+    if let cut = inCut { today.append(cut) }
     let path = cursorPath(events, .off, sequence: sequence)
 
     var mismatches: [String] = []

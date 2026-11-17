@@ -25,6 +25,7 @@ struct PreviewOverlay: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ view: PreviewOverlayView, coordinator: ()) {
+        view.stopSettling()
         view.stopDisplayLink()
     }
 }
@@ -45,6 +46,8 @@ final class PreviewOverlayView: NSView {
     private var bubbleStyle: CameraStyle?
     /// Whose style `bubbleStyle` is: the take's (1b) or a Bubble block's.
     private var bubbleTarget = LayoutTrackRules.BubbleTarget.none
+    /// The stage's points of the document shown, made from the take's screens the model read once
+    /// (`EditorModel.takeScreens`): cheap for each revision, never a pass over the take's events.
     private var stagePoints: (document: EditDocument, points: StagePoints)?
 
     /// A drag of the box: where it started (stage units) and the box then.
@@ -169,8 +172,8 @@ final class PreviewOverlayView: NSView {
 
     /// The stage's points of `document`, kept while it is the same document.
     private func points(of document: EditDocument, _ project: LoadedProject) -> StagePoints? {
-        if stagePoints?.document != document {
-            stagePoints = (document, StagePoints(take: project.take, events: project.events, document: document))
+        if stagePoints?.document != document, let screens = model.takeScreens {
+            stagePoints = (document, StagePoints(take: project.take, document: document, screens: screens))
         }
         return stagePoints?.points
     }
@@ -486,6 +489,7 @@ final class PreviewOverlayView: NSView {
         var style = drag.style
         style.anchor = CameraBubbleLayout.releaseAnchor(origin: origin, velocity: velocity, style: style, region: region)
         let target = bubbleFrame(style).rect
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if let document = model.document {
             let map = TimeMap(sequence: document.sequence)
             let step: EditStep?
@@ -496,7 +500,8 @@ final class PreviewOverlayView: NSView {
             }
             if let step {
                 model.updateGesture(step)
-                model.endGesture()
+                // The edit is made now; the preview draws no bubble until the thrown one lands (`stopSettling`): never two.
+                model.endGesture(holdingLook: !reduceMotion)
             } else {
                 model.cancelGesture()
             }
@@ -505,7 +510,7 @@ final class PreviewOverlayView: NSView {
         }
         NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
         bubbleStyle = style
-        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+        if reduceMotion {
             bubbleX = SpringValue(value: target.x, spring: Motion.bubbleRelease)
             bubbleY = SpringValue(value: target.y, spring: Motion.bubbleRelease)
             return
@@ -549,10 +554,12 @@ final class PreviewOverlayView: NSView {
         needsDisplay = true
     }
 
-    private func stopSettling() {
+    /// The thrown bubble landed (or the throw stopped): the preview draws it again, where the edit put it.
+    func stopSettling() {
         guard settling || displayLink != nil else { return }
         settling = false
         stopDisplayLink()
+        model.releaseLook()
         refresh()
     }
 
@@ -581,7 +588,10 @@ final class PreviewOverlayView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
-        if window == nil { stopDisplayLink() }
+        if window == nil {
+            stopSettling()
+            stopDisplayLink()
+        }
     }
 
     override func setFrameSize(_ newSize: NSSize) {

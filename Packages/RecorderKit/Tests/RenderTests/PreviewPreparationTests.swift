@@ -14,8 +14,11 @@ private actor Pinger {
 
 @Suite(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired)) struct PreviewPreparationTests {
     /// More previews prepared at once than the pool has threads: each blocks while it decodes, which on the
-    /// pool would take every thread and hang the app.
-    @Test func manyPreparationsAtOnceLeaveThePoolFree() async throws {
+    /// pool would take every thread and hang the app. They all wait for the preparation queue, which this test holds
+    /// until a ping (a call on an actor of the default executor, which needs a thread of the pool) came back: it comes
+    /// back only if waiting for the queue holds no thread of the pool, and none of them can have finished by then.
+    /// Nothing is timed: a watchdog lets the queue go after 60 s, so that a regression fails instead of hanging.
+    @Test(.timeLimit(.minutes(10))) func manyPreparationsAtOnceLeaveThePoolFree() async throws {
         try await withTemporaryDirectory { dir in
             let builder = try TakeBuilder(in: dir)
             let frame = Rect(x: 0, y: 0, width: 640, height: 360)
@@ -24,9 +27,10 @@ private actor Pinger {
             let package = try builder.write().package
             let count = ProcessInfo.processInfo.activeProcessorCount + 1
             let finished = Atomic(0)
-            let clock = ContinuousClock()
-            let started = clock.now
             let pinger = Pinger()
+            let queueHeld = DispatchSemaphore(value: 0)
+            PreviewPreparation.queue.async { queueHeld.wait() }
+            let watchdog = Watchdog(after: .seconds(60)) { queueHeld.signal() }
 
             try await withThrowingTaskGroup(of: Void.self) { group in
                 for _ in 0..<count {
@@ -37,16 +41,14 @@ private actor Pinger {
                     }
                 }
                 group.addTask {
-                    let pinged = clock.now
                     await pinger.ping()
-                    #expect(clock.now - pinged < .seconds(1))
-                    // Made while they run: one at a time, they take far longer than a ping.
-                    #expect(finished.load(ordering: .relaxed) < count)
+                    #expect(finished.load(ordering: .relaxed) == 0, "a preparation finished while the queue was held")
+                    queueHeld.signal()
                 }
                 try await group.waitForAll()
             }
+            #expect(!watchdog.disarm(), "the ping waited for the preparations: waiting for the queue held the pool's threads")
             #expect(finished.load(ordering: .relaxed) == count)
-            #expect(clock.now - started < .seconds(30))
         }
     }
 
