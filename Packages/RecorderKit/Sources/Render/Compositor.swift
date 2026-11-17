@@ -7,7 +7,9 @@ import Synchronization
 /// Draws a `RenderFrame` into a `.bgra8Unorm` target: the stage (the background, the shadow, the window frame, the screen
 /// — over the one being left during a change of screen — and the cursor), the click effects and the camera (its shadow,
 /// its picture and its border), in that order, blended premultiplied "over"; before it, for a screen sampled with
-/// mipmaps, a blit pass that makes them.
+/// mipmaps, a blit pass that makes them. In the camera layouts (1c design §14.2) that is one composition too, with the
+/// numbers blended during a transition: the screen's group fades as one (`RenderFrame.screenOpacity`), and a frame
+/// covered by the camera (`RenderFrame.coveredByCamera`) is the camera alone, drawn over nothing else.
 ///
 /// - Without a motion blur, in one render pass that starts by clearing the target: the stage through the frame's zoom
 ///   camera (`RenderFrame.stage`), exactly as without a zoom when it has none or is at rest.
@@ -109,9 +111,12 @@ public final class Compositor: @unchecked Sendable {
                 screen: pipeline(vertex: "quadVertex", fragment: "screenFragment", blending: .over, into: attachments),
                 mipmappedScreen: pipeline(vertex: "quadVertex", fragment: "mipmappedScreenFragment", blending: .over, into: attachments),
                 shadow: pipeline(vertex: "quadVertex", fragment: "shadowFragment", blending: .over, into: attachments),
+                screenShadow: pipeline(vertex: "quadVertex", fragment: "screenShadowFragment", blending: .over, into: attachments),
                 sprite: pipeline(vertex: "quadVertex", fragment: "spriteFragment", blending: .over, into: attachments),
                 cursor: pipeline(vertex: "quadVertex", fragment: "cursorFragment", blending: .over, into: attachments),
-                windowBar: pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blending: .over, into: attachments))
+                windowBar: pipeline(vertex: "quadVertex", fragment: "windowBarFragment", blending: .over, into: attachments),
+                fadingWindowBar: pipeline(
+                    vertex: "quadVertex", fragment: "fadingWindowBarFragment", blending: .over, into: attachments))
         }
         self.library = library
         self.device = device
@@ -166,7 +171,9 @@ public final class Compositor: @unchecked Sendable {
     /// every cursor of the frame (its subframes', its samples) is drawn with; the click effects over it
     /// (`frame.clickEffects`); the camera only when `frame.camera` is set, shown (opacity above 0) and `camera` is given,
     /// filling its rect without stretching (cropped, centred, to the rect's shape), with its look (its shadow, its picture
-    /// flipped, its border) at its opacity in the same pass. An `.image` background is `backgroundImage`, the texture
+    /// flipped, its border) at its opacity in the same pass; with `frame.coveredByCamera` and `camera` given, alone, in one
+    /// pass without a blur. With `frame.screenOpacity`, the shadow, the window frame and its title fade with the screen as
+    /// one group (`RenderFrame.screenOpacity`). An `.image` background is `backgroundImage`, the texture
     /// `BackgroundImages` made of it for this size, or the frame's gradient without one. A `.wallpaper` is drawn
     /// directly without `backgroundImage`; with one, its mesh gradient, blurred or not
     /// (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A window frame's title is `windowTitle`,
@@ -207,6 +214,14 @@ public final class Compositor: @unchecked Sendable {
         commandBuffer: any MTLCommandBuffer,
         counts: inout DrawCounts
     ) throws {
+        // The camera over every pixel: nothing under it is drawn, nor sampled.
+        if frame.coveredByCamera, let layer = frame.camera, let camera {
+            let encoder = renderPass(into: target, commandBuffer: commandBuffer)
+            counts.renderPasses += 1
+            drawCamera(layer, texture: camera, outputSize: frame.outputSize, pipelines: directCamera, encoder: encoder, counts: &counts)
+            encoder.endEncoding()
+            return
+        }
         // The blur's tile memory, then what the screens are sampled from, their copies with mipmaps made before the render
         // pass.
         let tileMemory = frame.subframes.isEmpty && frame.cursorSamples.isEmpty ? nil : try blurTileMemory(like: target)
@@ -394,7 +409,9 @@ public final class Compositor: @unchecked Sendable {
     /// covers the target opaquely, clipped by scissor rects: every pixel drawn is the one it would be, and an opaque one
     /// does not show what is under it (the motion blur's subsamples, which draw the stage up to 16 times). Only while the
     /// screen is drawn alone at full opacity: a screen fading in over the one being left, or at any lower opacity, draws
-    /// everything under it.
+    /// everything under it. With `frame.screenOpacity`, the shadow is drawn under the screen's group (the window with a
+    /// frame, the screen without) and the window's bar under the screen, each at that opacity and only where what goes over
+    /// it lets it through, and the title at that opacity (`RenderFrame.screenOpacity`).
     private func drawStage(
         _ frame: RenderFrame, through stage: StageTransform?, cursor cursorLayer: CursorLayer?, textures: StageTextures,
         pipelines: StagePipelines, culling: Bool = false, targetSize: SIMD2<Int>, encoder: any MTLRenderCommandEncoder,
@@ -412,6 +429,15 @@ public final class Compositor: @unchecked Sendable {
         let bands = (culling && opaque && textures.screen != nil ? Self.opaqueInterior(screen: screenLayer, window: window) : nil).map {
             Self.scissorBands(around: $0, outputSize: size, targetSize: targetSize)
         }
+        // The camera layouts' screen's group, fading as one: the shape its shadow is cast by, and the screen as the bar
+        // under it is cut (nothing of it when it is not drawn).
+        let fade = frame.screenOpacity.map { $0.isNaN ? 0 : min(max($0, 0), 1) }
+        let group = window.map { window in
+            Self.shape(window.rect, cornerRadius: window.cornerRadius, bottomRadius: window.bottomCornerRadius, viewport: viewport)
+        } ?? screenLayer.map { Self.shape($0.rect, cornerRadius: $0.cornerRadius, viewport: viewport) }
+        let shadowDrawing = fade.flatMap { fade in
+            group.map { ShadowDrawing.under(shape: $0, opacity: fade, pipeline: pipelines.screenShadow) }
+        } ?? .alone(pipelines.shadow)
 
         // 1. Background, and 2. the shadow over it, under the window or the screen, with the screen drawn: with
         // `culling`, both in each band in turn.
@@ -422,7 +448,7 @@ public final class Compositor: @unchecked Sendable {
                 frame, through: stage, textures: textures, targetSize: targetSize, viewport: viewport, pipelines: pipelines,
                 encoder: encoder)
             if let shadow, textures.screen != nil {
-                drawShadow(shadow, viewport: viewport, pipeline: pipelines.shadow, encoder: encoder)
+                drawShadow(shadow, shadowDrawing, viewport: viewport, encoder: encoder)
             }
         }
         if bands != nil { encoder.setScissorRect(MTLScissorRect(x: 0, y: 0, width: targetSize.x, height: targetSize.y)) }
@@ -431,7 +457,16 @@ public final class Compositor: @unchecked Sendable {
         // (`TitleTexture.scale(for:)`): those pixels, brought back to the stage, through it. While the window moves, the
         // title is made where it goes (`TitleTexture.source(for:)`) and stretched from there onto its bar now.
         if let window, let unzoomed = frame.windowFrame, window.rect.width > 0, window.rect.height > 0 {
-            drawWindowBar(window, viewport: viewport, pipelines: pipelines, encoder: encoder)
+            let screenShape = screenLayer.flatMap { layer in
+                textures.screen.map { _ in
+                    Self.imageQuad(
+                        in: layer.rect, cornerRadius: window.cornerRadius, uvOrigin: .zero, uvSize: .one,
+                        shape: (window.rect, bottomRadius: window.bottomCornerRadius, imageTopRadius: window.screenTopCornerRadius),
+                        viewport: viewport)
+                }
+            } ?? Self.noImage(viewport: viewport)
+            drawWindowBar(
+                window, under: fade.map { (screen: screenShape, opacity: $0) }, viewport: viewport, pipelines: pipelines, encoder: encoder)
             if let windowTitle = textures.windowTitle {
                 let scale = TitleTexture.scale(for: frame), source = frame.settledWindowFrame ?? unzoomed
                 let box = (scale == 1 ? source : TitleTexture.scaled(source, by: scale)).barPixels
@@ -443,7 +478,8 @@ public final class Compositor: @unchecked Sendable {
                 }
                 drawSprite(
                     windowTitle, origin: stage?.outputPoint(ofStage: origin, outputSize: size) ?? origin,
-                    size: boxSize * (stage?.depth ?? 1), pipeline: pipelines.sprite, viewport: viewport, encoder: encoder)
+                    size: boxSize * (stage?.depth ?? 1), opacity: fade.map(Float.init),
+                    pipeline: fade == nil ? pipelines.sprite : pipelines.cursor, viewport: viewport, encoder: encoder)
             }
         }
 
@@ -498,8 +534,9 @@ public final class Compositor: @unchecked Sendable {
         let opacity = layer.opacity.isNaN ? 0 : min(layer.opacity, 1)
         guard opacity > 0 else { return }
         let viewport = SIMD2<Float>(Float(outputSize.x), Float(outputSize.y))
+        let shape = Self.shape(layer.rect, cornerRadius: layer.cornerRadius, viewport: viewport)
         if let shadow = layer.shadow, drawShadow(
-            shadow, under: (layer.rect, layer.cornerRadius, opacity), viewport: viewport, pipeline: pipelines.shadow, encoder: encoder)
+            shadow, .under(shape: shape, opacity: opacity, pipeline: pipelines.shadow), viewport: viewport, encoder: encoder)
         {
             counts.cameraShadows += 1
         }
@@ -742,15 +779,12 @@ public final class Compositor: @unchecked Sendable {
         }
     }
 
-    /// Draws `layer` with `pipeline` (`shadowFragment`) over a quad of its box and 3σ and a pixel more on every side: past
-    /// 3σ of its box the shadow is under 0.35 / 255, which rounds to nothing in every output. The camera's (`camera`: its
-    /// rect and corners, in output pixels, and the opacity it is drawn at next) with `cameraShadowFragment`, which takes the
-    /// camera's rounded rect as the image of a quad (`imageCoverage`). Nothing of a layer `ShadowMath.Box` leaves out:
+    /// Draws `layer` as `drawing` says over a quad of its box and 3σ and a pixel more on every side: past 3σ of its box the
+    /// shadow is under 0.35 / 255, which rounds to nothing in every output. Nothing of a layer `ShadowMath.Box` leaves out:
     /// returns whether it drew it.
     @discardableResult
     private func drawShadow(
-        _ layer: ShadowLayer, under camera: (rect: Rect, cornerRadius: Double, opacity: Double)? = nil, viewport: SIMD2<Float>,
-        pipeline: any MTLRenderPipelineState, encoder: any MTLRenderCommandEncoder
+        _ layer: ShadowLayer, _ drawing: ShadowDrawing, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) -> Bool {
         guard let box = ShadowMath.Box(layer) else { return false }
         let reach = 3 * box.sigma + 1
@@ -759,28 +793,59 @@ public final class Compositor: @unchecked Sendable {
             viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
             uvSize: .one, radius: 0)
         var uniforms = ShadowUniforms(lower: box.lower, upper: box.upper, sigma: box.sigma, corner: box.corner, opacity: box.opacity)
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
-        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShadowUniforms>.stride, index: 0)
-        if let camera {
-            let rect = camera.rect
-            let cameraOrigin = SIMD2(Float(rect.x), Float(rect.y)), cameraSize = SIMD2(Float(rect.width), Float(rect.height))
-            var shape = QuadUniforms(
-                viewport: viewport, origin: cameraOrigin, size: cameraSize, contentOrigin: cameraOrigin, contentSize: cameraSize,
-                uvOrigin: .zero, uvSize: .one, radius: Float(max(camera.cornerRadius, 0)))
-            var opacity = Float(camera.opacity)
+        switch drawing {
+        case let .alone(pipeline):
+            encoder.setRenderPipelineState(pipeline)
+        case let .under(shape, opacity, pipeline):
+            encoder.setRenderPipelineState(pipeline)
+            var shape = shape, opacity = Float(opacity)
             encoder.setFragmentBytes(&shape, length: MemoryLayout<QuadUniforms>.stride, index: 1)
             encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 2)
         }
+        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ShadowUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         return true
     }
 
+    /// How a shadow is drawn: alone (`shadowFragment`), or under a shape drawn over it next at `opacity`
+    /// (`cameraShadowFragment`, `screenShadowFragment`), which the pipeline reads as the image of a quad (`imageCoverage`):
+    /// the pipeline and what it reads go together.
+    private enum ShadowDrawing {
+        case alone(any MTLRenderPipelineState)
+        case under(shape: QuadUniforms, opacity: Double, pipeline: any MTLRenderPipelineState)
+    }
+
+    /// `rect` (output pixels) with corners of `cornerRadius` as the image of a quad (`imageCoverage`), or with corners of
+    /// `bottomRadius` along its bottom edge (a window's): the shape a shadow is drawn under, or the bar under the screen.
+    private static func shape(_ rect: Rect, cornerRadius: Double, bottomRadius: Double? = nil, viewport: SIMD2<Float>) -> QuadUniforms {
+        let origin = SIMD2(Float(rect.x), Float(rect.y)), size = SIMD2(Float(rect.width), Float(rect.height))
+        let radius = Float(max(cornerRadius, 0))
+        var shape = QuadUniforms(
+            viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero, uvSize: .one,
+            radius: radius)
+        if let bottomRadius {
+            (shape.shapeOrigin, shape.shapeSize, shape.topRadius) = (origin, size, radius)
+            shape.shapeBottomRadius = Float(max(bottomRadius, 0))
+        }
+        return shape
+    }
+
+    /// An image that covers no pixel of the target (`imageCoverage` 0 everywhere in it): no screen for the bar to be cut
+    /// by.
+    private static func noImage(viewport: SIMD2<Float>) -> QuadUniforms {
+        QuadUniforms(
+            viewport: viewport, origin: .zero, size: .zero, contentOrigin: SIMD2(-8, -8), contentSize: .zero, uvOrigin: .zero,
+            uvSize: .one, radius: 0)
+    }
+
     /// Draws the title bar of `window` with its buttons (`windowBarFragment`), over a quad one pixel larger than the bar
     /// on every side and one more at the bottom, where the bar goes on one pixel under the screen, and down behind the
-    /// screen's round top corners.
+    /// screen's round top corners. In a group fading at `opacity`, under `screen` (the image of the screen drawn over it
+    /// next, `noImage` for none): `fadingWindowBarFragment`.
     private func drawWindowBar(
-        _ window: WindowFrameLayer, viewport: SIMD2<Float>, pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
+        _ window: WindowFrameLayer, under fading: (screen: QuadUniforms, opacity: Double)? = nil, viewport: SIMD2<Float>,
+        pipelines: StagePipelines, encoder: any MTLRenderCommandEncoder
     ) {
         let rect = window.rect, bar = window.barHeight, below = max(window.screenTopCornerRadius, 0)
         let origin = SIMD2(Float(rect.x - 1), Float(rect.y - 1)), size = SIMD2(Float(rect.width + 2), Float(bar + 3 + below))
@@ -795,9 +860,14 @@ public final class Compositor: @unchecked Sendable {
             buttonRadius: window.buttons ? Float(WindowFrameLayer.buttonDiameter / 2 * bar) : 0,
             radius: Float(max(window.cornerRadius, 0)), barBottom: Float(rect.y + bar),
             bottomRadius: Float(max(window.bottomCornerRadius, 0)), below: Float(below))
-        encoder.setRenderPipelineState(pipelines.windowBar)
+        encoder.setRenderPipelineState(fading == nil ? pipelines.windowBar : pipelines.fadingWindowBar)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WindowBarUniforms>.stride, index: 0)
+        if let fading {
+            var screen = fading.screen, opacity = Float(fading.opacity)
+            encoder.setFragmentBytes(&screen, length: MemoryLayout<QuadUniforms>.stride, index: 1)
+            encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 2)
+        }
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
@@ -817,7 +887,29 @@ public final class Compositor: @unchecked Sendable {
         viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
         guard rect.width > 0, rect.height > 0 else { return }
-        var quad = QuadUniforms(
+        var quad = Self.imageQuad(
+            in: rect, cornerRadius: cornerRadius, uvOrigin: uvOrigin, uvSize: uvSize, clampsToCrop: clampsToCrop, shape: shape,
+            viewport: viewport)
+        var alpha = Float(min(max(opacity, 0), 1))
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&alpha, length: MemoryLayout<Float>.stride, index: 1)
+        if let border {
+            var uniforms = CameraBorderUniforms(color: border.color, width: Float(border.width))
+            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CameraBorderUniforms>.stride, index: 2)
+        }
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.setFragmentSamplerState(mipmapped ? trilinearSampler : screenSampler, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+    }
+
+    /// The quad `drawImage` draws the image into `rect` with (see there): one pixel larger than it on every side.
+    private static func imageQuad(
+        in rect: Rect, cornerRadius: Double, uvOrigin: SIMD2<Float>, uvSize: SIMD2<Float>, clampsToCrop: Bool = false,
+        shape: (rect: Rect, bottomRadius: Double, imageTopRadius: Double)? = nil, viewport: SIMD2<Float>
+    ) -> QuadUniforms {
+        QuadUniforms(
             viewport: viewport,
             origin: SIMD2(Float(rect.x - 1), Float(rect.y - 1)),
             size: SIMD2(Float(rect.width + 2), Float(rect.height + 2)),
@@ -831,18 +923,6 @@ public final class Compositor: @unchecked Sendable {
             shapeSize: shape.map { SIMD2(Float($0.rect.width), Float($0.rect.height)) } ?? .zero,
             shapeBottomRadius: shape.map { Float(max($0.bottomRadius, 0)) } ?? 0,
             topRadius: shape.map { Float(max($0.imageTopRadius, 0)) } ?? 0)
-        var alpha = Float(min(max(opacity, 0), 1))
-        encoder.setRenderPipelineState(pipeline)
-        encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
-        encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
-        encoder.setFragmentBytes(&alpha, length: MemoryLayout<Float>.stride, index: 1)
-        if let border {
-            var uniforms = CameraBorderUniforms(color: border.color, width: Float(border.width))
-            encoder.setFragmentBytes(&uniforms, length: MemoryLayout<CameraBorderUniforms>.stride, index: 2)
-        }
-        encoder.setFragmentTexture(texture, index: 0)
-        encoder.setFragmentSamplerState(mipmapped ? trilinearSampler : screenSampler, index: 0)
-        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
     }
 
     /// The part of an image of `size` that fills `rect` without stretching: all of it along the axis where its
@@ -899,9 +979,13 @@ private struct StagePipelines {
     let screen: any MTLRenderPipelineState
     let mipmappedScreen: any MTLRenderPipelineState
     let shadow: any MTLRenderPipelineState
+    /// The shadow under the screen's group as it fades (`RenderFrame.screenOpacity`).
+    let screenShadow: any MTLRenderPipelineState
     let sprite: any MTLRenderPipelineState
     let cursor: any MTLRenderPipelineState
     let windowBar: any MTLRenderPipelineState
+    /// The bar under the screen as the group fades.
+    let fadingWindowBar: any MTLRenderPipelineState
 }
 
 /// The pipelines of the motion blur's pass that do not draw the stage.
