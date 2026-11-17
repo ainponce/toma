@@ -6,12 +6,13 @@ import SwiftUI
 @main
 struct TomaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @State private var clock = MenuBarClock()
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(app: appDelegate, recording: appDelegate.recording, updater: appDelegate.updater)
+            MenuContent(app: appDelegate, recording: appDelegate.recording, updater: appDelegate.updater, clock: clock)
         } label: {
-            MenuBarIcon(recording: appDelegate.recording)
+            MenuBarIcon(recording: appDelegate.recording, clock: clock)
         }
         .commands {
             EditorCommands()
@@ -21,19 +22,36 @@ struct TomaApp: App {
     }
 }
 
+/// The time the menu bar shows, ticked once a second by a timer. A `TimelineView` in a `MenuBarExtra`
+/// (its label or its menu) makes SwiftUI rebuild the status item without pause: the main thread spins at
+/// ~100 % CPU and the island and Stop stop answering (macOS 26). A label that reads `now` while a take
+/// records is redrawn once a second; at rest it doesn't read `now`, so the tick redraws nothing.
+@MainActor @Observable final class MenuBarClock {
+    private(set) var now = Date()
+    @ObservationIgnored private var timer: Timer?
+
+    init() {
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.now = Date() }
+        }
+        timer.tolerance = 0.1
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+    }
+}
+
 /// `record.circle` at rest; `record.circle.fill` in red while a take is being recorded, followed by the
 /// time it has recorded.
 private struct MenuBarIcon: View {
     let recording: RecordingController
+    let clock: MenuBarClock
 
     var body: some View {
         if case .recording = recording.phase {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                HStack(spacing: 4) {
-                    Image(nsImage: Self.recordingImage)
-                    Text(verbatim: recording.elapsed(at: context.date).recordedTime)
-                        .monospacedDigit()
-                }
+            HStack(spacing: 4) {
+                Image(nsImage: Self.recordingImage)
+                Text(verbatim: recording.elapsed(at: clock.now).recordedTime)
+                    .monospacedDigit()
             }
         } else if recording.isRecording {
             Image(nsImage: Self.recordingImage)
@@ -58,6 +76,7 @@ private struct MenuContent: View {
     let app: AppDelegate
     let recording: RecordingController
     let updater: UpdaterController
+    let clock: MenuBarClock
 
     var body: some View {
         switch recording.phase {
@@ -71,11 +90,9 @@ private struct MenuContent: View {
         case .starting:
             Text("Starting recording…")
         case .recording:
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text(
-                    "Recording \(recording.elapsed(at: context.date).formatted(.time(pattern: .hourMinuteSecond)))",
-                    comment: "Menu item while recording: the time recorded so far")
-            }
+            Text(
+                "Recording \(recording.elapsed(at: clock.now).formatted(.time(pattern: .hourMinuteSecond)))",
+                comment: "Menu item while recording: the time recorded so far")
             // The user's pause first: a lock during it changes nothing for the take.
             if recording.isUserPaused {
                 Text("Paused", comment: "Menu item, and the open island, while the user has paused the take")
