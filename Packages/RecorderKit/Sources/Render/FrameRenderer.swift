@@ -50,9 +50,10 @@ public enum RenderError: Error, Equatable {
 ///
 /// `render(at:into:completion:)` only queues the frame and returns: on queues of the renderer's, each track's frames are
 /// decoded ahead (up to `FramePrefetcher.maxFrames`) along the grid of `frameRate` from the frame asked for, as the export
-/// asks for them, and the frame is drawn once its own are; the completion comes when the GPU is done with it. The frames
-/// asked for one after the other on that grid find theirs decoded already; another one starts the reading ahead again
-/// from there.
+/// asks for them, and the frame is drawn once its own are; the completion comes when the GPU is done with it. A track
+/// that a layout hid and a block border brings back starts decoding `FramePrefetcher.borderLookahead` (1 s of output)
+/// before the border (`DecodeAhead`, 1c design §14.4). The frames asked for one after the other on that grid find theirs
+/// decoded already; another one starts the reading ahead again from there.
 ///
 /// Elsewhere, decoding is synchronous, on the caller's thread: the first frame read from each segment loads its track and decodes
 /// from the keyframe before it, and so does every scrub (a step back, or a jump of 2 s or more). Reading forward frame
@@ -112,10 +113,13 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The frames `render(at:into:completion:)` evaluated and scheduled ahead, and the prefetchers decoding theirs.
     private struct Ahead {
         var prefetchers: [String: FramePrefetcher] = [:]
-        /// Evaluated, their frames scheduled, in order, by their index on the grid: the one expected next first.
+        /// Evaluated, in order, by their index on the grid: the one expected next first, up to
+        /// `FramePrefetcher.borderLookahead` after it.
         var frames: [(index: Int, frame: RenderFrame)] = []
         /// The index on the grid of the frame expected next; `nil` before the first and after one off the grid.
         var expected: Int?
+        /// What is scheduled of the frames evaluated: those of the next `lookahead`, and a track that comes back.
+        var plan: DecodeAhead?
     }
 
     /// The frames of the grid decoded ahead of the one asked for.
@@ -398,8 +402,8 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// The frame at `outputTime`, evaluated, and the prefetchers that decode the frames it shows, with what each is asked
-    /// for. Schedules the frames of the grid ahead of it, from the one expected next: from it, when it is not. Runs on
-    /// `renderQueue`.
+    /// for. Schedules the frames of the grid ahead of it, from the one expected next: from it, when it is not; and, a
+    /// second of output ahead, the first frame of a track that comes back (`DecodeAhead`). Runs on `renderQueue`.
     private func prepare(at outputTime: Double) throws -> PreparedFrame {
         let scene = self.scene, frameRate = scene.frameRate
         let index = gridIndex(of: outputTime, frameRate: frameRate)
@@ -409,16 +413,20 @@ public final class FrameRenderer: @unchecked Sendable {
             if index == nil || index != ahead.expected || ahead.frames.first.map({ $0.index != index }) == true {
                 for prefetcher in ahead.prefetchers.values { prefetcher.reset() }
                 ahead.frames.removeAll()
+                ahead.plan = nil
             }
             ahead.expected = index.map { $0 + 1 }
             if let index, index <= lastIndex {
-                var next = ahead.frames.last.map { $0.index + 1 } ?? index
-                while next <= min(index + Self.lookahead, lastIndex) {
+                var plan = ahead.plan ?? DecodeAhead(frameRate: frameRate)
+                var evaluated: [(index: Int, frame: RenderFrame)] = []
+                let keys = try plan.advance(to: index, last: lastIndex) { next in
                     let frame = try self.frame(of: scene, at: Double(TimeMap.frameTime(next, frameRate: frameRate)) / 1e9)
-                    try schedule(frame, in: &ahead)
-                    ahead.frames.append((next, frame))
-                    next += 1
+                    evaluated.append((next, frame))
+                    return Self.videos(of: frame)
                 }
+                ahead.plan = plan
+                ahead.frames += evaluated
+                for key in keys { try prefetcher(for: key.trackID, in: &ahead)?.schedule(key.time) }
                 let first = ahead.frames.removeFirst()
                 return PreparedFrame(frame: first.frame, sources: try sources(of: first.frame, in: &ahead))
             }
@@ -436,11 +444,17 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The (track, source instant) of each frame `frame` shows (`draw`'s order), with the prefetcher of its track, made the
     /// first time; none for a track the take does not have.
     private func sources(of frame: RenderFrame, in ahead: inout Ahead) throws -> [(DecodedKey, FramePrefetcher)] {
-        let layers = [frame.screen.map { ($0.trackID, $0.sourceTime) }, frame.previousScreen.map { ($0.trackID, $0.sourceTime) },
-                      frame.camera.map { ($0.trackID, $0.sourceTime) }].compactMap { $0 }
-        return try layers.compactMap { trackID, time in
-            try prefetcher(for: trackID, in: &ahead).map { (DecodedKey(trackID: trackID, time: time), $0) }
-        }
+        try Self.videos(of: frame).compactMap { key in try prefetcher(for: key.trackID, in: &ahead).map { (key, $0) } }
+    }
+
+    /// The (track, source instant) of each video `frame` shows, in `draw`'s order: the screen, the screen being left, the
+    /// camera. A part a layout hides is not in the frame (1c design §14.4), so it is not decoded.
+    static func videos(of frame: RenderFrame) -> [DecodedKey] {
+        [
+            frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
+            frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
+            frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
+        ].compactMap { $0 }
     }
 
     /// The prefetcher of track `trackID`, made the first time; `nil` for a track the take does not have.
@@ -464,6 +478,7 @@ public final class FrameRenderer: @unchecked Sendable {
             for prefetcher in ahead.prefetchers.values { prefetcher.reset() }
             ahead.frames.removeAll()
             ahead.expected = nil
+            ahead.plan = nil
         }
     }
 

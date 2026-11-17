@@ -33,7 +33,8 @@ public enum PreviewRequest: Equatable, Sendable {
 ///   the exact frames nearest the playhead in the background, as the export does (its reader opens `AVAssetReader`s for
 ///   that), so the release finds its frame decoded.
 /// - `.playing(seconds:)`: the frame of the scene's grid at or before the instant, its videos decoded ahead by each
-///   track's `FramePrefetcher` (the frames of the grid after it are scheduled as it goes); a frame not decoded in time
+///   track's `FramePrefetcher` (the frames of the grid after it are scheduled as it goes, and a second ahead the first
+///   frame of a track that a block border brings back: `DecodeAhead`, 1c design §14.4); a frame not decoded in time
 ///   leaves the one before it on screen, and the frame is late. Late for `PreviewQuality.lateWindow` seconds in a row, the
 ///   preview draws at half the side (`PreviewQuality`, `FrameEvaluator.resized(to:)`) until it pauses.
 ///
@@ -122,6 +123,8 @@ public final class PreviewEngine: @unchecked Sendable {
         /// While playing: the frame of the grid presented last, of which scene and at which size, and the last one
         /// scheduled ahead.
         var playing: (presented: Int, scene: Int, size: SIMD2<Int>, scheduledThrough: Int)?
+        /// While playing: what is scheduled of the frames ahead (`DecodeAhead`).
+        var ahead: DecodeAhead?
     }
 
     /// Shows `renderer`'s frames in `layer`, which it sets up: `renderer.device`, `.bgra8Unorm`, Rec. 709,
@@ -294,7 +297,10 @@ public final class PreviewEngine: @unchecked Sendable {
         if let previous, previous.presented == n, previous.scene == number, previous.size == size { return }
         // A jump, or a new scene (`FrameRenderer.setScene(_:)` dropped what was decoded ahead): schedule again from `n`.
         let jumped = previous.map { n < $0.presented || n > $0.scheduledThrough + 1 || $0.scene != number } ?? true
-        if jumped { resetPrefetchers() }
+        if jumped {
+            resetPrefetchers()
+            drawing.ahead = nil
+        }
         let frameSeconds = Double(TimeMap.frameTime(n, frameRate: scene.frameRate)) / 1e9
         let frame = try renderer.frame(of: scene, at: frameSeconds)
         var late = previous.map { n > $0.presented + 1 } ?? false
@@ -314,17 +320,18 @@ public final class PreviewEngine: @unchecked Sendable {
                 videos[key] = .some(nil)
             }
         }
-        // The frames of the grid after it, scheduled in order.
+        // The frames of the grid after it, scheduled in order, and a second ahead the first frame of a track that comes
+        // back at a block border (1c design §14.4): it is decoded before the transition needs it.
         let last = scene.timeMap.frameCount(frameRate: scene.frameRate) - 1
-        var scheduled = jumped ? n : max(previous?.scheduledThrough ?? n, n)
-        while scheduled < min(n + FrameRenderer.lookahead, last) {
-            scheduled += 1
-            let ahead = try renderer.frame(of: scene, at: Double(TimeMap.frameTime(scheduled, frameRate: scene.frameRate)) / 1e9)
-            for key in Self.videos(of: ahead) where drawing.exact[key] == nil {
-                try renderer.prefetcher(for: key.trackID)?.schedule(key.time)
-            }
+        var ahead = drawing.ahead ?? DecodeAhead(frameRate: scene.frameRate)
+        let keys = try ahead.advance(to: n, last: last, first: 1) { next in
+            Self.videos(of: try renderer.frame(of: scene, at: Double(TimeMap.frameTime(next, frameRate: scene.frameRate)) / 1e9))
         }
-        drawing.playing = (n, number, size, scheduled)
+        drawing.ahead = ahead
+        for key in keys where drawing.exact[key] == nil {
+            try renderer.prefetcher(for: key.trackID)?.schedule(key.time)
+        }
+        drawing.playing = (n, number, size, max(ahead.scheduledThrough ?? n, n))
         // The first frame of a playback is not late: nothing was decoded ahead for it.
         if previous == nil { late = false }
         _ = drawing.quality.record(late: late, atSeconds: CACurrentMediaTime())
@@ -390,11 +397,7 @@ public final class PreviewEngine: @unchecked Sendable {
 
     /// The (track, source instant) of each video `frame` shows: the screen, the screen being left, the camera.
     private static func videos(of frame: RenderFrame) -> [DecodedKey] {
-        [
-            frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-            frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-            frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-        ].compactMap { $0 }
+        FrameRenderer.videos(of: frame)
     }
 
     /// `n` within the frames of `scene`'s grid.

@@ -697,6 +697,21 @@ Una sola pasada de fin de hito, contra la app de esta rama, en orden: la prepara
 3. Si se creó el certificado de firma después de recibir la copia de prueba, pedir una copia nueva: la anterior quedó ad hoc y macOS no conserva sus permisos.
 4. **Permisos.** Los mismos del hito 1a (paso 3 de su preparación): Toma pide cada uno cuando hace falta. El hito 1c no pide ninguno nuevo.
 
+### 1. Recorrido completo (la salida del hito)
+
+Con la copia de prueba abierta desde Finder, en la Mac del dueño y, donde se dice, en macOS 15. Las diez comprobaciones del diseño del hito (§16.2), en ese orden; el detalle de cada una está en «2. Detalle por área», en el área que dice entre paréntesis:
+
+1. **Una toma con cámara y los cinco layouts** (La pista Cámara, La pestaña Cámara, La vista previa con la división). Grabar una toma con cámara. En el editor: 5 s de Cámara a pantalla completa al principio, un tramo de Pantalla dividida con clics, un bloque Burbuja arriba a la izquierda y volver al layout del proyecto. Se tiene que ver: la cámara llena el video de borde a borde sin esquinas, borde ni sombra, y la pantalla no se ve; en la división, la pantalla entera en su tarjeta (nunca recortada) y la cámara en la suya, y **el zoom de cada clic queda dentro de la tarjeta de la pantalla**, con el fondo quieto; la burbuja del bloque aparece arriba a la izquierda y al terminar el bloque vuelve a su lugar. Las transiciones se sienten como las de la burbuja de la isla (el mismo resorte): suaves, sin saltos, lo que aparece crece desde el 90 % y lo que se va se achica y se desvanece. Exportar en 16:9 y comparar con la vista previa en los mismos instantes (en cada borde y a mitad de cada transición): es el mismo cuadro. Con Reducir movimiento, las transiciones se ven igual (son parte del video).
+2. **«Duplicar como 9:16»** (Las acciones de la biblioteca). Del proyecto de la comprobación 1: aparece «… vertical» y se abre en el editor ya en 9:16, con la división **apilada** (pantalla arriba, cámara abajo, o al revés según el lado) y la burbuja del tamaño que se espera en un video vertical (una Mediana, un cuarto del ancho, no casi la mitad). Exportarlo y verlo en el iPhone: no se recorta nada de la pantalla.
+3. **Espejo, borde y sombra** (El aspecto de la cámara en el video). Espejar sí y no: con espejo la cámara se ve como en un espejo, sin espejo como la ve otra persona; el lugar y la forma de la burbuja no cambian. Borde y sombra a 1080p y a 4K, mirados a pantalla completa: el borde es un trazo parejo por dentro del contorno, el canto suave; la sombra, suave y hacia abajo; en 4K se ven igual de proporcionados que en 1080p.
+4. **La biblioteca con los proyectos propios** (La ventana de la biblioteca, Abrir la biblioteca, Las acciones de la biblioteca, Renombrar y duplicar desde el editor). Buscar, ordenar, marcar favoritos, renombrar desde la biblioteca y desde el título del editor, duplicar, mandar a la papelera y deshacer, restaurar y vaciar la papelera (la alerta dice cuántos son y cuánto pesan, y que no se puede deshacer). «Reiniciar toma» (⇧⌘2 con la isla) deja la toma en la papelera, y el aviso de la isla abre la biblioteca ahí. Renombrar un proyecto en Finder con la biblioteca abierta se ve enseguida (en 1 s o menos).
+5. **Otros lugares y discos externos** (Las acciones de la biblioteca). Un proyecto de un disco externo abierto con ⌘O aparece en Otros lugares. Con el disco desconectado, la biblioteca no pide nada ni se traba, y la tarjeta queda «No disponible» recién al tocarla; en ningún momento aparece un aviso de privacidad nuevo de macOS al abrir la biblioteca.
+6. **Un GIF** (La hoja de exportar: GIF, rango y Copiar). Un GIF de 10 s (con I y O) a 800 px y 15 cuadros por segundo: el tamaño real contra el «Aprox.» de la hoja (dentro de ± 30 %); abrirlo en Safari, Slack y un issue de GitHub, y se ve bien (el tramado se juzga a tamaño real); «Copiar» y pegarlo donde se pueda; sin «Repetir siempre», se reproduce una sola vez. (Sale 1,25 a 1,5 veces más grande que un GIF de Apple con los mismos cuadros: es lo medido y está anotado en `docs/backlog.md`.)
+7. **Un proyecto de 1b en 1c** (Un proyecto de 1b abierto en 1c). El de la preparación (paso 1): se ve igual en 1c, y abrirlo sin editar no lo cambia: la copia de 1b lo sigue abriendo. Al editarlo en 1c y cerrar, la copia de 1b dice que el proyecto se editó con una versión más nueva de Toma.
+8. **Estilos** (Estilos con nombre). Guardar un estilo, aplicarlo a otro proyecto (un solo ⌘Z lo deshace; no toca bloques, formato ni burbuja), marcarlo «Usar en los proyectos nuevos» y grabar una toma: el proyecto nuevo se abre con ese estilo.
+9. **Accesibilidad.** VoiceOver por la biblioteca (cada tarjeta se lee entera y tiene sus acciones), la pista Cámara (cada bloque es un elemento con sus acciones) y la hoja del GIF (la estimación nueva se dice cuando llega); todo alcanzable solo con el teclado; Reducir movimiento (la biblioteca y la vista previa del GIF no se mueven solas).
+10. **Las metas de rendimiento** de diseño §15 en la Mac del dueño y, para el piso, en la M1: las medidas del agente están en [`docs/performance.md`](performance.md), «La tabla de metas del hito 1c (diseño §15)», con la columna de la M1 vacía; cada fila dice cómo se mide. Lo que solo mide el dueño: el desplazamiento de la grilla y la lista a 120 fps (ProMotion), la memoria de la biblioteca con 1 000 proyectos, y el **primer cuadro de la biblioteca en una Mac tranquila** (ver «La ventana de la biblioteca», la última comprobación).
+
 ### 2. Detalle por área
 
 **Un proyecto de 1b abierto en 1c** (3)
@@ -760,6 +775,7 @@ Con 1 000 proyectos de prueba, en una copia de esta rama armada con `make build`
 - VoiceOver (⌘F5): cada tarjeta se lee entera, por ejemplo "Synthetic 0999, 39 segundos, 16:9, grabado el …"; el rotor de encabezados lista las secciones por fecha; la lista es una tabla; los botones de la barra dicen su nombre.
 - Reducir movimiento (Ajustes del Sistema ▸ Accesibilidad ▸ Pantalla): las miniaturas aparecen con un fundido simple, sin subir.
 - Con la app entera (después de las tareas 37 y 38, que abren la biblioteca desde la app y le avisan lo que graba): una tarjeta de una toma en curso dice "● Grabando", con el punto latiendo cada 1,8 s y quieto con Reducir movimiento, y no se abre ("Se está grabando."); las demás tarjetas conservan su miniatura durante la toma. Cerrar la biblioteca y volver a abrirla: vuelve al mismo lugar y tamaño, con la misma vista, orden y sección.
+- **Volver a medir el primer cuadro y la espera más larga, en una Mac tranquila** (Task 36). El agente midió con la Mac cargada y no llegó a la meta: el primer cuadro con 1 000 proyectos e índice en caché tardó **168 a 197 ms** (meta ≤ 150 ms) y la espera más larga del hilo principal fue de **4,3 a 7,1 ms** (meta ≤ 4 ms; 1,7 a 4,3 ms en la mejor serie). Con la Mac sin otro trabajo (cerrar todo lo demás, y que `uptime` diga una carga menor que 2): con la carpeta de 1 000 que deja `TOMA_BENCH=1 TOMA_BENCH_DIR="$TMPDIR/lib1000" swift test --package-path Packages/RecorderKit --filter reconcileAndIndexAThousand`, correr seis veces `build/Build/Products/Debug/Toma.app/Contents/MacOS/Toma -TomaLibraryBench "$TMPDIR/lib1000"` y anotar en la tabla del final `first-frame` y `longest-main-wait` de cada línea y la carga. Se cumple si el primer cuadro da ≤ 150 ms (≤ 300 ms en la M1) y la espera más larga ≤ 4 ms (≤ 8 ms en la M1) en todas. Si no se cumple en la Mac tranquila, queda en `docs/backlog.md` («Lo que deja abierto el hito 1c»), no se arregla acá.
 
 **Abrir la biblioteca** (38)
 
@@ -809,6 +825,14 @@ Con la app entera, sobre proyectos propios, con la biblioteca abierta al lado de
 - **Una toma sin terminar en la papelera.** Un proyecto «Sin terminar» que está en `~/Movies/Toma/Trash/`, abierto desde Finder: el editor dice "Esta grabación no terminó de guardarse" con "Este proyecto está en la papelera: se abre solo para ver." y el botón Restaurar (no Recuperar). Restaurar lo devuelve a su carpeta y entonces ofrece Recuperar.
 - **Lo que sigue al proyecto, no a su ruta.** Renombrar «A» a «A2» desde el editor y después renombrar otro proyecto a «A» en la biblioteca: la tarjeta del nuevo «A» no tiene el punto "Abierto", y mandarlo a la papelera no cierra la ventana de «A2». Un proyecto abierto solo para ver porque otra app lo tiene abierto: Mover a la papelera desde la biblioteca cierra primero esa ventana. Mover con Finder a la papelera de Toma un proyecto abierto en el editor y volver a esa ventana: se reabre solo para ver, con la franja de la papelera.
 
+**Las disposiciones al reproducir, al exportar y en el sonido** (13)
+
+Con un proyecto con cámara grabado con 1c.
+- **Las transiciones se sienten como las de la burbuja de la isla** (comprobación 1 de diseño §16.2). Poner 5 s de Cámara a pantalla completa al principio, un tramo de Pantalla dividida con clics (el zoom queda dentro de la tarjeta de la pantalla), un bloque Burbuja arriba a la izquierda y volver a la burbuja del proyecto. Reproducir de punta a punta: cada cambio se mueve con el mismo resorte que la burbuja de la isla cuando se la arrastra, sin saltos ni dobles contornos, y la pantalla que vuelve después de Cámara a pantalla completa aparece ya moviéndose, nunca con un cuadro viejo ni un instante en negro. Exportar en 16:9 y comparar con la vista previa: los mismos cuadros.
+- **Los clics que no se ven no suenan.** Con un sonido de clic elegido (pestaña Cursor, Sonido de clic), un clic grabado mientras rige Cámara a pantalla completa o Solo cámara no suena, ni en la vista previa ni en el video exportado; el mismo clic en la Burbuja, en Pantalla dividida o en Solo pantalla suena como en 1b. Justo al empezar un bloque de Cámara a pantalla completa, el clic suena mientras la pantalla todavía se ve más de la mitad.
+- **La manija y el recuadro del zoom durante una transición.** Pausar a mitad de la transición hacia una Pantalla dividida (dos décimas de segundo después del borde del bloque): la manija entre las tarjetas no aparece ni cambia el puntero hasta que las tarjetas se asientan, y con un zoom fijo seleccionado su recuadro se dibuja sobre la tarjeta de la pantalla donde se la ve en ese cuadro. Un proyecto sin cámara con Pantalla dividida como disposición del proyecto (un estilo guardado) no muestra la manija: se ve solo la pantalla, como en el video.
+- **La meta del piso en la Mac M1** (diseño §15). En la Mac M1 de piso: `swift build --package-path Packages/RecorderKit -c release --product recorder-dev` y `Packages/RecorderKit/.build/release/recorder-dev bench-preview --synthetic --layouts --width 1920 --height 1080 --view-width 1920 --view-height 1080`. Se tiene que ver `frame p50 … p95 …` con el p95 en 16,7 ms o menos y `transitions: 0 frames skipped, 0 late`. Anotar las líneas `playing`, `transition at …` y `transitions:` con la carga (`uptime`) en la columna del piso de `docs/performance.md`.
+
 **La hoja de exportar: GIF, rango y Copiar** (26)
 
 Con la app entera, sobre un proyecto propio con cámara y sonido de más de un minuto, grabado en una pantalla Retina.
@@ -826,6 +850,49 @@ Con la app entera, sobre un proyecto propio con cámara y sonido de más de un m
 - **Cerrar la hoja la suelta.** Con un proyecto abierto desde un disco externo (Otros lugares), abrir la hoja en GIF animado y, mientras dice "Calculando…", Cancelar: en Monitor de actividad, el uso de CPU de Toma vuelve enseguida a reposo (la vista previa y la estimación se detienen). Lo mismo con Exportar… (solo la exportación sigue) y con la hoja abierta al mover el proyecto a la papelera desde la biblioteca. Después de cerrar el editor, Monitor de actividad ▸ Toma ▸ Archivos y puertos abiertos no lista la carpeta `.toma`, y el disco se expulsa sin decir que Toma lo está usando.
 - **Disco lleno.** Crear y abrir una imagen de disco chica (`hdiutil create -size 20m -fs HFS+ -volname Lleno ~/Desktop/lleno.dmg`, doble clic) y exportar ahí un GIF del video entero a 1920 × 1080: "No se pudo exportar el GIF: el disco está lleno" y en el disco no queda ningún archivo del GIF. Exportar a una carpeta sin permiso de escritura (por ejemplo, una de otro usuario en `/Users/Shared` con permisos de solo lectura): "No se pudo exportar el GIF: no hay permiso".
 - **En inglés.** Con Toma en inglés (Ajustes del Sistema ▸ General ▸ Idioma y región ▸ Apps): Export As, MP4 Video, Animated GIF, Range, Whole Video, Between the Marks, Size, Light, Balanced, High, Dithering, Loop Forever, Actual Size, "About … · … · … frames", "GIFs have no sound." y, después de exportar, Copy.
+
+### 3. Textos que no están en diseño §12
+
+Las tareas tuvieron que escribir textos que la tabla de diseño §12 no trae. Están en `App/Resources/Localizable.xcstrings` con un español neutro que sigue a los de §12. Son decisiones de redacción pendientes: si alguno no suena como querés, anotar el texto que preferís en la tabla del final y un agente lo cambia (es solo el catálogo). Entre paréntesis, la tarea de origen.
+
+**Biblioteca: errores y avisos** (37)
+- «El nombre no puede tener caracteres de control.» · «El nombre es demasiado largo.» (el campo de renombrar, junto a los cuatro de §12).
+- Los motivos, en minúscula, que van después de «No se pudo …: »: «ya hay un proyecto con ese nombre» · «el nombre no se puede usar» · «el nombre es demasiado largo» · «ya no está en la papelera» · «su editor tiene cambios que no se pudieron guardar» · «no se pudo guardar el cambio» · «la copia no se puede abrir» · «la copia no se puede editar» · «el disco está lleno» · «el disco es de solo lectura» · «el disco no lo permitió».
+- Los dos avisos que §12 no trae: «No se pudo eliminar «%1$@»: %2$@» (§12 trae renombrar, duplicar, mover a la papelera y restaurar) y «No se pudo cambiar el formato de «%1$@»: %2$@» (el «Duplicar como»), y el sufijo «%1$@ (y %2$lld más)» cuando la acción falló en varios proyectos.
+- «Rehacer» (el botón del aviso, junto a «Deshacer»).
+- Las palabras de los nombres de las copias, cada una en su clave: «copia», «copia %lld», «horizontal», «vertical» y «cuadrado» (§12 trae los nombres armados: «%@ copia», «%@ copia %d»…).
+- Por qué un `.toma` arrastrado a la ventana no aparece, cuatro textos: ««%@» está en una carpeta dentro de la papelera: la biblioteca no lo muestra.» · ««%@» está en una carpeta oculta: …» · ««%@» está dentro de otro proyecto: …» · ««%@» está a más de cuatro carpetas de la de proyectos: …».
+
+**Estilos con nombre** (29)
+- «No se pudo aplicar el estilo.» (un estilo que no se pudo aplicar a este proyecto) · «No se pudo importar el estilo.» (un error del disco; §12 solo trae el del archivo dañado) · «No se pudo mover el estilo a la Papelera.» · «No se pudo guardar el estilo.».
+- «Administrar estilos» (el título de la hoja) · «Guardar como estilo nuevo» (el título del pedido del nombre) · «Guardar» · «Borrar…» (el elemento del menú; §8 dice «Borrar»).
+
+**Cámara** (14 y 16)
+- Los nombres de los colores del borde que §12 no trae: «Violeta», «Turquesa» y «Coral» (§12 trae Blanco, Negro y Gris; la pestaña Cámara ofrece seis colores y un selector).
+
+### Resultados de la pasada
+
+Una fila por comprobación; anotar la fecha, la versión exacta de macOS y lo que se vio (o el texto que preferís, en la comprobación 3 de arriba).
+
+| Comprobación | Fecha | macOS | Resultado |
+|---|---|---|---|
+| 0. Preparación: la copia de 1b guardada antes, copia de prueba (firmada o ad hoc), permisos | pendiente | pendiente | pendiente |
+| 1. Recorrido completo (§16.2): una toma con los cinco layouts y sus transiciones, exportada y comparada con la vista previa; «Duplicar como 9:16»; espejo, borde y sombra; la biblioteca con los proyectos propios; Otros lugares y un disco externo; un GIF; un proyecto de 1b; estilos; accesibilidad; las metas de §15 | pendiente | pendiente | pendiente |
+| 2. Un proyecto de 1b abierto en 1c: igual que en 1b, sin escribir; la copia de 1b lo abre hasta que se edita en 1c; deshacer hasta el final | pendiente | pendiente | pendiente |
+| 2. Estilos con nombre: la fila Estilo, guardar, aplicar, marcar y grabar, actualizar, administrar, imagen perdida, mandarlo a otra Mac, «Aplicar el estilo por defecto» | pendiente | pendiente | pendiente |
+| 2. La pestaña Cámara: los cinco mosaicos en 16:9, 9:16 y 1:1, Burbuja → Dividida → Burbuja, «Se edita», borrar todos los cambios, aspecto | pendiente | pendiente | pendiente |
+| 2. La pista Cámara: crear, mover, recortar y borrar bloques, el menú contextual, los rombos atenuados, la cámara ilegible, VoiceOver | pendiente | pendiente | pendiente |
+| 2. La vista previa con la división y los atajos: la manija, volver a Automático, la burbuja de un bloque, el recuadro del zoom, ⌥1 a ⌥5 | pendiente | pendiente | pendiente |
+| 2. El aspecto de la cámara en el video: espejo, borde y sombra a 1080p y a 4K, la burbuja en 9:16, un proyecto de 1b | pendiente | pendiente | pendiente |
+| 2. La ventana de la biblioteca (1 000 proyectos): desplazar a 120 Hz, memoria ≤ 250 MB, teclado, lista, secciones vacías, VoiceOver, Reducir movimiento, la toma en curso | pendiente | pendiente | pendiente |
+| 2. La biblioteca en una Mac tranquila: `first-frame` ≤ 150 ms y `longest-main-wait` ≤ 4 ms (seis corridas); el agente midió 168 a 197 ms y 4,3 a 7,1 ms con la Mac cargada | pendiente | pendiente | pendiente |
+| 2. Abrir la biblioteca: el menú del ícono, el botón de la isla, ⇧⌘L, reabrir desde el Launchpad, grabar con la biblioteca abierta, «Reiniciar toma», abrir un `.toma` de afuera | pendiente | pendiente | pendiente |
+| 2. Las acciones de la biblioteca: el menú contextual, favoritos, renombrar, duplicar y «Duplicar como», deshacer, la papelera, vaciar, Otros lugares, un disco externo, ⌘Q mientras se duplica, VoiceOver | pendiente | pendiente | pendiente |
+| 2. Renombrar y duplicar desde el editor, y la papelera solo para ver: el título del editor, el menú Archivo, abrir de la papelera, Deshacer de la biblioteca, «Sin terminar», cerrar un editor que exporta | pendiente | pendiente | pendiente |
+| 2. La hoja de exportar: GIF, rango y Copiar: marcas, la primera estimación y la vista previa a tiempo (≤ 1,5 s en la M1, ≤ 0,6 s en la del dueño), tamaños, avisos, un rango de menos de un cuadro, el MP4 de un rango, lo que recuerda, Tamaño real, VoiceOver, cerrar y salir, disco lleno, en inglés | pendiente | pendiente | pendiente |
+| 2. El GIF: el corpus (opcional, contra gifski) | pendiente | pendiente | pendiente |
+| 2. Las disposiciones al reproducir, al exportar y en el sonido (Task 13): transiciones como las de la burbuja, clics que no se ven no suenan, la meta del piso en la M1 | pendiente | pendiente | pendiente |
+| 3. Textos que no están en diseño §12: los que cambiarías | pendiente | pendiente | pendiente |
 
 ## Prueba en seco (ad hoc)
 

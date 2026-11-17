@@ -143,6 +143,9 @@ final class EditorModel {
     /// No camera track of the take has anything to read (`LayoutTrackRules.cameraReadable`): the layouts that need the camera
     /// show only the screen, and the Camera track says so. Set by the timeline once it has looked at the files.
     var cameraUnreadable = false
+    /// Whether the renderer found the camera readable (`FrameRenderer.cameraReadable`; false before it is made, and for a
+    /// take without a camera): what the preview's overlays go by, so they see the layouts the frame shows.
+    var renderCameraReadable: Bool { renderer?.cameraReadable ?? false }
     /// The take saved the shapes of the cursor (`cursorImage` events): macOS's cursor can be drawn.
     private(set) var hasCursorImages = false
     /// The take has clicks to make zooms from; without them the Zoom tab says so.

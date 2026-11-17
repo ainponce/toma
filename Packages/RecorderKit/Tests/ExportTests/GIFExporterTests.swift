@@ -43,6 +43,28 @@ private func noisyTake(in dir: URL, seconds: Double = 1) async throws -> LoadedP
     return try builder.write()
 }
 
+/// A take of `seconds` whose camera, 640 × 360 at 30 fps unless `size` says otherwise, is noise in every frame (each frame
+/// its own), over a screen of `SampleFactory`'s frames, and its legacy edit with the camera full screen (the project's
+/// layout Camera full screen, 1c design §5.1): the palette's worst case, every bucket taken on every frame.
+private func noisyCameraTake(
+    in dir: URL, seconds: Double = 1, size: SIMD2<Int> = [640, 360]
+) async throws -> (LoadedProject, EditDocument) {
+    let builder = try TakeBuilder(in: dir, name: "Noisy camera")
+    try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: seconds)])
+    try await builder.addVideoTrack(
+        id: "camera", kind: .camera, source: TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera"),
+        segments: [
+            VideoSegmentSpec(start: base, seconds: seconds, width: size.x, height: size.y) { index, sample in
+                noiseVideoSample(width: size.x, height: size.y, pts: sample.presentationTimeStamp, seed: UInt64(index + 1))
+            },
+        ])
+    let project = try builder.write()
+    var document = EditDocument.legacy(for: project)
+    document.camera.show = true
+    document.camera.layout = CameraLayout(kind: .cameraFull)
+    return (project, document)
+}
+
 /// The take's edit at 60 fps on the aurora wallpaper (gradients that the dither works on), with the smoothed cursor.
 private func edit(of project: LoadedProject) -> EditDocument {
     var document = EditDocument.legacy(for: project)
@@ -339,12 +361,9 @@ private func fill(_ folder: URL, leaving: Int) throws {
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(10)))
     func noisyCameraRefreshesThePaletteWithinBounds() async throws {
         try await withTemporaryDirectory { dir in
-            // The full-screen camera with noise in every frame: until the render draws the camera layouts (Tasks 10 and
-            // 11), a screen of noise filling the output gives the palette the same pixels.
-            let project = try await noisyTake(in: dir)
-            var document = EditDocument.legacy(for: project)
-            document.style.padding = 0
-            document.style.cornerRadius = 0
+            // The camera full screen with noise in every frame (Task 13: the layout itself, where a screen of noise filling
+            // the output stood in for it until the render drew the camera layouts).
+            let (project, document) = try await noisyCameraTake(in: dir)
             let palettes = Mutex<[(frame: Int, colors: Int, isNew: Bool)]>([])
             let exporter = GIFExporter(
                 project: project, document: document, settings: GIFSettings(longSide: 480, range: whole(document))
@@ -360,6 +379,39 @@ private func fill(_ folder: URL, leaving: Int) throws {
             let images = GIFTestDecoder.frames(try Data(contentsOf: destination))
             #expect(images.count == 15 && summary.writtenFrames == 15)
             #expect(images.map(\.delay).reduce(0, +) == 100)
+        }
+    }
+
+    /// The palette's worst case, timed (Task 22's measure, with the camera layout itself since Task 13): 20 s of a camera
+    /// of 1280 × 720 at 30 fps with noise in every frame, full screen, exported at 15 fps, Balanced, at 800 and at 1920
+    /// px. Run by an agent, with `TOMA_BENCH=1`, in release; printed with the load and recorded in docs/performance.md
+    /// (design §15: 60 s of a 4K60 take with a camera in ≤ 10 s at 800 px and ≤ 20 s at 1920 on this Mac), not asserted.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1" && MetalCondition.isAvailable), .timeLimit(.minutes(30)))
+    func noisyFullCameraWorstCase() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, document) = try await noisyCameraTake(in: dir, seconds: 20, size: [1280, 720])
+            for longSide in [800, 1920] {
+                let newPalettes = Mutex(0)
+                let exporter = GIFExporter(
+                    project: project, document: document,
+                    settings: GIFSettings(longSide: longSide, fps: 15, quality: .balanced, range: whole(document))
+                ) { _, _, isNew in
+                    if isNew { newPalettes.withLock { $0 += 1 } }
+                }
+                let destination = dir.appending(path: "noise-\(longSide).gif")
+                let clock = ContinuousClock()
+                let started = clock.now
+                let summary = try await exporter.export(to: destination) { _ in }
+                let took = clock.now - started
+                let seconds = Double(took.components.seconds) + Double(took.components.attoseconds) / 1e18
+                let bytes = try Data(contentsOf: destination).count
+                var loads = [Double](repeating: 0, count: 3)
+                _ = getloadavg(&loads, 3)
+                print(String(
+                    format: "noise, camera full screen, %d px: %d frames in %.2f s (about %.1f s for 60 s), %d new palettes, "
+                        + "%.1f MB; load %.1f",
+                    longSide, summary.writtenFrames, seconds, seconds * 3, newPalettes.withLock { $0 }, Double(bytes) / 1e6, loads[0]))
+            }
         }
     }
 
