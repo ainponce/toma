@@ -17,8 +17,9 @@ import Render
 /// The frame is the render's: `.bgra8Unorm`, read as the bytes the render wrote (`round(c × 255)` of what a shader
 /// reads gives them back exactly).
 public final class GIFQuantizer: @unchecked Sendable {
-    /// The ordered dither's threshold map (plan decision 18): the 8 × 8 Bayer matrix, row `y` and column `x` at
-    /// `y × 8 + x`, each value `i` as `(i + 0.5) / 64`. A pixel at `(x, y)` takes `m` at `(x mod 8, y mod 8)`.
+    /// The ordered dither's threshold map (plan decision 18, gifQuant-1): the 8 × 8 Bayer matrix, row `y` and column `x`
+    /// at `y × 8 + x`, each value `i` as `(i + 0.5) / 64`. A pixel at `(x, y)` takes `m` at `(x mod 8, y mod 8)`. On the
+    /// fixed corpus, a 64 × 64 blue noise gave the same error in GIFs 2 to 25 % larger (`GIFCorpusTests`).
     ///
     /// The matrix doubles from `[0]`: each cell `v` of the one of side `n` becomes the 2 × 2 block
     /// `[[4v, 4v + 2], [4v + 3, 4v + 1]]`, so bit `k` of `x` and `y` (with `b = x_k XOR y_k`, `y_k`) adds
@@ -48,12 +49,22 @@ public final class GIFQuantizer: @unchecked Sendable {
 
     /// Compiles the kernels. Throws the compiler's error if they do not build, and `RenderError` if Metal cannot make a
     /// pipeline with threadgroups as large as the mapping's.
-    public init(device: any MTLDevice) throws {
+    public convenience init(device: any MTLDevice) throws {
+        try self.init(device: device, source: Self.shaderSource)
+    }
+
+    /// The kernels with another threshold map, `side` × `side` values row by row, anchored at the frame's origin like
+    /// `thresholdMap`: only for the corpus bench, which measures the maps against each other (plan decision 18).
+    convenience init(device: any MTLDevice, thresholdMap: [Float], side: Int) throws {
+        try self.init(device: device, source: Self.shaderSource(thresholdMap: thresholdMap, side: side))
+    }
+
+    private init(device: any MTLDevice, source: String) throws {
         precondition(MemoryLayout<PaletteEntry>.stride == 16, "PaletteEntry must keep the layout of the shader's struct: 16 bytes")
         precondition(MemoryLayout<MapUniforms>.stride == 16, "MapUniforms must keep the layout of the shader's struct: 16 bytes")
         let options = MTLCompileOptions()
         options.mathMode = .safe
-        let library = try device.makeLibrary(source: Self.shaderSource, options: options)
+        let library = try device.makeLibrary(source: source, options: options)
         func pipeline(_ name: String, threads: Int) throws -> any MTLComputePipelineState {
             guard let function = library.makeFunction(name: name) else { throw RenderError.missingShaderFunction(name) }
             let descriptor = MTLComputePipelineDescriptor()
@@ -248,10 +259,15 @@ extension GIFQuantizer {
     /// - `gifMap`: one thread per pixel in threadgroups of `mapGroupSide`²; each threadgroup adds its pixels'
     ///   `round(error × 10⁶)` and its count of large errors in threadgroup memory, by halves; the first thread writes
     ///   the sum to the threadgroup's slot (`y × groups across + x`) and adds the count to one atomic.
-    static let shaderSource = OKLab.shaderSource + """
+    static let shaderSource = shaderSource(thresholdMap: thresholdMap, side: thresholdSide)
+
+    /// `shaderSource` with the threshold map `thresholdMap`, of `side` × `side`.
+    static func shaderSource(thresholdMap: [Float], side: Int) -> String {
+        precondition(side > 0 && thresholdMap.count == side * side, "a threshold map of \(thresholdMap.count) values is not \(side) × \(side)")
+        return OKLab.shaderSource + """
 
         constant uint gifHistogramRun = \(histogramRun);
-        constant uint gifThresholdSide = \(thresholdSide);
+        constant uint gifThresholdSide = \(side);
         constant float gifThresholdMap[\(thresholdMap.count)] = {
             \(thresholdMap.map(OKLab.metal).joined(separator: ", "))
         };
@@ -386,4 +402,5 @@ extension GIFQuantizer {
         }
 
         """
+    }
 }

@@ -104,7 +104,9 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             return Data(count: 1000)
         }
         #expect(calls.withLock { $0 } == 8)
-        #expect(without.bytes == 1_000 * 60 && without.seconds == 60 && without.frames == 900 && without.warnings.isEmpty)
+        // 1000 bytes a stretch of 15 frames, none a GIF whose first image this reads: each stretch whole, 8 000 bytes over
+        // 120 frames, times 900.
+        #expect(without.bytes == 60_000 && without.seconds == 60 && without.frames == 900 && without.warnings.isEmpty)
         calls.withLock { $0 = 0 }
         // A real 1 s GIF (not 3 s), so its length is read from the file itself.
         let with = try await GIFEstimate.estimate(settings: settings, preview: gif, first: nil) { _ in
@@ -137,7 +139,11 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         #expect(firsts.withLock { $0 }.count == 1)
         #expect(first.calls == 0, "the first estimate is given before any other stretch is encoded")
         #expect(calls.withLock { $0 } == 7)
-        let expected = GIFEstimate.roundedToTwoDigits(Int64((Double(gif.count) / length * 60).rounded()))
+        // The preview's first image once, and its bytes after it per frame times the 899 frames after the first.
+        let firstImage = try #require(GIFEstimate.firstImageEnd(of: gif))
+        let previewFrames = Int((length * 15).rounded())
+        let expected = GIFEstimate.roundedToTwoDigits(
+            Int64((Double(firstImage) + Double(gif.count - firstImage) * 899 / Double(previewFrames - 1)).rounded()))
         #expect(first.result.bytes == expected && first.result.seconds == 60 && first.result.frames == 900)
         #expect(first.result.warnings == GIFEstimate.warnings(bytes: expected, seconds: 60))
         // Without a preview, or on a short range, there is no first estimate.
@@ -201,6 +207,70 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         }
         #expect(seen.withLock { $0 } == [settings.range])
         #expect(result.bytes == 2000 && result.frames == 90)
+    }
+
+    /// A still GIF is a whole first image and next to nothing after: each 1 s stretch has one first image of its own, and
+    /// the estimate pays it once, not once a second. A range encoded whole is its own size, to the byte.
+    @Test func theFirstImageIsPaidOnce() {
+        let still = [GIFEstimate.Stretch](repeating: GIFEstimate.Stretch(bytes: 1_112, firstImage: 1_000, frames: 15), count: 8)
+        // 1 000 + 896 × 899 / (8 × 14) = 8 192; per second of every stretch it would be 8 896 / 8 × 60 = 66 720.
+        #expect(GIFEstimate.estimatedSize(still, frames: 900) == 8_192)
+        #expect(GIFEstimate.estimatedBytes(still, frames: 900) == 8_200)
+        let mixed = [
+            GIFEstimate.Stretch(bytes: 3_840, firstImage: 1_200, frames: 45),
+            GIFEstimate.Stretch(bytes: 1_640, firstImage: 800, frames: 15),
+        ]
+        // (1 200 + 800) / 2 + (2 640 + 840) × 299 / (44 + 14) = 18 940.
+        #expect(GIFEstimate.estimatedSize(mixed, frames: 300) == 18_940)
+        #expect(GIFEstimate.estimatedSize([GIFEstimate.Stretch(bytes: 2_345, firstImage: 1_000, frames: 90)], frames: 90) == 2_345)
+    }
+
+    /// A stretch whose first image cannot be split from the rest counts whole, its bytes per frame: a range of one frame
+    /// is the bytes of its GIF (the trailer too), stretches not read as GIFs are their total bytes, and one not read
+    /// among others read does not count as a first image of 0 bytes. Never 0 when something was encoded.
+    @Test func aStretchThatCannotBeSplitCountsWhole() {
+        #expect(GIFEstimate.estimatedSize([GIFEstimate.Stretch(bytes: 1_234, firstImage: 1_233, frames: 1)], frames: 1) == 1_234)
+        let unread = [GIFEstimate.Stretch](repeating: GIFEstimate.Stretch(bytes: 1_000, firstImage: nil, frames: 15), count: 8)
+        #expect(GIFEstimate.estimatedSize(unread, frames: 900) == 60_000)
+        let some = [
+            GIFEstimate.Stretch(bytes: 1_640, firstImage: 800, frames: 15), GIFEstimate.Stretch(bytes: 500, firstImage: nil, frames: 15),
+        ]
+        // 800, the first image read (not their mean with 0), + 840 × 99 / 14.
+        #expect(GIFEstimate.estimatedSize(some, frames: 100) == 6_740)
+        #expect(GIFEstimate.estimatedSize([GIFEstimate.Stretch(bytes: 70, firstImage: nil, frames: 1)], frames: 1) == 70)
+        #expect(GIFEstimate.estimatedBytes([GIFEstimate.Stretch(bytes: 70, firstImage: nil, frames: 1)], frames: 1) == 70)
+    }
+
+    /// The first image ends where the second's graphic control begins, past the header, the loop extension and its own
+    /// control, descriptor, colour table and data; anything else is not read.
+    @Test func firstImageEndsBeforeTheSecond() throws {
+        try withTemporaryDirectory { dir in
+            let url = dir.appending(path: "two.gif")
+            let fd = open(url.path, O_RDWR | O_CREAT | O_EXCL, 0o644)
+            try #require(fd >= 0)
+            defer { close(fd) }
+            var writer = try GIFWriter(fileDescriptor: fd, width: 300, height: 2, loops: true)
+            func coded(_ index: UInt8, count: Int) throws -> [UInt8] {
+                try [UInt8](repeating: index, count: count).withUnsafeBufferPointer { try LZWEncoder.encode($0, minimumCodeSize: 2) }
+            }
+            let first = GIFImageBlock(
+                x: 0, y: 0, width: 300, height: 2, palette: [SIMD3(0, 0, 0), SIMD3(255, 255, 255), SIMD3(9, 9, 9)],
+                transparentIndex: nil, delay: 7, minimumCodeSize: 2, data: try coded(1, count: 600))
+            try writer.write(first)
+            try writer.write(GIFImageBlock(
+                x: 1, y: 1, width: 1, height: 1, palette: [SIMD3(0, 0, 0), SIMD3(255, 255, 255)], transparentIndex: 2, delay: 6,
+                minimumCodeSize: 2, data: try coded(0, count: 1)))
+            try writer.finish()
+            let gif = try Data(contentsOf: url)
+            // Header and screen 13, loop 19; the first image: control 8, descriptor 10, a table of 4 colours 12, code size
+            // 1, its data in sub-blocks of up to 255 bytes and the terminator.
+            let subBlocks = (first.data.count + 254) / 255
+            let end = 13 + 19 + 8 + 10 + 12 + 1 + first.data.count + subBlocks + 1
+            #expect(GIFEstimate.firstImageEnd(of: gif) == end)
+            #expect(gif[end] == 0x21 && gif[end + 1] == 0xF9, "the second image's graphic control")
+            #expect(GIFEstimate.firstImageEnd(of: gif.prefix(end - 1)) == nil, "cut inside the first image")
+            #expect(GIFEstimate.firstImageEnd(of: Data(count: 1_000)) == nil)
+        }
     }
 
     @Test func estimateCanBeCancelled() async throws {

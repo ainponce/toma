@@ -90,8 +90,10 @@ extension ColorHistogram {
 }
 
 /// The GIF's Quality (design §7.1): colours per frame, how strong the ordered dither is and how far a frame may be from
-/// the previous palette before a new one is built. The values are the provisional ones of plan decision 17, tuned on
-/// the corpus in Task 25.
+/// the previous palette before a new one is built. gifQuant-1's values (plan decision 17), chosen on the fixed corpus
+/// (`GIFCorpusTests.gifCorpusTuning`, Task 25): the reuse threshold sits above the error each quality's own dither leaves
+/// on the camera (the error of a reused palette includes the dither's noise; under it, every frame takes a new palette
+/// and the GIF grows up to tenfold), and High dithers more than Balanced and so takes a new palette sooner.
 public enum GIFQuality: String, Codable, Sendable, CaseIterable {
     case light, balanced, high
 
@@ -106,8 +108,8 @@ public enum GIFQuality: String, Codable, Sendable, CaseIterable {
     /// The dither's offset is `(m − 0.5) × ditherStrength / 16` in sRGB, `m` the threshold map.
     public var ditherStrength: Float {
         switch self {
-        case .light, .high: 1.0
-        case .balanced: 0.75
+        case .light, .high: 0.75
+        case .balanced: 0.5
         }
     }
 
@@ -115,13 +117,15 @@ public enum GIFQuality: String, Codable, Sendable, CaseIterable {
     public var reuseMeanError: Double {
         switch self {
         case .light: 0.025
-        case .balanced: 0.015
-        case .high: 0.010
+        case .balanced, .high: 0.015
         }
     }
 }
 
-/// The rules of a new palette and of reusing one (design §7.2, step 3).
+/// The rules of a new palette and of reusing one (design §7.2, step 3); `largeError` and `largeErrorLimit` are gifQuant-1's
+/// (plan decision 17). On the corpus they decided only on the scroll take, where new content comes in: with 3 % instead
+/// of 2 % its GIF came out 1.6 to 6 % smaller, with less error at Balanced and High (a little more at Light); 0.08
+/// instead of 0.06, about as small with more error; 0.04 or 1 %, more palettes and larger GIFs.
 public enum PaletteRules {
     /// At most this many exact colours.
     public static let maxExactColors = 32
@@ -130,7 +134,7 @@ public enum PaletteRules {
     /// A pixel farther than this in OKLab from its palette colour has a large error.
     public static let largeError = 0.06
     /// A palette is reused only while fewer than this share of the pixels have a large error.
-    public static let largeErrorLimit = 0.02
+    public static let largeErrorLimit = 0.03
 }
 
 /// The colours of a frame. The first `exactCount` are exact (a pixel of that colour maps to it without dither); there

@@ -784,6 +784,9 @@ Con la app entera (después de la tarea 38, que abre la biblioteca desde la app)
 - **Comprobación 5 del diseño (§16.2):** abrir con ⌘O un proyecto de un disco externo: aparece en Otros lugares. Expulsar el disco y abrir la biblioteca: no pide nada, no se traba, ningún aviso de privacidad nuevo de macOS, y la tarjeta se ve como antes; recién al tocarla (Abrir, Actualizar o Mostrar en Finder) queda atenuada con "No disponible" y la ayuda "El disco «…» no está conectado.". Nunca se quita sola de la lista.
 - Salir de Toma (⌘Q) mientras se duplica un proyecto grande en un disco sin clones (un disco externo con HFS+ o exFAT, como Otros lugares): la app espera a que la copia termine antes de cerrarse, y la copia queda entera.
 - VoiceOver sobre una tarjeta: el rotor de acciones lista Abrir, Renombrar, Duplicar, Mostrar en Finder, Agregar a Favoritos (o Quitar de Favoritos) y Mover a la papelera; en la Papelera, Abrir, Restaurar, Mostrar en Finder y Eliminar ahora…. Con Reducir movimiento, las tarjetas que se acomodan y la que va a la papelera solo se funden.
+**El GIF: el corpus** (25)
+
+- *Opcional:* si tiene gifski instalado, comparar a ojo un GIF del corpus. `TOMA_BENCH=1 TOMA_GIF_CORPUS_OUT=~/Desktop/corpus-gif swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter gifCorpusBeatsImageIO` deja en `~/Desktop/corpus-gif/<toma>/` los cuadros (`frames/*.png`), el GIF de Toma (`toma.gif`) y el de ImageIO (`imageio.gif`) de cada toma del corpus (ver `docs/performance.md`, fila 25). Con `gifski --fps 15 -o gifski.gif frames/*.png`, abrir los tres en Safari a tamaño real: el de Toma no tiene bandas que molesten en el fondo `aurora-1` ni en la cámara, el tramado no titila en lo quieto, y el texto se lee como en los otros. Anotar el tamaño de los tres.
 
 ## Prueba en seco (ad hoc)
 
