@@ -6,8 +6,8 @@ import ProjectFormat
 ///
 /// Frame `n` of an export at `fps` frames per second is at `start + round(n / fps × 10⁹)` ns (`TimeMap.frameTime`); the
 /// export's frames are those that fall before `end`. A range lasts at least a frame when `(end − start) × fps` is at
-/// least 10⁹ ns: a shorter one is not exported (`GIFExportError.rangeShorterThanAFrame`), though its first frame falls
-/// before its end.
+/// least 10⁹ ns: a shorter one is not exported (`GIFExportError.rangeShorterThanAFrame`; `ExportError.nothingToExport`
+/// for the MP4), though its first frame falls before its end.
 public struct ExportRange: Equatable, Sendable {
     public var start: Int64
     public var end: Int64
