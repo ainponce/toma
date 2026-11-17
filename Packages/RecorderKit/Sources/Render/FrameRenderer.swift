@@ -334,7 +334,8 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// The texture `frame`'s background is drawn with (`Compositor.encode`'s `backgroundImage`), from `images`, for
     /// frames `outputSize` big: an image's; a blurred wallpaper's mesh gradient, blurred; a sharp wallpaper's mesh
-    /// gradient under the zoom camera's motion blur (`RenderFrame.subframes`), which the subsamples read; none otherwise.
+    /// gradient under the zoom camera's motion blur (`RenderFrame.subframes`), which the subsamples read, but in a card's
+    /// mode, whose background is drawn once (`RenderFrame.backgroundTransform`); none otherwise.
     static func backgroundTexture(
         of frame: RenderFrame, images: BackgroundImages, outputSize: SIMD2<Int>
     ) throws -> (any MTLTexture)? {
@@ -343,7 +344,7 @@ public final class FrameRenderer: @unchecked Sendable {
             return try images.texture(for: image, outputSize: outputSize)
         case let .wallpaper(preset, sigma) where sigma.isFinite && sigma > 0:
             return try images.texture(forWallpaper: preset, blurSigma: sigma, outputSize: outputSize)
-        case let .wallpaper(preset, _) where !frame.subframes.isEmpty:
+        case let .wallpaper(preset, _) where !frame.subframes.isEmpty && !frame.isCardMode:
             return try images.texture(forWallpaper: preset, blurSigma: 0, outputSize: outputSize)
         default:
             return nil

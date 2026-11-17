@@ -60,8 +60,8 @@ extension Compositor {
     }
 
     /// Encodes `frame`, in a card's mode, into `target` (see the extension's notes), with `textures`, the camera's texture
-    /// `camera` and the blur's `tileMemory` (`nil` without a blur), counting what it draws in `counts`. A sharp wallpaper is
-    /// drawn as it is, never from its mesh: the background is drawn once, as without the blur.
+    /// `camera` and the blur's `tileMemory` (`nil` without a blur), counting what it draws in `counts`. The background is
+    /// drawn once, as without the blur, so a sharp wallpaper's mesh is not asked for (`FrameRenderer.backgroundTexture`).
     func encodeCard(
         _ frame: RenderFrame, textures: StageTextures, camera: (any MTLTexture)?,
         tileMemory: (subsample: any MTLTexture, sum: any MTLTexture)?, into target: any MTLTexture,
@@ -72,8 +72,6 @@ extension Compositor {
         // What the content and the click effects are drawn through: the card's content, or the background without one.
         let content = card.map(\.transform) ?? background
         let targetSize = SIMD2(target.width, target.height)
-        var textures = textures
-        if case let .wallpaper(_, sigma) = frame.background, !(sigma.isFinite && sigma > 0) { textures.backgroundImage = nil }
 
         guard let tileMemory else {
             let encoder = renderPass(into: target, commandBuffer: commandBuffer)

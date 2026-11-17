@@ -436,8 +436,9 @@ public final class Compositor: @unchecked Sendable {
     /// frame, the screen without) and the window's bar under the screen, each at that opacity and only where what goes over
     /// it lets it through, and the title at that opacity (`RenderFrame.screenOpacity`). With `card` (`RenderFrame.card`),
     /// `stage` is the background's transform, the shadow's and the window frame's, and the screens and the cursor are drawn
-    /// through the card's content and cut to it. Only the `parts` asked for are drawn: the background, the shadow and the
-    /// window frame (`.frame`), then the screens and the cursor (`.content`).
+    /// through the card's content and cut to it: the screens square, so the card's cut alone shapes them and no background
+    /// shows inside the card, at its corners either (1c design §5.4). Only the `parts` asked for are drawn: the
+    /// background, the shadow and the window frame (`.frame`), then the screens and the cursor (`.content`).
     func drawStage(
         _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, parts: StageParts = .all,
         cursor cursorLayer: CursorLayer?, textures: StageTextures, pipelines: StagePipelines, culling: Bool = false,
@@ -473,11 +474,17 @@ public final class Compositor: @unchecked Sendable {
         }
         guard parts.contains(.content) else { return }
 
-        // In a card, the content through its own transform, cut to the card; the window only cuts the screen.
+        // In a card, the content through its own transform, square, so that the card's cut alone shapes it: the content
+        // covers all of the cut, its corners too (`T(C) ⊇ B(C)`), and at the stage's end the cut is the screen's own shape.
         let content = card == nil ? stage : card?.transform
-        let contentWindow = card == nil ? window : frame.windowFrame.map { content?.drawn($0, outputSize: size) ?? $0 }
-        let contentScreen = card == nil ? screenLayer : frame.screen.map { content?.drawn($0, outputSize: size) ?? $0 }
-        let contentPrevious = card == nil ? previousLayer : frame.previousScreen.map { content?.drawn($0, outputSize: size) ?? $0 }
+        func square(_ layer: ScreenLayer) -> ScreenLayer {
+            var drawn = content?.drawn(layer, outputSize: size) ?? layer
+            drawn.cornerRadius = 0
+            return drawn
+        }
+        let contentWindow = card == nil ? window : nil
+        let contentScreen = card == nil ? screenLayer : frame.screen.map(square)
+        let contentPrevious = card == nil ? previousLayer : frame.previousScreen.map(square)
 
         // 4. Screen, cut by the window around it if there is one: the one being left first, then the one coming over it.
         for (layer, screenImage) in [(contentPrevious, textures.previousScreen), (contentScreen, textures.screen)] {
