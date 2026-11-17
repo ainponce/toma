@@ -25,7 +25,7 @@ let package = Package(
         .target(name: "SyntheticCapture", dependencies: ["Recording", "ProjectFormat"]),
         .target(name: "Recovery", dependencies: ["ProjectFormat"]),
         .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
-        .target(name: "Export", dependencies: ["Render", "ProjectFormat"]),
+        .target(name: "Export", dependencies: ["Render", "ProjectFormat", "Analysis"]),
         .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
         .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing"]),
         // Shared by every test target; not a product.

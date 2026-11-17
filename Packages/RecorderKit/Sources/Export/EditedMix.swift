@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import Foundation
 import ProjectFormat
 import Synchronization
@@ -25,8 +26,10 @@ import Synchronization
 ///   (`SpeedStretch`), track by track before its gain: the clips of one take at one speed that go on one from the
 ///   other are stretched as one, from where they start. A clip faster than 4×, or of another take, is silent.
 /// - A click sound (`cursor.clickSound`, `ClickSounds`) plays at `clickSoundGain` from the output frame of every left
-///   or right `mouseDown` the clips keep; one less than `ClickSounds.minimumSpacing` after the last that sounded does
-///   not sound.
+///   or right `mouseDown` the clips keep where it can be seen (1c design §5.4): where the screen's opacity
+///   (`LayoutTimeline.screenOpacity`, with the camera readable as the render finds it) is at least 0.5 then, so not under
+///   a settled Camera only or Camera full screen; one less than `ClickSounds.minimumSpacing` after the last that sounded
+///   does not sound. A document without layouts (`LayoutTimeline.isTrivial`) sounds every one, as in 1b.
 /// - The mix lasts `totalFrames`, what the video lasts at its frame rate (`totalFrames(frameCount:framesPerSecond:)`):
 ///   past the content, silence; before its end, the content is cut.
 /// - The export of a range of the output (`ExportRange`, 1c design §7.1) plays the frames of this mix from the range's
@@ -79,18 +82,24 @@ public final class EditedMix: Sendable {
         let keys: [String]
         /// The host times of the take's left and right `mouseDown`s, in order.
         let clicks: [HostTime]
+        /// The take, whose layouts decide which clicks are seen.
+        let take: TakeRecord
+        /// Some camera track of the take can be read (`LayoutTimeline.cameraReadable`), as the render finds it.
+        let cameraReadable: Bool
 
         init(
-            takeID: String, origin: HostTime, editable: ClosedRange<HostTime>, channels: Int, tracks: [AudioTrackTimeline],
-            clicks: [HostTime]
+            take: TakeRecord, origin: HostTime, editable: ClosedRange<HostTime>, channels: Int, tracks: [AudioTrackTimeline],
+            clicks: [HostTime], cameraReadable: Bool
         ) {
-            self.takeID = takeID
+            takeID = take.id
+            self.take = take
             self.origin = origin
             self.editable = editable
             self.channels = channels
             self.tracks = tracks
-            keys = tracks.map { AudioPlan.key(take: takeID, track: $0.track) }
+            keys = tracks.map { AudioPlan.key(take: take.id, track: $0.track) }
             self.clicks = clicks
+            self.cameraReadable = cameraReadable
         }
     }
 
@@ -153,9 +162,11 @@ public final class EditedMix: Sendable {
             return event.t
         }
         let editable = TakeTimeline.editableBounds(take: project.take, events: project.events)
+        // The render's rule (`FrameRenderer.cameraReadable`): the layouts that need the camera are Screen only without it.
+        let cameraReadable = LayoutTimeline.cameraReadable(take: project.take) { SegmentAvailability.classify($0, in: project.package) }
         let source = Source(
-            takeID: project.take.id, origin: origin, editable: editable.start...editable.end, channels: channels, tracks: timelines,
-            clicks: clicks)
+            take: project.take, origin: origin, editable: editable.start...editable.end, channels: channels, tracks: timelines,
+            clicks: clicks, cameraReadable: cameraReadable)
         return EditedMix(source: source, document: document, framesPerSecond: framesPerSecond, prereadSegments: timelines.reduce(0) {
             $0 + $1.decodedSegments
         })
@@ -185,7 +196,8 @@ public final class EditedMix: Sendable {
         let clickGain = document.cursor.clickSoundGain.isNaN ? 0 : Float(min(max(document.cursor.clickSoundGain, 0), 1))
         if let sound = ClickSounds.samples(document.cursor.clickSound), clickGain > 0 {
             clickSound = sound.map { $0 * clickGain }
-            clickFrames = Self.clickFrames(of: source, timeMap: timeMap)
+            let layouts = LayoutTimeline(document: document, take: source.take, timeMap: timeMap, cameraReadable: source.cameraReadable)
+            clickFrames = Self.clickFrames(of: source, timeMap: timeMap, layouts: layouts)
         } else {
             clickSound = []
             clickFrames = []
@@ -379,13 +391,16 @@ public final class EditedMix: Sendable {
         return (pieces, runs)
     }
 
-    /// The output frames where a click sounds: each kept `mouseDown` at its output time, unless it comes less than
+    /// The output frames where a click sounds: each kept `mouseDown` at its output time where `layouts` show the screen
+    /// at an opacity of at least 0.5 (every one when they are trivial), unless it comes less than
     /// `ClickSounds.minimumSpacing` after the last that sounded.
-    private static func clickFrames(of source: Source, timeMap: TimeMap) -> [Int64] {
+    private static func clickFrames(of source: Source, timeMap: TimeMap, layouts: LayoutTimeline) -> [Int64] {
         let times = source.clicks.compactMap { timeMap.output(atSource: $0, take: source.takeID) }.sorted()
         var frames: [Int64] = []
         var last: Int64?
         for time in times {
+            // A click that cannot be seen does not sound (1c design §5.4), nor keeps the next one quiet.
+            if !layouts.isTrivial, layouts.screenOpacity(atOutput: time) < 0.5 { continue }
             if let last, time - last < ClickSounds.minimumSpacing { continue }
             last = time
             frames.append(Self.frames(ofNanoseconds: time))

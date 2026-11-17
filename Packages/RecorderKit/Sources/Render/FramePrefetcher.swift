@@ -25,9 +25,15 @@ import Synchronization
 /// (`frame(atSource:completion:)`).
 ///
 /// For scrubbing, `keyFrame(atSource:)` decodes the key frame at or before an instant alone, without the reader.
+///
+/// Who draws frames along a grid tells each track's prefetcher what to decode by `DecodeAhead`: the next frames as they
+/// come, and, 1 s of output before it (`borderLookahead`), the first frame of a track a layout hid until then.
 final class FramePrefetcher: @unchecked Sendable {
     /// Instants decoded ahead at most, the one asked for next among them.
     static let maxFrames = 8
+    /// Output seconds ahead that whoever draws along a grid looks for a track it is about to need (1c design §14.4):
+    /// a screen or a camera that a block border brings back starts decoding this long before it (`DecodeAhead`).
+    static let borderLookahead = 1.0
     /// Bytes of the distinct frames decoded ahead, at most: no frame is decoded that would pass it (but the next one asked
     /// for always is).
     static let maxBytes = 300 << 20
@@ -327,5 +333,94 @@ final class FramePrefetcher: @unchecked Sendable {
             }
             for waiter in waiting { waiter.wake() }
         }
+    }
+}
+
+/// What to tell each track's `FramePrefetcher` it will be asked for (`schedule(_:)`), for whoever draws the frames of a
+/// grid in order: the videos (`DecodedKey`) of the next `near` frames as they come, and, 1c design §14.4, the first video
+/// within `far` frames of a track that has nothing scheduled from the frame drawn on (a screen or a camera that a layout
+/// hides until a block border): at once, so the track that the border is about to need starts decoding that far before
+/// it, and the transition skips no frame. That frame is not scheduled again when its turn comes.
+///
+/// Each track is scheduled its frames in the order of the grid, each once, as drawing them frame by frame asks for them:
+/// an early frame is scheduled only to a track with nothing scheduled from the frame drawn on, and only the first frame
+/// that shows it after those scheduled already, so no frame of it scheduled later comes before. Its reader reads the
+/// same frames in the same order, so a frame and the gaps found are the same.
+///
+/// Each frame of the grid is looked at (`videos`) once, in order, up to `far` frames before it is drawn.
+struct DecodeAhead {
+    /// The frames after the one drawn whose videos are scheduled as they come.
+    let near: Int
+    /// The frames after the one drawn that are looked at for a track that comes: at least `near`.
+    let far: Int
+    /// The last frame scheduled as it comes; `nil` before the first.
+    private(set) var scheduledThrough: Int?
+    /// The videos of the frames looked at and not drawn yet, by frame, in order.
+    private var looked: [(index: Int, videos: [DecodedKey])] = []
+    private var lookedThrough: Int?
+    /// The last frame of each track scheduled, as it came or early.
+    private var latest: [String: Int] = [:]
+    /// The videos scheduled before their turn, with their frame: not scheduled again when it comes.
+    private var early: [(index: Int, key: DecodedKey)] = []
+
+    /// `near` frames as they come, and a track that comes within `far` (at least `near`).
+    init(near: Int, far: Int) {
+        self.near = near
+        self.far = max(far, near)
+    }
+
+    /// For frames drawn at `frameRate` frames per second: `FrameRenderer.lookahead` frames as they come, and a track that
+    /// comes within `FramePrefetcher.borderLookahead` seconds.
+    init(frameRate: Int) {
+        self.init(near: FrameRenderer.lookahead, far: Int((FramePrefetcher.borderLookahead * Double(frameRate)).rounded(.up)))
+    }
+
+    /// Forgets everything, as after a jump: the prefetchers dropped what they had.
+    mutating func reset() {
+        self = DecodeAhead(near: near, far: far)
+    }
+
+    /// Frame `index` of the grid (whose last frame is `last`) is drawn next, after the one drawn before (or the first since
+    /// `reset()`; the frames between, if any, were skipped). Looks at the frames up to `far` after it not looked at yet,
+    /// asking `videos` for each, in order, and returns what to schedule now, in order: the videos of the frames from
+    /// `index + first` (0: `index` itself; 1: the one after, the caller asking for `index` on its own) to `index + near`
+    /// not scheduled yet, then, for each track with nothing scheduled from `index` on, its first video ahead.
+    mutating func advance(
+        to index: Int, last: Int, first: Int = 0, videos: (_ frame: Int) throws -> [DecodedKey]
+    ) rethrows -> [DecodedKey] {
+        looked.removeAll { $0.index < index }
+        early.removeAll { $0.index < index }
+        var next = max((lookedThrough ?? index - 1) + 1, index)
+        while next <= min(index + far, last) {
+            looked.append((next, try videos(next)))
+            lookedThrough = next
+            next += 1
+        }
+        var scheduled: [DecodedKey] = []
+        // The next frames, as they come.
+        next = max((scheduledThrough ?? index + first - 1) + 1, index + first)
+        while next <= min(index + near, last) {
+            let frame = next
+            for key in looked.first(where: { $0.index == frame })?.videos ?? [] {
+                if let found = early.firstIndex(where: { $0.index == frame && $0.key == key }) {
+                    early.remove(at: found)
+                } else {
+                    scheduled.append(key)
+                }
+                latest[key.trackID] = max(latest[key.trackID] ?? frame, frame)
+            }
+            scheduledThrough = frame
+            next += 1
+        }
+        // A track with nothing scheduled from `index` on that a frame ahead shows: that frame, now.
+        let from = scheduledThrough ?? index + first - 1
+        for entry in looked where entry.index > from {
+            for key in entry.videos where (latest[key.trackID] ?? .min) < index {
+                scheduled.append(key)
+                early.append((entry.index, key))
+                latest[key.trackID] = entry.index
+            }
+        }
+        return scheduled
     }
 }
