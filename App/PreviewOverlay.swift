@@ -44,6 +44,8 @@ final class PreviewOverlayView: NSView {
     }
     private var zoom: ZoomBox?
     private var bubbleStyle: CameraStyle?
+    /// What the bubble is measured against, as the render measures it: the document's `camera.sizeReference`.
+    private var bubbleReference = SizeReference.height
     /// Whose style `bubbleStyle` is: the take's (1b) or a Bubble block's.
     private var bubbleTarget = LayoutTrackRules.BubbleTarget.none
     /// The stage's points of the document shown, made from the take's screens the model read once
@@ -140,6 +142,7 @@ final class PreviewOverlayView: NSView {
             window?.invalidateCursorRects(for: self)
         }
         guard let document, let project, editable, !playing else { return }
+        bubbleReference = document.camera.sizeReference
         let stage = SIMD2(document.aspect.ratio, 1)
         let map = TimeMap(sequence: document.sequence)
         splitState = makeSplitState(of: document, project: project, atOutput: now, timeMap: map)
@@ -212,7 +215,7 @@ final class PreviewOverlayView: NSView {
     private var region: Rect { Rect(x: 0, y: 0, width: bounds.width, height: bounds.height) }
 
     private func bubbleFrame(_ style: CameraStyle) -> CameraFrame {
-        style.frame(in: region)
+        style.frame(in: region, reference: bubbleReference)
     }
 
     /// The bubble's rect now: its resting place, or where the drag or the throw has it.
@@ -317,7 +320,7 @@ final class PreviewOverlayView: NSView {
         if lifted {
             // The 8 places, under the bubble.
             NSColor.white.withAlphaComponent(0.85).setFill()
-            for place in CameraBubbleLayout.anchorFrames(style: style, region: region) {
+            for place in CameraBubbleLayout.anchorFrames(style: style, region: region, reference: bubbleReference) {
                 let center = CGPoint(x: place.rect.x + place.rect.width / 2, y: place.rect.y + place.rect.height / 2)
                 let dot = place.anchor == style.anchor && !settling ? 8.0 : 6.0
                 NSBezierPath(ovalIn: CGRect(x: center.x - dot / 2, y: center.y - dot / 2, width: dot, height: dot)).fill()
@@ -487,7 +490,8 @@ final class PreviewOverlayView: NSView {
         samples.append(.init(time: time, point: origin))
         let velocity = CameraBubbleLayout.releaseVelocity(samples: samples, at: time)
         var style = drag.style
-        style.anchor = CameraBubbleLayout.releaseAnchor(origin: origin, velocity: velocity, style: style, region: region)
+        style.anchor = CameraBubbleLayout.releaseAnchor(
+            origin: origin, velocity: velocity, style: style, region: region, reference: bubbleReference)
         let target = bubbleFrame(style).rect
         let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         if let document = model.document {

@@ -44,8 +44,9 @@ public struct ZoomCameraState: Equatable, Sendable {
 ///     bubble is applied after the box, so a bubble too big for the box leaves the cursor out of the box but visible,
 ///     in the frame, on the same target every step. The bubble counts where the render draws the camera, by the one
 ///     rule of both (`CameraBubble`): with `camera.show`, a camera track with a segment, from the start of its first
-///     segment on. The cursor is `CursorPath`'s on the step, read before the camera moves (design §8.6), at its stage
-///     point (`StagePoints.stagePoint(global:at:)`); without one, the target stays.
+///     segment on, measured against the document's `camera.sizeReference`. The cursor is `CursorPath`'s on the step,
+///     read before the camera moves (design §8.6), at its stage point (`StagePoints.stagePoint(global:at:)`); without
+///     one, the target stays.
 /// - The motion: `zoom.spring` (`StepGrid.spring`, the spring read through `StepGrid.stable(_:)` so a document edited
 ///   by hand never stops the render) for `u` and for each axis of the centre, toward the target. On entering or
 ///   leaving an `instant` block, the camera jumps to the target with velocity 0.
@@ -93,7 +94,9 @@ public struct ZoomCameraPath: Sendable {
     ) {
         simulation = ZoomSimulation(
             document: document, timeMap: timeMap, cursor: cursor, take: take,
-            viewport: StageViewport(stage: stage, bubble: CameraBubble(document: document, take: take, timeMap: timeMap)),
+            viewport: StageViewport(
+                stage: stage, bubble: CameraBubble(document: document, take: take, timeMap: timeMap),
+                reference: document.camera.sizeReference),
             after: old?.simulation, changedFrom: changed)
     }
 
@@ -175,15 +178,18 @@ struct StageViewport: ZoomViewport {
     private let stage: StagePoints
     /// `nil` where the render draws no camera.
     private let bubble: CameraBubble?
+    /// What the bubble is measured against, as the render measures it: the document's `camera.sizeReference`.
+    private let reference: SizeReference
 
     /// A bubble whose centre is this close to the output's centre on an axis is on neither side of it (one in the
     /// middle of an edge).
     private static let centred = 1e-9
 
-    init(stage: StagePoints, bubble: CameraBubble?) {
+    init(stage: StagePoints, bubble: CameraBubble?, reference: SizeReference) {
         size = stage.stageSize
         self.stage = stage
         self.bubble = bubble
+        self.reference = reference
     }
 
     func screen(at host: HostTime?) -> Rect {
@@ -205,7 +211,7 @@ struct StageViewport: ZoomViewport {
     /// The camera's bubble at output time `τ` (source instant `host`), grown by `bubbleMargin`; `nil` where there is
     /// none.
     private func bubbleRect(atOutput τ: Int64, host: HostTime) -> Rect? {
-        guard let rect = bubble?.frame(atOutput: τ, host: host, output: size)?.rect else { return nil }
+        guard let rect = bubble?.frame(atOutput: τ, host: host, output: size, reference: reference)?.rect else { return nil }
         let grow = ZoomCameraPath.bubbleMargin / 2
         return Rect(
             x: rect.x - rect.width * grow, y: rect.y - rect.height * grow, width: rect.width * (1 + ZoomCameraPath.bubbleMargin),

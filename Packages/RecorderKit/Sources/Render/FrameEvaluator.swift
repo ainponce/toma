@@ -63,7 +63,9 @@ import simd
 ///   segment, from the start of its first segment on, at the `CameraStyleTimeline` of the take's `camera.initial` and
 ///   its `camera.changes` in output time: a change in a cut rules from the first instant kept after it, one before the
 ///   first clip keeps its time through that clip's mapping (it is under way at output 0, as it always was), and one
-///   after the last never rules.
+///   after the last never rules. Each style is measured against `camera.sizeReference` (the output's height, as in 1b,
+///   or its shorter side), and the camera is drawn with the document's look: mirrored, with its border and its shadow
+///   (`cameraLayer`, 1c design §14.3).
 /// - Zoom camera (design §7.4): the stage is drawn through the zoom camera's path (`ZoomCameraPath.state(atOutput:)`) at
 ///   the output time, in this output's pixels (`RenderFrame.stage`, `nil` at rest), its centre placed again with
 ///   `StageCrop` over the screen's rect at this size (the window's with a frame; the stage without a screen): the path
@@ -555,11 +557,42 @@ public struct FrameEvaluator: Sendable {
             aspect: size.x / size.y, pointHeight: document.cursor.style == .toma ? 24 : size.y)
     }
 
-    /// The camera at source instant `source` and output time `output`, from the start of its first segment on.
+    /// The camera at source instant `source` and output time `output`, from the start of its first segment on: its
+    /// bubble measured against the document's `camera.sizeReference`, with the document's look.
     private func camera(at source: HostTime, output: Int64) -> CameraLayer? {
-        guard let bubble, let frame = bubble.frame(
-            atOutput: output, host: source, output: SIMD2(Double(outputSize.x), Double(outputSize.y)))
+        let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        guard let bubble, let frame = bubble.frame(atOutput: output, host: source, output: size, reference: document.camera.sizeReference)
         else { return nil }
-        return CameraLayer(trackID: bubble.trackID, sourceTime: source, rect: frame.rect, cornerRadius: frame.cornerRadius)
+        return Self.cameraLayer(trackID: bubble.trackID, sourceTime: source, frame: frame, look: document.camera, output: size)
+    }
+
+    /// The camera drawn in `frame` with the look of `camera` (1c design §14.3) in an output `output` big, `s` its shorter
+    /// side: its picture flipped with `mirror`; a border `border.width × weight × CameraBorder.widthFactor × s` wide, only
+    /// above 0; and, with `k = shadow × weight`, a shadow cast by the camera with its corners, at opacity `0.55·k`, of σ
+    /// `(0.004 + 0.016·k)·s` and `0.010·k·s` down, only for `k` above 0. `opacity` and the weights (a layout's: 1 in the
+    /// Bubble) and the document's border width and shadow are read from 0 to 1, 0 if not a number: a layout's spring
+    /// overshoots by about 10⁻⁴. With the legacy look (not mirrored, no border, no shadow) at opacity 1, 1b's layer.
+    static func cameraLayer(
+        trackID: String, sourceTime: HostTime, frame: CameraFrame, opacity: Double = 1, borderWeight: Double = 1,
+        shadowWeight: Double = 1, look camera: CameraPlan, output: SIMD2<Double>
+    ) -> CameraLayer {
+        func unit(_ value: Double) -> Double { value.isNaN ? 0 : min(max(value, 0), 1) }
+        let short = min(output.x, output.y)
+        var layer = CameraLayer(
+            trackID: trackID, sourceTime: sourceTime, rect: frame.rect, cornerRadius: frame.cornerRadius, mirror: camera.mirror,
+            opacity: unit(opacity))
+        let width = unit(camera.border.width) * unit(borderWeight) * CameraBorder.widthFactor * short
+        if width > 0 {
+            let color = camera.border.color
+            layer.border = CameraBorderLayer(
+                width: width, color: SIMD4(Float(unit(color.r)), Float(unit(color.g)), Float(unit(color.b)), Float(unit(color.a))))
+        }
+        let k = unit(camera.shadow) * unit(shadowWeight)
+        if k > 0 {
+            layer.shadow = ShadowLayer(
+                rect: frame.rect, cornerRadius: frame.cornerRadius, opacity: 0.55 * k, sigma: (0.004 + 0.016 * k) * short,
+                offsetY: 0.010 * k * short)
+        }
+        return layer
     }
 }

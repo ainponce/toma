@@ -231,7 +231,9 @@ public struct ShadowLayer: Equatable, Sendable {
 }
 
 /// The camera: the frame of track `trackID` shown at host time `sourceTime`, filling `rect` (cropped to its shape,
-/// centred) with corners of `cornerRadius`.
+/// centred) with corners of `cornerRadius`, and its look (1c design §14.3): its `shadow` under it, its picture flipped
+/// with `mirror`, its `border` inside its edge, all at `opacity`. The fields after `cornerRadius` draw what 1b drew at
+/// their defaults: not one drawing nor one value more.
 public struct CameraLayer: Equatable, Sendable {
     public var trackID: String
     public var sourceTime: HostTime
@@ -239,12 +241,44 @@ public struct CameraLayer: Equatable, Sendable {
     public var rect: Rect
     /// In output pixels: half the side for a circle.
     public var cornerRadius: Double
+    /// Whether the picture is flipped horizontally inside `rect`: its `u` becomes `1 − u` after the centred crop. The rect
+    /// stays where it is.
+    public var mirror: Bool
+    /// 1 opaque, as in 1b; below it, the camera, its border and its shadow are blended over what is under them; 0 (or
+    /// less, or not a number) nothing is drawn of it.
+    public var opacity: Double
+    /// `nil` without one.
+    public var border: CameraBorderLayer?
+    /// Under the camera, drawn before it, at its opacity times `opacity`; `nil` without one.
+    public var shadow: ShadowLayer?
 
-    public init(trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double) {
+    public init(
+        trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double, mirror: Bool = false, opacity: Double = 1,
+        border: CameraBorderLayer? = nil, shadow: ShadowLayer? = nil
+    ) {
         self.trackID = trackID
         self.sourceTime = sourceTime
         self.rect = rect
         self.cornerRadius = cornerRadius
+        self.mirror = mirror
+        self.opacity = opacity
+        self.border = border
+        self.shadow = shadow
+    }
+}
+
+/// The camera's border (1c design §14.3): a stroke `width` wide inside the camera's rounded rect, along its edge, with the
+/// same antialiasing as its corners. It neither grows the camera nor moves it: the picture fills the rect under it.
+/// Nothing is drawn of one that is not above 0 wide.
+public struct CameraBorderLayer: Equatable, Sendable {
+    /// In output pixels.
+    public var width: Double
+    /// sRGB from 0 to 1, not premultiplied, written to the output as it is (like the background's colours).
+    public var color: SIMD4<Float>
+
+    public init(width: Double, color: SIMD4<Float>) {
+        self.width = width
+        self.color = color
     }
 }
 

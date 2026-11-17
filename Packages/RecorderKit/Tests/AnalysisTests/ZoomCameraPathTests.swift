@@ -223,6 +223,34 @@ extension ZoomFixtures {
             }
         }
 
+        @Test func theBubbleIsMeasuredAsTheRenderMeasuresIt() {
+            // 9:16 of the 1440×900 display, without padding: the screen is 0.5625 × 0.3516 from y 0.3242. A circle of 0.40 at
+            // the bottom centre is, against the output's height (1b), 0.40 tall from y 0.568, from 0.552 grown; against its
+            // short side (0.5625), 0.225 tall from y 0.757, from 0.748 grown (1c design §5.2). At depth 2 with the stage's
+            // centre as the target the central box spans output y 0.2…0.8: a cursor at stage y 0.6 (output 0.7) is under the
+            // bubble measured against the height only, one at 0.635 (output 0.77) under both.
+            let bubble = CameraStyle(shape: .circle, size: 0.40, anchor: .bottom)
+            let middle = SIMD2(0.28125, 0.5)
+            func global(_ p: SIMD2<Double>) -> SIMD2<Double> {
+                (p - SIMD2(0, 0.32421875)) / SIMD2(0.5625, 0.3515625) * SIMD2(1440, 900)
+            }
+            func target(cursorAt y: Double, _ reference: SizeReference?) -> SIMD2<Double> {
+                var document = zoomDocument(aspect: .portrait, regions: [block(1, from: 1, to: 12)], bubble: reference.map { _ in bubble })
+                if let reference { document.camera.sizeReference = reference }
+                let events = [pointer(0, global(middle)), pointer(4, global(SIMD2(middle.x, y)))]
+                return paths(document, events: events, take: zoomTake(camera: true)).zoom.camera(atStep: step(4)).target
+            }
+            for y in [0.6, 0.635] {
+                // Without the camera the cursor is inside the box and the target stays; under the bubble of the height, it
+                // moves.
+                #expect(near(target(cursorAt: y, nil), middle), "\(y)")
+                #expect(!near(target(cursorAt: y, .height), middle), "\(y)")
+            }
+            // Against the short side, only the cursor under that smaller bubble moves it.
+            #expect(near(target(cursorAt: 0.6, .shortSide), middle))
+            #expect(!near(target(cursorAt: 0.635, .shortSide), middle))
+        }
+
         @Test func aCornerBubbleIsClearedTheShortestWay() {
             // A circle of 0.45 at the bottom right of a 16:9 output, grown by 8 %: x from 1.2778, y from 0.5. The cursor at output
             // (1.35, 0.75), inside the central box, is 0.072 from clearing it to the left and 0.25 upward: the crop moves right.
