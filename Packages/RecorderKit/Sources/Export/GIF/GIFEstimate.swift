@@ -35,8 +35,9 @@ public struct GIFEstimateResult: Equatable, Sendable {
 ///
 /// A stretch is a GIF of its own, so its first image is a whole frame, with nothing transparent, and the export of the range
 /// pays one of those only once: the estimate is one first image (the mean of the stretches') and the bytes the
-/// stretches spend after theirs, per frame, times the range's frames but the first. Per second of every stretch, as
-/// design §7.3 has it, the still takes of the GIF corpus came out up to twice their size (`GIFCorpusTests`, Task 25).
+/// stretches spend after theirs, per frame, times the range's frames but the first (design §7.3 as amended by the
+/// controller's ruling of Task 25). Per second of every stretch, as §7.3 had it, the still takes of the GIF corpus came out
+/// up to twice their size (`GIFCorpusTests`).
 public enum GIFEstimate {
     /// Stretches encoded for the estimate.
     public static let sampleCount = 8
@@ -166,32 +167,44 @@ public enum GIFEstimate {
     }
 
     /// A stretch encoded for the estimate: its bytes, those up to the end of its first image (the header and the loop
-    /// extension with it; 0 if it does not read as one of our GIFs) and its frames.
+    /// extension with it; `nil` if it does not read as one of our GIFs) and its frames.
     struct Stretch: Equatable {
         var bytes: Int
-        var firstImage: Int
+        var firstImage: Int?
         var frames: Int
 
-        init(bytes: Int, firstImage: Int, frames: Int) {
+        init(bytes: Int, firstImage: Int?, frames: Int) {
             self.bytes = bytes
             self.firstImage = firstImage
             self.frames = frames
         }
 
         init(_ gif: Data, frames: Int) {
-            self.init(bytes: gif.count, firstImage: GIFEstimate.firstImageEnd(of: gif) ?? 0, frames: frames)
+            self.init(bytes: gif.count, firstImage: GIFEstimate.firstImageEnd(of: gif), frames: frames)
         }
     }
 
-    /// The bytes of a GIF of `frames` frames, at two digits, from `stretches`: the mean of their first images, and the
-    /// bytes after them over the frames after them, times `frames − 1`.
+    /// `estimatedSize(_:frames:)` at two digits.
     static func estimatedBytes(_ stretches: [Stretch], frames: Int) -> Int64 {
-        guard !stretches.isEmpty else { return 0 }
-        let firstImage = Double(stretches.reduce(0) { $0 + $1.firstImage }) / Double(stretches.count)
-        let rest = Double(stretches.reduce(0) { $0 + $1.bytes - $1.firstImage })
-        let restFrames = stretches.reduce(0) { $0 + max(0, $1.frames - 1) }
-        let bytes = firstImage + (restFrames > 0 ? rest / Double(restFrames) * Double(max(0, frames - 1)) : 0)
-        return roundedToTwoDigits(Int64(bytes.rounded()))
+        roundedToTwoDigits(Int64(estimatedSize(stretches, frames: frames).rounded()))
+    }
+
+    /// The bytes of a GIF of `frames` frames from `stretches`: the mean of the first images that were read, and the bytes
+    /// after them over the frames after them, of the stretches that have some, times `frames − 1`. When no stretch read
+    /// has frames after its first (a range of one frame) or none was read, each stretch's total bytes per frame, times
+    /// `frames`: never 0 when something was encoded, and a stretch not read never counts as a first image of 0 bytes.
+    static func estimatedSize(_ stretches: [Stretch], frames: Int) -> Double {
+        let read = stretches.compactMap { stretch in stretch.firstImage.map { (stretch, $0) } }
+        let split = read.filter { $0.0.frames > 1 }
+        guard !split.isEmpty else {
+            let bytes = stretches.reduce(0) { $0 + $1.bytes }
+            let stretchFrames = stretches.reduce(0) { $0 + max(1, $1.frames) }
+            return stretchFrames > 0 ? Double(bytes) * Double(max(1, frames)) / Double(stretchFrames) : 0
+        }
+        let firstImage = Double(read.reduce(0) { $0 + $1.1 }) / Double(read.count)
+        let rest = split.reduce(0) { $0 + $1.0.bytes - $1.1 }
+        let restFrames = split.reduce(0) { $0 + $1.0.frames - 1 }
+        return firstImage + Double(rest) * Double(max(0, frames - 1)) / Double(restFrames)
     }
 
     /// Where the first image of a GIF ends: past the header, the logical screen and its colour table, the extensions

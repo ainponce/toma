@@ -104,9 +104,9 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             return Data(count: 1000)
         }
         #expect(calls.withLock { $0 } == 8)
-        // 1000 bytes a stretch of 15 frames, none a GIF whose first image this reads: 8 000 bytes over 8 × 14 frames, times
-        // the 899 after the first: 64 214, at two digits.
-        #expect(without.bytes == 64_000 && without.seconds == 60 && without.frames == 900 && without.warnings.isEmpty)
+        // 1000 bytes a stretch of 15 frames, none a GIF whose first image this reads: each stretch whole, 8 000 bytes over
+        // 120 frames, times 900.
+        #expect(without.bytes == 60_000 && without.seconds == 60 && without.frames == 900 && without.warnings.isEmpty)
         calls.withLock { $0 = 0 }
         // A real 1 s GIF (not 3 s), so its length is read from the file itself.
         let with = try await GIFEstimate.estimate(settings: settings, preview: gif, first: nil) { _ in
@@ -143,7 +143,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         let firstImage = try #require(GIFEstimate.firstImageEnd(of: gif))
         let previewFrames = Int((length * 15).rounded())
         let expected = GIFEstimate.roundedToTwoDigits(
-            Int64((Double(firstImage) + Double(gif.count - firstImage) / Double(previewFrames - 1) * 899).rounded()))
+            Int64((Double(firstImage) + Double(gif.count - firstImage) * 899 / Double(previewFrames - 1)).rounded()))
         #expect(first.result.bytes == expected && first.result.seconds == 60 && first.result.frames == 900)
         #expect(first.result.warnings == GIFEstimate.warnings(bytes: expected, seconds: 60))
         // Without a preview, or on a short range, there is no first estimate.
@@ -210,19 +210,35 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
     }
 
     /// A still GIF is a whole first image and next to nothing after: each 1 s stretch has one first image of its own, and
-    /// the estimate pays it once, not once a second. A range encoded whole is its own size.
+    /// the estimate pays it once, not once a second. A range encoded whole is its own size, to the byte.
     @Test func theFirstImageIsPaidOnce() {
-        let still = [GIFEstimate.Stretch](repeating: GIFEstimate.Stretch(bytes: 1_100, firstImage: 1_000, frames: 15), count: 8)
-        // 1 000 + 800 / (8 × 14) × 899 = 7 421; per second of every stretch it would be 8 800 / 8 × 60 = 66 000.
-        #expect(GIFEstimate.estimatedBytes(still, frames: 900) == 7_400)
+        let still = [GIFEstimate.Stretch](repeating: GIFEstimate.Stretch(bytes: 1_112, firstImage: 1_000, frames: 15), count: 8)
+        // 1 000 + 896 × 899 / (8 × 14) = 8 192; per second of every stretch it would be 8 896 / 8 × 60 = 66 720.
+        #expect(GIFEstimate.estimatedSize(still, frames: 900) == 8_192)
+        #expect(GIFEstimate.estimatedBytes(still, frames: 900) == 8_200)
         let mixed = [
-            GIFEstimate.Stretch(bytes: 4_000, firstImage: 1_200, frames: 45),
-            GIFEstimate.Stretch(bytes: 2_000, firstImage: 800, frames: 15),
+            GIFEstimate.Stretch(bytes: 3_840, firstImage: 1_200, frames: 45),
+            GIFEstimate.Stretch(bytes: 1_640, firstImage: 800, frames: 15),
         ]
-        // (1 200 + 800) / 2 + (2 800 + 1 200) / (44 + 14) × 299 = 21 621.
-        #expect(GIFEstimate.estimatedBytes(mixed, frames: 300) == 22_000)
-        #expect(GIFEstimate.estimatedBytes([GIFEstimate.Stretch(bytes: 2_345, firstImage: 1_000, frames: 90)], frames: 90) == 2_300)
-        #expect(GIFEstimate.estimatedBytes([GIFEstimate.Stretch(bytes: 1_234, firstImage: 1_234, frames: 1)], frames: 1) == 1_200)
+        // (1 200 + 800) / 2 + (2 640 + 840) × 299 / (44 + 14) = 18 940.
+        #expect(GIFEstimate.estimatedSize(mixed, frames: 300) == 18_940)
+        #expect(GIFEstimate.estimatedSize([GIFEstimate.Stretch(bytes: 2_345, firstImage: 1_000, frames: 90)], frames: 90) == 2_345)
+    }
+
+    /// A stretch whose first image cannot be split from the rest counts whole, its bytes per frame: a range of one frame
+    /// is the bytes of its GIF (the trailer too), stretches not read as GIFs are their total bytes, and one not read
+    /// among others read does not count as a first image of 0 bytes. Never 0 when something was encoded.
+    @Test func aStretchThatCannotBeSplitCountsWhole() {
+        #expect(GIFEstimate.estimatedSize([GIFEstimate.Stretch(bytes: 1_234, firstImage: 1_233, frames: 1)], frames: 1) == 1_234)
+        let unread = [GIFEstimate.Stretch](repeating: GIFEstimate.Stretch(bytes: 1_000, firstImage: nil, frames: 15), count: 8)
+        #expect(GIFEstimate.estimatedSize(unread, frames: 900) == 60_000)
+        let some = [
+            GIFEstimate.Stretch(bytes: 1_640, firstImage: 800, frames: 15), GIFEstimate.Stretch(bytes: 500, firstImage: nil, frames: 15),
+        ]
+        // 800, the first image read (not their mean with 0), + 840 × 99 / 14.
+        #expect(GIFEstimate.estimatedSize(some, frames: 100) == 6_740)
+        #expect(GIFEstimate.estimatedSize([GIFEstimate.Stretch(bytes: 70, firstImage: nil, frames: 1)], frames: 1) == 70)
+        #expect(GIFEstimate.estimatedBytes([GIFEstimate.Stretch(bytes: 70, firstImage: nil, frames: 1)], frames: 1) == 70)
     }
 
     /// The first image ends where the second's graphic control begins, past the header, the loop extension and its own

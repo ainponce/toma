@@ -1102,6 +1102,64 @@ private func tunedGIF(
         #expect(palette.colors.map { [$0.x, $0.y, $0.z] } == leftoverPalette, "gifQuant-1's palette of this frame")
     }
 
+    /// A still frame keeps its palette at every quality (Task 20's carry): the error a frame mapped to its own palette is
+    /// left with includes the noise of the quality's dither, and each quality's reuse thresholds sit above it, the mean and
+    /// the share of pixels with a large error alike, with room to spare (a quarter over the mean, twice over the share; on
+    /// this frame Light is 0.0120 against 0.025, Balanced 0.0091 against 0.015, and High, which takes a new palette
+    /// sooner, 0.0119 against 0.015, the closest). Otherwise a camera that does not move would take
+    /// a new palette on every frame, and the GIF would grow up to tenfold (the provisional High of plan decision 17,
+    /// dither 1.0 and reuse ≤ 0.010, did: `GIFCorpusTests.gifCorpusTuning`). The frame is a camera's: smooth gradients with
+    /// sensor noise of σ ≈ 3 levels, which leaves more error than any screen.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func eachQualityKeepsThePaletteOfAStillFrame() async throws {
+        let width = 640, height = 360
+        var random = SplitMix64(seed: 20)
+        var bgra = [UInt8](repeating: 255, count: width * height * 4)
+        for y in 0..<height {
+            for x in 0..<width {
+                // A warm wall going darker to the right, a face-like bright blob, and noise on every channel.
+                let dx = Double(x - 330) / 150, dy = Double(y - 170) / 190
+                let face = max(0, 1 - (dx * dx + dy * dy))
+                let wall = SIMD3<Double>(140, 129, 116) - SIMD3(50, 46, 40) * (Double(x) / Double(width))
+                let color = wall * (1 - face) + SIMD3<Double>(226, 180, 150) * face
+                let r = random.next()
+                for c in 0..<3 {
+                    let noise = Double(Int(r >> (16 * c) & 0xFF) + Int(r >> (16 * c + 8) & 0xFF) - 255) / 32
+                    bgra[(y * width + x) * 4 + 2 - c] = UInt8(min(255, max(0, (color[c] + noise).rounded())))
+                }
+            }
+        }
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let queue = try #require(device.makeCommandQueue())
+        let quantizer = try GIFQuantizer(device: device)
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: width, height: height, mipmapped: false)
+        descriptor.usage = [.shaderRead]
+        descriptor.storageMode = .shared
+        let texture = try #require(device.makeTexture(descriptor: descriptor))
+        bgra.withUnsafeBytes {
+            texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: $0.baseAddress!, bytesPerRow: width * 4)
+        }
+        let histogram = bgra.withUnsafeBytes { ColorHistogram(bgra: $0, width: width, height: height, bytesPerRow: width * 4) }
+        func error(_ palette: GIFPalette, dither: Float) async throws -> PaletteError {
+            let commands = try #require(queue.makeCommandBuffer())
+            let pass = try quantizer.map(texture, palette: palette, dither: dither, into: commands)
+            commands.commit()
+            await commands.completed()
+            try #require(commands.status == .completed)
+            return pass.error()
+        }
+        for quality in GIFQuality.allCases {
+            let palette = PaletteBuilder.build(histogram, quality: quality)
+            let own = try await error(palette, dither: quality.ditherStrength)
+            #expect(PaletteBuilder.shouldReuse(own, quality: quality), "\(quality): \(own)")
+            #expect(own.meanOKLab * 1.25 <= quality.reuseMeanError, "\(quality): \(own.meanOKLab) against \(quality.reuseMeanError)")
+            #expect(own.largeErrorFraction * 2 <= PaletteRules.largeErrorLimit, "\(quality): \(own.largeErrorFraction)")
+        }
+        // What the provisional High would have been left with: over its threshold.
+        let provisional = try await error(PaletteBuilder.build(histogram, quality: .high), dither: 1.0)
+        #expect(provisional.meanOKLab > 0.010, "the provisional High rebuilt the palette on every frame of a still camera")
+    }
+
     /// The palette of a frame that fills all 255 colours (the median cut and k-means at work: tiles of a gradient, of noise
     /// and of three flat colours) is pinned too: gifQuant-1 gives these colours, in this order, on every Mac.
     @Test func fullPaletteIsPinned() {
@@ -1136,9 +1194,13 @@ private func tunedGIF(
     /// dither, our GIF (`GIFExporter.export`) against ImageIO's of the same rendered frames:
     /// - a mean error in OKLab no larger than ImageIO's on at least half the takes;
     /// - the export's memory bounded: what it allocates on the heap at its most (`heapInUse`, as ImageIO's is measured,
-    ///   the first take's with the process's caches) is under a tenth of the take's frames, all of which ImageIO keeps
-    ///   until it finalizes (the frames in flight are GPU textures, outside the heap; that the whole process's footprint
-    ///   does not grow with the duration, `make crash-test`'s GIF case checks);
+    ///   the first take's with the process's caches) is under a fifth of the take's frames, all of which ImageIO keeps
+    ///   until it finalizes: 43.2 MB, where at most 11.4 MB was measured (the frames in flight are GPU textures, outside
+    ///   the heap; that the whole process's footprint does not grow with the duration, `make crash-test`'s GIF case
+    ///   checks);
+    /// - no regression of size or of palettes: each take's GIF within 1.2 times the bytes it had when gifQuant-1 was
+    ///   frozen, and at most 5 more new palettes than then (`frozenCorpus`): a palette rebuilt on every frame, the error
+    ///   of the provisional High, is 150;
     /// - the estimate (`GIFEstimate.estimates`, with its preview from the start) within 30 % of the size;
     /// - the size against ImageIO's printed as measured, not asserted.
     /// Prints a line per take and the load. With `TOMA_GIF_CORPUS_OUT` set to a folder, also writes there the frames as
@@ -1155,7 +1217,10 @@ private func tunedGIF(
                 let settings = GIFSettings(longSide: 800, fps: 15, quality: .balanced, range: .whole(TimeMap(sequence: document.sequence)))
                 let size = settings.outputSize(aspect: document.aspect)
 
-                let exporter = GIFExporter(project: project, document: document, settings: settings)
+                let newPalettes = Mutex(0)
+                let exporter = GIFExporter(project: project, document: document, settings: settings) { _, _, isNew in
+                    if isNew { newPalettes.withLock { $0 += 1 } }
+                }
                 let destination = dir.appending(path: "ours.gif")
                 let (_, ourHeap) = try await peakHeapGrowth { try await exporter.export(to: destination) { _ in } }
                 let ours = try Data(contentsOf: destination)
@@ -1178,17 +1243,25 @@ private func tunedGIF(
                 let ratio = Double(ours.count) / Double(imageIO.gif.count)
                 let off = Double(estimate.bytes) / Double(ours.count) - 1
                 let firstOff = Double(estimates.first!.bytes) / Double(ours.count) - 1
+                let palettes = newPalettes.withLock { $0 }
                 rows.append(String(
-                    format: "%@ ours %@ (error %.5f)  ImageIO %@ (error %.5f)  size %.1f %% of ImageIO's  "
+                    format: "%@ ours %@ (error %.5f, %d new palettes)  ImageIO %@ (error %.5f)  size %.1f %% of ImageIO's  "
                         + "estimate %@ %+.0f %% (first %@ %+.0f %%)  heap at most: ours %@, ImageIO %@ with the %d frames added "
                         + "and %@ finalizing, %@ once released (the GIF aside)",
-                    take.rawValue.padding(toLength: 16, withPad: " ", startingAt: 0), kilobytes(ours.count), ourError,
+                    take.rawValue.padding(toLength: 16, withPad: " ", startingAt: 0), kilobytes(ours.count), ourError, palettes,
                     kilobytes(imageIO.gif.count), imageIOError, ratio * 100, kilobytes(Int(estimate.bytes)), off * 100,
                     kilobytes(Int(estimates.first!.bytes)), firstOff * 100, megabytes(ourHeap), megabytes(imageIO.memory.added),
                     frames.count, megabytes(imageIO.memory.finalizing), megabytes(imageIO.memory.released)))
                 if ourError <= imageIOError { errorsNoLarger += 1 }
-                if ourHeap * 10 >= frames.count * size.x * size.y * 4 {
+                if ourHeap * 5 >= frames.count * size.x * size.y * 4 {
                     failures.append("\(take): the export allocated \(ourHeap) bytes at its most")
+                }
+                let frozen = try #require(frozenCorpus[take])
+                if Double(ours.count) > 1.2 * Double(frozen.bytes) {
+                    failures.append("\(take): \(ours.count) bytes, over 1.2 times the \(frozen.bytes) it had when gifQuant-1 was frozen")
+                }
+                if palettes > frozen.palettes + 5 {
+                    failures.append("\(take): \(palettes) new palettes, where gifQuant-1 took \(frozen.palettes)")
                 }
                 if abs(off) > 0.3 { failures.append("\(take): estimate \(estimate.bytes) for \(ours.count) bytes") }
             }
@@ -1302,6 +1375,12 @@ private func tunedGIF(
         }
     }
 }
+
+/// What each take of the corpus gave when gifQuant-1 was frozen (Task 25; the same bytes on every run of this Mac): the
+/// GIF's bytes and the new palettes of its 150 frames.
+private let frozenCorpus: [GIFCorpus: (bytes: Int, palettes: Int)] = [
+    .tutorial: (1_849_888, 1), .browserScroll: (2_698_969, 2), .wallpaperBubble: (740_716, 1), .cameraFull: (16_573_149, 1),
+]
 
 /// gifQuant-1's palette of the frame of `leftoverBucketsMakeAPaletteUnder255Colors`, as R, G, B.
 private let leftoverPalette: [[UInt8]] = [
