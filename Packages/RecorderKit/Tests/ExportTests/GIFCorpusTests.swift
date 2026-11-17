@@ -749,6 +749,25 @@ private func heapInUse() -> Int {
     return Int(statistics.size_in_use)
 }
 
+/// What `body` returns, and the most `heapInUse()` grew over its value before while it ran, sampled every millisecond.
+private func peakHeapGrowth<T>(during body: () async throws -> T) async throws -> (T, Int) {
+    let before = heapInUse()
+    let largest = Mutex(before)
+    let running = Atomic(true)
+    let sampler = Thread {
+        while running.load(ordering: .relaxed) {
+            let now = heapInUse()
+            largest.withLock { $0 = max($0, now) }
+            usleep(1000)
+        }
+    }
+    sampler.start()
+    defer { running.store(false, ordering: .relaxed) }
+    let value = try await body()
+    let now = heapInUse()
+    return (value, largest.withLock { max($0, now) } - before)
+}
+
 /// A rendered frame as a `CGImage` of its own copy of the bytes (sRGB, BGRA).
 private func image(of frame: [UInt8], size: SIMD2<Int>) -> CGImage {
     let provider = CGDataProvider(data: Data(frame) as CFData)!
@@ -1111,28 +1130,39 @@ private func tunedGIF(
         #expect(hash == fullPaletteHash, "gifQuant-1's palette of this frame: 0x\(String(hash, radix: 16))")
     }
 
-    /// The bench of 1c design §15 and §16.1 (Task 25): for each take of the corpus, at 800 px, 15 fps, Balanced, with the
-    /// dither, our GIF (`GIFExporter.encodeInMemory`) against ImageIO's of the same rendered frames: at most half its size
-    /// and a mean error in OKLab no larger; the estimate (`GIFEstimate`, with its preview from the start) within 30 % of
-    /// the size. Prints the pairs, the estimates and ImageIO's memory while it encodes. With `TOMA_GIF_CORPUS_OUT` set to
-    /// a folder, also writes there the frames as PNGs and both GIFs, for the owner's look against gifski.
+    /// The bench of 1c design §15 and §16.1 (Task 25), with the criterion the coordinator put in place of "≤ 50 % of
+    /// ImageIO's size" (design §4.3 assumed an ImageIO that neither crops nor leaves unchanged pixels transparent; on
+    /// macOS 26.6 it does both, with one palette). For each take of the corpus, at 800 px, 15 fps, Balanced, with the
+    /// dither, our GIF (`GIFExporter.export`) against ImageIO's of the same rendered frames:
+    /// - a mean error in OKLab no larger than ImageIO's on at least half the takes;
+    /// - the export's memory bounded: what it allocates on the heap at its most (`heapInUse`, as ImageIO's is measured,
+    ///   the first take's with the process's caches) is under a tenth of the take's frames, all of which ImageIO keeps
+    ///   until it finalizes (the frames in flight are GPU textures, outside the heap; that the whole process's footprint
+    ///   does not grow with the duration, `make crash-test`'s GIF case checks);
+    /// - the estimate (`GIFEstimate.estimates`, with its preview from the start) within 30 % of the size;
+    /// - the size against ImageIO's printed as measured, not asserted.
+    /// Prints a line per take and the load. With `TOMA_GIF_CORPUS_OUT` set to a folder, also writes there the frames as
+    /// PNGs and both GIFs, for the owner's look against gifski.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"), .timeLimit(.minutes(60)))
     func gifCorpusBeatsImageIO() async throws {
         let output = ProcessInfo.processInfo.environment["TOMA_GIF_CORPUS_OUT"].map { URL(fileURLWithPath: $0) }
         var rows: [String] = []
         var failures: [String] = []
+        var errorsNoLarger = 0
         for take in GIFCorpus.allCases {
             try await withTemporaryDirectory { dir in
                 let (project, document) = try await take.make(in: dir)
                 let settings = GIFSettings(longSide: 800, fps: 15, quality: .balanced, range: .whole(TimeMap(sequence: document.sequence)))
                 let size = settings.outputSize(aspect: document.aspect)
-                let frames = try await renderedFrames(project, document, settings: settings)
-                let imageIO = try imageIOGIF(frames, size: size, fps: settings.fps)
-                let imageIOError = try meanError(of: imageIO.gif, frames: frames, fps: settings.fps)
 
                 let exporter = GIFExporter(project: project, document: document, settings: settings)
-                let ours = try await exporter.encodeInMemory(range: settings.range)
+                let destination = dir.appending(path: "ours.gif")
+                let (_, ourHeap) = try await peakHeapGrowth { try await exporter.export(to: destination) { _ in } }
+                let ours = try Data(contentsOf: destination)
+                let frames = try await renderedFrames(project, document, settings: settings)
                 let ourError = try meanError(of: ours, frames: frames, fps: settings.fps)
+                let imageIO = try imageIOGIF(frames, size: size, fps: settings.fps)
+                let imageIOError = try meanError(of: imageIO.gif, frames: frames, fps: settings.fps)
                 let preview = try await GIFEstimate.preview(
                     project: project, document: document, settings: settings, playhead: settings.range.start)
                 var estimates: [GIFEstimateResult] = []
@@ -1147,20 +1177,28 @@ private func tunedGIF(
 
                 let ratio = Double(ours.count) / Double(imageIO.gif.count)
                 let off = Double(estimate.bytes) / Double(ours.count) - 1
+                let firstOff = Double(estimates.first!.bytes) / Double(ours.count) - 1
                 rows.append(String(
-                    format: "%@ ours %@ (error %.5f)  ImageIO %@ (error %.5f)  size %.1f %%  estimate %@ (first %@) %+.0f %%  "
-                        + "ImageIO holds %@ with the %d frames added, up to %@ finalizing, %@ once released (the GIF aside)",
+                    format: "%@ ours %@ (error %.5f)  ImageIO %@ (error %.5f)  size %.1f %% of ImageIO's  "
+                        + "estimate %@ %+.0f %% (first %@ %+.0f %%)  heap at most: ours %@, ImageIO %@ with the %d frames added "
+                        + "and %@ finalizing, %@ once released (the GIF aside)",
                     take.rawValue.padding(toLength: 16, withPad: " ", startingAt: 0), kilobytes(ours.count), ourError,
-                    kilobytes(imageIO.gif.count), imageIOError, ratio * 100,
-                    kilobytes(Int(estimate.bytes)), kilobytes(Int(estimates.first!.bytes)), off * 100, megabytes(imageIO.memory.added),
+                    kilobytes(imageIO.gif.count), imageIOError, ratio * 100, kilobytes(Int(estimate.bytes)), off * 100,
+                    kilobytes(Int(estimates.first!.bytes)), firstOff * 100, megabytes(ourHeap), megabytes(imageIO.memory.added),
                     frames.count, megabytes(imageIO.memory.finalizing), megabytes(imageIO.memory.released)))
-                if ratio > 0.5 { failures.append("\(take): \(String(format: "%.1f", ratio * 100)) % of ImageIO's size") }
-                if ourError > imageIOError { failures.append("\(take): error \(ourError) over ImageIO's \(imageIOError)") }
+                if ourError <= imageIOError { errorsNoLarger += 1 }
+                if ourHeap * 10 >= frames.count * size.x * size.y * 4 {
+                    failures.append("\(take): the export allocated \(ourHeap) bytes at its most")
+                }
                 if abs(off) > 0.3 { failures.append("\(take): estimate \(estimate.bytes) for \(ours.count) bytes") }
             }
         }
+        if errorsNoLarger * 2 < GIFCorpus.allCases.count {
+            failures.append("the error is no larger than ImageIO's on \(errorsNoLarger) of \(GIFCorpus.allCases.count) takes")
+        }
         print("gifQuant-1 on the corpus, 800 px, 15 fps, Balanced, load \(String(format: "%.1f", loadAverage())):")
         for row in rows { print("  " + row) }
+        print("  error no larger than ImageIO's on \(errorsNoLarger) of \(GIFCorpus.allCases.count) takes")
         #expect(failures.isEmpty, "\(failures)")
     }
 
@@ -1168,9 +1206,10 @@ private func tunedGIF(
     /// at 800 px and 15 fps, rendered once per take, through the pipeline with each combination of the threshold map
     /// (plan decision 18) and three values around each constant of decision 17 (the dither and the reuse threshold
     /// crossed; the large-error rule on its own, around the provisional values and around the code's), each against
-    /// ImageIO; for Balanced, also less dither and none, past the grid. Prints a line per combination
-    /// and take, then per combination whether it passes on all four (≤ 50 % of the size, an error no larger) and the
-    /// corpus's total size. It first checks that the pipeline here, with the code's constants, gives the exporter's bytes.
+    /// ImageIO; for Balanced, also less dither and none, past the grid. Prints a line per combination and take, then per
+    /// combination whether it passes `gifCorpusBeatsImageIO`'s error criterion, its worst size and error against
+    /// ImageIO's and the corpus's total size. It first checks that the pipeline here, with the code's constants, gives the
+    /// exporter's bytes.
     @Test(
         .enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1" && ProcessInfo.processInfo.environment["TOMA_GIF_TUNING"] == "1"),
         .timeLimit(.minutes(120)))
@@ -1250,7 +1289,9 @@ private func tunedGIF(
             let takes = results[tuning]!
             let sizes = takes.map { Double($0.gif.bytes) / Double($0.imageIO) }
             let errors = takes.map { $0.gif.meanError / $0.imageIOError }
-            let passes = sizes.allSatisfy { $0 <= 0.5 } && errors.allSatisfy { $0 <= 1 }
+            // `gifCorpusBeatsImageIO`'s criterion for the error: no larger than ImageIO's on at least half the takes. (It
+            // chose gifQuant-1 against "≤ 50 % of ImageIO's size" too, which nothing reached: see the size columns.)
+            let passes = errors.filter { $0 <= 1 }.count * 2 >= errors.count
             return (tuning, passes, takes.reduce(0) { $0 + $1.gif.bytes }, sizes.max()!, errors.max()!)
         }
         for row in ranked.sorted(by: { ($0.passes ? 0 : 1, $0.total) < ($1.passes ? 0 : 1, $1.total) }) {

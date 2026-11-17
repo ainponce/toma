@@ -32,6 +32,11 @@ public struct GIFEstimateResult: Equatable, Sendable {
 
 /// The export sheet's size estimate and short preview (1c design §7.3): short stretches of the range really encoded with
 /// the settings, never a formula. Cancel the task running either to stop.
+///
+/// A stretch is a GIF of its own, so its first image is a whole frame, with nothing transparent, and the export of the range
+/// pays one of those only once: the estimate is one first image (the mean of the stretches') and the bytes the
+/// stretches spend after theirs, per frame, times the range's frames but the first. Per second of every stretch, as
+/// design §7.3 has it, the still takes of the GIF corpus came out up to twice their size (`GIFCorpusTests`, Task 25).
 public enum GIFEstimate {
     /// Stretches encoded for the estimate.
     public static let sampleCount = 8
@@ -90,10 +95,10 @@ public enum GIFEstimate {
         return try await exporter.encodeInMemory(range: range)
     }
 
-    /// The GIF's size: the bytes a second of `sampleRanges` encoded for real, times the range's length, at two digits. A
-    /// `preview` already made (by `preview(...)`) counts as one of the stretches, in place of the first (the estimate does not
-    /// know where the playhead was; the preview is 3 s of real content either way). All the stretches are drawn by one
-    /// renderer.
+    /// The GIF's size, at two digits, from `sampleRanges` encoded for real: one first image and the bytes per frame after
+    /// it (see `GIFEstimate`). A `preview` already made (by `preview(...)`) counts as one of the stretches, in place of the
+    /// first (the estimate does not know where the playhead was; the preview is 3 s of real content either way). All the
+    /// stretches are drawn by one renderer.
     public static func estimate(
         project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?
     ) async throws -> GIFEstimateResult {
@@ -139,28 +144,92 @@ public enum GIFEstimate {
         let range = settings.range
         let samples = sampleRanges(range)
         let length = Double(range.end - range.start) / 1e9
-        func result(bytes: Int64, seconds: Double) -> GIFEstimateResult {
-            let estimated = roundedToTwoDigits(Int64((Double(bytes) / seconds * length).rounded()))
+        let frames = range.frameCount(fps: settings.fps)
+        func result(_ stretches: [Stretch]) -> GIFEstimateResult {
+            let estimated = estimatedBytes(stretches, frames: frames)
             return GIFEstimateResult(
-                bytes: estimated, seconds: length, frames: range.frameCount(fps: settings.fps),
-                warnings: warnings(bytes: estimated, seconds: length))
+                bytes: estimated, seconds: length, frames: frames, warnings: warnings(bytes: estimated, seconds: length))
         }
-        var bytes: Int64 = 0
-        var seconds = 0.0
+        var stretches: [Stretch] = []
         var skipped: Int?
         if samples.count > 1, let preview, let previewLength = duration(of: preview), previewLength > 0 {
             skipped = 0
-            bytes += Int64(preview.count)
-            seconds += previewLength
-            first?(result(bytes: bytes, seconds: seconds))
+            stretches.append(Stretch(preview, frames: Int((previewLength * Double(settings.fps)).rounded())))
+            first?(result(stretches))
         }
         for (i, sample) in samples.enumerated() where i != skipped {
             try Task.checkCancellation()
-            bytes += Int64(try await encode(sample).count)
-            seconds += Double(sample.end - sample.start) / 1e9
+            stretches.append(Stretch(try await encode(sample), frames: sample.frameCount(fps: settings.fps)))
         }
-        guard seconds > 0 else { throw GIFExportError.rangeShorterThanAFrame }
-        return result(bytes: bytes, seconds: seconds)
+        guard stretches.contains(where: { $0.frames > 0 }) else { throw GIFExportError.rangeShorterThanAFrame }
+        return result(stretches)
+    }
+
+    /// A stretch encoded for the estimate: its bytes, those up to the end of its first image (the header and the loop
+    /// extension with it; 0 if it does not read as one of our GIFs) and its frames.
+    struct Stretch: Equatable {
+        var bytes: Int
+        var firstImage: Int
+        var frames: Int
+
+        init(bytes: Int, firstImage: Int, frames: Int) {
+            self.bytes = bytes
+            self.firstImage = firstImage
+            self.frames = frames
+        }
+
+        init(_ gif: Data, frames: Int) {
+            self.init(bytes: gif.count, firstImage: GIFEstimate.firstImageEnd(of: gif) ?? 0, frames: frames)
+        }
+    }
+
+    /// The bytes of a GIF of `frames` frames, at two digits, from `stretches`: the mean of their first images, and the
+    /// bytes after them over the frames after them, times `frames − 1`.
+    static func estimatedBytes(_ stretches: [Stretch], frames: Int) -> Int64 {
+        guard !stretches.isEmpty else { return 0 }
+        let firstImage = Double(stretches.reduce(0) { $0 + $1.firstImage }) / Double(stretches.count)
+        let rest = Double(stretches.reduce(0) { $0 + $1.bytes - $1.firstImage })
+        let restFrames = stretches.reduce(0) { $0 + max(0, $1.frames - 1) }
+        let bytes = firstImage + (restFrames > 0 ? rest / Double(restFrames) * Double(max(0, frames - 1)) : 0)
+        return roundedToTwoDigits(Int64(bytes.rounded()))
+    }
+
+    /// Where the first image of a GIF ends: past the header, the logical screen and its colour table, the extensions
+    /// before the image (the loop, its graphic control), its descriptor, its colour table and its data's sub-blocks. `nil`
+    /// if `gif` ends before or has another block there.
+    static func firstImageEnd(of gif: Data) -> Int? {
+        gif.withUnsafeBytes { (bytes: UnsafeRawBufferPointer) -> Int? in
+            guard bytes.count >= 13, bytes.prefix(3).elementsEqual("GIF".utf8) else { return nil }
+            var position = 13
+            if bytes[10] & 0x80 != 0 { position += 3 << (Int(bytes[10] & 7) + 1) }
+            // Past the sub-blocks at `position`; false if the data ends first.
+            func skipSubBlocks() -> Bool {
+                while position < bytes.count {
+                    let size = Int(bytes[position])
+                    position += 1 + size
+                    if size == 0 { return true }
+                }
+                return false
+            }
+            while position < bytes.count {
+                switch bytes[position] {
+                case 0x21:
+                    position += 2
+                    guard skipSubBlocks() else { return nil }
+                case 0x2C:
+                    guard position + 10 <= bytes.count else { return nil }
+                    let packed = bytes[position + 9]
+                    position += 10
+                    if packed & 0x80 != 0 { position += 3 << (Int(packed & 7) + 1) }
+                    position += 1  // the minimum code size
+                    guard skipSubBlocks(), position <= bytes.count else { return nil }
+                    return position
+                default:
+                    return nil
+                }
+            }
+            return nil
+        }
     }
 
     /// The seconds a GIF plays once (the sum of its images' delays), or `nil` if it is not one.

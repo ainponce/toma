@@ -621,7 +621,7 @@ Hace falta un proyecto con cámara. La pestaña tiene la tarjeta "Bloque selecci
 
 **El GIF: el corpus** (25)
 
-- *Opcional:* si tiene gifski instalado, comparar a ojo un GIF del corpus. `TOMA_BENCH=1 TOMA_GIF_CORPUS_OUT=~/Desktop/corpus-gif swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter gifCorpusBeatsImageIO` deja en `~/Desktop/corpus-gif/<toma>/` los cuadros (`frames/*.png`), el GIF de Toma (`toma.gif`) y el de ImageIO (`imageio.gif`) de cada toma del corpus (los escribe aunque la prueba falle por sus metas, ver `docs/performance.md`, fila 25). Con `gifski --fps 15 -o gifski.gif frames/*.png`, abrir los tres en Safari a tamaño real: el de Toma no tiene bandas que molesten en el fondo `aurora-1` ni en la cámara, el tramado no titila en lo quieto, y el texto se lee como en los otros. Anotar el tamaño de los tres.
+- *Opcional:* si tiene gifski instalado, comparar a ojo un GIF del corpus. `TOMA_BENCH=1 TOMA_GIF_CORPUS_OUT=~/Desktop/corpus-gif swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter gifCorpusBeatsImageIO` deja en `~/Desktop/corpus-gif/<toma>/` los cuadros (`frames/*.png`), el GIF de Toma (`toma.gif`) y el de ImageIO (`imageio.gif`) de cada toma del corpus (ver `docs/performance.md`, fila 25). Con `gifski --fps 15 -o gifski.gif frames/*.png`, abrir los tres en Safari a tamaño real: el de Toma no tiene bandas que molesten en el fondo `aurora-1` ni en la cámara, el tramado no titila en lo quieto, y el texto se lee como en los otros. Anotar el tamaño de los tres.
 
 ## Prueba en seco (ad hoc)
 
