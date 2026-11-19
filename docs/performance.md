@@ -385,3 +385,5 @@ El corpus, hecho en código (`GIFCorpusTests`): cuatro tomas de 10 s, la pantall
 ## Medidas del agente, fase 2
 
 Las medidas del agente para las metas de la fase 2 (diseño de la fase 2, §13). Cada tarea suma sus filas al final, con cómo se midió.
+
+- **Limpieza (`soundIsolation-1`) de 60 s de micrófono** (Task A5; meta ≤ 12 s, 5 × tiempo real): **2,20 s (27 × tiempo real)** en Release y 8,77 s (6,8 ×) en Debug, el comando del plan. `TOMA_BENCH=1 swift test --package-path Packages/RecorderKit --filter cleanupIsFiveTimesRealTime` (Release: con `-c release -Xswiftc -enable-testing`): un micrófono de ruido sintético de 60 s, leído como lo ubica la mezcla (`TrackAudio`) y pasado por `AUSoundIsolation` (voz de alta calidad, 100 % húmedo) en render manual fuera de tiempo real, de a 4 096 cuadros, hasta el `.caf` escrito. La latencia que informa el AU, 92,5 ms (4 440 cuadros), se descarta al principio. Apple M5 Pro, macOS 26.6.2, carga 33 a 52 (otros agentes en la Mac).
