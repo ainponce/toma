@@ -930,6 +930,10 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 - Con el permiso: escribir en Notas y en el campo de contraseña de Safari (y en el de una contraseña de Ajustes del Sistema): solo lo de Notas queda en la toma (Cursor ▸ Teclas en pantalla ▸ Todas), ni la contraseña ni la ↩ que cierra su campo. Pausar y reanudar escribiendo: las teclas de justo después de reanudar se ven como las de antes.
 - Con la distribución Español (Latinoamérica) o Español: ⌘⇧4 y ⌘⇧7 en una toma se ven «⌘ ⇧ 4» y «⌘ ⇧ 7» en Teclas en pantalla (no «$» ni «/»), y lo escrito con ⇧ en la píldora de Todas se ve como se escribió («$», «/»).
 
+**Máscaras y caras con Vision** (I8; se recorre con la pestaña Cámara de I13)
+
+- Con una toma real con cámara (una persona que se mueve, gira la cara y sale del cuadro unos segundos): con Fondo Desenfocado, en `~/Library/Caches/dev.toma.Toma/Projects/<id>/masks/<toma>/<pista>/` aparece un `…-personMask-1.mov` por segmento de la cámara. Abierto en QuickTime, dura lo mismo que el segmento, la silueta blanca sigue a la persona sin parpadear y queda negro mientras no hay nadie. Con Seguir la cara, `faces/…/…-faceTrack-1.json` tiene `face` en las muestras con la cara a la vista y no la tiene mientras la persona no está.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
