@@ -249,8 +249,9 @@ public actor RecordingCoordinator {
     /// Starts recording a new take and returns its ID.
     ///
     /// Throws `volumeNotAllowed`, `notEnoughDiskSpace` or `notCurrentFormatVersion` before creating
-    /// anything. The take's record must reach the manifest on disk before anything is recorded: if that
-    /// write fails (after one retry with the reserve's room when it ran out of space), the lock and the
+    /// anything. The take's record must reach the manifest on disk before anything is recorded, in a package
+    /// raised to version 4 first if a source's track needs it (`TrackKind.requiresFormatVersion4`): if those
+    /// writes fail (after one retry with the reserve's room when they ran out of space), the lock and the
     /// reserve are released and the error is rethrown, leaving at most an empty take folder. If a source
     /// fails to start, the sources already started are stopped, the take is closed as `complete` with what
     /// it has (nothing is deleted), the lock is released and the error is rethrown. Either way this
@@ -309,14 +310,24 @@ public actor RecordingCoordinator {
             id: takeID, status: .recording, startedAt: startedAt,
             tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) },
             cameraStyle: initialCameraStyle)
+        // A take with a track only version 4 defines (an iPhone's) raises the package to 4 first: the store refuses
+        // that record in a package of 3, and a take without one leaves it at 3.
+        let needsFormatVersion4 = sources.contains { $0.kind.requiresFormatVersion4 }
         // A take the manifest does not list is invisible to recovery and the editor: nothing is recorded
         // until it is on disk.
         do {
             do {
+                if needsFormatVersion4 { try store.raiseFormatVersion(to: 4) }
                 try store.update { $0.takes.append(record) }
             } catch where isOutOfSpace(error) {
                 reserve.release()
-                try store.flushPending()
+                if store.manifest.takes.contains(where: { $0.id == takeID }) {
+                    try store.flushPending()
+                } else {
+                    // The raise ran out of space: nothing of the take is in memory yet. Does nothing once at 4.
+                    if needsFormatVersion4 { try store.raiseFormatVersion(to: 4) }
+                    try store.update { $0.takes.append(record) }
+                }
                 diskFilled()  // still starting: the take stops as `diskFull` once it has started
             }
         } catch {
@@ -347,6 +358,10 @@ public actor RecordingCoordinator {
                 case .camera, .microphone, .systemAudio, .device, .deviceAudio:
                     break
                 }
+            }
+            // Before its first `keyPress` line, a key recorder raises the package to 4; a take without one stays at 3.
+            if let raising = input as? any FormatRaising {
+                raising.setFormatRaiser { try store.raiseFormatVersion(to: 4) }
             }
             await input.start(log: log)
 

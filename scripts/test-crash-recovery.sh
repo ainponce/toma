@@ -20,6 +20,8 @@
 # nothing has the final name, and the next export to the same destination finishes, removes the .partial.gif left and
 # writes a GIF sips reads, with the bytes of the first one; the package never changes. Then the peak memory of
 # export-gif (/usr/bin/time -l) of a 10 s and of a 60 s take at 800 px must be the same within 10 %.
+# Eighth, the keys (keys_case): synth-record --keys killed with SIGKILL while it types; the recovered package must be at
+# version 4, with every keyPress line whole and the keys typed so far in order, and verify must pass.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -536,6 +538,69 @@ gif_case() {
   echo "gif crash case passed (20 runs)"
 }
 
+# The keys (P8): a take that types a text, one key every 100 ms, killed while it types. The package went to 4 before the
+# first keyPress line; after the recovery every line of events.jsonl is whole and the keyPress ones are the text's first
+# keys, in order, with their codes and modifiers.
+keys_case() {
+  local TMP PID PKG TEXT
+  TMP=$(mktemp -d)
+  TEXT="Hola, Toma! Grabar las teclas 123"
+  echo "== synth-record --keys, kill -9 while it types (in $TMP)"
+  "$BIN" synth-record "$TMP" --duration 20 --keys "$TEXT" > "$TMP/out" &
+  PID=$!
+  until [ -s "$TMP/out" ]; do
+    if ! kill -0 "$PID" 2>/dev/null; then
+      echo "FAIL: synth-record --keys exited before it started recording"
+      wait "$PID" || true
+      exit 1
+    fi
+    sleep 0.1
+  done
+  PKG=$(head -1 "$TMP/out")
+  # 33 keys take 3.3 s: killed about half way.
+  sleep 1.7
+  kill -9 "$PID"
+  wait "$PID" 2>/dev/null || true
+  "$BIN" recover "$TMP"
+  if ! grep -q '"status" : "recovered"' "$PKG/manifest.json"; then
+    echo "FAIL: the take with keys was not marked recovered"
+    exit 1
+  fi
+  if ! grep -q '^  "formatVersion" : 4,$' "$PKG/manifest.json"; then
+    echo "FAIL: the package with keyPress lines is not at version 4"
+    exit 1
+  fi
+  if ! python3 -I - "$PKG/takes/take-001/events.jsonl" "$TEXT" <<'PY'
+import json, sys
+path, text = sys.argv[1], sys.argv[2]
+with open(path, "rb") as f:
+    data = f.read()
+if data and not data.endswith(b"\n"):
+    sys.exit("events.jsonl does not end at a line break")
+keys = []
+for number, line in enumerate(data.splitlines(), 1):
+    event = json.loads(line)  # every line whole
+    if event.get("type") != "keyPress":
+        continue
+    if set(event) - {"t", "type", "code", "chars", "mods", "repeat"} or not {"t", "code", "mods", "repeat"} <= set(event):
+        sys.exit(f"line {number}: keyPress with the wrong fields: {sorted(event)}")
+    if event["mods"] not in (0, 0x20000) or event["repeat"] is not False:
+        sys.exit(f"line {number}: keyPress with mods {event['mods']} repeat {event['repeat']}")
+    keys.append(event.get("chars") or "")
+typed = "".join(keys)
+if not 3 <= len(keys) < len(text) or not text.startswith(typed):
+    sys.exit(f"{len(keys)} keyPress lines typing {typed!r}: not the first keys of {text!r} up to the kill")
+print(f"{len(keys)} keyPress lines, whole and in order: {typed!r}")
+PY
+  then
+    echo "FAIL: the keyPress lines of the recovered take are not whole or not the keys typed"
+    exit 1
+  fi
+  "$BIN" verify "$PKG" --min-duration 0.5 --max-drop-ratio 0.01
+  rm -rf "$TMP"
+  echo "keys crash case passed"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
@@ -543,4 +608,5 @@ run_case "--window" "" "window-4242 mic"
 edit_case
 library_case
 gif_case
+keys_case
 echo "crash test passed"

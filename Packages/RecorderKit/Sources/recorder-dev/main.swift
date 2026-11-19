@@ -50,7 +50,9 @@ struct SynthRecord: AsyncParsableCommand {
 
             The take's events.jsonl gets synthetic input, the same in every take: the cursor going round a circle \
             about (320, 180), a click every second from 0.5 s, the arrow and from 1 s the I-beam (their images in \
-            the take's cursors/ folder), a scroll at 2 s and key activity from 3 to 4 s.
+            the take's cursors/ folder), a scroll at 2 s and key activity from 3 to 4 s. With --keys, it also gets \
+            the keys that type the text given, one every 100 ms from 0.1 s, as keyPress events with the codes of a US \
+            keyboard (characters it has no key for are left out): the package goes to version 4 just before the first.
             """
     )
 
@@ -90,6 +92,9 @@ struct SynthRecord: AsyncParsableCommand {
     @Flag(help: "Also record synthetic system audio, stereo at 48 kHz, with a clock 1500 ppm slow.")
     var systemAudio = false
 
+    @Option(help: "Also record the keys that type this text, one every 100 ms (keyPress events; the package goes to version 4).")
+    var keys: String?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         guard fps > 0, width > 0, height > 0 else { throw ValidationError("--fps, --width and --height must be positive.") }
@@ -119,9 +124,16 @@ struct SynthRecord: AsyncParsableCommand {
             sources.append(SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500))
         }
         let staticAfter = staticAfter
+        var input: any InputRecorder = SyntheticInputRecorder()
+        if let keys {
+            // Typed by the script, not by the user: secure input says nothing about them.
+            let typed = KeyPressRecorder(
+                source: ScriptedKeyEvents(text: keys, every: .milliseconds(100), ticks: .live), secureInput: { false })
+            input = CompositeInputRecorder([input, typed])
+        }
         try await recordTake(
             in: directory, prefix: "synth", duration: duration,
-            sources: sources, input: SyntheticInputRecorder(),
+            sources: sources, input: input,
             systemActivity: AsyncStream { $0.finish() },
             whileRecording: {
                 guard let staticAfter else { return }
