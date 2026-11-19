@@ -11,6 +11,10 @@ public enum TimelineTrack: Equatable, Sendable {
     case screen
     /// The zoom blocks.
     case zoom
+    /// The captions, with a transcript (phase 2; empty until the captions feature draws in it).
+    case captions
+    /// The privacy blocks, with any (phase 2; empty until the privacy feature draws in it).
+    case privacy
     /// The camera's changes.
     case camera
     /// The waveform of audio track `id` of the take (`TrackRecord.id`).
@@ -45,11 +49,13 @@ public struct TimelineLayout: Equatable, Sendable {
     static let videoHeight = 56.0
     static let screenHeight = 24.0
     static let zoomHeight = 28.0
+    static let captionsHeight = 28.0
+    static let privacyHeight = 28.0
     static let cameraHeight = 32.0
     static let audioHeight = 36.0
 
-    /// Top to bottom: the ruler, Video, Screen (with two or more screen tracks that recorded something), Zoom, Camera
-    /// (with a camera that recorded something) and one row for each audio track that recorded something, the
+    /// Top to bottom: the ruler, Video, Captions (with a transcript), Screen (with two or more screen tracks that recorded
+    /// something), Zoom, Privacy (with privacy blocks), Camera (with a camera that recorded something) and one row for each audio track that recorded something, the
     /// microphones before the system audio, each in the take's order.
     public var tracks: [TimelineRow]
 
@@ -58,8 +64,10 @@ public struct TimelineLayout: Equatable, Sendable {
     public init(take: TakeRecord, document: EditDocument) {
         let recorded = take.tracks.filter { !$0.segments.isEmpty }
         var tracks = [TimelineRow(track: .ruler, height: Self.rulerHeight), TimelineRow(track: .video, height: Self.videoHeight)]
+        if document.transcript != nil { tracks.append(TimelineRow(track: .captions, height: Self.captionsHeight)) }
         if recorded.filter(\.kind.isScreen).count >= 2 { tracks.append(TimelineRow(track: .screen, height: Self.screenHeight)) }
         tracks.append(TimelineRow(track: .zoom, height: Self.zoomHeight))
+        if !document.privacy.blocks.isEmpty { tracks.append(TimelineRow(track: .privacy, height: Self.privacyHeight)) }
         if recorded.contains(where: { $0.kind == .camera }) { tracks.append(TimelineRow(track: .camera, height: Self.cameraHeight)) }
         for kind in [TrackKind.microphone, .systemAudio] {
             tracks += recorded.filter { $0.kind == kind }.map { TimelineRow(track: .audio(id: $0.id), height: Self.audioHeight) }

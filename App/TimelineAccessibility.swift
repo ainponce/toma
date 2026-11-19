@@ -160,7 +160,7 @@ final class TimelineAccessibility {
                 guard let output = view.hitItems.first(where: { $0.id == id })?.output.lowerBound else { return false }
                 model.selectCameraChange(id, output: output)
             }
-        case .ruler, .screen, .audio: return false
+        case .ruler, .screen, .audio, .captions, .privacy: return false
         }
         return true
     }

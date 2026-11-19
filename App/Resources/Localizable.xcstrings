@@ -1230,6 +1230,16 @@
         }
       }
     },
+    "Captions" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subtítulos"
+          }
+        }
+      }
+    },
     "Center of the Screen" : {
       "comment" : "The timeline's menu of a zoom: the focus is fixed in the middle",
       "localizations" : {
@@ -3203,6 +3213,16 @@
         }
       }
     },
+    "Input Monitoring" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Monitoreo de entrada"
+          }
+        }
+      }
+    },
     "Instant" : {
       "comment" : "The Zoom tab: the selected zoom cuts in and out",
       "localizations" : {
@@ -4202,6 +4222,17 @@
         }
       }
     },
+    "Only to show the keys you press on screen, if you turn it on in Settings ▸ Recording." : {
+      "comment" : "Under Input Monitoring in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo para mostrar en pantalla las teclas presionadas, si se activa en Ajustes ▸ Grabación."
+          }
+        }
+      }
+    },
     "Only to switch desktops from the notch." : {
       "comment" : "Under Accessibility in the permissions window",
       "localizations" : {
@@ -4611,6 +4642,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escritorio anterior"
+          }
+        }
+      }
+    },
+    "Privacy" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Privacidad"
           }
         }
       }

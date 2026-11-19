@@ -51,7 +51,7 @@ struct TimelineGeometry {
             let x = snapped(self.x(item.output.lowerBound))
             guard x > -8, x < areaWidth + 8 else { return nil }
             return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
-        case .ruler, .audio: return nil
+        case .ruler, .audio, .captions, .privacy: return nil
         }
     }
 

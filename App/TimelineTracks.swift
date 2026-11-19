@@ -531,6 +531,8 @@ final class TimelineTracks {
             case .video: layOutVideo(content, row, geometry, palette, &wanted)
             case .screen: layOutScreens(content, row, geometry, palette)
             case .zoom: layOutZooms(content, row, geometry, palette)
+            // Drawn by the captions and privacy features (phase 2).
+            case .captions, .privacy: break
             case .camera: layOutCamera(content, row, geometry, palette)
             case let .audio(id):
                 layOutWaveform(id, content, row, geometry, palette)

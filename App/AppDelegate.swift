@@ -638,6 +638,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editor.onAccessChanged = { [weak self] in self?.tellLibraryEditors() }
         editor.onPackageMoved = { [weak self] in self?.tellLibraryEditors() }
         editors[key] = editor
+        // Opened during a take: its analysis queue starts paused.
+        if recording.isRecording { editor.model.setRecording(true) }
         if !Self.isInProjectsFolder(key, projectsFolder: recording.projectsFolder) {
             // A project of another folder is one of Other Places (design §6.5).
             openedElsewhere.insert(key)
@@ -722,6 +724,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func tellLibraryTake() {
         let isRecording = recording.isRecording
         launchState.setRecording(isRecording)
+        // The editors' analysis queues stop while a take records and go on after it.
+        for editor in editors.values { editor.model.setRecording(isRecording) }
         guard let model = library?.model else { return }
         let package = recording.takePackageURL
         model.setTake(isRecording: isRecording, package: package)

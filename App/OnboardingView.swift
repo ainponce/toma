@@ -409,6 +409,7 @@ private struct PermissionRow: View {
         case .camera: "video.fill"
         case .systemAudio: "speaker.wave.2.fill"
         case .accessibility: "accessibility"
+        case .inputMonitoring: "keyboard"
         }
     }
 
@@ -419,6 +420,7 @@ private struct PermissionRow: View {
         case .camera: .green
         case .systemAudio: .pink
         case .accessibility: .blue
+        case .inputMonitoring: .purple
         }
     }
 
@@ -429,6 +431,7 @@ private struct PermissionRow: View {
         case .camera: Text("Camera")
         case .systemAudio: Text("System Audio")
         case .accessibility: Text("Accessibility")
+        case .inputMonitoring: Text("Input Monitoring")
         }
     }
 
@@ -451,6 +454,10 @@ private struct PermissionRow: View {
                 "The sound of the apps, on a track of its own.", comment: "Under system audio in the permissions window")
         case .accessibility:
             Text("Only to switch desktops from the notch.", comment: "Under Accessibility in the permissions window")
+        case .inputMonitoring:
+            Text(
+                "Only to show the keys you press on screen, if you turn it on in Settings ▸ Recording.",
+                comment: "Under Input Monitoring in the permissions window")
         }
     }
 

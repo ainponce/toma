@@ -160,6 +160,8 @@ extension EditorPanelTab {
         case .cursor: "cursor"
         case .zoom: "zoom"
         case .audio: "audio"
+        case .captions: "captions"
+        case .privacy: "privacy"
         }
     }
 

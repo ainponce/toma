@@ -123,6 +123,7 @@ import Testing
             ("+", [.command], .zoomIn), ("-", [.command], .zoomOut),
             ("1", [.command], .tab(1)), ("2", [.command], .tab(2)), ("3", [.command], .tab(3)),
             ("4", [.command], .tab(4)), ("5", [.command], .tab(5)), ("6", [.command], .tab(6)),
+            ("7", [.command], .tab(7)), ("8", [.command], .tab(8)),
             ("i", [.command, .option], .togglePanel),
             ("e", [.command], .export),
             ("o", [.command], .open),
@@ -148,8 +149,8 @@ import Testing
         #expect(command("+", [.command, .shift]) == .zoomIn)
         #expect(command("-", [.command, .option]) == nil)
         #expect(command("+") == nil)
-        // Only the panel's six tabs.
-        #expect(command("7", [.command]) == nil)
+        // Only the panel's eight tabs.
+        #expect(command("9", [.command]) == nil)
         #expect(command("0", [.command]) == nil)
     }
 

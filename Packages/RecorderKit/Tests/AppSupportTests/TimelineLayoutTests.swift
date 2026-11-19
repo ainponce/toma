@@ -36,6 +36,45 @@ import Testing
         ])
     }
 
+    private static func documentWith(transcript: Transcript? = nil, privacy: PrivacyPlan = .legacy, take: TakeRecord) -> EditDocument {
+        var document = EditDocument.legacy(take: take, events: [])
+        document.transcript = transcript
+        document.privacy = privacy
+        return document
+    }
+
+    private static func fullTake() -> TakeRecord {
+        TakeRecord(
+            id: "take-001", status: .complete, startedAt: Date(timeIntervalSince1970: 0),
+            tracks: [track("display-1", .display), track("camera", .camera), track("mic", .microphone)])
+    }
+
+    @Test func captionsRowOnlyWithATranscript() {
+        let take = Self.fullTake()
+        #expect(!TimelineLayout(take: take, document: .legacy(take: take, events: [])).tracks.map(\.track).contains(.captions))
+        let transcript = Transcript(language: "es-AR", engine: "speechTranscriber-1", takes: [])
+        let layout = TimelineLayout(take: take, document: Self.documentWith(transcript: transcript, take: take))
+        #expect(layout.tracks.map(\.track) == [.ruler, .video, .captions, .zoom, .camera, .audio(id: "mic")])
+        #expect(layout.tracks[2] == TimelineRow(track: .captions, height: 28))
+    }
+
+    @Test func privacyRowOnlyWithBlocks() {
+        let take = Self.fullTake()
+        let block = PrivacyBlock(
+            id: "p-00000001", take: "take-001", start: HostTime(nanoseconds: 1_000_000_000),
+            end: HostTime(nanoseconds: 2_000_000_000), effect: .blur, rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))
+        let layout = TimelineLayout(take: take, document: Self.documentWith(privacy: PrivacyPlan(blocks: [block]), take: take))
+        #expect(layout.tracks.map(\.track) == [.ruler, .video, .zoom, .privacy, .camera, .audio(id: "mic")])
+        #expect(layout.tracks[3] == TimelineRow(track: .privacy, height: 28))
+        #expect(!TimelineLayout(take: take, document: .legacy(take: take, events: [])).tracks.map(\.track).contains(.privacy))
+    }
+
+    @Test func phase1RowsAreUnchanged() {
+        let take = Self.fullTake()
+        let layout = TimelineLayout(take: take, document: .legacy(take: take, events: []))
+        #expect(layout.tracks.map(\.track) == [.ruler, .video, .zoom, .camera, .audio(id: "mic")])
+    }
+
     @Test func tracksWithoutSegmentsAreLeftOut() {
         // A second screen, a camera and a microphone that recorded nothing; the system audio listed before the microphone.
         let layout = Self.layout([

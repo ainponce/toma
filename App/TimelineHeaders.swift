@@ -118,6 +118,8 @@ final class TrackHeaderView: NSView {
         case .video: (String(localized: "Video"), "film")
         case .screen: (String(localized: "Screen"), "display")
         case .zoom: (String(localized: "Zoom"), "plus.magnifyingglass")
+        case .captions: (String(localized: "Captions"), "captions.bubble")
+        case .privacy: (String(localized: "Privacy"), "eye.slash")
         case .camera: (String(localized: "Camera"), "web.camera")
         case let .audio(id):
             take?.track(id)?.kind == .systemAudio
