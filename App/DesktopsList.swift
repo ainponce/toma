@@ -86,7 +86,7 @@ final class DesktopsModel {
     }
 
     /// "Give Permission…": the system's prompt the first time (it already offers to open System Settings),
-    /// System Settings after that; never both (plan decision 27). The island gets out of the way of either.
+    /// System Settings after that, asked again first in case macOS forgot Toma; never both (plan decision 27). The island gets out of the way of either.
     func givePermission() {
         switch PermissionAction(for: probe.state(of: .accessibility)) {
         case nil:
@@ -97,7 +97,7 @@ final class DesktopsModel {
             Task { _ = await probe.request(.accessibility) }
         case .openSettings:
             send(.systemUIOpened)
-            NSWorkspace.shared.open(PermissionSettings.url(for: .accessibility))
+            Task { await PermissionSettingsOpener.live(probe: probe).open(.accessibility) }
         }
     }
 

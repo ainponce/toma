@@ -50,9 +50,11 @@ final class PermissionsModel {
         refresh()
     }
 
-    func openSettings(for kind: PermissionKind) {
+    /// Asks again first when macOS may have forgotten Toma, so it is back in the list (`PermissionSettingsOpener`).
+    func openSettings(for kind: PermissionKind) async {
         if kind == .screenRecording { askedForScreenRecording = true }
-        NSWorkspace.shared.open(PermissionSettings.url(for: kind))
+        await PermissionSettingsOpener.live(probe: probe).open(kind)
+        refresh()
     }
 
     /// Opens a new instance of the app and quits this one.
@@ -222,7 +224,7 @@ private struct PermissionRow: View {
     private func perform(_ action: PermissionAction) {
         switch action {
         case .prompt: Task { await model.request(kind) }
-        case .openSettings: model.openSettings(for: kind)
+        case .openSettings: Task { await model.openSettings(for: kind) }
         }
     }
 

@@ -196,6 +196,59 @@ public enum PermissionAction: Equatable, Sendable {
     }
 }
 
+/// "Open System Settings" for a permission that was asked for and is still not allowed.
+///
+/// macOS can forget an app it was asked about: after `tccutil reset`, or when a new build without a stable
+/// signature counts as another app. Toma is then missing from the list in System Settings, or listed under a
+/// switch that no longer applies to it, and there is nothing to turn on. So screen recording and Accessibility
+/// are asked for again first: that puts Toma back in the list, and shows the system's prompt if macOS had
+/// forgotten it. System Settings opens only when no prompt came up (the prompt already offers to open it), so
+/// never both; nothing opens once asking again allowed it. The microphone and the camera go straight to System
+/// Settings: macOS reports when it forgot them (`notDetermined`), and asking again after a no shows nothing.
+@MainActor
+public struct PermissionSettingsOpener {
+    private let probe: any PermissionProbe
+    /// The app in front, to tell whether the system's prompt came up: it comes up in front.
+    private let frontmostApp: @MainActor () -> Int32?
+    /// Waits for the prompt, which comes up a moment after the request returns.
+    private let settle: @Sendable () async -> Void
+    private let openURL: @MainActor (URL) -> Void
+
+    public init(
+        probe: any PermissionProbe,
+        frontmostApp: @escaping @MainActor () -> Int32?,
+        settle: @escaping @Sendable () async -> Void = { try? await Task.sleep(for: .milliseconds(600)) },
+        openURL: @escaping @MainActor (URL) -> Void
+    ) {
+        self.probe = probe
+        self.frontmostApp = frontmostApp
+        self.settle = settle
+        self.openURL = openURL
+    }
+
+    /// Whether macOS needs to be asked again before System Settings is of any use for `kind`.
+    static func asksAgain(_ kind: PermissionKind) -> Bool {
+        kind == .screenRecording || kind == .accessibility
+    }
+
+    /// Asks again when that helps, then opens System Settings unless a prompt came up or the permission is now
+    /// allowed. Returns the permission's state after asking.
+    @discardableResult
+    public func open(_ kind: PermissionKind) async -> PermissionState {
+        guard Self.asksAgain(kind) else {
+            openURL(PermissionSettings.url(for: kind))
+            return probe.state(of: kind)
+        }
+        let before = frontmostApp()
+        let state = await probe.request(kind)
+        guard state != .granted else { return state }
+        await settle()
+        guard frontmostApp() == before else { return probe.state(of: kind) }
+        openURL(PermissionSettings.url(for: kind))
+        return probe.state(of: kind)
+    }
+}
+
 /// Where System Settings lets the user change a permission.
 public enum PermissionSettings {
     public static func url(for kind: PermissionKind) -> URL {

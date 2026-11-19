@@ -119,6 +119,71 @@ struct FakeProbe: PermissionProbe {
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
 }
 
+/// A probe that counts its requests and answers `answer` to each.
+final class AskedProbe: PermissionProbe, @unchecked Sendable {
+    let base: FakeProbe
+    let answer: PermissionState?
+    private let lock = Mutex<[PermissionKind]>([])
+    var requests: [PermissionKind] { lock.withLock { $0 } }
+
+    init(_ base: FakeProbe, answer: PermissionState? = nil) {
+        self.base = base
+        self.answer = answer
+    }
+
+    func state(of kind: PermissionKind) -> PermissionState {
+        answer.map { requests.contains(kind) ? $0 : base.state(of: kind) } ?? base.state(of: kind)
+    }
+
+    func request(_ kind: PermissionKind) async -> PermissionState {
+        lock.withLock { $0.append(kind) }
+        return state(of: kind)
+    }
+}
+
+/// Opens System Settings with `probe`; `promptComesUp` puts another app in front between asking and settling.
+@MainActor
+func openSettings(_ kind: PermissionKind, probe: AskedProbe, promptComesUp: Bool = false) async -> [URL] {
+    var front: Int32 = 100
+    var opened: [URL] = []
+    let opener = PermissionSettingsOpener(
+        probe: probe,
+        frontmostApp: {
+            defer { if promptComesUp { front = 200 } }
+            return front
+        },
+        settle: {}, openURL: { opened.append($0) })
+    await opener.open(kind)
+    return opened
+}
+
+@Test func screenRecordingIsAskedForAgainBeforeSystemSettingsSoTomaIsBackInTheList() async {
+    for kind in [PermissionKind.screenRecording, .accessibility] {
+        let probe = AskedProbe(FakeProbe(screen: .denied, mic: .granted, accessibility: .denied))
+        #expect(await openSettings(kind, probe: probe) == [PermissionSettings.url(for: kind)])
+        #expect(probe.requests == [kind])
+    }
+}
+
+@Test func systemSettingsStayClosedWhenTheSystemPromptCameUp() async {
+    let probe = AskedProbe(FakeProbe(screen: .denied, mic: .granted))
+    #expect(await openSettings(.screenRecording, probe: probe, promptComesUp: true).isEmpty)
+    #expect(probe.requests == [.screenRecording])
+}
+
+@Test func nothingOpensWhenAskingAgainAllowedIt() async {
+    let probe = AskedProbe(FakeProbe(screen: .denied, mic: .granted), answer: .granted)
+    #expect(await openSettings(.screenRecording, probe: probe).isEmpty)
+}
+
+@Test func theMicrophoneAndTheCameraGoStraightToSystemSettings() async {
+    for kind in [PermissionKind.microphone, .camera] {
+        let probe = AskedProbe(FakeProbe(screen: .granted, mic: .denied, camera: .denied))
+        #expect(await openSettings(kind, probe: probe) == [PermissionSettings.url(for: kind)])
+        #expect(probe.requests.isEmpty)
+    }
+}
+
 // MARK: - System probe
 
 /// A defaults suite of its own, removed when `body` returns.
