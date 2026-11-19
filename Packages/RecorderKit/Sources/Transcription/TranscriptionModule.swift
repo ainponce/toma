@@ -5,5 +5,7 @@
 ///
 /// An engine of the analysis queue: it is handed the files it reads and reports its progress, and knows nothing of the
 /// project's caches or the queue (`ProjectJobs` runs it). What it makes is not a cache: it goes into the document
-/// (`EditDocument.transcript`). Never called from the render or the mix. Empty in phase 2's base; milestone 2a fills it.
+/// (`EditDocument.transcript`). Never called from the render or the mix. `Transcriber` transcribes a take with a
+/// `SpeechEngine` (`SpeechTranscriberEngine`); `SpeechLanguages` lists the languages and gets their models;
+/// `TranscriptWords` makes the words of what an engine heard.
 enum TranscriptionModule {}
