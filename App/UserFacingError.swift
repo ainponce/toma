@@ -73,6 +73,12 @@ private func description(of error: CaptureSourceError) -> String {
         String(localized: "The camera stopped: another app is using it, or the lid is closed.")
     case .systemAudioUnavailable(let status):
         String(localized: "System audio can't be recorded (error \(status)).")
+    case .deviceNotFound:
+        String(localized: "The iPhone or iPad isn't connected. Connect it with a cable, unlock it and tap Trust.")
+    case .deviceDisconnected:
+        String(localized: "The iPhone or iPad was disconnected.")
+    case .deviceInterrupted:
+        String(localized: "The iPhone or iPad stopped sending its screen.")
     }
 }
 

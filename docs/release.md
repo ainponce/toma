@@ -908,12 +908,19 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-2`, en orden: la 
 
 Un proyecto de 1b o de 1c sigue siendo de su versión en el disco hasta que se lo edita en la fase 2: mirarlo no lo cambia.
 - Con el proyecto de la preparación: abrirlo en la app de la fase 2, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 1. Abrirlo otra vez con `~/Desktop/Toma-fase1.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
+- Una toma grabada con la copia de la fase 1 y nunca abierta en el editor: abrirla en la fase 2 sin tocar nada y cerrarla. La copia de la fase 1 la sigue abriendo como una toma suya, sin aviso.
 - Editarlo en la fase 2 (otro margen) y cerrarlo. Abierto con la copia de la fase 1, dice que el proyecto se editó con una versión más nueva de Toma (nunca que está dañado) y no escribe nada.
-- Deshacer en la fase 2 después de esa edición: si el proyecto tenía en 1c un cambio de volumen o de silencio, o un estilo aplicado, Deshacer se detiene en la primera edición de la fase 2 (es lo esperado, `docs/format/README.md`, «Cambios del documento 3»); si no, vuelve paso a paso hasta las ediciones de 1c.
+- Deshacer en la fase 2 después de esa edición: vuelve paso a paso hasta las ediciones de 1c, también un cambio de volumen o de silencio de una pista y un estilo aplicado (la pista y el estilo quedan como estaban antes de cada uno), y Rehacer las trae de vuelta en orden.
 
 **Monitoreo de entrada** (B4a)
 
 En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra el aviso del sistema; después de negarlo, «Abrir Ajustes del Sistema» lo vuelve a pedir y Toma aparece en la lista de Monitoreo de entrada.
+
+- **iPhone o iPad por cable: descubrir y capturar** (P14; se recorre con la isla en modo iPhone de P15 y P17). Con un iPhone conectado por cable, desbloqueado y con «Confiar» tocado:
+  1. El iPhone aparece en la lista del modo iPhone a los pocos segundos de abrirlo, con su nombre. En la lista de cámaras de Toma (la isla y Ajustes) nunca aparece la pantalla del iPhone, ni con el modo iPhone abierto (el iPhone como Cámara de Continuidad es otra cosa y sí puede estar).
+  2. Grabar 20 s con el iPhone en vertical y un video sonando en el iPhone. En `manifest.json` del paquete: `formatVersion` 4, una pista `device` con `globalFrame` `{x: 0, y: 0}` y el tamaño en píxeles de la pantalla del iPhone (por ejemplo 1179 × 2556 en un iPhone 15), `pixelScale` 1, y una pista `deviceAudio` con el mismo `deviceUniqueID`. El primer segmento de `device` tiene exactamente ese tamaño (Información de QuickTime) y se ve fluido cuando la pantalla se mueve; el de `deviceAudio` se oye entero y en sincronía con la imagen. Si a `device` le faltan `globalFrame` y `pixelScale`, anotarlo: el iPhone no dijo su tamaño antes de empezar.
+  3. Girar el iPhone a horizontal y volver a vertical durante la toma: `device` sigue en segmentos nuevos (`formatChanged`) y la toma no se corta.
+  4. Desconectar el cable 10 s a mitad de la toma y volver a conectarlo: la toma sigue; las dos pistas terminan su segmento y siguen en uno nuevo del mismo iPhone. Con otro iPhone conectado mientras el primero no está, Toma no lo graba en su lugar.
 
 **Grabar las teclas** (P9)
 

@@ -1264,8 +1264,15 @@ private enum Opening {
                 resolution.document.style.background, from: context.styleDirectory, into: ProjectPackage(url: current))
         }
 
+        // A new document, of a take never opened in the editor, is written in the oldest version that holds it, never
+        // below 2 (what 1c writes for a new project): a take recorded in phase 1 and only looked at in phase 2 stays one
+        // the app of phase 1 opens, and its first edit migrates it, as for any project of phase 1.
+        if resolution.isNewDocument, resolution.startsLog {
+            let oldest = DocumentMigration.oldestVersion(holding: opened.document, from: 2)
+            (opened.diskVersion, opened.createVersion) = (oldest, oldest)
+        }
         // While the document is of an older version on disk, everything written here is in that version (1c design §13.2).
-        let (diskVersion, createVersion) = (resolution.diskVersion, resolution.createVersion)
+        let (diskVersion, createVersion) = (opened.diskVersion, opened.createVersion)
         var entries = resolution.entries
         var history = UndoHistory(entries: entries, createVersion: createVersion)
         var snapshotSeq = resolution.snapshotSeq
@@ -1314,7 +1321,7 @@ private enum Opening {
         }
         opened.entries = entries
         opened.history = history
-        opened.groups = groupChanges(of: entries, in: history)
+        opened.groups = groupChanges(of: entries, in: history, createVersion: createVersion)
         opened.logBytes = logBytes
         opened.snapshotSeq = snapshotSeq
         return opened
@@ -1388,13 +1395,32 @@ private enum Opening {
     }
 
     /// The changes of the `do` lines of each group still in the stacks: of a log the replay applied, every `do` of a group
-    /// comes while it is applied, so all of them are what its undo inverts.
-    private static func groupChanges(of entries: [EditLogEntry], in history: UndoHistory) -> [Int: [EditChange]] {
+    /// comes while it is applied, so all of them are what its undo inverts. Each line's changes are carried from the
+    /// version it was written in (the `create`'s, `createVersion`, raised by each `migrate` that follows) to the current
+    /// one, the document's in memory (`DocumentMigration.carried(_:from:to:)`); a group with one that does not carry
+    /// has none, and its undo is refused, as the `migrate` of the first edit cuts it then.
+    private static func groupChanges(
+        of entries: [EditLogEntry], in history: UndoHistory, createVersion: Int
+    ) -> [Int: [EditChange]] {
         let live = Set(history.done + history.undone)
         var groups: [Int: [EditChange]] = [:]
-        for case let .do(_, group, _, changes, _) in entries where live.contains(group) {
-            groups[group, default: []] += changes
+        var uncarried: Set<Int> = []
+        var walk = DocumentMigration.LogWalk(createVersion: createVersion)
+        for entry in entries {
+            switch entry {
+            case let .migrate(_, from, to):
+                _ = walk.walkMigrate(from: from, to: to)
+            case let .do(_, group, _, changes, _) where live.contains(group):
+                if let carried = DocumentMigration.carried(changes, from: walk.version, to: EditDocument.currentVersion) {
+                    groups[group, default: []] += carried
+                } else {
+                    uncarried.insert(group)
+                }
+            default:
+                break
+            }
         }
+        for group in uncarried { groups[group] = nil }
         return groups
     }
 

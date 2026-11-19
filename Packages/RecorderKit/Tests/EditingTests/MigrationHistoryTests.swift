@@ -79,9 +79,9 @@ private func at(_ seq: Int, _ document: EditDocument) -> EditDocument {
     #expect(try replay(log + undos, createVersion: 2).mismatchSeq == 3)
 }
 
-@Test func lineThatWritesCameraBeforeTheMigrateClearsTheStacks() throws {
-    // A line of version 1 that writes the whole camera, made by hand: it does not commute with the migration, which
-    // writes inside it.
+@Test func lineThatWritesTheWholeCameraBeforeTheMigrateIsCarriedThroughIt() throws {
+    // A line of version 1 that writes the whole camera, made by hand: the migration writes inside it, so it is carried
+    // through the migration (its camera gains what the migration adds), and the history is kept.
     let v1 = try #require(DocumentMigration.reverted(JSONValue(encoding: SmallDocument.document), to: 1))
     guard case let .object(document) = v1, case let .object(camera)? = document["camera"] else {
         Issue.record("no camera")
@@ -89,11 +89,56 @@ private func at(_ seq: Int, _ document: EditDocument) -> EditDocument {
     }
     var hidden = camera
     hidden["show"] = .bool(false)
-    let wholeCamera = EditLogEntry.do(
-        seq: 2, group: 2, label: EditLabel.camera.rawValue, changes: [try set("/camera", .object(camera), .object(hidden))], at: date)
-    #expect(UndoHistory(entries: [SmallDocument.create, wholeCamera], createVersion: 1).done == [2])
+    let change = try set("/camera", .object(camera), .object(hidden))
+    #expect(!DocumentMigration.touchesAddedFields(change, from: 1))
+    let wholeCamera = EditLogEntry.do(seq: 2, group: 2, label: EditLabel.camera.rawValue, changes: [change], at: date)
 
     let log = [SmallDocument.create, wholeCamera, .migrate(seq: 3, from: 1, to: 2)]
+    #expect(UndoHistory(entries: log, createVersion: 1).done == [2])
+    let longer = log + [try padding(4)]
+    let history = UndoHistory(entries: longer, createVersion: 1)
+    #expect(history.done == [2, 4])
+    #expect(history.undoLabel == .padding)
+
+    // The replay migrates and goes on, and both groups are undone on the document of version 2.
+    let replayed = try replay(longer)
+    #expect(replayed.mismatchSeq == nil)
+    #expect(replayed.version == 2)
+    #expect(!replayed.document.camera.show)
+    let undone = try replay(longer + [.undo(seq: 5, group: 4), .undo(seq: 6, group: 2)])
+    #expect(undone.mismatchSeq == nil)
+    #expect(undone.document == at(6, SmallDocument.document))
+    #expect(try replay(longer + [.undo(seq: 5, group: 4), .undo(seq: 6, group: 2), .redo(seq: 7, group: 2)]).document.camera.show == false)
+
+    // Compacted, the line goes after the migrate, carried: the same document and the same stacks.
+    let compacted = LogCompaction.compact(longer, createVersion: 1)
+    guard compacted.count == 4, case .migrate(_, 1, 2) = compacted[1], case let .do(_, 2, _, changes, _) = compacted[2] else {
+        Issue.record("the create, the migrate and the two groups: \(compacted)")
+        return
+    }
+    #expect(changes == [try #require(DocumentMigration.carried(change, from: 1))])
+    #expect(try replay(compacted).document == replayed.document)
+    #expect(try replay(compacted).json == replayed.json)
+    #expect(UndoHistory(entries: compacted, createVersion: 1).done == history.done)
+    #expect(try replay(compacted + [.undo(seq: 5, group: 4), .undo(seq: 6, group: 2)]).document == undone.document)
+}
+
+@Test func lineThatWritesTheWholeDocumentBeforeTheMigrateClearsTheStacks() throws {
+    // A line of version 1 that writes the whole document, made by hand: it does not commute with the migration, which
+    // reads and writes `documentVersion`, even carried.
+    let v1 = try #require(DocumentMigration.reverted(JSONValue(encoding: SmallDocument.document), to: 1))
+    guard case var .object(document) = v1, case var .object(camera)? = document["camera"] else {
+        Issue.record("no camera")
+        return
+    }
+    camera["show"] = .bool(false)
+    document["camera"] = .object(camera)
+    let change = EditChange.set(path: JSONPointer(components: []), before: v1, after: .object(document))
+    #expect(DocumentMigration.touchesAddedFields(change, from: 1))
+    let whole = EditLogEntry.do(seq: 2, group: 2, label: EditLabel.camera.rawValue, changes: [change], at: date)
+    #expect(UndoHistory(entries: [SmallDocument.create, whole], createVersion: 1).done == [2])
+
+    let log = [SmallDocument.create, whole, .migrate(seq: 3, from: 1, to: 2)]
     let history = UndoHistory(entries: log, createVersion: 1)
     #expect(history.done == [])
     #expect(history.undone == [])

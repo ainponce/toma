@@ -634,6 +634,31 @@ extension JSONValue {
     #expect(try document.applying([depth]) == region)
 }
 
+@Test func setChangeTakesAwayADefaultTheJSONLeavesOut() throws {
+    // The second word of the example starts a caption; `false` is left out of the JSON, so the change takes it away.
+    let document = DocumentV3Example.document
+    let pointer = "/transcript/takes/0/words/1/breakBefore"
+    let change = try #require(document.setChange(pointer, false))
+    #expect(change == .set(path: try JSONPointer(pointer), before: .bool(true), after: .null))
+    let changed = try document.applying([change])
+    #expect(changed.transcript?.takes[0].words[1].breakBefore == false)
+    #expect(!(try pretty(changed)).contains("\"breakBefore\""))
+    #expect(try changed.applying([change.inverse]) == document)
+    // Back to `true` from a word without it, and nothing for one that has it as asked.
+    let back = try #require(changed.setChange(pointer, true))
+    #expect(back == change.inverse)
+    #expect(document.setChange("/transcript/takes/0/words/0/breakBefore", false) == nil)
+    #expect(document.setChange(pointer, true) == nil)
+    // Every change `setChange` gives for a value the document can hold applies.
+    for (path, value) in [(pointer, false), ("/transcript/takes/0/words/0/breakBefore", true)] {
+        let change = try #require(document.setChange(path, value), "\(path)")
+        #expect(throws: Never.self, "\(path)") { try document.applying([change]) }
+    }
+    // A value the document cannot hold is still named, and `applying` says where.
+    let aspect = try #require(document.setChange("/aspect", "4:3"))
+    #expect(throws: EditChangeError.invalidDocument("/aspect")) { try document.applying([aspect]) }
+}
+
 @Test func phase2CollectionsAreArraysOfTheDocument() throws {
     #expect(EditCollection.privacyBlocks.rawValue == "/privacy/blocks")
     #expect(EditCollection.transcriptTakes.rawValue == "/transcript/takes")

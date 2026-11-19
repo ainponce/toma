@@ -276,7 +276,8 @@ private enum ApplyFixture {
         let applied = await session.applyStyle(style, imageDirectory: images)
         #expect(applied.outcome == .applied)
         #expect(!applied.imageMissing)
-        #expect(await session.flushed() == 2)
+        // The `create`, the `migrate` of the first edit and its step.
+        #expect(await session.flushed() == 3)
         #expect(session.document.style.background == .image(file: file))
         #expect(try Data(contentsOf: project.package.fileURL(file)) == png)
         #expect(session.document.style.padding == 0.1)
@@ -305,7 +306,7 @@ private enum ApplyFixture {
             #expect(session.document.zoom.auto.depth == 2.5)
             #expect(session.document.camera == style.camera.applied(to: before.camera))
             #expect(session.undoLabel == .styleApply)
-            #expect(await session.flushed() == 2)
+            #expect(await session.flushed() == 3)
             #expect(!ApplyFixture.exists(other.package.assetsURL))
             await session.close()
         }

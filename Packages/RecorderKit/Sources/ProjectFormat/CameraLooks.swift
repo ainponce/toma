@@ -5,17 +5,18 @@ import Foundation
 /// Custom is a 3D LUT of 33³ made here, which the render uploads as an `rgba16Float` texture and samples trilinearly
 /// with `uvw = c (N − 1) / N + 0.5 / N`. Natural is the identity and draws nothing; Custom is the user's `.cube`.
 ///
-/// Each look takes the color, clamped to 0…1, to linear light (IEC 61966-2-1), adds its tint, moves it from or
-/// towards its gray by its saturation (`L + s (c − L)`, with `L` the Rec. 709 luma in linear light), encodes it again,
-/// then sets its contrast around the middle (`0.5 + k (c − 0.5)`) and lifts its blacks (`b + c (1 − b)`): in that order,
-/// each step clamped to 0…1.
+/// Each look takes the color, clamped to 0…1, to linear light (IEC 61966-2-1), multiplies it by its white balance (a
+/// gain per channel: black stays black), moves it from or towards its gray by its saturation (`L + s (c − L)`, with `L`
+/// the Rec. 709 luma in linear light), encodes it again, then sets its contrast around mid-grey (`0.5 + k (c − 0.5)`)
+/// and last sets its blacks: what the contrast made of black, `c₀ = max(0, 0.5 − 0.5 k)`, goes to `b` and 1 stays 1
+/// (`b + (c − c₀) (1 − b) / (1 − c₀)`, the identity when `b` and `c₀` are 0). In that order, each step clamped to 0…1.
 ///
-/// | Look | Tint (linear) | Saturation | Contrast | Blacks |
+/// | Look | White balance (linear) | Saturation | Contrast | Blacks |
 /// |---|---|---|---|---|
-/// | Warm | R + 0.06, B − 0.05 | 1.05 | 1 | 0 |
-/// | Cool | R − 0.04, B + 0.06 | 1 | 1 | 0 |
+/// | Warm | R × 1.06, B × 0.95 | 1.05 | 1 | 0 |
+/// | Cool | R × 0.96, B × 1.06 | 1 | 1 | 0 |
 /// | Vivid | — | 1.3 | 1.1 | 0 |
-/// | Soft | — | 0.9 | 0.9 | 0.04 |
+/// | Soft | — | 0.9 | 0.9 (black to 0.05) | 0.04 (black to exactly 0.04; white, from 0.95, to 0.9495) |
 /// | Black and white | — | 0 (the luma) | 1.05 | 0 |
 ///
 /// Frozen once merged (`cameraLook1IsFrozen`): a different look is a new id.
@@ -51,35 +52,36 @@ public enum CameraLooks {
 
 /// The four numbers of a look.
 private struct Recipe {
-    /// Added in linear light.
-    var tint: SIMD3<Double>
+    /// The white balance: a gain per channel, in linear light.
+    var gain: SIMD3<Double>
     /// In linear light, around the Rec. 709 luma: 1 keeps the color, 0 is its gray.
     var saturation: Double
     /// Encoded, around 0.5.
     var contrast: Double
-    /// Encoded: what black becomes, white staying white.
+    /// Encoded: what black becomes in the end, white staying white.
     var blacks: Double
 
     init?(_ preset: CameraColorPreset) {
         switch preset {
         case .natural, .custom: return nil
-        case .warm: (tint, saturation, contrast, blacks) = (SIMD3(0.06, 0, -0.05), 1.05, 1, 0)
-        case .cool: (tint, saturation, contrast, blacks) = (SIMD3(-0.04, 0, 0.06), 1, 1, 0)
-        case .vivid: (tint, saturation, contrast, blacks) = (SIMD3(0, 0, 0), 1.3, 1.1, 0)
-        case .soft: (tint, saturation, contrast, blacks) = (SIMD3(0, 0, 0), 0.9, 0.9, 0.04)
-        case .mono: (tint, saturation, contrast, blacks) = (SIMD3(0, 0, 0), 0, 1.05, 0)
+        case .warm: (gain, saturation, contrast, blacks) = (SIMD3(1.06, 1, 0.95), 1.05, 1, 0)
+        case .cool: (gain, saturation, contrast, blacks) = (SIMD3(0.96, 1, 1.06), 1, 1, 0)
+        case .vivid: (gain, saturation, contrast, blacks) = (SIMD3(1, 1, 1), 1.3, 1.1, 0)
+        case .soft: (gain, saturation, contrast, blacks) = (SIMD3(1, 1, 1), 0.9, 0.9, 0.04)
+        case .mono: (gain, saturation, contrast, blacks) = (SIMD3(1, 1, 1), 0, 1.05, 0)
         }
     }
 
     func apply(_ rgb: SIMD3<Double>) -> SIMD3<Double> {
         var c = Self.clamped(rgb)
         c = SIMD3(Self.linear(c.x), Self.linear(c.y), Self.linear(c.z))
-        c = Self.clamped(c + tint)
+        c = Self.clamped(c * gain)
         let luma = 0.2126 * c.x + 0.7152 * c.y + 0.0722 * c.z
         c = Self.clamped(luma + saturation * (c - luma))
         c = SIMD3(Self.encoded(c.x), Self.encoded(c.y), Self.encoded(c.z))
         c = Self.clamped(0.5 + contrast * (c - 0.5))
-        return Self.clamped(blacks + c * (1 - blacks))
+        let contrastBlack = max(0, 0.5 - 0.5 * contrast)
+        return Self.clamped(blacks + (c - contrastBlack) * ((1 - blacks) / (1 - contrastBlack)))
     }
 
     /// IEC 61966-2-1: sRGB-encoded to linear light.

@@ -258,18 +258,31 @@ extension EditDocument {
     /// A change of the value at `pointer` to `value`; `nil` if the pointer names nothing in this document, `value`
     /// is what is there already or `value` cannot be encoded. An optional member left out (a `transcript` that is `nil`)
     /// is named if the document has a place for it: the change adds it from `null`, as one with a `nil` value takes it
-    /// away to `null` (plan decision 4 of phase 2).
+    /// away to `null` (plan decision 4 of phase 2). `value` is written as the document writes it: one its type leaves out
+    /// of the JSON (a `breakBefore` of `false`) takes the member away, so the change is one `applying` takes.
     public func setChange(_ pointer: String, _ value: some Encodable) -> EditChange? {
         guard let path = try? JSONPointer(pointer), let json = try? jsonValue(), let after = try? JSONValue(encoding: value)
         else { return nil }
         if let before = json.value(at: path) {
-            return after == before ? nil : .set(path: path, before: before, after: after)
+            guard after != before else { return nil }
+            let written = Self.written(after, at: path, replacing: before, in: json)
+            return written == before ? nil : .set(path: path, before: before, after: written)
         }
         // Not there: a member of an object that is, which the document can hold once added.
         let parent = JSONPointer(components: Array(path.components.dropLast()))
         guard !path.components.isEmpty, after != .null, case .object? = json.value(at: parent) else { return nil }
         let change = EditChange.set(path: path, before: .null, after: after)
         return (try? applying([change])) == nil ? nil : change
+    }
+
+    /// `value` at `path` of `json`, a document, as the document writes it once it holds it there instead of `before`:
+    /// `null` for one its type leaves out of the JSON (a default that is not written), `value` itself for any other, and
+    /// for one the document cannot hold (`applying` refuses it, and says where).
+    private static func written(_ value: JSONValue, at path: JSONPointer, replacing before: JSONValue, in json: JSONValue) -> JSONValue {
+        guard let changed = try? json.applying([.set(path: path, before: before, after: value)]),
+            let document = try? changed.decoded(as: EditDocument.self), let canonical = try? document.jsonValue()
+        else { return value }
+        return canonical.value(at: path) ?? .null
     }
 
     /// The insertion of `value` into `collection` at `index`. A value that cannot be encoded (a non-finite number)
