@@ -263,6 +263,9 @@ final class EditorModel {
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
     @ObservationIgnored private var mixGeneration = 0
+    /// Whether the project's first mix is being made (`makeMix`): the voice's analysis that arrives meanwhile is read into
+    /// it once it is made, instead of making it again.
+    @ObservationIgnored private var makingMix = false
     /// Which revision's mix the player holds and which one is heard.
     @ObservationIgnored private var sound = PlayingMix()
     /// The revision of the session's document shown.
@@ -524,12 +527,16 @@ final class EditorModel {
     }
 
     /// The mix of the document as it opened, off the main thread: it reads where every audio segment ends. Playback
-    /// follows the host's clock until it is there.
+    /// follows the host's clock until it is there. The voice's analysis that arrives while it is made (the caches of a
+    /// project opened again) is read into it once it is made (`EditedMix.with(analysis:)`, which decodes nothing again):
+    /// the project's audio is decoded once.
     private func makeMix(of project: LoadedProject, document: EditDocument, revision: Int) {
         mixGeneration += 1
+        makingMix = true
         let generation = mixGeneration, analysis = analysis
         Task {
-            let mix: EditedMix
+            defer { if generation == mixGeneration { makingMix = false } }
+            var mix: EditedMix
             do {
                 mix = try await EditedMix.make(
                     project: project, document: document, framesPerSecond: document.frameRate, analysis: analysis)
@@ -537,20 +544,26 @@ final class EditorModel {
                 Self.logger.error("No preview sound for \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
                 return
             }
+            while !closed, generation == mixGeneration, !EditedMix.hearsTheSame(mix.analysis, self.analysis) {
+                mix = await mix.with(analysis: self.analysis)
+            }
             guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
             baseMix = mix
             if let player {
                 // Remade with new analysis: the player takes the revision shown's mix as it is built.
                 player.setMix(mix)
-                if let session { build(session.document, revision: session.revision) }
+                showCurrentDocument()
                 return
             }
             let player = PreviewAudioPlayer(mix: mix)
             self.player = player
             sound.hold(document)
-            if shownRevision != revision, let session {
+            if isGesturing {
+                // The gesture's look, with the mix.
+                showGesture()
+            } else if shownRevision != revision, session != nil {
                 // Edited meanwhile: the mix (and scene) of the revision shown, played once built if playing.
-                build(session.document, revision: session.revision)
+                showSessionRevision()
             } else if isPlaying {
                 startClock(at: clockSeconds())
             }
@@ -618,6 +631,7 @@ final class EditorModel {
         player = nil
         sound = PlayingMix()
         baseMix = nil
+        makingMix = false
         missingVideoCheck = nil
         missingVideo = []
         timeline = nil
@@ -758,6 +772,13 @@ final class EditorModel {
         build(session.document, revision: session.revision)
     }
 
+    /// The preview is built again as it is shown now (with a new mix or analysis): the gesture's look while one lasts
+    /// (a session revision's build would put the document from before the drag back and drop the drag's own builds on
+    /// their way, `PreviewBuilds`), otherwise the session's document.
+    private func showCurrentDocument() {
+        if isGesturing { showGesture() } else { showSessionRevision() }
+    }
+
     /// Builds the scene and the mix of session revision `revision`, `document`, with the look still held, if one is.
     private func build(_ document: EditDocument, revision: Int) {
         guard let builder else { return }
@@ -777,24 +798,27 @@ final class EditorModel {
     }
 
     /// A feature's analysis arrived (or went): `edit` changes what the preview and the export read of the caches. The
-    /// preview's scene is built again with it and the mix is remade (off the main thread), then the revision shown is
-    /// drawn again. Nothing happens if `edit` changes nothing.
+    /// preview's scene is built again with it (the gesture's look while one lasts) and, when what the mix reads changed
+    /// (`EditedMix.hearsTheSame`: the clean voice, the loudness), the mix is remade (off the main thread), then what is
+    /// shown is built again with it. Nothing happens if `edit` changes nothing.
     func updateAnalysis(_ edit: (inout AnalysisInputs) -> Void) {
         var next = analysis
         edit(&next)
         guard next != analysis else { return }
+        let heard = !EditedMix.hearsTheSame(next, analysis)
         analysis = next
         guard state == .ready, let session else { return }
-        showSessionRevision()
-        refreshMix(of: session)
+        showCurrentDocument()
+        if heard { refreshMix(of: session) }
     }
 
     /// The mix read with the analysis as it is now (plan 2a decision 18): the base mix with it (`EditedMix.with(analysis:)`,
-    /// which opens only the clean files it names and decodes nothing again), then the revision shown is built and heard
-    /// with it; made whole while the first mix is still being made.
+    /// which opens only the clean files it names and decodes nothing again), then what is shown is built and heard with
+    /// it. While the first mix is being made, it reads the analysis once it is (`makeMix`); made whole if there is none
+    /// (it could not be made).
     private func refreshMix(of session: EditSession) {
         guard let base = baseMix else {
-            makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
+            if !makingMix { makeMix(of: currentProject(of: session), document: session.document, revision: session.revision) }
             return
         }
         mixGeneration += 1
@@ -804,7 +828,7 @@ final class EditorModel {
             guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
             baseMix = mix
             player?.setMix(mix)
-            if let session = self.session { build(session.document, revision: session.revision) }
+            showCurrentDocument()
         }
     }
 

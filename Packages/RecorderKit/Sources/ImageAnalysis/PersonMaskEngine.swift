@@ -4,6 +4,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import ProjectFormat
 import Synchronization
 import Vision
 import VideoToolbox
@@ -106,7 +107,7 @@ private final class VisionPersonSequence: PersonSegmenter, @unchecked Sendable {
 ///   `to` is removed.
 public enum PersonMaskEngine {
     /// The algorithm of the masks, with its version: another way of making them is another id, and another file.
-    public static let algorithm = "personMask-1"
+    public static let algorithm = CameraSegment.personMaskID
     /// The mask movie's average bit rate per pixel and frame.
     static let bitsPerPixel = 0.15
 

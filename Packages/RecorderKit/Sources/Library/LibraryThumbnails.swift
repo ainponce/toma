@@ -9,14 +9,16 @@ import ProjectFormat
 import Render
 import Synchronization
 
-/// The library's thumbnails (design §6.8, plan decision 26, `thumb-1`): each project as it is exported (style, layout,
+/// The library's thumbnails (design §6.8, plan decision 26, `thumb-2`): each project as it is exported (style, layout,
 /// camera) at output instant `time(outputSeconds:)`, drawn by the export's `FrameRenderer` from its document as
-/// `EditSession.readDocument` reads it, at the size of its aspect inside `pixelSize`, and kept as HEIC in `directory`
-/// as `<key>.heic`. The key comes from what the package holds (`key(of:)`, `key(manifest:edit:log:size:)`): a change to
-/// the project gives another thumbnail, and a copy that did not change shares its original's. A project never opened in
-/// the editor has no edit files: it is drawn with the new document of `EditContext.defaultStyle` (without an image
-/// background, which only opening it copies into the package), which the key does not cover, so its thumbnail can show a
-/// default style changed since, until it is opened (which writes its log, and so changes its key).
+/// `EditSession.readDocument` reads it with what its analysis caches hold of the camera (`drawn(_:document:caches:)`),
+/// at the size of its aspect inside `pixelSize`, and kept as HEIC in `directory` as `<key>.heic`. The key comes from what
+/// the package holds and the camera's analysis files in its caches (`key(of:cachesRoot:)`,
+/// `key(manifest:edit:log:size:analysis:)`): a change to the project, or a mask or a face made, gives another thumbnail,
+/// and a copy that did not change shares its original's. A project never opened in the editor has no edit files: it is
+/// drawn with the new document of `EditContext.defaultStyle` (without an image background, which only opening it copies
+/// into the package), which the key does not cover, so its thumbnail can show a default style changed since, until it is
+/// opened (which writes its log, and so changes its key).
 ///
 /// What the caller decides: which cards to draw (the visible ones, two at a time and with a low priority, cancelling a card
 /// that scrolls away), and which projects may be looked at (`mayDraw(place:volume:opened:)`): never, by itself, one of
@@ -39,7 +41,7 @@ public actor LibraryThumbnails {
     /// What the cache may take on the disk (design §13.4).
     public static let maxCacheBytes: Int64 = 500 * 1_048_576
     /// The version of how a thumbnail looks, in its key: what it shows, where, how big and how it is encoded.
-    static let version = "thumb-1"
+    static let version = "thumb-2"
     /// The quality of the HEIC. Below 1, ImageIO's encoder stays at about 40 dB (PSNR) of the frame drawn on sharp
     /// coloured edges, as a screen has, from 0.92 up (0.9 falls under it); at 1, 47 dB, in the same time (10 ms for
     /// 520 × 292) and about 65 KB, 7 500 thumbnails in `maxCacheBytes`.
@@ -99,11 +101,12 @@ public actor LibraryThumbnails {
         return min(0.1 * outputSeconds, 20)
     }
 
-    /// The key of the thumbnail of a package (plan decision 26): SHA-256, in lowercase hex, of `thumb-1`, `\n`, the
+    /// The key of the thumbnail of a package (plan decision 26): SHA-256, in lowercase hex, of `thumb-2`, `\n`, the
     /// bytes of `manifest.json`, `\n`, those of `edit.json` (nothing without it), `\n`, the size and the modification date
-    /// in nanoseconds of `edit-log.jsonl` as `<size> <date>` (nothing without it), `\n`, and the box the thumbnail is
-    /// drawn in, `size`, as `<width>x<height>`.
-    public static func key(manifest: Data, edit: Data?, log: FileSignature?, size: SIMD2<Int>) -> String {
+    /// in nanoseconds of `edit-log.jsonl` as `<size> <date>` (nothing without it), `\n`, the box the thumbnail is drawn
+    /// in, `size`, as `<width>x<height>`, `\n`, and the camera's analysis files in the project's caches, `analysis`
+    /// (`analysisSignature(_:)`; nothing without any).
+    public static func key(manifest: Data, edit: Data?, log: FileSignature?, size: SIMD2<Int>, analysis: String = "") -> String {
         var hasher = SHA256()
         hasher.update(data: Data("\(version)\n".utf8))
         hasher.update(data: manifest)
@@ -111,8 +114,73 @@ public actor LibraryThumbnails {
         if let edit { hasher.update(data: edit) }
         hasher.update(data: Data("\n".utf8))
         if let log { hasher.update(data: Data("\(log.size) \(log.modified)".utf8)) }
-        hasher.update(data: Data("\n\(size.x)x\(size.y)".utf8))
+        hasher.update(data: Data("\n\(size.x)x\(size.y)\n".utf8))
+        hasher.update(data: Data(analysis.utf8))
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// What the thumbnail reads of the camera's analysis in `caches`, as its key covers it: a line
+    /// `<folder>/<take>/<track>/<name> <size> <date>` (the modification date in nanoseconds) for every file committed in
+    /// its `masks/` and `faces/` folders (`CameraAnalysisCaches`), in order: a regular file whose name does not start with
+    /// `.` (a job's temporary is hidden until it is committed). A mask or a face made, or gone, gives another key.
+    /// Directory listings and `lstat` only, never a file's bytes nor a link followed: a light read, never on the main
+    /// thread.
+    static func analysisSignature(_ caches: ProjectCaches) -> String {
+        var lines: [String] = []
+        for folder in [AnalysisCacheFolder.masks, .faces] {
+            let top = caches.folder(folder)
+            for take in entries(of: top, type: S_IFDIR) {
+                let takeFolder = top.appending(path: take.name, directoryHint: .isDirectory)
+                for track in entries(of: takeFolder, type: S_IFDIR) {
+                    let trackFolder = takeFolder.appending(path: track.name, directoryHint: .isDirectory)
+                    for file in entries(of: trackFolder, type: S_IFREG) {
+                        lines.append("\(folder.rawValue)/\(take.name)/\(track.name)/\(file.name) \(file.size) \(file.modified)")
+                    }
+                }
+            }
+        }
+        return lines.sorted().joined(separator: "\n")
+    }
+
+    /// The entries of type `type` (`S_IFDIR`, `S_IFREG`) of the folder at `url` whose names do not start with `.`, by
+    /// `lstat`, with their size and modification date in nanoseconds; none unless `url` is a folder (not a link).
+    private static func entries(of url: URL, type: mode_t) -> [(name: String, size: Int64, modified: Int64)] {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR,
+              let names = try? FileManager.default.contentsOfDirectory(atPath: url.path)
+        else { return [] }
+        return names.filter { !$0.hasPrefix(".") }.compactMap { name in
+            var info = stat()
+            guard lstat(url.appending(path: name, directoryHint: .notDirectory).path, &info) == 0,
+                  info.st_mode & S_IFMT == type
+            else { return nil }
+            let modified = Int64(info.st_mtimespec.tv_sec) * 1_000_000_000 + Int64(info.st_mtimespec.tv_nsec)
+            return (name, Int64(info.st_size), modified)
+        }
+    }
+
+    /// What the thumbnail of `project` draws (final review of phase 2): `document` with what `caches` hold of its camera's
+    /// analysis (`CameraAnalysisCaches.fill`: the masks while the background is not Original, the faces while the framing
+    /// follows the face), which it never makes. A Blurred or Removed camera with a segment the render can draw
+    /// (`SegmentAvailability.present`) still without its mask is left out (`camera.show` off) rather than drawn with the
+    /// room behind the person; Follow the Face without its faces stays centred, as the preview does until they arrive.
+    /// Reads the disk: never on the main thread.
+    static func drawn(
+        _ project: LoadedProject, document: EditDocument, caches: ProjectCaches
+    ) -> (document: EditDocument, analysis: AnalysisInputs) {
+        var analysis = AnalysisInputs()
+        CameraAnalysisCaches.fill(&analysis, document: document, take: project.take, package: project.package, caches: caches)
+        var drawn = document
+        if document.camera.background != .original,
+           let track = CameraAnalysisCaches.cameraTrack(document: document, take: project.take),
+           track.segments.contains(where: { segment in
+               SegmentAvailability.classify(segment, in: project.package) == .present
+                   && analysis.personMasks[CameraSegment(take: project.take.id, track: track.id, segment: segment.index)] == nil
+           })
+        {
+            drawn.camera.show = false
+        }
+        return (drawn, analysis)
     }
 
     /// The size a thumbnail of `aspect` is drawn at: the largest output of that aspect (`StageLayout`'s, both sides even)
@@ -139,8 +207,9 @@ public actor LibraryThumbnails {
         return volume.isInternal && !volume.isRemovable
     }
 
-    /// The thumbnail of key `key` (`ProjectSummary.thumbnailKey`, `key(of:)`) from the cache, which counts as a use of
-    /// it; `nil` if there is none or it cannot be read. Read and decoded on the actor's queue, also while a take records.
+    /// The thumbnail of key `key` (`ProjectSummary.thumbnailKey`, `key(of:cachesRoot:)`) from the cache, which counts as
+    /// a use of it; `nil` if there is none or it cannot be read. Read and decoded on the actor's queue, also while a take
+    /// records.
     public func cached(_ key: String) async -> CGImage? {
         let directory = self.directory, hooks = self.hooks
         return await onWork {
@@ -157,9 +226,9 @@ public actor LibraryThumbnails {
     /// all of them are cancelled.
     public func render(_ url: URL, summary: ProjectSummary, context: EditContext) async -> CGImage? {
         guard Self.isDrawable(summary.state) else { return nil }
-        let directory = self.directory, hooks = self.hooks
+        let directory = self.directory, hooks = self.hooks, cachesRoot = context.cachesRoot
         guard let looked = await onWork({ () -> (key: String, cached: CGImage?)? in
-            guard let key = try? Self.key(of: url) else { return nil }
+            guard let key = try? Self.key(of: url, cachesRoot: cachesRoot) else { return nil }
             hooks.beforeReading?()
             return (key, Self.read(key, in: directory))
         }) else { return nil }
@@ -196,6 +265,7 @@ public actor LibraryThumbnails {
     private func draw(_ url: URL, key: String, context: EditContext) async -> CGImage? {
         let stopped = Flag()
         let isRecording = self.isRecording, directory = self.directory, maxBytes = self.maxBytes, hooks = self.hooks
+        let cachesRoot = context.cachesRoot
         let shouldStop: @Sendable () -> Bool = { isRecording() || stopped.isSet }
         let drawn = await withTaskCancellationHandler {
             await withCheckedContinuation { (continuation: CheckedContinuation<(image: CGImage?, drew: Bool), Never>) in
@@ -207,7 +277,8 @@ public actor LibraryThumbnails {
                         // next time), and neither encoded nor written once a take records: nothing competes with it.
                         let file = Self.file(key, in: directory)
                         let stored =
-                            if let image, !shouldStop(), (try? Self.key(of: url)) == key, let heic = Self.heic(image),
+                            if let image, !shouldStop(), (try? Self.key(of: url, cachesRoot: cachesRoot)) == key,
+                               let heic = Self.heic(image),
                                !shouldStop()
                             {
                                 Self.write(heic, to: file)
@@ -236,11 +307,13 @@ public actor LibraryThumbnails {
         }
     }
 
-    /// The key of the thumbnail of the package at `url` as it is now, at `pixelSize`: what the index keeps as
-    /// `ProjectSummary.thumbnailKey`, for `cached(_:)`. `manifest.json` (at most `ProjectReader.maxManifestBytes`) and
-    /// `edit.json` are read with `SafeRead`, never through a link, and `edit-log.jsonl` looked at with `lstat`: light reads,
-    /// never on the main thread. Throws what reading them throws (a missing `edit.json` or log is part of the key).
-    public static func key(of url: URL) throws -> String {
+    /// The key of the thumbnail of the package at `url` as it is now, at `pixelSize`, with the camera's analysis files of
+    /// its caches in `cachesRoot` (`EditContext.cachesRoot`; `analysisSignature(_:)` of the folder its manifest's id names,
+    /// none if the manifest does not decode): what the index keeps as `ProjectSummary.thumbnailKey`, for `cached(_:)`.
+    /// `manifest.json` (at most `ProjectReader.maxManifestBytes`) and `edit.json` are read with `SafeRead`, never through a
+    /// link, and `edit-log.jsonl` looked at with `lstat`: light reads, never on the main thread. Throws what reading them
+    /// throws (a missing `edit.json` or log is part of the key).
+    public static func key(of url: URL, cachesRoot: URL) throws -> String {
         let package = ProjectPackage(url: url)
         let manifest = try SafeRead.regularFile(at: package.manifestURL, maxBytes: ProjectReader.maxManifestBytes)
         let edit: Data?
@@ -259,28 +332,34 @@ public actor LibraryThumbnails {
         } else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
-        return key(manifest: manifest, edit: edit, log: log, size: pixelSize)
+        let analysis = (try? ProjectJSON.decoder().decode(Manifest.self, from: manifest)).map { decoded in
+            analysisSignature(ProjectCaches(root: cachesRoot, projectID: decoded.resolvedProjectID))
+        }
+        return key(manifest: manifest, edit: edit, log: log, size: pixelSize, analysis: analysis ?? "")
     }
 
-    /// Calls `finish` with the frame at `time(outputSeconds:)` of the project at `url` as the export draws it, at
-    /// `size(for:)` of its aspect (`nil` if the GPU could not draw it), or `stopped` if nothing was drawn: the document
-    /// could not be read (with the take's event log, which the cursor and the clicks come from: `readDocument` throws
-    /// for one it cannot read, so no thumbnail is ever kept without them) or the renderer made, or `shouldStop()` once
-    /// the document is read. One of them, once. The document is read without a lock and without writing anything.
-    /// Decodes and waits for the GPU: never on the cooperative pool. The renderer goes only after `finish` returns:
-    /// closing its readers (`AVAssetReader.cancelReading`) takes some 20 ms, which the thumbnail need not wait for.
+    /// Calls `finish` with the frame at `time(outputSeconds:)` of the project at `url` as the export draws it with what
+    /// its caches hold of the camera's analysis (`drawn(_:document:caches:)`), at `size(for:)` of its aspect (`nil` if
+    /// the GPU could not draw it), or `stopped` if nothing was drawn: the document could not be read (with the take's
+    /// event log, which the cursor and the clicks come from: `readDocument` throws for one it cannot read, so no
+    /// thumbnail is ever kept without them) or the renderer made, or `shouldStop()` once the document is read. One of
+    /// them, once. The document is read without a lock and without writing anything. Decodes and waits for the GPU:
+    /// never on the cooperative pool. The renderer goes only after `finish` returns: closing its readers
+    /// (`AVAssetReader.cancelReading`) takes some 20 ms, which the thumbnail need not wait for.
     private static func draw(
         _ url: URL, context: EditContext, shouldStop: () -> Bool, then finish: (CGImage?) -> Void,
         stopped: () -> Void
     ) {
         let renderer: FrameRenderer, size: SIMD2<Int>
         do {
-            let (project, document) = try EditSession.readDocument(url, take: nil, context: context)
+            let (project, read) = try EditSession.readDocument(url, take: nil, context: context)
             guard !shouldStop() else { return stopped() }
+            let caches = ProjectCaches(root: context.cachesRoot, projectID: project.manifest.resolvedProjectID)
+            let (document, analysis) = drawn(project, document: read, caches: caches)
             size = Self.size(
                 for: document.aspect,
                 contentRatio: StageLayout.contentRatio(take: project.take, document: document, events: project.events))
-            renderer = try FrameRenderer(project: project, document: document, outputSize: size)
+            renderer = try FrameRenderer(project: project, document: document, outputSize: size, analysis: analysis)
         } catch {
             return stopped()
         }

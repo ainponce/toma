@@ -29,6 +29,11 @@ private enum Thumbs {
         ProjectReader.summary(of: url, place: place, fileSystem: SystemFileSystem(), context: context(dir), now: now)
     }
 
+    /// `LibraryThumbnails.key(of:cachesRoot:)` of the package at `url`, with the caches of `context(dir)`.
+    static func key(_ url: URL, in dir: URL) throws -> String {
+        try LibraryThumbnails.key(of: url, cachesRoot: context(dir).cachesRoot)
+    }
+
     /// The folder the thumbnails of a test go to.
     static func cache(_ dir: URL) -> URL {
         dir.appending(path: "thumbnails", directoryHint: .isDirectory)
@@ -56,6 +61,57 @@ private enum Thumbs {
             InputEvent(t: base.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: frame, scale: 1))
         ])
         return try builder.write().package.url
+    }
+
+    /// The camera's frame of `cameraTake`: the person over a checkerboard (`CameraPictureFixtures.person`).
+    static let personFrame = CameraPictureFixtures.bytes(width: 640, height: 360) {
+        CameraPictureFixtures.person($0, $1, width: 640, height: 360)
+    }
+
+    /// A project of a display (`display`'s) and a camera of the person (`personFrame`) in two segments of `seconds / 2`,
+    /// at 10 fps, whose document draws its camera with `background` (and `framing`), written in its edit log: the
+    /// package's URL, the project and its document as `EditSession` reads them, and the caches of `context(dir)`.
+    static func cameraTake(
+        in dir: URL, name: String, seconds: Double = 2, background: CameraBackground,
+        framing: CameraFramingMode = .center
+    ) async throws -> (url: URL, project: LoadedProject, document: EditDocument, caches: ProjectCaches) {
+        let builder = try TakeBuilder(in: dir, name: name)
+        let base = HostTime(nanoseconds: 5_000_000_000_000)
+        try await builder.addVideoTrack(
+            id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: frame, pixelScale: 1),
+            segments: [VideoSegmentSpec(start: base, seconds: seconds, framesPerSecond: 10, width: 640, height: 360)])
+        try await builder.addVideoTrack(
+            id: "camera", kind: .camera, source: TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera"),
+            segments: [0, seconds / 2].map { from in
+                VideoSegmentSpec(
+                    start: base.adding(seconds: from), seconds: seconds / 2, framesPerSecond: 10, width: 640, height: 360,
+                    transform: { _, sample in CameraPictureFixtures.copying(sample, bytes: personFrame) })
+            })
+        try builder.addEvents([
+            InputEvent(t: base.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: frame, scale: 1))
+        ])
+        let project = try builder.write()
+        var document = EditDocument.legacy(for: project)
+        document.logSequence = 1
+        document.camera.background = background
+        document.camera.framing.mode = framing
+        let line = try EditLogEntry.create(seq: 1, document: document, app: app).jsonLine()
+        try DurableFile.writeAtomically(Data((line + "\n").utf8), to: project.package.editLogURL)
+        let url = project.package.url
+        let (read, shown) = try EditSession.readDocument(url, take: nil, context: context(dir))
+        #expect(shown.camera.show && shown.camera.background == background && shown.camera.framing.mode == framing)
+        return (url, read, shown, ProjectCaches(root: context(dir).cachesRoot, projectID: read.manifest.resolvedProjectID))
+    }
+
+    /// The camera's segments of `project`, in order.
+    static func cameraSegments(_ project: LoadedProject) throws -> [SegmentRecord] {
+        try #require(project.take.track("camera")).segments.sorted { $0.index < $1.index }
+    }
+
+    /// The mask's cache file of camera segment `segment` of `project` in `caches`.
+    static func maskFile(_ segment: SegmentRecord, of project: LoadedProject, in caches: ProjectCaches) throws -> URL {
+        let identity = try #require(SegmentIdentity.of(segment, in: project.package))
+        return try #require(CameraAnalysisCaches.maskFile(take: project.take.id, track: "camera", identity: identity, caches: caches))
     }
 
     /// The frame at `seconds` of the project at `url` as the export draws it, `size` big, as BGRA bytes: its document as
@@ -191,13 +247,13 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             let context = Thumbs.context(dir)
             let first = try #require(await thumbnails.render(url, summary: Thumbs.summary(url, in: dir), context: context))
             #expect(await thumbnails.renders == 1)
-            let original = try LibraryThumbnails.key(of: url)
+            let original = try Thumbs.key(url, in: dir)
             #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(original).heic"])
 
             // A copy that did not change, as the library duplicates (a clone, with the files' dates), shares it.
             let copy = dir.appending(path: "copy.toma", directoryHint: .isDirectory)
             #expect(clonefile(url.path, copy.path, 0) == 0)
-            #expect(try LibraryThumbnails.key(of: copy) == original)
+            #expect(try Thumbs.key(copy, in: dir) == original)
             let shared = try #require(await thumbnails.render(copy, summary: Thumbs.summary(copy, in: dir), context: context))
             #expect(await thumbnails.renders == 1)
             #expect(try Thumbs.bgra(shared) == Thumbs.bgra(try #require(await thumbnails.cached(original))))
@@ -211,7 +267,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             document.sequence[0].end = document.sequence[0].start.adding(seconds: 0.25)
             let line = try EditLogEntry.create(seq: 1, document: document, app: Thumbs.app).jsonLine()
             try DurableFile.writeAtomically(Data((line + "\n").utf8), to: package.editLogURL)
-            let edited = try LibraryThumbnails.key(of: copy)
+            let edited = try Thumbs.key(copy, in: dir)
             #expect(edited != original)
             _ = try #require(await thumbnails.render(copy, summary: Thumbs.summary(copy, in: dir), context: context))
             #expect(await thumbnails.renders == 2)
@@ -243,7 +299,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             #expect(SIMD2(image.width, image.height) == SIMD2(164, 292))
             let expected = try await Thumbs.exportFrame(url, at: 0.05, size: SIMD2(164, 292), in: dir)
             #expect(try Thumbs.bgra(image) == expected)
-            let file = Thumbs.cache(dir).appending(path: "\(try LibraryThumbnails.key(of: url)).heic", directoryHint: .notDirectory)
+            let file = Thumbs.cache(dir).appending(path: "\(try Thumbs.key(url, in: dir)).heic", directoryHint: .notDirectory)
             let decoded = try Thumbs.decodeHEIC(file)
             #expect(SIMD2(decoded.width, decoded.height) == SIMD2(164, 292))
         }
@@ -254,7 +310,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         try await withTemporaryDirectory { dir in
             // Three projects that look the same, so their thumbnails are about as big, with keys of their own.
             let urls = try await LibraryFixtures.folder(in: dir, kinds: [.v3, .v3, .v3])
-            let keys = try urls.map { try LibraryThumbnails.key(of: $0) }
+            let keys = try urls.map { try Thumbs.key($0, in: dir) }
             #expect(Set(keys).count == 3)
             let cache = Thumbs.cache(dir), context = Thumbs.context(dir)
             func file(_ index: Int) -> URL { cache.appending(path: "\(keys[index]).heic", directoryHint: .notDirectory) }
@@ -318,7 +374,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             // …is still shown while it records, by its key (the index's) or by the project, a light read; only drawing
             // waits.
             recording.withLock { $0 = true }
-            let key = try LibraryThumbnails.key(of: urls[0])
+            let key = try Thumbs.key(urls[0], in: dir)
             #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(key).heic"])
             let byKey = try #require(await thumbnails.cached(key))
             let byProject = try #require(await thumbnails.render(urls[0], summary: drawn, context: context))
@@ -353,7 +409,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
     func aCardCancelledBeforeItsFrameIsDrawnDrawsAndWritesNothing() async throws {
         try await withTemporaryDirectory { dir in
             let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
-            let key = try LibraryThumbnails.key(of: url)
+            let key = try Thumbs.key(url, in: dir)
             let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
             let gate = DispatchSemaphore(value: 0)
             await thumbnails.setHooks(.init(beforeDrawing: { _ = gate.wait(timeout: .now() + 10) }))
@@ -384,7 +440,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
             let copy = dir.appending(path: "copy.toma", directoryHint: .isDirectory)
             #expect(clonefile(url.path, copy.path, 0) == 0)
-            let key = try LibraryThumbnails.key(of: url)
+            let key = try Thumbs.key(url, in: dir)
             let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
             let gate = DispatchSemaphore(value: 0)
             await thumbnails.setHooks(.init(beforeDrawing: { _ = gate.wait(timeout: .now() + 10) }))
@@ -414,7 +470,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             let images = await [first, second]
             #expect(images.allSatisfy { $0 != nil })
             #expect(await thumbnails.renders == 2)
-            let keys = try urls.map { "\(try LibraryThumbnails.key(of: $0)).heic" }
+            let keys = try urls.map { "\(try Thumbs.key($0, in: dir)).heic" }
             #expect(Thumbs.files(Thumbs.cache(dir)) == keys.sorted())
         }
     }
@@ -454,7 +510,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             try Thumbs.setModified(cache.appending(path: old, directoryHint: .notDirectory), to: Date().addingTimeInterval(-3600))
             let thumbnails = LibraryThumbnails(directory: cache, isRecording: { false })
             _ = try #require(await thumbnails.render(url, summary: Thumbs.summary(url, in: dir), context: Thumbs.context(dir)))
-            let left = [fresh, "\(try LibraryThumbnails.key(of: url)).heic"].sorted()
+            let left = [fresh, "\(try Thumbs.key(url, in: dir)).heic"].sorted()
             #expect(await eventually { Thumbs.files(cache) == left })
         }
     }
@@ -472,7 +528,7 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
                 let label = String(cString: __dispatch_queue_get_label(nil))
                 queues.withLock { $0.append(label) }
             }))
-            #expect(await thumbnails.cached(try LibraryThumbnails.key(of: url)) != nil)
+            #expect(await thumbnails.cached(try Thumbs.key(url, in: dir)) != nil)
             #expect(await thumbnails.render(url, summary: summary, context: context) != nil)
             #expect(queues.withLock { $0 } == ["dev.toma.Toma.LibraryThumbnails", "dev.toma.Toma.LibraryThumbnails"])
             #expect(await thumbnails.renders == 1)
@@ -552,7 +608,102 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             #expect(chmod(events.path, 0o644) == 0)
             _ = try #require(await thumbnails.render(url, summary: summary, context: Thumbs.context(dir)))
             #expect(await thumbnails.renders == 1)
-            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(try LibraryThumbnails.key(of: url)).heic"])
+            #expect(Thumbs.files(Thumbs.cache(dir)) == ["\(try Thumbs.key(url, in: dir)).heic"])
+        }
+    }
+
+    /// The camera's analysis in the caches (final review of phase 2): the thumbnail reads the masks and the faces
+    /// (`CameraAnalysisCaches.fill`), makes none, and leaves out a Blurred or Removed camera with a segment still
+    /// without its mask rather than show the room behind the person. A mask or a face committed is another key; a
+    /// temporary not committed is not.
+    @Test func thumbnailReadsTheCamerasAnalysisAndNeverShowsTheRoom() async throws {
+        try await withTemporaryDirectory { dir in
+            for background in [CameraBackground.removed, .blurred] {
+                let take = try await Thumbs.cameraTake(in: dir, name: "Camera \(background)", background: background)
+                let segments = try Thumbs.cameraSegments(take.project)
+                #expect(segments.count == 2)
+                let masks = try segments.map { try Thumbs.maskFile($0, of: take.project, in: take.caches) }
+                var keys = [try Thumbs.key(take.url, in: dir)]
+
+                var drawn = LibraryThumbnails.drawn(take.project, document: take.document, caches: take.caches)
+                #expect(!drawn.document.camera.show && drawn.analysis.personMasks.isEmpty)
+                // Half done: one segment without its mask still shows the room.
+                #expect(ProjectCaches.writeAnalysis(Data("mask".utf8), to: masks[0]))
+                keys.append(try Thumbs.key(take.url, in: dir))
+                drawn = LibraryThumbnails.drawn(take.project, document: take.document, caches: take.caches)
+                #expect(!drawn.document.camera.show && drawn.analysis.personMasks.count == 1)
+                // A temporary of the second mask's job is not a mask, nor another key.
+                let temporary = try ProjectCaches.temporaryFile(for: masks[1])
+                try Data("half".utf8).write(to: temporary)
+                #expect(try Thumbs.key(take.url, in: dir) == keys.last)
+                #expect(!LibraryThumbnails.drawn(take.project, document: take.document, caches: take.caches).document.camera.show)
+                // Both: the camera, with them, and nothing else of the document changed.
+                #expect(try ProjectCaches.commit(temporary, to: masks[1]))
+                keys.append(try Thumbs.key(take.url, in: dir))
+                drawn = LibraryThumbnails.drawn(take.project, document: take.document, caches: take.caches)
+                #expect(drawn.document == take.document)
+                #expect(drawn.analysis.personMasks == [
+                    CameraSegment(take: take.project.take.id, track: "camera", segment: segments[0].index): masks[0],
+                    CameraSegment(take: take.project.take.id, track: "camera", segment: segments[1].index): masks[1],
+                ])
+                #expect(Set(keys).count == 3)
+            }
+
+            // Original reads no mask, and hides nothing; Follow the Face reads the faces.
+            let face = try await Thumbs.cameraTake(in: dir, name: "Face", background: .original, framing: .face)
+            let segment = try #require(try Thumbs.cameraSegments(face.project).first)
+            let identity = try #require(SegmentIdentity.of(segment, in: face.project.package))
+            #expect(ProjectCaches.writeAnalysis(Data("mask".utf8), to: try Thumbs.maskFile(segment, of: face.project, in: face.caches)))
+            var drawn = LibraryThumbnails.drawn(face.project, document: face.document, caches: face.caches)
+            #expect(drawn.document == face.document && drawn.analysis == .none)
+            let before = try Thumbs.key(face.url, in: dir)
+            let track = CameraFaceTrack(
+                algorithm: CameraFaceTrack.id, frameSize: [640, 360],
+                samples: [CameraFaceSample(t: segment.startHostTime, face: NormalizedRect(x: 0.6, y: 0.2, width: 0.2, height: 0.3))])
+            let file = try #require(CameraAnalysisCaches.faceFile(
+                take: face.project.take.id, track: "camera", identity: identity, caches: face.caches))
+            #expect(ProjectCaches.writeAnalysis(try ProjectJSON.encoder().encode(track), to: file))
+            #expect(try Thumbs.key(face.url, in: dir) != before)
+            drawn = LibraryThumbnails.drawn(face.project, document: face.document, caches: face.caches)
+            #expect(drawn.document == face.document)
+            #expect(drawn.analysis.faceTracks == [CameraSegment(take: face.project.take.id, track: "camera", segment: segment.index): track])
+        }
+    }
+
+    /// Drawn: a Removed camera without its masks is left out of the thumbnail; with them, the person is drawn as the
+    /// export draws it with the caches' analysis, under another key.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func removedCameraIsDrawnWithItsMasksOrNotAtAll() async throws {
+        try await withTemporaryDirectory { dir in
+            let take = try await Thumbs.cameraTake(in: dir, name: "Removed", background: .removed)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            let context = Thumbs.context(dir)
+            func frame(_ document: EditDocument, _ analysis: AnalysisInputs, size: SIMD2<Int>) async throws -> [UInt8] {
+                let renderer = try FrameRenderer(project: take.project, document: document, outputSize: size, analysis: analysis)
+                return try await offThePool { try renderer.renderBytes(at: LibraryThumbnails.time(outputSeconds: renderer.duration)) }
+            }
+
+            let hidden = try #require(await thumbnails.render(take.url, summary: Thumbs.summary(take.url, in: dir), context: context))
+            let size = SIMD2(hidden.width, hidden.height)
+            var withoutCamera = take.document
+            withoutCamera.camera.show = false
+            #expect(try Thumbs.bgra(hidden) == (try await frame(withoutCamera, .none, size: size)))
+            #expect(try Thumbs.bgra(hidden) != (try await frame(take.document, .none, size: size)), "the room behind the person")
+
+            var analysis = AnalysisInputs()
+            for segment in try Thumbs.cameraSegments(take.project) {
+                let url = try Thumbs.maskFile(segment, of: take.project, in: take.caches)
+                try await CameraPictureFixtures.writeMask(
+                    to: url, scratch: dir.appending(path: "scratch", directoryHint: .isDirectory), start: segment.startHostTime,
+                    seconds: try #require(segment.endHostTime).seconds(since: segment.startHostTime), framesPerSecond: 10,
+                    width: 320, height: 180) { _, x, y in CameraPictureFixtures.personMask(x, y, width: 320, height: 180) }
+                analysis.personMasks[CameraSegment(take: take.project.take.id, track: "camera", segment: segment.index)] = url
+            }
+            let masked = try #require(await thumbnails.render(take.url, summary: Thumbs.summary(take.url, in: dir), context: context))
+            #expect(await thumbnails.renders == 2)
+            #expect(try Thumbs.bgra(masked) == (try await frame(take.document, analysis, size: size)))
+            #expect(try Thumbs.bgra(masked) != Thumbs.bgra(hidden))
+            #expect(Thumbs.files(Thumbs.cache(dir)).count == 2)
         }
     }
 

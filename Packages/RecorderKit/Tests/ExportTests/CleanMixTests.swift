@@ -282,6 +282,26 @@ private func flatLoudness(_ lufs: Double, wet wetLUFS: Double? = nil, blocks: In
     }
 }
 
+/// What a mix reads of the analysis is its clean voice and its loudness (final review of phase 2): a mask or a face that
+/// arrives leaves it as it is, so the editor never remakes it for one.
+@Test func onlyTheVoicesAnalysisIsHeard() {
+    let camera = CameraSegment(take: "take-001", track: "camera", segment: 0)
+    var picture = AnalysisInputs.none
+    picture.personMasks[camera] = URL(filePath: "/caches/masks/take-001/camera/seg-0001-personMask-1.mov")
+    picture.faceTracks[camera] = CameraFaceTrack(algorithm: CameraFaceTrack.id, frameSize: [640, 360], samples: [])
+    #expect(picture != .none)
+    #expect(EditedMix.hearsTheSame(picture, .none))
+    var voice = AnalysisInputs.none
+    voice.cleanVoice["take-001/mic-1"] = CleanVoice(files: [:])
+    #expect(!EditedMix.hearsTheSame(voice, .none) && !EditedMix.hearsTheSame(voice, picture))
+    var loud = AnalysisInputs.none
+    loud.loudness["take-001/mic-1"] = TrackLoudness(channels: 1, dry: [-30], wet: nil, cross: nil)
+    #expect(!EditedMix.hearsTheSame(loud, .none))
+    var both = voice
+    both.personMasks = picture.personMasks
+    #expect(EditedMix.hearsTheSame(both, voice))
+}
+
 /// The clean files gone while the mix plays (macOS emptied the caches): from the next range on the track sounds dry, at
 /// the gain that normalizes it dry, never silent.
 @Test func purgedCacheSoundsDry() async throws {

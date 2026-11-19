@@ -234,6 +234,12 @@ public final class EditedMix: Sendable {
             framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
+    /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice and the same loudness. The
+    /// person's masks and the faces are the picture's, so a mix made with one sounds as one made with the other.
+    public static func hearsTheSame(_ a: AnalysisInputs, _ b: AnalysisInputs) -> Bool {
+        a.cleanVoice == b.cleanVoice && a.loudness == b.loudness
+    }
+
     /// The clean voice of each of `source`'s tracks that `analysis` has, if it has it whole.
     private static func cleanLines(of source: Source, analysis: AnalysisInputs) async -> [AudioTrackTimeline?] {
         var lines: [AudioTrackTimeline?] = []

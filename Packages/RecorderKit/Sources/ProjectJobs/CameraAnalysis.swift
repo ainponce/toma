@@ -24,8 +24,8 @@ public enum CameraAnalysis {
     /// The jobs `document` needs for `take` (in `package`): the faces of each segment first (they are quick, and Follow
     /// the Face waits for them), then the masks, each in the segments' order. Reads each segment's `lstat`, never a file.
     public static func neededJobs(document: EditDocument, take: TakeRecord, package: ProjectPackage) -> [AnalysisJobKind] {
-        guard let track = cameraTrack(document: document, take: take) else { return [] }
-        let segments = analysable(track, in: package).map(\.index)
+        guard let track = CameraAnalysisCaches.cameraTrack(document: document, take: take) else { return [] }
+        let segments = CameraAnalysisCaches.analysable(track, in: package).map(\.index)
         var kinds: [AnalysisJobKind] = []
         if document.camera.framing.mode == .face {
             kinds += segments.map { .faceTrack(take: take.id, track: track.id, segment: $0) }
@@ -54,33 +54,13 @@ public enum CameraAnalysis {
         }
     }
 
-    /// `inputs` with its masks and faces replaced by what the caches hold whole for what `document` asks of `take`: the
-    /// committed mask movie of each segment (a regular file of some bytes at its name) while the background is not
-    /// `original`, and the face track that decodes as `faceTrack-1` while the framing follows the face; nothing else.
-    /// A temporary not committed is never at the name, and a JSON that does not decode is not there. Reads the disk:
-    /// never on the main thread.
+    /// `inputs` with its masks and faces replaced by what the caches hold whole for what `document` asks of `take`
+    /// (`CameraAnalysisCaches.fill`, which the library's thumbnails read with too). Reads the disk: never on the main
+    /// thread.
     public static func fill(
         _ inputs: inout AnalysisInputs, document: EditDocument, take: TakeRecord, package: ProjectPackage, caches: ProjectCaches
     ) {
-        var masks: [CameraSegment: URL] = [:]
-        var faces: [CameraSegment: CameraFaceTrack] = [:]
-        if let track = cameraTrack(document: document, take: take) {
-            for segment in analysable(track, in: package) {
-                guard let identity = SegmentIdentity.of(segment, in: package) else { continue }
-                let key = CameraSegment(take: take.id, track: track.id, segment: segment.index)
-                if document.camera.background != .original,
-                   let url = maskFile(take: take.id, track: track.id, identity: identity, caches: caches), isWholeFile(url) {
-                    masks[key] = url
-                }
-                if document.camera.framing.mode == .face,
-                   let url = faceFile(take: take.id, track: track.id, identity: identity, caches: caches),
-                   let face = readFaceTrack(url) {
-                    faces[key] = face
-                }
-            }
-        }
-        inputs.personMasks = masks
-        inputs.faceTracks = faces
+        CameraAnalysisCaches.fill(&inputs, document: document, take: take, package: package, caches: caches)
     }
 
     /// What an export does before it starts: every job `document` needs (`neededJobs`), asked of `jobs` first in its
@@ -138,10 +118,10 @@ public enum CameraAnalysis {
             guard let identity = SegmentIdentity.of(segment, in: package) else {
                 throw JobError(.sourceUnreadable(file: segment.file))
             }
-            guard let url = maskFile(take: take, track: track, identity: identity, caches: caches) else {
+            guard let url = CameraAnalysisCaches.maskFile(take: take, track: track, identity: identity, caches: caches) else {
                 throw JobError(.failed("The camera segment's names cannot name a cache file"))
             }
-            if isWholeFile(url) {
+            if CameraAnalysisCaches.isWholeFile(url) {
                 progress.report(1)
                 return .cached(url)
             }
@@ -178,10 +158,10 @@ public enum CameraAnalysis {
             guard let identity = SegmentIdentity.of(segment, in: package) else {
                 throw JobError(.sourceUnreadable(file: segment.file))
             }
-            guard let url = faceFile(take: take, track: track, identity: identity, caches: caches) else {
+            guard let url = CameraAnalysisCaches.faceFile(take: take, track: track, identity: identity, caches: caches) else {
                 throw JobError(.failed("The camera segment's names cannot name a cache file"))
             }
-            if readFaceTrack(url) != nil {
+            if CameraAnalysisCaches.readFaceTrack(url) != nil {
                 progress.report(1)
                 return .cached(url)
             }
@@ -208,47 +188,10 @@ public enum CameraAnalysis {
 
     // MARK: - Private
 
-    /// The camera track `CameraBubble` draws: the take's first camera track with a segment, unless the document hides
-    /// the camera.
-    private static func cameraTrack(document: EditDocument, take: TakeRecord) -> TrackRecord? {
-        guard document.camera.show else { return nil }
-        return take.tracks.first { $0.kind == .camera && !$0.segments.isEmpty }
-    }
-
-    /// The segments of `track` that can be analysed, in the order of their index: present, and not a link.
-    private static func analysable(_ track: TrackRecord, in package: ProjectPackage) -> [SegmentRecord] {
-        track.segments.sorted { $0.index < $1.index }.filter { segment in
-            SegmentAvailability.classify(segment, in: package) == .present && SegmentIdentity.of(segment, in: package) != nil
-        }
-    }
-
     /// Segment `index` of camera track `track` of `project`'s take, if `take` is it.
     private static func segment(_ index: Int, of track: String, take: String, in project: LoadedProject) -> SegmentRecord? {
         guard take == project.take.id, let record = project.take.track(track), record.kind == .camera else { return nil }
         return record.segments.first { $0.index == index }
-    }
-
-    private static func maskFile(take: String, track: String, identity: SegmentIdentity, caches: ProjectCaches) -> URL? {
-        caches.analysisFile(.masks, take: take, track: track, segment: identity, algorithm: PersonMaskEngine.algorithm, extension: "mov")
-    }
-
-    private static func faceFile(take: String, track: String, identity: SegmentIdentity, caches: ProjectCaches) -> URL? {
-        caches.analysisFile(.faces, take: take, track: track, segment: identity, algorithm: FaceTrackEngine.algorithm, extension: "json")
-    }
-
-    /// Whether a regular file of some bytes is at `url`, by `lstat` (a link is not followed).
-    private static func isWholeFile(_ url: URL) -> Bool {
-        var info = stat()
-        return lstat(url.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG && info.st_size > 0
-    }
-
-    /// The face track at `url`, if it is there and decodes as `faceTrack-1`.
-    private static func readFaceTrack(_ url: URL) -> CameraFaceTrack? {
-        guard let data = ProjectCaches.readAnalysis(url),
-              let face = try? ProjectJSON.decoder().decode(CameraFaceTrack.self, from: data),
-              face.algorithm == FaceTrackEngine.algorithm
-        else { return nil }
-        return face
     }
 
     /// The length of the segment of a camera job, in seconds; 0 for an open segment, one not in `take` and any other job.
