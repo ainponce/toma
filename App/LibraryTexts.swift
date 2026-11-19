@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import Library
+import ProjectFormat
 
 /// What the library says of a project in words, for the cards, the list and VoiceOver (design §6.6, §11, §12). The
 /// library's modules have no words: the codes and reasons they give are said here.
@@ -79,8 +80,15 @@ enum LibraryTexts {
             parts.append(
                 timeOnly ? recorded.formatted(date: .omitted, time: .shortened) : recorded.formatted(date: .abbreviated, time: .shortened))
         }
-        if let aspect = item.summary.aspect { parts.append(aspect.rawValue) }
+        if let aspect = item.summary.aspect { parts.append(aspectText(aspect)) }
         return parts.joined(separator: " · ")
+    }
+
+    /// A project's format as the library shows it: the ratio, or «Como la grabación» for `auto` (phase 2 design §6.4).
+    static func aspectText(_ aspect: Aspect) -> String {
+        aspect == .auto
+            ? String(localized: "Like the Recording", comment: "The editor toolbar: the Format menu, the proportion of the recording; and the library, Duplicate As")
+            : aspect.rawValue
     }
 
     /// The card for VoiceOver (design §11): "Demo nueva función, 2 minutos 14 segundos, 16:9, grabado hoy a las 14:32,
@@ -91,7 +99,7 @@ enum LibraryTexts {
             let whole = Int(seconds.isFinite ? max(seconds, 0) : 0)
             parts.append(Duration.seconds(whole).formatted(.units(allowed: [.hours, .minutes, .seconds], width: .wide)))
         }
-        if let aspect = item.summary.aspect { parts.append(aspect.rawValue) }
+        if let aspect = item.summary.aspect { parts.append(aspectText(aspect)) }
         if let recorded = item.summary.recordedAt { parts.append(recordedPhrase(recorded)) }
         if item.favorite { parts.append(String(localized: "favorite", comment: "VoiceOver: a project of the library is a favorite")) }
         if let badge = badge(item) {
