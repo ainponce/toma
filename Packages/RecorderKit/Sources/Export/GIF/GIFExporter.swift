@@ -39,12 +39,20 @@ public struct GIFSettings: Equatable, Sendable {
 
     /// The GIF's size for a document of `aspect`: `longSide` on the longer side and the shorter one in proportion,
     /// rounded to an even number of pixels (1080 in 9:16 is 608 × 1080); a square's sides are both `longSide`.
-    public func outputSize(aspect: Aspect) -> SIMD2<Int> {
+    ///
+    /// The other aspects: 4:5, 4:3 and 3:4 have `longSide` on the longer side and the other in proportion; `auto` is the
+    /// same from `contentRatio` (16:9 without it).
+    public func outputSize(aspect: Aspect, contentRatio: Double? = nil) -> SIMD2<Int> {
         let shortSide = max(2, Int((Double(longSide) * 9 / 16 / 2).rounded()) * 2)
         switch aspect {
         case .landscape: return SIMD2(longSide, shortSide)
         case .portrait: return SIMD2(shortSide, longSide)
         case .square: return SIMD2(longSide, longSide)
+        case .fourByFive, .fourByThree, .threeByFour, .auto:
+            let ratio = aspect.ratio(contentRatio: contentRatio)
+            let wide = ratio >= 1
+            let other = max(2, Int((Double(longSide) * (wide ? 1 / ratio : ratio) / 2).rounded()) * 2)
+            return wide ? SIMD2(longSide, other) : SIMD2(other, longSide)
         }
     }
 

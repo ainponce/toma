@@ -193,6 +193,72 @@
         }
       }
     },
+    "3:4 Portrait" : {
+      "comment" : "The editor toolbar: the Format menu, 3:4",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3:4 vertical"
+          }
+        }
+      }
+    },
+    "3x4" : {
+      "comment" : "The library: what follows a project's name in a 3:4 copy's name («Demo 3x4»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "3x4"
+          }
+        }
+      }
+    },
+    "4:3 Landscape" : {
+      "comment" : "The editor toolbar: the Format menu, 4:3",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4:3 horizontal"
+          }
+        }
+      }
+    },
+    "4:5 Portrait" : {
+      "comment" : "The editor toolbar: the Format menu, 4:5",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4:5 vertical"
+          }
+        }
+      }
+    },
+    "4x3" : {
+      "comment" : "The library: what follows a project's name in a 4:3 copy's name («Demo 4x3»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4x3"
+          }
+        }
+      }
+    },
+    "4x5" : {
+      "comment" : "The library: what follows a project's name in a 4:5 copy's name («Demo 4x5»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "4x5"
+          }
+        }
+      }
+    },
     "9:16 Portrait" : {
       "comment" : "A format of the project",
       "localizations" : {
@@ -3235,6 +3301,17 @@
         }
       }
     },
+    "Landscape 4:3" : {
+      "comment" : "The library: Duplicate As, a format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Horizontal 4:3"
+          }
+        }
+      }
+    },
     "Large" : {
       "comment" : "The camera bubble's size",
       "localizations" : {
@@ -3379,6 +3456,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Liviana"
+          }
+        }
+      }
+    },
+    "Like the Recording" : {
+      "comment" : "The editor toolbar: the Format menu, the proportion of the recording; and the library, Duplicate As",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como la grabación"
           }
         }
       }
@@ -4458,6 +4546,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Puntos"
+          }
+        }
+      }
+    },
+    "Portrait 3:4" : {
+      "comment" : "The library: Duplicate As, a format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vertical 3:4"
+          }
+        }
+      }
+    },
+    "Portrait 4:5" : {
+      "comment" : "The library: Duplicate As, a format",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vertical 4:5"
           }
         }
       }
@@ -8210,6 +8320,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "horizontal"
+          }
+        }
+      }
+    },
+    "like the recording" : {
+      "comment" : "The library: what follows a project's name in a copy's name that follows the recording («Demo como la grabación»)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "como la grabación"
           }
         }
       }

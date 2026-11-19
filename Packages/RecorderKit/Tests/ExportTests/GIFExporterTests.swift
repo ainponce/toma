@@ -415,6 +415,17 @@ private func fill(_ folder: URL, leaving: Int) throws {
         }
     }
 
+    @Test func gifSizesOfTheNewAspects() {
+        let range = ExportRange(start: 0, end: 1_000_000_000)
+        let settings = GIFSettings(longSide: 800, range: range)
+        #expect(settings.outputSize(aspect: .landscape) == [800, 450])
+        #expect(settings.outputSize(aspect: .fourByFive) == [640, 800])
+        #expect(settings.outputSize(aspect: .fourByThree) == [800, 600])
+        #expect(settings.outputSize(aspect: .threeByFour) == [600, 800])
+        #expect(settings.outputSize(aspect: .auto) == [800, 450])
+        #expect(settings.outputSize(aspect: .auto, contentRatio: 0.5) == [400, 800])
+    }
+
     @Test func oddSizesAreEven() {
         let range = ExportRange(start: 0, end: 1_000_000_000)
         #expect(GIFSettings(longSide: 1080, range: range).outputSize(aspect: .portrait) == [608, 1080])

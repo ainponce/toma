@@ -281,6 +281,10 @@ extension LibraryActions {
         case .landscape: String(localized: "Landscape 16:9", comment: "The library: Duplicate As, a format")
         case .portrait: String(localized: "Portrait 9:16", comment: "The library: Duplicate As, a format")
         case .square: String(localized: "Square 1:1", comment: "The library: Duplicate As, a format")
+        case .fourByFive: String(localized: "Portrait 4:5", comment: "The library: Duplicate As, a format")
+        case .fourByThree: String(localized: "Landscape 4:3", comment: "The library: Duplicate As, a format")
+        case .threeByFour: String(localized: "Portrait 3:4", comment: "The library: Duplicate As, a format")
+        case .auto: String(localized: "Like the Recording", comment: "The library: Duplicate As, a format")
         }
     }
 
@@ -317,6 +321,16 @@ extension LibraryActions {
                     String(localized: "portrait", comment: "The library: what follows a project's name in a 9:16 copy's name («Demo vertical»)")
                 case .square:
                     String(localized: "square", comment: "The library: what follows a project's name in a 1:1 copy's name («Demo cuadrado»)")
+                case .fourByFive:
+                    String(localized: "4x5", comment: "The library: what follows a project's name in a 4:5 copy's name («Demo 4x5»)")
+                case .fourByThree:
+                    String(localized: "4x3", comment: "The library: what follows a project's name in a 4:3 copy's name («Demo 4x3»)")
+                case .threeByFour:
+                    String(localized: "3x4", comment: "The library: what follows a project's name in a 3:4 copy's name («Demo 3x4»)")
+                case .auto:
+                    String(
+                        localized: "like the recording",
+                        comment: "The library: what follows a project's name in a copy's name that follows the recording («Demo como la grabación»)")
                 }
             })
     }
