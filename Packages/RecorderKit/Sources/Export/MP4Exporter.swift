@@ -98,7 +98,8 @@ public final class MP4Exporter: Sendable {
     /// and returns what it had to leave out: microphone or system audio that could not be read is silence, and
     /// screen or camera video that could not be decoded shows the frame before it.
     ///
-    /// Rendering and encoding run on a queue of their own, never on the caller's thread or the main thread.
+    /// Rendering and encoding run on a queue of their own, never on the caller's thread or the main thread, holding one
+    /// of the process's decoding slots (`DecodingSlots.shared`): with every slot taken, the export waits for one.
     /// `progress` is called one call at a time, in order, never on the main thread (hop to the main actor
     /// to show the values): from the export's queue while frames are encoded, with values from 0 that never
     /// go down and stay below 1, then once more with exactly 1 from the task running the export, once the
@@ -519,15 +520,23 @@ private final class ExportSession: @unchecked Sendable {
     /// cancelled (this is the export's own partial file, never recorded data) and the error rethrown.
     func run(progress: @escaping @Sendable (Double) -> Void) async throws {
         do {
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
-                queue.async {
-                    do {
-                        try self.encode(progress: progress)
-                        done.resume()
-                    } catch {
-                        done.resume(throwing: error)
+            // The loop pulls the mix's readers, and the video's through the renderer: it holds one of the process's
+            // decoding slots while it runs (`DecodingSlots`).
+            do {
+                try await DecodingSlots.shared.withSlot {
+                    try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, any Error>) in
+                        self.queue.async {
+                            do {
+                                try self.encode(progress: progress)
+                                done.resume()
+                            } catch {
+                                done.resume(throwing: error)
+                            }
+                        }
                     }
                 }
+            } catch is CancellationError {
+                throw ExportError.cancelled  // while it waited for a slot, before writing anything
             }
             writer.endSession(atSourceTime: CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(settings.framesPerSecond)))
             await writer.finishWriting()

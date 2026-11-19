@@ -24,12 +24,6 @@ private func movingTake(in dir: URL, seconds: Double) async throws -> LoadedProj
     return try builder.write()
 }
 
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 @Suite(.serialized) struct GIFEstimateTests {
     @Test func samplesAreSpreadOrTheWholeRange() {
         let long = GIFEstimate.sampleRanges(ExportRange(start: 0, end: 60 * second))

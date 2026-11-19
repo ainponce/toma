@@ -22,14 +22,6 @@ import UniformTypeIdentifiers
 
 private func at(_ seconds: Double) -> HostTime { base.adding(seconds: seconds) }
 
-/// Runs `body` on a thread of its own: drawing decodes, which blocks in `copyNextSampleBuffer`, and many tests blocking
-/// Swift's cooperative pool at once hang the run.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// SplitMix64: the same numbers on every run.
 private struct SplitMix64: RandomNumberGenerator {
     var state: UInt64

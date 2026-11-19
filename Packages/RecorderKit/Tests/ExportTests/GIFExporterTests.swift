@@ -76,14 +76,6 @@ private func edit(of project: LoadedProject) -> EditDocument {
 
 private func whole(_ document: EditDocument) -> ExportRange { .whole(TimeMap(sequence: document.sequence)) }
 
-/// Runs `body` on a thread of its own: drawing decodes, which blocks in `copyNextSampleBuffer`, and many tests blocking
-/// Swift's cooperative pool at once hang the run.
-private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread { continuation.resume(with: Result(catching: body)) }.start()
-    }
-}
-
 /// The canvas a viewer shows at each of the `count` frames of a GIF at `fps`: its images (`GIFTestDecoder.frames`), each
 /// for as many frames as its delay covers, since the composer folds a frame that changes nothing into the one before.
 private func canvasesByFrame(_ data: Data, count: Int, fps: Int) -> [[SIMD3<UInt8>]] {
