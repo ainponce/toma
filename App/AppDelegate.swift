@@ -493,6 +493,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let environment = ProcessInfo.processInfo.environment
             if environment["TOMA_SHOWCASE_TAB"] != nil || environment["TOMA_SHOWCASE_SELECT"] != nil
                 || environment["TOMA_SHOWCASE_ASPECT"] != nil || environment["TOMA_SHOWCASE_SAFEZONES"] != nil
+                || environment["TOMA_SHOWCASE_FRAME"] != nil || environment["TOMA_SHOWCASE_KEYS"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -506,6 +507,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         model.setKeyOverlay(mode: mode, position: .bottomLeading, size: .large)
                     }
                     if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
+                    // TOMA_SHOWCASE_FRAME=<n> moves the playhead to output frame n (an iPhone's turned segment, say).
+                    if let frame = environment["TOMA_SHOWCASE_FRAME"].flatMap(Int.init) { model.seek(frame: frame) }
                     if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
                         model.selection = .zooms([id])
                     }

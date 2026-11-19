@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
 import Foundation
 import ImageIO
 import ProjectFormat
@@ -117,6 +118,54 @@ import Recording
             let ups = events.filter { if case .mouseUp(.left, _, _) = $0.kind { true } else { false } }
             #expect(downs.count >= 4 && ups.count >= 4)
             #expect(events.count { if case .cursor = $0.kind { true } else { false } } > 100)
+        }
+    }
+
+    @Test func theSyntheticDeviceSaysItsFirstSize() {
+        let device = SyntheticDeviceSource(width: 1080, height: 1920, framesPerSecond: 30, rotateAt: 2)
+        #expect(device.trackID == "device" && device.kind == .device && device.media == .video(framesPerSecond: 30))
+        #expect(device.sourceInfo == TrackSource(
+            name: "Synthetic iPhone", deviceUniqueID: SyntheticDeviceSource.uniqueID,
+            globalFrame: Rect(x: 0, y: 0, width: 1080, height: 1920), pixelScale: 1))
+        #expect(device.activeDeviceUniqueID == nil)
+        let audio = SyntheticDeviceAudioSource()
+        #expect(audio.trackID == "deviceAudio" && audio.kind == .deviceAudio && audio.media == .audio)
+        #expect(audio.sourceInfo == TrackSource(name: "Synthetic iPhone", deviceUniqueID: SyntheticDeviceSource.uniqueID))
+    }
+
+    /// A synthetic iPhone turned 0.6 s into its take: version 4, its screen in two segments, the first one closed by the
+    /// turn (`formatChanged`) and the second the other way round, and `globalFrame` still the first's size.
+    @Test func aDeviceTakeIsVersion4WithASegmentPerOrientation() async throws {
+        try await withTemporaryDirectory { dir in
+            let package = try ProjectPackage.create(in: dir, name: "Test", app: AppInfo(name: "Tests", version: "0"), now: Date())
+            let device = SyntheticDeviceSource(width: 180, height: 320, framesPerSecond: 30, rotateAt: 0.6)
+            let coordinator = RecordingCoordinator(
+                package: package, sources: [device, SyntheticDeviceAudioSource(), SyntheticAudioSource()],
+                input: NoInputRecorder(),
+                diskMonitor: DiskSpaceMonitor(volumeURL: dir, query: { _ in DiskCapacity(importantUsage: 1 << 40, available: 1 << 40) }),
+                systemActivity: AsyncStream { $0.finish() })
+            let id = try await coordinator.start()
+            #expect(device.activeDeviceUniqueID == SyntheticDeviceSource.uniqueID)
+            try await Task.sleep(for: .seconds(1.5))
+            let take = try await coordinator.stop()
+            #expect(device.activeDeviceUniqueID == nil)
+            let manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
+            #expect(manifest.formatVersion == 4)
+            #expect(take.status == .complete)
+            #expect(take.tracks.map(\.kind) == [.device, .deviceAudio, .microphone])
+            let screen = try #require(take.track("device"))
+            #expect(screen.source.globalFrame == Rect(x: 0, y: 0, width: 180, height: 320) && screen.source.pixelScale == 1)
+            #expect(screen.segments.map(\.endReason) == [.formatChanged, .stopped])
+            var sizes: [CGSize] = []
+            for segment in screen.segments {
+                let track = try #require(try await AVURLAsset(url: package.fileURL(segment.file)).loadTracks(withMediaType: .video).first)
+                sizes.append(try await track.load(.naturalSize))
+            }
+            #expect(sizes == [CGSize(width: 180, height: 320), CGSize(width: 320, height: 180)])
+            #expect(take.track("deviceAudio")?.segments.count == 1)
+            // No cursor, no clicks and no keys: an iPhone's take records none.
+            let events = try EventLogReader.read(package.eventsURL(take: id)).events
+            #expect(!events.contains { if case .cursor = $0.kind { true } else { false } })
         }
     }
 }

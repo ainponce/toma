@@ -56,7 +56,7 @@ public struct TimelineLayout: Equatable, Sendable {
 
     /// Top to bottom: the ruler, Video, Captions (with a transcript), Screen (with two or more screen tracks that recorded
     /// something), Zoom, Privacy (with privacy blocks), Camera (with a camera that recorded something) and one row for each audio track that recorded something, the
-    /// microphones before the system audio, each in the take's order.
+    /// microphones before the system audio and the system audio before an iPhone's or iPad's sound, each in the take's order.
     public var tracks: [TimelineRow]
 
     /// The tracks of `take`, the take of `document`'s sequence. In 1b they depend on the take alone: what the document
@@ -69,7 +69,7 @@ public struct TimelineLayout: Equatable, Sendable {
         tracks.append(TimelineRow(track: .zoom, height: Self.zoomHeight))
         if !document.privacy.blocks.isEmpty { tracks.append(TimelineRow(track: .privacy, height: Self.privacyHeight)) }
         if recorded.contains(where: { $0.kind == .camera }) { tracks.append(TimelineRow(track: .camera, height: Self.cameraHeight)) }
-        for kind in [TrackKind.microphone, .systemAudio] {
+        for kind in [TrackKind.microphone, .systemAudio, .deviceAudio] {
             tracks += recorded.filter { $0.kind == kind }.map { TimelineRow(track: .audio(id: $0.id), height: Self.audioHeight) }
         }
         self.tracks = tracks

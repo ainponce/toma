@@ -974,6 +974,11 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 - Con el permiso de Grabación de pantalla negado a Toma y el de Cámara permitido: una toma de iPhone graba igual, sin abrir la ventana de permisos. Con el de Cámara sin pedir nunca (`tccutil reset Camera dev.toma.Toma`): Grabar en modo iPhone muestra el aviso del sistema durante la cuenta atrás y, permitido, graba; negado ahí (o negado de antes), no graba nada y se abre la ventana de permisos con Cámara.
 - Con «Grabar las teclas para mostrarlas» prendido y el Monitoreo de entrada negado: una toma de iPhone no avisa «Las teclas no se grabaron…» y su `events.jsonl` no tiene líneas `keyPress` ni del cursor.
 - Con la cámara y el micrófono de la Mac elegidos: en `manifest.json`, las pistas `device`, `deviceAudio`, `camera` y `microphone`, en ese orden; la burbuja de la cámara se ve en la pantalla de la isla mientras graba, y «Ocultar los íconos del escritorio» no tapa el escritorio (no se graba la Mac).
+**La toma de iPhone en el editor** (P16; se graba con la isla en modo iPhone de P15 y P17)
+
+- Con un iPhone real, grabar 20 s en vertical, girarlo a horizontal a los 10 s y abrir la toma en el editor: empieza con el marco de iPhone Oscuro (Marco ▸ iPhone), sin cursor (la pestaña Cursor lo dice y sus controles quedan apagados) y sin zooms automáticos. Después del giro, la pantalla del iPhone se ve entera, achicada y centrada en el mismo marco vertical, con barras negras arriba y abajo: nada recortado ni estirado, y el marco no cambia de tamaño ni salta en el giro. Lo mismo avanzando cuadro a cuadro, arrastrando el cabezal por el giro y en el MP4 exportado (la vista previa es igual al MP4).
+- Un zoom agregado a mano en la pista Zoom entra y sale sobre la pantalla del iPhone, también con el foco fijo movido.
+- La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad (o un iPhone grabado empezando en horizontal), la toma empieza con el marco de iPad.
 
 ## Prueba en seco (ad hoc)
 

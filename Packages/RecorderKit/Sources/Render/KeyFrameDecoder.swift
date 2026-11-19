@@ -12,7 +12,8 @@ import os
 /// `AVSampleCursor` (from the sample at or before the instant, back in presentation order to a full sync sample), its
 /// sample read by an `AVSampleBufferGenerator` without a timebase (synchronously) and decoded by a
 /// `VTDecompressionSession` kept while the format allows, to BGRA in IOSurfaces like `TrackFrameReader`'s. No
-/// `AVAssetReader` is opened, so a scrub costs one decode of one frame, and none while the key frame stays the same.
+/// `AVAssetReader` is opened, so a scrub costs one decode of one frame, and none while the key frame stays the same. A
+/// `device` track's key frame is fitted into its first segment's size, as its reader's frames are (`DeviceFrameFit`).
 ///
 /// Not thread-safe; blocks while it reads and decodes.
 final class KeyFrameDecoder {
@@ -31,6 +32,8 @@ final class KeyFrameDecoder {
     private var segments: [TrackFrameReader.Media] = []
     /// Errors already logged.
     private var reported: Set<String> = []
+    /// Where the fitted key frames come from.
+    private var fitPool: CVPixelBufferPool?
 
     /// - Throws: `RenderError.metalResourceUnavailable` if Core Video cannot make a texture cache for `device`.
     init(device: any MTLDevice) throws {
@@ -69,13 +72,13 @@ final class KeyFrameDecoder {
         }
         let keyTime = cursor.presentationTimeStamp
         if let last, last.asset === media.asset, last.time == keyTime { return last.frame }
-        let frame = decode(cursor, of: media.asset)
+        let frame = decode(cursor, of: media.asset, fitInto: media.fitSize)
         last = (media.asset, keyTime, frame)
         return frame
     }
 
-    /// The sample at `cursor` of `asset`, decoded, as a texture.
-    private func decode(_ cursor: AVSampleCursor, of asset: AVURLAsset) -> CachedTexture? {
+    /// The sample at `cursor` of `asset`, decoded (and fitted into `fitSize`, when given), as a texture.
+    private func decode(_ cursor: AVSampleCursor, of asset: AVURLAsset, fitInto fitSize: SIMD2<Int>?) -> CachedTexture? {
         let generator = self.generator.flatMap { $0.asset === asset ? $0.generator : nil }
             ?? AVSampleBufferGenerator(asset: asset, timebase: nil)
         self.generator = (asset, generator)
@@ -92,9 +95,17 @@ final class KeyFrameDecoder {
             output.set(status == noErr ? image : nil)
         }
         VTDecompressionSessionWaitForAsynchronousFrames(session)
-        guard status == noErr, let pixelBuffer = output.get() else {
+        guard status == noErr, let decoded = output.get() else {
             report("cannot decode the key frame (OSStatus \(status))")
             return nil
+        }
+        var pixelBuffer = decoded
+        if let fitSize {
+            guard let fitted = DeviceFrameFit.fitted(decoded, into: fitSize, pool: &fitPool) else {
+                report("cannot fit the key frame into \(fitSize.x) × \(fitSize.y)")
+                return nil
+            }
+            pixelBuffer = fitted
         }
         decodeCount += 1
         CVMetalTextureCacheFlush(textureCache, 0)

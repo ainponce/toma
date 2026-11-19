@@ -26,6 +26,14 @@ struct AudioTab: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                        } else if track.isDevice {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("iPhone or iPad")
+                                    .font(.subheadline.weight(.semibold))
+                                Text(verbatim: track.deviceName)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
                         } else {
                             Text("System Audio")
                                 .font(.subheadline.weight(.semibold))

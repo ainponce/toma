@@ -25,6 +25,10 @@ import os
 /// and then tried again; only a load that fails marks it unreadable. Every span shown with the frame before
 /// it for one of these reasons is in `gaps`, so no gap goes unreported.
 ///
+/// The frames of a `device` track (an iPhone or iPad, phase 2 design §7.6) are given at the size of its first segment
+/// (`DeviceFrameFit`): a segment the device recorded turned is read scaled whole into that size, centred, with black around
+/// it. A frame that cannot be fitted is never given at another size: the frame given before it is held, a gap.
+///
 /// Thread-safe: calls are serialized. Blocks while it loads and decodes (`copyNextSampleBuffer`, and up to
 /// `trackLoadTimeout` for a track): never call it from a Swift concurrency thread. Many blocked callers
 /// there leave the cooperative pool no thread, and every task of the app stops. Use a dispatch queue
@@ -115,6 +119,12 @@ public final class TrackFrameReader: @unchecked Sendable {
     private var openedReaders = 0
     private var recordedGaps: [Gap] = []
     private var asked: ClosedRange<HostTime>?
+    /// The size every frame is given at (`DeviceFrameFit.referenceSize(of:)`): `nil`, as recorded.
+    private let fitSize: SIMD2<Int>?
+    /// Where the fitted frames come from.
+    private var fitPool: CVPixelBufferPool?
+    /// The frame last fitted, and what it was fitted from: asked for again, it is given again as it is.
+    private var lastFit: (decoded: CVPixelBuffer, fitted: CVPixelBuffer)?
     /// Every host time a frame was asked for while `recordsAsks` is on, in order: for tests.
     private var asks: [HostTime]?
     /// Loads a segment's video track; tests replace it. Called with the lock held.
@@ -156,6 +166,7 @@ public final class TrackFrameReader: @unchecked Sendable {
     public init(package: ProjectPackage, track: TrackRecord) {
         trackID = track.id
         self.package = package
+        fitSize = DeviceFrameFit.referenceSize(of: track)
         let records = track.segments.sorted { $0.startHostTime < $1.startHostTime }
         segments = records.map { record in
             Segment(
@@ -184,6 +195,7 @@ public final class TrackFrameReader: @unchecked Sendable {
     public init(maskFile file: URL, trackID: String, start: HostTime, end: HostTime?) {
         self.trackID = trackID
         package = ProjectPackage(url: file.deletingLastPathComponent())
+        fitSize = nil
         segments = [Segment(
             index: 1, file: file.lastPathComponent, start: start, end: end, usable: true, media: nil, retryAfter: nil,
             loadFailure: nil, failure: nil)]
@@ -206,6 +218,8 @@ public final class TrackFrameReader: @unchecked Sendable {
         var end: HostTime?
         var asset: AVURLAsset
         var track: AVAssetTrack
+        /// The size its frames are shown at (`DeviceFrameFit`): `nil`, as recorded.
+        var fitSize: SIMD2<Int>? = nil
     }
 
     /// The segment that shows `time` (the last usable one starting at or before it), with its file and video track,
@@ -216,18 +230,34 @@ public final class TrackFrameReader: @unchecked Sendable {
         lock.withLock {
             guard let k = segments.lastIndex(where: { $0.usable && $0.start <= time }), let (asset, track) = loadMedia(k)
             else { return nil }
-            return Media(start: segments[k].start, end: segments[k].end, asset: asset, track: track)
+            return Media(start: segments[k].start, end: segments[k].end, asset: asset, track: track, fitSize: fitSize)
         }
     }
 
-    /// A BGRA, IOSurface-backed, Metal-compatible frame: the latest one presented at or before `time`.
-    /// `nil` before the first readable frame of the track.
+    /// A BGRA, IOSurface-backed, Metal-compatible frame: the latest one presented at or before `time`, of a `device`
+    /// track fitted into its first segment's size. `nil` before the first readable frame of the track.
     public func pixelBuffer(at time: HostTime) -> CVPixelBuffer? {
         lock.withLock {
             asked = asked.map { min($0.lowerBound, time)...max($0.upperBound, time) } ?? time...time
             asks?.append(time)
-            return frame(at: time)?.pixelBuffer
+            guard let decoded = frame(at: time)?.pixelBuffer else { return nil }
+            return fitted(decoded, at: time)
         }
+    }
+
+    /// `decoded` at `fitSize` (`DeviceFrameFit`), the same buffer for the same frame. One that cannot be fitted is a gap
+    /// at `time`, shown with the frame fitted before it (`nil` without one).
+    private func fitted(_ decoded: CVPixelBuffer, at time: HostTime) -> CVPixelBuffer? {
+        guard let size = fitSize else { return decoded }
+        if let last = lastFit, last.decoded === decoded { return last.fitted }
+        if let fitted = DeviceFrameFit.fitted(decoded, into: size, pool: &fitPool) {
+            lastFit = (decoded, fitted)
+            return fitted
+        }
+        let reason = "the frame of \(CVPixelBufferGetWidth(decoded)) × \(CVPixelBufferGetHeight(decoded)) cannot be fitted into \(size.x) × \(size.y)"
+        if let k = open?.segment { noteGap(k, from: time, to: time, .readFailed(reason)) }
+        Self.logger.error("Track \(self.trackID, privacy: .public): \(reason, privacy: .public); holding the frame before it")
+        return lastFit?.fitted
     }
 
     private func frame(at time: HostTime) -> Frame? {

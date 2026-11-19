@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
 import AppSupport
+import Editing
 import ProjectFormat
 
 /// The header of a track (design §5.5): its icon and name, and on an audio track the Mute button under the name, both
@@ -123,9 +124,15 @@ final class TrackHeaderView: NSView {
         case .privacy: (String(localized: "Privacy"), "eye.slash")
         case .camera: (String(localized: "Camera"), "web.camera")
         case let .audio(id):
-            take?.track(id)?.kind == .systemAudio
-                ? (String(localized: "System"), "speaker.wave.2")
-                : (String(localized: "Microphone"), "mic")
+            switch take?.track(id)?.kind {
+            case .systemAudio: (String(localized: "System"), "speaker.wave.2")
+            // The sound of the iPhone or iPad the take recorded, named as its frame draws it.
+            case .deviceAudio:
+                take.flatMap(DeviceTakeDefaults.model(of:)) == .iPad
+                    ? (String(localized: "iPad", comment: "The header of the track of an iPad's sound"), "ipad")
+                    : (String(localized: "iPhone", comment: "The header of the track of an iPhone's sound"), "iphone")
+            default: (String(localized: "Microphone"), "mic")
+            }
         }
     }
 }

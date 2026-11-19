@@ -16,7 +16,8 @@ public enum NewDocument {
     /// settings, with the blocks `autoZoom-1` plans for the document so built. The camera as the take recorded it with
     /// the look `cameraLook` gives (mirrored, with a shadow and measured against the output's short side for a new project,
     /// design §13.3), and every audio track at gain 1, as in the legacy document, but through the limiter. 16:9 at 60 frames per second;
-    /// `logSequence` 0.
+    /// `logSequence` 0. A take of an iPhone or iPad starts with its device's frame and without the cursor
+    /// (`DeviceTakeDefaults`), before its corners and its zooms are worked out.
     public static func make(
         project: LoadedProject, defaultStyle: DefaultStyle, makeID: (String) -> String, cameraLook: CameraLook = .newProjects
     ) -> EditDocument {
@@ -57,6 +58,7 @@ public enum NewDocument {
                 motionBlur: defaultStyle.zoomMotionBlur, regions: [], suppressed: []),
             camera: cameraLook.applied(to: legacy.camera),
             audio: AudioPlan(limiter: true, tracks: legacy.audio.tracks))
+        document = DeviceTakeDefaults.applied(to: document, take: take)
         document.style.cornerRadius = max(style.cornerRadius, windowCornerCover(of: document, take: take, events: events))
         document.zoom.regions = AutoZoomPlanner.plan(take: take, events: events, document: document)
         return document
