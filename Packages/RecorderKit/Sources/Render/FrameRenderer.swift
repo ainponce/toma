@@ -235,14 +235,19 @@ public final class FrameRenderer: @unchecked Sendable {
     /// A scene of this renderer's take: `document` at `outputSize`, with `paths`
     /// (`MotionPaths(take:events:document:cameraReadable:)` of `document` with `cameraReadable`, built off the main thread),
     /// at the renderer's frames per second (the document's unless the renderer was given some), with the camera readable
-    /// as the renderer found it, reading `analysis` of the caches (the renderer's when `nil`; mind that `.none` there is
-    /// `Optional.none`, write `AnalysisInputs.none` for no analysis). Cheap: the paths are what costs.
+    /// as the renderer found it, reading the renderer's own `analysis`. Cheap: the paths are what costs.
+    public func makeScene(document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
+        makeScene(document: document, paths: paths, outputSize: outputSize, analysis: analysis)
+    }
+
+    /// Like `makeScene(document:paths:outputSize:)`, reading `analysis` of the caches instead of the renderer's
+    /// (`AnalysisInputs.none` is no analysis).
     public func makeScene(
-        document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>, analysis: AnalysisInputs? = nil
+        document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>, analysis: AnalysisInputs
     ) -> FrameEvaluator {
         FrameEvaluator(
             take: take, events: events, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride,
-            cameraReadable: cameraReadable, analysis: analysis ?? self.analysis)
+            cameraReadable: cameraReadable, analysis: analysis)
     }
 
     /// Makes `scene` the renderer's scene, and its size the one `encode(at:into:commandBuffer:)` checks: what was decoded
