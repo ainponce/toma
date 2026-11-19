@@ -444,6 +444,8 @@ Una sola pasada de fin de hito, contra la app de esta rama, en orden: la prepara
 
 ### 0. Preparación
 
+La app de la fase 2 está en `build/fase2/Toma.app` (Release, firma ad hoc; es la única copia registrada). Como es una compilación nueva, macOS pide de nuevo los permisos: «Abrir Ajustes del Sistema» la vuelve a poner en la lista.
+
 1. **Abrir la copia de prueba.** La arma el controlador después de unir la rama: `open build/prueba/Toma.app`. `codesign -dv build/prueba/Toma.app 2>&1 | grep Authority` dice `Authority=Toma Project Signing` cuando salió firmada con el certificado (paso 1 de la preparación del hito 1a); si no, es ad hoc.
 2. **La copia ad hoc y el certificado** (pendiente del hito 1a). Si se creó el certificado de firma (paso 1 de la preparación del hito 1a) después de recibir la copia de prueba, pedir una copia nueva: la anterior quedó ad hoc y macOS no conserva sus permisos de una copia a la siguiente (con una copia nueva firmada, `tccutil reset All dev.toma.Toma` y otorgarlos de nuevo la primera vez).
 3. **Permisos.** Los mismos del hito 1a (paso 3 de su preparación): Toma pide cada uno cuando hace falta. El hito 1b **no pide ninguno nuevo**: ni Monitoreo de entrada ni Accesibilidad para el editor; si algún aviso nuevo aparece, anotarlo.
@@ -900,7 +902,7 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-2`, en orden: la 
 
 ### 0. Preparación
 
-1. **Antes de instalar la app de la fase 2, guardar un proyecto de la fase 1.** La app de la fase 1 queda en `build/fase1/Toma.app`: copiarla a otra carpeta (`cp -R build/fase1/Toma.app ~/Desktop/Toma-fase1.app`) y, con ella, abrir un proyecto con cámara, editarlo (un corte y otro margen alcanzan), exportarlo y cerrarlo. Si queda alguno de 1b sin abrir en 1c, guardarlo también. Esos proyectos son los de «Un proyecto de la fase 1 abierto en la fase 2», abajo.
+1. **Antes de instalar la app de la fase 2, guardar un proyecto de la fase 1.** La app de la fase 1 queda comprimida en `build/fase1/Toma-fase1.zip` (para que macOS no la confunda con la de la fase 2): descomprimirla en otra carpeta (`ditto -x -k build/fase1/Toma-fase1.zip ~/Desktop/ && mv ~/Desktop/Toma.app ~/Desktop/Toma-fase1.app`) y, con ella, abrir un proyecto con cámara, editarlo (un corte y otro margen alcanzan), exportarlo y cerrarlo. Si queda alguno de 1b sin abrir en 1c, guardarlo también. Esos proyectos son los de «Un proyecto de la fase 1 abierto en la fase 2», abajo.
 
 ### 2. Detalle por área
 
