@@ -85,7 +85,11 @@ public enum DocumentMigration {
                 (["audio", "tracks", "*", "cleanup"], .integer(0)),
             ],
             absent: [["transcript"]],
-            newValues: [(["style", "frame", "type"], .string("device"))]),
+            newValues: [
+                (["style", "frame", "type"], .string("device")),
+                (["aspect"], .string("4:5")), (["aspect"], .string("4:3")),
+                (["aspect"], .string("3:4")), (["aspect"], .string("auto")),
+            ]),
     ]
 
     /// `json`, a document of `version`, in the next version: the places of `addedPlaces[version]` at their frozen values

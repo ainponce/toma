@@ -196,6 +196,10 @@ struct FormatMenu: View {
         case .landscape: "rectangle"
         case .portrait: "rectangle.portrait"
         case .square: "square"
+        case .fourByFive: "rectangle.portrait"
+        case .fourByThree: "rectangle"
+        case .threeByFour: "rectangle.portrait"
+        case .auto: "rectangle.dashed"
         }
     }
 
@@ -204,6 +208,10 @@ struct FormatMenu: View {
         case .landscape: "16:9 Landscape"
         case .portrait: "9:16 Portrait"
         case .square: "1:1 Square"
+        case .fourByFive: "4:5 Portrait"
+        case .fourByThree: "4:3 Landscape"
+        case .threeByFour: "3:4 Portrait"
+        case .auto: "Like the Recording"
         }
     }
 }

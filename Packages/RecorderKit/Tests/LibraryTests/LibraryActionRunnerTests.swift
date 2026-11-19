@@ -146,6 +146,10 @@ private final class Copies: Sendable {
             case .landscape: "horizontal"
             case .portrait: "vertical"
             case .square: "cuadrado"
+            case .fourByFive: "4x5"
+            case .fourByThree: "4x3"
+            case .threeByFour: "3x4"
+            case .auto: "como la grabación"
             }
         }
         let macTrash = dir.appending(path: "MacTrash", directoryHint: .isDirectory)

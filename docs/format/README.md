@@ -818,7 +818,7 @@ Las claves de `audio.tracks`, `camera.initial` y `screens.initial` son por toma 
 |---|---|
 | `documentVersion` | La versión del documento dentro del formato v3: 1 en 1b. Un lector que conoce hasta la `n` rechaza uno mayor (`EditDocumentError.newerVersion`) antes de leer lo demás, esté donde esté (un archivo propio o el `create` del registro) |
 | `logSequence` | El `seq` de la última línea del registro que esta instantánea ya incluye |
-| `aspect` | `16:9`, `9:16` o `1:1` |
+| `aspect` | `16:9`, `9:16` o `1:1`; desde el documento 3 también `4:5`, `4:3`, `3:4` y `auto` (como la grabación) |
 | `frameRate` | 24, 25, 30, 50 o 60: la grilla de cuadros del editor y los cuadros por segundo por defecto de la hoja de exportar. Exportar a otros no lo toca |
 | `sequence` | Los tramos, en el orden de salida y, en 1b, en el de la fuente, sin superponerse: `id` (`c-` y 8 hex), `take`, `start` y `end` (`HostTime` de la toma, `end` excluido) y `speed` (de 0,25 a 16) |
 | `screens` | Qué pantalla se ve: `initial` por toma (el id de la pista); `changes` (`id` `p-…`, `take`, `t` de la fuente, `track` y `origin`, `auto` o `user`), desde `t` se ve `track`; `planner` si los hizo un planificador (`screenFollow-1`) |
@@ -1124,8 +1124,10 @@ Desde la fase 2, el documento de edición es la versión 3 (`EditDocument.curren
 | `camera.syncOffset` | Cuánto más tarde se dibuja la cámara contra el sonido, en ns (entero; positivo, más tarde) | `0` |
 | `audio.normalize` | Normalizar el volumen | `false` |
 | `audio.tracks.<toma>/<pista>.cleanup` | La limpieza de ruido de la pista, de 0 a 1 | `0`, en cada pista |
+| `aspect` | Suma `4:5`, `4:3`, `3:4` y `auto` (como la grabación) a `16:9`, `9:16` y `1:1`. Un documento que usa uno no vuelve a la versión 2 ni a la 1 | Lo que tenía |
 
 - Un `rect` es `{x, y, width, height}`, en fracciones del contenido de la pantalla, de 0 a 1, con `y` hacia abajo.
+- **Tamaño de salida de los formatos nuevos** (`StageLayout.outputSize(aspect:shortSide:contentRatio:)`). 16:9, 9:16 y 1:1 como siempre. Para `4:5`, `4:3` y `3:4` el lado corto es el de la hoja (720, 1080, 1440 o 2160) y el largo `round(corto × r / 2) × 2`, con `r` el largo sobre el corto (1080: 4:5 = 1080 × 1350, 4:3 = 1440 × 1080, 3:4 = 1080 × 1440). `auto` usa la proporción de lo que muestra el primer tramo (con el recorte de Área) si es finita, positiva y se aparta un 1 % o más de 16:9; si no, es 16:9. El GIF pone `longSide` en el lado largo y el otro en proporción, redondeado a un número par (800: 4:5 = 640 × 800, 4:3 = 800 × 600).
 - **Lo que se omite.** `transcript` mientras no hay transcripción, `lut` sin LUT y `breakBefore` cuando es `false` (una transcripción tiene miles de palabras): nunca se escriben como `null`. Una palabra que deja de empezar un subtítulo se escribe entera, o se le saca `breakBefore` con un `set` a `null` (abajo). Todo lo demás se escribe siempre, como los campos del documento 2.
 - **Un valor desconocido hace inválido el documento** (un `preset`, un `model`, un `effect` que no son estos): está dañado, no es más nuevo. Lo mismo la falta de un campo obligatorio, con una excepción: un `style` sin `reframe` se lee como `fit`, porque así lo guardan la fase 1 y sus estilos (`default-style.json` y el `style.json` de un `.tomastyle`); en un documento 3 siempre está, y un cambio que lo saca se rechaza.
 

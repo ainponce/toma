@@ -193,17 +193,35 @@ public enum EditDocumentError: Error, Equatable, Sendable {
 }
 
 /// The shape of the output.
-public enum Aspect: String, Codable, Sendable {
+public enum Aspect: String, Codable, Sendable, CaseIterable {
     case landscape = "16:9"
     case portrait = "9:16"
     case square = "1:1"
+    case fourByFive = "4:5"
+    case fourByThree = "4:3"
+    case threeByFour = "3:4"
+    /// Like the recording: the proportion of what the first segment shows (phase 2 design §6.4); 16:9 without it.
+    case auto
 
-    /// Width over height.
-    public var ratio: Double {
+    /// Width over height; `auto` is 16:9 (see `ratio(contentRatio:)`).
+    public var ratio: Double { ratio(contentRatio: nil) }
+
+    /// Width over height. `auto` is `contentRatio` if it is finite, positive and 1 % or more away from 16:9; if not,
+    /// 16:9.
+    public func ratio(contentRatio: Double?) -> Double {
         switch self {
-        case .landscape: 16.0 / 9
-        case .portrait: 9.0 / 16
-        case .square: 1
+        case .landscape: return 16.0 / 9
+        case .portrait: return 9.0 / 16
+        case .square: return 1
+        case .fourByFive: return 4.0 / 5
+        case .fourByThree: return 4.0 / 3
+        case .threeByFour: return 3.0 / 4
+        case .auto:
+            let wide = 16.0 / 9
+            if let contentRatio, contentRatio.isFinite, contentRatio > 0, abs(contentRatio - wide) / wide >= 0.01 {
+                return contentRatio
+            }
+            return wide
         }
     }
 }
