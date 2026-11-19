@@ -3086,6 +3086,17 @@
         }
       }
     },
+    "Hide Safe Zones" : {
+      "comment" : "Menu item and button help: hides the safe-zone guide",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar las zonas seguras"
+          }
+        }
+      }
+    },
     "Hide When Still" : {
       "comment" : "The Cursor tab",
       "localizations" : {
@@ -5354,6 +5365,17 @@
         }
       }
     },
+    "Safe zone for Reels, TikTok and Shorts" : {
+      "comment" : "Legend of the safe-zone guide over the preview",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Zona segura para Reels, TikTok y Shorts"
+          }
+        }
+      }
+    },
     "Sand" : {
       "localizations" : {
         "es" : {
@@ -5714,6 +5736,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar el panel"
+          }
+        }
+      }
+    },
+    "Show Safe Zones" : {
+      "comment" : "Menu item and button help: shows the guide of where the apps of vertical video cover the picture",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar las zonas seguras"
           }
         }
       }

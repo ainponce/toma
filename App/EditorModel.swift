@@ -129,6 +129,8 @@ final class EditorModel {
     var isAskingTypingSpeed = false
     /// The in and out marks of the timeline's ruler (I and O, or ⌥ and a drag), in output nanoseconds.
     var timelineMarks = TimelineMarks()
+    /// The safe-zone guide is shown over the preview (View ▸ Show Safe Zones; `safeZones-1`, never in the export).
+    var showsSafeZones = false
     /// Whether the panel is shown; the window shows or hides its inspector by it.
     var panelVisible = true
     /// The panel's tab.

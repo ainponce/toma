@@ -16,6 +16,7 @@ struct PreviewArea: View {
 
     /// The gray around the video.
     static let background = Color(red: 0x16 / 255.0, green: 0x16 / 255.0, blue: 0x18 / 255.0)
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         VStack(spacing: 0) {
@@ -76,6 +77,13 @@ struct PreviewArea: View {
             VStack(spacing: 12) {
                 PreviewSurface(model: model)
                     .overlay { PreviewOverlay(model: model) }
+                    .overlay {
+                        // Over the preview only, never in the render (`safeZones-1`).
+                        if model.showsSafeZones, SafeZones.applies(ratio: model.previewRatio) {
+                            SafeZonesOverlay().transition(.opacity)
+                        }
+                    }
+                    .animation(.panel(Motion.hover, reduceMotion: reduceMotion), value: model.showsSafeZones)
                     .aspectRatio(CGFloat(model.previewRatio), contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Transport(model: model)
@@ -137,6 +145,27 @@ private struct Transport: View {
         .buttonStyle(TransportButtonStyle())
         .monospacedDigit()
         .disabled(!model.canPlay)
+        .overlay(alignment: .trailing) {
+            // The safe-zone guide's switch, for the formats it applies to (4:5 and narrower).
+            if SafeZones.applies(ratio: model.previewRatio) {
+                Toggle(isOn: Bindable(model).showsSafeZones) {
+                    Label("Show Safe Zones", systemImage: "rectangle.dashed")
+                }
+                .toggleStyle(SafeZonesToggleStyle())
+                .help(model.showsSafeZones ? Text("Hide Safe Zones") : Text("Show Safe Zones"))
+            }
+        }
+    }
+}
+
+/// The safe-zone button of the transport: the symbol in the transport's circle, in the brand's violet while on.
+private struct SafeZonesToggleStyle: ToggleStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        Button { configuration.isOn.toggle() } label: { configuration.label }
+            .buttonStyle(TransportButtonStyle())
+            .labelStyle(.iconOnly)
+            .foregroundStyle(configuration.isOn ? Color.accentColor : Color.primary)
+            .accessibilityAddTraits(configuration.isOn ? .isSelected : [])
     }
 }
 

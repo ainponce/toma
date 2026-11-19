@@ -264,6 +264,8 @@ final class KeyEditor: ObservableObject {
 
     /// Whether the key editor shows its panel; `nil` while no editor is the key window.
     @Published private(set) var panelVisible: Bool?
+    /// The safe-zone guide of the key editor: whether it applies to its format and is shown; `nil` while no editor is key.
+    @Published private(set) var safeZones: (applies: Bool, shown: Bool)?
     /// The key editor's project; `nil` while no editor is the key window or its project is not open.
     @Published private(set) var project: Project?
     /// What File offers for the key editor's project; `nil` while no editor is the key window.
@@ -311,6 +313,11 @@ final class KeyEditor: ObservableObject {
         model?.askTypingSpeed()
     }
 
+    /// View ▸ Show Safe Zones.
+    func toggleSafeZones() {
+        model?.showsSafeZones.toggle()
+    }
+
     func rename() {
         model?.projectActions?.startRenaming()
     }
@@ -336,9 +343,10 @@ final class KeyEditor: ObservableObject {
     /// Reads the followed model's panel, project and what File offers, and reads them again when what was read changes.
     private func track(_ generation: Int) {
         guard generation == self.generation else { return }
-        let (panel, next, nextFile) = withObservationTracking {
+        let (panel, zones, next, nextFile) = withObservationTracking {
             (
                 model?.panelVisible,
+                model.map { (SafeZones.applies(ratio: $0.previewRatio), $0.showsSafeZones) },
                 model.flatMap { model in
                     model.document.map {
                         Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets)
@@ -355,6 +363,7 @@ final class KeyEditor: ObservableObject {
             Task { @MainActor in self?.track(generation) }
         }
         if panelVisible != panel { panelVisible = panel }
+        if safeZones?.applies != zones?.0 || safeZones?.shown != zones?.1 { safeZones = zones.map { (applies: $0.0, shown: $0.1) } }
         if project != next { project = next }
         if file != nextFile { file = nextFile }
     }
