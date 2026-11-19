@@ -38,6 +38,7 @@ struct LibrarySidebar: View {
                 }
             }
             .font(.caption)
+            .monospacedDigit()
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 16)

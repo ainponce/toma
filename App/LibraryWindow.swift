@@ -77,6 +77,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
         nil
     }
 
+    /// The sidebar's width: wider than `LibraryLayout.sidebarWidth` so "Todos los proyectos" and its count fit.
+    static let sidebarWidth = 248.0
+
     /// How long a window being opened waits for the cached index before it shows without it.
     static let indexWait: Duration = .milliseconds(200)
 
@@ -102,8 +105,9 @@ final class LibraryWindowController: NSWindowController, NSWindowDelegate, NSToo
         let sidebar = NSHostingController(rootView: LibrarySidebar(model: model))
         sidebar.sizingOptions = []
         let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
-        sidebarItem.minimumThickness = LibraryLayout.sidebarWidth
-        sidebarItem.maximumThickness = LibraryLayout.sidebarWidth
+        // Wider than `LibraryLayout.sidebarWidth` (200): "Todos los proyectos" and its count fit without cutting.
+        sidebarItem.minimumThickness = Self.sidebarWidth
+        sidebarItem.maximumThickness = Self.sidebarWidth
         sidebarItem.canCollapse = true
         let content = NSHostingController(
             rootView: LibraryContentView(model: model) { [weak self] in self?.searchItem?.beginSearchInteraction() })
@@ -573,8 +577,26 @@ private struct LibraryTrashNoticeView: View {
 private struct LibraryEmptyView: View {
     let model: LibraryModel
 
+    /// A quiet symbol over the line; none while the first walk looks for projects.
+    private var symbol: String? {
+        if !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "magnifyingglass" }
+        switch model.section {
+        case .all: return model.isLookingForProjects ? nil : "film.stack"
+        case .favorites: return "star"
+        case .otherPlaces: return "folder"
+        case .trash: return "trash"
+        }
+    }
+
     var body: some View {
         VStack(spacing: 10) {
+            if let symbol = symbol {
+                Image(systemName: symbol)
+                    .font(.system(size: 34, weight: .light))
+                    .foregroundStyle(.tertiary)
+                    .padding(.bottom, 4)
+                    .accessibilityHidden(true)
+            }
             if !model.search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 let search = model.search.trimmingCharacters(in: .whitespacesAndNewlines)
                 Text("Nothing matches “\(search)”.", comment: "The library: a search without results")
@@ -587,7 +609,7 @@ private struct LibraryEmptyView: View {
                             .controlSize(.small)
                     } else {
                         Text("No recordings yet.", comment: "The library without projects")
-                            .font(.title3)
+                            .font(.title3.weight(.semibold))
                         Text("Record from the notch or with \(model.host.recordShortcut()).", comment: "The library without projects: how to record")
                             .foregroundStyle(.secondary)
                         Button(String(localized: "Record")) { model.host.record() }

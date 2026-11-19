@@ -58,7 +58,9 @@ struct LibraryGrid: View {
                                 Text(verbatim: title)
                                     .font(.title3.weight(.semibold))
                                     .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(.top, 8)
+                                    .padding(.horizontal, 6)
+                                    .padding(.top, 10)
+                                    .padding(.bottom, 2)
                                     .accessibilityAddTraits(.isHeader)
                             }
                         }
@@ -137,14 +139,15 @@ struct LibraryCard: View {
     private var id: Library.PackageIdentity { item.summary.identity }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 8) {
             frame
             VStack(alignment: .leading, spacing: 2) {
                 if model.actions.renaming == id {
                     LibraryRenameField(model: model, item: item)
                 } else {
                     Text(verbatim: item.summary.name)
-                        .font(.body.weight(.medium))
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.primary)
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .onTapGesture(perform: nameClicked)
@@ -152,14 +155,16 @@ struct LibraryCard: View {
                 Text(verbatim: LibraryTexts.subtitle(item, timeOnly: showsTimeOnly))
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .monospacedDigit()
                     .lineLimit(1)
             }
             .padding(.horizontal, 2)
         }
-        .padding(6)
+        .padding(8)
         .background {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(isSelected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(isHovering ? 0.06 : 0))
+            // One flat, cheap fill per card (no blur, no shadow): the brand accent when selected, a veil on hover.
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(isSelected ? Color.accentColor.opacity(0.20) : Color.primary.opacity(isHovering ? 0.07 : 0))
         }
         .opacity(LibraryTexts.isDimmed(item) ? 0.5 : 1)
         .contentShape(Rectangle())
@@ -211,13 +216,13 @@ struct LibraryCard: View {
         .overlay(alignment: .bottomTrailing) {
             if let seconds = item.summary.outputSeconds, item.live != .recording {
                 Text(verbatim: Timecode.duration(seconds))
-                    .font(.caption.weight(.medium))
+                    .font(.system(size: 11, weight: .semibold))
                     .monospacedDigit()
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 5)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(.black.opacity(0.55), in: RoundedRectangle(cornerRadius: 4))
-                    .padding(6)
+                    .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 5, style: .continuous))
+                    .padding(8)
             }
         }
         .overlay(alignment: .topLeading) {
@@ -263,10 +268,11 @@ struct LibraryCard: View {
                 .controlSize(.small)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: isSelected ? 2 : 1)
+            // A hairline that keeps a dark thumbnail from melting into the window; the accent when selected.
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(isSelected ? Color.accentColor : Color.primary.opacity(0.14), lineWidth: isSelected ? 2 : 0.5)
         }
     }
 }
