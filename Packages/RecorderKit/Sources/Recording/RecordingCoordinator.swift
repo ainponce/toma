@@ -389,6 +389,14 @@ public actor RecordingCoordinator {
                     source: source, context: context, isSoleScreen: source.kind.isScreen && screens == 1)
                 take?.pipelines.append(pipeline)
                 try await pipeline.start()
+                // An iPhone's screen has the size its first run started with, which the record could not know: the
+                // device may have turned since, or not told its size before capturing.
+                if source.kind == .device {
+                    let info = source.sourceInfo
+                    if record.tracks.first(where: { $0.id == source.trackID })?.source != info {
+                        context.updateTrack(source.trackID) { $0.source = info }
+                    }
+                }
             }
         } catch {
             _ = await closeTake(reason: .stopped, stopTime: clock())

@@ -21,9 +21,9 @@ public final class ExternalDeviceAudioSource: CaptureSource {
 
     public var activeDeviceUniqueID: String? { runs.activeDeviceUniqueID }
 
-    /// The device's name and `uniqueID`.
+    /// The device's name and `uniqueID`; read like the screen's, never on the main thread.
     public var sourceInfo: TrackSource {
-        TrackSource(name: (runs.activeFormat ?? session.describe() ?? .unknown).name, deviceUniqueID: session.deviceUniqueID)
+        TrackSource(name: (session.describe() ?? .unknown).name, deviceUniqueID: session.deviceUniqueID)
     }
 
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {

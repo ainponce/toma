@@ -33,10 +33,12 @@ public final class ExternalDeviceCaptureSource: CaptureSource {
     public var activeDeviceUniqueID: String? { runs.activeDeviceUniqueID }
 
     /// The device's name and `uniqueID`, with `globalFrame` (0, 0, width, height) in pixels at `pixelScale` 1: the size
-    /// the active run started with, otherwise the size the device has now (what a take records as it starts). Without
-    /// the device, no frame.
+    /// the first run of this source started with, the size of its first segment (`ExternalDeviceSession.describe()`);
+    /// before that run, the size the device tells, if it does. Without the device, no name and no frame. Until the
+    /// device is found a read looks for it, so it is never read on the main thread: the coordinator reads it on its
+    /// actor, as the take starts and once the first run has started.
     public var sourceInfo: TrackSource {
-        (runs.activeFormat ?? session.describe() ?? .unknown).trackSource(uniqueID: session.deviceUniqueID)
+        (session.describe() ?? .unknown).trackSource(uniqueID: session.deviceUniqueID)
     }
 
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
@@ -64,9 +66,6 @@ final class ExternalDeviceRuns: Sendable {
     }
 
     var activeDeviceUniqueID: String? { runs.activeDeviceUniqueID }
-
-    /// What the active run's lease captured when it was given; `nil` without an active run.
-    var activeFormat: ExternalDeviceFormat? { runs.activeRun()?.resource.format }
 
     func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
         // The previous run, if any, ends: its lease ends on the session's queue, and its output delivers nowhere;

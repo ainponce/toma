@@ -104,21 +104,59 @@ import Testing
         let audio = ExternalDeviceAudioSource(video: video)
         #expect(video.sourceInfo == screen)
         #expect(audio.sourceInfo == TrackSource(name: "iPhone", deviceUniqueID: "iphone-1"))
+        // A take asks four times as it starts: the device is looked for once.
+        #expect(video.sourceInfo == screen && audio.sourceInfo.name == "iPhone")
+        #expect(engine.describes == 1)
 
-        // The size is the one at the start: turning the device while it records does not change it.
+        // Turned after the take asked and before its first run: the size is the one that run starts with, the size of
+        // the first segment.
+        let landscape = ExternalDeviceFormat(name: "iPhone", pixelSize: ExternalDeviceFormat.PixelSize(width: 2556, height: 1179))
+        engine.setFormat(landscape)
         let queue = DispatchSerialQueue(label: "test.device.info")
         try await video.start(on: queue, sink: Sink(queue: queue))
-        engine.setFormat(ExternalDeviceFormat(name: "iPhone", pixelSize: ExternalDeviceFormat.PixelSize(width: 2556, height: 1179)))
-        #expect(video.sourceInfo == screen)
+        #expect(video.sourceInfo == landscape.trackSource(uniqueID: "iphone-1"))
+        // Turning it again while it records, or after a restart, does not change it.
+        engine.setFormat(Self.iPhone)
+        #expect(video.sourceInfo == landscape.trackSource(uniqueID: "iphone-1"))
+        try await video.start(on: queue, sink: Sink(queue: queue))
         await video.stop()
+        #expect(video.sourceInfo == landscape.trackSource(uniqueID: "iphone-1"))
+        #expect(engine.describes == 1)
 
-        // Not connected: its name is not known, nor its size.
-        engine.setFormat(nil)
-        #expect(video.sourceInfo == TrackSource(name: "iPhone or iPad", deviceUniqueID: "iphone-1"))
-        #expect(audio.sourceInfo == TrackSource(name: "iPhone or iPad", deviceUniqueID: "iphone-1"))
-        // A size the device does not tell: no frame.
-        engine.setFormat(ExternalDeviceFormat(name: "iPad", pixelSize: nil))
-        #expect(video.sourceInfo == TrackSource(name: "iPad", deviceUniqueID: "iphone-1"))
+        // Not connected when asked: its name is not known, nor its size, and it is looked for again next time.
+        let away = FakeEngine(format: nil)
+        let awayVideo = ExternalDeviceCaptureSource(session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: away))
+        #expect(awayVideo.sourceInfo == TrackSource(name: "iPhone or iPad", deviceUniqueID: "iphone-1"))
+        #expect(ExternalDeviceAudioSource(video: awayVideo).sourceInfo == TrackSource(name: "iPhone or iPad", deviceUniqueID: "iphone-1"))
+        // A device that does not tell its size before it captures: no frame until its first run.
+        away.setFormat(Self.iPhone)
+        away.setTellsSizeBeforeCapturing(false)
+        #expect(awayVideo.sourceInfo == TrackSource(name: "iPhone", deviceUniqueID: "iphone-1"))
+        try await awayVideo.start(on: queue, sink: Sink(queue: queue))
+        #expect(awayVideo.sourceInfo == screen)
+        await awayVideo.stop()
+    }
+
+    @Test func theTrackHasTheSizeItsFirstRunStartedWith() async throws {
+        // The take writes its tracks before any run starts: the device turned right after, or did not tell its size
+        // yet. Once the screen's run has started, its track has the size of the first segment.
+        try await withTemporaryDirectory { directory in
+            let portrait = ExternalDeviceFormat(name: "iPhone", pixelSize: ExternalDeviceFormat.PixelSize(width: 390, height: 844))
+            let landscape = ExternalDeviceFormat(name: "iPhone", pixelSize: ExternalDeviceFormat.PixelSize(width: 844, height: 390))
+            let engine = FakeEngine(format: portrait)
+            engine.setTurnsAfterDescribing(to: landscape)
+            let video = ExternalDeviceCaptureSource(
+                session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: engine), framesPerSecond: 30)
+            let rig = try Rig(in: directory, sources: [video])
+            let id = try await rig.coordinator.start()
+            await engine.deliverFrames(width: 844, height: 390, count: 10)
+            _ = try await rig.coordinator.stop()
+
+            let track = try #require(try rig.takeOnDisk(id).track("device"))
+            #expect(track.source == landscape.trackSource(uniqueID: "iphone-1"))
+            try #require(track.segments.count == 1)
+            #expect(try await rig.videoSize(of: track.segments[0]) == CGSize(width: 844, height: 390))
+        }
     }
 
     @Test func sessionRunsWhileEitherSourceRuns() async throws {
@@ -337,8 +375,11 @@ private final class FakeEngine: ExternalDeviceEngine {
         var running = false
         var interrupted = false
         var stopsRightAfterStarting = false
+        var tellsSizeBeforeCapturing = true
+        var turnsAfterDescribing: ExternalDeviceFormat?
         var counts = Counts()
         var prepares = 0
+        var describes = 0
         var deliveries: [ExternalDeviceSession.Output: ExternalDeviceSession.Delivery] = [:]
         var onStop: (@Sendable (ExternalDeviceSession.StopCause) -> Void)?
     }
@@ -352,6 +393,8 @@ private final class FakeEngine: ExternalDeviceEngine {
     var counts: Counts { state.withLock { $0.counts } }
     /// How many times a lease asked it to capture.
     var prepares: Int { state.withLock { $0.prepares } }
+    /// How many times it was asked to describe the device.
+    var describes: Int { state.withLock { $0.describes } }
 
     func setFormat(_ format: ExternalDeviceFormat?) {
         state.withLock { $0.format = format }
@@ -359,6 +402,24 @@ private final class FakeEngine: ExternalDeviceEngine {
 
     func setStopsRightAfterStarting(_ stops: Bool) {
         state.withLock { $0.stopsRightAfterStarting = stops }
+    }
+
+    /// `false`: like a muxed device, its size is known only once it captures.
+    func setTellsSizeBeforeCapturing(_ tells: Bool) {
+        state.withLock { $0.tellsSizeBeforeCapturing = tells }
+    }
+
+    /// Right after the next description, the device turns to `format`.
+    func setTurnsAfterDescribing(to format: ExternalDeviceFormat) {
+        state.withLock { $0.turnsAfterDescribing = format }
+    }
+
+    /// `count` frames of `width` × `height` to the screen's source, one every 33 ms, at the host time they are made.
+    func deliverFrames(width: Int, height: Int, count: Int) async {
+        for index in 0..<count {
+            _ = deliver(SampleFactory.videoSample(width: width, height: height, pts: HostTime.now(), frameIndex: index), to: .video)
+            try? await Task.sleep(for: .milliseconds(33))
+        }
     }
 
     /// Hands `sample` to the source of `output`, on its queue; `false` if no source has it.
@@ -404,7 +465,16 @@ private final class FakeEngine: ExternalDeviceEngine {
     }
 
     func describe() -> ExternalDeviceFormat? {
-        state.withLock { $0.connected ? $0.format : nil }
+        state.withLock { state in
+            state.describes += 1
+            guard state.connected, var format = state.format else { return nil }
+            if let turned = state.turnsAfterDescribing {
+                state.format = turned
+                state.turnsAfterDescribing = nil
+            }
+            if !state.tellsSizeBeforeCapturing { format.pixelSize = nil }
+            return format
+        }
     }
 
     func prepare(for output: ExternalDeviceSession.Output) throws -> ExternalDeviceFormat {
