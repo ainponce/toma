@@ -210,6 +210,9 @@ public final class EditSession {
     private var lastKnownURL: URL
     /// How many times the package was opened again from the disk after another process changed it (Task 12b).
     private var reopenings = 0
+    /// `document` and its JSON as the last step, undo or redo left them: the next one starts from that JSON instead of
+    /// encoding the whole document again (`applied(_:)`), as long as `document` is still that one.
+    private var documentJSON: (document: EditDocument, json: JSONValue)?
 
     private init(_ opened: Opened, context: EditContext) {
         project = opened.project
@@ -240,6 +243,7 @@ public final class EditSession {
         diskVersion = opened.diskVersion
         createVersion = opened.createVersion
         pendingCreate = opened.pendingCreate
+        documentJSON = opened.json.map { (opened.document, $0) }
         let manifest = opened.project.manifest
         legacyManifest = manifest.formatVersion < 3 && opened.access == .editable ? manifest : nil
         snapshotSeq = opened.snapshotSeq
@@ -384,18 +388,26 @@ public final class EditSession {
         return restartingLog || journal.state != .saved
     }
 
+    /// Whether the document on disk is already of `EditDocument.currentVersion`, in a package of format version 3 (or
+    /// one an edit here is upgrading), so that a step performed now migrates nothing an older app reads: false for a
+    /// package of version 1 or 2, one upgraded and never edited, a project whose log is of an older version (phase 1's)
+    /// and a new document written in an older version, until the first edit here. What the editor does by itself as a
+    /// project opens (`AutomaticTranscription`) asks it first.
+    public var documentIsCurrentOnDisk: Bool {
+        !pendingMigration && pendingCreate == nil && (project.manifest.formatVersion >= 3 || upgrade != nil)
+    }
+
     /// Applies `step` and hands its `do` line to the journal, without waiting for the disk. A step with the same label
     /// and target as the last one, less than 1 s after it, joins its undo group (design §6.4). The first step of a
     /// version 1 or 2 package starts its upgrade to version 3, and the line waits for it, as those of the steps that come
     /// meanwhile do (`.pendingUpgrade`). The first line of a project of 1b goes with its `migrate` (`pendingMigration`).
     public func perform(_ step: EditStep) -> EditOutcome {
-        guard isEditable, !step.changes.isEmpty, let next = try? document.applying(step.changes), next.isDrawable
-        else { return .refused }
+        guard isEditable, !step.changes.isEmpty, let (next, json) = applied(step.changes) else { return .refused }
         if restartingLog {
             // The new log starts with a `create` of the document as it is then, this step included: an edited document,
             // of the current version.
             diskVersion = EditDocument.currentVersion
-            change(to: next, seq: document.logSequence)
+            change(to: next, seq: document.logSequence, json: json)
             return .applied
         }
         let at = context.now()
@@ -422,7 +434,7 @@ public final class EditSession {
         diskVersion = EditDocument.currentVersion
         for group in closing { groups[group] = nil }
         groups[group, default: []] += step.changes
-        change(to: next, seq: line.seq)
+        change(to: next, seq: line.seq, json: json)
         return outcome
     }
 
@@ -435,19 +447,20 @@ public final class EditSession {
     public var canRedo: Bool { redoing() != nil }
 
     /// An undo or a redo as it would be handed over: its lines (the `migrate` lines first while `pendingMigration`
-    /// holds, then its own), the history once they are recorded, and the document it leaves.
+    /// holds, then its own), the history once they are recorded, and the document it leaves, with its JSON.
     private struct HistoryStep {
         var lines: [EditLogEntry]
         var history: UndoHistory
         var next: EditDocument
+        var json: JSONValue
     }
 
     /// The undo of the group on top of the undo stack; `nil` when `undo()` refuses.
     private func undoing() -> HistoryStep? {
         guard isEditable, !restartingLog, let group = history.done.last, let changes = groups[group],
-            let next = try? document.applying(changes.reversed().map(\.inverse)), next.isDrawable
+            let (next, json) = applied(changes.reversed().map(\.inverse))
         else { return nil }
-        return historyStep(to: next) { history in
+        return historyStep(to: next, json: json) { history in
             history.done.last == group ? .undo(seq: history.nextSeq, group: group) : nil
         }
     }
@@ -455,11 +468,20 @@ public final class EditSession {
     /// The redo of the group on top of the redo stack; `nil` when `redo()` refuses.
     private func redoing() -> HistoryStep? {
         guard isEditable, !restartingLog, let group = history.undone.last, let changes = groups[group],
-            let next = try? document.applying(changes), next.isDrawable
+            let (next, json) = applied(changes)
         else { return nil }
-        return historyStep(to: next) { history in
+        return historyStep(to: next, json: json) { history in
             history.undone.last == group ? .redo(seq: history.nextSeq, group: group) : nil
         }
+    }
+
+    /// `document` with `changes` applied, and its JSON, from the JSON the last change left (`documentJSON`) while it is
+    /// still of this document (`EditDocument.applying(_:json:)`: only what the changes touch is decoded again); `nil` if
+    /// they do not apply or leave a document no render can draw.
+    private func applied(_ changes: [EditChange]) -> (document: EditDocument, json: JSONValue)? {
+        let json = documentJSON.flatMap { $0.document == document ? $0.json : nil }
+        guard let next = try? document.applying(changes, json: json), next.document.isDrawable else { return nil }
+        return next
     }
 
     /// Undoes the group on top of the undo stack.
@@ -672,13 +694,15 @@ public final class EditSession {
     /// `pendingMigration` holds, leaving `next`. Changes nothing. `nil` when `line` gives `nil`, its group not on top any
     /// more: a `migrate` that cuts the history (a line of 1b before it writes inside of what it adds, 1c design §13.2)
     /// leaves nothing before it to undo or redo, and the step is refused.
-    private func historyStep(to next: EditDocument, _ line: (UndoHistory) -> EditLogEntry?) -> HistoryStep? {
+    private func historyStep(
+        to next: EditDocument, json: JSONValue, _ line: (UndoHistory) -> EditLogEntry?
+    ) -> HistoryStep? {
         var history = history
         var lines = migrations(recordedIn: &history)
         guard let last = line(history) else { return nil }
         lines.append(last)
         history.record(last)
-        return HistoryStep(lines: lines, history: history, next: next)
+        return HistoryStep(lines: lines, history: history, next: next, json: json)
     }
 
     /// Hands the lines of `step`, an undo or a redo, to the journal, and moves the document to the one it leaves;
@@ -687,7 +711,7 @@ public final class EditSession {
         guard let step, let last = step.lines.last, let outcome = hand(step.lines) else { return .refused }
         history = step.history
         diskVersion = EditDocument.currentVersion
-        change(to: step.next, seq: last.seq)
+        change(to: step.next, seq: last.seq, json: step.json)
         return outcome
     }
 
@@ -723,9 +747,17 @@ public final class EditSession {
         return true
     }
 
-    private func change(to next: EditDocument, seq: Int) {
+    /// `document` becomes `next` at line `seq`; `json`, its JSON when the change made it, is kept for the next one
+    /// (`documentJSON`) with that `logSequence`.
+    private func change(to next: EditDocument, seq: Int, json: JSONValue? = nil) {
         document = next
         document.logSequence = seq
+        if case var .object(members)? = json {
+            members["logSequence"] = .integer(Int64(seq))
+            documentJSON = (document, .object(members))
+        } else {
+            documentJSON = nil
+        }
         revision += 1
         onChange?()
     }
@@ -1145,6 +1177,8 @@ private struct Opened: Sendable {
     var createVersion = EditDocument.currentVersion
     var pendingCreate: EditDocument?
     var snapshotSeq: Int?
+    /// The document's JSON (`EditDocument.heldJSON()`), for an editable session.
+    var json: JSONValue?
 }
 
 /// What an attempt at the upgrade to version 3 gives back to the main actor.
@@ -1211,6 +1245,7 @@ private enum Opening {
                 opened.access = .readOnly(.openElsewhere)
             } else {
                 opened.pendingCreate = opened.document
+                opened.json = opened.document.heldJSON()
             }
             return opened
         }
@@ -1324,6 +1359,8 @@ private enum Opening {
         opened.groups = groupChanges(of: entries, in: history, createVersion: createVersion)
         opened.logBytes = logBytes
         opened.snapshotSeq = snapshotSeq
+        // Off the main actor: the first edit starts from it (`EditSession.applied`).
+        opened.json = opened.document.heldJSON()
         return opened
     }
 

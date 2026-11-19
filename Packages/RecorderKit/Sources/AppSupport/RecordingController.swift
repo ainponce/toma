@@ -44,6 +44,9 @@ public final class RecordingController {
     /// The last take a stop closed and kept: the user's stop or the disk's, also when closing it failed in
     /// part (`closedWithError`). Not a take that was restarted, nor one closed to quit.
     public private(set) var lastSaved: SavedTake?
+    /// The packages a take of this launch recorded something into, by their folder (`PackageIdentity`, so a rename or a
+    /// move on their volume keeps them): `recordedThisSession(_:)`.
+    @ObservationIgnored private var recordedPackages: Set<PackageIdentity> = []
     /// What the take was asked to record, from the countdown until the controller is idle again, with the camera
     /// style in force (`setCameraStyle`). A restart records it again, and does not change it.
     public internal(set) var currentRequest: TakeRequest?
@@ -611,6 +614,7 @@ public final class RecordingController {
         endTake()
         stopTask = nil
         guard closed.opened else { return }
+        if let identity = PackageIdentity(take.package.url) { recordedPackages.insert(identity) }
         lastProjectURL = take.package.url
         guard case .save(let opensEditor) = outcome else { return }
         lastSaved = SavedTake(
@@ -660,6 +664,13 @@ public final class RecordingController {
     }
 
     // MARK: - Other actions
+
+    /// Whether a take of this launch recorded something into the package at `url`, also after it was renamed or moved on
+    /// its volume: its editor may transcribe it by itself (`AutomaticTranscription`), since nothing of an earlier phase
+    /// has to read it as it was.
+    public func recordedThisSession(_ url: URL) -> Bool {
+        PackageIdentity(url).map(recordedPackages.contains) ?? false
+    }
 
     public func openLastProject() {
         guard let lastProjectURL, hasLastProject else { return }

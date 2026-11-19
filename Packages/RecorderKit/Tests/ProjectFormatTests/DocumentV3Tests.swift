@@ -655,7 +655,7 @@ extension JSONValue {
         #expect(throws: Never.self, "\(path)") { try document.applying([change]) }
     }
     // A value the document cannot hold is still named, and `applying` says where.
-    let aspect = try #require(document.setChange("/aspect", "4:3"))
+    let aspect = try #require(document.setChange("/aspect", "5:4"))
     #expect(throws: EditChangeError.invalidDocument("/aspect")) { try document.applying([aspect]) }
 }
 

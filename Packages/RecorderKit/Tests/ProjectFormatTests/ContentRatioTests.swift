@@ -89,3 +89,14 @@ private enum Ratio {
     #expect(StageLayout.outputSize(aspect: .landscape, shortSide: 1080, contentRatio: 2.4) == [1920, 1080])
     #expect(StageLayout.outputSize(aspect: .fourByFive, shortSide: 1080, contentRatio: 2.4) == [1080, 1350])
 }
+
+@Test func aCraftedWindowGivesABoundedSize() {
+    // A window of 10¹⁷ × 1 points at the start: its ratio as it is, the output held to 4:1.
+    let take = Ratio.take([Ratio.window(frame: Rect(x: 0, y: 0, width: 100, height: 100))])
+    let events = [
+        InputEvent(t: Ratio.at(0), kind: .windowGeometry(track: "window-1", frame: Rect(x: 0, y: 0, width: 1e17, height: 1), onScreen: true))
+    ]
+    let ratio = Ratio.ratio(take, events: events, screen: "window-1")
+    #expect(ratio == 1e17)
+    #expect(StageLayout.outputSize(aspect: .auto, shortSide: 1080, contentRatio: ratio) == [4320, 1080])
+}

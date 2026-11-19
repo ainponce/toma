@@ -209,6 +209,13 @@ final class EditorModel {
     /// What the editor does with its project as a whole (design §6.7): renaming it, duplicating it, the trash; set by
     /// the window.
     @ObservationIgnored var projectActions: EditorProjectActions?
+    /// Whether a take of this launch recorded into the package at a URL; set by the window, from the app delegate.
+    @ObservationIgnored var recordedHere: (URL) -> Bool = { _ in false }
+    /// The session's document is already of the current version on disk (`EditSession.documentIsCurrentOnDisk`): what
+    /// the editor does by itself as the project opens migrates nothing (`AutomaticTranscription`).
+    var documentIsCurrentOnDisk: Bool { session?.documentIsCurrentOnDisk ?? false }
+    /// A take of this launch recorded into the session's package (`recordedHere`).
+    var recordedThisSession: Bool { session.map { recordedHere($0.packageURL) } ?? false }
     /// Another app holds the project's `edit.lock`.
     var isOpenElsewhere: Bool {
         switch access {

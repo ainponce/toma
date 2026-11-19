@@ -3,22 +3,40 @@
 /// The stage's measures: the output sizes of each aspect, and where the screen, or the macOS window around it, goes inside
 /// the padding (design §7.1 and §7.3). Positions are in output pixels, origin at the top left.
 public enum StageLayout {
+    /// The longest side of an output, in pixels: the most the video encoders take.
+    public static let maximumSide = 16_384
+
     /// The output of `aspect` whose shorter side is `shortSide` (720, 1080, 1440 or 2160 in the export sheet). 16:9 and
     /// 9:16: the longer side is `round(shortSide × 16/9 / 2) × 2`, so both are even as H.264 needs; a square's are both
-    /// `shortSide`. The others (and `auto`, from `contentRatio`, 16:9 without it): the shorter side is `shortSide` and the
-    /// longer `round(shortSide × r / 2) × 2`, `r` the ratio of the longer over the shorter.
+    /// `shortSide`. The others (and `auto`, from `contentRatio`, 16:9 without it, held to `Aspect.autoRange`): the shorter
+    /// side is `shortSide` and the longer `round(shortSide × r / 2) × 2`, `r` the ratio of the longer over the shorter.
+    /// An output whose longer side would pass `maximumSide` is scaled down to it, the other side in proportion and even.
     public static func outputSize(aspect: Aspect, shortSide: Int, contentRatio: Double? = nil) -> SIMD2<Int> {
         let longSide = Int((Double(shortSide) * 16 / 9 / 2).rounded()) * 2
+        let size: SIMD2<Int>
         switch aspect {
-        case .landscape: return SIMD2(longSide, shortSide)
-        case .portrait: return SIMD2(shortSide, longSide)
-        case .square: return SIMD2(shortSide, shortSide)
+        case .landscape: size = SIMD2(longSide, shortSide)
+        case .portrait: size = SIMD2(shortSide, longSide)
+        case .square: size = SIMD2(shortSide, shortSide)
         case .fourByFive, .fourByThree, .threeByFour, .auto:
             let ratio = aspect.ratio(contentRatio: contentRatio)
             let wide = ratio >= 1
             let long = Int((Double(shortSide) * (wide ? ratio : 1 / ratio) / 2).rounded()) * 2
-            return wide ? SIMD2(long, shortSide) : SIMD2(shortSide, long)
+            size = wide ? SIMD2(long, shortSide) : SIMD2(shortSide, long)
         }
+        return held(size)
+    }
+
+    /// `size` with its longer side at most `maximumSide`: scaled down to it, the shorter in proportion, rounded to an
+    /// even number of pixels (2 at least).
+    private static func held(_ size: SIMD2<Int>) -> SIMD2<Int> {
+        let long = max(size.x, size.y)
+        guard long > maximumSide else { return size }
+        let scale = Double(maximumSide) / Double(long)
+        func side(_ pixels: Int) -> Int {
+            pixels == long ? maximumSide : min(max(2, Int((Double(pixels) * scale / 2).rounded()) * 2), maximumSide)
+        }
+        return SIMD2(side(size.x), side(size.y))
     }
 
     /// The ratio `auto` ("like the recording") takes: the region of the screen of `screens.initial` for `take`, with the

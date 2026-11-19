@@ -74,6 +74,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         projectActions = EditorProjectActions(model: model, host: projectHost)
         model.projectActions = projectActions
         model.onRecovered = onRecovered
+        model.recordedHere = projectHost.recordedHere
         timeline = TimelineViewController(model: model)
         keyboard = EditorKeyboard(model: model, timeline: timeline.timelineView)
         let visible = NSScreen.main?.visibleFrame ?? NSRect(origin: .zero, size: EditorLayout.minimumSize)

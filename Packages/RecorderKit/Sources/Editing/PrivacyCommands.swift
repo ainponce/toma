@@ -42,15 +42,16 @@ public enum PrivacyCommands {
     }
 
     /// Moves block `id` so its output range starts at `toOutputStart`, kept in the output; its keys move with it (by the
-    /// change of its source start). `nil` if it stays where it is, if there is no such block or it shows nothing.
+    /// change of its source start, either way and into another take: each keeps its offset from the block's start, held
+    /// to the ends of the clock). `nil` if it stays where it is, if there is no such block or it shows nothing.
     public static func move(_ doc: EditDocument, id: String, toOutputStart: Int64) -> EditStep? {
         guard let k = doc.privacy.blocks.firstIndex(where: { $0.id == id }), let output = outputRange(of: doc.privacy.blocks[k], in: doc),
             let source = track(doc, outputs: [output]).moved(0, toOutputStart: toOutputStart)
         else { return nil }
         var block = doc.privacy.blocks[k]
-        let delta = source.start.nanoseconds - block.start.nanoseconds
+        let (from, to) = (block.start, source.start)
         (block.take, block.start, block.end) = (source.take, source.start, source.end)
-        block.keys = block.keys.map { RectKey(t: HostTime(nanoseconds: $0.t.nanoseconds + delta), rect: $0.rect) }
+        block.keys = block.keys.map { RectKey(t: shifted($0.t, from: from, to: to), rect: $0.rect) }
         return replace(doc, k, block, label: .privacyMove)
     }
 
@@ -152,6 +153,17 @@ public enum PrivacyCommands {
             guard let output, output.contains(atOutput) else { return nil }
             return block
         }
+    }
+
+    /// `t` at the same signed offset from `to` as it is from `from`, held to 0 and to the latest host time (a key may be
+    /// before the block's start, and a block may move earlier or into an earlier take).
+    private static func shifted(_ t: HostTime, from: HostTime, to: HostTime) -> HostTime {
+        if t >= from {
+            let (sum, overflow) = to.nanoseconds.addingReportingOverflow(t.nanoseconds - from.nanoseconds)
+            return HostTime(nanoseconds: overflow ? .max : sum)
+        }
+        let back = from.nanoseconds - t.nanoseconds
+        return HostTime(nanoseconds: to.nanoseconds > back ? to.nanoseconds - back : 0)
     }
 
     private static func replace(_ doc: EditDocument, _ k: Int, _ block: PrivacyBlock, label: EditLabel) -> EditStep? {

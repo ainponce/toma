@@ -55,3 +55,29 @@ import Testing
         try body(defaults)
     }
 }
+
+@Suite struct AutomaticTranscriptionTests {
+    /// Only where its step migrates nothing: a document already of version 3 on disk, or a package this app recorded
+    /// since it launched; never an untouched project of phase 1. And never without the setting, the model, while it has
+    /// a transcript or when it cannot be edited.
+    @Test func onlyAProjectOfVersion3OrRecordedHereTranscribesByItself() {
+        func starts(
+            automatic: Bool = true, installed: Bool = true, transcript: Bool = false, canEdit: Bool = true, current: Bool,
+            recorded: Bool
+        ) -> Bool {
+            AutomaticTranscription.starts(
+                automatic: automatic, modelInstalled: installed, hasTranscript: transcript, canEdit: canEdit,
+                documentIsCurrentOnDisk: current, recordedThisSession: recorded)
+        }
+        #expect(!starts(current: false, recorded: false))
+        #expect(starts(current: true, recorded: false))
+        #expect(starts(current: false, recorded: true))
+        #expect(starts(current: true, recorded: true))
+        for current in [false, true] {
+            #expect(!starts(automatic: false, current: current, recorded: true))
+            #expect(!starts(installed: false, current: current, recorded: true))
+            #expect(!starts(transcript: true, current: current, recorded: true))
+            #expect(!starts(canEdit: false, current: current, recorded: true))
+        }
+    }
+}

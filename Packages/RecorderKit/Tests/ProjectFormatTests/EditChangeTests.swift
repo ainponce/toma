@@ -388,7 +388,7 @@ func canonical(_ document: EditDocument) throws -> String {
 
 @Test func changeThatBreaksTheDocumentIsInvalid() throws {
     let document = DesignExample.document
-    let aspect = EditChange.set(path: try pointer("/aspect"), before: .string("16:9"), after: .string("4:3"))
+    let aspect = EditChange.set(path: try pointer("/aspect"), before: .string("16:9"), after: .string("5:4"))
     #expect(throws: EditChangeError.invalidDocument("/aspect")) { try document.applying([aspect]) }
     // `JSONValue` knows nothing of the document.
     let json = try value(document)
@@ -450,4 +450,105 @@ func canonical(_ document: EditDocument) throws -> String {
     let line = try create.jsonLine()
     #expect(line.contains(#""start":1152921504606846977"#))
     #expect(try EditLogEntry(jsonLine: line) == create)
+}
+
+// MARK: - Applying from the document's JSON
+
+/// `applying(_:json:)` gives what `applying(_:)` gives, the document or the error, and the document's JSON (equal to
+/// `JSONValue(encoding:)` of it): each list of changes of a document with a transcript alone, and those that apply one
+/// after the other, each from the JSON the one before gave.
+@Test func applyingFromTheJSONIsApplying() throws {
+    var document = DesignExample.document
+    document.transcript = Transcript(
+        language: "es-MX", engine: "speechTranscriber-1",
+        takes: [TranscriptTake(take: "take-001", track: "mic", words: [
+            TranscriptWord(start: ns(81_240_000_000_000), end: ns(81_240_300_000_000), text: "Hola"),
+            TranscriptWord(start: ns(81_240_400_000_000), end: ns(81_240_700_000_000), text: "eh"),
+        ])])
+    let json = try value(document)
+    var clip = document.sequence[0]
+    clip.end = ns(81_250_000_000_000)
+    var extra = try value(document.zoom.regions[0])
+    if case var .object(members) = extra {
+        members["extra"] = .bool(true)
+        extra = .object(members)
+    }
+    let other = try value(DesignExample.document)
+    func set(_ path: String, _ before: JSONValue, _ after: JSONValue) throws -> EditChange {
+        .set(path: try pointer(path), before: before, after: after)
+    }
+    let lists: [[EditChange]] = [
+        [try #require(document.setChange("/style/padding", 0.1))],
+        [try #require(document.setChange("/audio/tracks/take-001~1mic/gain", 1.5))],
+        [document.insertChange(.zoomSuppressed, at: 1, SourceRange(take: "take-001", start: ns(1), end: ns(2)))],
+        [try #require(document.removeChange(.zoomRegions, at: 0))],
+        [try #require(document.replaceChange(.sequence, id: "c-00a1b2c3", with: clip))],
+        [try #require(document.setChange("/transcript/takes/0/words/1/text", "pues"))],
+        [try #require(document.setChange("/captions/show", true)), try #require(document.setChange("/keys/mode", KeyOverlayMode.all))],
+        [try set("/transcript", try value(document.transcript), .null)],
+        [try set("/aspect", .string("16:9"), .string("4:3"))],
+        [try set("/logSequence", .integer(128), .integer(129))],
+        [try set("/zoom/regions/1/depth", .number(1.6), .null)],
+        // Words of the transcript alone, and with the rest of it.
+        [try set("/transcript/takes/0/words/0/breakBefore", .null, .bool(true))],
+        [try set("/transcript/takes/0/words/0", try value(document.transcript?.takes[0].words[0]),
+                 try value(TranscriptWord(start: ns(81_240_000_000_000), end: ns(81_240_200_000_000), text: "Hola,")))],
+        [try set("/transcript/takes/0/words/1/text", .string("eh"), .string("este")),
+         try set("/transcript/takes/0/words/0/text", .string("Hola"), .string("Bueno"))],
+        [try set("/transcript/takes/0/words/1/text", .string("eh"), .string("este")), try set("/transcript/engine", .string("speechTranscriber-1"), .string("x"))],
+        [try set("/transcript/takes/0/words/0/end", .integer(81_240_300_000_000), .number(1e18))],
+        [try set("/transcript/takes/0/words/0/breakBefore", .null, .bool(false))],
+        [try set("/transcript/takes/0/words/0", try value(document.transcript?.takes[0].words[0]), .null)],
+        [try set("/transcript/takes/0/words/0/start", .integer(81_240_000_000_000), .string("x"))],
+        [try set("/transcript/takes/0/words/9/text", .string("eh"), .string("x"))],
+        [try set("/transcript/takes/0/words/0/extra", .null, .integer(1))],
+        // Other bytes for the same value (`1e+18` written for an integer).
+        [try set("/logSequence", .integer(128), .number(1e18))],
+        [try set("/zoom/regions/0/start", .integer(81_241_000_000_000), .number(1e18))],
+        // Refused, with the error of `applying(_:)`.
+        [try set("/aspect", .string("16:9"), .string("5:4"))],
+        [try set("/sequence/1/speed", .integer(2), .string("fast"))],
+        [.insert(collection: try pointer("/zoom/regions"), index: 2, value: extra)],
+        [try set("/zoom/regions/1/instant", .bool(false), .null)],
+        [try set("/nothing", .null, .integer(1))],
+        [try set("/zoom", try value(document.zoom), .null)],
+        [try set("/documentVersion", .integer(3), .integer(2))],
+        [try set("/documentVersion", .integer(3), .integer(4))],
+        [try set("/style/padding", .number(0.07), .number(0.1))],
+        [try set("/transcript/takes/0/words/0/text", .string("Hola"), .integer(1))],
+        [try set("/transcript", try value(document.transcript), .string("x"))],
+        // The whole document.
+        [.set(path: JSONPointer(components: []), before: json, after: other)],
+        [.set(path: JSONPointer(components: []), before: json, after: .integer(1))],
+    ]
+    for (k, changes) in lists.enumerated() {
+        let expected = Result { () throws(EditChangeError) in try document.applying(changes) }
+        let fast = Result { () throws(EditChangeError) in try document.applying(changes, json: json) }
+        switch (expected, fast) {
+        case let (.success(a), .success(b)):
+            #expect(b.document == a, "\(k)")
+            #expect(b.json == (try value(a)), "\(k)")
+        case let (.failure(a), .failure(b)):
+            #expect(a == b, "\(k)")
+        default:
+            Issue.record("\(k): \(expected) and \(fast)")
+        }
+    }
+    // One after the other, each from the JSON the one before gave, and back with their inverses.
+    var (current, currentJSON) = (document, json)
+    var applied = [0, 1, 2, 4, 5, 6, 8, 9, 10, 11].map { lists[$0] }
+    let shown = try document.applying(applied.flatMap { $0 })
+    applied.append([try set("/transcript", try value(shown.transcript), .null)])
+    for changes in applied + applied.reversed().map({ $0.reversed().map(\.inverse) }) {
+        let expected = try current.applying(changes)
+        (current, currentJSON) = try current.applying(changes, json: currentJSON)
+        #expect(current == expected)
+        #expect(currentJSON == (try value(current)))
+    }
+    // A document of an older version decodes migrated: from its JSON as from nothing.
+    var older = DesignExample.document
+    older.documentVersion = 2
+    let aspect = try set("/aspect", .string("16:9"), .string("4:3"))
+    #expect(throws: EditChangeError.invalidDocument("/aspect")) { try older.applying([aspect]) }
+    #expect(throws: EditChangeError.invalidDocument("/aspect")) { try older.applying([aspect], json: try value(older)) }
 }

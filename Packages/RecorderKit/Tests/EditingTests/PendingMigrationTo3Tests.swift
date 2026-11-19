@@ -952,6 +952,61 @@ extension JSONValue {
     }
 }
 
+// MARK: - What the editor may do by itself
+
+/// Only a document of version 3 on disk is: an untouched project of phase 1 (a log of version 2, a never edited take
+/// whose new document is written in version 2, a package of format 2) is not until its first edit, and then is.
+@MainActor @Test func theDocumentIsCurrentOnDiskOnlyOnceVersion3IsWritten() async throws {
+    try await withTemporaryDirectory { dir in
+        let caches = dir.appending(path: "Caches")
+        for version in [2, 1] {
+            let url = try await To3.project(version, in: dir, steps: 2, snapshotAt: 2)
+            let session = try await To3.open(url, To3.context(caches: caches))
+            #expect(!session.documentIsCurrentOnDisk, "\(version)")
+            #expect(session.perform(try To3.padding(session.document, 0.1)) == .applied)
+            #expect(session.documentIsCurrentOnDisk, "\(version)")
+            await session.close()
+            let again = try await To3.open(url, To3.context(caches: caches))
+            #expect(again.documentIsCurrentOnDisk, "\(version)")
+            await again.close()
+        }
+
+        let base = HostTime(nanoseconds: 5_000_000_000_000)
+        let frame = Rect(x: 0, y: 0, width: 640, height: 360)
+        func take(_ name: String, formatVersion: Int = 3) async throws -> URL {
+            let builder = try TakeBuilder(in: dir, name: name, formatVersion: formatVersion)
+            try await builder.addVideoTrack(
+                id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: frame, pixelScale: 1),
+                segments: [VideoSegmentSpec(start: base, seconds: 1, framesPerSecond: 10)])
+            try builder.addEvents([InputEvent(t: base.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: frame, scale: 1))])
+            return try builder.write().package.url
+        }
+        let recorded = try await take("Recorded")
+        let new = try await To3.open(recorded, To3.context(caches: caches))
+        #expect(!new.documentIsCurrentOnDisk)
+        await new.close()
+
+        let legacy = try await take("Legacy", formatVersion: 2)
+        let looked = try await To3.open(legacy, To3.context(caches: caches))
+        #expect(!looked.documentIsCurrentOnDisk)
+        #expect(looked.perform(try To3.padding(looked.document, 0.1)) == .pendingUpgrade)
+        #expect(looked.documentIsCurrentOnDisk)
+        #expect(await looked.flushed() == 2)
+        #expect(looked.documentIsCurrentOnDisk)
+        await looked.close()
+        let upgraded = try await To3.open(legacy, To3.context(caches: caches))
+        #expect(try LoadedProject.load(legacy, take: nil).manifest.formatVersion == 3)
+        #expect(upgraded.documentIsCurrentOnDisk)
+        await upgraded.close()
+        let readOnly = try await take("ReadOnly", formatVersion: 2)
+        var forced = To3.context(caches: caches)
+        forced.forcedReadOnly = .inTrash
+        let shown = try await To3.open(readOnly, forced)
+        #expect(!shown.documentIsCurrentOnDisk)
+        await shown.close()
+    }
+}
+
 // MARK: - The labels and collections of phase 2
 
 @Test func phase2LabelsAndCollections() {

@@ -17,7 +17,9 @@ import os
 ///
 /// - **Transcribing.** As the project opens, a document without a transcript is transcribed by itself when Settings ▸
 ///   General ▸ "Transcribe Automatically" is on, on macOS 26, with the model of its language installed (what
-///   `SpeechTranscriber.installedLocales` lists) and the project editable; otherwise with `transcribe()`. The job runs
+///   `SpeechTranscriber.installedLocales` lists), the project editable, and its document already of version 3 on disk
+///   or its package recorded by this launch (`AutomaticTranscription`: an untouched project of phase 1 never changes by
+///   being opened); otherwise with `transcribe()`, the Captions tab's Transcribe. The job runs
 ///   in the project's queue (never while a take records) and what it makes becomes one step, `transcript.create`; if
 ///   the project cannot be edited by then, it is dropped. Transcribing again asks first when corrections would be lost
 ///   ("Transcribing again replaces %lld corrected words.").
@@ -187,7 +189,12 @@ final class EditorVoice {
             self.chosenLanguage = language ?? ""
             self.modelStatus = status
             self.refreshTranscription()
-            if saved.automatic, status == .installed, self.document?.transcript == nil, self.model?.canEdit == true {
+            // Never on an untouched project of phase 1: its step would migrate it and turn its captions on.
+            if let model = self.model, AutomaticTranscription.starts(
+                automatic: saved.automatic, modelInstalled: status == .installed, hasTranscript: self.document?.transcript != nil,
+                canEdit: model.canEdit, documentIsCurrentOnDisk: model.documentIsCurrentOnDisk,
+                recordedThisSession: model.recordedThisSession)
+            {
                 self.transcribe()
             }
         }

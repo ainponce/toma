@@ -110,6 +110,48 @@ private enum PrivacyFixture {
         #expect(PrivacyCommands.move(doc, id: "p-a", toOutputStart: F.output(1)) == nil)
     }
 
+    @Test func movingEarlierCarriesTheKeysBack() throws {
+        let keys = [
+            RectKey(t: F.at(4.5), rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)),
+            RectKey(t: F.at(5), rect: NormalizedRect(x: 0.2, y: 0.1, width: 0.2, height: 0.2)),
+        ]
+        let doc = F.document([F.block("p-a", from: 4, to: 6, keys: keys)])
+        let moved = try F.applied(doc, PrivacyCommands.move(doc, id: "p-a", toOutputStart: F.output(1))).privacy.blocks[0]
+        #expect(moved.start == F.at(1) && moved.end == F.at(3))
+        #expect(moved.keys.map(\.t) == [F.at(1.5), F.at(2)])
+        #expect(moved.keys.map(\.rect) == keys.map(\.rect))
+    }
+
+    @Test func movingAcrossTakesCarriesTheKeysEitherWay() throws {
+        // Later: from take-001 into take-002 (output 18…23 s, source base2…).
+        let keys = [RectKey(t: F.at(1.5), rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))]
+        let doc = F.document([F.block("p-a", from: 1, to: 3, keys: keys)])
+        let later = try F.applied(doc, PrivacyCommands.move(doc, id: "p-a", toOutputStart: F.output(19))).privacy.blocks[0]
+        #expect(later.take == "take-002" && later.start == F.base2.adding(seconds: 1) && later.end == F.base2.adding(seconds: 3))
+        #expect(later.keys.map(\.t) == [F.base2.adding(seconds: 1.5)])
+        // Earlier: from take-002 back into take-001.
+        var block = F.block("p-b", from: 0, to: 2)
+        (block.take, block.start, block.end) = ("take-002", F.base2.adding(seconds: 1), F.base2.adding(seconds: 3))
+        block.keys = [RectKey(t: F.base2.adding(seconds: 2), rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))]
+        let back = F.document([block])
+        let earlier = try F.applied(back, PrivacyCommands.move(back, id: "p-b", toOutputStart: F.output(2))).privacy.blocks[0]
+        #expect(earlier.take == "take-001" && earlier.start == F.at(2) && earlier.end == F.at(4))
+        #expect(earlier.keys.map(\.t) == [F.at(3)])
+    }
+
+    @Test func keysBeforeTheStartKeepTheirOffsetAndStopAtZero() throws {
+        let keys = [
+            RectKey(t: HostTime(nanoseconds: 0), rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)),
+            RectKey(t: F.at(0.5), rect: NormalizedRect(x: 0.2, y: 0.1, width: 0.2, height: 0.2)),
+            RectKey(t: HostTime(nanoseconds: .max), rect: NormalizedRect(x: 0.3, y: 0.1, width: 0.2, height: 0.2)),
+        ]
+        let doc = F.document([F.block("p-a", from: 2, to: 4, keys: keys)])
+        let earlier = try F.applied(doc, PrivacyCommands.move(doc, id: "p-a", toOutputStart: F.output(1))).privacy.blocks[0]
+        #expect(earlier.keys.map(\.t) == [HostTime(nanoseconds: 0), F.at(-0.5), HostTime(nanoseconds: .max - 1_000_000_000)])
+        let later = try F.applied(doc, PrivacyCommands.move(doc, id: "p-a", toOutputStart: F.output(5))).privacy.blocks[0]
+        #expect(later.keys.map(\.t) == [HostTime(nanoseconds: 3_000_000_000), F.at(3.5), HostTime(nanoseconds: .max)])
+    }
+
     @Test func trimKeepsTheKeysAndAMinimum() throws {
         let keys = [RectKey(t: F.at(1), rect: NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2))]
         let doc = F.document([F.block("p-a", from: 1, to: 4, keys: keys)])

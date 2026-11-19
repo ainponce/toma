@@ -219,6 +219,12 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         }
     }
 
+    @Test func anExtremeAutoRatioFitsTheCard() {
+        // A crafted window of 10¹⁷ × 1 points: held to 4:1, inside the card (no size that overflows).
+        #expect(LibraryThumbnails.size(for: .auto, contentRatio: 1e17) == SIMD2(520, 130))
+        #expect(LibraryThumbnails.size(for: .auto, contentRatio: 1e-17) == SIMD2(73, 292))
+    }
+
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
     func portraitFitsInsideTheCard() async throws {
         #expect(LibraryThumbnails.size(for: .landscape) == SIMD2(520, 292))
