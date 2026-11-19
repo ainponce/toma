@@ -980,6 +980,10 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 - Un zoom agregado a mano en la pista Zoom entra y sale sobre la pantalla del iPhone, también con el foco fijo movido.
 - La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad (o un iPhone grabado empezando en horizontal), la toma empieza con el marco de iPad.
 
+**Seguir el cursor en el render** (I5; se recorre con la pestaña Marco de I14)
+
+- Con una toma real 16:9 en 9:16 y Seguir el cursor: la pantalla llena el lugar dentro del margen y la ventana sigue al cursor sin marear (sin saltos en los cortes ni al cambiar de clip, nunca muestra fondo fuera del contenido); con un zoom, el zoom actúa dentro de la pantalla reencuadrada; con Ventana de macOS o un dispositivo elegidos, no se dibuja ningún marco. Un clic deja su efecto sobre lo que se clicó mientras la ventana se mueve. La vista previa es igual al MP4 exportado, también en 1:1.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

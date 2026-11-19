@@ -45,6 +45,15 @@ import simd
 ///   (`StageLayout.deviceRects(contentAspect:padding:outputSize:model:)`), the zoom keeps to those bounds as to a window,
 ///   a card holds them whole, and `DeviceFrameScene` puts the device around the screen as either path left it, with the
 ///   device's screen corners and the shadow cast by its body.
+/// - Follow the cursor (`style.reframe` `followCursor`, phase 2 design §6.5, `reframe-1`): never a window or device
+///   frame. A view wider than the room inside the padding (`StagePoints.isReframed(_:)`) fills all of it
+///   (`StagePoints.room`) with the window of its region the motion paths' `ReframePath` shows at the output time
+///   (`part(of:atOutput:stage:)`): its crop and its region are cut to that window, so `ScreenLayer.crop` is what is
+///   drawn (the privacy regions are placed in it), the cursor and the click effects are placed in the window by the
+///   rules below and hidden outside it, the zoom keeps to the room, and a card takes the room's shape. While a change
+///   moves the rect, the part of the rect's shape about the window's centre, which is the window when it gets there. A
+///   view no wider than the room is placed whole, as without a frame. The window's motion is not blurred: the content of
+///   a frame is that of its time, the cursor's subsamples placed in its window.
 /// - Cursor (`cursor.show`, design §7.5): where the cursor path is at the output time (`CursorPath.sample(atOutput:)`
 ///   of the motion paths: with `smoothing` off, phase 0's rule, the last raw position at or before it moved toward the
 ///   next one within 50 ms), placed on the screen's rect as it is in the region the screen shows; hidden off that
@@ -269,7 +278,7 @@ public struct FrameEvaluator: Sendable {
     ) -> ScreenTransitions {
         let style = document.style, stageSize = SIMD2(Double(outputSize.x), Double(outputSize.y))
         return ScreenTransitions(take: take, events: events, document: document, timeMap: timeMap, stage: paths.stage) {
-            Self.placement(of: $0, style: style, outputSize: stageSize)
+            Self.placement(of: $0, style: style, outputSize: stageSize, stage: paths.stage)
         }
     }
 
@@ -316,12 +325,13 @@ public struct FrameEvaluator: Sendable {
             let style = document.style
             let transition = transitions.state(atOutput: output)
             // Where the screen is: where it goes, or on the way there while a change moves it.
-            let settled = Self.placement(of: view, style: style, outputSize: size)
+            let settled = Self.placement(of: view, style: style, outputSize: size, stage: paths.stage)
             let placement = transition.placement ?? settled
             let rect = placement.screen
             let styleCorners = style.cornerRadius * size.x
             var cornerRadius = styleCorners
-            if case let .macWindow(appearance, title, buttons) = style.frame {
+            // Following the cursor there is no window frame (phase 2 design §6.5).
+            if case let .macWindow(appearance, title, buttons) = style.frame, style.reframe == .fit {
                 // A recorded window keeps the style's corners where there are no buttons: the window's bottom ones, and
                 // its screen's top ones under the bar.
                 let recordedWindow = windowTrackIDs.contains(trackID)
@@ -337,13 +347,15 @@ public struct FrameEvaluator: Sendable {
                 // Its title is drawn from where it goes while it moves.
                 if placement != settled { frame.settledWindowFrame = window(settled).layer }
             }
-            // Out of its own place, each screen fills the rect, cut to its shape.
-            let filled = Self.fill(view, settled: settled, into: placement)
+            // Out of its own place, each screen fills the rect, cut to its shape; reframed, about its window.
+            let filled = Self.fill(view, settled: settled, into: placement, window: reframedPart(of: view, atOutput: output))
             if let previous = transition.previous, let left = transitions.view(of: previous.track, at: source) {
-                let leftSettled = Self.placement(of: left, style: style, outputSize: size)
+                let leftSettled = Self.placement(of: left, style: style, outputSize: size, stage: paths.stage)
+                let leftFilled = Self.fill(
+                    left, settled: leftSettled, into: placement, window: reframedPart(of: left, atOutput: output))
                 frame.previousScreen = ScreenLayer(
                     trackID: previous.track, sourceTime: source, rect: rect, cornerRadius: cornerRadius,
-                    crop: Self.fill(left, settled: leftSettled, into: placement).view.crop, mipmapped: style.screenSampling == .mipmapped)
+                    crop: leftFilled.view.crop, mipmapped: style.screenSampling == .mipmapped)
             }
             frame.screen = ScreenLayer(
                 trackID: trackID, sourceTime: source, rect: rect, cornerRadius: cornerRadius, crop: filled.view.crop,
@@ -759,14 +771,23 @@ public struct FrameEvaluator: Sendable {
     /// Where the screen of `view` goes, settled, in an output of `outputSize` with `style` (design §7.3): the rect of its
     /// region's aspect inside the padding (`StageLayout.screenRect`); with a macOS window frame, under the bar of the window
     /// around it (`StageLayout.windowRect`); with a device frame around the screen fitted whole, inside the device whose
-    /// bounds fit there (`DeviceFrameGeometry.placement`, phase 2 design §6.7).
-    private static func placement(of view: ShownScreen, style: StageStyle, outputSize: SIMD2<Double>) -> ScreenPlacement {
+    /// bounds fit there (`DeviceFrameGeometry.placement`, phase 2 design §6.7). Following the cursor (`style.reframe`
+    /// `followCursor`, §6.5) there is never a frame: a view `stage` reframes (`StagePoints.isReframed(_:)`) fills the whole
+    /// room inside the padding (`StagePoints.room`), any other is placed whole, as without a frame.
+    private static func placement(
+        of view: ShownScreen, style: StageStyle, outputSize: SIMD2<Double>, stage: StagePoints
+    ) -> ScreenPlacement {
         let aspect = view.region.map { $0.width / $0.height }
+        if style.reframe == .followCursor {
+            let rect = StageLayout.screenRect(
+                contentAspect: stage.isReframed(view) ? nil : aspect, padding: style.padding, outputSize: outputSize)
+            return ScreenPlacement(screen: rect, window: rect, barHeight: 0)
+        }
         if case let .device(device) = style.frame, style.reframe == .fit {
             return DeviceFrameGeometry.placement(contentAspect: aspect, padding: style.padding, outputSize: outputSize, frame: device)
         }
         switch style.frame {
-        // A device around a screen that follows the cursor is not drawn (phase 2 design §6.5).
+        // A device is drawn only around the screen fitted whole (above).
         case .none, .device:
             let rect = StageLayout.screenRect(contentAspect: aspect, padding: style.padding, outputSize: outputSize)
             return ScreenPlacement(screen: rect, window: rect, barHeight: 0)
@@ -780,17 +801,39 @@ public struct FrameEvaluator: Sendable {
     /// change on its way), the part that fills the rect without stretching (`GeometryTransitions.aspectFill`, of its
     /// region's aspect), its crop and its region cut to it, with that `part` as fractions of the region. Never anything
     /// outside its crop, so nothing outside an Area. A view without a region, whose aspect is unknown, is shown whole.
+    ///
+    /// A reframed view (`window`, the window of its region it shows, `reframedPart(of:atOutput:)`) shows that window
+    /// where it goes (the room); on its way there, the part of the rect's shape about the window's centre, moved to stay
+    /// inside the region, so it is the window when it gets there (2c's `layerCrop` is the crop cut, its `contentCrop`
+    /// the view's: plan 2b decision 17).
     private static func fill(
-        _ view: ShownScreen, settled: ScreenPlacement, into placement: ScreenPlacement
+        _ view: ShownScreen, settled: ScreenPlacement, into placement: ScreenPlacement, window: Rect?
     ) -> (view: ShownScreen, part: Rect?) {
-        guard let region = view.region, settled != placement else { return (view, nil) }
-        let part = GeometryTransitions.aspectFill(aspect: region.width / region.height, in: placement.screen)
+        guard let region = view.region else { return (view, nil) }
+        var part: Rect
+        if settled == placement {
+            guard let window else { return (view, nil) }
+            part = window
+        } else {
+            part = GeometryTransitions.aspectFill(aspect: region.width / region.height, in: placement.screen)
+            if let window, part.width < 1 {
+                let center = window.x + window.width / 2
+                part.x = min(max(center - part.width / 2, 0), 1 - part.width)
+            }
+        }
         func cut(_ rect: Rect) -> Rect {
             Rect(
                 x: rect.x + part.x * rect.width, y: rect.y + part.y * rect.height, width: part.width * rect.width,
                 height: part.height * rect.height)
         }
         return (ShownScreen(crop: cut(view.crop), region: cut(region), onScreen: view.onScreen), part)
+    }
+
+    /// The window of `view`'s region a screen that follows the cursor shows at output time `output` (`ReframePath.part`,
+    /// `reframe-1`), in fractions of the region; `nil` when `view` is not reframed (`StagePoints.isReframed(_:)`), and with
+    /// the screen fitted whole (`paths.reframe` is `nil`).
+    private func reframedPart(of view: ShownScreen, atOutput output: Int64) -> Rect? {
+        paths.reframe?.part(of: view, atOutput: output, stage: paths.stage)
     }
 
     /// The largest corners of a window frame, in heights of its bar. Corners of about 1.37 bars touch the first button's
