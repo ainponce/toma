@@ -92,14 +92,21 @@ public enum DocumentMigration {
 
     /// `json`, a document of `version`, in the next version: the places of `addedPlaces[version]` at their frozen values
     /// (over any value they already had) and `documentVersion` one more. Throws `invalidDocument` at `/documentVersion`
-    /// from a version that has no migration or for a document that is not of `version`, and at the pointer of an object
-    /// it writes in that is missing or is not an object (`/camera` from 1; `/style`, `/camera`, `/audio`, `/audio/tracks`
-    /// or one of its members from 2).
+    /// from a version that has no migration or for a document that is not of `version`, at the pointer of an object it
+    /// writes in that is missing or is not an object (`/camera` from 1; `/style`, `/camera`, `/audio`, `/audio/tracks` or
+    /// one of its members from 2), and at what only the next version can hold, which a document of `version` never has
+    /// (from 2: a `/transcript`, or a `device` at `/style/frame/type`): the same places `reverted` refuses.
     public static func migrate(_ json: JSONValue, from version: Int) throws(EditChangeError) -> JSONValue {
         guard let migration = migrations[version], case .object(let document) = json,
             document["documentVersion"] == .integer(Int64(version))
         else {
             throw .invalidDocument("/documentVersion")
+        }
+        for place in migration.absent where json.value(at: JSONPointer(components: place)) != nil {
+            throw .invalidDocument(JSONPointer(components: place).string)
+        }
+        for (place, value) in migration.newValues where json.value(at: JSONPointer(components: place)) == value {
+            throw .invalidDocument(JSONPointer(components: place).string)
         }
         var migrated = json
         for (place, value) in migration.added {
@@ -203,6 +210,17 @@ public enum DocumentMigration {
             return component == "*" ? .over : .apart
         }
         return written.count < added.count ? .holding(rest: added[written.count...]) : .over
+    }
+
+    /// The oldest version, from `floor` on, that holds `document` (`reverted` gives it): the version a document never
+    /// edited is written in, so an older app still opens it until the first edit migrates it. The current version if no
+    /// older one holds it, or it cannot be encoded.
+    public static func oldestVersion(holding document: EditDocument, from floor: Int = 1) -> Int {
+        guard let json = try? JSONValue(encoding: document) else { return EditDocument.currentVersion }
+        for version in max(floor, 1)..<EditDocument.currentVersion where reverted(json, to: version) != nil {
+            return version
+        }
+        return EditDocument.currentVersion
     }
 
     /// `json`, a document, as it is in `version`: itself if it is of `version`; from a newer one, one version at a time

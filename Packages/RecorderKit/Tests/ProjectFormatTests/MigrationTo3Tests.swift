@@ -191,6 +191,35 @@ private let addedFrom2: [String: JSONValue] = [
     }
 }
 
+@Test func migrationFrom2RefusesWhatOnly3Holds() throws {
+    // A document of version 2 made by hand with a transcription or a device frame: version 2 has no place for them, so it
+    // is damaged, never read as a document of version 3 (`reverted` refuses the same).
+    let v2 = try parsed(DesignExample.canonical)
+    var transcribed = v2
+    transcribed["transcript"] = try JSONValue(encoding: try #require(DocumentV3Example.document.transcript))
+    var framed = v2
+    framed["style"]?["frame"] = .object(["finish": .string("dark"), "model": .string("iPhone"), "type": .string("device")])
+    for (document, place) in [(transcribed, "/transcript"), (framed, "/style/frame/type")] {
+        #expect(throws: EditChangeError.invalidDocument(place)) { try DocumentMigration.migrate(document, from: 2) }
+        // A `DecodingError`, never `EditDocumentError.newerVersion`, wherever it is.
+        #expect(throws: DecodingError.self, "\(place)") { try EditDocument.decode(json: document) }
+        let text = String(decoding: try ProjectJSON.compactEncoder().encode(document), as: UTF8.self)
+        #expect(throws: DecodingError.self, "\(place)") { try EditDocument.decode(Data(text.utf8)) }
+        let line = #"{"app":{"name":"Toma","version":"0.3.0"},"document":"# + text + #","seq":1,"type":"create"}"#
+        #expect(throws: DecodingError.self, "\(place)") { try EditLogEntry(jsonLine: line) }
+    }
+    // From 1 the same, on the way through 2.
+    var v1 = try parsed(DocumentV1Example.canonical)
+    v1["transcript"] = transcribed["transcript"]
+    #expect(throws: DecodingError.self) { try EditDocument.decode(json: v1) }
+    // A macOS window frame is of version 2.
+    var window = v2
+    window["style"]?["frame"] = .object([
+        "appearance": .string("light"), "buttons": .bool(false), "title": .string(""), "type": .string("macWindow"),
+    ])
+    #expect(try EditDocument.decode(json: window).style.frame == .macWindow(appearance: .light, title: "", buttons: false))
+}
+
 // MARK: - Undoing the migration, and what commutes with it
 
 @Test func revertedWalksDownOneVersionAtATime() throws {

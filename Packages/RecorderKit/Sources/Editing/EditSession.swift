@@ -1255,8 +1255,15 @@ private enum Opening {
                 resolution.document.style.background, from: context.styleDirectory, into: ProjectPackage(url: current))
         }
 
+        // A new document, of a take never opened in the editor, is written in the oldest version that holds it, never
+        // below 2 (what 1c writes for a new project): a take recorded in phase 1 and only looked at in phase 2 stays one
+        // the app of phase 1 opens, and its first edit migrates it, as for any project of phase 1.
+        if resolution.isNewDocument, resolution.startsLog {
+            let oldest = DocumentMigration.oldestVersion(holding: opened.document, from: 2)
+            (opened.diskVersion, opened.createVersion) = (oldest, oldest)
+        }
         // While the document is of an older version on disk, everything written here is in that version (1c design §13.2).
-        let (diskVersion, createVersion) = (resolution.diskVersion, resolution.createVersion)
+        let (diskVersion, createVersion) = (opened.diskVersion, opened.createVersion)
         var entries = resolution.entries
         var history = UndoHistory(entries: entries, createVersion: createVersion)
         var snapshotSeq = resolution.snapshotSeq

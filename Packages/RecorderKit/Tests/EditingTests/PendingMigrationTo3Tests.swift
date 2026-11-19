@@ -458,6 +458,132 @@ private enum To3 {
     }
 }
 
+@MainActor @Test func aTakeNeverEditedStaysOfVersion2UntilItsFirstEdit() async throws {
+    try await withTemporaryDirectory { dir in
+        // A take of format version 3 that no editor opened (recorded in phase 1, or in phase 2 without anything only
+        // version 3 holds): its first opening writes the new document's `create` and snapshot in version 2.
+        let builder = try TakeBuilder(in: dir, name: "Recorded")
+        let base = HostTime(nanoseconds: 5_000_000_000_000)
+        let frame = Rect(x: 0, y: 0, width: 640, height: 360)
+        try await builder.addVideoTrack(
+            id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: frame, pixelScale: 1),
+            segments: [VideoSegmentSpec(start: base, seconds: 1, framesPerSecond: 10)])
+        let project = try builder.write()
+        let url = project.package.url
+        let caches = dir.appending(path: "Caches")
+        let looked = try await To3.open(url, To3.context(caches: caches))
+        #expect(looked.document.documentVersion == 3)
+        #expect(await looked.flushed() == 1)
+        await looked.close()
+        let read = try To3.read(url)
+        #expect(read.createVersion == 2)
+        #expect(read.entries.count == 1)
+        #expect(try To3.snapshotVersion(url) == 2)
+        // `edit.json` is what the app of phase 1 writes and reads: the document of version 2, without anything of phase 2.
+        let snapshot = try Data(contentsOf: To3.snapshot(url))
+        let v2 = try #require(DocumentMigration.reverted(JSONValue(encoding: looked.document), to: 2))
+        #expect(snapshot == (try ProjectJSON.encoder().encode(v2)))
+        for key in ["\"captions\"", "\"keys\"", "\"privacy\"", "\"reframe\"", "\"syncOffset\"", "\"cleanup\""] {
+            #expect(!String(decoding: snapshot, as: UTF8.self).contains(key), "\(key)")
+        }
+        #expect(try EditDocument.decode(snapshot) == looked.document)
+        let context = To3.context(caches: caches)
+        #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == 2)
+        #expect(try EditSession.readOutline(url, take: nil, context: context).1.diskVersion == 2)
+
+        // Opened again and closed, still nothing of version 3; its first edit writes the migrate and the step.
+        let unchanged = try treeHash(url)
+        await (try await To3.open(url, To3.context(caches: caches))).close()
+        #expect(try treeHash(url) == unchanged)
+        let session = try await To3.open(url, To3.context(caches: caches))
+        #expect(session.perform(try To3.padding(session.document, 0.1)) == .applied)
+        #expect(await session.flushed() == 3)
+        let entries = try To3.read(url).entries
+        #expect(entries[1] == .migrate(seq: 2, from: 2, to: 3))
+        if case let .do(seq, _, label, _, _) = entries[2] {
+            #expect((seq, label) == (3, "style.padding"))
+        } else {
+            Issue.record("no do line: \(entries)")
+        }
+        await session.close()
+        #expect(try To3.snapshotVersion(url) == 3)
+        #expect(try To3.read(url).createVersion == 2)
+
+        // A new document that version 2 cannot hold (a default style that follows the cursor) starts in version 3.
+        let other = try TakeBuilder(in: dir, name: "Reframed")
+        try await other.addVideoTrack(
+            id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: frame, pixelScale: 1),
+            segments: [VideoSegmentSpec(start: base, seconds: 1, framesPerSecond: 10)])
+        let reframed = try other.write()
+        var style = DefaultStyle.toma
+        style.style.reframe = .followCursor
+        let following = EditContext(
+            app: To3.app, cachesRoot: caches, defaultStyle: style, now: { To3.date }, makeID: { $0 + "00000001" })
+        let new = try await EditSession.open(reframed.package.url, take: nil, context: following)
+        #expect(new.document.style.reframe == .followCursor)
+        await new.close()
+        #expect(try To3.read(reframed.package.url).createVersion == 3)
+        #expect(try To3.snapshotVersion(reframed.package.url) == 3)
+    }
+}
+
+@MainActor @Test func aTranscriptAddedFromNullGoesThroughTheLog() async throws {
+    try await withTemporaryDirectory { dir in
+        // A step that adds the optional `transcript` (`set` from `null`, plan decision 4), undone, redone and undone again,
+        // through `edit-log.jsonl`, a reopening and a compaction.
+        let url = try await To3.v2Project(in: dir, steps: 0, snapshotAt: 0)
+        let caches = dir.appending(path: "Caches")
+        let session = try await To3.open(url, To3.context(caches: caches))
+        #expect(session.document.transcript == nil)
+        let transcript = Transcript(
+            language: "es-AR", engine: "speechTranscriber-1",
+            takes: [
+                TranscriptTake(
+                    take: "take-001", track: "mic",
+                    words: [
+                        TranscriptWord(start: HostTime(nanoseconds: 5_000_100_000_000), end: HostTime(nanoseconds: 5_000_400_000_000), text: "Hola"),
+                        TranscriptWord(
+                            start: HostTime(nanoseconds: 5_000_500_000_000), end: HostTime(nanoseconds: 5_000_900_000_000), text: "mundo.",
+                            breakBefore: true),
+                    ]),
+            ])
+        let change = try #require(session.document.setChange("/transcript", transcript))
+        #expect(change == .set(path: try JSONPointer("/transcript"), before: .null, after: try JSONValue(encoding: transcript)))
+        #expect(session.perform(EditStep(label: .transcriptCreate, target: "/transcript", changes: [change])) == .applied)
+        #expect(session.document.transcript == transcript)
+        #expect(session.undo() == .applied)
+        #expect(session.document.transcript == nil)
+        #expect(session.redo() == .applied)
+        #expect(session.document.transcript == transcript)
+        #expect(session.undo() == .applied)
+        #expect(await session.flushed() == 6)
+        await session.close()
+        let lines = try To3.lines(url)
+        #expect(lines.contains { $0.contains(#""before":null"#) && $0.contains(#""path":"/transcript""#) })
+        #expect(!lines.contains { $0.contains(#""after":null"#) })
+        #expect(try To3.replay(url).document.transcript == nil)
+        #expect(!(try String(decoding: Data(contentsOf: To3.snapshot(url)), as: UTF8.self)).contains("\"transcript\""))
+
+        // Reopened and compacted: the redo and its undo go, the group stays, and it comes back.
+        let compacting = To3.context(caches: caches, compaction: (maxBytes: .max, maxEntries: 3))
+        let again = try await To3.open(url, compacting)
+        let compacted = try To3.read(url)
+        #expect(compacted.entries.count < 6)
+        #expect(compacted.createVersion == 2)
+        #expect(again.document.transcript == nil)
+        #expect(again.redoLabel == .transcriptCreate)
+        #expect(again.redo() == .applied)
+        #expect(again.document.transcript == transcript)
+        await again.close()
+        #expect(try To3.replay(url).document.transcript == transcript)
+        let last = try await To3.open(url, To3.context(caches: caches))
+        #expect(last.document.transcript == transcript)
+        #expect(last.undo() == .applied)
+        #expect(last.document.transcript == nil)
+        await last.close()
+    }
+}
+
 // MARK: - The log across the migrate to 3
 
 @Test func revertedIsTheReplayedJSONAtVersion2() throws {
