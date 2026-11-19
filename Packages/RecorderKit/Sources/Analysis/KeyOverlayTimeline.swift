@@ -62,15 +62,16 @@ public struct KeyOverlayTimeline: Sendable {
         var built: [Display] = []
         /// The index of the pill that takes characters, if one is open.
         var openPill: Int?
-        let keys = events.compactMap { event -> (t: Int64, code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool)? in
-            guard case .keyPress(let code, let chars, let mods, let isRepeat) = event.kind,
+        let keys = events.compactMap {
+            event -> (t: Int64, code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool, key: String?)? in
+            guard case .keyPress(let code, let chars, let mods, let isRepeat, let key) = event.kind,
                 let output = timeMap.output(atSource: event.t, take: take)
             else { return nil }
-            return (output, code, chars, mods, isRepeat)
+            return (output, code, chars, mods, isRepeat, key)
         }
         for key in keys.enumerated().sorted(by: { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }).map(\.element) {
             if KeyLabels.isShortcut(code: key.code, mods: key.mods) {
-                guard let label = KeyLabels.key(code: key.code, chars: key.chars, mods: key.mods) else { continue }
+                guard let label = KeyLabels.key(code: key.code, chars: key.chars, mods: key.mods, key: key.key) else { continue }
                 Self.addKeys(KeyLabels.modifiers(key.mods) + [label], at: key.t, repeating: key.isRepeat, to: &built)
                 openPill = nil
                 continue

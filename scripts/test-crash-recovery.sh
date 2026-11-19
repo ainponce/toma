@@ -540,7 +540,7 @@ gif_case() {
 
 # The keys (P8): a take that types a text, one key every 100 ms, killed while it types. The package went to 4 before the
 # first keyPress line; after the recovery every line of events.jsonl is whole and the keyPress ones are the text's first
-# keys, in order, with their codes and modifiers.
+# keys, in order, with their codes and modifiers, and with `key` (what the key types with no modifier) where `chars` is.
 keys_case() {
   local TMP PID PKG TEXT
   TMP=$(mktemp -d)
@@ -582,8 +582,13 @@ for number, line in enumerate(data.splitlines(), 1):
     event = json.loads(line)  # every line whole
     if event.get("type") != "keyPress":
         continue
-    if set(event) - {"t", "type", "code", "chars", "mods", "repeat"} or not {"t", "code", "mods", "repeat"} <= set(event):
+    if set(event) - {"t", "type", "code", "chars", "mods", "repeat", "key"} or not {"t", "code", "mods", "repeat"} <= set(event):
         sys.exit(f"line {number}: keyPress with the wrong fields: {sorted(event)}")
+    # The US keys of the text: `key` is the character without ⇧ (a capital's small letter, "1" for "!").
+    own = dict(zip("!@#$%^&*()_+{}|:\"<>?~", "1234567890-=[]\\;',./`"))
+    chars = event.get("chars")
+    if ("key" in event) != (chars is not None) or (chars is not None and event["key"] != own.get(chars, chars.lower())):
+        sys.exit(f"line {number}: keyPress with chars {chars!r} and key {event.get('key')!r}")
     if event["mods"] not in (0, 0x20000) or event["repeat"] is not False:
         sys.exit(f"line {number}: keyPress with mods {event['mods']} repeat {event['repeat']}")
     keys.append(event.get("chars") or "")

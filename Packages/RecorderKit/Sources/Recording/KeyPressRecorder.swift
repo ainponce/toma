@@ -8,8 +8,8 @@ import ProjectFormat
 import Synchronization
 
 /// Records which keys go down while a take runs, for the editor to show them (`keys.mode`): one `keyPress` line a key,
-/// written on its own queue, with the key's code, what it types with only ⇧ (`chars`), its modifiers (only the bits of
-/// `modifierMask`) and whether it is a repeat, at the time the key went down. Only in the takes the user chose to record
+/// written on its own queue, with the key's code, what it types with only ⇧ (`chars`) and with no modifier (`key`), its
+/// modifiers (only the bits of `modifierMask`) and whether it is a repeat, at the time the key went down. Only in the takes the user chose to record
 /// keys for (the app gives it to those alone). Lives alongside `KeyActivityRecorder`, which stays as it is.
 ///
 /// Nothing is written:
@@ -152,7 +152,8 @@ public final class KeyPressRecorder: InputRecorder, FormatRaising, Sendable {
             guard !secureInput() else { return .none }
             log.append(InputEvent(
                 t: time,
-                kind: .keyPress(code: key.code, chars: key.chars, mods: key.mods & Self.modifierMask, isRepeat: key.isRepeat)))
+                kind: .keyPress(
+                    code: key.code, chars: key.chars, mods: key.mods & Self.modifierMask, isRepeat: key.isRepeat, key: key.key)))
             return .none
         }
         switch outcome {

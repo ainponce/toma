@@ -36,6 +36,17 @@ private func timeline(_ events: [InputEvent], _ mode: KeyOverlayMode = .all, _ m
         #expect(timeline(events, .off).isEmpty)
     }
 
+    @Test func aShortcutShowsTheKeysOwnCharacter() {
+        // ⌘⇧7 on a Spanish keyboard (⇧7 types "/"), recorded with `key`; and an old ⌘⇧4 line without it.
+        let spanish = InputEvent(t: host(1), kind: .keyPress(code: 26, chars: "/", mods: command | shift, isRepeat: false, key: "7"))
+        let t = timeline([spanish, key(3, code: 21, "$", mods: command | shift)], .shortcuts)
+        #expect(t.shown(atOutput: sec(1.5)).map(\.content) == [.keys(["⌘", "⇧", "7"])])
+        #expect(t.shown(atOutput: sec(3.5)).map(\.content) == [.keys(["⌘", "⇧", "4"])])
+        // What is typed is what ⇧ typed, not the key's own character.
+        let typed = InputEvent(t: host(5), kind: .keyPress(code: 26, chars: "/", mods: shift, isRepeat: false, key: "7"))
+        #expect(timeline([typed]).shown(atOutput: sec(5.5)).map(\.content) == [.text("/")])
+    }
+
     @Test func typingJoinsIntoAPillAndCutsFromTheLeft() {
         let letters = Array("abcdefghijklmnopqrstuvwxy")
         let events = letters.enumerated().map { text(1 + Double($0.offset) * 0.1, String($0.element)) }

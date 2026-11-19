@@ -27,13 +27,22 @@ public enum KeyLabels {
         key(code: code, chars: chars, mods: 0)
     }
 
-    /// As `key(code:chars:)`, for a key pressed with `mods`: `chars` is what it types with only ⇧ applied, so with ⇧ held
-    /// a symbol is taken back to the key's own one on a US keyboard (`$` is "4" in "⌘ ⇧ 4").
-    public static func key(code: UInt16, chars: String?, mods: UInt32) -> String? {
+    /// As `key(code:chars:)`, for a key pressed with `mods`. `key` is what it types with no modifier, in the layout it was
+    /// pressed in (`InputEvent.Kind.keyPress`' `key`): the key's own label whatever the keyboard ("4" in "⌘ ⇧ 4", "7" for
+    /// the ⇧7 that types "/" on a Spanish keyboard). A line recorded without it has only `chars`, what it types with ⇧
+    /// applied: with ⇧ held a symbol is then taken back to the key's own one on a US keyboard (`$` is "4").
+    public static func key(code: UInt16, chars: String?, mods: UInt32, key: String? = nil) -> String? {
         if code == spaceCode { return "␣" }
         if let label = specialLabels[code] { return label }
-        guard var text = chars, !text.isEmpty else { return nil }
-        if mods & shiftBit != 0, text.count == 1, let own = unshifted[text.first!] { text = String(own) }
+        let text: String
+        if let key, !key.isEmpty {
+            text = key
+        } else if let chars, !chars.isEmpty {
+            let own = mods & shiftBit != 0 && chars.count == 1 ? unshifted[chars.first!] : nil
+            text = own.map { String($0) } ?? chars
+        } else {
+            return nil
+        }
         let upper = text.uppercased()
         return upper.count == text.count ? upper : text
     }

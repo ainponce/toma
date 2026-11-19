@@ -20,12 +20,16 @@ public struct KeyEvent: Equatable, Sendable {
     public var mods: UInt32
     /// The key's automatic repeat (`keyboardEventAutorepeat`).
     public var isRepeat: Bool
+    /// What the key types with no modifier at all, in the same layout (`"4"` where ⇧4 makes `chars` `"$"`): the key's
+    /// own label for a shortcut, whatever the keyboard. `nil` where `chars` is.
+    public var key: String?
 
-    public init(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool) {
+    public init(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool, key: String? = nil) {
         self.code = code
         self.chars = chars
         self.mods = mods
         self.isRepeat = isRepeat
+        self.key = key
     }
 }
 
@@ -45,8 +49,8 @@ public protocol KeyEventSource: AnyObject, Sendable {
 ///
 /// Each key's time is `HostTime.now()` when the tap is called (the event's own timestamp is not used: its unit depends
 /// on the Mac). Nothing is handed on while secure input is on (`IsSecureEventInputEnabled()`, read as the key comes;
-/// `KeyPressRecorder` reads it again). `chars` comes from `UCKeyTranslate` with only ⇧ and
-/// `kUCKeyTranslateNoDeadKeysMask`, on the keyboard layout read on the main thread (Text Input Sources) when the tap
+/// `KeyPressRecorder` reads it again). `chars` comes from `UCKeyTranslate` with only ⇧ and `key` with no modifier, both
+/// with `kUCKeyTranslateNoDeadKeysMask`, on the keyboard layout read on the main thread (Text Input Sources) when the tap
 /// starts and each time the user picks another input source. Until a start's reading comes, the keys use the reading
 /// before it (a resume keeps `chars`); a key in the moment before the very first reading has no `chars`.
 public final class KeyEventTap: KeyEventSource {
@@ -141,6 +145,19 @@ public final class KeyEventTap: KeyEventSource {
     }
 }
 
+extension KeyEventTap {
+    /// The key `code` that went down with `flags`, read in `layout`: `chars` with only ⇧ of `flags`, `key` with none.
+    static func keyEvent(
+        code: UInt16, flags: CGEventFlags, keyboardType: UInt32, isRepeat: Bool, layout: KeyboardLayout
+    ) -> KeyEvent {
+        let shift = flags.contains(.maskShift)
+        let chars = layout.characters(code: code, shift: shift, keyboardType: keyboardType)
+        // With no ⇧, what it types with only ⇧ is what it types with none; a key that types nothing has no `key` either.
+        let key = chars == nil || !shift ? chars : layout.characters(code: code, shift: false, keyboardType: keyboardType)
+        return KeyEvent(code: code, chars: chars, mods: UInt32(truncatingIfNeeded: flags.rawValue), isRepeat: isRepeat, key: key)
+    }
+}
+
 /// What the tap's callback reaches through its `userInfo`.
 private final class TapContext: @unchecked Sendable {
     let queue: DispatchSerialQueue
@@ -171,14 +188,10 @@ private final class TapContext: @unchecked Sendable {
     func keyDown(_ event: CGEvent) {
         let time = HostTime.now()
         guard !stopped.load(ordering: .acquiring), !IsSecureEventInputEnabled() else { return }
-        let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
-        let flags = event.flags
-        let chars = layout.characters(
-            code: code, shift: flags.contains(.maskShift),
-            keyboardType: UInt32(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeyboardType)))
-        let key = KeyEvent(
-            code: code, chars: chars, mods: UInt32(truncatingIfNeeded: flags.rawValue),
-            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+        let key = KeyEventTap.keyEvent(
+            code: UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)), flags: event.flags,
+            keyboardType: UInt32(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeyboardType)),
+            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0, layout: layout)
         let handler = handler
         queue.async { handler(key, time) }
     }

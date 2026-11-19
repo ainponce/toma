@@ -168,8 +168,8 @@ private let commandFlags = UInt32(truncatingIfNeeded: CGEventFlags.maskCommand.r
 /// The bits macOS sets with any key: no modifier (`NX_NONCOALSESCEDMASK`) and the left ⇧ (device dependent).
 private let deviceBits: UInt32 = 0x0000_0100 | 0x0000_0002
 
-private func key(_ code: UInt16, _ chars: String?, mods: UInt32 = 0, isRepeat: Bool = false) -> KeyEvent {
-    KeyEvent(code: code, chars: chars, mods: mods, isRepeat: isRepeat)
+private func key(_ code: UInt16, _ chars: String?, mods: UInt32 = 0, isRepeat: Bool = false, key: String? = nil) -> KeyEvent {
+    KeyEvent(code: code, chars: chars, mods: mods, isRepeat: isRepeat, key: key)
 }
 
 @Suite struct KeyPressRecorderTests {
@@ -178,14 +178,18 @@ private func key(_ code: UInt16, _ chars: String?, mods: UInt32 = 0, isRepeat: B
             let rig = try KeyRig(in: dir)
             await rig.recorder.start(log: rig.log)
             #expect(rig.recorder.isListening)
-            await rig.source.press(key(0, "A", mods: shiftFlags | deviceBits), at: 2)
-            await rig.source.press(key(8, "c", mods: commandFlags | 0x0000_0108), at: 3)
+            await rig.source.press(key(0, "A", mods: shiftFlags | deviceBits, key: "a"), at: 2)
+            await rig.source.press(key(8, "c", mods: commandFlags | 0x0000_0108, key: "c"), at: 3)
             await rig.source.press(key(123, nil, mods: 0x00A0_0100, isRepeat: true), at: 4)
+            // ⌘⇧7 on a Spanish keyboard: ⇧ makes it "/", with no modifier it is "7".
+            await rig.source.press(key(26, "/", mods: commandFlags | shiftFlags, key: "7"), at: 5)
             #expect(try await rig.finish() == [
-                InputEvent(t: host(2), kind: .keyPress(code: 0, chars: "A", mods: shiftFlags, isRepeat: false)),
-                InputEvent(t: host(3), kind: .keyPress(code: 8, chars: "c", mods: commandFlags, isRepeat: false)),
+                InputEvent(t: host(2), kind: .keyPress(code: 0, chars: "A", mods: shiftFlags, isRepeat: false, key: "a")),
+                InputEvent(t: host(3), kind: .keyPress(code: 8, chars: "c", mods: commandFlags, isRepeat: false, key: "c")),
                 // ← sets fn (`maskSecondaryFn`) and the numeric pad's bit: fn stays, the pad's goes.
                 InputEvent(t: host(4), kind: .keyPress(code: 123, chars: nil, mods: 0x0080_0000, isRepeat: true)),
+                InputEvent(
+                    t: host(5), kind: .keyPress(code: 26, chars: "/", mods: commandFlags | shiftFlags, isRepeat: false, key: "7")),
             ])
         }
     }
@@ -385,11 +389,11 @@ private func key(_ code: UInt16, _ chars: String?, mods: UInt32 = 0, isRepeat: B
     @Test func typesTheTextWithUSCodes() async {
         let shift = UInt32(truncatingIfNeeded: CGEventFlags.maskShift.rawValue)
         #expect(await typed("Hi 1!\n") == [
-            KeyEvent(code: 4, chars: "H", mods: shift, isRepeat: false),
-            KeyEvent(code: 34, chars: "i", mods: 0, isRepeat: false),
-            KeyEvent(code: 49, chars: " ", mods: 0, isRepeat: false),
-            KeyEvent(code: 18, chars: "1", mods: 0, isRepeat: false),
-            KeyEvent(code: 18, chars: "!", mods: shift, isRepeat: false),
+            KeyEvent(code: 4, chars: "H", mods: shift, isRepeat: false, key: "h"),
+            KeyEvent(code: 34, chars: "i", mods: 0, isRepeat: false, key: "i"),
+            KeyEvent(code: 49, chars: " ", mods: 0, isRepeat: false, key: " "),
+            KeyEvent(code: 18, chars: "1", mods: 0, isRepeat: false, key: "1"),
+            KeyEvent(code: 18, chars: "!", mods: shift, isRepeat: false, key: "1"),
             KeyEvent(code: 36, chars: nil, mods: 0, isRepeat: false),
         ])
         // A character the US layout has no key for is left out.
@@ -432,5 +436,28 @@ private func key(_ code: UInt16, _ chars: String?, mods: UInt32 = 0, isRepeat: B
         if letter.first?.isLetter == true {
             #expect(layout.characters(code: 0, shift: true, keyboardType: 0) == letter.uppercased())
         }
+    }
+
+    @Test @MainActor func aKeySaysWhatItTypesWithOnlyShiftAndWithNoModifier() throws {
+        let layout = KeyboardLayout()
+        layout.refresh()
+        // The key at 4 on a US keyboard, with ⌘⇧: `chars` is what ⇧ makes it ("$" in US and Spanish), `key` what it is
+        // with nothing ("4"), in the layout this Mac has.
+        let shifted = KeyEventTap.keyEvent(
+            code: 21, flags: [.maskCommand, .maskShift], keyboardType: 0, isRepeat: false, layout: layout)
+        #expect(shifted.chars == layout.characters(code: 21, shift: true, keyboardType: 0))
+        let own = try #require(shifted.key)
+        #expect(own == layout.characters(code: 21, shift: false, keyboardType: 0))
+        #expect(shifted.chars != own)
+        #expect(shifted.mods == UInt32(truncatingIfNeeded: CGEventFlags([.maskCommand, .maskShift]).rawValue))
+        // Without ⇧ the two are the same; a key that types nothing has neither.
+        let plain = KeyEventTap.keyEvent(code: 21, flags: .maskCommand, keyboardType: 0, isRepeat: true, layout: layout)
+        #expect(plain.key == own && plain.chars == own && plain.isRepeat)
+        let arrow = KeyEventTap.keyEvent(
+            code: 123, flags: [.maskShift, .maskSecondaryFn], keyboardType: 0, isRepeat: false, layout: layout)
+        #expect(arrow.chars == nil && arrow.key == nil)
+        // Before the layout is read: nothing.
+        let unread = KeyEventTap.keyEvent(code: 21, flags: .maskShift, keyboardType: 0, isRepeat: false, layout: KeyboardLayout())
+        #expect(unread.chars == nil && unread.key == nil)
     }
 }

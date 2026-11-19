@@ -36,4 +36,22 @@ import Testing
         #expect(KeyLabels.isSpecial(code: 90))
         #expect(!KeyLabels.isSpecial(code: 0))
     }
+
+    @Test func theKeysOwnCharacterIsItsLabelOnAnyKeyboard() {
+        let mods = Self.command | Self.shift
+        // A Spanish keyboard: ⇧7 types "/", ⇧2 a double quote, ⇧4 "$". The key's own character is what the shortcut shows.
+        #expect(KeyLabels.key(code: 26, chars: "/", mods: mods, key: "7") == "7")
+        #expect(KeyLabels.key(code: 19, chars: "\"", mods: mods, key: "2") == "2")
+        #expect(KeyLabels.key(code: 21, chars: "$", mods: mods, key: "4") == "4")
+        // A letter is a capital either way; a key that types nothing keeps its special label.
+        #expect(KeyLabels.key(code: 0, chars: "A", mods: mods, key: "a") == "A")
+        #expect(KeyLabels.key(code: 41, chars: "Ñ", mods: Self.command, key: "ñ") == "Ñ")
+        #expect(KeyLabels.key(code: 123, chars: nil, mods: Self.shift, key: nil) == "←")
+        // A line recorded without `key` (or with an empty one): the US way back from what ⇧ typed, wrong on that
+        // keyboard for ⇧7 and ⇧2 but right where it agrees with US (⇧4).
+        #expect(KeyLabels.key(code: 26, chars: "/", mods: mods) == "/")
+        #expect(KeyLabels.key(code: 19, chars: "\"", mods: mods) == "'")
+        #expect(KeyLabels.key(code: 21, chars: "$", mods: mods, key: "") == "4")
+        #expect(KeyLabels.key(code: 8, chars: nil, mods: Self.command, key: nil) == nil)
+    }
 }
