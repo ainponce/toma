@@ -494,6 +494,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if environment["TOMA_SHOWCASE_TAB"] != nil || environment["TOMA_SHOWCASE_SELECT"] != nil
                 || environment["TOMA_SHOWCASE_ASPECT"] != nil || environment["TOMA_SHOWCASE_SAFEZONES"] != nil
                 || environment["TOMA_SHOWCASE_FRAME"] != nil || environment["TOMA_SHOWCASE_KEYS"] != nil
+                || environment["TOMA_SHOWCASE_PICTURE"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -528,6 +529,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // sensitive data, running, having found nothing, seven findings with their sheet, or those blurred (phase 2).
                     if let variant = environment["TOMA_SHOWCASE_SELECT"], variant.hasPrefix("scan-") {
                         model.showcaseSensitiveSearch(variant)
+                    }
+                    // TOMA_SHOWCASE_PICTURE=<background>:<framing>:<look>[:<panel scrolled, 0 to 1>[:<frame>[:<zoom>]]]
+                    // sets the camera's picture (phase 2 design §6.1 to §6.3; "blurred:manual:warm:1:90:1.8"), scrolls the
+                    // panel that far down, puts the playhead at that frame and sets the framing's zoom.
+                    if let picture = environment["TOMA_SHOWCASE_PICTURE"]?.split(separator: ":").map(String.init) {
+                        model.showcasePicture(picture)
                     }
                 }
             }

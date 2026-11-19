@@ -292,6 +292,17 @@
         }
       }
     },
+    "A 3D LUT in a .cube file" : {
+      "comment" : "Camera tab, Color: under Custom…",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una LUT 3D en un archivo .cube"
+          }
+        }
+      }
+    },
     "A GIF longer than a minute is heavy. Mark a range (I and O) or export MP4." : {
       "comment" : "The export sheet: a GIF of more than 60 s",
       "localizations" : {
@@ -975,6 +986,17 @@
         }
       }
     },
+    "Black & White" : {
+      "comment" : "Camera tab, Color",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Blanco y negro"
+          }
+        }
+      }
+    },
     "Blur" : {
       "localizations" : {
         "es" : {
@@ -1003,6 +1025,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Desenfocar datos sensibles"
+          }
+        }
+      }
+    },
+    "Blurred" : {
+      "comment" : "Camera tab, Background: the camera's own picture blurred behind the person",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfocado"
           }
         }
       }
@@ -1080,6 +1113,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abajo a la derecha"
+          }
+        }
+      }
+    },
+    "Bringing in the .cube…" : {
+      "comment" : "Camera tab, Color: a .cube being copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importando el .cube…"
           }
         }
       }
@@ -1357,6 +1401,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Centro de la pantalla"
+          }
+        }
+      }
+    },
+    "Center: %1$lld %% across, %2$lld %% down; zoom %3$@" : {
+      "comment" : "VoiceOver: where the camera's manual framing is, as seen, and its zoom (“1.4×”)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Centro: %1$lld %% horizontal, %2$lld %% vertical; zoom %3$@"
+          }
+        }
+      }
+    },
+    "Centered" : {
+      "comment" : "Camera tab, Framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Centrado"
           }
         }
       }
@@ -1710,6 +1776,28 @@
         }
       }
     },
+    "Choose a 3D LUT in .cube format." : {
+      "comment" : "The open panel of Custom…",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir una LUT 3D en formato .cube."
+          }
+        }
+      }
+    },
+    "Choose another .cube file" : {
+      "comment" : "Camera tab, Color: the help of Change…",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir otro archivo .cube"
+          }
+        }
+      }
+    },
     "Choose on Screen" : {
       "localizations" : {
         "es" : {
@@ -1901,6 +1989,17 @@
         }
       }
     },
+    "Cool" : {
+      "comment" : "Camera tab, Color",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Frío"
+          }
+        }
+      }
+    },
     "Copy" : {
       "comment" : "The editor's bar after an export: puts the exported file on the clipboard",
       "localizations" : {
@@ -2018,6 +2117,17 @@
         }
       }
     },
+    "Couldn't follow the face: %@" : {
+      "comment" : "The camera's Follow Face, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo seguir la cara: %@"
+          }
+        }
+      }
+    },
     "Couldn't import the style." : {
       "comment" : "Importing a .tomastyle failed on the disk",
       "localizations" : {
@@ -2073,6 +2183,17 @@
         }
       }
     },
+    "Couldn't open the file." : {
+      "comment" : "Camera tab, Color: a .cube that couldn't be opened",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo abrir el archivo."
+          }
+        }
+      }
+    },
     "Couldn't open the image." : {
       "localizations" : {
         "es" : {
@@ -2100,6 +2221,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo preparar la cámara: %@"
+          }
+        }
+      }
+    },
+    "Couldn't prepare the cutout: %@" : {
+      "comment" : "The camera's background, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar el recorte: %@"
           }
         }
       }
@@ -2196,6 +2328,17 @@
         }
       }
     },
+    "Couldn't use the .cube." : {
+      "comment" : "Camera tab, Color: a .cube refused, before why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo usar el .cube."
+          }
+        }
+      }
+    },
     "Countdown" : {
       "localizations" : {
         "es" : {
@@ -2256,6 +2399,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Velocidad personalizada…"
+          }
+        }
+      }
+    },
+    "Custom…" : {
+      "comment" : "Camera tab, Color: imports a .cube",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Personalizado…"
           }
         }
       }
@@ -2570,6 +2724,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Arrastrar para dibujar el área."
+          }
+        }
+      }
+    },
+    "Drag to move the framing; scroll or pinch to zoom." : {
+      "comment" : "Camera tab, under the small view of Manual framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Arrastrar para mover el encuadre; desplazar o pellizcar para hacer zoom."
           }
         }
       }
@@ -3005,6 +3170,17 @@
         }
       }
     },
+    "Follow Face" : {
+      "comment" : "Camera tab, Framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir la cara"
+          }
+        }
+      }
+    },
     "Follow the Cursor" : {
       "comment" : "The Zoom tab: the selected zoom's focus",
       "localizations" : {
@@ -3099,6 +3275,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuadros por segundo"
+          }
+        }
+      }
+    },
+    "Framing" : {
+      "comment" : "Camera tab: the section of the camera's framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encuadre"
           }
         }
       }
@@ -3477,6 +3664,17 @@
         }
       }
     },
+    "In a bubble, only the person shows, without its shape, border or shadow." : {
+      "comment" : "Camera tab, under Background: Removed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En una burbuja se ve solo la persona, sin su forma, borde ni sombra."
+          }
+        }
+      }
+    },
     "In the trash since %@" : {
       "comment" : "The library: when a project went to the trash",
       "localizations" : {
@@ -3520,6 +3718,17 @@
         }
       }
     },
+    "Intensity" : {
+      "comment" : "Camera tab, Color: how much of the look is mixed over the original",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intensidad"
+          }
+        }
+      }
+    },
     "It can't start with a period." : {
       "comment" : "The library: beside a name being edited",
       "localizations" : {
@@ -3527,6 +3736,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No puede empezar con un punto."
+          }
+        }
+      }
+    },
+    "It doesn't say its size (LUT_3D_SIZE)." : {
+      "comment" : "Why a .cube was refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No indica su tamaño (LUT_3D_SIZE)."
           }
         }
       }
@@ -3542,6 +3762,50 @@
         }
       }
     },
+    "It has %1$@ rows; its size needs %2$@." : {
+      "comment" : "The rows of a .cube's table",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tiene %1$@ filas; su tamaño necesita %2$@."
+          }
+        }
+      }
+    },
+    "It isn't text: it may be an image or another kind of file." : {
+      "comment" : "Why a .cube was refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No es texto: puede ser una imagen u otro tipo de archivo."
+          }
+        }
+      }
+    },
+    "It's a 1D LUT; it needs a 3D one." : {
+      "comment" : "Why a .cube was refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Es una LUT 1D; se necesita una 3D."
+          }
+        }
+      }
+    },
+    "It's larger than 16 MB." : {
+      "comment" : "Why a .cube was refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pesa más de 16 MB."
+          }
+        }
+      }
+    },
     "It's recording." : {
       "comment" : "The library: a project being recorded does not open",
       "localizations" : {
@@ -3549,6 +3813,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se está grabando."
+          }
+        }
+      }
+    },
+    "Its domain is wrong: each minimum must be below its maximum." : {
+      "comment" : "Why a .cube was refused",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su dominio no es válido: cada mínimo tiene que ser menor que su máximo."
+          }
+        }
+      }
+    },
+    "Its size is %@; it must be from 2 to 65." : {
+      "comment" : "A .cube's LUT_3D_SIZE",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Su tamaño es %@; tiene que ser de 2 a 65."
           }
         }
       }
@@ -3810,6 +4096,28 @@
         }
       }
     },
+    "Line %@ can't be read." : {
+      "comment" : "A line of a .cube file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se puede leer la línea %@."
+          }
+        }
+      }
+    },
+    "Loading the camera's picture…" : {
+      "comment" : "Camera tab: the small view of Manual framing, while its frame is read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cargando la imagen de la cámara…"
+          }
+        }
+      }
+    },
     "Loading…" : {
       "localizations" : {
         "es" : {
@@ -3838,6 +4146,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Buscando proyectos… %lld"
+          }
+        }
+      }
+    },
+    "Looking for the face… %lld %%" : {
+      "comment" : "The camera's face being found, for Follow Face",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscando la cara… %lld %%"
           }
         }
       }
@@ -3914,6 +4233,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Administrar estilos…"
+          }
+        }
+      }
+    },
+    "Manual" : {
+      "comment" : "Camera tab, Framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Manual"
+          }
+        }
+      }
+    },
+    "Manual Framing" : {
+      "comment" : "VoiceOver: the small view of the camera's manual framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encuadre manual"
           }
         }
       }
@@ -4149,6 +4490,17 @@
         }
       }
     },
+    "Move Down" : {
+      "comment" : "VoiceOver action: moves the camera's manual framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover hacia abajo"
+          }
+        }
+      }
+    },
     "Move Layout Block" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block was moved",
       "localizations" : {
@@ -4156,6 +4508,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mover el bloque de disposición"
+          }
+        }
+      }
+    },
+    "Move Left" : {
+      "comment" : "VoiceOver action: moves the camera's manual framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a la izquierda"
+          }
+        }
+      }
+    },
+    "Move Right" : {
+      "comment" : "VoiceOver action: moves the camera's manual framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover a la derecha"
+          }
+        }
+      }
+    },
+    "Move Up" : {
+      "comment" : "VoiceOver action: moves the camera's manual framing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover hacia arriba"
           }
         }
       }
@@ -4254,6 +4639,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nativa"
+          }
+        }
+      }
+    },
+    "Natural" : {
+      "comment" : "Camera tab, Color: the camera as recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Natural"
           }
         }
       }
@@ -4808,6 +5204,17 @@
         }
       }
     },
+    "Original" : {
+      "comment" : "Camera tab, Background: the camera as recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Original"
+          }
+        }
+      }
+    },
     "Other Locations" : {
       "comment" : "The library's sidebar: a section",
       "localizations" : {
@@ -5105,6 +5512,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Posición"
+          }
+        }
+      }
+    },
+    "Preparing the cutout… %lld %%" : {
+      "comment" : "The camera's background being prepared",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparando el recorte… %lld %%"
           }
         }
       }
@@ -5596,6 +6014,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Quitar de la biblioteca"
+          }
+        }
+      }
+    },
+    "Removed" : {
+      "comment" : "Camera tab, Background: the person alone, cut out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitado"
           }
         }
       }
@@ -6921,6 +7350,39 @@
         }
       }
     },
+    "The camera has no picture here." : {
+      "comment" : "Camera tab: the small view of Manual framing, where the camera's frame can't be read",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara no tiene imagen aquí."
+          }
+        }
+      }
+    },
+    "The camera is shown as recorded." : {
+      "comment" : "Camera tab, under “Couldn't prepare the cutout: …”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara se ve como se grabó."
+          }
+        }
+      }
+    },
+    "The camera stays centered." : {
+      "comment" : "Camera tab, under “Couldn't follow the face: …”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La cámara queda centrada."
+          }
+        }
+      }
+    },
     "The camera stopped recording. Still trying to bring it back." : {
       "localizations" : {
         "es" : {
@@ -7018,6 +7480,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se canceló la exportación."
+          }
+        }
+      }
+    },
+    "The file couldn't be saved." : {
+      "comment" : "Camera tab, Color: a .cube that couldn't be copied into the project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar el archivo."
           }
         }
       }
@@ -7122,6 +7595,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo guardar la imagen."
+          }
+        }
+      }
+    },
+    "The imported .cube file" : {
+      "comment" : "Camera tab, Color: under Custom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El archivo .cube importado"
           }
         }
       }
@@ -8484,6 +8968,28 @@
         }
       }
     },
+    "Until then, the camera is shown as recorded." : {
+      "comment" : "Camera tab, under “Preparing the cutout…”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mientras tanto, la cámara se ve como se grabó."
+          }
+        }
+      }
+    },
+    "Until then, the camera stays centered." : {
+      "comment" : "Camera tab, under “Looking for the face…”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mientras tanto, la cámara queda centrada."
+          }
+        }
+      }
+    },
     "Up to 4× the sound speeds up without changing pitch; faster, the clip has no sound." : {
       "comment" : "The speed menu of the timeline: a note",
       "localizations" : {
@@ -8603,6 +9109,17 @@
         }
       }
     },
+    "Vivid" : {
+      "comment" : "Camera tab, Color",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vívido"
+          }
+        }
+      }
+    },
     "Voice Isolation" : {
       "comment" : "Microphone mode of macOS",
       "localizations" : {
@@ -8675,6 +9192,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Fondo de pantalla"
+          }
+        }
+      }
+    },
+    "Warm" : {
+      "comment" : "Camera tab, Color",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cálido"
           }
         }
       }
