@@ -51,3 +51,12 @@ import Testing
     #expect(!ExportSettings.exceedsRecording(.p1080, recordedShortSide: 1080))
     #expect(ExportSettings.exceedsRecording(.p1440, recordedShortSide: 1080))
 }
+
+@Test func exportSizesOfAuto() {
+    let wide = ExportSettings(aspect: .auto, resolution: .p1080, framesPerSecond: 30, quality: .standard, contentRatio: 2.4)
+    #expect(wide.outputSize == [2592, 1080])
+    // Without a ratio, or one within 1 % of 16:9, it is 16:9; the fixed aspects ignore it.
+    #expect(ExportSettings(aspect: .auto, resolution: .p1080, framesPerSecond: 30, quality: .standard).outputSize == [1920, 1080])
+    #expect(ExportSettings(aspect: .auto, resolution: .p720, framesPerSecond: 30, quality: .standard, contentRatio: 1.78).outputSize == [1280, 720])
+    #expect(ExportSettings(aspect: .fourByFive, resolution: .p1080, framesPerSecond: 30, quality: .standard, contentRatio: 2.4).outputSize == [1080, 1350])
+}

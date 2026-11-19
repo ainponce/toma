@@ -21,6 +21,28 @@ public enum StageLayout {
         }
     }
 
+    /// The ratio `auto` ("like the recording") takes: the region of the screen of `screens.initial` for `take`, with the
+    /// Area crop, at the start of its first segment, as width over height (design §6.4). Later window or screen changes
+    /// do not move it, so the output keeps one size. `nil` without a screen of the take, a segment, a region, or one
+    /// whose ratio is not finite and positive.
+    public static func contentRatio(
+        take: TakeRecord, document: EditDocument, geometry: (TrackRecord) -> ScreenGeometry
+    ) -> Double? {
+        guard let id = document.screens.initial[take.id], let track = take.track(id), track.kind.isScreen,
+              let start = track.segments.map(\.startHostTime).min(),
+              let region = geometry(track).shown(at: start)?.region,
+              region.width.isFinite, region.height.isFinite, region.width > 0, region.height > 0
+        else { return nil }
+        let ratio = region.width / region.height
+        return ratio.isFinite && ratio > 0 ? ratio : nil
+    }
+
+    /// `contentRatio(take:document:geometry:)` from the take's `events`, in any order.
+    public static func contentRatio(take: TakeRecord, document: EditDocument, events: [InputEvent]) -> Double? {
+        let ordered = events.sortedByTime()
+        return contentRatio(take: take, document: document) { ScreenGeometry(track: $0, events: ordered) }
+    }
+
     /// The screen's rect in an output of `outputSize`: the largest rect of `contentAspect` (width over height)
     /// centred inside `padding × width` of space on every side; the whole area inside the padding without an aspect,
     /// and an empty rect at the centre when the padding leaves no room.

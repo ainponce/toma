@@ -116,11 +116,12 @@ public actor LibraryThumbnails {
     }
 
     /// The size a thumbnail of `aspect` is drawn at: the largest output of that aspect (`StageLayout`'s, both sides even)
-    /// inside `pixelSize`. 520 × 292 in 16:9, 164 × 292 in 9:16, 292 × 292 in 1:1.
-    static func size(for aspect: Aspect) -> SIMD2<Int> {
+    /// inside `pixelSize`. 520 × 292 in 16:9, 164 × 292 in 9:16, 292 × 292 in 1:1; `auto` from `contentRatio`, the ratio of
+    /// the recording's screen (`StageLayout.contentRatio`; 16:9 without it).
+    static func size(for aspect: Aspect, contentRatio: Double? = nil) -> SIMD2<Int> {
         var shortSide = min(pixelSize.x, pixelSize.y)
         while shortSide > 1 {
-            let size = StageLayout.outputSize(aspect: aspect, shortSide: shortSide)
+            let size = StageLayout.outputSize(aspect: aspect, shortSide: shortSide, contentRatio: contentRatio)
             if size.x <= pixelSize.x, size.y <= pixelSize.y { return size }
             shortSide -= 1
         }
@@ -276,7 +277,9 @@ public actor LibraryThumbnails {
         do {
             let (project, document) = try EditSession.readDocument(url, take: nil, context: context)
             guard !shouldStop() else { return stopped() }
-            size = Self.size(for: document.aspect)
+            size = Self.size(
+                for: document.aspect,
+                contentRatio: StageLayout.contentRatio(take: project.take, document: document, events: project.events))
             renderer = try FrameRenderer(project: project, document: document, outputSize: size)
         } catch {
             return stopped()

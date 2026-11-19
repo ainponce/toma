@@ -44,6 +44,8 @@ final class ExportChoices {
 
     /// The document's format: shown, never chosen here (the bar and the Project menu change it).
     let aspect: Aspect
+    /// The ratio "Like the Recording" follows (`StageLayout.contentRatio`); `nil` without a screen.
+    let contentRatio: Double?
     /// What the output lasts, in nanoseconds and in seconds.
     let duration: Int64
     let durationSeconds: Double
@@ -91,11 +93,15 @@ final class ExportChoices {
     @ObservationIgnored private let work = SettlingWork<GIFRequest>(settle: .milliseconds(300))
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "ExportSheet")
 
-    init(document: EditDocument, project: LoadedProject, marks: TimelineMarks, playhead: Int64, remembered: ExportPreferences) {
+    init(
+        document: EditDocument, project: LoadedProject, marks: TimelineMarks, playhead: Int64, remembered: ExportPreferences,
+        contentRatio: Double? = nil
+    ) {
         self.document = document
         self.project = project
         self.playhead = playhead
         aspect = document.aspect
+        self.contentRatio = contentRatio
         let timeMap = TimeMap(sequence: document.sequence)
         duration = timeMap.duration
         durationSeconds = timeMap.durationSeconds
@@ -151,7 +157,8 @@ final class ExportChoices {
 
     /// The MP4 these choices make of the document.
     var settings: ExportSettings {
-        ExportSettings(aspect: aspect, resolution: resolution, framesPerSecond: framesPerSecond, quality: quality)
+        ExportSettings(
+            aspect: aspect, resolution: resolution, framesPerSecond: framesPerSecond, quality: quality, contentRatio: contentRatio)
     }
 
     /// The GIF these choices make of the document.
@@ -189,7 +196,7 @@ final class ExportChoices {
 
     /// The GIF's size with `longSide` on its longer side, in the document's format.
     func gifSize(longSide: Int) -> SIMD2<Int> {
-        GIFSettings(longSide: longSide, range: exportRange).outputSize(aspect: aspect)
+        GIFSettings(longSide: longSide, range: exportRange).outputSize(aspect: aspect, contentRatio: contentRatio)
     }
 
     /// Whether the GIF of `longSide` has more pixels on its shorter side than what was recorded of the screen, as the
@@ -534,7 +541,7 @@ extension EditorModel {
         guard canExport, let window, window.attachedSheet == nil, let session = panelSession, let project = exportProject else { return }
         let choices = ExportChoices(
             document: session.document, project: project, marks: timelineMarks, playhead: playheadNanoseconds,
-            remembered: SettingsStore().settings.export)
+            remembered: SettingsStore().settings.export, contentRatio: contentRatio(of: session.document))
         let host = NSHostingController(
             rootView: ExportSheet(choices: choices, model: self) { [weak self, weak window] export in
                 // The sheet is the window's only one: the save panel comes after it.

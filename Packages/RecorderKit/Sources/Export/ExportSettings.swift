@@ -52,11 +52,15 @@ public struct ExportSettings: Sendable, Equatable {
         self.quality = quality
     }
 
-    /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even).
-    public init(aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality) {
+    /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even); `auto` from
+    /// `contentRatio`, the ratio of the recording's screen (16:9 without it).
+    public init(
+        aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality,
+        contentRatio: Double? = nil
+    ) {
         self.init(
-            outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue), framesPerSecond: framesPerSecond,
-            quality: quality)
+            outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue, contentRatio: contentRatio),
+            framesPerSecond: framesPerSecond, quality: quality)
     }
 
     /// About how many bytes an export of `durationSeconds` takes: the video's and the audio's bitrates over that time

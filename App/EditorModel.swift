@@ -532,7 +532,7 @@ final class EditorModel {
     /// The export's size, which the paused preview is drawn at: the document's format at the resolution the export sheet
     /// remembers.
     private func previewSize(of document: EditDocument) -> SIMD2<Int> {
-        StageLayout.outputSize(aspect: document.aspect, shortSide: previewShortSide)
+        StageLayout.outputSize(aspect: document.aspect, shortSide: previewShortSide, contentRatio: contentRatio(of: document))
     }
 
     /// The export sheet remembers another resolution (this editor's or another's exported at it): the preview is drawn at

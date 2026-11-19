@@ -150,7 +150,7 @@ final class PreviewOverlayView: NSView {
         }
         guard let document, let project, editable, !playing else { return }
         bubbleReference = document.camera.sizeReference
-        let stage = SIMD2(document.aspect.ratio, 1)
+        let stage = SIMD2(document.aspect.ratio(contentRatio: model.contentRatio(of: document)), 1)
         let map = TimeMap(sequence: document.sequence)
         splitState = makeSplitState(of: document, project: project, atOutput: now, timeMap: map)
         if case let .zooms(ids)? = selection, ids.count == 1, let id = ids.first,
@@ -198,7 +198,7 @@ final class PreviewOverlayView: NSView {
             document: document, take: project.take, timeMap: timeMap, cameraReadable: model.renderCameraReadable)
         let span = layouts.span(atOutput: now)
         guard span.kind == .split else { return nil }
-        let size = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080)
+        let size = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: model.contentRatio(of: document))
         let screen = timeMap.source(atOutput: now).flatMap { points(of: document, project)?.screenRect(at: $0.1) }
         var state = SplitState(
             blockID: span.blockID, split: span.split ?? SplitLayout(side: .end), output: SIMD2(Double(size.x), Double(size.y)),

@@ -921,6 +921,7 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
   2. Grabar 20 s con el iPhone en vertical y un video sonando en el iPhone. En `manifest.json` del paquete: `formatVersion` 4, una pista `device` con `globalFrame` `{x: 0, y: 0}` y el tamaño en píxeles de la pantalla del iPhone (por ejemplo 1179 × 2556 en un iPhone 15), `pixelScale` 1, y una pista `deviceAudio` con el mismo `deviceUniqueID`. El primer segmento de `device` tiene exactamente ese tamaño (Información de QuickTime) y se ve fluido cuando la pantalla se mueve; el de `deviceAudio` se oye entero y en sincronía con la imagen. Si a `device` le faltan `globalFrame` y `pixelScale`, anotarlo: el iPhone no dijo su tamaño antes de empezar.
   3. Girar el iPhone a horizontal y volver a vertical durante la toma: `device` sigue en segmentos nuevos (`formatChanged`) y la toma no se corta.
   4. Desconectar el cable 10 s a mitad de la toma y volver a conectarlo: la toma sigue; las dos pistas terminan su segmento y siguen en uno nuevo del mismo iPhone. Con otro iPhone conectado mientras el primero no está, Toma no lo graba en su lugar.
+- **Formatos** (I1): los siete en la barra y en Proyecto ▸ Formato; «Como la grabación» con una toma de un área ancha (el editor, la vista previa, el GIF y el MP4 salen con esa proporción).
 
 
 ## Prueba en seco (ad hoc)

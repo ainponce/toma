@@ -42,6 +42,12 @@ public struct GIFSettings: Equatable, Sendable {
     ///
     /// The other aspects: 4:5, 4:3 and 3:4 have `longSide` on the longer side and the other in proportion; `auto` is the
     /// same from `contentRatio` (16:9 without it).
+    public func outputSize(project: LoadedProject, document: EditDocument) -> SIMD2<Int> {
+        outputSize(
+            aspect: document.aspect,
+            contentRatio: StageLayout.contentRatio(take: project.take, document: document, events: project.events))
+    }
+
     public func outputSize(aspect: Aspect, contentRatio: Double? = nil) -> SIMD2<Int> {
         let shortSide = max(2, Int((Double(longSide) * 9 / 16 / 2).rounded()) * 2)
         switch aspect {
@@ -232,7 +238,8 @@ public final class GIFExporter: Sendable {
     /// The renderer a run draws with, for `encodeInMemory(range:renderer:)` to reuse across several runs.
     func makeRenderer() throws -> FrameRenderer {
         try GIFEncoding.makeRenderer(
-            project: project, document: document, size: settings.outputSize(aspect: document.aspect), analysis: analysis)
+            project: project, document: document, size: settings.outputSize(project: project, document: document),
+            analysis: analysis)
     }
 
     /// `encodeInMemory(range:)` drawing with `renderer` (from `makeRenderer()`) instead of a new one: the same bytes. One
@@ -329,7 +336,7 @@ private final class GIFEncoding: @unchecked Sendable {
         project: LoadedProject, document: EditDocument, settings: GIFSettings, range: ExportRange,
         paletteSink: GIFExporter.PaletteSink?, renderer: FrameRenderer? = nil, analysis: AnalysisInputs = .none
     ) throws {
-        size = settings.outputSize(aspect: document.aspect)
+        size = settings.outputSize(project: project, document: document)
         // A passed renderer draws with its own analysis: `analysis` would be ignored, so the two must agree.
         precondition(renderer.map { $0.analysis == analysis } ?? true, "GIFExporter: renderer.analysis differs from analysis")
         let drawing = try renderer ?? Self.makeRenderer(project: project, document: document, size: size, analysis: analysis)

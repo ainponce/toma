@@ -21,8 +21,11 @@ public struct StagePoints: Sendable {
     /// The output the window frame is placed in: the document's aspect, 1080 px on its shorter side.
     private static let windowFrameShortSide = 1080
 
-    /// Width over height of the stage: the document's aspect.
+    /// Width over height of the stage: the document's aspect (`auto`: the content's).
     private let ratio: Double
+    /// The ratio of the content `auto` follows (`StageLayout.contentRatio`); `nil` without a screen. The same one the
+    /// export and the preview size themselves by.
+    public let contentRatio: Double?
     /// The document's padding, as a fraction of the stage's width.
     private let padding: Double
     /// With a macOS window frame, the output its rects are worked out in; `nil` without a frame.
@@ -48,14 +51,17 @@ public struct StagePoints: Sendable {
     }
 
     private init(take: TakeRecord, document: EditDocument, geometry: (TrackRecord) -> ScreenGeometry) {
-        ratio = document.aspect.ratio
+        let contentRatio = StageLayout.contentRatio(take: take, document: document, geometry: geometry)
+        self.contentRatio = contentRatio
+        ratio = document.aspect.ratio(contentRatio: contentRatio)
         padding = document.style.padding
         switch document.style.frame {
         // A device is measured as no frame until the render draws it (plan decision 10).
         case .none, .device:
             windowFrameOutput = nil
         case .macWindow:
-            windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(aspect: document.aspect, shortSide: Self.windowFrameShortSide))
+            windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(
+                aspect: document.aspect, shortSide: Self.windowFrameShortSide, contentRatio: contentRatio))
         }
         let initialScreen = document.screens.initial[take.id]
         self.initialScreen = initialScreen
@@ -74,7 +80,7 @@ public struct StagePoints: Sendable {
         self.screenTrackIDs = screenTrackIDs
     }
 
-    /// The stage's width and height: `aspect.ratio` and 1.
+    /// The stage's width and height: the aspect's ratio (the content's for `auto`) and 1.
     public var stageSize: SIMD2<Double> { SIMD2(ratio, 1) }
 
     /// Where `global` (in global points) is on the stage at source instant `host`: placed in the screen's rect as it is
@@ -138,6 +144,11 @@ public struct TakeScreens: Sendable {
         geometries = Dictionary(
             take.tracks.filter(\.kind.isScreen).map { ($0.id, ScreenGeometry(track: $0, events: ordered)) },
             uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The ratio `auto` takes for `document` (`StageLayout.contentRatio`), from the screens read once.
+    public func contentRatio(take: TakeRecord, document: EditDocument) -> Double? {
+        StageLayout.contentRatio(take: take, document: document) { geometry(of: $0) }
     }
 
     /// The screen `track` of the take, as the take's events place it.

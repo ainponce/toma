@@ -38,3 +38,39 @@ import Testing
         }
     }
 }
+
+@Test func autoStageFollowsTheContent() {
+    typealias F = ScreenFollowFixtures
+    let wide = F.display(1, frame: Rect(x: 0, y: 0, width: 2400, height: 1000))
+    let take = F.makeTake([wide])
+    var document = EditDocument.legacy(take: take, events: [])
+    let screens = TakeScreens(take: take, events: [])
+    // `auto`: the stage is the content's ratio tall by 1; the screens read once say the same as the events.
+    document.aspect = .auto
+    let auto = StagePoints(take: take, document: document, screens: screens)
+    #expect(auto.contentRatio == 2.4 && auto.stageSize == SIMD2(2.4, 1))
+    #expect(screens.contentRatio(take: take, document: document) == 2.4)
+    #expect(StagePoints(take: take, events: [], document: document).stageSize == SIMD2(2.4, 1))
+    // A content within 1 % of 16:9 is 16:9.
+    let ordinary = F.makeTake([F.display(1, frame: Rect(x: 0, y: 0, width: 1440, height: 810))])
+    #expect(StagePoints(take: ordinary, events: [], document: .legacy(take: ordinary, events: []).with(aspect: .auto)).stageSize == SIMD2(16.0 / 9, 1))
+    // The fixed aspects do not follow it, and keep their stage.
+    for (aspect, width) in [(Aspect.landscape, 16.0 / 9), (.portrait, 9.0 / 16), (.square, 1), (.fourByFive, 0.8)] {
+        document.aspect = aspect
+        #expect(StagePoints(take: take, document: document, screens: screens).stageSize == SIMD2(width, 1), "\(aspect)")
+    }
+    // The macOS window of an `auto` stage is placed in the content's output.
+    document.aspect = .auto
+    document.style.frame = .macWindow(appearance: .dark, title: "x", buttons: true)
+    let window = StagePoints(take: take, document: document, screens: screens)
+    let rect = window.screenRect(at: F.at(1))
+    #expect(rect != nil && rect!.width > 0 && rect!.width <= 2.4)
+}
+
+private extension EditDocument {
+    func with(aspect: Aspect) -> EditDocument {
+        var copy = self
+        copy.aspect = aspect
+        return copy
+    }
+}

@@ -86,7 +86,7 @@ struct CameraTab: View {
         let block = Self.block(of: layoutTarget, in: document)
         let kind = block?.kind ?? document.camera.layout.kind
         let split = block?.split ?? (block == nil ? document.camera.layout.split : nil)
-        let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080)
+        let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: model.contentRatio(of: document))
         let outputSize = SIMD2(Double(output.x), Double(output.y))
         VStack(alignment: .leading, spacing: 18) {
             if let block {
