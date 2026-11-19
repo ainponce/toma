@@ -463,6 +463,54 @@ extension ZoomFixtures {
             #expect(zoom.camera(atStep: 1_234).target != zoom.camera(atStep: 400).target)
         }
 
+        @Test func zoomFollowsTheCursorInTheReframedScreen() throws {
+            // 9:16 of the display, the screen following the cursor (`reframe-1`): its window fills the stage. A following
+            // block from 3 s at 2× and a fixed one from 9 s; the cursor stands at 0.8 of the display, then moves in the
+            // window, reaching out of it.
+            let size = SIMD2(1440.0, 900.0)
+            let events = [pointer(0, SIMD2(0.8, 0.3) * size)]
+                + trail(from: 3.5, to: 12) { SIMD2(0.8 + 0.12 * sin($0), 0.3 + 0.3 * sin(1.7 * $0)) * size }
+            var document = zoomDocument(
+                aspect: .portrait, regions: [block(1, from: 3, to: 8), block(2, from: 9, to: 11, focus: .fixed(x: 0.25, y: 0.5))],
+                smoothing: smoothed)
+            document.style.reframe = .followCursor
+            let motion = paths(document, events: events)
+            let (stage, reframe) = (motion.stage, try #require(motion.reframe))
+            let room = stage.room
+            /// Where the stage's camera heads on step `s`, by the rule of a following block's entry.
+            func entry(_ s: Int) throws -> (target: SIMD2<Double>, squeezed: SIMD2<Double>) {
+                let τ = StepGrid.outputTime(ofStep: s)
+                let host = try #require(motion.timeMap.source(atOutput: τ)).source
+                let view = try #require(stage.shownScreen(at: host)?.view)
+                let part = try #require(reframe.part(of: view, atOutput: τ, stage: stage))
+                let sample = try #require(motion.cursor.sample(atStep: s))
+                let point = try #require(stage.stagePoint(global: sample.position, at: host, part: part))
+                #expect(stage.screenRect(at: host) == room)
+                return (
+                    StageCrop.clamp(center: point, depth: 2, stage: stage.stageSize, screen: room),
+                    try #require(stage.stagePoint(global: sample.position, at: host)))
+            }
+            let first = step(3)
+            let camera = motion.zoom.camera(atStep: first), heads = try entry(first)
+            #expect(camera.block == 0 && camera.target == heads.target)
+            // The cursor is in the middle of the window, not where the whole region squeezed into the room puts it.
+            #expect(abs(heads.target.x - (room.x + room.width / 2)) < 1e-9 && abs(heads.squeezed.x - heads.target.x) > 0.1)
+            // The camera keeps to the room as the cursor moves, and the fixed focus is a point of the room.
+            #expect(stride(from: first, through: step(8), by: 11).allSatisfy { s in
+                let state = motion.zoom.state(atStep: s)
+                let held = StageCrop.clamp(center: state.center, depth: state.depth, stage: stage.stageSize, screen: room)
+                return state.center == held
+            })
+            #expect(motion.zoom.camera(atStep: step(5)).target != camera.target)
+            let fixed = SIMD2(room.x + 0.25 * room.width, room.y + 0.5 * room.height)
+            #expect(motion.zoom.camera(atStep: step(9)).target
+                == StageCrop.clamp(center: fixed, depth: 2, stage: stage.stageSize, screen: room))
+            // Read step after step, the bits of the camera simulated from output 0.
+            for s in [first + 1, step(4.2), step(6.01), step(7.99), step(10)] {
+                #expect(bits(motion.zoom.camera(atStep: s)) == bits(motion.zoom.cameraSimulatedFromStart(atStep: s)), "step \(s)")
+            }
+        }
+
         @Test func zoomOffTheGridIsBetweenTheTwoSteps() {
             let zoom = paths(zoomDocument(regions: [block(1, from: 1, to: 4, focus: .fixed(x: 0.5, y: 0.55))])).zoom
             // Frames of every frame rate land on their steps.

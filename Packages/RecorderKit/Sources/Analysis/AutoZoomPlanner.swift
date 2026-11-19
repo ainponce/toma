@@ -23,8 +23,9 @@ import ProjectFormat
 ///    the first and the first element of the second.
 /// 6. Depth: `min(depth, the depth whose crop fits the box with its margin)`; a block below 1.15× is not made. A block at
 ///    `depth` leaves it out (`nil`: it follows the setting).
-/// 7. Focus: `.follow` with `follow`; otherwise fixed at the centre of the box, as fractions of the screen's rect at
-///    the instant of the group's first element.
+/// 7. Focus: `.follow` with `follow`, and always where the screen follows the cursor (`style.reframe` `followCursor`,
+///    `reframe-1`: the screen's window moves with it); otherwise fixed at the centre of the box, as fractions of the
+///    screen's rect at the instant of the group's first element.
 /// 8. The user's blocks win: a block over one of the user's blocks (`origin: .user`) of the take keeps what is left
 ///    free, each part only if it lasts at least 1.0 s. A block (or part) and a `suppressed` range of the take (where the
 ///    user deleted an automatic one) that overlap by half of the range or more, or by half of the block or more, make
@@ -58,7 +59,9 @@ public enum AutoZoomPlanner {
         guard document.zoom.auto.enabled, timeMap.duration > 0 else { return [] }
         let stage = StagePoints(take: take, events: events, document: document)
         let found = ActivityExtraction(take: take, events: events, timeMap: timeMap, stage: stage)
-        let planner = Planner(settings: document.zoom.auto, stage: stage, timeMap: timeMap, sequence: document.sequence)
+        let planner = Planner(
+            settings: document.zoom.auto, stage: stage, timeMap: timeMap, sequence: document.sequence,
+            followsCursor: document.style.reframe == .followCursor)
         let blocks = planner.neighboursSettled(planner.blocks(of: planner.groups(found)))
 
         let users = planner.placed(
@@ -126,15 +129,18 @@ private struct Planner {
     let timeMap: TimeMap
     /// The clips `timeMap` maps.
     let sequence: [Clip]
+    /// Whether the screen follows the cursor (`style.reframe`): every block follows it too.
+    let followsCursor: Bool
     let gap: Int64
     let leadIn: Int64
     let leadOut: Int64
 
-    init(settings: AutoZoomSettings, stage: StagePoints, timeMap: TimeMap, sequence: [Clip]) {
+    init(settings: AutoZoomSettings, stage: StagePoints, timeMap: TimeMap, sequence: [Clip], followsCursor: Bool) {
         self.settings = settings
         self.stage = stage
         self.timeMap = timeMap
         self.sequence = sequence
+        self.followsCursor = followsCursor
         gap = TimeMap.outputNanoseconds(seconds: settings.groupGap)
         leadIn = TimeMap.outputNanoseconds(seconds: settings.leadIn)
         leadOut = TimeMap.outputNanoseconds(seconds: settings.leadOut)
@@ -310,7 +316,7 @@ private struct Planner {
 
     /// Step 7.
     private func focus(of block: Block) -> ZoomFocus {
-        guard !settings.follow else { return .follow }
+        guard !settings.follow, !followsCursor else { return .follow }
         let center = SIMD2(block.box.x + block.box.width / 2, block.box.y + block.box.height / 2)
         guard let screen = stage.screenRect(at: block.host), screen.width > 0, screen.height > 0 else { return .fixed(x: 0.5, y: 0.5) }
         return .fixed(x: (center.x - screen.x) / screen.width, y: (center.y - screen.y) / screen.height)

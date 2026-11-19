@@ -20,6 +20,10 @@ import ProjectFormat
 /// (`deviceFrame-1`, with the screen fitted, `style.reframe` `fit`), the screen is the device's
 /// (`StageLayout.deviceRects(contentAspect:padding:outputSize:model:)`) and the window its bounds: every measure of a
 /// device is a fraction of its screen, so stage units hold it exactly.
+///
+/// Following the cursor (`style.reframe` `followCursor`, `reframe-1`), there is never a frame, and a view wider than the
+/// room (`isReframed(_:)`) fills the whole room inside the padding (`room`) with a window of its region as tall as it
+/// (`ReframePath.part`); a view no wider than the room is placed whole, as with `fit`.
 public struct StagePoints: Sendable {
     /// The output the window frame is placed in: the document's aspect, 1080 px on its shorter side.
     private static let windowFrameShortSide = 1080
@@ -31,6 +35,10 @@ public struct StagePoints: Sendable {
     public let contentRatio: Double?
     /// The document's padding, as a fraction of the stage's width.
     private let padding: Double
+    /// How the screen fills the stage (`style.reframe`).
+    private let reframe: Reframe
+    /// The take the document's screens are of.
+    let takeID: String
     /// With a macOS window frame, the output its rects are worked out in; `nil` without a frame.
     private let windowFrameOutput: SIMD2<Double>?
     /// With a device frame around the fitted screen, its model; `nil` without one.
@@ -38,6 +46,9 @@ public struct StagePoints: Sendable {
     /// The screen track of the take at its start, and from each of its changes on (in time order).
     private let initialScreen: String?
     private let screenChanges: [(t: HostTime, track: String)]
+    /// The source instants of the take's geometry events (`displayGeometry` and `windowGeometry`, of any screen), in
+    /// order: with `screenChanges`, every instant at which what `shownScreen(at:)` gives can change.
+    private let geometryTimes: [HostTime]
     /// Where each screen track the document names is, by ID: only the take's screen tracks.
     private let screens: [String: ScreenGeometry]
     /// The screen tracks of `screens`, each once, in the order the document names them: `screens.initial`, then
@@ -46,20 +57,27 @@ public struct StagePoints: Sendable {
 
     public init(take: TakeRecord, events: [InputEvent], document: EditDocument) {
         let ordered = events.sortedByTime()
-        self.init(take: take, document: document) { ScreenGeometry(track: $0, events: ordered) }
+        self.init(take: take, document: document, geometryTimes: TakeScreens.geometryTimes(of: ordered)) {
+            ScreenGeometry(track: $0, events: ordered)
+        }
     }
 
     /// The same as `init(take:events:document:)`, from the take's screens read once (`TakeScreens`): it reads only what
     /// the document names, so an editor makes one for each revision without going over the take's events again.
     public init(take: TakeRecord, document: EditDocument, screens: TakeScreens) {
-        self.init(take: take, document: document) { screens.geometry(of: $0) }
+        self.init(take: take, document: document, geometryTimes: screens.geometryTimes) { screens.geometry(of: $0) }
     }
 
-    private init(take: TakeRecord, document: EditDocument, geometry: (TrackRecord) -> ScreenGeometry) {
+    private init(
+        take: TakeRecord, document: EditDocument, geometryTimes: [HostTime], geometry: (TrackRecord) -> ScreenGeometry
+    ) {
         let contentRatio = StageLayout.contentRatio(take: take, document: document, geometry: geometry)
         self.contentRatio = contentRatio
         ratio = document.aspect.ratio(contentRatio: contentRatio)
         padding = document.style.padding
+        reframe = document.style.reframe
+        takeID = take.id
+        self.geometryTimes = geometryTimes
         switch document.style.frame {
         case .none:
             (windowFrameOutput, device) = (nil, nil)
@@ -67,8 +85,11 @@ public struct StagePoints: Sendable {
             // Only around the screen fitted whole: following the cursor, the screen is cut and has no frame.
             (windowFrameOutput, device) = (nil, document.style.reframe == .fit ? frame.model : nil)
         case .macWindow:
-            windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(
-                aspect: document.aspect, shortSide: Self.windowFrameShortSide, contentRatio: contentRatio))
+            // The same: following the cursor, no window frame either (phase 2 design §6.5).
+            windowFrameOutput = document.style.reframe == .fit
+                ? SIMD2<Double>(StageLayout.outputSize(
+                    aspect: document.aspect, shortSide: Self.windowFrameShortSide, contentRatio: contentRatio))
+                : nil
             device = nil
         }
         let initialScreen = document.screens.initial[take.id]
@@ -91,16 +112,89 @@ public struct StagePoints: Sendable {
     /// The stage's width and height: the aspect's ratio (the content's for `auto`) and 1.
     public var stageSize: SIMD2<Double> { SIMD2(ratio, 1) }
 
+    /// The whole room the screen has inside the padding, in stage units (`StageLayout.screenRect` without an aspect):
+    /// what a reframed screen fills (an empty rect at the centre when the padding leaves it none).
+    public var room: Rect {
+        StageLayout.screenRect(contentAspect: nil, padding: padding, outputSize: stageSize)
+    }
+
+    /// Whether `view` is reframed (`reframe-1`): the document follows the cursor and `view`'s region is wider than the
+    /// room. A view no wider than the room, or without a region, is placed whole.
+    public func isReframed(_ view: ShownScreen) -> Bool {
+        reframedWidth(of: view) != nil
+    }
+
+    /// The width of the window of `view`'s region a reframed screen shows, as a fraction of the region's width: the
+    /// room's aspect over the region's, below 1; `nil` when `view` is not reframed (`isReframed(_:)`).
+    func reframedWidth(of view: ShownScreen) -> Double? {
+        guard reframe == .followCursor, let region = view.region, region.width > 0, region.height > 0 else { return nil }
+        let room = room
+        guard room.width > 0, room.height > 0 else { return nil }
+        let width = (room.width / room.height) / (region.width / region.height)
+        return width.isFinite && width > 0 && width < 1 - Self.sameAspect ? width : nil
+    }
+
+    /// Two aspects closer than this (relatively) are the same: a region of the room's own aspect is placed whole.
+    private static let sameAspect = 1e-9
+
     /// Where `global` (in global points) is on the stage at source instant `host`: placed in the screen's rect as it is
     /// in the region the screen shows (under the bar, with a window frame). `nil` off that region (its far edges are out,
     /// as for the drawn cursor), while a window is not on screen, for a screen without a usable frame, and with no screen
-    /// shown.
+    /// shown. A reframed screen (`isReframed(_:)`) shows its whole region squeezed into the room here; with the part it
+    /// shows, `stagePoint(global:at:part:)` places it.
     public func stagePoint(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>? {
-        guard let view = shownScreen(at: host)?.view, view.onScreen, let region = view.region else { return nil }
+        stagePoint(global: global, at: host, part: nil)
+    }
+
+    /// `stagePoint(global:at:)` where the screen shown, when it is reframed (`isReframed(_:)`), shows `part` of its region
+    /// (`ReframePath.part`, in fractions of the region) over the whole room: the point placed in that window, `nil`
+    /// outside it (its far edges are out). For a view that is not reframed, or with `part` `nil`, the same as
+    /// `stagePoint(global:at:)`.
+    public func stagePoint(global: SIMD2<Double>, at host: HostTime, part: Rect?) -> SIMD2<Double>? {
+        guard let view = shownScreen(at: host)?.view else { return nil }
+        return stagePoint(global: global, in: view, part: part.flatMap { isReframed(view) ? $0 : nil })
+    }
+
+    /// `global` placed on the stage as `view` shows it, through `part` of its region when there is one: see
+    /// `stagePoint(global:at:part:)`.
+    func stagePoint(global: SIMD2<Double>, in view: ShownScreen, part: Rect?) -> SIMD2<Double>? {
+        guard view.onScreen, let region = view.region else { return nil }
         let point = CGPoint(x: global.x, y: global.y)
-        guard CursorGeometry.contains(point, region) else { return nil }
+        guard CursorGeometry.contains(point, region),
+            let shown = Self.placed(CursorGeometry.normalized(point, in: region), in: part)
+        else { return nil }
         let rect = rects(of: view).screen
-        return SIMD2(rect.x, rect.y) + CursorGeometry.normalized(point, in: region) * SIMD2(rect.width, rect.height)
+        return SIMD2(rect.x, rect.y) + shown * SIMD2(rect.width, rect.height)
+    }
+
+    /// `fraction`, of a region, in fractions of `part` of it; `nil` outside `part` (its far edges are out). `fraction`
+    /// itself without a part.
+    static func placed(_ fraction: SIMD2<Double>, in part: Rect?) -> SIMD2<Double>? {
+        guard let part else { return fraction }
+        let shown = (fraction - SIMD2(part.x, part.y)) / SIMD2(part.width, part.height)
+        guard shown.x >= 0, shown.x < 1, shown.y >= 0, shown.y < 1 else { return nil }
+        return shown
+    }
+
+    /// Every source instant from which what `shownScreen(at:)` gives can change, in order and each once: the take's
+    /// `screens.changes` and its geometry events (more than that, never fewer).
+    var viewChanges: [HostTime] {
+        // Both are in order: merged.
+        var instants: [HostTime] = []
+        instants.reserveCapacity(screenChanges.count + geometryTimes.count)
+        var (i, j) = (0, 0)
+        while i < screenChanges.count || j < geometryTimes.count {
+            let instant: HostTime
+            if j == geometryTimes.count || (i < screenChanges.count && screenChanges[i].t <= geometryTimes[j]) {
+                instant = screenChanges[i].t
+                i += 1
+            } else {
+                instant = geometryTimes[j]
+                j += 1
+            }
+            if instants.last != instant { instants.append(instant) }
+        }
+        return instants
     }
 
     /// The rect of the screen shown at source instant `host`, in stage units: with a window frame, the whole window, bar
@@ -126,9 +220,15 @@ public struct StagePoints: Sendable {
 
     /// The screen's rect for `view`, of the region's aspect (of the whole room inside the padding without a region), and
     /// the window's around it: the same rect without a window frame, the device's bounds with a device frame (an empty
-    /// rect at the centre for both when the padding leaves it no room). The screen's is where `stagePoint(global:at:)`
+    /// rect at the centre for both when the padding leaves it no room). A reframed view's (`isReframed(_:)`) are both the
+    /// room. The screen's is where `stagePoint(global:at:)`
     /// places the cursor; the window's is `screenRect(at:)`.
     public func rects(of view: ShownScreen) -> (window: Rect, screen: Rect) {
+        if isReframed(view) {
+            // Following the cursor, the window of the region fills the room, without a frame.
+            let room = room
+            return (room, room)
+        }
         let aspect = view.region.map { $0.width / $0.height }
         if let device {
             guard let rects = StageLayout.deviceRects(contentAspect: aspect, padding: padding, outputSize: stageSize, model: device)
@@ -156,12 +256,25 @@ public struct StagePoints: Sendable {
 /// main thread, and each revision's `StagePoints(take:document:screens:)` reads only what that document names.
 public struct TakeScreens: Sendable {
     private let geometries: [String: ScreenGeometry]
+    /// The source instants of the take's geometry events, in order (`StagePoints.viewChanges`).
+    let geometryTimes: [HostTime]
 
     public init(take: TakeRecord, events: [InputEvent]) {
         let ordered = events.sortedByTime()
         geometries = Dictionary(
             take.tracks.filter(\.kind.isScreen).map { ($0.id, ScreenGeometry(track: $0, events: ordered)) },
             uniquingKeysWith: { first, _ in first })
+        geometryTimes = Self.geometryTimes(of: ordered)
+    }
+
+    /// The instants of the `displayGeometry` and `windowGeometry` events of `events`, in time order, of any screen.
+    static func geometryTimes(of ordered: [InputEvent]) -> [HostTime] {
+        ordered.compactMap { event in
+            switch event.kind {
+            case .displayGeometry, .windowGeometry: event.t
+            default: nil
+            }
+        }
     }
 
     /// The ratio `auto` takes for `document` (`StageLayout.contentRatio`), from the screens read once.

@@ -51,7 +51,9 @@ public struct ZoomCameraState: Equatable, Sendable {
 ///     in Screen only nothing is over the screen, and the cards of the others are beside it or cover it all (1c design
 ///     §5.4). A trivial document's is the take's bubble, as in 1b. The cursor is `CursorPath`'s on the step, read before
 ///     the camera moves (design §8.6), at its stage point (`StagePoints.stagePoint(global:at:)`); without one, the
-///     target stays.
+///     target stays. Where the screen is reframed (`ReframePath`, `reframe-1`), the cursor's stage point is where it is
+///     in the window the screen shows on the step (`StagePoints.stagePoint(global:at:part:)`, the window read step after
+///     step as the cursor is), none outside it; the screen's rect is the room, so a fixed focus is a point of it.
 /// - The motion: `zoom.spring` (`StepGrid.spring`, the spring read through `StepGrid.stable(_:)` so a document edited
 ///   by hand never stops the render) for `u` and for each axis of the centre, toward the target. On entering or
 ///   leaving an `instant` block, the camera jumps to the target with velocity 0.
@@ -85,24 +87,27 @@ public struct ZoomCameraPath: Sendable {
     public var jumps: [ClosedRange<Int64>] { simulation.jumps }
 
     /// `cameraReadable`: some camera track of the take can be read (plan decision 40, `LayoutTimeline.cameraReadable`), as
-    /// the render is told; without one, the layouts that need the camera are Screen only, with no bubble.
+    /// the render is told; without one, the layouts that need the camera are Screen only, with no bubble. `reframe`: the
+    /// document's window of the screen that follows the cursor (`MotionPaths.reframe`); `nil`, the screen fitted whole.
     public init(
         document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
-        cameraReadable: Bool = true
+        cameraReadable: Bool = true, reframe: ReframePath? = nil
     ) {
         self.init(
             document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil,
-            layouts: Self.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable))
+            layouts: Self.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable),
+            reframe: reframe)
     }
 
     /// The camera of the same take after an edit (`MotionPaths.init(take:events:document:after:)`): bit for bit
     /// `init(document:timeMap:stage:cursor:take:cameraReadable:)`'s (that one without `old`), from `old`'s checkpoints as
     /// `ZoomSimulation` keeps them. `changed` is the first step at which what the camera reads besides its blocks and
-    /// spring (the time map, the stage, the cursor, the camera's bubble and the layouts) can differ; `nil`, none of them
-    /// does. `layouts`: `layouts(of:take:timeMap:cameraReadable:)` of the document; with the camera readable when `nil`.
+    /// spring (the time map, the stage, the cursor, the camera's bubble, the layouts and the window that follows the
+    /// cursor) can differ; `nil`, none of them does. `layouts`: `layouts(of:take:timeMap:cameraReadable:)` of the
+    /// document; with the camera readable when `nil`.
     init(
         document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
-        after old: ZoomCameraPath?, changedFrom changed: Int?, layouts: LayoutTimeline? = nil
+        after old: ZoomCameraPath?, changedFrom changed: Int?, layouts: LayoutTimeline? = nil, reframe: ReframePath? = nil
     ) {
         let layouts = layouts ?? Self.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: true)
         self.layouts = layouts
@@ -111,7 +116,8 @@ public struct ZoomCameraPath: Sendable {
             viewport: StageViewport(
                 stage: stage, bubble: CameraBubble(document: document, take: take, timeMap: timeMap),
                 reference: document.camera.sizeReference,
-                layouts: layouts.isTrivial ? nil : StageViewport.Layouts(layouts, document: document, size: stage.stageSize)),
+                layouts: layouts.isTrivial ? nil : StageViewport.Layouts(layouts, document: document, size: stage.stageSize),
+                reframe: reframe),
             after: old?.simulation, changedFrom: changed)
     }
 
@@ -206,6 +212,7 @@ extension ZoomCameraState {
 /// camera's bubble, or, with layouts, the layouts' camera where a Bubble span rules (see `ZoomCameraPath`'s notes).
 struct StageViewport: ZoomViewport {
     let size: SIMD2<Double>
+    let reframe: ReframePath?
     private let stage: StagePoints
     /// `nil` where the render draws no camera.
     private let bubble: CameraBubble?
@@ -218,8 +225,12 @@ struct StageViewport: ZoomViewport {
     /// middle of an edge).
     private static let centred = 1e-9
 
-    init(stage: StagePoints, bubble: CameraBubble?, reference: SizeReference, layouts: Layouts? = nil) {
+    init(
+        stage: StagePoints, bubble: CameraBubble?, reference: SizeReference, layouts: Layouts? = nil,
+        reframe: ReframePath? = nil
+    ) {
         size = stage.stageSize
+        self.reframe = reframe
         self.stage = stage
         self.bubble = bubble
         self.reference = reference
@@ -274,8 +285,11 @@ struct StageViewport: ZoomViewport {
         host.flatMap(stage.screenRect(at:)) ?? Rect(x: 0, y: 0, width: size.x, height: size.y)
     }
 
-    func cursor(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>? {
-        stage.stagePoint(global: global, at: host)
+    func cursor(global: SIMD2<Double>, at host: HostTime, windowCenter: Double?) -> SIMD2<Double>? {
+        guard let windowCenter else { return stage.stagePoint(global: global, at: host) }
+        guard let view = stage.shownScreen(at: host)?.view else { return nil }
+        let part = stage.reframedWidth(of: view).map { ReframePath.part(center: windowCenter, width: $0) }
+        return stage.stagePoint(global: global, in: view, part: part)
     }
 
     /// The bubble, applied after the dead zone (see `ZoomCameraPath`'s notes).
@@ -360,12 +374,17 @@ struct StageViewport: ZoomViewport {
 protocol ZoomViewport: Sendable {
     /// What the camera looks over, from (0, 0) to `size`: at rest it looks at all of it, from its centre.
     var size: SIMD2<Double> { get }
+    /// The window of a reframed screen that follows the cursor (`ReframePath`), where the cursor is placed; `nil` with
+    /// the screen fitted whole.
+    var reframe: ReframePath? { get }
     /// The rect of the screen shown at source instant `host` (`nil`: no instant of the take is shown), in the viewport's
     /// units: what a fixed focus is a fraction of, and what the crop keeps to where it fits in it.
     func screen(at host: HostTime?) -> Rect
     /// Where the cursor at `global` (global points) is at source instant `host`, in the viewport's units; `nil` off the
-    /// screen shown, as `StagePoints.stagePoint(global:at:)`.
-    func cursor(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>?
+    /// screen shown, as `StagePoints.stagePoint(global:at:)`. `windowCenter`: with `reframe`, its centre on the step
+    /// (`ReframePath.center(atStep:)`, read step after step): a reframed screen shows the window about it
+    /// (`ReframePath.part`), and the cursor is placed in it, `nil` outside it.
+    func cursor(global: SIMD2<Double>, at host: HostTime, windowCenter: Double?) -> SIMD2<Double>?
     /// `target`, where the dead zone left a following block's target of `depth` with the cursor at `point`, moved off
     /// what else the viewport keeps the cursor from at output time `τ` (source instant `host`); `target` where nothing.
     func cleared(_ target: SIMD2<Double>, cursor point: SIMD2<Double>, depth: Double, atOutput τ: Int64, host: HostTime)
@@ -499,8 +518,9 @@ private struct ZoomBlock: Equatable, Sendable {
 /// - The target, read on each step: outside every block, rest (`u` 0, the viewport's centre); in a block, `u = ln` of
 ///   its depth and a centre placed with `StageCrop` at that depth over the viewport's screen at the step's source
 ///   instant: a fixed focus is its point of that screen; a following one is, on entering the block, the cursor's point
-///   (`CursorPath`'s on the step, read before the camera moves), then the dead zone (`ZoomCameraPath.deadZone` of the
-///   crop it heads to, steps of `followStep` of it) and what the viewport clears (`ZoomViewport.cleared`).
+///   (`CursorPath`'s on the step, read before the camera moves; in the window of a reframed screen, the viewport's
+///   `ReframePath` read on the step after the cursor), then the dead zone (`ZoomCameraPath.deadZone` of the crop it
+///   heads to, steps of `followStep` of it) and what the viewport clears (`ZoomViewport.cleared`).
 /// - The motion: `zoom.spring` (`StepGrid.spring`, through `StepGrid.stable(_:)`) for `u` and each axis of the centre;
 ///   on entering or leaving an `instant` block, a jump to the target with velocity 0.
 /// - Drawn: `u` at least 0 and the centre placed with `StageCrop` over the viewport's screen of the instant.
@@ -705,6 +725,8 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         /// The first block whose steps end after `step`.
         var nextBlock: Int
         var cursor: CursorPath.Reader
+        /// The viewport's window that follows the cursor, read step after step; `nil` without one.
+        var reframe: ReframePath.Reader?
     }
 
     /// What of an old simulation an edit of its blocks alone can leave as it was after it: its checkpoints from the first
@@ -755,7 +777,9 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         let center = viewport.size / 2
         let rest = ZoomCamera(
             logDepth: 0, logDepthVelocity: 0, center: center, centerVelocity: .zero, target: center, block: nil)
-        return Run(step: -1, camera: rest, nextBlock: 0, cursor: CursorPath.Reader(cursor))
+        return Run(
+            step: -1, camera: rest, nextBlock: 0, cursor: CursorPath.Reader(cursor),
+            reframe: viewport.reframe.map(ReframePath.Reader.init))
     }
 
     /// A run from the checkpoint at or before step `s` (in `0...lastStep`).
@@ -773,7 +797,9 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
             let mid = (low + high) / 2
             if blocks[mid].steps.upperBound <= step { low = mid + 1 } else { high = mid }
         }
-        return Run(step: step, camera: camera, nextBlock: low, cursor: CursorPath.Reader(cursor))
+        return Run(
+            step: step, camera: camera, nextBlock: low, cursor: CursorPath.Reader(cursor),
+            reframe: viewport.reframe.map(ReframePath.Reader.init))
     }
 
     /// Takes `run` to the next step: reads the block and, in a following one, the cursor, places the target, and moves
@@ -800,7 +826,8 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
             } else {
                 target = camera.target
                 if let host, let sample = run.cursor.sample(atStep: step),
-                    let point = viewport.cursor(global: sample.position, at: host)
+                    let point = viewport.cursor(
+                        global: sample.position, at: host, windowCenter: run.reframe?.center(atStep: step))
                 {
                     target = entering
                         ? point

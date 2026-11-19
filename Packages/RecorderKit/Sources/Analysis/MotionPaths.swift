@@ -3,14 +3,17 @@ import Dispatch
 import ProjectFormat
 
 /// The motion of one revision of the document (design §8.6): its time map, where things are on the stage, the drawn
-/// cursor's path and the zoom camera's, which follows that cursor, and, with a split, the zoom inside the screen's card
-/// (1c design §5.4). Built once per revision (from those of the revision before it after an edit,
-/// `init(take:events:document:after:)`), off the main thread, and shared by the preview and the export at any size they
-/// draw: everything is in output time and stage units (the card's zoom, in fractions of the screen).
+/// cursor's path, the window of the screen that follows it (`reframe-1`, phase 2 design §6.5) and the zoom camera's,
+/// which follows that cursor in that window, and, with a split, the zoom inside the screen's card (1c design §5.4).
+/// Built once per revision (from those of the revision before it after an edit, `init(take:events:document:after:)`),
+/// off the main thread, and shared by the preview and the export at any size they draw: everything is in output time
+/// and stage units (the card's zoom, in fractions of the screen; the window, in fractions of the screen's region).
 public struct MotionPaths: Sendable {
     public let timeMap: TimeMap
     public let stage: StagePoints
     public let cursor: CursorPath
+    /// `nil` when the document fits the screen whole (`style.reframe` `fit`; `ReframePath`).
+    public let reframe: ReframePath?
     public let zoom: ZoomCameraPath
     /// `nil` when the document has no split (`CardZoomPath`).
     public let cardZoom: CardZoomPath?
@@ -24,9 +27,11 @@ public struct MotionPaths: Sendable {
         timeMap = TimeMap(sequence: document.sequence)
         stage = StagePoints(take: take, events: events, document: document)
         cursor = CursorPath(take: take, events: events, style: document.cursor, timeMap: timeMap)
+        reframe = ReframePath(document: document, timeMap: timeMap, stage: stage, cursor: cursor)
         zoom = ZoomCameraPath(
-            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, cameraReadable: cameraReadable)
-        cardZoom = CardZoomPath(document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take)
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, cameraReadable: cameraReadable,
+            reframe: reframe)
+        cardZoom = CardZoomPath(document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, reframe: reframe)
         inputs = Inputs(document, cameraReadable: cameraReadable)
     }
 
@@ -46,8 +51,11 @@ public struct MotionPaths: Sendable {
     /// - The zoom's blocks on the grid and its spring, which each camera compares itself; the take's camera bubble for
     ///   the stage's camera (its first change placed otherwise; the whole of it when it shows or starts otherwise), and
     ///   the layouts it reads that bubble from where a Bubble span rules (`firstChangedLayoutOutput`).
-    /// - The stage (the screens, the aspect, the padding and whether there is a window frame): the whole of both
-    ///   cameras, and it is built again.
+    /// - The stage (the screens, the aspect, the padding, whether there is a window frame and whether the screen follows
+    ///   the cursor): the whole of both cameras and of the window that follows the cursor, and it is built again.
+    /// - The window that follows the cursor (`ReframePath`) reads the time map and the cursor, as both cameras do, and it
+    ///   keeps its checkpoints before the first step either changes; both cameras read it on the steps they read the
+    ///   cursor, so it changes nothing of them before that step either.
     /// - For the card's camera, the layouts only decide whether there is one: one that was not there is simulated from
     ///   output 0.
     ///
@@ -71,8 +79,11 @@ public struct MotionPaths: Sendable {
             after: old.cursor, take: take, events: events, style: document.cursor, timeMap: timeMap)
         let timeChanged = Self.firstChangedOutput(old.inputs.sequence, old.timeMap, document.sequence, timeMap)
             .map(StepGrid.firstStep(atOrAfter:))
-        // What both cameras read besides their blocks and spring.
+        // What both cameras read besides their blocks and spring, and all the window that follows the cursor reads.
         let changed = sameStage ? [timeChanged, cursorChanged].compactMap { $0 }.min() : 0
+        let reframe = ReframePath(
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, after: sameStage ? old.reframe : nil,
+            changedFrom: changed)
         let bubbleChanged = Self.firstChangedBubbleOutput(
             old.inputs.camera, old.timeMap, document.camera, timeMap, take: take.id).map(StepGrid.firstStep(atOrAfter:))
         let layouts = ZoomCameraPath.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable)
@@ -84,16 +95,17 @@ public struct MotionPaths: Sendable {
             {
                 ZoomCameraPath(
                     document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.zoom,
-                    changedFrom: zoomChanged, layouts: layouts)
+                    changedFrom: zoomChanged, layouts: layouts, reframe: reframe)
             },
             {
                 CardZoomPath(
                     document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.cardZoom,
-                    changedFrom: changed)
+                    changedFrom: changed, reframe: reframe)
             })
         self.timeMap = timeMap
         self.stage = stage
         self.cursor = cursor
+        self.reframe = reframe
         self.inputs = inputs
     }
 
@@ -110,22 +122,24 @@ public struct MotionPaths: Sendable {
 
     /// Whether these are the paths of `document` too (of the same take and events, with the camera as readable): it
     /// differs from the one they were built from in nothing they read (the clips, the screens, the aspect, the window
-    /// frame and the padding, the cursor, the zoom and the camera, whose layouts decide whether there is a card's zoom and
-    /// where the stage's keeps the cursor from the bubble), as after an edit of the background, the shadow or the corners.
+    /// frame and the padding, whether the screen follows the cursor, the cursor, the zoom and the camera, whose layouts
+    /// decide whether there is a card's zoom and where the stage's keeps the cursor from the bubble), as after an edit of
+    /// the background, the shadow or the corners.
     /// Then a new revision keeps them rather than building them again (about 100 ms for an hour of take).
     public func areThePaths(of document: EditDocument) -> Bool {
         inputs == Inputs(document, cameraReadable: inputs.cameraReadable)
     }
 
-    /// Everything of a document the paths read (`StagePoints`, `CursorPath`, `ZoomCameraPath`, `CameraBubble`, the
-    /// layouts, and `CardZoomPath`: the project's layout and the blocks', which make a split, over the same stage, cursor
-    /// and zoom), and whether the camera can be read.
+    /// Everything of a document the paths read (`StagePoints`, `CursorPath`, `ReframePath`, `ZoomCameraPath`,
+    /// `CameraBubble`, the layouts, and `CardZoomPath`: the project's layout and the blocks', which make a split, over the
+    /// same stage, cursor and zoom), and whether the camera can be read.
     private struct Inputs: Equatable, Sendable {
         let sequence: [Clip]
         let screens: ScreenPlan
         let aspect: Aspect
         let frame: WindowFrame
         let padding: Double
+        let reframe: Reframe
         let cursor: CursorStyle
         let zoom: ZoomPlan
         /// With `layout` and `layouts`.
@@ -139,26 +153,28 @@ public struct MotionPaths: Sendable {
             // A device's finish is only drawn: dark or light, the paths are the same. Following the cursor, the screen
             // has no frame (`StagePoints`).
             frame = switch document.style.frame {
-            case let .device(device):
-                document.style.reframe == .fit ? .device(DeviceFrame(model: device.model, finish: .dark)) : .none
+            case _ where document.style.reframe != .fit: .none
+            case let .device(device): .device(DeviceFrame(model: device.model, finish: .dark))
             case let other: other
             }
             padding = document.style.padding
+            reframe = document.style.reframe
             cursor = document.cursor
             zoom = document.zoom
             camera = document.camera
             self.cameraReadable = cameraReadable
         }
 
-        /// What `StagePoints` reads: the screens, the aspect, the padding and the frame: none, a window (its appearance,
-        /// title and buttons are only drawn) or the model of a device (its finish is only drawn).
+        /// What `StagePoints` reads: the screens, the aspect, the padding, the frame (none, a window, whose appearance,
+        /// title and buttons are only drawn, or the model of a device, whose finish is only drawn) and how the screen
+        /// fills the stage. A change of that last one builds every path again (`ReframePath`).
         var stage: Stage {
             let measured: Stage.Frame = switch frame {
             case .none: .none
             case .macWindow: .window
             case let .device(device): .device(device.model)
             }
-            return Stage(screens: screens, aspect: aspect, padding: padding, frame: measured)
+            return Stage(screens: screens, aspect: aspect, padding: padding, frame: measured, reframe: reframe)
         }
 
         struct Stage: Equatable {
@@ -166,6 +182,7 @@ public struct MotionPaths: Sendable {
             let aspect: Aspect
             let padding: Double
             let frame: Frame
+            let reframe: Reframe
 
             /// The frame around the screen, as it is measured.
             enum Frame: Equatable {

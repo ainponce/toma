@@ -105,6 +105,20 @@ extension ActivityFixtures {
             #expect(spans(plan(click(12, x: 700, y: 450) + [pointer(15, x: 750, y: 450)] + typing, document: document)) == [11.5...13.0])
         }
 
+        @Test func autoZoomFollowsWhenReframed() {
+            // Settings that fix the focus, and a screen that follows the cursor (`reframe-1`), in 9:16: every block
+            // follows the cursor, as the screen's window does; the blocks themselves are the same.
+            let fixed = makeDocument(aspect: .portrait, auto: settings { $0.follow = false })
+            var reframed = fixed
+            reframed.style.reframe = .followCursor
+            let events = click(5, x: 300, y: 450) + click(14, x: 1_200, y: 200)
+                + drag(30, 31, from: SIMD2(200, 700), to: SIMD2(400, 650)) + click(45, x: 720, y: 450) + keys(from: 46, to: 49)
+            let fitted = plan(events, document: fixed), following = plan(events, document: reframed)
+            #expect(fitted.count >= 3 && fitted.allSatisfy { $0.focus != .follow })
+            #expect(following.count == fitted.count && following.allSatisfy { $0.focus == .follow })
+            #expect(following.map(\.id) == fitted.map(\.id) && following.map(\.depth) == fitted.map(\.depth))
+        }
+
         @Test func typingAloneOffWithoutHoldWhileTyping() {
             let document = makeDocument(auto: settings { $0.holdWhileTyping = false })
             let events = click(12, x: 700, y: 450) + [pointer(15, x: 710, y: 450)] + keys(from: 20, to: 20.5)
