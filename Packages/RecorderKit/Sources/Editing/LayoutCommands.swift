@@ -243,3 +243,36 @@ public enum LayoutCommands {
         return changes.step(label: label, target: projectLayoutTarget)
     }
 }
+
+extension LayoutCommands {
+    /// Makes a block of layout `kind`, not instant, in the free part of each of the output ranges `outputs` (clamped to the
+    /// output, and free also of the blocks this call makes), those parts at least `minimumDuration` long, in one step with
+    /// the label `label`. Each goes after the blocks that start before it in the source. A range that is not of one take
+    /// gives none. `nil` if no block is made.
+    public static func addBlocks(
+        _ doc: EditDocument, kind: LayoutKind, outputs: [Range<Int64>], label: EditLabel, timeMap: TimeMap,
+        makeID: (String) -> String
+    ) -> EditStep? {
+        var track = track(doc, timeMap)
+        var ids = Set(doc.camera.layouts.map(\.id))
+        var layouts = doc.camera.layouts
+        var changes = DocumentChanges()
+        var made: [String] = []
+        for range in outputs.sorted(by: { $0.lowerBound < $1.lowerBound }) {
+            for part in track.free(range) where part.upperBound - part.lowerBound >= minimumDuration {
+                guard let source = track.source(of: part) else { continue }
+                let block = withFirstSettings(
+                    LayoutBlock(
+                        id: DocumentIDs.new("l-", makeID, avoiding: &ids), take: source.take, start: source.start, end: source.end,
+                        kind: kind, instant: false),
+                    doc, outputStart: part.lowerBound, timeMap)
+                let position = layouts.firstIndex { $0.start > block.start } ?? layouts.count
+                layouts.insert(block, at: position)
+                changes.insert(block, into: .cameraLayouts, at: position)
+                made.append(block.id)
+                track = OutputBlockTrack(sequence: track.sequence, map: track.map, outputs: track.outputs + [part])
+            }
+        }
+        return changes.step(label: label, target: made.joined(separator: ","))
+    }
+}
