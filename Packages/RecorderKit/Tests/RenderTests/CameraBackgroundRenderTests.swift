@@ -375,6 +375,45 @@ func withoutTheMaskTheCameraIsOriginal() async throws {
 }
 
 @Test(.enabled(if: isMetal), .timeLimit(.minutes(5)))
+func removedWithAMaskThatCannotBeDecodedIsTheOriginal() async throws {
+    try await withTemporaryDirectory { dir in
+        let (project, analysis, masks) = try await maskedProject(in: dir, paint: paintingThePerson, value: personMaskValue)
+        // The analysis lists the mask, a regular file of some bytes where the caches keep it, but no video: nothing of it
+        // decodes. Removed is then drawn as Original, every byte: a Bubble with its circle, border and shadow, a card with
+        // its shadow, Camera full screen alone over the frame. Through both ways to draw, and the preview's.
+        try Data((0..<4096).map { UInt8(truncatingIfNeeded: $0 &* 37 &+ 11) }).write(to: masks[0])
+        let layouts = [CameraLayout.bubble, CameraLayout(kind: .split, split: SplitLayout()), CameraLayout(kind: .cameraFull)]
+        for layout in layouts {
+            func styled(_ document: inout EditDocument) {
+                document.camera.layout = layout
+                document.camera.initial[takeID] = CameraStyle(shape: .circle, size: 0.5, anchor: .bottom)
+                document.camera.border = CameraBorder(width: 0.6, color: RGBA(1, 0, 0, 1))
+                document.camera.shadow = 0.8
+            }
+            let removed = pictureDocument(project.take) { styled(&$0); $0.camera.background = .removed }
+            let original = pictureDocument(project.take) { styled(&$0) }
+            let renderer = try FrameRenderer(project: project, document: removed, outputSize: pictureSize, frameRate: 30, analysis: analysis)
+            let shown = try FrameRenderer(project: project, document: removed, outputSize: pictureSize, frameRate: 30, analysis: analysis)
+            let preview = PreviewRenderer(renderer: shown)
+            let plain = try FrameRenderer(project: project, document: original, outputSize: pictureSize, frameRate: 30)
+            // The frame still asks for the mask: only the renderer finds that it cannot be decoded.
+            #expect(renderer.scene.frame(at: 1).camera?.background?.mode == .removed, "\(layout.kind)")
+            for t in [0.5, 1.5, 2.5] {
+                let (drawn, snapshot, expected) = try await offThePool {
+                    (try renderer.renderBytes(at: t), try preview.snapshot(at: t), try plain.renderBytes(at: t))
+                }
+                #expect(drawn == expected && snapshot == expected, "\(layout.kind) at \(t) s")
+            }
+            for n in [10, 11, 40] {
+                let drawn = try await exported(renderer, at: gridTime(n))
+                #expect(drawn == (try await offThePool { try plain.renderBytes(at: gridTime(n)) }), "\(layout.kind), frame \(n)")
+            }
+            #expect(renderer.missingVideo.isEmpty)
+        }
+    }
+}
+
+@Test(.enabled(if: isMetal), .timeLimit(.minutes(5)))
 func maskIsDecodedAhead() async throws {
     try await withTemporaryDirectory { dir in
         let (project, analysis, _) = try await maskedProject(in: dir, paint: paintingThePerson, value: personMaskValue)

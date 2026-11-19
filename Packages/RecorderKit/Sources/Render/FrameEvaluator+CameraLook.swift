@@ -80,11 +80,16 @@ public struct CameraBackgroundLayer: Equatable, Sendable {
     /// Removed in a Bubble (plan 2b decision 8): the person over the scene in the bubble's rect, without its shape, border
     /// or shadow. `false` in a card, which keeps its shape and border.
     public var overScene: Bool
+    /// Removed: the camera's shape, border and shadow and whether it covered the frame before the background changed them,
+    /// which a frame whose mask is not decoded is drawn with (`RenderFrame.droppingCameraBackground()`). `nil` for Blurred,
+    /// which changes none of them.
+    public var withoutIt: CameraWithoutBackground?
 
-    public init(mode: Mode, mask: PersonMaskSource, overScene: Bool) {
+    public init(mode: Mode, mask: PersonMaskSource, overScene: Bool, withoutIt: CameraWithoutBackground? = nil) {
         self.mode = mode
         self.mask = mask
         self.overScene = overScene
+        self.withoutIt = withoutIt
     }
 }
 
@@ -109,7 +114,10 @@ public struct CameraBackgroundLayer: Equatable, Sendable {
 ///   without its shadow, and a frame that the camera covered is no longer covered: what is under the person is drawn.
 ///   The span that rules at the frame's output time (`LayoutTimeline.span(atOutput:)`) says which: Bubble is a bubble; a
 ///   Screen only span shows only the camera leaving the span before it (or coming into the next one, which then rules),
-///   so it is what that span was, a bubble when none was before it (1b's path, which only ever draws a bubble).
+///   so it is what that span was, a bubble when none was before it (1b's path, which only ever draws a bubble). A mask in
+///   the caches whose frame the renderer cannot decode (a corrupt file) is the original for that frame, shape, border,
+///   shadow and all, as without it in the caches: the compositor drops the background then
+///   (`RenderFrame.droppingCameraBackground()`).
 struct CameraLookScene: Sendable {
     /// The evaluator's layouts: the span that rules at a frame's output time (`LayoutTimeline.span(atOutput:)`).
     let layouts: LayoutTimeline
@@ -199,7 +207,8 @@ struct CameraLookScene: Sendable {
     /// instant `t` and output time `output` onto `frame`'s camera, as `FrameEvaluator.finishLayers` hands it over (the
     /// camera's frame taken at its sync, `CameraLayer.sourceTime`); a removed background changes the camera's shape,
     /// border and shadow, and a frame covered by the camera (`RenderFrame.coveredByCamera`) is no longer covered (see the
-    /// type's notes). Nothing without a camera.
+    /// type's notes), keeping what they were (`CameraBackgroundLayer.withoutIt`) for a frame whose mask the renderer does
+    /// not decode. Nothing without a camera.
     func apply(to frame: inout RenderFrame, atSource t: HostTime, output: Int64) {
         guard var camera = frame.camera else { return }
         let framing: CameraFramingLayer?
@@ -216,7 +225,12 @@ struct CameraLookScene: Sendable {
         }
         if let mode = background, let mask = mask(of: camera) {
             let bubble = mode == .removed && showsABubble(atOutput: output)
-            camera.background = CameraBackgroundLayer(mode: mode, mask: mask, overScene: bubble)
+            let withoutIt = mode == .removed
+                ? CameraWithoutBackground(
+                    cornerRadius: camera.cornerRadius, border: camera.border, shadow: camera.shadow,
+                    coversTheFrame: frame.coveredByCamera)
+                : nil
+            camera.background = CameraBackgroundLayer(mode: mode, mask: mask, overScene: bubble, withoutIt: withoutIt)
             if mode == .removed {
                 camera.shadow = nil
                 if bubble {
@@ -258,5 +272,44 @@ struct CameraLookScene: Sendable {
             if spans[middle].output.lowerBound <= τ { low = middle + 1 } else { high = middle }
         }
         return showsABubble.isEmpty ? true : showsABubble[max(low - 1, 0)]
+    }
+}
+
+/// What a removed background changed of a frame's camera and of the frame (its shape, border and shadow, and whether the
+/// camera covered the frame), as they were: what the frame is drawn with again when its mask is not decoded
+/// (`RenderFrame.droppingCameraBackground()`).
+public struct CameraWithoutBackground: Equatable, Sendable {
+    public var cornerRadius: Double
+    public var border: CameraBorderLayer?
+    public var shadow: ShadowLayer?
+    /// `RenderFrame.coveredByCamera`.
+    public var coversTheFrame: Bool
+
+    public init(cornerRadius: Double, border: CameraBorderLayer?, shadow: ShadowLayer?, coversTheFrame: Bool) {
+        self.cornerRadius = cornerRadius
+        self.border = border
+        self.shadow = shadow
+        self.coversTheFrame = coversTheFrame
+    }
+}
+
+extension RenderFrame {
+    /// The frame with its camera's background as Original: what a frame whose person's mask is not decoded is drawn as,
+    /// for that frame (`Compositor.encode`, whose `CameraLookTextures` hold no mask then; a corrupt file listed by the
+    /// analysis, say). Blurred only drops the background; Removed gives the camera back the shape, border and shadow it
+    /// took away, and the frame back whether the camera covered it (`CameraBackgroundLayer.withoutIt`). The frame as it
+    /// is without a background.
+    func droppingCameraBackground() -> RenderFrame {
+        guard var camera, let background = camera.background else { return self }
+        var frame = self
+        if let original = background.withoutIt {
+            camera.cornerRadius = original.cornerRadius
+            camera.border = original.border
+            camera.shadow = original.shadow
+            frame.coveredByCamera = original.coversTheFrame
+        }
+        camera.background = nil
+        frame.camera = camera
+        return frame
     }
 }

@@ -330,3 +330,33 @@ private func framing(_ mode: CameraFramingMode, x: Double = 0.5, y: Double = 0.5
     #expect(card.opacity > 0 && card.opacity < 1)
     #expect(card.background?.overScene == false && card.cornerRadius > 0 && card.border != nil && card.shadow == nil)
 }
+
+@Test func backgroundWhoseMaskIsNotDecodedIsTheOriginal() throws {
+    // The analysis lists the mask, but the renderer could not decode the frame of it (a corrupt file, say): it drops the
+    // background (`RenderFrame.droppingCameraBackground()`), and the frame is the Original's, the camera's shape, border
+    // and shadow and what it covers among it, in every layout and for both backgrounds.
+    let layouts = [
+        CameraLayout.bubble, CameraLayout(kind: .split, split: SplitLayout()), CameraLayout(kind: .cameraOnly),
+        CameraLayout(kind: .cameraFull),
+    ]
+    for layout in layouts {
+        func styled(_ document: inout EditDocument) {
+            document.camera.layout = layout
+            document.camera.border = CameraBorder(width: 0.5, color: RGBA(1, 1, 1, 1))
+            document.camera.shadow = 0.6
+            document.camera.mirror = true
+        }
+        let original = scene(document { styled(&$0) })
+        for mode in [CameraBackground.removed, .blurred] {
+            let masked = scene(document { styled(&$0); $0.camera.background = mode }, analysis: masks([1, 2]))
+            for t in [2.0, 4.5, 7] {
+                let frame = masked.frame(at: t)
+                try #require(frame.camera?.background != nil, "\(layout.kind), \(mode) at \(t) s")
+                #expect(frame.droppingCameraBackground() == original.frame(at: t), "\(layout.kind), \(mode) at \(t) s")
+            }
+        }
+        // A frame without a background is as it is.
+        let plain = original.frame(at: 2)
+        #expect(plain.droppingCameraBackground() == plain)
+    }
+}
