@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import Editing
+import Export
 import Library
 import ProjectFormat
 import QuartzCore
@@ -522,6 +523,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 editors[url]?.model.openExportSheet()
                 // TOMA_SHOWCASE_EXPORT=gif shows the sheet's GIF.
                 if environment["TOMA_SHOWCASE_EXPORT"] == "gif" { editors[url]?.model.showcaseExportSheetGIF() }
+                // TOMA_SHOWCASE_CODEC=hevc|proRes422|proRes422HQ shows the sheet with that codec.
+                if let raw = environment["TOMA_SHOWCASE_CODEC"], let codec = ExportCodec(rawValue: raw) {
+                    editors[url]?.model.showcaseExportSheetCodec(codec)
+                }
             }
         default:
             print("unknown surface \(surface)")

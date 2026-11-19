@@ -1759,6 +1759,17 @@
         }
       }
     },
+    "Codec" : {
+      "comment" : "The export sheet: the video codec (H.264, HEVC, ProRes)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Códec"
+          }
+        }
+      }
+    },
     "Color" : {
       "comment" : "A background type, and a colour swatch",
       "localizations" : {
@@ -4713,6 +4724,17 @@
         }
       }
     },
+    "Plays everywhere. The safest choice for sharing." : {
+      "comment" : "The export sheet: when to pick H.264",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reproduce en cualquier lado. Lo más seguro para compartir."
+          }
+        }
+      }
+    },
     "Points" : {
       "comment" : "Display resolution: one pixel per point",
       "localizations" : {
@@ -5877,6 +5899,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Chica"
+          }
+        }
+      }
+    },
+    "Smaller files at the same quality. Some older players can't open it." : {
+      "comment" : "The export sheet: when to pick HEVC",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Archivos más chicos con la misma calidad. Algunos reproductores viejos no lo abren."
           }
         }
       }
@@ -7601,6 +7634,28 @@
         }
       }
     },
+    "To edit in Final Cut or another editor. Very large files." : {
+      "comment" : "The export sheet: when to pick ProRes 422",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para editar en Final Cut u otro editor. Archivos muy grandes."
+          }
+        }
+      }
+    },
+    "To edit in Final Cut with more quality. The largest files." : {
+      "comment" : "The export sheet: when to pick ProRes 422 HQ",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para editar en Final Cut con más calidad. Los archivos más grandes."
+          }
+        }
+      }
+    },
     "To export a part, mark it with I and O." : {
       "comment" : "The export sheet: under Range, while the timeline has no marks",
       "localizations" : {
@@ -8004,6 +8059,17 @@
     },
     "Video" : {
       "comment" : "The timeline's track of the clips",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Video"
+          }
+        }
+      }
+    },
+    "Video (Export As)" : {
+      "comment" : "The export sheet: Export As a video, whatever its codec",
       "localizations" : {
         "es" : {
           "stringUnit" : {
