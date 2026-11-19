@@ -37,6 +37,11 @@ public enum StyleCommands {
         setting(doc, JSONPointer(components: ["aspect"]), aspect, label: .aspect)
     }
 
+    /// How the screen fills the stage (phase 2 design §6.5), one step (`.styleReframe`, `/style/reframe`).
+    public static func setReframe(_ doc: EditDocument, _ value: Reframe) -> EditStep? {
+        setting(doc, JSONPointer(components: ["style", "reframe"]), value, label: .styleReframe)
+    }
+
     /// The project's frame rate, one of `frameRates`; `nil` for any other.
     public static func setFrameRate(_ doc: EditDocument, _ fps: Int) -> EditStep? {
         guard frameRates.contains(fps) else { return nil }
