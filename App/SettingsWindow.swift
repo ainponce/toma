@@ -45,6 +45,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         nil
     }
 
+    /// Shows the Recording pane (where "Record Keys to Show Them" is).
+    func showRecordingPane() {
+        tabs.selectedTabViewItemIndex = SettingsPane.recording.index
+    }
+
     #if DEBUG
     /// `-TomaShowcase settings <general|recording|shortcuts>`: the window on that pane. `recording-keys`: the Recording
     /// pane with "Record Keys to Show Them" on and Input Monitoring not allowed, made up (nothing is saved or asked).

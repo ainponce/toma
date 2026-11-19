@@ -1040,6 +1040,17 @@
         }
       }
     },
+    "Bottom Center" : {
+      "comment" : "A place of the keys on screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abajo al centro"
+          }
+        }
+      }
+    },
     "Bottom Left" : {
       "comment" : "A place of the camera bubble",
       "localizations" : {
@@ -3553,6 +3564,17 @@
         }
       }
     },
+    "Keys on Screen" : {
+      "comment" : "The Cursor tab: the section of the keys drawn over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teclas en pantalla"
+          }
+        }
+      }
+    },
     "Keys weren't recorded: Input Monitoring permission is missing." : {
       "comment" : "A take's notice: Record Keys to Show Them is on in Settings, but Input Monitoring isn't allowed",
       "localizations" : {
@@ -4653,6 +4675,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Abrir último proyecto"
+          }
+        }
+      }
+    },
+    "Open Recording Settings" : {
+      "comment" : "A button of the Cursor tab that opens Settings on the Recording pane",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abrir los ajustes de grabación"
           }
         }
       }
@@ -6070,6 +6103,17 @@
         }
       }
     },
+    "Show" : {
+      "comment" : "The Cursor tab, keys on screen: which keys show",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar"
+          }
+        }
+      }
+    },
     "Show Camera" : {
       "comment" : "The Camera tab: whether the camera shows",
       "localizations" : {
@@ -6088,6 +6132,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar el cursor"
+          }
+        }
+      }
+    },
+    "Show Keys" : {
+      "comment" : "Accessibility label of the control that picks which keys show on screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar teclas"
           }
         }
       }
@@ -7872,6 +7927,17 @@
         }
       }
     },
+    "This recording has no keys. To record them, turn on Settings ▸ Recording ▸ Record Keys to Show Them." : {
+      "comment" : "The Cursor tab: a take without key presses",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta grabación no tiene teclas. Para grabarlas, activar Ajustes ▸ Grabación ▸ Grabar las teclas para mostrarlas."
+          }
+        }
+      }
+    },
     "This recording has no photo of the desktop." : {
       "localizations" : {
         "es" : {
@@ -9065,6 +9131,61 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "su ventana quedó abierta para terminar la exportación"
+          }
+        }
+      }
+    },
+    "keys.mode.all" : {
+      "comment" : "Keys on screen: the shortcuts and what is typed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todas"
+          }
+        }
+      }
+    },
+    "keys.mode.off" : {
+      "comment" : "Keys on screen: none shown",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No"
+          }
+        }
+      }
+    },
+    "keys.size.large" : {
+      "comment" : "The keys on screen: size",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grande"
+          }
+        }
+      }
+    },
+    "keys.size.medium" : {
+      "comment" : "The keys on screen: size",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mediano"
+          }
+        }
+      }
+    },
+    "keys.size.small" : {
+      "comment" : "The keys on screen: size",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chico"
           }
         }
       }

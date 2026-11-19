@@ -1319,3 +1319,7 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 
 - En Exportar, la fila Códec ofrece H.264, HEVC, ProRes 422 y ProRes 422 HQ (H.264 por defecto; la hoja recuerda el último). Con ProRes desaparece Calidad y el panel de guardar propone `.mov`; con H.264 y HEVC, `.mp4`.
 - Un ProRes 422 HQ abre en Final Cut con su audio; un HEVC se reproduce en QuickTime y en Safari. Comparar el tamaño estimado de la hoja con el del archivo real (1080p, 60 fps, 12 s: unos 9 MB en HEVC, unos 670 MB en ProRes 422 HQ).
+
+**Teclas en pantalla** (P12)
+
+- En una toma con teclas grabadas, pestaña Cursor ▸ Teclas en pantalla: Atajos muestra ⌘C ⌘V y no lo escrito; Todas junta lo escrito en una píldora; las cuatro posiciones; con subtítulos abajo, las teclas quedan encima. En una toma sin teclas, la nota y el botón "Abrir los ajustes de grabación" abren Ajustes en Grabación.
