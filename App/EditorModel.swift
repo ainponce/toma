@@ -31,6 +31,8 @@ struct AudioTrackRow: Equatable, Identifiable {
     var isMicrophone: Bool
     /// The device's visible name.
     var deviceName: String
+    /// The sound of an iPhone or iPad (`deviceAudio`).
+    var isDevice = false
 
     var id: String { AudioPlan.key(take: take, track: track) }
 }
@@ -155,6 +157,8 @@ final class EditorModel {
     private(set) var hasCursorImages = false
     /// The take has clicks to make zooms from; without them the Zoom tab says so.
     private(set) var hasClicks = false
+    /// The take recorded an iPhone or iPad (a `device` track): it has no cursor, clicks or keys.
+    private(set) var isDeviceTake = false
     /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
     private(set) var canHoldWhileTyping = false
     /// The take's tracks of sound, as the Audio tab lists them.
@@ -470,8 +474,16 @@ final class EditorModel {
         hasCursorImages = project.events.contains { if case .cursorImage = $0.kind { true } else { false } }
         hasClicks = ZoomPanelRules.hasClicks(events: project.events)
         canHoldWhileTyping = ZoomPanelRules.canHoldWhileTyping(events: project.events)
-        audioTracks = project.take.tracks.filter { ($0.kind == .microphone || $0.kind == .systemAudio) && !$0.segments.isEmpty }
-            .map { AudioTrackRow(take: project.take.id, track: $0.id, isMicrophone: $0.kind == .microphone, deviceName: $0.source.name) }
+        // In the timeline's order (`TimelineLayout`): the microphones, the system audio, an iPhone's or iPad's sound.
+        let sounds: [TrackRecord] = [TrackKind.microphone, .systemAudio, .deviceAudio].flatMap { kind in
+            project.take.tracks.filter { $0.kind == kind && !$0.segments.isEmpty }
+        }
+        audioTracks = sounds.map { (track: TrackRecord) -> AudioTrackRow in
+            AudioTrackRow(
+                take: project.take.id, track: track.id, isMicrophone: track.kind == .microphone, deviceName: track.source.name,
+                isDevice: track.kind == .deviceAudio)
+        }
+        isDeviceTake = project.take.tracks.contains { $0.kind == .device }
         hasDesktopPhoto = false
         Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
         previewAspect = document.aspect
@@ -1281,12 +1293,18 @@ final class EditorModel {
         var leftOut: [String] = []
         let systemAudio = Set(take.tracks.filter { $0.kind == .systemAudio }.map(\.id))
         let systemAudioGaps = summary.missingAudio.filter { systemAudio.contains($0.track) }.count
-        let microphoneGaps = summary.missingAudio.count - systemAudioGaps
+        let deviceAudio = Set(take.tracks.filter { $0.kind == .deviceAudio }.map(\.id))
+        let deviceAudioGaps = summary.missingAudio.filter { deviceAudio.contains($0.track) }.count
+        let microphoneGaps = summary.missingAudio.count - systemAudioGaps - deviceAudioGaps
         if microphoneGaps > 0 {
             leftOut.append(String(localized: "The video was exported, but \(microphoneGaps) parts have no sound: their microphone audio couldn't be read."))
         }
         if systemAudioGaps > 0 {
             leftOut.append(String(localized: "The video was exported, but \(systemAudioGaps) parts have no system audio: it couldn't be read."))
+        }
+        if deviceAudioGaps > 0 {
+            leftOut.append(String(
+                localized: "The video was exported, but \(deviceAudioGaps) parts have no sound of the iPhone or iPad: it couldn't be read."))
         }
         let cameras = Set(take.tracks.filter { $0.kind == .camera }.map(\.id))
         let cameraGaps = summary.missingVideo.filter { cameras.contains($0.track) }.count

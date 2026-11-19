@@ -12,6 +12,11 @@ struct CursorTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if model.isDeviceTake {
+                Text("An iPhone or iPad has no cursor, so this recording has none to show.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             PanelSection {
                 Toggle("Show Cursor", isOn: Binding(get: { cursor.show }, set: { set("show", $0) }))
             }
@@ -22,7 +27,7 @@ struct CursorTab: View {
                 }
                 .pickerStyle(.segmented)
                 .panelTitled("Style")
-                if !model.hasCursorImages {
+                if !model.hasCursorImages && !model.isDeviceTake {
                     Text("This recording didn't save the cursor's shape: Toma's arrow is used.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
@@ -77,6 +82,8 @@ struct CursorTab: View {
                 }
             }
         }
+        // Nothing to show of a cursor the take never recorded.
+        .disabled(model.isDeviceTake)
     }
 
     private func set(_ key: String, _ value: some Encodable) {

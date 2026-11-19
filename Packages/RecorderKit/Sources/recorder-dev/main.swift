@@ -53,6 +53,11 @@ struct SynthRecord: AsyncParsableCommand {
             the take's cursors/ folder), a scroll at 2 s and key activity from 3 to 4 s. With --keys, it also gets \
             the keys that type the text given, one every 100 ms from 0.1 s, as keyPress events with the codes of a US \
             keyboard (characters it has no key for are left out): the package goes to version 4 just before the first.
+
+            With --device <width>x<height>, a synthetic iPhone or iPad replaces the displays: device, of that size in \
+            pixels at --fps, turned to <height>x<width> (a new segment) --rotate-at seconds in if given, and its sound, \
+            deviceAudio, in stereo at 48 kHz, after it; mic, --camera and --system-audio as without it. As the iPhone mode \
+            records it, the take has no cursor, clicks or keys, and the package goes to version 4 before the take's record.
             """
     )
 
@@ -95,6 +100,12 @@ struct SynthRecord: AsyncParsableCommand {
     @Option(help: "Also record the keys that type this text, one every 100 ms (keyPress events; the package goes to version 4).")
     var keys: String?
 
+    @Option(help: "Record a synthetic iPhone or iPad of <width>x<height> pixels and its sound instead of the displays (version 4).")
+    var device: DevicePixelSize?
+
+    @Option(help: "With --device, the seconds after which the synthetic device turns: <height>x<width> from then on.")
+    var rotateAt: Double?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         guard fps > 0, width > 0, height > 0 else { throw ValidationError("--fps, --width and --height must be positive.") }
@@ -102,9 +113,37 @@ struct SynthRecord: AsyncParsableCommand {
         guard displays > 0 else { throw ValidationError("--displays must be positive.") }
         if window, displays > 1 { throw ValidationError("--window records no display: leave out --displays.") }
         guard cameraWidth > 0, cameraHeight > 0 else { throw ValidationError("--camera-width and --camera-height must be positive.") }
+        if let rotateAt {
+            guard device != nil else { throw ValidationError("--rotate-at needs --device.") }
+            guard rotateAt >= 0, rotateAt.isFinite else { throw ValidationError("--rotate-at cannot be negative.") }
+        }
+        if device != nil {
+            if window || displays > 1 { throw ValidationError("--device records no display or window: leave out --window and --displays.") }
+            if keys != nil { throw ValidationError("--device records no keys, as the iPhone mode: leave out --keys.") }
+            if staticAfter != nil { throw ValidationError("--static-after is for the displays or the window, not --device.") }
+        }
     }
 
     func run() async throws {
+        if let device {
+            var sources: [any CaptureSource] = [
+                SyntheticDeviceSource(width: device.width, height: device.height, framesPerSecond: fps, rotateAt: rotateAt),
+                SyntheticDeviceAudioSource(),
+            ]
+            if camera {
+                sources.append(SyntheticVideoSource(
+                    trackID: "camera", kind: .camera, width: cameraWidth, height: cameraHeight, framesPerSecond: 30))
+            }
+            sources.append(SyntheticAudioSource())
+            if systemAudio {
+                sources.append(SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500))
+            }
+            // No cursor, clicks or keys: the iPhone mode records none.
+            try await recordTake(
+                in: directory, prefix: "synth", duration: duration, sources: sources, input: NoInputRecorder(),
+                systemActivity: AsyncStream { $0.finish() })
+            return
+        }
         let screens = window
             ? [SyntheticVideoSource(
                 trackID: "window-4242", kind: .window, globalOrigin: [100, 80], width: width, height: height,
@@ -144,6 +183,21 @@ struct SynthRecord: AsyncParsableCommand {
                 }
                 for screen in screens { screen.pauseFrames(true) }
             })
+    }
+}
+
+/// `--device`'s `<width>x<height>` in pixels (`×` also), each from 1 to 16 384.
+struct DevicePixelSize: ExpressibleByArgument {
+    var width: Int
+    var height: Int
+
+    init?(argument: String) {
+        let parts = argument.lowercased().split(whereSeparator: { $0 == "x" || $0 == "×" })
+        guard parts.count == 2, let width = Int(parts[0]), let height = Int(parts[1]),
+              (1...16_384).contains(width), (1...16_384).contains(height)
+        else { return nil }
+        self.width = width
+        self.height = height
     }
 }
 

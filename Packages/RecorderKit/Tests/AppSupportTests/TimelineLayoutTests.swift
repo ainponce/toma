@@ -36,6 +36,17 @@ import Testing
         ])
     }
 
+    /// An iPhone's take: its screen is the Video row, its sound a row of its own after the Mac's microphone.
+    @Test func aDeviceTakeHasARowForItsSound() {
+        let layout = Self.layout([
+            Self.track("device", .device), Self.track("deviceAudio", .deviceAudio), Self.track("mic", .microphone),
+        ])
+        #expect(layout.tracks == [
+            TimelineRow(track: .ruler, height: 24), TimelineRow(track: .video, height: 56), TimelineRow(track: .zoom, height: 28),
+            TimelineRow(track: .audio(id: "mic"), height: 36), TimelineRow(track: .audio(id: "deviceAudio"), height: 36),
+        ])
+    }
+
     private static func documentWith(transcript: Transcript? = nil, privacy: PrivacyPlan = .legacy, take: TakeRecord) -> EditDocument {
         var document = EditDocument.legacy(take: take, events: [])
         document.transcript = transcript

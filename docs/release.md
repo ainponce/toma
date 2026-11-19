@@ -955,6 +955,12 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Edición ▸ Acelerar el tipeo… (y el menú contextual del Video) en una toma real con escritura: la ventanita ofrece 2× · 3× · 4× · 8× (3× elegido) y el resultado («Se aceleran 5 tramos: 1:23 → 0:28») coincide con lo que queda; Acelerar lo hace en un solo paso y Edición ▸ Deshacer «Acelerar el tipeo» lo deshace entero. Sin tramos de tipeo de 2 s o más dice «No hay tramos de tipeo de 2 s o más.» y Acelerar queda apagado.
 
+**La toma de iPhone en el editor** (P16; se graba con la isla en modo iPhone de P15 y P17)
+
+- Con un iPhone real, grabar 20 s en vertical, girarlo a horizontal a los 10 s y abrir la toma en el editor: empieza con el marco de iPhone Oscuro (Marco ▸ iPhone), sin cursor (la pestaña Cursor lo dice y sus controles quedan apagados) y sin zooms automáticos. Después del giro, la pantalla del iPhone se ve entera, achicada y centrada en el mismo marco vertical, con barras negras arriba y abajo: nada recortado ni estirado, y el marco no cambia de tamaño ni salta en el giro. Lo mismo avanzando cuadro a cuadro, arrastrando el cabezal por el giro y en el MP4 exportado (la vista previa es igual al MP4).
+- Un zoom agregado a mano en la pista Zoom entra y sale sobre la pantalla del iPhone, también con el foco fijo movido.
+- La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad (o un iPhone grabado empezando en horizontal), la toma empieza con el marco de iPad.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

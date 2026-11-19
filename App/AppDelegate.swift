@@ -485,7 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // adds a zoom at 7 s and a Split block at the playhead (selected), `items-none` the same with nothing selected.
             let environment = ProcessInfo.processInfo.environment
             if environment["TOMA_SHOWCASE_TAB"] != nil || environment["TOMA_SHOWCASE_SELECT"] != nil
-                || environment["TOMA_SHOWCASE_ASPECT"] != nil
+                || environment["TOMA_SHOWCASE_ASPECT"] != nil || environment["TOMA_SHOWCASE_FRAME"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -493,6 +493,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // TOMA_SHOWCASE_ASPECT=<16:9|9:16|1:1|4:5|4:3|3:4|auto> sets the project's format.
                     if let aspect = environment["TOMA_SHOWCASE_ASPECT"].flatMap(Aspect.init(rawValue:)) { model.setAspect(aspect) }
                     if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
+                    // TOMA_SHOWCASE_FRAME=<n> moves the playhead to output frame n (an iPhone's turned segment, say).
+                    if let frame = environment["TOMA_SHOWCASE_FRAME"].flatMap(Int.init) { model.seek(frame: frame) }
                     if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
                         model.selection = .zooms([id])
                     }
