@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Foundation
 
 /// What the render and the mix read of the project's analysis caches (phase 2 design §10): the person's masks, the faces,
 /// the cleaned sound, the loudness. They never call Vision, Speech or an Audio Unit themselves (phase 2 rules, "render
@@ -19,4 +20,10 @@ public struct AnalysisInputs: Equatable, Sendable {
     /// The loudness measure of each audio track that was measured whole, by `AudioPlan.key(take:track:)` (phase 2 design
     /// §5.7). Empty: nothing is normalized.
     public var loudness: [String: TrackLoudness] = [:]
+    /// The person's mask of each camera segment (`personMask-1`, phase 2 design §6.1): the analysis caches' video of it,
+    /// written whole. A segment without one draws its camera Original.
+    public var personMasks: [CameraSegment: URL] = [:]
+    /// The face of each camera segment (`faceTrack-1`, §6.2), read whole from the analysis caches. A segment without one
+    /// shows no face: Follow the Face stays where it is (`faceFraming-1`).
+    public var faceTracks: [CameraSegment: CameraFaceTrack] = [:]
 }

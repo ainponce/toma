@@ -385,3 +385,7 @@ El corpus, hecho en código (`GIFCorpusTests`): cuatro tomas de 10 s, la pantall
 ## Medidas del agente, fase 2
 
 Las medidas del agente para las metas de la fase 2 (diseño de la fase 2, §13). Cada tarea suma sus filas al final, con cómo se midió.
+
+| Tarea | Qué | Comando | Medida | Meta | Carga |
+|---|---|---|---|---|---|
+| I7 (2b) | Armar `FaceFramingPath` de una hora, desde nada (se arma con cada escena): una cara que se mueve sin parar, una muestra cada 100 ms (36 000; sin cara 1 de cada 97), cuadro de 1920 × 1080, zoom 1,4, 60 clips de 59,5 s; mediana de 5 después de una para calentar | `TOMA_BENCH=1 swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter faceFramingOfAnHourIsQuick` | **10,1 a 10,3 ms** (tres corridas, M5 Pro) | ≤ 30 ms (plan 2b, Task I7): **se cumple** | 11 a 12 |
