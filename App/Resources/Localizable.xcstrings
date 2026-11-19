@@ -182,6 +182,17 @@
         }
       }
     },
+    "%lld stretches sped up: %@ → %@" : {
+      "comment" : "Speed Up Typing result: how many stretches of typing are sped up, and what they last before and after (1:23 → 0:28)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se aceleran %lld tramos: %@ → %@"
+          }
+        }
+      }
+    },
     "16:9 Landscape" : {
       "comment" : "A format of the project",
       "localizations" : {
@@ -4116,6 +4127,17 @@
         }
       }
     },
+    "No typing of 2 seconds or more." : {
+      "comment" : "Speed Up Typing result when no stretch of typing lasts 2 seconds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay tramos de tipeo de 2 s o más."
+          }
+        }
+      }
+    },
     "No window is chosen to record." : {
       "localizations" : {
         "es" : {
@@ -4262,6 +4284,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apagado"
+          }
+        }
+      }
+    },
+    "One stretch sped up: %@ → %@" : {
+      "comment" : "Speed Up Typing result with a single stretch (1:23 → 0:28)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se acelera 1 tramo: %@ → %@"
           }
         }
       }
@@ -5928,6 +5961,17 @@
         }
       }
     },
+    "Speed Up" : {
+      "comment" : "Button of the little window of Speed Up Typing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acelerar"
+          }
+        }
+      }
+    },
     "Speed Up Typing" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): the parts where the user types were sped up",
       "localizations" : {
@@ -5935,6 +5979,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Acelerar el tipeo"
+          }
+        }
+      }
+    },
+    "Speed Up Typing…" : {
+      "comment" : "Edit menu and the Video track menu: opens the little window that speeds up the typing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acelerar el tipeo…"
           }
         }
       }

@@ -306,6 +306,11 @@ final class KeyEditor: ObservableObject {
         model?.addBlur()
     }
 
+    /// Edit ▸ Speed Up Typing… (phase 2 design §7.5).
+    func askTypingSpeed() {
+        model?.askTypingSpeed()
+    }
+
     func rename() {
         model?.projectActions?.startRenaming()
     }
@@ -470,6 +475,8 @@ struct ProjectCommands: Commands {
         CommandGroup(after: .pasteboard) {
             Divider()
             Button("Add Blur") { editor.addBlur() }
+                .disabled(editor.project?.canEdit != true)
+            Button("Speed Up Typing…") { editor.askTypingSpeed() }
                 .disabled(editor.project?.canEdit != true)
         }
     }

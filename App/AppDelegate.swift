@@ -503,6 +503,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     // TOMA_SHOWCASE_SELECT=privacy: two privacy blocks, one over the other, the second selected (phase 2);
                     // `privacy-fill`, the second a black fill.
+                    // TOMA_SHOWCASE_SELECT=typing: the little window of Speed Up Typing, open.
+                    if environment["TOMA_SHOWCASE_SELECT"] == "typing" { model.askTypingSpeed() }
                     if environment["TOMA_SHOWCASE_SELECT"]?.hasPrefix("privacy") == true {
                         model.showcasePrivacy(fill: environment["TOMA_SHOWCASE_SELECT"] == "privacy-fill")
                     }

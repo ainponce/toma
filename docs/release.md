@@ -950,6 +950,10 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 
 En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico y en Grande, abajo y arriba, con y sin mayúsculas: la vista previa y el MP4 exportado (1080p y 4K, 16:9 y 9:16) se ven iguales y nítidos, sin acentos, eñes ni colas cortados (Á, ñ, ¿, g, p); el contorno de Destacado es parejo en todas las letras y tamaños; la palabra que se dice se pinta de amarillo y pasa a la siguiente sin parpadear entre palabras; con zoom y su desenfoque de movimiento los subtítulos quedan quietos y nítidos. En la M1, la vista previa a 1080p con Destacado se reproduce a 60 fps sin cuadros salteados cuando cambia la palabra (fila A8 de `docs/performance.md`).
 
+**Acelerar el tipeo** (P13)
+
+- Edición ▸ Acelerar el tipeo… (y el menú contextual del Video) en una toma real con escritura: la ventanita ofrece 2× · 3× · 4× · 8× (3× elegido) y el resultado («Se aceleran 5 tramos: 1:23 → 0:28») coincide con lo que queda; Acelerar lo hace en un solo paso y Edición ▸ Deshacer «Acelerar el tipeo» lo deshace entero. Sin tramos de tipeo de 2 s o más dice «No hay tramos de tipeo de 2 s o más.» y Acelerar queda apagado.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
