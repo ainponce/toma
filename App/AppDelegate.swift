@@ -486,6 +486,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let environment = ProcessInfo.processInfo.environment
             if environment["TOMA_SHOWCASE_TAB"] != nil || environment["TOMA_SHOWCASE_SELECT"] != nil
                 || environment["TOMA_SHOWCASE_ASPECT"] != nil || environment["TOMA_SHOWCASE_SAFEZONES"] != nil
+                || environment["TOMA_SHOWCASE_PICTURE"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -509,6 +510,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if environment["TOMA_SHOWCASE_SELECT"] == "typing" { model.askTypingSpeed() }
                     if environment["TOMA_SHOWCASE_SELECT"]?.hasPrefix("privacy") == true {
                         model.showcasePrivacy(fill: environment["TOMA_SHOWCASE_SELECT"] == "privacy-fill")
+                    }
+                    // TOMA_SHOWCASE_PICTURE=<background>:<framing>:<look>[:<panel scrolled, 0 to 1>[:<frame>[:<zoom>]]]
+                    // sets the camera's picture (phase 2 design §6.1 to §6.3; "blurred:manual:warm:1:90:1.8"), scrolls the
+                    // panel that far down, puts the playhead at that frame and sets the framing's zoom.
+                    if let picture = environment["TOMA_SHOWCASE_PICTURE"]?.split(separator: ":").map(String.init) {
+                        model.showcasePicture(picture)
                     }
                 }
             }

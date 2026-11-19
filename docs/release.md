@@ -961,6 +961,13 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 - «Cancelar la exportación» mientras espera la cámara: no aparece ningún aviso, el análisis sigue y la pestaña llega al 100 %. Exportar otra vez ya no espera.
 - Con el editor abierto y la persona ya sin fondo, borrar la carpeta `masks/` de `~/Library/Caches/dev.toma.Toma/Projects/<id>/` y cambiar Fondo a Original y de nuevo a Quitado: la pestaña vuelve a preparar el recorte y la persona aparece otra vez sin fondo; exportar sin cambiar nada espera a que se regenere.
 
+**La pestaña Cámara: fondo, encuadre y color** (I13)
+
+- Pestaña Cámara: el encuadre manual se arrastra y hace zoom con la rueda; importar un `.cube` 1D dice por qué no.
+- En detalle, con una toma real con cámara y Espejar prendido y apagado: en Manual, la vista chica muestra el cuadro del cabezal como se ve en la vista previa (espejado igual) con el recorte en la forma de la cámara; arrastrarlo lo mueve 1:1 hacia donde va el puntero (también espejado) y la vista previa lo sigue; soltar es un paso (Edición ▸ Deshacer «Cambiar el encuadre de la cámara»). La rueda del mouse y desplazar con dos dedos sobre la vista cambian el zoom (alejar la rueda acerca), pellizcar también; desplazar el panel y pasar por encima de la vista no hace zoom. Con la vista enfocada (Tab), las flechas lo mueven y + y − cambian el zoom; VoiceOver lee «Encuadre manual, Centro: 50 % horizontal, 50 % vertical; zoom 1,4×» y lo mueve con sus acciones.
+- Fondo Desenfocado o Quitado: «Preparando el recorte… N %» avanza hasta irse, y mientras tanto la cámara se ve como se grabó; Seguir la cara: «Buscando la cara… N %» con la cámara centrada mientras tanto. En una Mac sin Vision (o con el análisis fallando), el motivo aparece en su lugar.
+- Color: cada mosaico muestra el cuadro del cabezal de la cámara con su look (al pausar en otro lugar, cambian). Personalizado… abre el panel de archivos solo con `.cube`; un `.cube` 1D dice «No se pudo usar el .cube. Es una LUT 1D; se necesita una 3D.», uno con filas de menos «Tiene 35.000 filas; su tamaño necesita 35.937.», una imagen renombrada a `.cube` «No es texto…»; uno bueno queda elegido (Personalizado, «El archivo .cube importado», Cambiar…) y se ve en la vista previa. Intensidad queda apagada con Natural. Con el panel en su ancho mínimo, en español ningún texto se corta.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

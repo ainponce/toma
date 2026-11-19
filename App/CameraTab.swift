@@ -115,6 +115,7 @@ struct CameraTab: View {
             }
             Divider()
             look
+            CameraPictureSections(model: model, document: document)
         }
     }
 
