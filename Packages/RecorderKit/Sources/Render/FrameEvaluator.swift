@@ -173,7 +173,8 @@ public struct FrameEvaluator: Sendable {
     /// Phase 2's layers (`finishLayers`): those that depend on the output's size are made again by `resized(to:)`.
     private let privacy: PrivacyScene
     private let cameraSync: CameraSyncScene
-    private let cameraLook: CameraLookScene
+    /// Internal for tests: it sees the scene's `layouts`.
+    let cameraLook: CameraLookScene
     private var deviceFrame: DeviceFrameScene
     private var keys: KeyOverlayScene
     private var captions: CaptionScene
@@ -233,7 +234,7 @@ public struct FrameEvaluator: Sendable {
         self.analysis = analysis
         privacy = PrivacyScene(document: document, take: take, events: events)
         cameraSync = CameraSyncScene(document: document, take: take)
-        cameraLook = CameraLookScene(document: document, take: take, analysis: analysis)
+        cameraLook = CameraLookScene(document: document, take: take, analysis: analysis, layouts: layouts)
         deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
         keys = KeyOverlayScene(document: document, events: events, timeMap: timeMap, outputSize: outputSize)
         captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
@@ -403,8 +404,10 @@ public struct FrameEvaluator: Sendable {
 
     /// Puts phase 2's layers (phase 2 design §11) onto `frame`, a frame of the take at output time `output` showing source
     /// instant `source`, as either path left it, in this order: privacy on the screen and on the one being left; the
-    /// camera's frame taken at its sync (`CameraSyncScene`), then its framing, colour and background; the device frame
-    /// around the screen; the keys; the captions. With the legacy values each is `nil` or empty, and `frame` is as it was.
+    /// camera's frame taken at its sync (`CameraSyncScene`), then its framing, colour and background, which may change the
+    /// camera's shape and whether the frame is covered by it (`CameraLookScene`, over the whole frame); the device frame
+    /// around the screen, which may change the screens' corners and the shadow (`DeviceFrameScene`, over the whole frame);
+    /// the keys; the captions. With the legacy values each is `nil` or empty, and `frame` is as it was.
     private func finishLayers(_ frame: inout RenderFrame, source: HostTime, output: Int64) {
         if var screen = frame.screen {
             privacy.apply(to: &screen, atSource: source)
@@ -416,10 +419,10 @@ public struct FrameEvaluator: Sendable {
         }
         if var camera = frame.camera {
             camera.sourceTime = cameraSync.cameraTime(atSource: camera.sourceTime)
-            cameraLook.apply(to: &camera, atSource: source, output: output)
             frame.camera = camera
         }
-        frame.deviceFrame = deviceFrame.layer(around: frame.screen)
+        cameraLook.apply(to: &frame, atSource: source, output: output)
+        deviceFrame.apply(to: &frame)
         frame.keys = keys.layer(atOutput: output)
         frame.captions = captions.layer(atOutput: output)
     }

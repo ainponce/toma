@@ -244,7 +244,7 @@ public final class PreviewEngine: @unchecked Sendable {
             let index = clamp(n, scene)
             let seconds = Double(TimeMap.frameTime(index, frameRate: scene.frameRate)) / 1e9
             let frame = try renderer.frame(of: scene, at: seconds)
-            let keys = Self.videos(of: frame)
+            let keys = videos(of: frame)
             var exact = try exactFrames(of: keys.filter { drawing.exact[$0] == nil })
             for key in keys where exact[key] == nil { exact[key] = drawing.exact[key] }
             drawing.exact = exact
@@ -253,7 +253,7 @@ public final class PreviewEngine: @unchecked Sendable {
             stopPlaying()
             let frame = try renderer.frame(of: scene, at: seconds)
             var keyFrames: [DecodedKey: CachedTexture?] = [:]
-            for key in Self.videos(of: frame) {
+            for key in videos(of: frame) {
                 if let keyFrame = try renderer.prefetcher(for: key.trackID)?.keyFrame(atSource: key.time) {
                     keyFrames[key] = keyFrame
                 } else {
@@ -305,7 +305,7 @@ public final class PreviewEngine: @unchecked Sendable {
         let frame = try renderer.frame(of: scene, at: frameSeconds)
         var late = previous.map { n > $0.presented + 1 } ?? false
         var videos: [DecodedKey: CachedTexture?] = [:]
-        for key in Self.videos(of: frame) {
+        for key in self.videos(of: frame) {
             if let exact = drawing.exact[key] {
                 videos[key] = exact
                 continue
@@ -325,7 +325,7 @@ public final class PreviewEngine: @unchecked Sendable {
         let last = scene.timeMap.frameCount(frameRate: scene.frameRate) - 1
         var ahead = drawing.ahead ?? DecodeAhead(frameRate: scene.frameRate)
         let keys = try ahead.advance(to: n, last: last, first: 1) { next in
-            Self.videos(of: try renderer.frame(of: scene, at: Double(TimeMap.frameTime(next, frameRate: scene.frameRate)) / 1e9))
+            self.videos(of: try renderer.frame(of: scene, at: Double(TimeMap.frameTime(next, frameRate: scene.frameRate)) / 1e9))
         }
         drawing.ahead = ahead
         for key in keys where drawing.exact[key] == nil {
@@ -377,7 +377,7 @@ public final class PreviewEngine: @unchecked Sendable {
         resetPrefetchers()
         for n in frames {
             let frame = try renderer.frame(of: scene, at: Double(TimeMap.frameTime(n, frameRate: scene.frameRate)) / 1e9)
-            for key in Self.videos(of: frame) where drawing.exact[key] == nil {
+            for key in videos(of: frame) where drawing.exact[key] == nil {
                 try renderer.prefetcher(for: key.trackID)?.schedule(key.time)
             }
         }
@@ -395,9 +395,10 @@ public final class PreviewEngine: @unchecked Sendable {
         renderer.resetPrefetchers()
     }
 
-    /// The (track, source instant) of each video `frame` shows: the screen, the screen being left, the camera.
-    private static func videos(of frame: RenderFrame) -> [DecodedKey] {
-        FrameRenderer.videos(of: frame)
+    /// The (track, source instant) of each video `frame` shows: the screen, the screen being left, the camera, then what
+    /// the camera is drawn with (the renderer's, `FrameRenderer.videos(of:)`).
+    private func videos(of frame: RenderFrame) -> [DecodedKey] {
+        renderer.videos(of: frame)
     }
 
     /// `n` within the frames of `scene`'s grid.

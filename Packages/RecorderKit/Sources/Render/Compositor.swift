@@ -26,10 +26,11 @@ import ProjectFormat
 /// the card's content, cut to the card (`Compositor+Card.swift`).
 ///
 /// Phase 2's layers (phase 2 design §11) are drawn in that order by their own files (`Compositor+<Layer>.swift`), with
-/// their own pipelines (`LayerPipelines`): the device frame after the window frame, the screen's privacy in its shader,
-/// the camera's colour and background in its shader and its framing's crop in its fill, then the keys and the captions
-/// over the camera, on every path (`drawOverlays`). A layer that is `nil` or empty, as with the legacy values, draws
-/// nothing and changes no call, so the frame is drawn as in phase 1.
+/// their own pipelines (`LayerPipelines`): the device frame after the window frame, its island or notch over the stage
+/// once (`drawDeviceOverlay`, under the click effects), the screen's privacy in its shader, the camera's colour and
+/// background in its shader (with what `prepareCameraLook` makes before the render pass) and its framing's crop in its
+/// fill (`cameraFill`), then the keys and the captions over the camera, on every path (`drawOverlays`). A layer that is
+/// `nil` or empty, as with the legacy values, draws nothing and changes no call, so the frame is drawn as in phase 1.
 ///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
@@ -41,7 +42,8 @@ public final class Compositor: @unchecked Sendable {
 
     /// The compiled shaders (`ShaderSource`), for what draws into textures of its own (`BackgroundImages`).
     let library: any MTLLibrary
-    private let device: any MTLDevice
+    /// Internal for phase 2's layers (`Compositor+<Layer>.swift`), as are the samplers and `drawSprite`.
+    let device: any MTLDevice
     /// What draws the stage straight into the target.
     let direct: StagePipelines
     /// What draws the stage into a subsample of the motion blur's pass.
@@ -53,10 +55,15 @@ public final class Compositor: @unchecked Sendable {
     let directCamera: CameraPipelines
     /// The rest of the motion blur's pass.
     let blur: BlurPipelines
-    private let screenSampler: any MTLSamplerState
+    let screenSampler: any MTLSamplerState
     /// Linear between the texels and between the mipmap levels: the cursor, the title and a screen with mipmaps.
-    private let trilinearSampler: any MTLSamplerState
+    let trilinearSampler: any MTLSamplerState
     private let mipmappedCopies: MipmappedCopies
+    /// The copies with mipmaps of the camera's frames a blurred background reads (`prepareCameraLook`), apart from the
+    /// screen's.
+    let cameraCopies: MipmappedCopies
+    /// Linear, clamped to the edge in all three directions: the camera's 3D LUTs (`cameraLook-1`).
+    let lutSampler: any MTLSamplerState
     /// The pipelines of phase 2's layers (`Compositor+<Layer>.swift`), made last.
     let layers: LayerPipelines
 
@@ -152,7 +159,18 @@ public final class Compositor: @unchecked Sendable {
         }
         self.screenSampler = screenSampler
         self.trilinearSampler = trilinearSampler
+        let lut = MTLSamplerDescriptor()
+        lut.minFilter = .linear
+        lut.magFilter = .linear
+        lut.sAddressMode = .clampToEdge
+        lut.tAddressMode = .clampToEdge
+        lut.rAddressMode = .clampToEdge
+        guard let lutSampler = device.makeSamplerState(descriptor: lut) else {
+            throw RenderError.metalResourceUnavailable("LUT sampler")
+        }
+        self.lutSampler = lutSampler
         mipmappedCopies = MipmappedCopies(device: device)
+        cameraCopies = MipmappedCopies(device: device)
         layers = try LayerPipelines(maker: maker)
     }
 
@@ -176,10 +194,12 @@ public final class Compositor: @unchecked Sendable {
     /// (`BackgroundImages.texture(forWallpaper:…)`), the grain is added to it. A window frame's title is `windowTitle`,
     /// the texture `TitleTexture` made of it at the frame's title scale (`TitleTexture.scale(for:)`), drawn at those
     /// bar's pixels (`barPixels`) through the stage; none without one. The stage is drawn through `frame.stage`, and
-    /// blurred with `frame.subframes` or `frame.cursorSamples` (see the type's notes). Throws
-    /// `RenderError.metalResourceUnavailable`, having encoded nothing, when Metal cannot make the screen's copy or the
-    /// blur's tile memory: a frame is never drawn some other way. `screen`, `previousScreen`, `camera`, `cursor`,
-    /// `backgroundImage` and `windowTitle` must stay alive until `commandBuffer` completes.
+    /// blurred with `frame.subframes` or `frame.cursorSamples` (see the type's notes). The camera's colour and background
+    /// (`CameraLayer.look`, `background`) are drawn with `cameraLook`, the renderer's (`CameraLookResources`): `nil`, or
+    /// none of its textures, draws the camera as in phase 1. Throws `RenderError.metalResourceUnavailable`, having
+    /// encoded nothing, when Metal cannot make the screen's copy or the blur's tile memory: a frame is never drawn some
+    /// other way. `screen`, `previousScreen`, `camera`, `cursor`, `backgroundImage`, `windowTitle` and `cameraLook`'s
+    /// textures must stay alive until `commandBuffer` completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
@@ -188,17 +208,18 @@ public final class Compositor: @unchecked Sendable {
         cursor: any MTLTexture,
         backgroundImage: (any MTLTexture)? = nil,
         windowTitle: (any MTLTexture)? = nil,
+        cameraLook: CameraLookTextures? = nil,
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer
     ) throws {
         var counts = DrawCounts()
         try encode(
             frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
-            windowTitle: windowTitle, into: target, commandBuffer: commandBuffer, counts: &counts)
+            windowTitle: windowTitle, cameraLook: cameraLook, into: target, commandBuffer: commandBuffer, counts: &counts)
     }
 
-    /// `encode(_:screen:camera:cursor:backgroundImage:windowTitle:into:commandBuffer:)`, counting what it draws in
-    /// `counts`: for tests.
+    /// `encode(_:screen:camera:cursor:backgroundImage:windowTitle:cameraLook:into:commandBuffer:)`, counting what it draws
+    /// in `counts`: for tests.
     func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
@@ -207,15 +228,20 @@ public final class Compositor: @unchecked Sendable {
         cursor: any MTLTexture,
         backgroundImage: (any MTLTexture)? = nil,
         windowTitle: (any MTLTexture)? = nil,
+        cameraLook: CameraLookTextures? = nil,
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer,
         counts: inout DrawCounts
     ) throws {
+        // What the camera's colour and background are drawn with, made before any render pass, on every path.
+        let look = try prepareCameraLook(frame, camera: camera, textures: cameraLook, commandBuffer: commandBuffer)
         // The camera over every pixel: nothing under it is drawn, nor sampled.
         if frame.coveredByCamera, let layer = frame.camera, let camera {
             let encoder = renderPass(into: target, commandBuffer: commandBuffer)
             counts.renderPasses += 1
-            drawCamera(layer, texture: camera, outputSize: frame.outputSize, pipelines: directCamera, encoder: encoder, counts: &counts)
+            drawCamera(
+                layer, texture: camera, cameraLook: look, outputSize: frame.outputSize, pipelines: directCamera, encoder: encoder,
+                counts: &counts)
             drawOverlays(frame, pass: directCamera.pass, encoder: encoder, counts: &counts)
             encoder.endEncoding()
             return
@@ -235,8 +261,8 @@ public final class Compositor: @unchecked Sendable {
         let targetSize = SIMD2(target.width, target.height)
         if frame.isCardMode {
             encodeCard(
-                frame, textures: textures, camera: camera, tileMemory: tileMemory, into: target, commandBuffer: commandBuffer,
-                counts: &counts)
+                frame, textures: textures, camera: camera, cameraLook: look, tileMemory: tileMemory, into: target,
+                commandBuffer: commandBuffer, counts: &counts)
             return
         }
         let stage = Self.moving(frame.stage, outputSize: frame.outputSize)
@@ -270,8 +296,8 @@ public final class Compositor: @unchecked Sendable {
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
             drawOverTheStage(
-                frame, through: stage, camera: camera, clickEffect: blur.clickEffect, cameraPipelines: blur.camera, encoder: encoder,
-                counts: &counts)
+                frame, through: stage, device: stage, camera: camera, cameraLook: look, clickEffect: blur.clickEffect,
+                cameraPipelines: blur.camera, encoder: encoder, counts: &counts)
             encoder.endEncoding()
             return
         }
@@ -281,8 +307,8 @@ public final class Compositor: @unchecked Sendable {
             frame, through: stage, cursor: frame.cursor, textures: textures, pipelines: direct, targetSize: targetSize, encoder: encoder,
             counts: &counts)
         drawOverTheStage(
-            frame, through: stage, camera: camera, clickEffect: clickEffectPipeline, cameraPipelines: directCamera, encoder: encoder,
-            counts: &counts)
+            frame, through: stage, device: stage, camera: camera, cameraLook: look, clickEffect: clickEffectPipeline,
+            cameraPipelines: directCamera, encoder: encoder, counts: &counts)
         encoder.endEncoding()
     }
 
@@ -558,14 +584,21 @@ public final class Compositor: @unchecked Sendable {
         drawDeviceFrame(frame.deviceFrame, through: stage, outputSize: size, pass: pipelines.pass, encoder: encoder, counts: &counts)
     }
 
-    /// Draws what goes over the stage of `frame`: its click effects through `stage` (design §7.2, step 6), never blurred,
-    /// with `clickEffect` (in a card, cut to it: `card`), then the camera in output space (step 7) with `cameraPipelines`,
-    /// then the keys and the captions in its pass (phase 2 design §11, steps 5 and 6).
+    /// Draws what goes over the stage of `frame`, in the pass of `cameraPipelines`: the device's island or notch through
+    /// `device`, the frame's transform of the device frame (the stage's on the stage, the background's in a card), once
+    /// and never blurred (`drawDeviceOverlay`, plan 2b decision 10); its click effects through `stage` (design §7.2, step
+    /// 6), never blurred, with `clickEffect` (in a card, cut to it: `card`); then the camera in output space (step 7) with
+    /// `cameraPipelines` and `cameraLook`; then the keys and the captions (phase 2 design §11, steps 5 and 6).
     func drawOverTheStage(
-        _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, camera: (any MTLTexture)?,
-        clickEffect: any MTLRenderPipelineState, cameraPipelines: CameraPipelines, encoder: any MTLRenderCommandEncoder,
-        counts: inout DrawCounts
+        _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, device: StageTransform?,
+        camera: (any MTLTexture)?, cameraLook: CameraLookTextures?, clickEffect: any MTLRenderPipelineState,
+        cameraPipelines: CameraPipelines, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
     ) {
+        // The device's island or notch, over the cursor.
+        drawDeviceOverlay(
+            frame.deviceFrame, through: device, outputSize: frame.outputSize, pass: cameraPipelines.pass, encoder: encoder,
+            counts: &counts)
+
         // 6. Click effects, over the cursor.
         drawClickEffects(
             frame.clickEffects, through: stage, outputSize: frame.outputSize, clip: card, pipeline: clickEffect, encoder: encoder,
@@ -573,7 +606,9 @@ public final class Compositor: @unchecked Sendable {
 
         // 7. Camera, over the stage.
         if let layer = frame.camera, let camera {
-            drawCamera(layer, texture: camera, outputSize: frame.outputSize, pipelines: cameraPipelines, encoder: encoder, counts: &counts)
+            drawCamera(
+                layer, texture: camera, cameraLook: cameraLook, outputSize: frame.outputSize, pipelines: cameraPipelines,
+                encoder: encoder, counts: &counts)
         }
 
         // Phase 2's keys and captions, over everything.
@@ -585,12 +620,12 @@ public final class Compositor: @unchecked Sendable {
     /// rect's shape), flipped with `mirror` (`u` becomes `1 − u` across that crop), and its border over the picture in the
     /// same drawing, all at its opacity (0 to 1). Nothing of one hidden (its opacity not above 0, or not a number). With
     /// no shadow and no border, the one drawing of 1b, with its values: at opacity 1, the picture exactly as opaque as
-    /// ever. Its framing's crop (`CameraLayer.crop`, phase 2 design §6.2) is the part of the picture that fills the rect,
-    /// the whole picture as in 1b; with a colour or a background (`look`, `background`), the camera's pipeline of
-    /// `cameraLookPipeline` draws it, with what `bindCameraLook` binds.
+    /// ever. The part of the picture that fills the rect is `cameraFill`'s (its framing's crop, phase 2 design §6.2; the
+    /// centred fill of 1b without one); with a colour or a background (`look`, `background`), the camera's pipeline of
+    /// `cameraLookPipeline` draws it, with what `bindCameraLook` binds of `cameraLook`.
     private func drawCamera(
-        _ layer: CameraLayer, texture: any MTLTexture, outputSize: SIMD2<Int>, pipelines: CameraPipelines,
-        encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
+        _ layer: CameraLayer, texture: any MTLTexture, cameraLook: CameraLookTextures?, outputSize: SIMD2<Int>,
+        pipelines: CameraPipelines, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
     ) {
         let opacity = layer.opacity.isNaN ? 0 : min(layer.opacity, 1)
         guard opacity > 0 else { return }
@@ -601,18 +636,17 @@ public final class Compositor: @unchecked Sendable {
         {
             counts.cameraShadows += 1
         }
-        let pictureSize = SIMD2(Double(texture.width), Double(texture.height))
-        var fill = layer.crop == Rect(x: 0, y: 0, width: 1, height: 1)
-            ? Self.aspectFill(pictureSize, in: layer.rect) : Self.aspectFill(pictureSize, cropped: layer.crop, in: layer.rect)
+        var fill = cameraFill(layer, texture: texture)
         if layer.mirror {
             fill = (SIMD2(fill.origin.x + fill.size.x, fill.origin.y), SIMD2(-fill.size.x, fill.size.y))
         }
         let border = layer.border.flatMap { $0.width > 0 && $0.width.isFinite ? $0 : nil }
         // With a colour or a background (phase 2 design §11, step 4), the camera's shader with them, bound first.
-        let look = cameraLookPipeline(for: layer, bordered: border != nil, pass: pipelines.pass)
+        let look = cameraLookPipeline(for: layer, textures: cameraLook, bordered: border != nil, pass: pipelines.pass)
         if look != nil {
-            bindCameraLook(layer, encoder: encoder)
+            bindCameraLook(layer, textures: cameraLook, encoder: encoder)
             counts.cameraLooks += 1
+            if layer.background != nil, cameraLook?.mask != nil { counts.cameraBackgrounds += 1 }
         }
         drawImage(
             texture, in: layer.rect, cornerRadius: layer.cornerRadius, uvOrigin: fill.origin, uvSize: fill.size, opacity: opacity,
@@ -792,7 +826,7 @@ public final class Compositor: @unchecked Sendable {
 
     /// Draws `texture`, premultiplied, into the rect at `origin` of `size` (output pixels), all of it, with `pipeline`:
     /// as it is (`spriteFragment`), or at `opacity` (`cursorFragment`, `cursorSampleFragment`), cut to a card with `clip`.
-    private func drawSprite(
+    func drawSprite(
         _ texture: any MTLTexture, origin: SIMD2<Double>, size: SIMD2<Double>, opacity: Float? = nil, clip: CardContent? = nil,
         pipeline: any MTLRenderPipelineState, viewport: SIMD2<Float>, encoder: any MTLRenderCommandEncoder
     ) {
@@ -1053,6 +1087,10 @@ struct DrawCounts: Equatable, Sendable {
     /// How many times the keys' and the captions' step was reached (`Compositor.drawOverlays`): once a frame, on every
     /// path, drawn or not.
     var overlaySteps = 0
+    /// Milestone 2b's: the device's island or notch drawn over the stage (`drawDeviceOverlay`), and the cameras drawn with
+    /// their background (blurred or removed) and its mask.
+    var deviceOverlays = 0
+    var cameraBackgrounds = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1

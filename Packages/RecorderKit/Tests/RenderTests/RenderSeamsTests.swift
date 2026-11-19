@@ -204,7 +204,6 @@ private struct SeamDrawer: @unchecked Sendable {
     #expect(CaptionScene(document: document, timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
     #expect(KeyOverlayScene(document: document, events: [], timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
     let screen = ScreenLayer(trackID: trackID, sourceTime: base, rect: Rect(x: 10, y: 20, width: 300, height: 200), cornerRadius: 4)
-    #expect(DeviceFrameScene(document: document, outputSize: size).layer(around: screen) == nil)
     #expect(
         DeviceFrameGeometry.placement(
             contentAspect: 16.0 / 9, padding: 0.1, outputSize: SIMD2(1280, 720), frame: DeviceFrame(model: .iPhone, finish: .dark))
@@ -214,10 +213,16 @@ private struct SeamDrawer: @unchecked Sendable {
     var drawn = screen
     privacy.apply(to: &drawn, atSource: base)
     #expect(drawn == screen)
-    var cameraLayer = CameraLayer(trackID: cameraID, sourceTime: base, rect: Rect(x: 0, y: 0, width: 100, height: 100), cornerRadius: 50)
-    let before = cameraLayer
-    CameraLookScene(document: document, take: take, analysis: .none).apply(to: &cameraLayer, atSource: base, output: 0)
-    #expect(cameraLayer == before)
+    // The device frame and the camera's look act on the whole frame (milestone 2b's seams): neither changes it.
+    let cameraLayer = CameraLayer(trackID: cameraID, sourceTime: base, rect: Rect(x: 0, y: 0, width: 100, height: 100), cornerRadius: 50)
+    var frame = RenderFrame(
+        outputSize: size, gradientStart: .zero, gradientEnd: .one, gradientAngleDegrees: 0, screen: screen, camera: cameraLayer,
+        shadow: ShadowLayer(rect: screen.rect, cornerRadius: 4, opacity: 0.5, sigma: 8, offsetY: 4))
+    let before = frame
+    DeviceFrameScene(document: document, outputSize: size).apply(to: &frame)
+    let layouts = LayoutTimeline(document: document, take: take, timeMap: timeMap, cameraReadable: true)
+    CameraLookScene(document: document, take: take, analysis: .none, layouts: layouts).apply(to: &frame, atSource: base, output: 0)
+    #expect(frame == before)
 }
 
 @Test func cameraCropFillsFromItsPart() {
