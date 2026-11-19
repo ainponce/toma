@@ -189,6 +189,64 @@ func cleanKeepsTheLengthAndTheTiming() async throws {
     }
 }
 
+/// A take whose microphone records `samples` (48 kHz) as `channels` interleaved channels, the same on all of them.
+private func takeOnAllChannels(in dir: URL, name: String, recording samples: [Float], channels: Int) async throws -> LoadedProject {
+    let blocks = (samples.count + 479) / 480
+    let padded = samples + Array(repeating: 0, count: blocks * 480 - samples.count)
+    let seconds = Double(blocks) / 100
+    let transform: @Sendable (Int, CMSampleBuffer) -> CMSampleBuffer = { block, sample in
+        guard let data = CMSampleBufferGetDataBuffer(sample) else { return sample }
+        let frames = CMSampleBufferGetNumSamples(sample)
+        var values = [Float](repeating: 0, count: frames * channels)
+        for n in 0..<frames {
+            let at = block * frames + n
+            for c in 0..<channels { values[n * channels + c] = at < padded.count ? padded[at] : 0 }
+        }
+        let status = values.withUnsafeBytes {
+            CMBlockBufferReplaceDataBytes(with: $0.baseAddress!, blockBuffer: data, offsetIntoDestination: 0, dataLength: $0.count)
+        }
+        precondition(status == noErr, "recorded block: \(status)")
+        return sample
+    }
+    return try await voiceTake(
+        in: dir, name: name, seconds: seconds,
+        mic: [AudioSegmentSpec(start: base, seconds: seconds, channels: channels, transform: transform)])
+}
+
+/// A microphone with the same loud voice on every channel (L = R, as a common stereo USB microphone records): the clean
+/// voice is at the level of one channel of the dry sound (within 1 dB), not the sum of the channels, and nothing in it
+/// reaches full scale.
+@Test(.enabled(if: SoundIsolation.isAvailable), .timeLimit(.minutes(5)), arguments: [(2, Float(0.7)), (3, Float(0.3))])
+func cleanOfSeveralChannelsKeepsOneChannelsLevel(recorded: Int, peaking: Float) async throws {
+    guard var voice = try await speech("Hola, esta es una prueba de la limpieza del ruido de la voz.", language: "es-MX") else { return }
+    // Loud enough that the sum of two channels would be past full scale (a third channel is mixed into the two by the
+    // timeline, so it gets a lower peak: what the timeline does is not what is under test).
+    let peak = voice.reduce(0) { max($0, abs($1)) }
+    voice = voice.map { $0 / peak * peaking }
+    try await withTemporaryDirectory { dir in
+        let lead = 24_000, length = lead + voice.count + 24_000
+        let spoken = Array(repeating: Float(0), count: lead) + voice + Array(repeating: 0, count: length - lead - voice.count)
+        let project = try await takeOnAllChannels(in: dir, name: "wide-\(recorded)", recording: spoken, channels: recorded)
+        // As a voice job loads it: with the channels the track needs (a 3-channel one is mixed down to stereo).
+        let audio = try await TrackAudio.load(project, track: micID)
+        let channels = audio.channels
+        #expect(channels == 2)
+        let span = try #require(audio.spans.first)
+        let url = dir.appending(path: "clean.caf")
+        try await SoundIsolation.clean(audio, span: span, to: url) { _ in }
+        let clean = try cleanFrames(url)
+        #expect(clean.count == span.frames.count)
+        // The dry sound, read as the mix reads it, one channel of it.
+        var dry: [Float] = []
+        audio.makeReader().read(span.frames, into: &dry)
+        let first = (0..<span.frames.count).map { dry[$0 * channels] }
+        let voiced = lead..<(lead + voice.count)
+        let difference = decibels(rms(clean[voiced])) - decibels(rms(first[voiced]))
+        #expect(abs(difference) <= 1, "the clean voice is \(difference) dB from one channel of the dry sound")
+        #expect(!clean.contains { abs($0) >= 1 })
+    }
+}
+
 /// A span in the middle of the timeline: its clean file starts at the span's first frame, not at frame 0.
 @Test(.enabled(if: SoundIsolation.isAvailable))
 func cleanStartsAtTheSpan() async throws {
@@ -240,7 +298,7 @@ func cleanupIsFiveTimesRealTime() async throws {
             try await SoundIsolation.clean(audio, span: span, to: dir.appending(path: "clean.caf")) { _ in }
         }
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
-        print("soundIsolation-1 of 60 s of microphone: \(seconds) s (\(60 / seconds) × real time)")
+        print("soundIsolation-2 of 60 s of microphone: \(seconds) s (\(60 / seconds) × real time)")
         #expect(seconds < 12)
     }
 }

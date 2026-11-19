@@ -899,7 +899,7 @@ public struct TrackGain: Codable, Equatable, Sendable {
     public var gain: Double
     public var muted: Bool
     /// 0 to 1: how much of the voice isolated from the noise goes into the mix, over the track as recorded (phase 2
-    /// design §5.6, `soundIsolation-1`), from version 3.
+    /// design §5.6, `soundIsolation-2`), from version 3.
     public var cleanup: Double
 
     public init(gain: Double, muted: Bool, cleanup: Double = 0) {

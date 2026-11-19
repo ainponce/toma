@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 
-/// The voice of one audio track without its noise (`soundIsolation-1`, phase 2 design §5.6), as the mix reads it from
+/// The voice of one audio track without its noise (`soundIsolation-2`, phase 2 design §5.6), as the mix reads it from
 /// the caches (plan decision 14): for each segment of the track that is heard, a CAF file (Float32 LPCM, mono, 48 kHz)
 /// that holds exactly the timeline frames the segment's audio is heard over (`TrackAudio.spans`).
 public struct CleanVoice: Equatable, Sendable {

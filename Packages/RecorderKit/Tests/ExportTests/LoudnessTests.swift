@@ -175,7 +175,7 @@ func ebuTech3341Cases(_ test: EBUCase) {
         let dry = try await voiceRead(audio, span.frames)
         let clean = tone([(-12, Double(span.frames.count) / 48_000)])
         try #require(clean.count == span.frames.count)
-        let url = dir.appending(path: "seg-0001-soundIsolation-1.caf")
+        let url = dir.appending(path: "seg-0001-soundIsolation-2.caf")
         try writeClean(clean, to: url)
         let measured = try await Loudness.measure(audio, span: span, clean: url)
         var info = stat()

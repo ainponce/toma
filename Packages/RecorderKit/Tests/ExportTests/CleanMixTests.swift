@@ -37,7 +37,7 @@ private func cleanVoice(
     var files: [String: URL] = [:]
     for (k, span) in audio.spans.enumerated() {
         let dry = try await voiceRead(audio, span.frames)
-        let url = dir.appending(path: "clean-\(k)-soundIsolation-1.caf")
+        let url = dir.appending(path: "clean-\(k)-soundIsolation-2.caf")
         try writeCleanFile(Array((k == shortened ? dry.dropLast(shortenedBy) : dry[...]).map(transform)), to: url)
         files[span.segment] = url
     }

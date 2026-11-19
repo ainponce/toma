@@ -8,7 +8,7 @@ import ProjectFormat
 import Synchronization
 import Transcription
 
-/// What takes the noise out of a segment of a microphone (`soundIsolation-1`, phase 2 design §5.6): the system's
+/// What takes the noise out of a segment of a microphone (`soundIsolation-2`, phase 2 design §5.6): the system's
 /// `AUSoundIsolation` (`SystemVoiceIsolation`), or a test's.
 public protocol VoiceIsolating: Sendable {
     /// Whether this Mac can clean.
@@ -36,7 +36,7 @@ public struct SystemVoiceIsolation: VoiceIsolating {
 /// 17): which of them a document needs, their work on the project's `ProjectJobs`, what their caches give the mix
 /// (`AnalysisInputs`), and what an export waits for.
 ///
-/// - **The caches.** The clean voice of a segment of a microphone is `clean/<take>/<track>/<segment>-soundIsolation-1.caf`
+/// - **The caches.** The clean voice of a segment of a microphone is `clean/<take>/<track>/<segment>-soundIsolation-2.caf`
 ///   (exactly the timeline frames the segment is heard over, `TrackAudio.spans`), its loudness
 ///   `loudness/<take>/<track>/<segment>-loudness-1.json` (`SegmentLoudness`), each named by the segment's identity
 ///   (`SegmentIdentity`): a segment written again is another file. A clean file of another length than its span, or a

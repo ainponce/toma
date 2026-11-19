@@ -11,7 +11,7 @@ public enum AnalysisCacheFolder: String, Sendable, CaseIterable {
     case masks
     /// The camera's face tracks (`faceTrack-1`), one JSON per segment.
     case faces
-    /// The microphone's sound without noise (`soundIsolation-1`), one CAF per segment.
+    /// The microphone's sound without noise (`soundIsolation-2`), one CAF per segment.
     case clean
     /// The loudness of an audio track (`loudness-1`), one JSON per segment.
     case loudness

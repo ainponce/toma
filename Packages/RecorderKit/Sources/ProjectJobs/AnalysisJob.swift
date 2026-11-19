@@ -12,7 +12,7 @@ public enum AnalysisJobKind: Hashable, Sendable {
     case personMask(take: String, track: String, segment: Int)
     /// The face track of a segment of the camera (`faceTrack-1`).
     case faceTrack(take: String, track: String, segment: Int)
-    /// The microphone's sound without noise, for a segment (`soundIsolation-1`).
+    /// The microphone's sound without noise, for a segment (`soundIsolation-2`).
     case soundIsolation(take: String, track: String, segment: Int)
     /// The loudness of an audio track (`loudness-1`).
     case loudness(take: String, track: String)

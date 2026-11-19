@@ -11,21 +11,22 @@ public enum SoundIsolationError: Error, Equatable {
     case renderingFailed(String)
 }
 
-/// `soundIsolation-1` (phase 2 design §5.6): the voice of a segment of an audio track without its noise, by the system's
+/// `soundIsolation-2` (phase 2 design §5.6): the voice of a segment of an audio track without its noise, by the system's
 /// `AUSoundIsolation` with `SoundToIsolate` the high-quality voice model (`kAUSoundIsolationSoundType_HighQualityVoice`)
 /// and the mix all wet (`WetDryMixPercent` 100), rendered once, offline, into the cleanup cache (plan decision 14). The
 /// mix only ever reads that file (`EditedMix`); nothing calls the unit while mixing or rendering a frame.
 ///
 /// - The unit runs in an `AVAudioEngine` rendering offline by hand at 48 kHz in mono (Float32), `renderFrames` at a
 ///   time. It is fed the span's frames of the track as `TrackAudio` places them (the frames the mix plays there, its
-///   channels mixed down as the timeline mixes them: each at unity gain, clipped), then silence.
+///   channels averaged into one: the sum over the channel count, so a stereo microphone with the same signal on both
+///   channels is fed at that signal's level, not 6 dB above it and clipped), then silence.
 /// - The unit's latency (`AVAudioUnit.latency` or its audio unit's, the larger, read once the engine has started it:
 ///   92.5 ms, 4 440 frames, on macOS 26) is made up for: the first `round(latency × 48 000)` frames it gives are dropped,
 ///   and it is fed on past the span as far as that, so the clean voice keeps time with the dry one frame for frame.
 /// - The file (CAF, Float32 LPCM, mono, 48 kHz) holds exactly the span's frames, the clean voice of timeline frame
 ///   `span.frames.lowerBound + i` at its frame `i`.
 public enum SoundIsolation {
-    public static let algorithm = "soundIsolation-1"
+    public static let algorithm = "soundIsolation-2"
     /// The frames the engine renders at a time.
     static let renderFrames: AVAudioFrameCount = 4_096
 
@@ -184,10 +185,11 @@ private final class IsolationFeed {
                 if channels == 1 {
                     data[i] = samples[i - first]
                 } else {
-                    // As the timeline mixes a segment down: every channel at unity gain, clipped.
+                    // The channels' average: the mix puts the clean voice on every channel against the dry one of
+                    // that channel, so the level of one channel is what it must keep (a sum would be +6 dB, clipped).
                     var sum: Float = 0
                     for c in 0..<channels { sum += samples[(i - first) * channels + c] }
-                    data[i] = min(max(sum, -1), 1)
+                    data[i] = sum / Float(channels)
                 }
             }
         }

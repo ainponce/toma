@@ -31,7 +31,7 @@ import os
 ///   (`LayoutTimeline.screenOpacity`, with the camera readable as the render finds it) is at least 0.5 then, so not under
 ///   a settled Camera only or Camera full screen; one less than `ClickSounds.minimumSpacing` after the last that sounded
 ///   does not sound. A document without layouts (`LayoutTimeline.isTrivial`) sounds every one, as in 1b.
-/// - A track with its clean voice (phase 2 design §5.6, `soundIsolation-1`: `analysis.cleanVoice`, a file for every segment
+/// - A track with its clean voice (phase 2 design §5.6, `soundIsolation-2`: `analysis.cleanVoice`, a file for every segment
 ///   heard, each exactly as long as its span) and a cleanup `c` above 0 (`TrackGain.cleanup`, 0 to 1) mixes
 ///   `c × clean + (1 − c) × dry` before its gain, frame for frame where the dry sound is (the clean voice's own line of the
 ///   same segments, `AudioTrackTimeline.cleaned`), and at another speed each stretched with a stretch of its own. At
