@@ -3,8 +3,8 @@ import CoreGraphics
 import Darwin
 import Foundation
 
-/// An image file a package holds for the editor to draw, each kind with its own folder, name rule and limits
-/// (design §6.1). A file that breaks them is treated as absent.
+/// A file a package holds for the editor to draw (an image, or a camera look's `.cube`), each kind with its own folder,
+/// name rule and limits (design §6.1; phase 2 design §6.3). A file that breaks them is treated as absent.
 public enum PackageFileKind: Sendable {
     /// `takes/<take>/cursors/<32 lowercase hex>.png`: an image of the cursor a take recorded.
     case cursorImage
@@ -12,6 +12,9 @@ public enum PackageFileKind: Sendable {
     case wallpaper
     /// `assets/<32 lowercase hex>.<png|jpg|heic|tiff>`: an image of the user's own, copied into the package.
     case asset
+    /// `assets/<32 lowercase hex>.cube`: a 3D LUT of the user's own for the camera (`CameraColor.lut`), copied into the
+    /// package. Text, parsed by `CubeLUT.parse`: never decoded as an image.
+    case lut
 
     /// The largest file read.
     public var maxBytes: Int {
@@ -19,30 +22,34 @@ public enum PackageFileKind: Sendable {
         case .cursorImage: 1_048_576
         case .wallpaper: 67_108_864
         case .asset: 104_857_600
+        case .lut: CubeLUT.maxBytes
         }
     }
 
-    /// The largest width or height decoded.
+    /// The largest width or height decoded; 0 for a `.cube`, which is no image.
     public var maxPixelSide: Int {
         switch self {
         case .cursorImage: 512
         case .wallpaper, .asset: 16_384
+        case .lut: 0
         }
     }
 
     /// The image formats decoded for this kind, as the uniform type identifiers ImageIO reads from the content:
     /// PNG for cursors and wallpaper photos, which Toma writes; PNG, JPEG and HEIC for the user's own. A package can
     /// come from anywhere, so no other decoder of ImageIO is reached from it, whatever a file's name says. An asset
-    /// named `.tiff`, which `isValidName` allows, is not decoded.
+    /// named `.tiff`, which `isValidName` allows, is not decoded. None for a `.cube`.
     public var imageTypes: Set<String> {
         switch self {
         case .cursorImage, .wallpaper: ["public.png"]
         case .asset: ["public.png", "public.jpeg", "public.heic"]
+        case .lut: []
         }
     }
 
     /// Whether `name`, a file name with no folder, is exactly what this kind's files are called:
-    /// `^[0-9a-f]{32}\.png$`, `^display-[0-9]+\.png$` or `^[0-9a-f]{32}\.(png|jpg|heic|tiff)$`, in ASCII.
+    /// `^[0-9a-f]{32}\.png$`, `^display-[0-9]+\.png$`, `^[0-9a-f]{32}\.(png|jpg|heic|tiff)$` or `^[0-9a-f]{32}\.cube$`,
+    /// in ASCII.
     public func isValidName(_ name: String) -> Bool {
         let bytes = Array(name.utf8)
         switch self {
@@ -50,6 +57,8 @@ public enum PackageFileKind: Sendable {
             return Self.isHash(bytes, withExtensionIn: ["png"])
         case .asset:
             return Self.isHash(bytes, withExtensionIn: ["png", "jpg", "heic", "tiff"])
+        case .lut:
+            return Self.isHash(bytes, withExtensionIn: ["cube"])
         case .wallpaper:
             let prefix = Array("display-".utf8)
             let suffix = Array(".png".utf8)
@@ -67,7 +76,7 @@ public enum PackageFileKind: Sendable {
                   (try? ProjectPackage.validateTakeID(folders[folders.startIndex + 1])) != nil
             else { return false }
             return folders[folders.startIndex + 2] == (self == .cursorImage ? "cursors" : "wallpapers")
-        case .asset:
+        case .asset, .lut:
             return folders.elementsEqual(["assets"])
         }
     }

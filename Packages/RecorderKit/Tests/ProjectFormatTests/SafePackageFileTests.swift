@@ -527,3 +527,53 @@ private func png(width: Int, height: Int, noisy: Bool = false) throws -> Data {
         #expect(BoundedImage.decode(whole, maxPixelSide: 512, reducedTo: 32)?.width == 32)
     }
 }
+
+@Test func lutNameAndSize() throws {
+    #expect(PackageFileKind.lut.maxBytes == 16_777_216)
+    #expect(PackageFileKind.lut.maxBytes == CubeLUT.maxBytes)
+    #expect(PackageFileKind.lut.imageTypes.isEmpty)
+    #expect(PackageFileKind.lut.isValidName("\(hash).cube"))
+    for name in ["\(hash).CUBE", "\(hash).Cube", "0123456789ABCDEF0123456789abcdef.cube", "\(hash).cube.cube", "\(hash).png",
+                 "\(hash).cub", hash, "\(hash).cube\n", "x.cube", "display-1.cube"] {
+        #expect(!PackageFileKind.lut.isValidName(name), "\(name)")
+    }
+    // A `.cube` is no image, nor an image a `.cube`.
+    #expect(!PackageFileKind.asset.isValidName("\(hash).cube"))
+
+    try withTemporaryDirectory { dir in
+        let package = try makePackage(in: dir)
+        let cube = Data("LUT_3D_SIZE 2\n".utf8) + Data(String(repeating: "0 0 0\n", count: 8).utf8)
+        // Up to 16 MiB is read; one byte more is absent.
+        try put(cube + Data(String(repeating: "#", count: 16_777_216 - cube.count).utf8), at: "assets/\(hash).cube", in: package)
+        #expect(SafePackageFile.read("assets/\(hash).cube", in: package, as: .lut)?.count == 16_777_216)
+        try put(cube + Data(String(repeating: "#", count: 16_777_217 - cube.count).utf8), at: "assets/\(otherHash).cube", in: package)
+        #expect(SafePackageFile.read("assets/\(otherHash).cube", in: package, as: .lut) == nil)
+
+        // Only in `assets/`, only by its exact name, and never decoded as an image.
+        try put(cube, at: "assets/\(hash.uppercased()).cube", in: package)
+        #expect(SafePackageFile.read("assets/\(hash.uppercased()).cube", in: package, as: .lut) == nil)
+        try put(cube, at: "takes/take-001/\(hash).cube", in: package)
+        #expect(SafePackageFile.read("takes/take-001/\(hash).cube", in: package, as: .lut) == nil)
+        #expect(SafePackageFile.read("assets/../assets/\(hash).cube", in: package, as: .lut) == nil)
+        #expect(SafePackageFile.read("assets/\(hash).cube", in: package, as: .asset) == nil)
+        #expect(package.asset("assets/\(hash).cube") == nil)
+        #expect(PackageFileKind.lut.decodedImage(try png(width: 16, height: 16)) == nil)
+
+        // A link at its name, or at `assets/`, is absent, though what it leads to is a good `.cube`.
+        let outside = dir.appendingPathComponent("outside.cube", isDirectory: false)
+        try cube.write(to: outside)
+        let third = "00000000000000000000000000000003"
+        try FileManager.default.createSymbolicLink(
+            at: package.assetsURL.appendingPathComponent("\(third).cube"), withDestinationURL: outside)
+        #expect(try Data(contentsOf: package.assetsURL.appendingPathComponent("\(third).cube")) == cube)
+        #expect(SafePackageFile.read("assets/\(third).cube", in: package, as: .lut) == nil)
+
+        let elsewhere = dir.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere, withIntermediateDirectories: false)
+        try cube.write(to: elsewhere.appendingPathComponent("\(third).cube"))
+        let linked = ProjectPackage(url: dir.appendingPathComponent("Linked.toma", isDirectory: true))
+        try FileManager.default.createDirectory(at: linked.url, withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(at: linked.assetsURL, withDestinationURL: elsewhere)
+        #expect(SafePackageFile.read("assets/\(third).cube", in: linked, as: .lut) == nil)
+    }
+}
