@@ -16,6 +16,13 @@ public struct CameraSegment: Hashable, Sendable {
     }
 }
 
+extension CameraSegment {
+    /// The algorithm of a segment's person's mask (phase 2 design §6.1), with its version: what `PersonMaskEngine`
+    /// writes and its cache file is named after (`masks/<take>/<track>/<segment>-personMask-1.mov`). Another way of
+    /// making it is another id, and another file.
+    public static let personMaskID = "personMask-1"
+}
+
 /// The face of a camera's segment, `faceTrack-1` (phase 2 design §6.2): `VNDetectFaceRectanglesRequest` every 100 ms of
 /// the camera's source, the biggest face of each frame. The analysis caches keep it as JSON, written whole by
 /// `ProjectJSON.encoder()` (`faces/<take>/<track>/<segment>-faceTrack-1.json`), and the render reads it through

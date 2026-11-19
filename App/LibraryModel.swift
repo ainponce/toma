@@ -792,10 +792,12 @@ final class LibraryModel {
         case .normal, .readOnlyVolume, .inTrash: break
         case .unfinished, .needsRepair, .newerVersion, .unavailable: return
         }
-        let fileSystem = self.fileSystem, id = summary.identity
+        let fileSystem = self.fileSystem, id = summary.identity, cachesRoot = context.cachesRoot
         Task(priority: .low) {
             let looked = await Task.detached(priority: .utility) { () -> (key: String, mayDraw: Bool, offHere: Bool)? in
-                guard let key = try? LibraryThumbnails.key(of: url), let volume = try? fileSystem.volume(of: url) else {
+                guard let key = try? LibraryThumbnails.key(of: url, cachesRoot: cachesRoot),
+                      let volume = try? fileSystem.volume(of: url)
+                else {
                     return nil
                 }
                 return (key, LibraryThumbnails.mayDraw(place: summary.place, volume: volume, opened: true),
