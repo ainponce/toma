@@ -978,7 +978,7 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Con un iPhone real, grabar 20 s en vertical, girarlo a horizontal a los 10 s y abrir la toma en el editor: empieza con el marco de iPhone Oscuro (Marco ▸ iPhone), sin cursor (la pestaña Cursor lo dice y sus controles quedan apagados) y sin zooms automáticos. Después del giro, la pantalla del iPhone se ve entera, achicada y centrada en el mismo marco vertical, con barras negras arriba y abajo: nada recortado ni estirado, y el marco no cambia de tamaño ni salta en el giro. Lo mismo avanzando cuadro a cuadro, arrastrando el cabezal por el giro y en el MP4 exportado (la vista previa es igual al MP4).
 - Un zoom agregado a mano en la pista Zoom entra y sale sobre la pantalla del iPhone, también con el foco fijo movido.
-- La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad (o un iPhone grabado empezando en horizontal), la toma empieza con el marco de iPad.
+- La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad, la toma empieza con el marco de iPad; un iPhone grabado empezando en horizontal empieza con el de iPhone, acostado.
 
 **Seguir el cursor en el render** (I5; se recorre con la pestaña Marco de I14)
 
@@ -1002,6 +1002,14 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Con Transcribir automáticamente prendido y el español instalado, una toma nueva se transcribe sola al abrirla; no aparece ningún aviso de permiso de macOS; grabar mientras transcribe la frena y sigue al terminar; Transcribir de nuevo después de corregir una palabra avisa antes de reemplazar; un export con la limpieza pendiente espera y la barra lo muestra.
 - En detalle: Ajustes ▸ General muestra «Transcribir automáticamente» con «Al abrir un proyecto en el editor, si su idioma está instalado.» debajo, sin cortes; apagado, abrir una toma sin transcripción no transcribe nada. Después de la transcripción automática, Edición ▸ Deshacer «Transcribir» saca la transcripción y los subtítulos en un paso. Con una palabra corregida, Transcribir de nuevo pregunta «Transcribir de nuevo reemplaza 1 palabra corregida.» (en plural con dos o más): Conservar la actual no cambia nada y Reemplazar pone la nueva. Recién elegidas la Limpieza Suave y Normalizar el volumen, exportar enseguida a MP4: el anillo de la barra sube hasta un 20 % mientras espera la limpieza y la sonoridad y sigue de ahí con el export; el archivo suena limpio y normalizado como la vista previa. Cancelar la exportación mientras espera no muestra ningún aviso y la limpieza sigue. Un GIF no espera la limpieza.
+
+**La pestaña Marco** (I14)
+
+- Con una toma 16:9 en 9:16, en la pestaña Marco (⌘2): elegir Ninguno, Ventana de macOS, iPhone, iPad y MacBook; cada mosaico se ve como queda (el iPhone acostado con un contenido ancho), el anillo violeta se mueve con un resorte (con Reducir movimiento, un fundido) y la vista previa cambia. Con un dispositivo, «Acabado: Oscuro / Claro» lo cambia; pasar de un dispositivo a otro conserva el acabado. Cada cambio es un deshacer.
+- «Encuadre de la pantalla: Completa / Seguir el cursor»: con la toma 16:9 en 16:9 (y en «Como la grabación») Seguir el cursor está apagado y debajo dice «La grabación no es lo bastante ancha para este formato.»; en 9:16, 1:1, 4:5, 3:4 y 4:3 se puede elegir. Con Seguir el cursor, la pestaña dice «Con Seguir el cursor no se dibuja el marco.» y los mosaicos y el acabado se ven atenuados, sin marco en la vista previa; volver a Completa lo dibuja otra vez.
+- Con Seguir el cursor en 9:16, cambiar el formato a 16:9: el control sigue usable para volver a Completa y dice por qué Seguir el cursor no se ofrece.
+- Con una toma de iPhone: Seguir el cursor está apagado y dice «Un iPhone o un iPad no tiene cursor que seguir.».
+- Con el panel en su ancho mínimo, en español: ningún texto de la pestaña se corta. Con VoiceOver: cada mosaico se lee «Marco, iPhone, 3 de 5» y si está elegido; el control de Encuadre apagado lee su motivo.
 
 ## Prueba en seco (ad hoc)
 

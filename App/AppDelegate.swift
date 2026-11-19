@@ -496,6 +496,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || environment["TOMA_SHOWCASE_FRAME"] != nil || environment["TOMA_SHOWCASE_KEYS"] != nil
                 || environment["TOMA_SHOWCASE_PICTURE"] != nil
                 || environment["TOMA_SHOWCASE_SEEK"] != nil
+                || environment["TOMA_SHOWCASE_DEVICEFRAME"] != nil || environment["TOMA_SHOWCASE_REFRAME"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -508,6 +509,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let mode = environment["TOMA_SHOWCASE_KEYS"].flatMap(KeyOverlayMode.init(rawValue:)) {
                         model.setKeyOverlay(mode: mode, position: .bottomLeading, size: .large)
                     }
+                    // TOMA_SHOWCASE_DEVICEFRAME=<none|macWindow|iPhone|iPad|macBook>[-light] sets the frame (phase 2), and
+                    // TOMA_SHOWCASE_REFRAME=followCursor follows the cursor.
+                    if let raw = environment["TOMA_SHOWCASE_DEVICEFRAME"], let current = model.document?.style.frame {
+                        let parts = raw.split(separator: "-")
+                        let choice: FrameChoice? = switch parts.first {
+                        case "none": FrameChoice.none
+                        case "macWindow": .macWindow
+                        case "iPhone": .iPhone
+                        case "iPad": .iPad
+                        case "macBook": .macBook
+                        default: nil
+                        }
+                        if let choice {
+                            let frame = choice.frame(from: current)
+                            model.setFrame(parts.last == "light" ? FrameTabRules.frame(frame, finish: .light) ?? frame : frame)
+                        }
+                    }
+                    if let reframe = environment["TOMA_SHOWCASE_REFRAME"].flatMap(Reframe.init(rawValue:)) { model.setReframe(reframe) }
                     if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
                     // TOMA_SHOWCASE_FRAME=<n> moves the playhead to output frame n (an iPhone's turned segment, say).
                     if let frame = environment["TOMA_SHOWCASE_FRAME"].flatMap(Int.init) { model.seek(frame: frame) }

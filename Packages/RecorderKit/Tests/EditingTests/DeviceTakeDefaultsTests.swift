@@ -8,8 +8,9 @@ import Editing
 import ProjectFormat
 
 // How a take of an iPhone or iPad starts in the editor (phase 2 design §6.7 and §7.6, plan 2c decision 19): with its device
-// around the screen, an iPhone for upright content of an aspect of 0.6 or less and an iPad for any other, and without the
-// cursor, which it never records; the automatic zoom plans nothing without clicks. Every other take starts as before.
+// around the screen, an iPhone for content whose short side over its long side is 0.6 or less, in either orientation, and an
+// iPad for any other, and without the cursor, which it never records; the automatic zoom plans nothing without clicks. Every
+// other take starts as before.
 
 private let base = HostTime(nanoseconds: 5_000_000_000_000)
 
@@ -68,18 +69,31 @@ private func deviceTake(in dir: URL, name: String = "Fixture", width: Int, heigh
             let iPad = try await deviceTake(in: dir, name: "iPad", width: 1640, height: 2360)
             #expect(NewDocument.make(project: iPad, defaultStyle: .toma, makeID: IDs().make).style.frame
                 == .device(DeviceFrame(model: .iPad, finish: .dark)))
-            // Turned before the take started, an iPhone records wide content: the iPad's frame fits it.
-            let wide = try await deviceTake(in: dir, name: "Wide", width: 1920, height: 1080)
-            #expect(DeviceTakeDefaults.model(of: wide.take) == .iPad)
+            // Turned before the take started, an iPhone records wide content: it is still an iPhone, on its side.
+            let wide = try await deviceTake(in: dir, name: "Wide", width: 2532, height: 1170)
+            #expect(DeviceTakeDefaults.model(of: wide.take) == .iPhone)
+            #expect(NewDocument.make(project: wide, defaultStyle: .toma, makeID: IDs().make).style.frame
+                == .device(DeviceFrame(model: .iPhone, finish: .dark)))
+            // And an iPad turned before the take, an iPad.
+            let wideIPad = try await deviceTake(in: dir, name: "Wide iPad", width: 2360, height: 1640)
+            #expect(DeviceTakeDefaults.model(of: wideIPad.take) == .iPad)
         }
     }
 
-    @Test func widerContentGetsTheIPad() {
+    @Test func squarerContentGetsTheIPadInEitherOrientation() {
         #expect(DeviceTakeDefaults.iPhoneMaximumAspect == 0.6)
         #expect(DeviceTakeDefaults.frame(contentAspect: 0.75) == DeviceFrame(model: .iPad, finish: .dark))
         #expect(DeviceTakeDefaults.frame(contentAspect: 0.46) == DeviceFrame(model: .iPhone, finish: .dark))
         #expect(DeviceTakeDefaults.frame(contentAspect: 0.6) == DeviceFrame(model: .iPhone, finish: .dark))
-        #expect(DeviceTakeDefaults.frame(contentAspect: 16.0 / 9).model == .iPad)
+        // On its side, the same device: the orientation never decides it.
+        #expect(DeviceTakeDefaults.frame(contentAspect: 1 / 0.46) == DeviceFrame(model: .iPhone, finish: .dark))
+        #expect(DeviceTakeDefaults.frame(contentAspect: 1 / 0.6) == DeviceFrame(model: .iPhone, finish: .dark))
+        #expect(DeviceTakeDefaults.frame(contentAspect: 16.0 / 9).model == .iPhone)
+        #expect(DeviceTakeDefaults.frame(contentAspect: 4.0 / 3) == DeviceFrame(model: .iPad, finish: .dark))
+        #expect(DeviceTakeDefaults.frame(contentAspect: 1).model == .iPad)
+        // Just past 0.6, either way up, an iPad.
+        #expect(DeviceTakeDefaults.frame(contentAspect: 0.61).model == .iPad)
+        #expect(DeviceTakeDefaults.frame(contentAspect: 1 / 0.61).model == .iPad)
     }
 
     @Test func aDeviceThatToldNoSizeKeepsTheStylesFrame() {
