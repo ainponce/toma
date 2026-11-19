@@ -248,17 +248,17 @@ public enum SequenceCommands {
     }
 
     /// One frame of output at the document's frame rate, the shortest a clip can be (plan decision 24).
-    private static func oneFrame(of doc: EditDocument) -> Int64 {
+    static func oneFrame(of doc: EditDocument) -> Int64 {
         TimeMap.frameTime(1, frameRate: max(doc.frameRate, 1))
     }
 
     /// Whether `clip` lasts at least `frame` of output.
-    private static func lasts(_ clip: Clip, _ frame: Int64) -> Bool {
+    static func lasts(_ clip: Clip, _ frame: Int64) -> Bool {
         TimeMap.outputDuration(of: clip) >= frame
     }
 
     /// `clip` with its speed as the time map reads it, the one a command writes.
-    private static func written(_ clip: Clip) -> Clip {
+    static func written(_ clip: Clip) -> Clip {
         var clip = clip
         clip.speed = ClipSpeed.clamped(clip.speed)
         return clip
@@ -279,7 +279,7 @@ public enum SequenceCommands {
 
     /// A new clip id that no clip of the sequence has, nor one this command made: `makeID("c-")`, which gives 8 random
     /// hex digits and so almost never one in use. If it gives only ids in use, the first free `c-` id counting from 1.
-    private static func newID(_ makeID: (String) -> String, avoiding ids: inout Set<String>) -> String {
+    static func newID(_ makeID: (String) -> String, avoiding ids: inout Set<String>) -> String {
         for _ in 0..<8 {
             let id = makeID("c-")
             if ids.insert(id).inserted { return id }
@@ -295,7 +295,7 @@ public enum SequenceCommands {
 }
 
 /// The changes of a command to `/sequence`, in order, each built from the clips it touches.
-private struct SequenceChanges {
+struct SequenceChanges {
     private(set) var changes: [EditChange] = []
 
     /// `EditCollection.sequence`.
