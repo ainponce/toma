@@ -176,7 +176,7 @@ public struct KeyboardCommands {
         case ("e", [.command]): .export
         case ("o", [.command]): .open
         case let (digit, [.command]):
-            Int(digit).flatMap { (1...6).contains($0) ? .tab($0) : nil }
+            Int(digit).flatMap { (1...8).contains($0) ? .tab($0) : nil }
         default: nil
         }
     }

@@ -177,7 +177,7 @@ final class EditorKeyboard {
         }
     }
 
-    /// ⌘1 … ⌘6: the panel's tab (Camera only with a camera), the panel shown if it was hidden.
+    /// ⌘1 … ⌘8: the panel's tab (Camera only with a camera), the panel shown if it was hidden.
     private func showTab(_ n: Int, _ model: EditorModel) -> Bool {
         guard let tab = EditorPanelTab(rawValue: n - 1), tab != .camera || model.hasCamera else { return false }
         if !model.panelVisible { togglePanel() }

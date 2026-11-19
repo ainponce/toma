@@ -20,6 +20,9 @@ public enum PermissionKind: String, CaseIterable, Sendable {
     /// Optional, and never needed to record: only to switch desktops from the island, by posting ⌃← and ⌃→
     /// (`SpaceJumper`). Asked for only when the user asks to (plan decision 27).
     case accessibility
+    /// Optional, and no take wants it until the keys on screen (phase 2): only to read the keys pressed. Like
+    /// Accessibility it only answers yes or no (`CGPreflightListenEventAccess`).
+    case inputMonitoring
 }
 
 public enum PermissionState: Sendable, Equatable {
@@ -45,6 +48,7 @@ public protocol PermissionProbe: Sendable {
 /// authorization status for audio and video.
 /// Accessibility also only answers yes or no (`AXIsProcessTrusted`), and is remembered the same way: so
 /// the second "Give Permission…" opens System Settings instead of the prompt again.
+/// Input Monitoring is the same (`CGPreflightListenEventAccess`), asked for with `CGRequestListenEventAccess`.
 /// System audio cannot be read at all without private API: it is `notDetermined` until it has been requested
 /// once (remembered in `defaults`), and `granted` after that, which here means requested. Requesting runs a tap of
 /// every app for 1 s, which makes macOS show its prompt the first time; a refused tap records silence.
@@ -64,6 +68,8 @@ public struct SystemPermissionProbe: PermissionProbe {
     private let systemAudioRequest: @Sendable () async -> Void
     private let accessibilityTrusted: @Sendable () -> Bool
     private let accessibilityPrompt: @Sendable () -> Void
+    private let listenPreflight: @Sendable () -> Bool
+    private let listenRequest: @Sendable () -> Bool
 
     public init(defaults: UserDefaults = .standard) {
         self.init(
@@ -81,7 +87,9 @@ public struct SystemPermissionProbe: PermissionProbe {
                 // Swift 6 refuses to read ("not concurrency-safe"), with or without `takeUnretainedValue()`.
                 // The prompt adds Toma to the list in System Settings and offers to open it; it returns at once.
                 _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-            })
+            },
+            listenPreflight: { CGPreflightListenEventAccess() },
+            listenRequest: { CGRequestListenEventAccess() })
     }
 
     /// For tests: the system calls replaced.
@@ -95,7 +103,9 @@ public struct SystemPermissionProbe: PermissionProbe {
         cameraRequest: @escaping @Sendable () async -> Bool,
         systemAudioRequest: @escaping @Sendable () async -> Void,
         accessibilityTrusted: @escaping @Sendable () -> Bool,
-        accessibilityPrompt: @escaping @Sendable () -> Void
+        accessibilityPrompt: @escaping @Sendable () -> Void,
+        listenPreflight: @escaping @Sendable () -> Bool = { false },
+        listenRequest: @escaping @Sendable () -> Bool = { false }
     ) {
         self.defaults = Defaults(value: defaults)
         self.screenPreflight = screenPreflight
@@ -107,6 +117,8 @@ public struct SystemPermissionProbe: PermissionProbe {
         self.systemAudioRequest = systemAudioRequest
         self.accessibilityTrusted = accessibilityTrusted
         self.accessibilityPrompt = accessibilityPrompt
+        self.listenPreflight = listenPreflight
+        self.listenRequest = listenRequest
     }
 
     public func state(of kind: PermissionKind) -> PermissionState {
@@ -122,6 +134,9 @@ public struct SystemPermissionProbe: PermissionProbe {
             return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .granted : .notDetermined
         case .accessibility:
             if accessibilityTrusted() { return .granted }
+            return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .denied : .notDetermined
+        case .inputMonitoring:
+            if listenPreflight() { return .granted }
             return defaults.value.bool(forKey: Self.requestedKey(kind)) ? .denied : .notDetermined
         }
     }
@@ -143,6 +158,9 @@ public struct SystemPermissionProbe: PermissionProbe {
             defaults.value.set(true, forKey: Self.requestedKey(kind))
             accessibilityPrompt()
             return state(of: kind)
+        case .inputMonitoring:
+            defaults.value.set(true, forKey: Self.requestedKey(kind))
+            return listenRequest() ? .granted : .denied
         }
     }
 
@@ -200,7 +218,7 @@ public enum PermissionAction: Equatable, Sendable {
 ///
 /// macOS can forget an app it was asked about: after `tccutil reset`, or when a new build without a stable
 /// signature counts as another app. Toma is then missing from the list in System Settings, or listed under a
-/// switch that no longer applies to it, and there is nothing to turn on. So screen recording and Accessibility
+/// switch that no longer applies to it, and there is nothing to turn on. So screen recording, Accessibility and Input Monitoring
 /// are asked for again first: that puts Toma back in the list, and shows the system's prompt if macOS had
 /// forgotten it. System Settings opens only when no prompt came up (the prompt already offers to open it), so
 /// never both; nothing opens once asking again allowed it. The microphone and the camera go straight to System
@@ -228,7 +246,7 @@ public struct PermissionSettingsOpener {
 
     /// Whether macOS needs to be asked again before System Settings is of any use for `kind`.
     static func asksAgain(_ kind: PermissionKind) -> Bool {
-        kind == .screenRecording || kind == .accessibility
+        kind == .screenRecording || kind == .accessibility || kind == .inputMonitoring
     }
 
     /// Asks again when that helps, then opens System Settings unless a prompt came up or the permission is now
@@ -260,6 +278,7 @@ public enum PermissionSettings {
         // Recording Only".
         case .systemAudio: "Privacy_ScreenCapture"
         case .accessibility: "Privacy_Accessibility"
+        case .inputMonitoring: "Privacy_ListenEvent"
         }
         return URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane)")!
     }

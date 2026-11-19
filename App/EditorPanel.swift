@@ -2,9 +2,9 @@
 import AppSupport
 import SwiftUI
 
-/// The panel's tabs, in the mockup's order (design §5.4): ⌘1 to ⌘6.
+/// The panel's tabs, in the mockup's order (design §5.4): ⌘1 to ⌘8.
 enum EditorPanelTab: Int, CaseIterable, Identifiable {
-    case background, frame, camera, cursor, zoom, audio
+    case background, frame, camera, cursor, zoom, audio, captions, privacy
 
     var id: Int { rawValue }
 
@@ -16,6 +16,8 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .cursor: "Cursor"
         case .zoom: "Zoom"
         case .audio: "Audio"
+        case .captions: "Captions"
+        case .privacy: "Privacy"
         }
     }
 
@@ -27,6 +29,8 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .cursor: "cursorarrow"
         case .zoom: "plus.magnifyingglass"
         case .audio: "waveform"
+        case .captions: "captions.bubble"
+        case .privacy: "eye.slash"
         }
     }
 
@@ -116,6 +120,8 @@ struct EditorPanel: View {
             case .cursor: CursorTab(model: model, cursor: document.cursor)
             case .zoom: ZoomTab(model: model, document: document)
             case .audio: AudioTab(model: model, audio: document.audio)
+            case .captions: CaptionsTab(model: model)
+            case .privacy: PrivacyTab(model: model)
             }
         }
     }

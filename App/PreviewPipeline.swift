@@ -29,6 +29,7 @@ final class RevisionBuilder: Sendable {
         var document: EditDocument
         var outputSize: SIMD2<Int>
         var mix: EditedMix?
+        var analysis: AnalysisInputs
     }
 
     private let renderer: FrameRenderer
@@ -57,10 +58,14 @@ final class RevisionBuilder: Sendable {
         state.withLock { $0.paths = paths }
     }
 
-    /// Builds the request of `ticket`, `document` at `outputSize`, and its mix from `mix` (the project's).
-    func build(ticket: PreviewBuilds.Ticket, document: EditDocument, outputSize: SIMD2<Int>, mix: EditedMix?) {
+    /// Builds the request of `ticket`, `document` at `outputSize`, and its mix from `mix` (the project's); the scene reads
+    /// `analysis` of the caches.
+    func build(
+        ticket: PreviewBuilds.Ticket, document: EditDocument, outputSize: SIMD2<Int>, mix: EditedMix?,
+        analysis: AnalysisInputs
+    ) {
         let start = state.withLock { state in
-            state.pending = Request(ticket: ticket, document: document, outputSize: outputSize, mix: mix)
+            state.pending = Request(ticket: ticket, document: document, outputSize: outputSize, mix: mix, analysis: analysis)
             defer { state.building = true }
             return !state.building
         }
@@ -87,7 +92,8 @@ final class RevisionBuilder: Sendable {
             let paths = paths(of: request.document)
             let result = Built(
                 ticket: request.ticket, document: request.document,
-                scene: renderer.makeScene(document: request.document, paths: paths, outputSize: request.outputSize),
+                scene: renderer.makeScene(
+                    document: request.document, paths: paths, outputSize: request.outputSize, analysis: request.analysis),
                 mix: request.mix?.with(document: request.document, framesPerSecond: request.document.frameRate))
             let built = self.built
             Task { @MainActor in built(result) }

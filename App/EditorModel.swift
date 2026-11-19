@@ -6,6 +6,7 @@ import Editing
 import Export
 import Observation
 import ProjectFormat
+import ProjectJobs
 import QuartzCore
 import Recovery
 import Render
@@ -217,6 +218,19 @@ final class EditorModel {
     @ObservationIgnored private var player: PreviewAudioPlayer?
     /// The mix made when the project opened, which every revision's derives from.
     @ObservationIgnored private var baseMix: EditedMix?
+    /// What the preview and the export read of the project's analysis caches (phase 2 design §10): nothing until a
+    /// feature's job finishes and hands its result over with `updateAnalysis(_:)`.
+    @ObservationIgnored private(set) var analysis = AnalysisInputs.none
+    /// The analysis jobs of this project, one at a time and paused while a take records (`ProjectJobs`). The features'
+    /// jobs are enqueued here; closing the editor cancels them.
+    let jobs = ProjectJobs()
+    /// What an export does first, in order, before its exporter starts: each feature adds its own (for example, waiting
+    /// for its analysis jobs with progress). One that answers `false` cancels the export, saying nothing of its own.
+    var exportPreparations: [@MainActor (EditorModel) async -> Bool] = []
+    /// The last `jobs.setRecording(_:)` told, so the next one goes after it and they arrive in order.
+    @ObservationIgnored private var recordingTold: Task<Void, Never>?
+    /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
+    @ObservationIgnored private var mixGeneration = 0
     /// Which revision's mix the player holds and which one is heard.
     @ObservationIgnored private var sound = PlayingMix()
     /// The revision of the session's document shown.
@@ -466,16 +480,25 @@ final class EditorModel {
     /// The mix of the document as it opened, off the main thread: it reads where every audio segment ends. Playback
     /// follows the host's clock until it is there.
     private func makeMix(of project: LoadedProject, document: EditDocument, revision: Int) {
+        mixGeneration += 1
+        let generation = mixGeneration, analysis = analysis
         Task {
             let mix: EditedMix
             do {
-                mix = try await EditedMix.make(project: project, document: document, framesPerSecond: document.frameRate)
+                mix = try await EditedMix.make(
+                    project: project, document: document, framesPerSecond: document.frameRate, analysis: analysis)
             } catch {
                 Self.logger.error("No preview sound for \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
                 return
             }
-            guard !closed, state == .ready, builder != nil else { return }
+            guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
             baseMix = mix
+            if let player {
+                // Remade with new analysis: the player takes the revision shown's mix as it is built.
+                player.setMix(mix)
+                if let session { build(session.document, revision: session.revision) }
+                return
+            }
             let player = PreviewAudioPlayer(mix: mix)
             self.player = player
             sound.hold(document)
@@ -679,7 +702,7 @@ final class EditorModel {
         let applied: EditDocument? = gestureStep.flatMap { try? document.applying($0.changes) }
         let shown = gestureLook(applied ?? document)
         let ticket = builds.request(revision: session.revision, ofGesture: true)
-        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix)
+        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis)
         return applied
     }
 
@@ -694,7 +717,30 @@ final class EditorModel {
         guard let builder else { return }
         let shown = heldLook?(document) ?? document
         let ticket = builds.request(revision: revision, ofGesture: false)
-        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix)
+        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis)
+    }
+
+    /// A take starts or stops recording: the analysis queue pauses while it does (`ProjectJobs.setRecording(_:)`; an
+    /// analysis that cannot be suspended is repeated from its last segment after the take).
+    func setRecording(_ recording: Bool) {
+        let previous = recordingTold
+        recordingTold = Task { [jobs] in
+            await previous?.value
+            await jobs.setRecording(recording)
+        }
+    }
+
+    /// A feature's analysis arrived (or went): `edit` changes what the preview and the export read of the caches. The
+    /// preview's scene is built again with it and the mix is remade (off the main thread), then the revision shown is
+    /// drawn again. Nothing happens if `edit` changes nothing.
+    func updateAnalysis(_ edit: (inout AnalysisInputs) -> Void) {
+        var next = analysis
+        edit(&next)
+        guard next != analysis else { return }
+        analysis = next
+        guard state == .ready, let session else { return }
+        showSessionRevision()
+        makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
     }
 
     /// The project as the session has it, for what the overlays place.
@@ -1127,15 +1173,22 @@ final class EditorModel {
         }
         exportTask = Task {
             do {
+                // What each feature needs before the export (its analysis done); one that says no stops it quietly.
+                for preparation in exportPreparations {
+                    try Task.checkCancellation()
+                    guard await preparation(self) else { throw CancellationError() }
+                }
+                let analysis = analysis
                 switch job {
                 case let .mp4(settings, range):
-                    let exporter = MP4Exporter(project: project, document: document, settings: settings, range: range)
+                    let exporter = MP4Exporter(
+                        project: project, document: document, settings: settings, range: range, analysis: analysis)
                     let summary = try await exporter.export(to: destination, progress: progress)
                     exportFinished(at: destination)
                     let leftOut = Self.leftOut(summary, take: project.take)
                     if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
                 case let .gif(settings):
-                    let exporter = GIFExporter(project: project, document: document, settings: settings)
+                    let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
                     try await exporter.export(to: destination, progress: progress)
                     exportFinished(at: destination)
                 }
@@ -1357,6 +1410,7 @@ final class EditorModel {
         export?.cancel()
         exportFinishedTask?.cancel()
         tearDownPreview()
+        Task { [jobs] in await jobs.cancelAll() }
         session?.onChange = nil
         // Where it was last seen, for who looks at it once it closed.
         if let session { noteLocation(session.packageURL) }

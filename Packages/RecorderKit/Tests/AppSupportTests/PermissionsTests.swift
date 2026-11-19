@@ -12,6 +12,7 @@ struct FakeProbe: PermissionProbe {
     var accessibility: PermissionState = .notDetermined
     var camera: PermissionState = .notDetermined
     var systemAudio: PermissionState = .notDetermined
+    var inputMonitoring: PermissionState = .notDetermined
 
     func state(of kind: PermissionKind) -> PermissionState {
         switch kind {
@@ -20,6 +21,7 @@ struct FakeProbe: PermissionProbe {
         case .camera: camera
         case .systemAudio: systemAudio
         case .accessibility: accessibility
+        case .inputMonitoring: inputMonitoring
         }
     }
 
@@ -114,6 +116,8 @@ struct FakeProbe: PermissionProbe {
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
     #expect(PermissionSettings.url(for: .camera).absoluteString
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera")
+    #expect(PermissionSettings.url(for: .inputMonitoring).absoluteString
+        == "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
     // System audio is in the same pane as screen recording ("Screen & System Audio Recording").
     #expect(PermissionSettings.url(for: .systemAudio).absoluteString
         == "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
@@ -158,8 +162,8 @@ func openSettings(_ kind: PermissionKind, probe: AskedProbe, promptComesUp: Bool
 }
 
 @Test func screenRecordingIsAskedForAgainBeforeSystemSettingsSoTomaIsBackInTheList() async {
-    for kind in [PermissionKind.screenRecording, .accessibility] {
-        let probe = AskedProbe(FakeProbe(screen: .denied, mic: .granted, accessibility: .denied))
+    for kind in [PermissionKind.screenRecording, .accessibility, .inputMonitoring] {
+        let probe = AskedProbe(FakeProbe(screen: .denied, mic: .granted, accessibility: .denied, inputMonitoring: .denied))
         #expect(await openSettings(kind, probe: probe) == [PermissionSettings.url(for: kind)])
         #expect(probe.requests == [kind])
     }
@@ -206,6 +210,8 @@ final class FakeSystem: Sendable {
     let systemAudioRequests = Atomic(0)
     let accessibilityTrusted = Atomic(false)
     let accessibilityPrompts = Atomic(0)
+    let listenAllowed = Atomic(false)
+    let listenRequests = Atomic(0)
 
     func probe(_ defaults: UserDefaults) -> SystemPermissionProbe {
         SystemPermissionProbe(
@@ -224,7 +230,12 @@ final class FakeSystem: Sendable {
             },
             systemAudioRequest: { self.systemAudioRequests.add(1, ordering: .relaxed) },
             accessibilityTrusted: { self.accessibilityTrusted.load(ordering: .relaxed) },
-            accessibilityPrompt: { self.accessibilityPrompts.add(1, ordering: .relaxed) })
+            accessibilityPrompt: { self.accessibilityPrompts.add(1, ordering: .relaxed) },
+            listenPreflight: { self.listenAllowed.load(ordering: .relaxed) },
+            listenRequest: {
+                self.listenRequests.add(1, ordering: .relaxed)
+                return self.listenAllowed.load(ordering: .relaxed)
+            })
     }
 }
 
@@ -350,4 +361,48 @@ func cameraRequestGivesTheAnswer(answer: Bool, expected: PermissionState) async 
         #expect(system.probe(defaults).state(of: .accessibility) == .granted)
         #expect(system.accessibilityPrompts.load(ordering: .relaxed) == 0)
     }
+}
+
+@Test func inputMonitoringFollowsListenAccess() async {
+    await withDefaults { defaults in
+        let system = FakeSystem()
+        let probe = system.probe(defaults)
+        #expect(probe.state(of: .inputMonitoring) == .notDetermined)
+        #expect(await probe.request(.inputMonitoring) == .denied)
+        #expect(system.listenRequests.load(ordering: .relaxed) == 1)
+        #expect(probe.state(of: .inputMonitoring) == .denied)
+        #expect(defaults.bool(forKey: "permissionRequested.inputMonitoring"))
+        // Remembered in the defaults, not in the probe.
+        #expect(system.probe(defaults).state(of: .inputMonitoring) == .denied)
+        system.listenAllowed.store(true, ordering: .relaxed)
+        #expect(probe.state(of: .inputMonitoring) == .granted)
+        #expect(await probe.request(.inputMonitoring) == .granted)
+    }
+}
+
+@Test func inputMonitoringGrantedNeedsNoRequest() async {
+    await withDefaults { defaults in
+        let system = FakeSystem()
+        system.listenAllowed.store(true, ordering: .relaxed)
+        #expect(system.probe(defaults).state(of: .inputMonitoring) == .granted)
+        #expect(system.listenRequests.load(ordering: .relaxed) == 0)
+    }
+}
+
+@Test @MainActor func inputMonitoringIsAskedAgainBeforeSettings() async {
+    // Without a prompt coming up: System Settings opens, on the Input Monitoring pane.
+    let asked = AskedProbe(FakeProbe(screen: .granted, mic: .granted, inputMonitoring: .denied))
+    #expect(await openSettings(.inputMonitoring, probe: asked) == [PermissionSettings.url(for: .inputMonitoring)])
+    #expect(asked.requests == [.inputMonitoring])
+    // With the prompt up (another app in front): nothing opens.
+    let prompted = AskedProbe(FakeProbe(screen: .granted, mic: .granted, inputMonitoring: .denied))
+    #expect(await openSettings(.inputMonitoring, probe: prompted, promptComesUp: true).isEmpty)
+}
+
+@Test func aTakeNeverWantsInputMonitoring() {
+    let probe = FakeProbe(screen: .granted, mic: .denied)
+    let result = RecordingPreflight.evaluate(probe: probe, wanted: [.screenRecording, .microphone])
+    #expect(result.missing == [.microphone])
+    #expect(!result.missing.contains(.inputMonitoring))
+    #expect(result.granted == [.screenRecording])
 }
