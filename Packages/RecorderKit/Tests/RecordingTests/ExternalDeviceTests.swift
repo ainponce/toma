@@ -66,6 +66,36 @@ import Testing
         #expect(tries.load(ordering: .relaxed) == 2)
     }
 
+    @Test @MainActor func allowingFromTheMainActorMakesItOffIt() async {
+        let calls = Atomic(0)
+        let onMain = Atomic(false)
+        let gate = DispatchSemaphore(value: 0)
+        let setting = OneTimeSetting {
+            if Thread.isMainThread { onMain.store(true, ordering: .relaxed) }
+            calls.add(1, ordering: .relaxed)
+            // CoreMediaIO takes its time. Never for ever, even if this were the main thread.
+            _ = gate.wait(timeout: .now() + 5)
+            return true
+        }
+        // The iPhone mode opens, twice in a row: the main actor goes on while it is made, and it is made once.
+        let first = Task { await setting.apply() }
+        let second = Task { await setting.apply() }
+        #expect(await eventually { calls.load(ordering: .relaxed) == 1 })
+        gate.signal()
+        let applied = (await first.value, await second.value)
+        #expect(applied == (true, true))
+        #expect(await setting.apply())
+        #expect(calls.load(ordering: .relaxed) == 1 && !onMain.load(ordering: .relaxed))
+
+        // One that failed is tried again, until it holds; the session's queue waits for it the same way.
+        let tries = Atomic(0)
+        let flaky = OneTimeSetting { tries.add(1, ordering: .relaxed).newValue > 1 }
+        #expect(!(await flaky.apply()))
+        #expect(await Task.detached { flaky.apply() }.value)
+        #expect(await flaky.apply())
+        #expect(tries.load(ordering: .relaxed) == 2)
+    }
+
     // MARK: - Policy and errors
 
     @Test func deviceTracksKeepRetrying() {

@@ -24,11 +24,20 @@ public struct ExternalDeviceInfo: Equatable, Sendable {
 public enum ExternalDeviceCatalog {
     /// Lets this process see the screens of iPhones and iPads (`kCMIOHardwarePropertyAllowScreenCaptureDevices` = 1
     /// on the system object): set once per process, tried again only while it fails. The devices show up a moment
-    /// later (`AVCaptureDevice.wasConnectedNotification`), so the iPhone mode calls this as it opens. `true` once it
-    /// is set.
+    /// later (`AVCaptureDevice.wasConnectedNotification`). `true` once it is set.
+    ///
+    /// CoreMediaIO may take a while, and this waits for it: never on the main thread (the capture calls it on its
+    /// session's queue). The main actor uses the `async` one.
     @discardableResult
     public static func allowScreenCaptureDevices() -> Bool {
         screenCaptureDevices.apply()
+    }
+
+    /// The same, for callers on the main actor (the iPhone mode calls it as it opens): CoreMediaIO is called off it,
+    /// at user-initiated QoS, and the caller waits without holding its thread.
+    @discardableResult
+    public static func allowScreenCaptureDevices() async -> Bool {
+        await screenCaptureDevices.apply()
     }
 
     /// The iPhones and iPads connected now, in the system's order. Empty until `allowScreenCaptureDevices()`.
@@ -85,8 +94,13 @@ public enum ExternalDeviceCatalog {
 }
 
 /// A setting of the whole process that is made once: `apply` makes it until it holds, then never again.
+///
+/// It is made on a serial queue of its own, at user-initiated QoS, with no lock held: calls at the same time wait in
+/// line behind the one making it, and find it made (or try again if that one failed). Once it holds, a call returns
+/// at once, without the queue.
 final class OneTimeSetting: Sendable {
-    private let applied = Mutex(false)
+    private let holds = Atomic(false)
+    private let queue = DispatchSerialQueue(label: "dev.toma.OneTimeSetting", qos: .userInitiated)
     private let make: @Sendable () -> Bool
 
     /// `make` sets it, and says whether it took.
@@ -94,11 +108,28 @@ final class OneTimeSetting: Sendable {
         self.make = make
     }
 
-    /// Makes the setting unless it already holds. `true` once it holds. Calls at the same time wait for each other.
+    /// Makes the setting unless it already holds, and waits for it there: never on the main thread. `true` once it
+    /// holds.
     func apply() -> Bool {
-        applied.withLock { applied in
-            if !applied { applied = make() }
-            return applied
+        if holds.load(ordering: .acquiring) { return true }
+        dispatchPrecondition(condition: .notOnQueue(.main))
+        return queue.sync { applyOnQueue() }
+    }
+
+    /// The same, waiting without holding the caller's thread: for the main actor.
+    func apply() async -> Bool {
+        if holds.load(ordering: .acquiring) { return true }
+        return await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: self.applyOnQueue()) }
         }
+    }
+
+    private func applyOnQueue() -> Bool {
+        dispatchPrecondition(condition: .onQueue(queue))
+        // A call that waited in line behind the one that made it.
+        if holds.load(ordering: .acquiring) { return true }
+        let made = make()
+        if made { holds.store(true, ordering: .releasing) }
+        return made
     }
 }
