@@ -3292,6 +3292,17 @@
         }
       }
     },
+    "Match System" : {
+      "comment" : "Settings, Appearance: light or dark as the system is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Como el sistema"
+          }
+        }
+      }
+    },
     "Meadow" : {
       "localizations" : {
         "es" : {

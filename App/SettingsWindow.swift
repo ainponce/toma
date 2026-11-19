@@ -16,12 +16,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, onClose: @escaping () -> Void
+        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting,
+        onClose: @escaping () -> Void
     ) {
         self.onClose = onClose
         model = SettingsModel(
             store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
-            focusShortcut: focusShortcut)
+            focusShortcut: focusShortcut, appearance: appearance)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered,
             defer: false)
@@ -201,14 +202,16 @@ final class SettingsModel {
     @ObservationIgnored let afterStop: AfterStopSetting
     @ObservationIgnored let hideDesktopIcons: HideDesktopIconsSetting
     @ObservationIgnored let focusShortcut: FocusShortcutSetting
+    @ObservationIgnored let appearance: AppearanceSetting
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private var monitor: Any?
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting
+        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting
     ) {
         self.store = store
+        self.appearance = appearance
         self.hotKeys = hotKeys
         self.countdown = countdown
         self.afterStop = afterStop
@@ -299,6 +302,13 @@ private struct SettingsView: View {
 
     var body: some View {
         Form {
+            Picker(selection: Binding(get: { model.appearance.value }, set: { model.appearance.set($0) })) {
+                ForEach(AppAppearance.allCases, id: \.self) { value in
+                    AppearanceSetting.label(for: value)
+                }
+            } label: {
+                Text("Appearance")
+            }
             Picker(selection: Binding(get: { model.countdown.seconds }, set: { model.countdown.set($0) })) {
                 ForEach(RecorderSettings.countdownOptions, id: \.self) { seconds in
                     CountdownSetting.label(for: seconds)

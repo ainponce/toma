@@ -31,6 +31,8 @@ targets:
         ENABLE_HARDENED_RUNTIME: "YES"
         CODE_SIGN_ENTITLEMENTS: App/Toma.entitlements
         LOCALIZATION_PREFERS_STRING_CATALOGS: "YES"
+        # The brand's violet (App/Resources/Assets.xcassets), unless the user picked an accent color in System Settings.
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         SWIFT_EMIT_LOC_STRINGS: "YES"
       configs:
         # Xcode adds com.apple.security.get-task-allow (debugging) unless told not to: never in a release.

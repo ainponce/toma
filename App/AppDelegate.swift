@@ -23,6 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The app's one camera session: the bubble shows it and the take records it (plan decision 28).
     private let cameraHost = CameraSessionHost()
     private let store = SettingsStore()
+    /// Dark unless the user chose otherwise; applied as the app launches, before any window shows.
+    let appearance = AppearanceSetting()
     /// The countdown before a take, shared by the island's settings card and the settings window.
     private let countdown: CountdownSetting
     /// What a stop does once the take is saved, shared by the island's settings card and the settings window.
@@ -133,6 +135,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             dumpEditorStructure(of: path)
             return
         }
+        if let showcase = Self.showcase {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                MainActor.assumeIsolated { self.runShowcase(showcase.surface, path: showcase.path) }
+            }
+            return
+        }
         if let folder = Self.libraryBenchFolder {
             // Once the app has finished launching (its menu bar item, its scenes): the library opens in a running app.
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
@@ -160,14 +168,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { await focus.recoverAfterLaunch() }
         // The named styles: the default style of 1b becomes «My Style» the first time (1c design §8).
         StyleCatalog.shared.start()
-        let island = IslandPanel(
-            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop,
-            hideDesktopIcons: hideDesktopIcons, focusShortcut: focusShortcut, probe: probe, cameraHost: cameraHost)
-        // Opening or closing the island never activates the app.
-        island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
-        island.openLibrary = { [weak self] in self?.showLibrary(section: $0) }
-        recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
-        self.island = island
+        makeIsland()
         powerOffObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.willPowerOffNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -177,6 +178,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             await recovery.run(in: recording.projectsFolder, atLaunch: true)
             if PermissionsModel.needsAttention(probe: probe) { showOnboarding() }
         }
+    }
+
+    /// The recording control at the notch.
+    private func makeIsland() {
+        let island = IslandPanel(
+            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop,
+            hideDesktopIcons: hideDesktopIcons, focusShortcut: focusShortcut, probe: probe, cameraHost: cameraHost)
+        // Opening or closing the island never activates the app.
+        island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
+        island.openLibrary = { [weak self] in self?.showLibrary(section: $0) }
+        recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
+        self.island = island
     }
 
     /// Nothing in progress is lost to a quit (`TerminationDecision`): edits an editor couldn't save are asked about first
@@ -361,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings == nil {
             settings = SettingsWindowController(
                 store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
-                focusShortcut: focusShortcut
+                focusShortcut: focusShortcut, appearance: appearance
             ) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil
@@ -421,6 +434,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             print("split: " + (editor?.splitIdentifiers ?? []).joined(separator: " "))
             fflush(stdout)
             exit(editor?.structureIsSettled == true ? 0 : 1)
+        }
+    }
+
+    // MARK: - -TomaShowcase
+
+    /// `Toma -TomaShowcase <surface> [<path>]`: one surface to look at, for screenshots of the design
+    /// (`scripts/ui-shots.sh`).
+    private static var showcase: (surface: String, path: String?)? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "-TomaShowcase"), index + 1 < arguments.count else { return nil }
+        return (arguments[index + 1], index + 2 < arguments.count ? arguments[index + 2] : nil)
+    }
+
+    /// Opens `surface` and stays open, without the onboarding, the recovery, the deletions left at launch or anything
+    /// else that touches the projects folder: `onboarding`, `settings`, `notices`, `island` (the island, open),
+    /// `editor <package>`, `export <package>` (the editor with its export sheet). The library over a folder of its own is
+    /// `-TomaLibraryBench <folder> -TomaLibraryBenchKeepOpen`.
+    private func runShowcase(_ surface: String, path: String?) {
+        StyleCatalog.shared.start()
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate()
+        switch (surface, path) {
+        case ("onboarding", _): showOnboarding()
+        case ("settings", _): showSettings()
+        case ("notices", _): showThirdPartyNotices()
+        case ("island", _):
+            makeIsland()
+            island?.invoke()
+        case ("editor", let path?), ("export", let path?):
+            let url = URL(fileURLWithPath: path).standardizedFileURL
+            showEditor(for: url, take: nil)
+            guard surface == "export" else { return }
+            Task {
+                let deadline = ContinuousClock.now + .seconds(30)
+                while ContinuousClock.now < deadline, editors[url]?.structureIsSettled != true {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                try? await Task.sleep(for: .seconds(1))
+                editors[url]?.model.openExportSheet()
+            }
+        default:
+            print("unknown surface \(surface)")
+            exit(2)
         }
     }
 
