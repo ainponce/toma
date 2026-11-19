@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
+import Editing
 import ProjectFormat
 import SwiftUI
 
@@ -44,11 +45,14 @@ struct AudioTab: View {
                         ) { model.setTrackVolume(track, percent: $0) }
                         .disabled(gain.muted)
                         Toggle("Mute", isOn: Binding(get: { gain.muted }, set: { model.setTrackMuted(track, $0) }))
+                        if track.isMicrophone {
+                            AudioCleanupRow(model: model, track: track, level: CleanupLevel(cleanup: gain.cleanup))
+                        }
                     }
                 }
                 Divider()
                 PanelSection {
-                    Toggle("Avoid Clipping", isOn: Binding(get: { audio.limiter }, set: { model.setLimiter($0) }))
+                    AudioMasterRows(model: model, audio: audio)
                 }
             }
         }
