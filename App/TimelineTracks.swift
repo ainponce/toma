@@ -109,6 +109,8 @@ struct TimelineContent {
     let cameraChanges: TrackItems<CameraChangeInfo>
     /// The privacy blocks (phase 2 design §7.1).
     let privacy: TimelinePrivacyItems
+    /// The captions (phase 2 design §5.2); none without a transcript.
+    let captions: TrackItems<CaptionInfo>
     /// The layout blocks, where the preview shows them.
     let layoutBlocks: TrackItems<LayoutBlockInfo>
     /// The ids of `layoutBlocks`, to tell a block from a camera change under the mouse.
@@ -181,6 +183,7 @@ struct TimelineContent {
         })
         privacy = TimelinePrivacyItems(document: document)
         let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
+        captions = TimelineCaptionItems.items(document: document, map: map, outputSize: output)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
         splitOrientation = orientation
         projectLayout = document.camera.layout.kind
@@ -435,6 +438,10 @@ final class TimelineTracks {
     private var waveforms: [String: CAShapeLayer] = [:]
     /// The Privacy row's blocks (phase 2).
     private let privacyRow = TimelinePrivacyRow()
+    /// The Captions row's blocks (phase 2).
+    private let captionsRow = CaptionTrackLayers()
+    /// The output time under the playhead, for the caption it highlights (`moved(playhead:)` when it moves).
+    private(set) var playhead: Int64 = 0
 
     /// The thumbnails, and the waveforms worked out so far by audio track.
     var thumbnailCache: ThumbnailCache?
@@ -510,6 +517,7 @@ final class TimelineTracks {
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
         rows.addSublayer(privacyRow.layer)
+        rows.addSublayer(captionsRow.layer)
         layer.addSublayer(separators)
         separators.lineWidth = 1
         separators.fillColor = nil
@@ -533,6 +541,7 @@ final class TimelineTracks {
             pool()
         }
         privacyRow.begin()
+        captionsRow.begin()
         var wanted: Set<ThumbnailKey> = []
         var shownWaveforms: Set<String> = []
         for row in geometry.rows {
@@ -541,8 +550,7 @@ final class TimelineTracks {
             case .video: layOutVideo(content, row, geometry, palette, &wanted)
             case .screen: layOutScreens(content, row, geometry, palette)
             case .zoom: layOutZooms(content, row, geometry, palette)
-            // Drawn by the captions feature (phase 2).
-            case .captions: break
+            case .captions: captionsRow.layOut(content, row, geometry, palette, playhead: playhead)
             case .privacy: privacyRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
             case .camera: layOutCamera(content, row, geometry, palette)
             case let .audio(id):
@@ -552,6 +560,7 @@ final class TimelineTracks {
         }
         for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }
         privacyRow.end()
+        captionsRow.end()
         for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
             waveform.removeFromSuperlayer()
             waveforms[id] = nil
@@ -561,6 +570,12 @@ final class TimelineTracks {
             task.cancel()
             loading[key] = nil
         }
+    }
+
+    /// The playhead moved to output time `τ`: the caption under it is highlighted.
+    func moved(playhead τ: Int64) {
+        playhead = τ
+        captionsRow.highlight(playhead: τ)
     }
 
     /// Nothing to show (the project is opening, or cannot be shown).
@@ -579,6 +594,7 @@ final class TimelineTracks {
             pool()
         }
         privacyRow.reset()
+        captionsRow.reset()
         tileKeys = [:]
         for waveform in waveforms.values { waveform.removeFromSuperlayer() }
         waveforms = [:]
@@ -597,7 +613,7 @@ final class TimelineTracks {
     /// How many layers the rows have in sight now, for the benchmark.
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
-            + layouts.shownCount + diamonds.shownCount + audioClips.shownCount + waveforms.count
+            + layouts.shownCount + diamonds.shownCount + audioClips.shownCount + waveforms.count + captionsRow.layerCount
     }
 
     // MARK: - Video

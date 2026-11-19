@@ -1384,6 +1384,17 @@
         }
       }
     },
+    "Caption “%1$@”, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a caption of the timeline's Captions track, its text, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subtítulo «%1$@», de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "Captions" : {
       "localizations" : {
         "es" : {
@@ -6867,6 +6878,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar los zooms"
+          }
+        }
+      }
+    },
+    "Show in Captions" : {
+      "comment" : "VoiceOver: an action of a caption of the timeline: its first word is shown in the Captions tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar en Subtítulos"
           }
         }
       }

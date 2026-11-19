@@ -45,14 +45,14 @@ struct TimelineGeometry {
         switch item.track {
         case .video, .screen: return itemRect(item.output, top: top + 2, height: row.height - 4, gap: 1)
         case .zoom: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
-        case .privacy: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
+        case .privacy, .captions: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
         case .camera:
             // A layout block is a rectangle; a change of the bubble, a diamond.
             if !item.output.isEmpty { return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1) }
             let x = snapped(self.x(item.output.lowerBound))
             guard x > -8, x < areaWidth + 8 else { return nil }
             return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
-        case .ruler, .audio, .captions: return nil
+        case .ruler, .audio: return nil
         }
     }
 
@@ -328,6 +328,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private var isStopped = false
     /// Where the help over the hatching is.
     private var helpRect: CGRect?
+    /// The Captions row's help rectangle (its tooltip is the caption under the pointer).
+    private var captionsHelpRect: CGRect?
     /// The dimmed diamonds' help rectangles, in the order their tooltips were added (their `userData` is the index + 1).
     private var diamondHelp: [(rect: CGRect, id: String)] = []
 
@@ -454,6 +456,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
             + content.cameraChanges.items.map { TimelineItem(id: $0.id, track: .camera, output: $0.output) }
             // The longest first: the shortest under the pointer is found (plan 2c decision 4).
             + content.privacy.hitOrder
+            + content.captions.items.map { TimelineItem(id: $0.id, track: .captions, output: $0.output) }
         itemsCache = items
         return items
     }
@@ -582,6 +585,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private func placePlayhead(_ geometry: TimelineGeometry? = nil) {
         guard let geometry = geometry ?? self.geometry() else { return }
         if !isPlaying { drawnPlayhead = playhead }
+        tracks.moved(playhead: drawnPlayhead)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }
@@ -937,11 +941,20 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
                 diamonds.append((frame.offsetBy(dx: TimelineLayout.headerWidth, dy: 0).insetBy(dx: -2, dy: -2), change.id))
             }
         }
-        if help != helpRect || diamonds.map(\.rect) != diamondHelp.map(\.rect) || diamonds.map(\.id) != diamondHelp.map(\.id) {
+        // The help over the Captions row: the full text of the caption under the pointer.
+        var captions: CGRect?
+        if let row = geometry.rows.first(where: { $0.track == .captions }) {
+            captions = CGRect(
+                x: TimelineLayout.headerWidth, y: TimelineLayout.rulerHeight + row.top - geometry.verticalOffset,
+                width: geometry.areaWidth, height: row.height)
+        }
+        if help != helpRect || captions != captionsHelpRect || diamonds.map(\.rect) != diamondHelp.map(\.rect) || diamonds.map(\.id) != diamondHelp.map(\.id) {
             helpRect = help
+            captionsHelpRect = captions
             diamondHelp = diamonds
             removeAllToolTips()
             if let help { addToolTip(help, owner: self, userData: nil) }
+            if let captionsHelpRect { addToolTip(captionsHelpRect, owner: self, userData: UnsafeMutableRawPointer(bitPattern: -1)) }
             for (k, diamond) in diamonds.enumerated() {
                 addToolTip(diamond.rect, owner: self, userData: UnsafeMutableRawPointer(bitPattern: k + 1))
             }
@@ -954,6 +967,10 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         let helpIndex = data.map { Int(bitPattern: $0) - 1 }
         return MainActor.assumeIsolated {
             guard let content else { return "" }
+            if helpIndex == -2 {
+                let τ = content.layout.output(atX: point.x, scale: scale, offset: offset)
+                return content.captions.items.first { $0.output.contains(τ) }?.info.text ?? ""
+            }
             if let k = helpIndex, diamondHelp.indices.contains(k),
                 let change = content.cameraChanges.items.first(where: { $0.id == diamondHelp[k].id }),
                 let kind = change.info.hiddenBy

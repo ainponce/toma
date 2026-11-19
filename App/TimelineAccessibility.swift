@@ -84,6 +84,10 @@ final class TimelineAccessibility {
             let label = TimelinePrivacyItems.accessibilityLabel(block.info, output: block.output)
             add(block.id, .privacy, block.output, label: label, actions: [Action(.delete)])
         }
+        let showInCaptions = [Action(.showInCaptions)]
+        content.captions.forEach(from: geometry.visibleOutput.lower, to: geometry.visibleOutput.upper) { caption in
+            add(caption.id, .captions, caption.output, label: TimelineCaptionItems.accessibilityLabel(caption.info, output: caption.output), actions: showInCaptions)
+        }
         for block in content.layoutBlocks.items {
             let label = String(
                 format: String(localized: "Layout %1$@, from %2$@ to %3$@", comment: "VoiceOver: a layout block of the Camera track, its layout, start and end"),
@@ -135,7 +139,7 @@ final class TimelineAccessibility {
     // MARK: - Actions
 
     private struct Action {
-        enum Kind { case split, delete, trimStart, trimEnd, changeLayout }
+        enum Kind { case split, delete, trimStart, trimEnd, changeLayout, showInCaptions }
         let kind: Kind
         init(_ kind: Kind) { self.kind = kind }
 
@@ -146,6 +150,7 @@ final class TimelineAccessibility {
             case .trimStart: String(localized: "Trim Start to Playhead", comment: "VoiceOver: an action of a clip: its start trimmed up to the playhead")
             case .trimEnd: String(localized: "Trim End to Playhead", comment: "VoiceOver: an action of a clip: its end trimmed up to the playhead")
             case .changeLayout: String(localized: "Change Layout")
+            case .showInCaptions: String(localized: "Show in Captions", comment: "VoiceOver: an action of a caption of the timeline: its first word is shown in the Captions tab")
             }
         }
     }
@@ -165,8 +170,16 @@ final class TimelineAccessibility {
                 model.selectCameraChange(id, output: output)
             }
         case .privacy: model.selection = .privacyBlocks([id])
-        case .ruler, .screen, .audio, .captions: return false
+        case .captions: return showInCaptions(id)
+        case .ruler, .screen, .audio: return false
         }
+        return true
+    }
+
+    /// A caption is not selected: pressing it, as its action, shows its first word in the Captions tab.
+    private func showInCaptions(_ id: String) -> Bool {
+        guard let model, let ref = view.content?.captions.items.first(where: { $0.id == id })?.info.words.first?.ref else { return false }
+        model.voice.reveal(ref)
         return true
     }
 
@@ -190,6 +203,8 @@ final class TimelineAccessibility {
             else { return false }
             view.interaction.popLayoutMenu(id: id, at: CGPoint(x: TimelineLayout.headerWidth + frame.minX, y: frame.maxY))
             return true
+        case .showInCaptions:
+            return showInCaptions(id)
         case .delete:
             guard select(id, on: track) else { return false }
             view.interaction.deleteSelected()
