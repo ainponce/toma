@@ -354,6 +354,19 @@ import Testing
         #expect(!engine.isRunning)
     }
 
+    @Test func aStoppedSessionDeliversNowhere() {
+        // A real session, with no device in it: once stopped, no output hands samples to anyone, and nothing of the
+        // last leases is kept alive.
+        let engine = CaptureSessionEngine(deviceUniqueID: "not-connected")
+        let queue = DispatchSerialQueue(label: "test.device.engine")
+        engine.setDelivery(ExternalDeviceSession.Delivery(queue: queue) { _ in }, for: .video)
+        engine.setDelivery(ExternalDeviceSession.Delivery(queue: queue) { _ in }, for: .audio)
+        #expect(engine.delivers(to: .video) && engine.delivers(to: .audio))
+        engine.stop()
+        #expect(!engine.delivers(to: .video) && !engine.delivers(to: .audio))
+        #expect(engine.keptForwarders == 0)
+    }
+
     @Test func aStartThatFindsTheSessionStoppedFails() async throws {
         // What ended the capture before the run could hear it.
         let engine = FakeEngine(format: Self.iPhone)

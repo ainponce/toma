@@ -388,9 +388,24 @@ final class CaptureSessionEngine: ExternalDeviceEngine, @unchecked Sendable {
         state.withLock { $0.forwarders[output] = forwarder }
     }
 
+    /// Stops the session, and lets go of what the outputs delivered to: no lease is alive any more.
     func stop() {
         session.stopRunning()
+        videoOutput.setSampleBufferDelegate(nil, queue: nil)
+        audioOutput.setSampleBufferDelegate(nil, queue: nil)
+        state.withLock { $0.forwarders = [:] }
     }
+
+    /// Whether `output` hands its samples to anyone now.
+    func delivers(to output: ExternalDeviceSession.Output) -> Bool {
+        switch output {
+        case .video: videoOutput.sampleBufferDelegate != nil
+        case .audio: audioOutput.sampleBufferDelegate != nil
+        }
+    }
+
+    /// How many outputs' deliveries are kept alive.
+    var keptForwarders: Int { state.withLock { $0.forwarders.count } }
 
     func currentStopCause() -> ExternalDeviceSession.StopCause? {
         let (device, disconnected, interrupted) = state.withLock { ($0.device, $0.disconnected, $0.interrupted) }
