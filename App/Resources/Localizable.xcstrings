@@ -89,6 +89,17 @@
         }
       }
     },
+    "%lld blocks added." : {
+      "comment" : "Result of Hide During Silences",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agregaron %lld bloques."
+          }
+        }
+      }
+    },
     "%lld markers" : {
       "comment" : "A saved take: how many markers it has",
       "localizations" : {
@@ -553,6 +564,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agregar a Favoritos"
+          }
+        }
+      }
+    },
+    "Adds a Screen Only block to each silence of 3 seconds or more." : {
+      "comment" : "Accessibility hint",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agrega un bloque Solo pantalla en cada silencio de 3 segundos o más."
           }
         }
       }
@@ -1829,6 +1851,50 @@
         }
       }
     },
+    "Cleaning the audio… %lld %%" : {
+      "comment" : "The voice without noise being made",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpiando el audio… %lld %%"
+          }
+        }
+      }
+    },
+    "Cleanup Gentle" : {
+      "comment" : "Noise Cleanup level: light",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Suave"
+          }
+        }
+      }
+    },
+    "Cleanup Off" : {
+      "comment" : "Noise Cleanup level: none",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apagada"
+          }
+        }
+      }
+    },
+    "Cleanup Strong" : {
+      "comment" : "Noise Cleanup level: full",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fuerte"
+          }
+        }
+      }
+    },
     "Click Effect" : {
       "comment" : "The Cursor tab",
       "localizations" : {
@@ -2113,6 +2179,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el video"
+          }
+        }
+      }
+    },
+    "Couldn't find the silences." : {
+      "comment" : "Hide During Silences failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron encontrar los silencios."
           }
         }
       }
@@ -3166,6 +3243,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Buscar datos sensibles"
+          }
+        }
+      }
+    },
+    "Finding the silences…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscando los silencios…"
           }
         }
       }
@@ -4356,6 +4443,17 @@
         }
       }
     },
+    "Measuring the volume… %lld %%" : {
+      "comment" : "The loudness being measured",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Midiendo el volumen… %lld %%"
+          }
+        }
+      }
+    },
     "Mechanical" : {
       "comment" : "The Cursor tab: a click sound",
       "localizations" : {
@@ -4886,6 +4984,17 @@
         }
       }
     },
+    "No silences of 3 s or more." : {
+      "comment" : "Result of Hide During Silences",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay silencios de 3 s o más."
+          }
+        }
+      }
+    },
     "No thumbnail in this location" : {
       "comment" : "The library: a card in a synced or network location",
       "localizations" : {
@@ -4918,6 +5027,17 @@
         }
       }
     },
+    "Noise Cleanup" : {
+      "comment" : "Audio tab: the microphone cleanup control",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Limpieza"
+          }
+        }
+      }
+    },
     "None" : {
       "comment" : "System audio: record none; the countdown: none",
       "localizations" : {
@@ -4936,6 +5056,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Normalizar el volumen"
+          }
+        }
+      }
+    },
+    "Normalize keeps it on." : {
+      "comment" : "Avoid Clipping is on and fixed while Normalize is on",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Normalizar lo deja prendido."
           }
         }
       }
@@ -5065,6 +5196,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apagado"
+          }
+        }
+      }
+    },
+    "Offset" : {
+      "comment" : "Label of the sync value",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desfase"
           }
         }
       }
@@ -5556,6 +5698,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Posición"
+          }
+        }
+      }
+    },
+    "Positive: the camera is shown later." : {
+      "comment" : "What the sign of the sync means",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Positivo: la cámara se ve más tarde."
           }
         }
       }
@@ -7220,6 +7373,17 @@
         }
       }
     },
+    "Sync with Audio" : {
+      "comment" : "Camera tab: the camera's offset against the sound",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sincronía con el audio"
+          }
+        }
+      }
+    },
     "System" : {
       "comment" : "The timeline's track of the system audio",
       "localizations" : {
@@ -8368,6 +8532,17 @@
         }
       }
     },
+    "This Mac doesn't have the system's voice isolation." : {
+      "comment" : "Why Noise Cleanup cannot be chosen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta Mac no tiene el aislamiento de voz del sistema."
+          }
+        }
+      }
+    },
     "This Mac has no graphics device to draw the video." : {
       "localizations" : {
         "es" : {
@@ -8557,6 +8732,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta grabación no tiene teclas. Para grabarlas, activar Ajustes ▸ Grabación ▸ Grabar las teclas para mostrarlas."
+          }
+        }
+      }
+    },
+    "This recording has no microphone." : {
+      "comment" : "Hide During Silences cannot run",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta grabación no tiene micrófono."
           }
         }
       }

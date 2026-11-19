@@ -1351,3 +1351,8 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 **Teclas en pantalla** (P12)
 
 - En una toma con teclas grabadas, pestaña Cursor ▸ Teclas en pantalla: Atajos muestra ⌘C ⌘V y no lo escrito; Todas junta lo escrito en una píldora; las cuatro posiciones; con subtítulos abajo, las teclas quedan encima. En una toma sin teclas, la nota y el botón "Abrir los ajustes de grabación" abren Ajustes en Grabación.
+
+**Voz y audio: limpieza, volumen y cámara** (A12)
+
+- Una toma con ruido real (ventilador, teclado): Limpieza Suave y Fuerte se oyen distintas y la voz sigue natural; mientras limpia, la vista previa suena sin limpiar y "Limpiando el audio… N %" avanza. Normalizar el volumen deja una toma baja y una alta al mismo volumen percibido y nada satura ("Evitar la saturación" queda prendido y fijo).
+- Con un aplauso frente a la cámara, Sincronía con el audio lo alinea con el golpe del sonido (positivo: la cámara se ve más tarde). Ocultar en los silencios agrega bloques Solo pantalla editables que no pisan los que había, y todo se deshace con un ⌘Z.
