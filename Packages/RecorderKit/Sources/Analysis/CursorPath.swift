@@ -658,6 +658,38 @@ extension CursorPath {
             path.sample(atStep: s, from: &steps)
         }
     }
+
+    /// Where the cursor is, read step after step, for a path that reads nothing else of it (`ReframePath` reads it on
+    /// every step of the output): `sample(atStep:)?.position`, with the same bits, over a simulation that goes forward
+    /// as `Reader`'s does, without making the rest of the sample.
+    struct PositionReader: Sendable {
+        private let samples: [Sample]
+        /// `nil` with `off`.
+        private let motion: Motion?
+        private var simulation: Simulation?
+
+        init(_ path: CursorPath) {
+            samples = path.samples
+            motion = path.motion
+        }
+
+        /// `sample(atStep: s)?.position`.
+        mutating func position(atStep s: Int) -> SIMD2<Double>? {
+            guard motion != nil else {
+                let τ = StepGrid.outputTime(ofStep: s)
+                return CursorPath.todaysPoint(at: τ, next: CursorPath.firstSample(after: τ, in: samples), in: samples)
+            }
+            guard let step = motion!.started(s) else { return nil }
+            // On from the step asked for before when it is not after this one nor before its checkpoint, as `Forward`.
+            if simulation == nil || simulation!.step > step
+                || simulation!.step < step / StepGrid.checkpointEvery * StepGrid.checkpointEvery
+            {
+                simulation = motion!.simulation(from: step)
+            }
+            motion!.advance(&simulation!, to: step)
+            return simulation!.state?.position
+        }
+    }
 }
 
 extension CursorPath.Motion {

@@ -351,6 +351,41 @@ extension ZoomFixtures {
             #expect(card.camera(atStep: 1_234).target != card.camera(atStep: 400).target)
         }
 
+        @Test func cardZoomSeesTheWindow() throws {
+            // A split in 9:16 of the display, the screen following the cursor (`reframe-1`): the card shows the window,
+            // and its camera is in fractions of it. A following block from 3 s at 2×, a fixed one from 9 s; the cursor at
+            // 0.8 of the display, then moving in the window and out of it.
+            let events = [pointer(0, global(SIMD2(0.8, 0.3)))]
+                + trail(from: 3.5, to: 12) { global(SIMD2(0.8 + 0.12 * sin($0), 0.3 + 0.3 * sin(1.7 * $0))) }
+            var document = cardDocument(
+                aspect: .portrait, regions: [block(1, from: 3, to: 8), block(2, from: 9, to: 11, focus: .fixed(x: 0.25, y: 0.5))],
+                smoothing: smoothed)
+            document.style.reframe = .followCursor
+            let motion = paths(document, events: events)
+            let (stage, reframe, card) = (motion.stage, try #require(motion.reframe), try #require(motion.cardZoom))
+            let unit = Rect(x: 0, y: 0, width: 1, height: 1)
+            let first = step(3), τ = StepGrid.outputTime(ofStep: first)
+            let host = try #require(motion.timeMap.source(atOutput: τ)).source
+            let view = try #require(stage.shownScreen(at: host)?.view)
+            let part = try #require(reframe.part(of: view, atOutput: τ, stage: stage))
+            let sample = try #require(motion.cursor.sample(atStep: first))
+            let fraction = CursorGeometry.normalized(CGPoint(x: sample.position.x, y: sample.position.y), in: display)
+            let inWindow = try #require(StagePoints.placed(fraction, in: part))
+            // In the middle of the window, not at 0.8 of the content.
+            #expect(abs(inWindow.x - 0.5) < 1e-9 && abs(fraction.x - 0.8) < 1e-9)
+            let camera = card.camera(atStep: first)
+            func held(_ center: SIMD2<Double>) -> SIMD2<Double> {
+                StageCrop.clamp(center: center, depth: 2, stage: SIMD2(1, 1), screen: unit)
+            }
+            #expect(camera.block == 0 && camera.target == held(inWindow))
+            #expect(card.camera(atStep: step(5)).target != camera.target)
+            // A fixed focus is a point of the window: the screen of the card is its content.
+            #expect(card.camera(atStep: step(9)).target == held(SIMD2(0.25, 0.5)))
+            for s in [first + 1, step(4.2), step(6.01), step(7.99), step(10)] {
+                #expect(bits(card.camera(atStep: s)) == bits(card.cameraSimulatedFromStart(atStep: s)), "step \(s)")
+            }
+        }
+
         @Test func aSpanGivesTheStateOfEachInstant() throws {
             // A following block over a cursor that never stops, a fixed one, an instant one, a checkpoint and the output's end.
             let document = cardDocument(

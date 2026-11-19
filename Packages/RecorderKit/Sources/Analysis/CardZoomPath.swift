@@ -37,6 +37,8 @@ public struct CardZoomState: Equatable, Sendable {
 ///   the content (`CursorGeometry.normalized` in the region shown, as `StagePoints.stagePoint(global:at:)` places it),
 ///   then moves with the dead zone, the central box of `ZoomCameraPath.deadZone` of the crop and steps of `followStep`
 ///   of it. No zone to avoid: in a split the camera is beside the screen, not over it. `instant` jumps.
+/// - Where the screen is reframed (`ReframePath`, `reframe-1`), its content is the window it shows of its region: the
+///   cursor is in fractions of that window (`ReframePath.part` on the step, read step after step), none outside it.
 ///
 /// The card has the screen's proportion, so the path does not depend on where the card is: it is simulated once for the
 /// whole output, only for a document with a split (the project's layout or a block). Simulated everywhere, also where
@@ -48,25 +50,30 @@ public struct CardZoomPath: Sendable {
     /// blur in the card never mixes the two sides.
     public var jumps: [ClosedRange<Int64>] { simulation.jumps }
 
-    /// `nil` when neither the project's layout nor any block is a split.
-    public init?(document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord) {
+    /// `nil` when neither the project's layout nor any block is a split. `reframe`: the document's window of the screen
+    /// that follows the cursor (`MotionPaths.reframe`); `nil`, the screen fitted whole.
+    public init?(
+        document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
+        reframe: ReframePath? = nil
+    ) {
         self.init(
-            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil)
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: nil, changedFrom: nil,
+            reframe: reframe)
     }
 
     /// The card's camera of the same take after an edit (`MotionPaths.init(take:events:document:after:)`): bit for bit
     /// `init(document:timeMap:stage:cursor:take:)`'s (that one without `old`). With `old`, from its checkpoints as
     /// `ZoomSimulation` keeps them; `changed` is the first step at which what the camera reads besides its blocks and
-    /// spring (the time map, the stage and the cursor) can differ, `nil` where none of them does; the layouts only
-    /// decide whether there is a card's camera. Without `old`, simulated from output 0.
+    /// spring (the time map, the stage, the cursor and the window that follows it) can differ, `nil` where none of them
+    /// does; the layouts only decide whether there is a card's camera. Without `old`, simulated from output 0.
     init?(
         document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
-        after old: CardZoomPath?, changedFrom changed: Int?
+        after old: CardZoomPath?, changedFrom changed: Int?, reframe: ReframePath? = nil
     ) {
         guard Self.hasSplit(document) else { return nil }
         simulation = ZoomSimulation(
-            document: document, timeMap: timeMap, cursor: cursor, take: take, viewport: CardViewport(stage: stage),
-            after: old?.simulation, changedFrom: changed)
+            document: document, timeMap: timeMap, cursor: cursor, take: take,
+            viewport: CardViewport(stage: stage, reframe: reframe), after: old?.simulation, changedFrom: changed)
     }
 
     /// Whether the project's layout or a block is a split.
@@ -147,13 +154,15 @@ extension CardZoomState {
 /// square (`size`), the content, even where the window around it is bigger; nothing else is kept off the cursor.
 struct CardViewport: ZoomViewport {
     let size = SIMD2<Double>(1, 1)
+    let reframe: ReframePath?
     private let stage: StagePoints
 
     /// The content, and the window where no screen is shown.
     private static let content = Rect(x: 0, y: 0, width: 1, height: 1)
 
-    init(stage: StagePoints) {
+    init(stage: StagePoints, reframe: ReframePath? = nil) {
         self.stage = stage
+        self.reframe = reframe
     }
 
     /// The window around the screen shown at `host` (`StagePoints.screenRect(at:)`), in fractions of its content: what a
@@ -168,12 +177,15 @@ struct CardViewport: ZoomViewport {
     }
 
     /// The cursor at `global` in fractions of the content: where `StagePoints.stagePoint(global:at:)` places it, by the
-    /// same rule (on screen, in the region shown, its far edges out).
-    func cursor(global: SIMD2<Double>, at host: HostTime) -> SIMD2<Double>? {
+    /// same rule (on screen, in the region shown, its far edges out). Of a reframed screen, the content is the window
+    /// about `windowCenter` (`ReframePath.part`): the cursor in fractions of it, `nil` outside it.
+    func cursor(global: SIMD2<Double>, at host: HostTime, windowCenter: Double?) -> SIMD2<Double>? {
         guard let view = stage.shownScreen(at: host)?.view, view.onScreen, let region = view.region else { return nil }
         let point = CGPoint(x: global.x, y: global.y)
         guard CursorGeometry.contains(point, region) else { return nil }
-        return CursorGeometry.normalized(point, in: region)
+        let fraction = CursorGeometry.normalized(point, in: region)
+        guard let windowCenter, let width = stage.reframedWidth(of: view) else { return fraction }
+        return StagePoints.placed(fraction, in: ReframePath.part(center: windowCenter, width: width))
     }
 
     func cleared(

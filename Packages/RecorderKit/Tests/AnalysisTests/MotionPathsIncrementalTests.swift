@@ -218,6 +218,13 @@ extension ZoomFixtures {
         #expect(paths.cursor.jumps == full.cursor.jumps, "\(label)", sourceLocation: sourceLocation)
         #expect(paths.zoom.jumps == full.zoom.jumps, "\(label)", sourceLocation: sourceLocation)
         #expect(paths.cardZoom?.jumps == full.cardZoom?.jumps, "\(label)", sourceLocation: sourceLocation)
+        // The window that follows the cursor: all its queries read are its checkpoints and where it starts.
+        #expect((paths.reframe == nil) == (full.reframe == nil), "\(label)", sourceLocation: sourceLocation)
+        #expect(
+            paths.reframe?.checkpoints.map(bits) == full.reframe?.checkpoints.map(bits), "\(label)",
+            sourceLocation: sourceLocation)
+        #expect(paths.reframe?.start.bitPattern == full.reframe?.start.bitPattern, "\(label)", sourceLocation: sourceLocation)
+        #expect(paths.reframe?.startStep == full.reframe?.startStep, "\(label)", sourceLocation: sourceLocation)
 
         let frames = full.timeMap.frameCount(frameRate: frameRate) + 1
         let end = TimeMap.frameTime(frames, frameRate: frameRate)
@@ -239,6 +246,7 @@ extension ZoomFixtures {
                 guard n % pointEvery == 0 else { continue }
                 if bits(paths.zoom.state(atOutput: t)) != a || paths.cardZoom.map({ bits($0.state(atOutput: t)) }) != b
                     || bits(paths.cursor.sample(atOutput: t)) != c
+                    || paths.reframe?.center(atOutput: t).bitPattern != full.reframe?.center(atOutput: t).bitPattern
                 {
                     differ.append("at \(t)")
                 }
@@ -286,6 +294,54 @@ extension ZoomFixtures {
             }
             #expect(partial >= 6, "\(partial) of \(edits.count)")
             #expect(spliced >= 2, "\(spliced) of \(edits.count)")
+        }
+
+        /// Following the cursor or not (`style.reframe`) is not the same paths: a change of it builds them all again,
+        /// with the bits of building them from nothing, and back. Following it, an edit keeps what of the window
+        /// (`ReframePath`) it leaves as it was: all of it after an edit of zoom blocks alone, its checkpoints before a cut
+        /// late in the take; none after one of the padding (the stage) or the cursor's spring from its start.
+        @Test func reframeChangeRebuildsThePaths() throws {
+            let seconds = 60.0
+            let take = zoomTake(frame: Rect(x: 0, y: 0, width: 1920, height: 1080), camera: true, seconds: seconds + 1)
+            let events = wanderingEvents(seconds: seconds)
+            var fitted = editedTakeDocument(seconds: seconds)
+            fitted.aspect = .portrait
+            fitted.style.frame = .macWindow(appearance: .dark, title: "Reframe", buttons: true)
+            var following = fitted
+            following.style.reframe = .followCursor
+            let fit = MotionPaths(take: take, events: events, document: fitted)
+            #expect(fit.reframe == nil && !fit.areThePaths(of: following))
+            let full = MotionPaths(take: take, events: events, document: following)
+            let reframe = try #require(full.reframe)
+            #expect(reframe.startStep != nil && full.areThePaths(of: following) && !full.areThePaths(of: fitted))
+            let toFollow = MotionPaths(take: take, events: events, document: following, after: fit)
+            expectSameBits(toFollow, full, "to following the cursor")
+            #expect(toFollow.reframe?.simulatedSteps == reframe.lastStep + 1)
+            #expect(toFollow.zoom.simulatedSteps == full.zoom.simulatedSteps)
+            let back = MotionPaths(take: take, events: events, document: fitted, after: full)
+            expectSameBits(back, fit, "back to the fitted screen")
+
+            var moved = following, cut = following, padded = following, sprung = following
+            moved.zoom.regions[2].start = moved.zoom.regions[2].start.adding(seconds: 0.6)
+            // A cut of 1 s of source at 50 s, in the second clip (from 37 s at 1.25×): from 43.4 s of output on.
+            cut.sequence = [
+                following.sequence[0], zoomClip(2, from: 37, to: 50, speed: 1.25),
+                zoomClip(3, from: 51, to: seconds, speed: 1.25),
+            ]
+            padded.style.padding = 0.09
+            sprung.cursor.smoothing = .spring(SpringSpec(damping: 0.8, response: 0.3))
+            // What of the window each simulates again: nothing; from the checkpoint before the second before the cut; all.
+            let cases: [(String, EditDocument, (ReframePath) -> ClosedRange<Int>)] = [
+                ("a zoom moved", moved, { _ in 0...0 }), ("a late cut", cut, { 1...($0.lastStep - steps(42)) }),
+                ("the padding", padded, { ($0.lastStep + 1)...($0.lastStep + 1) }),
+                ("the cursor's spring", sprung, { ($0.lastStep + 1)...($0.lastStep + 1) }),
+            ]
+            for (name, edited, expected) in cases {
+                let rebuilt = MotionPaths(take: take, events: events, document: edited, after: full)
+                expectSameBits(rebuilt, MotionPaths(take: take, events: events, document: edited), name)
+                let path = try #require(rebuilt.reframe, "\(name)")
+                #expect(expected(path).contains(path.simulatedSteps), "\(name): \(path.simulatedSteps)")
+            }
         }
 
         /// An edit at 50 minutes of an hour simulates the last 10 minutes and the second before it, at most: of the
