@@ -210,7 +210,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     #if DEBUG
-    /// `-TomaShowcase island <variant>`: the open island in a mode (`display`, `window`, `area`), with its settings
+    /// `-TomaShowcase island <variant>`: the open island in a mode (`display`, `window`, `area`, `device…`), with its settings
     /// (`settings`) or with the camera on if it is allowed (`camera`), for screenshots; nothing is saved.
     func showcase(_ variant: String) {
         guard let panel = model.panel else { return }
@@ -222,6 +222,13 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         }
         if variant == "settings" { panel.showsSettings = true }
         if variant == "camera", panel.camera.permission == .granted { panel.setCamera(on: true) }
+        // iPhone mode with nothing connected (`device`), with one iPhone (`device-connected`), and with it while the
+        // camera permission is not given (`device-camera`).
+        if variant.hasPrefix("device") {
+            let phone = ExternalDeviceInfo(uniqueID: "showcase-iphone", name: "iPhone de Ana", modelID: "iOS Device")
+            ExternalDeviceList.shared.showcase(variant == "device" ? [] : [phone], camera: variant == "device-camera" ? .prompt : nil)
+            panel.selection.mode = .device
+        }
     }
     #endif
 

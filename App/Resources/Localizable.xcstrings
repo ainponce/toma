@@ -1857,6 +1857,28 @@
         }
       }
     },
+    "Connect the iPhone or iPad with a cable, unlock it and tap Trust." : {
+      "comment" : "iPhone mode with no iPhone or iPad connected: how to connect one (Trust is the button the device shows)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectar el iPhone o el iPad con un cable, desbloquearlo y tocar Confiar."
+          }
+        }
+      }
+    },
+    "Connected by cable" : {
+      "comment" : "An iPhone or iPad iPhone mode lists: it is plugged into the Mac",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conectado por cable"
+          }
+        }
+      }
+    },
     "Copy" : {
       "comment" : "The editor's bar after an export: puts the exported file on the clipboard",
       "localizations" : {
@@ -5301,6 +5323,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grabando"
+          }
+        }
+      }
+    },
+    "Recording an iPhone or iPad needs camera access." : {
+      "comment" : "iPhone mode while Toma may not use the camera: the screen of an iPhone or iPad comes through it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar un iPhone o un iPad necesita el permiso de Cámara."
           }
         }
       }

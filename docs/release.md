@@ -975,6 +975,14 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 - Con «Grabar las teclas para mostrarlas» prendido y el Monitoreo de entrada negado: una toma de iPhone no avisa «Las teclas no se grabaron…» y su `events.jsonl` no tiene líneas `keyPress` ni del cursor.
 - Con la cámara y el micrófono de la Mac elegidos: en `manifest.json`, las pistas `device`, `deviceAudio`, `camera` y `microphone`, en ese orden; la burbuja de la cámara se ve en la pantalla de la isla mientras graba, y «Ocultar los íconos del escritorio» no tapa el escritorio (no se graba la Mac).
 
+**La isla en modo iPhone** (P17)
+
+- Recién abierta la app, sin nada conectado: la pestaña «iPhone o iPad» abre sin trabar la isla y muestra el cable y «Conectar el iPhone o el iPad con un cable, desbloquearlo y tocar Confiar.»; Grabar está apagado y su ayuda dice «No se eligió ningún iPhone o iPad para grabar.».
+- Con la isla abierta en esa pestaña, conectar el iPhone por cable, desbloquearlo y tocar Confiar: aparece en la lista con su nombre, el ícono de iPhone y «Conectado por cable», con su animación (con Reducir movimiento, un fundido), queda elegido por ser el único y Grabar se prende. Con un iPad también conectado: su ícono es el de iPad, ninguno cambia de elegido solo y un clic elige el otro; desconectar el elegido deja elegido el que queda.
+- Grabar con el micrófono y la cámara de la Mac; rotar el iPhone dos veces; desconectarlo y volver a conectarlo a mitad. El editor abre la toma con el marco de iPhone, sin cursor, cada orientación entera; una toma de iPad toma el marco de iPad; el iPhone nunca aparece en la lista de cámaras de la isla ni del editor.
+- Con el permiso de Cámara sin pedir (`tccutil reset Camera dev.toma.Toma`): la columna muestra «Grabar un iPhone o un iPad necesita el permiso de Cámara.» con «Dar permiso…», que muestra el aviso del sistema con la isla debajo; permitido, la fila desaparece. Negado, «Dar permiso…» abre Ajustes del Sistema en Cámara. Ningún texto de la columna se corta.
+- Con VoiceOver: cada dispositivo se lee con su nombre, «Conectado por cable» y si está elegido; el estado vacío y la fila del permiso se leen enteros.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

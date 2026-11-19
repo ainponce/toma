@@ -150,6 +150,7 @@ final class OpenPanelModel {
     /// in progress.
     var recordProblem: (any Error)? {
         if let problem = TakePlanner.problem(with: selection, displays: displays.map(\.info)) { return problem }
+        if let problem = deviceProblem { return problem }
         return recording.isRecording ? RecordingError.alreadyStarted : nil
     }
 
@@ -284,7 +285,7 @@ struct IslandOpenPanel: View {
                     .init(value: ModeTab.display, title: Text("Display", comment: "What to record: a whole display"), icon: "display"),
                     .init(value: .window, title: Text("Window", comment: "What to record: one window"), icon: "macwindow"),
                     .init(value: .area, title: Text("Area", comment: "What to record: a rectangle of a display"), icon: "viewfinder"),
-                    .init(value: .iPhone, title: Text(verbatim: "iPhone"), icon: "iphone", disabledHelp: String(localized: "Coming in phase 2.")),
+                    .init(value: .iPhone, title: Text("iPhone or iPad", comment: "What to record: the screen of an iPhone or iPad connected by cable"), icon: "iphone"),
                 ],
                 selection: Binding(
                     get: {
@@ -300,7 +301,7 @@ struct IslandOpenPanel: View {
                         case .display: panel.selection.mode = .display
                         case .window: panel.selection.mode = .window
                         case .area: panel.selection.mode = .area
-                        case .iPhone: break  // disabled
+                        case .iPhone: panel.selection.mode = .device
                         }
                     }))
             Spacer()
@@ -323,7 +324,7 @@ struct IslandOpenPanel: View {
         case .display: displayColumn
         case .window: WindowChoiceColumn(panel: panel, send: send)
         case .area: AreaChoiceColumn(panel: panel, send: send)
-        case .device: EmptyView()  // the devices' column comes with the iPhone tab (plan P17)
+        case .device: DeviceChoiceColumn(panel: panel)
         }
     }
 
