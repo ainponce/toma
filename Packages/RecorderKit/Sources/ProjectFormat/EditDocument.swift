@@ -473,8 +473,7 @@ public enum WindowFrame: Codable, Equatable, Sendable {
     case none
     /// A generic macOS window: its appearance, its title (empty draws none) and whether it has the three buttons.
     case macWindow(appearance: FrameAppearance, title: String, buttons: Bool)
-    /// A device around the screen (phase 2 design §6.7). Until the render draws it (`deviceFrame-1`), it is drawn and
-    /// measured as `none`.
+    /// A device around the screen (phase 2 design §6.7), drawn and measured by `deviceFrame-1` (`StageLayout.deviceRects`).
     case device(DeviceFrame)
 
     private enum CodingKeys: String, CodingKey {
