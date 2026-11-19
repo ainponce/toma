@@ -166,6 +166,26 @@ public final class TrackFrameReader: @unchecked Sendable {
         }
     }
 
+    /// A reader of one video outside a package, read as a camera's segment: a person's mask of the analysis caches
+    /// (`personMask-1`, phase 2 design §6.1), `file` with the presentation times of its camera's segment from `start`
+    /// (to `end`, `nil` for one left open), its frames at the same host times as the camera's. Its track is `trackID`
+    /// (the mask's reader id). Never throws and reads nothing yet: what is at `file` that `lstat` does not find to be a
+    /// regular file of some bytes (nothing, a link, a folder, a FIFO, 0 bytes) is a gap from the start, and the reader
+    /// gives no frame.
+    public init(maskFile file: URL, trackID: String, start: HostTime, end: HostTime?) {
+        self.trackID = trackID
+        package = ProjectPackage(url: file.deletingLastPathComponent())
+        segments = [Segment(
+            index: 1, file: file.lastPathComponent, start: start, end: end, usable: true, media: nil, retryAfter: nil,
+            loadFailure: nil, failure: nil)]
+        var info = stat()
+        let found = lstat(file.path, &info) == 0
+        if !found || info.st_mode & S_IFMT != S_IFREG || info.st_size == 0 {
+            segments[0].usable = false
+            noteGap(0, from: start, to: end ?? start, !found ? .fileMissing : info.st_size == 0 ? .empty : .unreadable)
+        }
+    }
+
     deinit {
         open?.reader.cancelReading()
     }
