@@ -3,11 +3,13 @@ import Foundation
 import ProjectFormat
 
 /// The cached index of the library (design §13.4, plan decision 25): what it knew of every project the last time it
-/// looked, so the window draws at once. `{ "projects": [ProjectSummary…], "version": 1 }`, written whole with
+/// looked, so the window draws at once. `{ "projects": [ProjectSummary…], "version": 2 }`, written whole with
 /// `DurableFile.writeAtomically` (through a `DebouncedWriter`). A cache: if it is lost, the scan builds it again.
 public struct LibraryIndex: Codable, Equatable, Sendable {
-    /// The version this app writes and reads.
-    public static let currentVersion = 1
+    /// The version this app writes and reads. 2: the phase 2 app (manifest version 4) and the phase 1 app share the
+    /// cache file, and a cached summary keeps its `state` while the signatures do not change, so each must discard the
+    /// other's index and scan again (a v4 package that phase 1 indexed as `.newerVersion` must not stay so).
+    public static let currentVersion = 2
 
     public var version: Int
     public var projects: [ProjectSummary]

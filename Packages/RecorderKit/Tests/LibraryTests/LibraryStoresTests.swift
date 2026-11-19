@@ -94,6 +94,23 @@ private enum Stores {
     }
 }
 
+@Test func indexOfAnotherVersionIsRebuilt() throws {
+    try withTemporaryDirectory { dir in
+        let url = dir.appending(path: "index.json", directoryHint: .notDirectory)
+        let summary = Stores.summary(1, state: .newerVersion, place: .elsewhere)
+        // The phase 1 app writes version 1 (and a later one, a higher number): this app discards both and rescans.
+        for other in [LibraryIndex.currentVersion - 1, LibraryIndex.currentVersion + 1] {
+            let foreign = LibraryIndex(version: other, projects: [summary])
+            try DurableFile.writeAtomically(try foreign.encoded(), to: url)
+            #expect(LibraryIndex.load(from: url) == LibraryIndex(), "version \(other)")
+        }
+        let own = LibraryIndex(projects: [summary])
+        try DurableFile.writeAtomically(try own.encoded(), to: url)
+        #expect(LibraryIndex.load(from: url) == own)
+        #expect(LibraryIndex.currentVersion == 2)
+    }
+}
+
 @Test func indexAndRecordsRoundTripAndTolerateDamage() throws {
     try withTemporaryDirectory { dir in
         // The index: every state and every place.
@@ -105,7 +122,7 @@ private enum Stores {
         ]
         let places: [Place] = [.projectsFolder(subfolder: ""), .projectsFolder(subfolder: "Clientes/2026"), .trash, .elsewhere]
         let index = LibraryIndex(
-            version: 1,
+            version: LibraryIndex.currentVersion,
             projects: states.enumerated().map { number, state in
                 Stores.summary(UInt64(number), state: state, place: places[number % places.count])
             } + [
@@ -118,13 +135,13 @@ private enum Stores {
         #expect(LibraryIndex.load(from: indexURL) == index)
         let indexObject = try #require(try JSONSerialization.jsonObject(with: try index.encoded()) as? [String: Any])
         #expect(Set(indexObject.keys) == ["projects", "version"])
-        #expect(indexObject["version"] as? Int == 1)
+        #expect(indexObject["version"] as? Int == 2)
 
-        // Damaged, missing or of a newer version: an empty index, which the scan fills again.
-        let empty = LibraryIndex(version: 1, projects: [])
+        // Damaged, missing or of another version: an empty index, which the scan fills again.
+        let empty = LibraryIndex(version: LibraryIndex.currentVersion, projects: [])
         try Stores.garbage(10_000).write(to: indexURL)
         #expect(LibraryIndex.load(from: indexURL) == empty)
-        try Data(#"{"projects": [], "version": 2}"#.utf8).write(to: indexURL)
+        try Data(#"{"projects": [], "version": 3}"#.utf8).write(to: indexURL)
         #expect(LibraryIndex.load(from: indexURL) == empty)
         #expect(LibraryIndex.load(from: dir.appending(path: "missing.json")) == empty)
 
