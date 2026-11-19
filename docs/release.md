@@ -1351,3 +1351,7 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 **Teclas en pantalla** (P12)
 
 - En una toma con teclas grabadas, pestaña Cursor ▸ Teclas en pantalla: Atajos muestra ⌘C ⌘V y no lo escrito; Todas junta lo escrito en una píldora; las cuatro posiciones; con subtítulos abajo, las teclas quedan encima. En una toma sin teclas, la nota y el botón "Abrir los ajustes de grabación" abren Ajustes en Grabación.
+
+**Voz y audio: la pista Subtítulos** (A13)
+
+- Aparece solo con transcripción, debajo del Video; cada bloque es un subtítulo con su texto y sigue los cortes; doble clic lleva a esa palabra en la pestaña; VoiceOver lee cada subtítulo con su tramo.

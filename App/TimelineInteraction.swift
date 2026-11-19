@@ -105,6 +105,8 @@ final class TimelineInteraction {
     /// The edge of a screen's stretch is the limit between two: the start of the first stretch, and the end of the last, are
     /// not limits that move.
     private func normalized(_ hit: TimelineHit) -> TimelineHit {
+        // A caption has no edges to grab: its body is all there is (the captions follow the words).
+        if case let .edge(.captions, id, _) = hit { return .item(.captions, id: id) }
         guard case let .edge(.screen, id, edge) = hit, let content = view.content else { return hit }
         switch edge {
         case .start: return id == "initial" ? .item(.screen, id: id) : hit
@@ -184,6 +186,12 @@ final class TimelineInteraction {
             }
             return
         }
+        // A caption is not selected, dragged or trimmed; a double click shows its word in the Captions tab.
+        if case let .item(.captions, id) = hit {
+            if event.clickCount >= 2 { revealCaption(id, at: output(at: point)) }
+            drag = .none
+            return
+        }
         select(hit, shift: event.modifierFlags.contains(.shift))
         // A double click on a privacy block selects it and takes the playhead into it: the preview shows its rect.
         if event.clickCount >= 2, case let .item(.privacy, id) = hit {
@@ -217,6 +225,12 @@ final class TimelineInteraction {
         case .playhead:
             break
         }
+    }
+
+    /// Shows in the Captions tab the word of caption `id` said at output time `τ` (the first one if none is).
+    private func revealCaption(_ id: String, at τ: Int64) {
+        guard let model, let ref = view.content?.captions.items.first(where: { $0.id == id })?.info.word(at: τ) else { return }
+        model.voice.reveal(ref)
     }
 
     func mouseDragged(_ event: NSEvent) {
