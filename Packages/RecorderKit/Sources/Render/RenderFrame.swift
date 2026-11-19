@@ -341,9 +341,9 @@ public struct CameraLayer: Equatable, Sendable {
     /// Under the camera, drawn before it; `nil` without one. It fades with the camera as one group, so the camera hides
     /// its own shadow at any opacity, as it does opaque.
     public var shadow: ShadowLayer?
-    /// The part of the camera's picture its framing shows (phase 2 design §6.2), as fractions of the picture (0, 0 its
-    /// top-left corner), which fills `rect` without stretching as the whole picture does without it. The whole picture,
-    /// as in phase 1: the fill of 1b, not even worked out again.
+    /// A part of the camera's picture, as fractions of it (0, 0 its top-left corner): the whole picture, and not drawn.
+    /// The framing's crop depends on the aspect of the camera's frame, which only its texture knows, so it is
+    /// `look.framing`, which the compositor fills the rect from (`Compositor.cameraFill`, plan 2b decision 2).
     public var crop: Rect
     /// Its colour (phase 2 design §6.3); `nil`, natural, as in phase 1.
     public var look: CameraLookLayer?

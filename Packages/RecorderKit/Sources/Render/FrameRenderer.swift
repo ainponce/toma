@@ -101,6 +101,9 @@ public final class FrameRenderer: @unchecked Sendable {
     private var titleTextures: [(size: SIMD2<Int>, titles: TitleTexture)] = []
     /// The textures of the frames' cursors; used with `lock` held.
     private let cursorImages: CursorImages
+    /// What the camera's colour and background are drawn with: the LUTs, and the readers of the person's masks, which
+    /// `videos(of:)` and `reader(for:)` add to the take's (phase 2 design §6.1 and §6.3).
+    let cameraLook: CameraLookResources
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
     /// The frames per second the renderer's scene is drawn at (the document's unless given): the motion blur's frame, and
@@ -218,6 +221,7 @@ public final class FrameRenderer: @unchecked Sendable {
         compositor = try Compositor(device: device)
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
         cursorImages = try CursorImages(device: device, package: project.package, take: project.take.id)
+        cameraLook = CameraLookResources(device: device, package: project.package)
         let cameraReadable = LayoutTimeline.cameraReadable(take: project.take) {
             SegmentAvailability.classify($0, in: project.package)
         }
@@ -251,11 +255,15 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// Makes `scene` the renderer's scene, and its size the one `encode(at:into:commandBuffer:)` checks: what was decoded
-    /// ahead for the scene before goes, and a background image that could not be read is looked for again.
+    /// ahead for the scene before goes, and a background image or a camera's `.cube` that could not be read is looked for
+    /// again.
     public func setScene(_ scene: FrameEvaluator) {
         current.withLock { $0 = scene }
         resetPrefetchers()
-        lock.withLock { backgroundImages.forgetUnreadable() }
+        lock.withLock {
+            backgroundImages.forgetUnreadable()
+            cameraLook.forgetUnreadable()
+        }
     }
 
     /// Encodes the frame at `outputTime` of the renderer's scene into `target`, which must be `.bgra8Unorm` and
@@ -320,8 +328,9 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// Encodes `frame` into `target` with the screen and camera frames `decoded` gives for each (track, source instant)
-    /// it shows, asked for in this order: the screen, the screen being left, the camera. Every way to draw ends here.
-    /// Call with `lock` held.
+    /// it shows, asked for in this order: the screen, the screen being left, the camera; then what the camera's colour and
+    /// background are drawn with (`CameraLookResources`), its mask among them, whose absence draws the camera's original
+    /// and is never an error. Every way to draw ends here. Call with `lock` held.
     private func draw(
         _ frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
         decoded: (_ trackID: String, _ time: HostTime) throws -> CachedTexture?
@@ -336,6 +345,13 @@ public final class FrameRenderer: @unchecked Sendable {
         let screen = try frame.screen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let previousScreen = try frame.previousScreen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let camera = try frame.camera.flatMap { try texture($0.trackID, $0.sourceTime) }
+        let look = try cameraLook.textures(
+            for: frame,
+            decoded: { id, time in
+                guard let cached = try decoded(id, time) else { return nil }
+                commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
+                return cached
+            }, commandBuffer: commandBuffer)
         let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: frame.outputSize)
         let titleTexture = titles(for: frame.outputSize)
         let windowTitle = try TitleTexture.source(for: frame).flatMap {
@@ -346,7 +362,7 @@ public final class FrameRenderer: @unchecked Sendable {
         let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))
         try compositor.encode(
             frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
-            windowTitle: windowTitle, into: target, commandBuffer: commandBuffer)
+            windowTitle: windowTitle, cameraLook: look, into: target, commandBuffer: commandBuffer)
     }
 
     /// The texture `frame`'s background is drawn with (`Compositor.encode`'s `backgroundImage`), from `images`, for
@@ -435,7 +451,7 @@ public final class FrameRenderer: @unchecked Sendable {
                 let keys = try plan.advance(to: index, last: lastIndex) { next in
                     let frame = try self.frame(of: scene, at: Double(TimeMap.frameTime(next, frameRate: frameRate)) / 1e9)
                     evaluated.append((next, frame))
-                    return Self.videos(of: frame)
+                    return self.videos(of: frame)
                 }
                 ahead.plan = plan
                 ahead.frames += evaluated
@@ -455,22 +471,24 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// The (track, source instant) of each frame `frame` shows (`draw`'s order), with the prefetcher of its track, made the
-    /// first time; none for a track the take does not have.
+    /// first time; none for a video without a reader (`reader(for:)`).
     private func sources(of frame: RenderFrame, in ahead: inout Ahead) throws -> [(DecodedKey, FramePrefetcher)] {
-        try Self.videos(of: frame).compactMap { key in try prefetcher(for: key.trackID, in: &ahead).map { (key, $0) } }
+        try videos(of: frame).compactMap { key in try prefetcher(for: key.trackID, in: &ahead).map { (key, $0) } }
     }
 
     /// The (track, source instant) of each video `frame` shows, in `draw`'s order: the screen, the screen being left, the
-    /// camera. A part a layout hides is not in the frame (1c design §14.4), so it is not decoded.
-    static func videos(of frame: RenderFrame) -> [DecodedKey] {
+    /// camera, then what the camera is drawn with (`CameraLookResources.videos(of:)`: its person's mask, by a reader id that
+    /// is no track of the take). A part a layout hides is not in the frame (1c design §14.4), so it is not decoded.
+    func videos(of frame: RenderFrame) -> [DecodedKey] {
         [
             frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
             frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
             frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-        ].compactMap { $0 }
+        ].compactMap { $0 } + cameraLook.videos(of: frame)
     }
 
-    /// The prefetcher of track `trackID`, made the first time; `nil` for a track the take does not have.
+    /// The prefetcher of track `trackID` (or of a person's mask, by its reader id), made the first time; `nil` for a video
+    /// without a reader (`reader(for:)`).
     private func prefetcher(for trackID: String, in ahead: inout Ahead) throws -> FramePrefetcher? {
         if let prefetcher = ahead.prefetchers[trackID] { return prefetcher }
         guard let reader = reader(for: trackID) else { return nil }
@@ -479,8 +497,9 @@ public final class FrameRenderer: @unchecked Sendable {
         return prefetcher
     }
 
-    /// The prefetcher that decodes ahead the frames of track `trackID` (made the first time; `nil` for a track the take
-    /// does not have), shared with `render(at:into:completion:)`: one consumer of the renderer uses them.
+    /// The prefetcher that decodes ahead the frames of track `trackID` or of a person's mask (made the first time; `nil` for
+    /// a video without a reader, `reader(for:)`), shared with `render(at:into:completion:)`: one consumer of the renderer
+    /// uses them.
     func prefetcher(for trackID: String) throws -> FramePrefetcher? {
         try ahead.withLock { try prefetcher(for: trackID, in: &$0) }
     }
@@ -505,7 +524,8 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// Draws `frame` with the frames `decoded` holds into `pixelBuffer`, commits it and calls `completion` on `renderQueue`
     /// once the GPU is done; throws, having committed nothing, what kept it from being drawn: `RenderError.frameNotDecoded`
-    /// for a frame of a track of the take that `decoded` lacks. Runs on `renderQueue` (and in tests).
+    /// for a frame of a track of the take that `decoded` lacks (never for a person's mask, which no track of the take is:
+    /// without it, the camera's original). Runs on `renderQueue` (and in tests).
     func draw(
         _ frame: RenderFrame, decoded: [DecodedKey: CachedTexture?], into pixelBuffer: CVPixelBuffer,
         completion: @escaping @Sendable ((any Error)?) -> Void
@@ -517,8 +537,9 @@ public final class FrameRenderer: @unchecked Sendable {
             let target = try metalTexture(for: pixelBuffer)
             try draw(frame, into: target.texture, commandBuffer: commandBuffer) { trackID, time in
                 if let texture = decoded[DecodedKey(trackID: trackID, time: time)] { return texture }
-                // A track the take does not have shows nothing, as drawing it frame by frame does; any other was decoded.
-                guard reader(for: trackID) != nil else { return nil }
+                // A track the take does not have shows nothing, as drawing it frame by frame does, and a video that is no
+                // track of the take (a person's mask) is drawn without; any track of the take was decoded.
+                guard take.track(trackID) != nil else { return nil }
                 throw RenderError.frameNotDecoded(track: trackID, sourceTime: time)
             }
             return target
@@ -610,12 +631,13 @@ public final class FrameRenderer: @unchecked Sendable {
         readers.withLock { $0[trackID] }?.askedFor
     }
 
-    /// The reader of track `trackID` of the take, made the first time it is asked for; `nil` for a track the take does
-    /// not have. Every scene of the renderer reads with it.
+    /// The reader of track `trackID` of the take, made the first time it is asked for; for an id that is no track of the
+    /// take, `CameraLookResources.reader(for:)`'s (a person's mask), `nil` for any other. Every scene of the renderer reads
+    /// with it.
     func reader(for trackID: String) -> TrackFrameReader? {
-        readers.withLock { readers in
+        guard let track = take.track(trackID) else { return cameraLook.reader(for: trackID) }
+        return readers.withLock { readers in
             if let reader = readers[trackID] { return reader }
-            guard let track = take.track(trackID) else { return nil }
             let reader = TrackFrameReader(package: package, track: track)
             readers[trackID] = reader
             return reader

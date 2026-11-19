@@ -60,10 +60,12 @@ extension Compositor {
     }
 
     /// Encodes `frame`, in a card's mode, into `target` (see the extension's notes), with `textures`, the camera's texture
-    /// `camera` and the blur's `tileMemory` (`nil` without a blur), counting what it draws in `counts`. The background is
-    /// drawn once, as without the blur, so a sharp wallpaper's mesh is not asked for (`FrameRenderer.backgroundTexture`).
+    /// `camera` and what its colour and background are drawn with, `cameraLook`, and the blur's `tileMemory` (`nil` without
+    /// a blur), counting what it draws in `counts`. The background is drawn once, as without the blur, so a sharp
+    /// wallpaper's mesh is not asked for (`FrameRenderer.backgroundTexture`); the device frame goes with it, its island or
+    /// notch through the background's transform too.
     func encodeCard(
-        _ frame: RenderFrame, textures: StageTextures, camera: (any MTLTexture)?,
+        _ frame: RenderFrame, textures: StageTextures, camera: (any MTLTexture)?, cameraLook: CameraLookTextures?,
         tileMemory: (subsample: any MTLTexture, sum: any MTLTexture)?, into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer, counts: inout DrawCounts
     ) {
@@ -80,7 +82,7 @@ extension Compositor {
                 frame, through: background, card: card, cursor: frame.cursor, textures: textures, pipelines: direct,
                 targetSize: targetSize, encoder: encoder, counts: &counts)
             drawOverTheStage(
-                frame, through: content, card: card, camera: camera,
+                frame, through: content, card: card, device: background, camera: camera, cameraLook: cameraLook,
                 clickEffect: card == nil ? clickEffectPipeline : clippedClickEffectPipeline, cameraPipelines: directCamera,
                 encoder: encoder, counts: &counts)
             encoder.endEncoding()
@@ -123,7 +125,7 @@ extension Compositor {
         encoder.setRenderPipelineState(blur.resolveCursor)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         drawOverTheStage(
-            frame, through: content, card: card, camera: camera,
+            frame, through: content, card: card, device: background, camera: camera, cameraLook: cameraLook,
             clickEffect: card == nil ? blur.clickEffect : blur.clippedClickEffect, cameraPipelines: blur.camera,
             encoder: encoder, counts: &counts)
         encoder.endEncoding()
