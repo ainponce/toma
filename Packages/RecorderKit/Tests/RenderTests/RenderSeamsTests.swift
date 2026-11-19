@@ -192,8 +192,9 @@ private struct SeamDrawer: @unchecked Sendable {
     ]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + layers.joined())
     // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's (the device
-    // frame's, 2b's).
-    #expect(layers.dropFirst().allSatisfy { $0.isEmpty })
+    // frame's, 2b's; privacy's, 2c's `privacy-1`).
+    #expect(layers.dropFirst().filter { $0 != ShaderSource.privacyMetal }.allSatisfy { $0.isEmpty })
+    #expect(!ShaderSource.privacyMetal.isEmpty)
 }
 
 @Test func cameraSyncAtZeroIsTheSameInstant() throws {

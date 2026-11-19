@@ -923,6 +923,10 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
   4. Desconectar el cable 10 s a mitad de la toma y volver a conectarlo: la toma sigue; las dos pistas terminan su segmento y siguen en uno nuevo del mismo iPhone. Con otro iPhone conectado mientras el primero no está, Toma no lo graba en su lugar.
 - **Formatos** (I1): los siete en la barra y en Proyecto ▸ Formato; «Como la grabación» con una toma de un área ancha (el editor, la vista previa, el GIF y el MP4 salen con esa proporción).
 - **Marcos de dispositivo** (I3): iPhone, iPad y MacBook, oscuro y claro, en 16:9 y en 9:16, con una toma ancha y con una vertical: bien proporcionados, el iPhone acostado con un contenido ancho, sin una línea de fondo entre la pantalla y el bisel ni entre la tapa y la base, nítidos en un export 4K; con zoom (y con su desenfoque) se mueven con la pantalla; la isla y el notch tapan el cursor, no los efectos de clic; con Pantalla dividida, el dispositivo entero en su tarjeta; la vista previa es igual al MP4.
+- **Privacidad en el render** (P2; los bloques se agregan con P6). En una toma con texto chico y grande en pantalla (un correo, una clave), tapar tres partes con Desenfoque (intensidad por defecto y en 0), Pixelado y Relleno:
+  1. En la vista previa y en el MP4 exportado no se lee ninguna letra de lo tapado, ni con la intensidad en 0; los bordes del rectángulo son rectos y duros, sin un halo del texto alrededor.
+  2. Con un zoom de 4× que entra rápido (con desenfoque de movimiento) y con un cambio de forma de la pantalla, el rectángulo sigue pegado al mismo texto en cada cuadro, también avanzando cuadro a cuadro.
+  3. En la M1: la vista previa a 1080p con ocho bloques de Desenfoque grandes y un zoom que entra rápido con desenfoque de movimiento se reproduce a 60 fps, sin cuadros salteados (en el M5 Pro, el peor cuadro de la GPU es de unos 4 ms: `docs/performance.md`, fila P2).
 
 **Grabar las teclas** (P9)
 
