@@ -9,7 +9,7 @@ import SwiftUI
 
 /// The preview's part of the window (design §5.3): the banner on top, then, on a fixed dark gray in light and dark mode
 /// alike (#161618: colors are judged against a dark neutral), the video with 16 pt around it in the format's proportion
-/// and the transport under it: ⏮ ▶/⏸ ⏭ and `0:42,18 / 2:14,00`. Before it can show the video, what stands in its place:
+/// and the transport under it: `0:42,18  ⏮ ▶/⏸ ⏭  2:14,00`. Before it can show the video, what stands in its place:
 /// "Opening…", a take that didn't finish saving, a project that couldn't be opened, or one of a newer version.
 struct PreviewArea: View {
     let model: EditorModel
@@ -85,48 +85,92 @@ struct PreviewArea: View {
     }
 }
 
-/// ⏮ (to the start), ▶/⏸ and ⏭ (to the end), and the time of the playhead over what the output lasts.
+/// ⏮ (to the start), ▶/⏸ and ⏭ (to the end), centered under the video, between the time of the playhead (on their left)
+/// and what the output lasts (on their right, secondary).
 private struct Transport: View {
     let model: EditorModel
 
     var body: some View {
-        HStack(spacing: 16) {
-            Button {
-                model.seekToStart()
-            } label: {
-                Label("Go to the Beginning", systemImage: "backward.end.fill")
-            }
-            Button {
-                model.togglePlay()
-            } label: {
-                if model.isPlaying {
-                    Label("Pause", systemImage: "pause.fill")
-                } else {
-                    Label("Play", systemImage: "play.fill")
+        let total = model.durationSeconds
+        HStack(spacing: 0) {
+            let current = Timecode.precise(model.currentSeconds, total: total, locale: .current)
+            let length = Timecode.precise(total, total: total, locale: .current)
+            Text(verbatim: current)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .accessibilityLabel(Text("Playhead", comment: "VoiceOver: the time of the playhead under the preview"))
+                .accessibilityValue(Text(verbatim: current))
+            HStack(spacing: 6) {
+                Button {
+                    model.seekToStart()
+                } label: {
+                    Label("Go to the Beginning", systemImage: "backward.end.fill")
                 }
+                .help(Text("Go to the Beginning"))
+                Button {
+                    model.togglePlay()
+                } label: {
+                    if model.isPlaying {
+                        Label("Pause", systemImage: "pause.fill")
+                    } else {
+                        Label("Play", systemImage: "play.fill")
+                    }
+                }
+                .buttonStyle(TransportButtonStyle(prominent: true))
+                .keyboardShortcut(.space, modifiers: [])
+                .help(model.isPlaying ? Text("Pause") : Text("Play"))
+                Button {
+                    model.seekToEnd()
+                } label: {
+                    Label("Go to the End", systemImage: "forward.end.fill")
+                }
+                .help(Text("Go to the End"))
             }
-            .keyboardShortcut(.space, modifiers: [])
-            .frame(width: 20)
-            Button {
-                model.seekToEnd()
-            } label: {
-                Label("Go to the End", systemImage: "forward.end.fill")
-            }
-            Text(verbatim: time)
-                .monospacedDigit()
+            .padding(.horizontal, 18)
+            Text(verbatim: length)
                 .foregroundStyle(.secondary)
-                .padding(.leading, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(Text("Duration"))
+                .accessibilityValue(Text(verbatim: length))
         }
         .labelStyle(.iconOnly)
-        .buttonStyle(.borderless)
-        .font(.title3)
+        .buttonStyle(TransportButtonStyle())
+        .monospacedDigit()
         .disabled(!model.canPlay)
     }
+}
 
-    private var time: String {
-        let total = model.durationSeconds
-        return Timecode.precise(model.currentSeconds, total: total, locale: .current) + " / "
-            + Timecode.precise(total, total: total, locale: .current)
+/// A button of the transport: its symbol in a circle that shows while the mouse is over it, darker and a little smaller
+/// while pressed (not smaller with "Reduce motion"); the prominent one (▶/⏸) larger, its circle always there.
+private struct TransportButtonStyle: ButtonStyle {
+    var prominent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        TransportButton(configuration: configuration, prominent: prominent)
+    }
+}
+
+private struct TransportButton: View {
+    let configuration: ButtonStyleConfiguration
+    let prominent: Bool
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        let side: CGFloat = prominent ? 36 : 30
+        let rest = prominent ? 0.10 : 0
+        let fill = configuration.isPressed ? 0.20 : (hovering && isEnabled ? rest + 0.08 : rest)
+        configuration.label
+            .font(.system(size: prominent ? 16 : 13, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: side, height: side)
+            .background(Circle().fill(Color.primary.opacity(fill)))
+            .contentShape(Circle())
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.92 : 1)
+            .opacity(isEnabled ? 1 : 0.35)
+            .onHover { hovering = $0 }
+            .animation(.panel(Motion.hover, reduceMotion: reduceMotion), value: hovering)
+            .animation(.panel(Motion.selector, reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 }
 

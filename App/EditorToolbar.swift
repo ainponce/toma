@@ -6,13 +6,22 @@ import SwiftUI
 
 /// The editor's bar (design §5.2), in the window's unified toolbar: on the left the project's name (which a click edits,
 /// design §6.7) and what the output lasts, in the middle the format, on the right the panel's button and Export. Each item
-/// has the identifier `-TomaDumpEditorStructure` prints.
+/// has the identifier `-TomaDumpEditorStructure` prints. On macOS 26 the name and the duration are the window's title, not
+/// a glass capsule (`TitledEditorToolbar`).
 struct EditorToolbar: CustomizableToolbarContent {
     let model: EditorModel
     /// Shows or hides the panel.
     let togglePanel: () -> Void
 
     var body: some CustomizableToolbarContent {
+        nameItem
+        durationItem
+        formatItem
+        panelItem
+        exportItem
+    }
+
+    var nameItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.name", placement: .navigation) {
             if let actions = model.projectActions {
                 EditorNameField(model: model, actions: actions)
@@ -21,27 +30,57 @@ struct EditorToolbar: CustomizableToolbarContent {
             }
         }
         .customizationBehavior(.disabled)
+    }
+
+    /// What the output lasts, secondary to the name and apart from it.
+    var durationItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.duration", placement: .navigation) {
             // A placeholder of the same width until the project opens: an empty item has no size.
             Text(verbatim: Timecode.duration(model.durationSeconds))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
+                .padding(.leading, 4)
                 .opacity(model.document == nil ? 0 : 1)
+                .help(Text("Duration"))
         }
         .customizationBehavior(.disabled)
+    }
+
+    var formatItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.format", placement: .principal) {
             FormatMenu(model: model)
         }
+    }
+
+    var panelItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.panel", placement: .primaryAction) {
             Button(action: togglePanel) {
                 Label(model.panelVisible ? LocalizedStringKey("Hide Panel") : LocalizedStringKey("Show Panel"), systemImage: "sidebar.right")
             }
             .help(model.panelVisible ? Text("Hide Panel") : Text("Show Panel"))
         }
+    }
+
+    var exportItem: some CustomizableToolbarContent {
         ToolbarItem(id: "editor.export", placement: .primaryAction) {
             ExportControl(model: model)
         }
         .customizationBehavior(.disabled)
+    }
+}
+
+/// `EditorToolbar` on macOS 26: the same items, the name and the duration without the glass they would share, so they
+/// read as the window's title (plain text, as the system's title is), the duration apart and secondary.
+@available(macOS 26, *)
+struct TitledEditorToolbar: CustomizableToolbarContent {
+    let toolbar: EditorToolbar
+
+    var body: some CustomizableToolbarContent {
+        toolbar.nameItem.sharedBackgroundVisibility(.hidden)
+        toolbar.durationItem.sharedBackgroundVisibility(.hidden)
+        toolbar.formatItem
+        toolbar.panelItem
+        toolbar.exportItem
     }
 }
 

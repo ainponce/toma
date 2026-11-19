@@ -17,6 +17,16 @@ enum CameraNames {
         }
     }
 
+    /// The shape drawn, as the Shape control shows it.
+    static func shapeSymbol(_ shape: CameraShape) -> String {
+        switch shape {
+        case .circle: "circle"
+        case .roundedSquare: "app"
+        case .portrait: "rectangle.portrait"
+        case .landscape: "rectangle"
+        }
+    }
+
     static func shapeText(_ shape: CameraShape) -> String {
         switch shape {
         case .circle: String(localized: "Circle")
@@ -135,6 +145,7 @@ struct CameraTab: View {
                 Text("Instant").tag(true)
             }
             .pickerStyle(.segmented)
+            .panelTitled("Transition")
             Button("Delete Block", role: .destructive) { model.deleteLayoutBlock(block.id) }
         }
     }
@@ -169,6 +180,7 @@ struct CameraTab: View {
             }
         }
         .pickerStyle(.segmented)
+        .panelTitled("Camera Side")
         let share = split?.share
         Toggle("Automatic", isOn: Binding(get: { share == nil }, set: { model.setSplitShare(percent: $0 ? nil : Self.manualShare, id: id) }))
         PanelSlider(
@@ -204,11 +216,16 @@ struct CameraTab: View {
                 selection: Binding(
                     get: { style.shape }, set: { new in var next = style; next.shape = new; model.setBubbleStyle(next, target: target) })
             ) {
+                // The shapes drawn: their four names side by side do not fit in the panel.
                 ForEach(CameraShape.allCases, id: \.self) { shape in
-                    Text(CameraNames.shape(shape)).tag(shape)
+                    Label(CameraNames.shape(shape), systemImage: CameraNames.shapeSymbol(shape))
+                        .labelStyle(.iconOnly)
+                        .tag(shape)
                 }
             }
             .pickerStyle(.segmented)
+            .panelTitled("Shape")
+            .help(Text(CameraNames.shape(style.shape)))
         }
         PanelSection {
             Picker(
@@ -289,12 +306,20 @@ struct CameraTab: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
-        HStack {
-            Button("Add Change at Playhead") { model.addCameraChange() }
-            Button("Delete Change") {
-                if let selected { model.deleteCameraChange(selected) }
+        // Side by side if they fit in the panel, else one under the other.
+        let deleteChange = Button("Delete Change") {
+            if let selected { model.deleteCameraChange(selected) }
+        }
+        .disabled(selected == nil || !rows.contains { $0.id == selected })
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Button("Add Change at Playhead") { model.addCameraChange() }
+                deleteChange
             }
-            .disabled(selected == nil || !rows.contains { $0.id == selected })
+            VStack(alignment: .leading) {
+                Button("Add Change at Playhead") { model.addCameraChange() }
+                deleteChange
+            }
         }
         Button("Delete All Changes") { model.deleteAllCameraChanges() }
             .disabled(document.camera.changes.isEmpty)
@@ -309,9 +334,10 @@ struct CameraTab: View {
             PanelSlider(title: "Border", model: model, value: PanelValues.slider(cameraBorder: camera.border.width)) {
                 model.setCameraBorder(slider: $0)
             }
-            HStack(spacing: 6) {
-                Text("Border Color")
-                Spacer()
+            // The title above the swatches: beside them, the row is wider than the panel.
+            Text("Border Color")
+                .accessibilityHidden(true)
+            HStack(spacing: 8) {
                 ForEach(Array(CameraLookCommands.borderSwatches.enumerated()), id: \.offset) { _, swatch in
                     Button {
                         model.setCameraBorderColor(swatch)
@@ -328,6 +354,7 @@ struct CameraTab: View {
                     .accessibilityAddTraits(camera.border.color == swatch ? .isSelected : [])
                     .accessibilityLabel(Text(verbatim: Self.swatchName(swatch)))
                 }
+                Spacer(minLength: 8)
                 ColorPicker(
                     "Border Color",
                     selection: Binding(get: { Color(camera.border.color) }, set: { model.setCameraBorderColor($0.rgba) }),

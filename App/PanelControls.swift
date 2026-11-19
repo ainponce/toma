@@ -18,6 +18,18 @@ extension Animation {
     }
 }
 
+extension View {
+    /// A control of the panel with its title above it, as wide as the panel: a segmented control's title beside it would be
+    /// squeezed in the panel's width (Spanish is long). VoiceOver reads the control's own label, not the title twice.
+    func panelTitled(_ title: LocalizedStringKey) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .accessibilityHidden(true)
+            labelsHidden()
+        }
+    }
+}
+
 /// A titled group of controls of the panel.
 struct PanelSection<Content: View>: View {
     let title: LocalizedStringKey?

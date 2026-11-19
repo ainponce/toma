@@ -180,7 +180,7 @@ struct BackgroundTab: View {
                     Text(BackgroundNames.wallpaper(preset.id))
                         .font(.caption2)
                         .lineLimit(1)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(style.background == .wallpaper(preset.id) ? .primary : .secondary)
                 }
             }
         }
@@ -202,7 +202,7 @@ struct BackgroundTab: View {
                         Text(BackgroundNames.gradient(preset.id))
                             .font(.caption2)
                             .lineLimit(1)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(style.background == background ? .primary : .secondary)
                     }
                 }
                 VStack(spacing: 3) {
