@@ -943,6 +943,9 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 - Privacidad: Agregar desenfoque desde la barra y desde Edición; mover y agrandar el rectángulo con zoom y sin él; mover, recortar y borrar en la pista; el export tapa lo mismo que la vista previa.
 - En detalle: «Agregar desenfoque» (la barra de la línea de tiempo y Edición ▸ Agregar desenfoque) crea un bloque de 3 s desde el cabezal, aparece la pista Privacidad y la vista previa muestra un rectángulo centrado de 40 % × 20 % con 8 manijas. Arrastrar el cuerpo lo mueve 1:1 con el puntero, una esquina o un lado lo agranda; cerca de los bordes y del centro de la pantalla dibujada se pega (con una línea de acento y un toque del trackpad) y con ⌘ apretado no. Lo mismo con un zoom de 2× a 4× parado sobre el bloque, con Pantalla dividida y con Seguir el cursor del reencuadre: el rectángulo queda sobre lo que tapa el desenfoque, sin corrimiento. Soltar es un paso: Edición ▸ Deshacer «Cambiar el desenfoque».
 - En la pista: dos bloques pisados se ven uno sobre otro, el más corto arriba, y el que se agarra es el de arriba; moverlo y recortarlo no frena en el otro; doble clic lleva el cabezal al bloque; el menú cambia entre Desenfoque, Pixelado y Relleno y borra; ⌫ borra los elegidos. VoiceOver lee «Desenfoque, de 0:02 a 0:05».
+**Máscaras y caras con Vision** (I8; se recorre con la pestaña Cámara de I13)
+
+- Con una toma real con cámara (una persona que se mueve, gira la cara y sale del cuadro unos segundos): con Fondo Desenfocado, en `~/Library/Caches/dev.toma.Toma/Projects/<id>/masks/<toma>/<pista>/` aparece un `…-personMask-1.mov` por segmento de la cámara. Abierto en QuickTime, dura lo mismo que el segmento, la silueta blanca sigue a la persona sin parpadear y queda negro mientras no hay nadie. Con Seguir la cara, `faces/…/…-faceTrack-1.json` tiene `face` en las muestras con la cara a la vista y no la tiene mientras la persona no está.
 
 ## Prueba en seco (ad hoc)
 
