@@ -47,7 +47,7 @@ struct GIFPreviewBox: View {
                 }
             }
             .frame(width: 320, height: 180)
-            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: choices.isMakingPreview)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(Text("GIF Preview", comment: "VoiceOver: the export sheet's preview of the GIF"))
