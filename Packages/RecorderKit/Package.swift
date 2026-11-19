@@ -66,7 +66,7 @@ let package = Package(
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
         .testTarget(name: "TranscriptionTests", dependencies: ["Transcription", "ProjectFormat", "Export", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
         .testTarget(name: "ImageAnalysisTests", dependencies: ["ImageAnalysis", "ProjectFormat", "RecorderKitTestSupport"]),
-        .testTarget(name: "ProjectJobsTests", dependencies: ["ProjectJobs", "Editing", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "ProjectJobsTests", dependencies: ["ProjectJobs", "Editing", "ProjectFormat", "Export", "Transcription", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )
