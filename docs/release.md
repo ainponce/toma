@@ -1296,3 +1296,7 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 **Zonas seguras** (I15)
 
 - En un proyecto 9:16, 4:5 o 3:4: Visualización ▸ Mostrar las zonas seguras (o el botón de la derecha de la barra de la vista previa) atenúa arriba, abajo y la derecha con borde punteado y la leyenda. Comparada con un Reel real, el texto de abajo y los botones de la derecha caen en lo atenuado. En 16:9, 1:1 y 4:3 el menú está deshabilitado y no hay botón. Exportar un proyecto con las zonas prendidas no las dibuja.
+
+**Voz y audio: modo del micrófono** (A14)
+
+- Con el micrófono elegido y el medidor andando, la isla dice el modo activo ("Modo: Estándar"); Cambiar… abre el selector de macOS y al elegir Aislamiento de voz o Amplio espectro la fila lo dice enseguida. Con el micrófono apagado (o sin permiso), la fila está deshabilitada. Con el modo más largo la fila no se corta (el botón pasa abajo).

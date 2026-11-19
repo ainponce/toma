@@ -1581,6 +1581,17 @@
         }
       }
     },
+    "Change…" : {
+      "comment" : "Opens the system's picker of microphone modes",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar…"
+          }
+        }
+      }
+    },
     "Check for Updates…" : {
       "localizations" : {
         "es" : {
@@ -3749,6 +3760,17 @@
         }
       }
     },
+    "Microphone Mode" : {
+      "comment" : "Accessibility label of the row with the system microphone mode",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modo del micrófono"
+          }
+        }
+      }
+    },
     "Microphone access is off. Recording without audio." : {
       "localizations" : {
         "es" : {
@@ -3837,6 +3859,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Niebla"
+          }
+        }
+      }
+    },
+    "Mode: %@" : {
+      "comment" : "The system microphone mode, e.g. Mode: Standard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Modo: %@"
           }
         }
       }
@@ -5811,6 +5844,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar «%@»"
+          }
+        }
+      }
+    },
+    "Shown while the microphone is on." : {
+      "comment" : "Help of the disabled Change… button of the microphone mode",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se ve mientras el micrófono está prendido."
           }
         }
       }
@@ -7991,6 +8035,17 @@
         }
       }
     },
+    "Voice Isolation" : {
+      "comment" : "Microphone mode of macOS",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aislamiento de voz"
+          }
+        }
+      }
+    },
     "Volume" : {
       "comment" : "The Cursor tab: the click sound's volume; the Audio tab: a track's",
       "localizations" : {
@@ -8123,6 +8178,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Todo el video"
+          }
+        }
+      }
+    },
+    "Wide Spectrum" : {
+      "comment" : "Microphone mode of macOS",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amplio espectro"
           }
         }
       }
