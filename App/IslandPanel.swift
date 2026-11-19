@@ -209,6 +209,22 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         send(.clicked)
     }
 
+    #if DEBUG
+    /// `-TomaShowcase island <variant>`: the open island in a mode (`display`, `window`, `area`), with its settings
+    /// (`settings`) or with the camera on if it is allowed (`camera`), for screenshots; nothing is saved.
+    func showcase(_ variant: String) {
+        guard let panel = model.panel else { return }
+        switch variant {
+        case "display", "settings", "camera": panel.selection.mode = .display
+        case "window": panel.selection.mode = .window
+        case "area": panel.selection.mode = .area
+        default: break
+        }
+        if variant == "settings" { panel.showsSettings = true }
+        if variant == "camera", panel.camera.permission == .granted { panel.setCamera(on: true) }
+    }
+    #endif
+
     /// The island's shortcut (⇧⌘2): during a take it stops it, its countdown included; otherwise the
     /// island opens on the screen with the pointer, or closes.
     func shortcutPressed() {

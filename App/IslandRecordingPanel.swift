@@ -213,23 +213,32 @@ private struct ControlSeparator: View {
     }
 }
 
-/// Stop: red, like Record.
+/// Stop: red, like Record; brighter under the pointer.
 private struct StopButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        StopButtonBody(configuration: configuration)
+    }
+}
+
+private struct StopButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var isHovered = false
     @Environment(\.islandReduceMotion) private var reduceMotion
 
-    func makeBody(configuration: Configuration) -> some View {
+    var body: some View {
         configuration.label
             .foregroundStyle(.white)
             .background {
                 Circle()
-                    .fill(LinearGradient(
-                        colors: [Color(red: 1, green: 0.35, blue: 0.31), Color(red: 0.9, green: 0.21, blue: 0.17)],
-                        startPoint: .top, endPoint: .bottom))
-                    .overlay(Circle().stroke(Color.white.opacity(0.3)))
+                    .fill(RecordButtonStyle.red)
+                    .brightness(configuration.isPressed ? -0.06 : (isHovered ? 0.05 : 0))
+                    .overlay(Circle().strokeBorder(Color.white.opacity(0.22)))
             }
             .contentShape(Circle())
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.95 : 1)
+            .onHover { isHovered = $0 }
             .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: configuration.isPressed)
+            .animation(.island(Motion.hover, reduceMotion: reduceMotion), value: isHovered)
     }
 }
 

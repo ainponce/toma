@@ -266,7 +266,7 @@ private struct OverlayContent: View {
     }
 }
 
-/// The display that would be recorded: a blue frame around it and its name.
+/// The display that would be recorded: a frame in the accent color around it and its name.
 private struct SelectionHighlight: View {
     let model: OverlayModel
     let reduceMotion: Bool
@@ -275,15 +275,15 @@ private struct SelectionHighlight: View {
         ZStack(alignment: .bottom) {
             if model.isHighlighted {
                 Rectangle()
-                    .strokeBorder(Color(nsColor: .systemBlue).opacity(0.95), lineWidth: 3)
-                    .background(Color(nsColor: .systemBlue).opacity(0.08))
+                    .strokeBorder(Color.accentColor.opacity(0.95), lineWidth: 3)
+                    .background(Color.accentColor.opacity(0.08))
                     .transition(.opacity)
                 Label { Text(verbatim: model.name) } icon: { Image(systemName: "display") }
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 14)
                     .padding(.vertical, 7)
-                    .background(Capsule().fill(Color(nsColor: .systemBlue).opacity(0.92)))
+                    .background(Capsule().fill(Color.accentColor.opacity(0.92)))
                     .padding(.bottom, 36)
                     .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94)))
             }
@@ -292,7 +292,8 @@ private struct SelectionHighlight: View {
     }
 }
 
-/// The window under the pointer (the prototype's): a blue frame around it, and its app and size in the middle.
+/// The window under the pointer (the prototype's): a frame in the accent color around it, and its app and size in the
+/// middle.
 /// It moves from one window to the next with the selector spring (`SelectionOverlay` changes it inside that
 /// animation); each screen draws its part of it.
 private struct WindowHighlight: View {
@@ -309,9 +310,9 @@ private struct WindowHighlight: View {
                     x: window.frame.x - screen.frame.x - 3, y: window.frame.y - screen.frame.y - 3, width: window.frame.width + 6,
                     height: window.frame.height + 6)
                 RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(Color(nsColor: .systemBlue).opacity(0.95), lineWidth: 3)
+                    .strokeBorder(Color.accentColor.opacity(0.95), lineWidth: 3)
                     .background(
-                        RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color(nsColor: .systemBlue).opacity(0.14)))
+                        RoundedRectangle(cornerRadius: 13, style: .continuous).fill(Color.accentColor.opacity(0.14)))
                     .overlay {
                         Label {
                             Text(verbatim: "\(window.ownerName) · \(size ?? "")")
@@ -324,7 +325,7 @@ private struct WindowHighlight: View {
                         .lineLimit(1)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 7)
-                        .background(Capsule().fill(Color(nsColor: .systemBlue).opacity(0.92)))
+                        .background(Capsule().fill(Color.accentColor.opacity(0.92)))
                         .shadow(color: .black.opacity(0.3), radius: 10, y: 8)
                         .fixedSize()
                     }

@@ -950,6 +950,17 @@
         }
       }
     },
+    "Camera Off" : {
+      "comment" : "The open island's camera card while the camera is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cámara apagada"
+          }
+        }
+      }
+    },
     "Camera Only" : {
       "comment" : "Layout name",
       "localizations" : {
@@ -6985,6 +6996,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Volver a intentar"
+          }
+        }
+      }
+    },
+    "Turn it on to place the bubble." : {
+      "comment" : "The open island's camera card while the camera is off: what the switch does",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Activarla para ubicar la burbuja."
           }
         }
       }

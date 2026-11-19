@@ -305,9 +305,11 @@ struct IslandOpenPanel: View {
             Spacer()
             Button { send(.dismiss) } label: {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
-                    .frame(width: 30, height: 30)
+                    .frame(width: 32, height: 32)
             }
             .buttonStyle(GlassButtonStyle(shape: .circle))
+            .help(Text("Close"))
+            .accessibilityLabel(Text("Close"))
         }
     }
 
@@ -331,10 +333,11 @@ struct IslandOpenPanel: View {
         }
     }
 
-    /// Every display, each marked or not: a take records the marked ones.
+    /// Every display, each marked or not: a take records the marked ones. More than two scroll, so the desktops
+    /// keep their place.
     @ViewBuilder
     private var displayColumn: some View {
-        VStack(spacing: 2) {
+        let rows = VStack(spacing: 2) {
             ForEach(panel.displays) { display in
                 ChoiceRow(
                     title: Text(verbatim: display.name), subtitle: Text(verbatim: display.resolution),
@@ -343,18 +346,25 @@ struct IslandOpenPanel: View {
                     hovering: { panel.highlight($0 ? display.id : nil) })
             }
         }
+        if panel.displays.count > 2 {
+            ScrollView { rows }
+                .scrollIndicators(.automatic)
+                .frame(maxHeight: Self.displayRowsHeight)
+        } else {
+            rows
+        }
         Button { send(.beganChoosing) } label: {
             Label("Choose on Screen", systemImage: "display")
         }
         .buttonStyle(GlassButtonStyle())
-        VStack(alignment: .leading, spacing: 6) {
-            ColumnSubtitle(
-                text: Text("Desktop", comment: "A display's only desktop (Space), and the open island's section of desktops"),
-                icon: "rectangle.3.group")
+        ColumnSection(title: Text("Desktop", comment: "A display's only desktop (Space), and the open island's section of desktops")) {
             DesktopsList(model: desktops, layout: .column)
         }
-        Spacer(minLength: 0)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
+
+    /// Two displays and half of a third: the half says there are more.
+    private static let displayRowsHeight = 104.0
 
     // MARK: - Camera
 
@@ -363,65 +373,61 @@ struct IslandOpenPanel: View {
         case device(String)
     }
 
-    /// The switch; which camera, the bubble's shape and size, and how to place it, dimmed while the camera is
-    /// off. Once camera access was refused, the switch stays off and the column says how to allow it.
+    /// The switch, and with the camera on which camera, the bubble's shape and size, and how to place it; they
+    /// materialize as the island's content does when it is turned on. Off, a symbol and a line say so; once camera
+    /// access was refused, the switch stays off and the card says how to allow it.
     @ViewBuilder
     private var camera: some View {
-        HStack {
-            ColumnTitle(text: Text("Camera"), icon: "video.fill")
-            Spacer()
+        ColumnTitle(text: Text("Camera"), icon: "video.fill") {
             Toggle(isOn: Binding(get: { panel.isCameraOn }, set: { panel.setCamera(on: $0) })) { Text("Camera") }
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .controlSize(.mini)
                 .disabled(panel.camera.permission == .denied || panel.camera.isAsking)
         }
-        if panel.camera.permission == .denied {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Camera access is off.")
-                    .font(.system(size: 12))
-                    .opacity(0.75)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button { panel.camera.openSettings() } label: {
-                    Text("Open Settings", comment: "Opens the camera's privacy settings in System Settings")
-                }
-                .buttonStyle(GlassButtonStyle(compact: true))
+        ZStack(alignment: .top) {
+            if panel.isCameraOn {
+                cameraControls
+                    .transition(reduceMotion ? .islandFade : .islandContent)
+            } else {
+                CameraOffState(isDenied: panel.camera.permission == .denied) { panel.camera.openSettings() }
+                    .transition(reduceMotion ? .islandFade : .islandContent)
             }
         }
-        VStack(alignment: .leading, spacing: 8) {
-            // In its place, without access, how to allow it.
-            if panel.camera.permission != .denied {
-                Picker(selection: cameraDevice) {
-                    Text("System Default").tag(CameraTag.systemDefault)
-                    ForEach(cameraRows) { row in
-                        Text(verbatim: row.name).tag(CameraTag.device(row.id))
-                    }
-                } label: {
-                    Text("Camera")
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .animation(.island(Motion.islandExpand, reduceMotion: reduceMotion), value: panel.isCameraOn)
+    }
+
+    /// Which camera, the bubble's shape and size, and how to place it.
+    private var cameraControls: some View {
+        VStack(alignment: .leading, spacing: Column<EmptyView>.spacing) {
+            Picker(selection: cameraDevice) {
+                Text("System Default").tag(CameraTag.systemDefault)
+                ForEach(cameraRows) { row in
+                    Text(verbatim: row.name).tag(CameraTag.device(row.id))
                 }
-                .pickerStyle(.menu)
-                .labelsHidden()
-                .controlSize(.small)
+            } label: {
+                Text("Camera")
             }
-            GlassSegmented(
-                items: CameraShape.allCases.map { shape in
-                    .init(value: shape, title: Text(shape.title), icon: shape.symbol, iconOnly: true)
-                },
-                selection: Binding(get: { panel.camera.style.shape }, set: { shape in panel.camera.update { $0.shape = shape } }),
-                compact: true)
-            GlassSegmented(
-                items: CameraStyle.sizes.map { size in .init(value: size.size, title: Text(size.title)) },
-                selection: Binding(get: { panel.camera.style.size }, set: { size in panel.camera.update { $0.size = size } }),
-                compact: true)
-            Text("Drag the bubble to place it. This is how the video starts; you can change it in the editor.")
-                .font(.system(size: 11))
-                .opacity(0.62)
-                .fixedSize(horizontal: false, vertical: true)
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .controlSize(.small)
+            ColumnSection(title: Text("Shape", comment: "The camera bubble's shape")) {
+                GlassSegmented(
+                    items: CameraShape.allCases.map { shape in
+                        .init(value: shape, title: Text(shape.title), icon: shape.symbol, iconOnly: true)
+                    },
+                    selection: Binding(get: { panel.camera.style.shape }, set: { shape in panel.camera.update { $0.shape = shape } }),
+                    compact: true, fills: true)
+            }
+            ColumnSection(title: Text("Size", comment: "The camera's size, or the cursor's")) {
+                GlassSegmented(
+                    items: CameraStyle.sizes.map { size in .init(value: size.size, title: Text(size.title)) },
+                    selection: Binding(get: { panel.camera.style.size }, set: { size in panel.camera.update { $0.size = size } }),
+                    compact: true, fills: true)
+            }
+            ColumnNote(text: Text("Drag the bubble to place it. This is how the video starts; you can change it in the editor."))
         }
-        .disabled(!panel.isCameraOn)
-        .opacity(panel.isCameraOn ? 1 : 0.32)
-        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: panel.isCameraOn)
-        Spacer(minLength: 0)
     }
 
     /// The connected cameras, and the chosen one if it is not connected now (by its ID).
@@ -457,31 +463,43 @@ struct IslandOpenPanel: View {
     @ViewBuilder
     private var audioAndScript: some View {
         ColumnTitle(text: Text("Audio and Script"), icon: "mic.fill")
-        ColumnSubtitle(text: Text("Microphone"))
-        Picker(selection: microphone) {
-            Text("System Default").tag(MicrophoneTag.systemDefault)
-            ForEach(microphoneRows) { row in
-                Text(verbatim: row.name).tag(MicrophoneTag.device(row.id))
+        ColumnSection(title: Text("Microphone")) {
+            MicrophoneLevelRow(preview: panel.levelPreview, choice: panel.selection.microphone)
+        } content: {
+            Picker(selection: microphone) {
+                Text("System Default").tag(MicrophoneTag.systemDefault)
+                ForEach(microphoneRows) { row in
+                    Text(verbatim: row.name).tag(MicrophoneTag.device(row.id))
+                }
+                Divider()
+                Text("Off", comment: "Microphone: none").tag(MicrophoneTag.off)
+            } label: {
+                Text("Microphone")
             }
-            Divider()
-            Text("Off", comment: "Microphone: none").tag(MicrophoneTag.off)
-        } label: {
-            Text("Microphone")
+            .pickerStyle(.menu)
+            .labelsHidden()
+            .controlSize(.small)
         }
-        .pickerStyle(.menu)
-        .labelsHidden()
-        .controlSize(.small)
-        MicrophoneLevelRow(preview: panel.levelPreview, choice: panel.selection.microphone)
-        ColumnSubtitle(text: Text("System Audio"), icon: "speaker.wave.2.fill")
-        SystemAudioPicker(panel: panel)
-        HStack {
-            ColumnSubtitle(text: Text("Teleprompter"), icon: "text.alignleft")
-            Spacer()
+        ColumnSection(title: Text("System Audio")) {
+            SystemAudioPicker(panel: panel)
+        }
+        // A switch row: its name with its symbol, the switch at the right.
+        HStack(spacing: 6) {
+            Label {
+                Text("Teleprompter")
+            } icon: {
+                Image(systemName: "text.alignleft").symbolRenderingMode(.hierarchical).opacity(0.75)
+            }
+            .font(.system(size: 12.5))
+            .accessibilityHidden(true)
+            Spacer(minLength: 0)
             Toggle(isOn: panel.teleprompter.isOn) { Text("Teleprompter") }
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .controlSize(.mini)
         }
+        .frame(height: ColumnTitle<EmptyView>.height)
+        .padding(.top, 2)
         Spacer(minLength: 0)
     }
 
@@ -515,7 +533,7 @@ struct IslandOpenPanel: View {
     // MARK: - Footer
 
     private var footer: some View {
-        HStack {
+        HStack(spacing: 8) {
             Button { panel.showsSettings.toggle() } label: {
                 Label("Settings", systemImage: "slider.horizontal.3")
             }
@@ -524,8 +542,8 @@ struct IslandOpenPanel: View {
                 Label("Library", systemImage: "square.grid.2x2")
             }
             .buttonStyle(GlassButtonStyle(isOn: false))
+            Spacer(minLength: 8)
             LoadIndicator(verdict: panel.load) { panel.showsSettings = true }
-            Spacer()
             let problem = panel.recordProblem
             // The reason is on a container: a disabled button shows no help.
             HStack {
@@ -573,8 +591,54 @@ private struct StartFailureRow: View {
     }
 }
 
-/// The chosen microphone's live level (plan decision 31), heard while the panel shows it: nothing without
-/// microphone access (asked for when Record is clicked) or with the microphone off.
+/// The camera card while the camera is off: a symbol and a line, and once access was refused how to allow it.
+private struct CameraOffState: View {
+    let isDenied: Bool
+    let openSettings: () -> Void
+
+    var body: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "video.slash")
+                .font(.system(size: 18))
+                .symbolRenderingMode(.hierarchical)
+                .opacity(0.6)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(Color.white.opacity(0.06)))
+                .accessibilityHidden(true)
+            VStack(spacing: 3) {
+                if isDenied {
+                    Text("Camera access is off.")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .opacity(0.85)
+                } else {
+                    Text("Camera Off", comment: "The open island's camera card while the camera is off")
+                        .font(.system(size: 12.5, weight: .medium))
+                        .opacity(0.85)
+                    Text("Turn it on to place the bubble.", comment: "The open island's camera card while the camera is off: what the switch does")
+                        .font(.system(size: 11))
+                        .opacity(0.55)
+                }
+            }
+            .multilineTextAlignment(.center)
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityElement(children: .combine)
+            if isDenied {
+                Button(action: openSettings) {
+                    Text("Open Settings", comment: "Opens the camera's privacy settings in System Settings")
+                }
+                .buttonStyle(GlassButtonStyle(compact: true))
+            }
+        }
+        .padding(.horizontal, 6)
+        // In the middle of what the card has under its title, a little above center.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(.bottom, 18)
+    }
+}
+
+/// The chosen microphone's live level (plan decision 31), heard while the panel shows it, at the right of the
+/// microphone's name: nothing without microphone access (asked for when Record is clicked) or with the microphone
+/// off.
 private struct MicrophoneLevelRow: View {
     let preview: MicrophoneLevelPreview
     let choice: DeviceChoice
@@ -582,8 +646,8 @@ private struct MicrophoneLevelRow: View {
     var body: some View {
         // Always there, so it appears and disappears with the panel whether or not it shows the meter.
         Color.clear
-            .frame(height: 12)
-            .overlay(alignment: .leading) {
+            .frame(width: 28, height: 12)
+            .overlay(alignment: .trailing) {
                 if preview.isListening {
                     LevelMeter(peak: { preview.peakDecibels }, bars: 6, height: 12)
                 }

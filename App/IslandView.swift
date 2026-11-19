@@ -209,7 +209,7 @@ private struct ChoosingRow: View {
                     .font(.system(size: 11, weight: .semibold))
                     .padding(.horizontal, 11)
                     .padding(.vertical, 1.5)
-                    .background(Capsule().fill(Color(nsColor: .systemBlue)))
+                    .background(Capsule().fill(Color.accentColor))
             }
             .buttonStyle(.plain)
         }

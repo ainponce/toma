@@ -86,7 +86,7 @@ struct AreaChoiceColumn: View {
     @Environment(\.islandReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Column<EmptyView>.spacing) {
             if let area = panel.selection.area {
                 ChoiceRow(
                     title: Text(verbatim: panel.pixelSize(of: area)), subtitle: Text(verbatim: panel.details(of: area)),
@@ -105,19 +105,20 @@ struct AreaChoiceColumn: View {
             if saved.isEmpty {
                 Spacer(minLength: 0)
             } else {
-                ColumnSubtitle(text: Text("Saved Areas"), icon: "bookmark")
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(saved.indices, id: \.self) { index in
-                            let area = saved[index]
-                            ChoiceRow(
-                                title: Text(verbatim: panel.pixelSize(of: area)), subtitle: Text(verbatim: panel.details(of: area)),
-                                icon: .symbol("bookmark"), isChosen: panel.selection.area == area,
-                                choose: { panel.selection.area = area })
+                ColumnSection(title: Text("Saved Areas")) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(saved.indices, id: \.self) { index in
+                                let area = saved[index]
+                                ChoiceRow(
+                                    title: Text(verbatim: panel.pixelSize(of: area)), subtitle: Text(verbatim: panel.details(of: area)),
+                                    icon: .symbol("bookmark"), isChosen: panel.selection.area == area,
+                                    choose: { panel.selection.area = area })
+                            }
                         }
                     }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .frame(maxHeight: .infinity, alignment: .top)
             }
             ColumnNote(
                 text: Text("The whole display is recorded: what's outside the area is saved too. The area can be changed later."))

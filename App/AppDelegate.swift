@@ -448,9 +448,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// Opens `surface` and stays open, without the onboarding, the recovery, the deletions left at launch or anything
-    /// else that touches the projects folder: `onboarding`, `settings`, `notices`, `island` (the island, open),
-    /// `editor <package>`, `export <package>` (the editor with its export sheet). The library over a folder of its own is
-    /// `-TomaLibraryBench <folder> -TomaLibraryBenchKeepOpen`.
+    /// else that touches the projects folder: `onboarding`, `settings`, `notices`, `island [<variant>]` (the island,
+    /// open; `IslandPanel.showcase`), `editor <package>`, `export <package>` (the editor with its export sheet). The
+    /// library over a folder of its own is `-TomaLibraryBench <folder> -TomaLibraryBenchKeepOpen`.
     private func runShowcase(_ surface: String, path: String?) {
         StyleCatalog.shared.start()
         NSApp.setActivationPolicy(.regular)
@@ -459,9 +459,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case ("onboarding", _): showOnboarding()
         case ("settings", _): showSettings()
         case ("notices", _): showThirdPartyNotices()
-        case ("island", _):
+        case ("island", let variant):
             makeIsland()
             island?.invoke()
+            if let variant { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.island?.showcase(variant) } }
         case ("editor", let path?), ("export", let path?):
             let url = URL(fileURLWithPath: path).standardizedFileURL
             showEditor(for: url, take: nil)

@@ -4,8 +4,8 @@ import AppSupport
 import Recording
 import SwiftUI
 
-// The encoder's load in the open island (notch design §5.2): a dot in the footer, green or amber, and at the bottom
-// of the settings what would lighten a high load, as buttons that make the change.
+// The encoder's load in the open island (notch design §5.2): a quiet gauge in the footer, amber with a line once the
+// load matters, and at the bottom of the settings the load with what would lighten it, as buttons that make the change.
 
 extension OpenPanelModel {
     /// What the selection would weigh on the encoder with the settings shown, before there is a take: the same
@@ -72,23 +72,64 @@ extension CameraPreset {
     }
 }
 
-/// The footer's dot: green while the encoder keeps up, with how much of its budget the take would use; amber once
-/// frames may be dropped, saying so. A click opens the settings, where the changes that lighten it are.
+/// The footer's load, next to Record: while the encoder keeps up, only a quiet gauge whose needle follows how much
+/// of its budget the take would use (the number is its help, and what VoiceOver reads); amber once frames may be
+/// dropped, saying so. A click opens the settings, where the load is in full with the changes that lighten it.
 struct LoadIndicator: View {
     let verdict: EncoderLoadVerdict
     let showSettings: () -> Void
+    @State private var isHovered = false
     @Environment(\.islandReduceMotion) private var reduceMotion
 
     var body: some View {
+        let tint = NoticePresentation.attention.tint
         Button(action: showSettings) {
-            LoadLine(verdict: verdict, size: 11.5)
-                .opacity(verdict.isHeavy ? 0.9 : 0.62)
-                .padding(.vertical, 4)
-                .padding(.horizontal, 6)
-                .contentShape(Rectangle())
+            HStack(spacing: 6) {
+                if verdict.isHeavy {
+                    Text("This setup may be too much for the encoder.")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(tint)
+                        .multilineTextAlignment(.trailing)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .transition(.opacity)
+                }
+                Image(systemName: Self.symbol(for: verdict))
+                    .font(.system(size: 14))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(verdict.isHeavy ? tint : .white)
+                    .opacity(verdict.isHeavy ? 1 : (isHovered ? 0.8 : 0.42))
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            // Two lines of warning stay within Record's height: the footer keeps its place.
+            .padding(.vertical, verdict.isHeavy ? 0 : 4)
+            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .help(Text("Encoder load \(percent)", comment: "How much of the encoder's budget the take would use, as 42 %"))
+        .accessibilityLabel(
+            verdict.isHeavy
+                ? Text("This setup may be too much for the encoder.")
+                : Text("Encoder load \(percent)", comment: "How much of the encoder's budget the take would use, as 42 %"))
+        .onHover { isHovered = $0 }
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: verdict.isHeavy)
+        .animation(.island(Motion.hover, reduceMotion: reduceMotion), value: isHovered)
+    }
+
+    private var percent: String {
+        verdict.ratio.formatted(.percent.precision(.fractionLength(0)))
+    }
+
+    /// The gauge with its needle nearest the load: empty, a third, half, two thirds, full.
+    private static func symbol(for verdict: EncoderLoadVerdict) -> String {
+        switch verdict.ratio {
+        case ..<0.2: "gauge.with.dots.needle.0percent"
+        case ..<0.42: "gauge.with.dots.needle.33percent"
+        case ..<0.6: "gauge.with.dots.needle.50percent"
+        case ..<0.85: "gauge.with.dots.needle.67percent"
+        default: "gauge.with.dots.needle.100percent"
+        }
     }
 }
 

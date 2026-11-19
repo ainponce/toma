@@ -141,7 +141,7 @@ struct WindowChoiceColumn: View {
     @Environment(\.islandReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: Column<EmptyView>.spacing) {
             if let window = panel.chosenWindow {
                 ChoiceRow(
                     title: Text(verbatim: windowName(app: window.ownerName, title: window.title)),
@@ -156,16 +156,17 @@ struct WindowChoiceColumn: View {
             if panel.otherDesktopWindows.isEmpty {
                 Spacer(minLength: 0)
             } else {
-                ColumnSubtitle(text: Text("From Other Desktops"), icon: "rectangle.3.group")
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 2) {
-                        ForEach(panel.otherDesktopWindows) { group in
-                            OtherDesktopGroup(group: group, chosenID: panel.selection.windowID) { panel.choose(window: $0) }
+                ColumnSection(title: Text("From Other Desktops")) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(panel.otherDesktopWindows) { group in
+                                OtherDesktopGroup(group: group, chosenID: panel.selection.windowID) { panel.choose(window: $0) }
+                            }
                         }
                     }
+                    .scrollIndicators(.automatic)
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
-                .scrollIndicators(.automatic)
-                .frame(maxHeight: .infinity, alignment: .top)
             }
             Label {
                 Text("With many menus, Area or Display works better.")
@@ -173,7 +174,7 @@ struct WindowChoiceColumn: View {
                 Image(systemName: "info.circle").symbolRenderingMode(.hierarchical)
             }
             .font(.system(size: 11))
-            .opacity(0.62)
+            .opacity(0.55)
             .fixedSize(horizontal: false, vertical: true)
             .help(String(localized: "Menus don't appear in a window recording, and popovers may not either."))
         }
@@ -198,7 +199,7 @@ private struct OtherDesktopGroup: View {
             Text(verbatim: group.appName).lineLimit(1)
         }
         .font(.system(size: 11, weight: .medium))
-        .opacity(0.62)
+        .opacity(0.55)
         .padding(.top, 4)
         .padding(.leading, 2)
         ForEach(group.windows, id: \.windowID) { window in
