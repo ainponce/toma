@@ -14,7 +14,8 @@ import Synchronization
 ///
 /// Nothing is written:
 /// - while secure input is on (`IsSecureEventInputEnabled()`, read for each key: a password field, Terminal's Secure
-///   Keyboard Entry), so neither the password nor the ↩ that closes its field leaves a line;
+///   Keyboard Entry), so neither the password nor the ↩ that closes its field leaves a line. It covers the fields where
+///   the app turns secure input on, as password fields do: a field of an app that does not is recorded like any other;
 /// - while paused (the keyboard is not listened to then), nor for a key from before the start or the resume, nor after
 ///   `stop()`;
 /// - if the keyboard cannot be listened to (`isListening` is `false`, and the app's log says so);
@@ -129,12 +130,13 @@ public final class KeyPressRecorder: InputRecorder, FormatRaising, Sendable {
     }
 
     /// One key, on the queue. Raises and appends under the lock, so nothing is appended once `pause()` or `stop()` has
-    /// returned.
+    /// returned. Secure input is read right before the line, so a password field that gets the focus while the first key
+    /// raises the package is seen for that key; a key with secure input on does not raise it either.
     private func record(_ key: KeyEvent, at time: HostTime) {
-        let secure = secureInput()
         let outcome = state.withLock { s -> Outcome in
-            guard let log = s.log, !s.paused, !s.off, !secure, time >= s.acceptsFrom else { return .none }
+            guard let log = s.log, !s.paused, !s.off, time >= s.acceptsFrom else { return .none }
             if !s.raised {
+                guard !secureInput() else { return .none }
                 guard let raise = s.raise else {
                     s.off = true
                     return .noRaiser
@@ -147,6 +149,7 @@ public final class KeyPressRecorder: InputRecorder, FormatRaising, Sendable {
                 }
                 s.raised = true
             }
+            guard !secureInput() else { return .none }
             log.append(InputEvent(
                 t: time,
                 kind: .keyPress(code: key.code, chars: key.chars, mods: key.mods & Self.modifierMask, isRepeat: key.isRepeat)))

@@ -75,8 +75,9 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// At least one key was pressed in the 250 ms that start at `t` (version 3). Never which, nor how many.
         case keyActivity
         /// A key went down at `t` (version 4, only in takes the user chose to record keys for, never while secure input
-        /// is on): its virtual key code (`kCGKeyboardEventKeycode`), the characters it types without modifiers (`nil`
-        /// for one that types nothing, an arrow or a function key), the modifier flags (`CGEventFlags`, its low 32 bits)
+        /// is on): its virtual key code (`kCGKeyboardEventKeycode`), the characters it types with only ⇧ of its
+        /// modifiers (`"A"` with ⇧, `"c"` in ⌘C; `nil` for one that types nothing or a control character, such as ↩,
+        /// an arrow or a function key), the modifier flags (`CGEventFlags`, its low 32 bits)
         /// and whether it is the key's automatic repeat. Written as `{"chars":"a","code":0,"mods":0,"repeat":false,…}`.
         case keyPress(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool)
 

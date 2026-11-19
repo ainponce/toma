@@ -210,6 +210,24 @@ private func key(_ code: UInt16, _ chars: String?, mods: UInt32 = 0, isRepeat: B
         }
     }
 
+    @Test func secureInputThatComesOnDuringTheRaiseIsSeen() async throws {
+        try await withTemporaryDirectory { dir in
+            let rig = try KeyRig(in: dir, raiser: false)
+            let (probe, secure) = (rig.probe, rig.secure)
+            // A password field gets the focus while the package goes to 4 for the first key: that key is not written.
+            rig.recorder.setFormatRaiser {
+                try probe.raise()
+                secure.set(true)
+            }
+            await rig.recorder.start(log: rig.log)
+            await rig.source.press(key(0, "a"), at: 2)
+            rig.secure.set(false)
+            await rig.source.press(key(11, "b"), at: 3)
+            #expect(try await rig.finish().map(\.t) == [host(3)])
+            #expect(rig.probe.calls == 1)
+        }
+    }
+
     @Test func theFirstKeyRaisesTo4BeforeItsLine() async throws {
         try await withTemporaryDirectory { dir in
             let rig = try KeyRig(in: dir)

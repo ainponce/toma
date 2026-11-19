@@ -47,8 +47,8 @@ public protocol KeyEventSource: AnyObject, Sendable {
 /// on the Mac). Nothing is handed on while secure input is on (`IsSecureEventInputEnabled()`, read as the key comes;
 /// `KeyPressRecorder` reads it again). `chars` comes from `UCKeyTranslate` with only ⇧ and
 /// `kUCKeyTranslateNoDeadKeysMask`, on the keyboard layout read on the main thread (Text Input Sources) when the tap
-/// starts and each time the user picks another input source; a key in the moment before the first reading has no
-/// `chars`.
+/// starts and each time the user picks another input source. Until a start's reading comes, the keys use the reading
+/// before it (a resume keeps `chars`); a key in the moment before the very first reading has no `chars`.
 public final class KeyEventTap: KeyEventSource {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "KeyEventTap")
 
@@ -62,6 +62,8 @@ public final class KeyEventTap: KeyEventSource {
     }
 
     private let running = Mutex<Running?>(nil)
+    /// Kept across starts: a start (a resume) reads the layout again, and until then the keys keep the last reading.
+    private let layout = KeyboardLayout()
 
     public init() {}
 
@@ -76,15 +78,25 @@ public final class KeyEventTap: KeyEventSource {
             Self.logger.notice("The keys are not recorded: Input Monitoring is not granted (no prompt is shown).")
             return false
         }
-        let context = TapContext(queue: queue, handler: handler)
+        let context = TapContext(queue: queue, handler: handler, layout: layout)
         let mask = CGEventMask(1) << CGEventMask(CGEventType.keyDown.rawValue)
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
             callback: { _, type, event, userInfo in
-                if let userInfo {
-                    Unmanaged<TapContext>.fromOpaque(userInfo).takeUnretainedValue().handle(type, event)
+                guard let userInfo else { return nil }
+                let context = Unmanaged<TapContext>.fromOpaque(userInfo).takeUnretainedValue()
+                // The type first: for the tap being disabled the event may be NULL, so it is not touched. A listen-only
+                // tap's answer changes nothing, so nil is as good as the event.
+                switch type {
+                case .tapDisabledByTimeout, .tapDisabledByUserInput:
+                    context.enableAgain()
+                    return nil
+                case .keyDown:
+                    context.keyDown(event)
+                    return Unmanaged.passUnretained(event)
+                default:
+                    return nil
                 }
-                return Unmanaged.passUnretained(event)
             },
             userInfo: Unmanaged.passUnretained(context).toOpaque())
         else {
@@ -97,7 +109,7 @@ public final class KeyEventTap: KeyEventSource {
             Self.logger.notice("The keys are not recorded: the keyboard's event tap has no run loop source.")
             return false
         }
-        let layout = context.layout
+        let layout = layout
         let observer = DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name(kTISNotifySelectedKeyboardInputSourceChanged as String), object: nil, queue: .main
         ) { _ in
@@ -133,42 +145,42 @@ public final class KeyEventTap: KeyEventSource {
 private final class TapContext: @unchecked Sendable {
     let queue: DispatchSerialQueue
     let handler: @Sendable (KeyEvent, HostTime) -> Void
-    let layout = KeyboardLayout()
+    /// The tap's, kept across its starts.
+    let layout: KeyboardLayout
     /// Set once, before the tap's thread starts; read on that thread to enable the tap again.
     var port: CFMachPort?
     private let stopped = Atomic(false)
 
-    init(queue: DispatchSerialQueue, handler: @escaping @Sendable (KeyEvent, HostTime) -> Void) {
+    init(queue: DispatchSerialQueue, handler: @escaping @Sendable (KeyEvent, HostTime) -> Void, layout: KeyboardLayout) {
         self.queue = queue
         self.handler = handler
+        self.layout = layout
     }
 
     func stop() {
         stopped.store(true, ordering: .releasing)
     }
 
-    /// On the tap's thread.
-    func handle(_ type: CGEventType, _ event: CGEvent) {
+    /// On the tap's thread: macOS disabled the tap (`tapDisabledByTimeout`, `tapDisabledByUserInput`), with no event.
+    func enableAgain() {
+        guard !stopped.load(ordering: .acquiring), let port else { return }
+        CGEvent.tapEnable(tap: port, enable: true)
+    }
+
+    /// On the tap's thread: a key went down.
+    func keyDown(_ event: CGEvent) {
         let time = HostTime.now()
-        guard !stopped.load(ordering: .acquiring) else { return }
-        switch type {
-        case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let port { CGEvent.tapEnable(tap: port, enable: true) }
-        case .keyDown:
-            guard !IsSecureEventInputEnabled() else { return }
-            let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
-            let flags = event.flags
-            let chars = layout.characters(
-                code: code, shift: flags.contains(.maskShift),
-                keyboardType: UInt32(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeyboardType)))
-            let key = KeyEvent(
-                code: code, chars: chars, mods: UInt32(truncatingIfNeeded: flags.rawValue),
-                isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
-            let handler = handler
-            queue.async { handler(key, time) }
-        default:
-            break
-        }
+        guard !stopped.load(ordering: .acquiring), !IsSecureEventInputEnabled() else { return }
+        let code = UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        let chars = layout.characters(
+            code: code, shift: flags.contains(.maskShift),
+            keyboardType: UInt32(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeyboardType)))
+        let key = KeyEvent(
+            code: code, chars: chars, mods: UInt32(truncatingIfNeeded: flags.rawValue),
+            isRepeat: event.getIntegerValueField(.keyboardEventAutorepeat) != 0)
+        let handler = handler
+        queue.async { handler(key, time) }
     }
 }
 
