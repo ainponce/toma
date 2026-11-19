@@ -954,6 +954,10 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Edición ▸ Acelerar el tipeo… (y el menú contextual del Video) en una toma real con escritura: la ventanita ofrece 2× · 3× · 4× · 8× (3× elegido) y el resultado («Se aceleran 5 tramos: 1:23 → 0:28») coincide con lo que queda; Acelerar lo hace en un solo paso y Edición ▸ Deshacer «Acelerar el tipeo» lo deshace entero. Sin tramos de tipeo de 2 s o más dice «No hay tramos de tipeo de 2 s o más.» y Acelerar queda apagado.
 
+**Teclas en pantalla** (P11; se prenden en la pestaña Cursor de P12)
+
+- En una toma real con teclas grabadas, con Atajos y con Todas, en Chico, Mediano y Grande y en las cuatro posiciones: la vista previa y el MP4 exportado (1080p y 4K, 16:9 y 9:16) se ven iguales y nítidos; ⌘ ⇧ ⌥ y la letra del atajo quedan alineados en las tapas y ⌃ centrado; ⌘␣, ⌘⇥ y ⌘↩ se ven del mismo grosor que las demás; la píldora crece al escribir, se corta por la izquierda con «…» y un atajo la reemplaza con un fundido cruzado, sin saltos. Con los subtítulos abajo las teclas quedan encima de ellos, también entre subtítulos. Repetirlo en macOS 15 (la fuente del sistema cambia con macOS: anotar si falta algún símbolo o se ve de otra fuente).
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
