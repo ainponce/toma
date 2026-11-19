@@ -191,11 +191,9 @@ private struct SeamDrawer: @unchecked Sendable {
         ShaderSource.captionsMetal,
     ]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + layers.joined())
-    // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's (the device
-    // frame's, 2b's; privacy's, 2c's `privacy-1`; the captions', 2a's; the keys', 2c's `keyOverlay-1`).
-    let written = [ShaderSource.privacyMetal, ShaderSource.captionsMetal, ShaderSource.keysMetal]
-    #expect(layers.dropFirst().filter { !written.contains($0) }.allSatisfy { $0.isEmpty })
-    #expect(written.allSatisfy { !$0.isEmpty })
+    // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's, all of them
+    // written by now (the device frame's and the camera look's, 2b's; privacy's and the keys', 2c's; the captions', 2a's).
+    #expect(layers.allSatisfy { !$0.isEmpty })
 }
 
 @Test func cameraSyncAtZeroIsTheSameInstant() throws {
