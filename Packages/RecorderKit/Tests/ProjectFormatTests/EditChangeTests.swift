@@ -388,7 +388,7 @@ func canonical(_ document: EditDocument) throws -> String {
 
 @Test func changeThatBreaksTheDocumentIsInvalid() throws {
     let document = DesignExample.document
-    let aspect = EditChange.set(path: try pointer("/aspect"), before: .string("16:9"), after: .string("4:3"))
+    let aspect = EditChange.set(path: try pointer("/aspect"), before: .string("16:9"), after: .string("5:4"))
     #expect(throws: EditChangeError.invalidDocument("/aspect")) { try document.applying([aspect]) }
     // `JSONValue` knows nothing of the document.
     let json = try value(document)

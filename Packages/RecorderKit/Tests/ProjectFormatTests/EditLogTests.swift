@@ -452,7 +452,7 @@ private enum SmallDocument {
          [create, padding, doLine(3, group: 3, try set("/style/padding", 0.08, 0.2)), doLine(4, group: 4, try set("/style/shadow", 0.6, 0.1))],
          at(2, padded), 3),
         ("a change that breaks the document",
-         [create, padding, doLine(3, group: 3, .set(path: try JSONPointer("/aspect"), before: .string("16:9"), after: .string("4:3")))],
+         [create, padding, doLine(3, group: 3, .set(path: try JSONPointer("/aspect"), before: .string("16:9"), after: .string("5:4")))],
          at(2, padded), 3),
         ("an undo of a group that has no lines", [create, padding, .undo(seq: 3, group: 9)], at(2, padded), 3),
         ("an undo of a group already undone", [create, padding, .undo(seq: 3, group: 2), .undo(seq: 4, group: 2)], at(3, start), 4),
@@ -573,7 +573,7 @@ private enum SmallDocument {
         }
         return entries
     }
-    let aspect = EditChange.set(path: try JSONPointer("/aspect"), before: .string("16:9"), after: .string("4:3"))
+    let aspect = EditChange.set(path: try JSONPointer("/aspect"), before: .string("16:9"), after: .string("5:4"))
     var region = try JSONValue(encoding: start.zoom.regions[0])
     if case var .object(members) = region {
         members["extra"] = .bool(true)
