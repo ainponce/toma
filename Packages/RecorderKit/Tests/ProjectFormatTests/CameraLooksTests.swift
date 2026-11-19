@@ -14,23 +14,25 @@ private enum Reference {
     static func clamp(_ c: Double) -> Double { min(max(c, 0), 1) }
     static func luma(_ c: [Double]) -> Double { 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2] }
 
-    /// The look of `preset` on `rgb`: tint and saturation in linear light, contrast and blacks encoded, each clamped.
+    /// The look of `preset` on `rgb`: white balance (gains) and saturation in linear light, contrast and blacks
+    /// encoded, each clamped. The blacks take what the contrast made of black to `blacks`, and keep 1 at 1.
     static func look(_ preset: CameraColorPreset, _ rgb: [Double]) -> [Double] {
-        let (tint, saturation, contrast, blacks): ([Double], Double, Double, Double) = switch preset {
-        case .warm: ([0.06, 0, -0.05], 1.05, 1, 0)
-        case .cool: ([-0.04, 0, 0.06], 1, 1, 0)
-        case .vivid: ([0, 0, 0], 1.3, 1.1, 0)
-        case .soft: ([0, 0, 0], 0.9, 0.9, 0.04)
-        case .mono: ([0, 0, 0], 0, 1.05, 0)
-        case .natural, .custom: ([0, 0, 0], 1, 1, 0)
+        let (gain, saturation, contrast, blacks): ([Double], Double, Double, Double) = switch preset {
+        case .warm: ([1.06, 1, 0.95], 1.05, 1, 0)
+        case .cool: ([0.96, 1, 1.06], 1, 1, 0)
+        case .vivid: ([1, 1, 1], 1.3, 1.1, 0)
+        case .soft: ([1, 1, 1], 0.9, 0.9, 0.04)
+        case .mono: ([1, 1, 1], 0, 1.05, 0)
+        case .natural, .custom: ([1, 1, 1], 1, 1, 0)
         }
         var c = rgb.map { linear(clamp($0)) }
-        c = zip(c, tint).map { clamp($0 + $1) }
+        c = zip(c, gain).map { clamp($0 * $1) }
         let l = luma(c)
         c = c.map { clamp(l + saturation * ($0 - l)) }
         c = c.map(encoded)
         c = c.map { clamp(0.5 + contrast * ($0 - 0.5)) }
-        return c.map { clamp(blacks + $0 * (1 - blacks)) }
+        let black = max(0, 0.5 - 0.5 * contrast)
+        return c.map { clamp(blacks + ($0 - black) * ((1 - blacks) / (1 - black))) }
     }
 }
 
@@ -62,12 +64,9 @@ private func apply(_ preset: CameraColorPreset, _ r: Float, _ g: Float, _ b: Flo
     let skin = SIMD3<Float>(0.8, 0.6, 0.5)
     let vivid = CameraLooks.apply(.vivid, to: skin)
     #expect(vivid.max() - vivid.min() > skin.max() - skin.min())
-    // Soft brings the channels together and lifts black: contrast 0.9 takes it to 0.05, then blacks to 0.04 + 0.05 × 0.96.
+    // Soft brings the channels together (its black and white in `softsBlackIsPointZeroFour`).
     let soft = CameraLooks.apply(.soft, to: skin)
     #expect(soft.max() - soft.min() < skin.max() - skin.min())
-    let black = apply(.soft, 0, 0, 0)
-    #expect(abs(black.x - 0.088) < 1e-6 && black.x == black.y && black.y == black.z)
-    #expect(apply(.soft, 1, 1, 1).x < 1)
 
     // Black and white is the Rec. 709 luma in linear light, the same in the three channels.
     for rgb in [SIMD3<Float>(1, 0, 0), SIMD3(0, 1, 0), SIMD3(0, 0, 1), SIMD3(0.8, 0.6, 0.5)] {
@@ -101,6 +100,43 @@ private func apply(_ preset: CameraColorPreset, _ r: Float, _ g: Float, _ b: Flo
     }
 }
 
+@Test func blackStaysBlackInWarmAndCool() throws {
+    // A white balance is a gain per channel in linear light: black has nothing to multiply.
+    for preset in [CameraColorPreset.warm, .cool] {
+        #expect(apply(preset, 0, 0, 0) == SIMD3(0, 0, 0), "\(preset)")
+        #expect(try #require(CameraLooks.lut(preset)).values[0] == SIMD3(0, 0, 0), "\(preset)")
+        // Each channel scales by its gain: a dark gray moves as little as the gain says, never by an offset.
+        let dark = apply(preset, 0.02, 0.02, 0.02)
+        #expect((0..<3).allSatisfy { dark[$0] < 0.03 }, "\(preset) \(dark)")
+    }
+    // Warm on white: red is already at the top, blue comes down to 0.95 in linear light (with saturation 1.05).
+    let white = apply(.warm, 1, 1, 1)
+    #expect(white.x == 1 && white.z < 1)
+    let cool = apply(.cool, 1, 1, 1)
+    #expect(cool.x < 1 && cool.z == 1)
+    // The design's gains, on a mid gray in linear light (0.2, where nothing clamps), before saturation and encoding.
+    let gray = Float(Reference.encoded(0.2))
+    let warm = apply(.warm, gray, gray, gray), coolGray = apply(.cool, gray, gray, gray)
+    #expect(abs(Reference.linear(Double(coolGray.x)) - 0.2 * 0.96) < 1e-5)
+    #expect(abs(Reference.linear(Double(coolGray.z)) - 0.2 * 1.06) < 1e-5)
+    #expect(Reference.linear(Double(warm.x)) > 0.2 * 1.06 && Reference.linear(Double(warm.z)) < 0.2 * 0.95, "saturation 1.05 spreads them")
+}
+
+@Test func softsBlackIsPointZeroFour() throws {
+    // Contrast 0.9 around mid-grey takes black to 0.05 and white to 0.95; then the blacks put black at exactly 0.04,
+    // keeping 1 at 1.
+    #expect(apply(.soft, 0, 0, 0) == SIMD3(repeating: 0.04))
+    #expect(try #require(CameraLooks.lut(.soft)).values[0] == SIMD3(repeating: 0.04))
+    let white = apply(.soft, 1, 1, 1)
+    #expect(white.x == white.y && white.y == white.z)
+    #expect(abs(Double(white.x) - (0.04 + 0.9 * 0.96 / 0.95)) < 1e-6)
+    #expect(white.x <= 1)
+    // Mid-grey stays where contrast leaves it, near the middle, and the order of grays is kept.
+    let middle = apply(.soft, 0.5, 0.5, 0.5).x
+    #expect(abs(Double(middle) - (0.04 + 0.45 * 0.96 / 0.95)) < 1e-6)
+    #expect(apply(.soft, 0, 0, 0).x < apply(.soft, 0.1, 0.1, 0.1).x && middle < white.x)
+}
+
 @Test func eachLookIsItsLUT() throws {
     for preset in looks {
         let lut = try #require(CameraLooks.lut(preset))
@@ -119,10 +155,10 @@ private func apply(_ preset: CameraColorPreset, _ r: Float, _ g: Float, _ b: Flo
     // The SHA-256 of each LUT's table as the render uploads it: each value as a `Float16`, red, green and blue, little
     // endian, red the fastest. `cameraLook-1` never changes once merged; a new look is a new id.
     let frozen: [CameraColorPreset: String] = [
-        .warm: "a87f4e9bdd3b813ead5dea5b1eded79e57cd01f66c06466ce74625522353c272",
-        .cool: "28fd3ce793e62d4752f7c61496bc700652c638ad00ae3ff00813dfc28e3326d9",
+        .warm: "0e7e13f2bc0ed158d2df5cbb2f47621ad48117174d37679a16cdbdca344bc051",
+        .cool: "9aff38bce286d1005240b9c7673e5e7a640ba26d64e35996f14e4c9e716c92ea",
         .vivid: "7689add145a6b3c311b4db19c91e78eabfecb95a7a4b1b8b55573fae1666e601",
-        .soft: "fa6b12a84f85db63e780c31908a5bcc9cd2816e08a6c3d0d2f66c14d6e5c36cb",
+        .soft: "bdcc9150444c9025406976cc0ae23ad47d70a39ca92d17abf969c9c7b51ca9b0",
         .mono: "b6ab83374def472994b57fced56ce00385b757e3848b2753a199d9456030268e",
     ]
     for preset in looks {
