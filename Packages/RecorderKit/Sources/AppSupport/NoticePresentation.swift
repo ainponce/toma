@@ -20,7 +20,8 @@ extension TakeNotice {
             .confirmation
         case .noMicrophone, .microphoneAccessOff, .optionalSourceFailedToStart, .cameraAccessOff, .systemAudioNotRequested,
             .windowHidden, .streamInterrupted, .trackLost, .screenPaused, .trackPaused, .writerFailed, .samplesDropped,
-            .manifestWriteFailed, .diskLow, .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent, .focusShortcutFailed:
+            .manifestWriteFailed, .diskLow, .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent, .focusShortcutFailed,
+            .keysNotRecorded:
             .attention
         }
     }

@@ -75,10 +75,13 @@ public struct InputEvent: Codable, Equatable, Sendable {
         /// At least one key was pressed in the 250 ms that start at `t` (version 3). Never which, nor how many.
         case keyActivity
         /// A key went down at `t` (version 4, only in takes the user chose to record keys for, never while secure input
-        /// is on): its virtual key code (`kCGKeyboardEventKeycode`), the characters it types without modifiers (`nil`
-        /// for one that types nothing, an arrow or a function key), the modifier flags (`CGEventFlags`, its low 32 bits)
-        /// and whether it is the key's automatic repeat. Written as `{"chars":"a","code":0,"mods":0,"repeat":false,…}`.
-        case keyPress(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool)
+        /// is on): its virtual key code (`kCGKeyboardEventKeycode`), the characters it types with only ⇧ of its
+        /// modifiers (`"A"` with ⇧, `"c"` in ⌘C; `nil` for one that types nothing or a control character, such as ↩,
+        /// an arrow or a function key), the modifier flags (`CGEventFlags`, its low 32 bits), whether it is the key's
+        /// automatic repeat and `key`, what it types with no modifier at all in the layout in use (`"4"` in ⌘⇧4, where
+        /// `chars` is `"$"`; `nil` where `chars` is, and in the lines recorded before it was written). Written as
+        /// `{"chars":"a","code":0,"key":"a","mods":0,"repeat":false,…}`.
+        case keyPress(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool, key: String? = nil)
 
         /// Whether an event of this kind is only in a package of version 4 or later: `keyPress`. Whoever writes the
         /// first one raises the package to 4 before (`ManifestStore.raiseFormatVersion(to:)`).
@@ -109,7 +112,7 @@ public struct InputEvent: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case t, type, x, y, button, displayID, frame, scale, track, index, domain, code, reason, deviceUniqueID, count
         case onScreen, style, hash, hotspot, size, kind, dx, dy
-        case chars, mods
+        case chars, mods, key
         case isRepeat = "repeat"
     }
 
@@ -220,7 +223,8 @@ public struct InputEvent: Codable, Equatable, Sendable {
                 code: try container.decode(UInt16.self, forKey: .code),
                 chars: try container.decodeIfPresent(String.self, forKey: .chars),
                 mods: try container.decode(UInt32.self, forKey: .mods),
-                isRepeat: try container.decode(Bool.self, forKey: .isRepeat)
+                isRepeat: try container.decode(Bool.self, forKey: .isRepeat),
+                key: try container.decodeIfPresent(String.self, forKey: .key)
             )
         }
         self.init(t: t, kind: kind)
@@ -303,12 +307,13 @@ public struct InputEvent: Codable, Equatable, Sendable {
             try container.encode(y, forKey: .y)
         case .keyActivity:
             try container.encode(EventType.keyActivity, forKey: .type)
-        case let .keyPress(code, chars, mods, isRepeat):
+        case let .keyPress(code, chars, mods, isRepeat, key):
             try container.encode(EventType.keyPress, forKey: .type)
             try container.encode(code, forKey: .code)
             try container.encodeIfPresent(chars, forKey: .chars)
             try container.encode(mods, forKey: .mods)
             try container.encode(isRepeat, forKey: .isRepeat)
+            try container.encodeIfPresent(key, forKey: .key)
         }
     }
 }

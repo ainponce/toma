@@ -48,4 +48,7 @@ public enum TakeNotice: Equatable, Sendable {
     /// The shortcut that turns Do Not Disturb on failed or did not end in time (`FocusGuard`): notifications may sound
     /// during the take. They never appear in the video.
     case focusShortcutFailed
+    /// "Record Keys to Show Them" is on but Input Monitoring is not allowed (a take never asks for it): the take is
+    /// recorded without keys.
+    case keysNotRecorded
 }

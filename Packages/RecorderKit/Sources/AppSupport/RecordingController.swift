@@ -234,13 +234,16 @@ public final class RecordingController {
         request.selection.microphone != .off && environment.hasMicrophone()
     }
 
-    /// What the preflight asks about: screen recording, and the microphone, the camera and system audio when the take
-    /// uses them.
+    /// What the preflight asks about: screen recording, the microphone, the camera and system audio when the take
+    /// uses them, and Input Monitoring when "Record Keys to Show Them" is on (`RecorderSettings.recordKeys`, read now, so
+    /// a change applies from the next take or restart). Input Monitoring is never asked for by a take: only the
+    /// settings do.
     private func wantedPermissions(_ request: TakeRequest) -> Set<PermissionKind> {
         var wanted: Set<PermissionKind> = [.screenRecording]
         if usesMicrophone(request) { wanted.insert(.microphone) }
         if request.selection.camera != .off { wanted.insert(.camera) }
         if request.selection.systemAudio != .off { wanted.insert(.systemAudio) }
+        if SettingsStore(defaults: defaults).settings.recordKeys { wanted.insert(.inputMonitoring) }
         return wanted
     }
 
@@ -282,7 +285,8 @@ public final class RecordingController {
             await endHooks()
             return
         }
-        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request))
+        let wanted = wantedPermissions(request)
+        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wanted)
         guard preflight.canRecord, !startCancelled else {
             notices = carried
             setPhase(.idle)
@@ -304,6 +308,8 @@ public final class RecordingController {
         if request.selection.systemAudio != .off, probe.state(of: .systemAudio) == .notDetermined {
             addNotice(.systemAudioNotRequested)
         }
+        // The keys are wanted but not allowed: the take records without them (the settings are where it is asked for).
+        if wanted.contains(.inputMonitoring), !preflight.granted.contains(.inputMonitoring) { addNotice(.keysNotRecorded) }
 
         while true {
             switch await attempt(request, granted: preflight.granted) {

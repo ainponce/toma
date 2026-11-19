@@ -65,7 +65,7 @@ extension RealTimeRecordingTests {
                 #expect(!manifest.needsFormatVersion4)
                 #expect(try rig.takeOnDisk(id).status == .complete)
                 let lines = try rig.events(id).filter(\.kind.requiresFormatVersion4)
-                #expect(lines.map(\.kind) == [.keyPress(code: 0, chars: "a", mods: 0, isRepeat: false)])
+                #expect(lines.map(\.kind) == [.keyPress(code: 0, chars: "a", mods: 0, isRepeat: false, key: "a")])
             }
         }
 

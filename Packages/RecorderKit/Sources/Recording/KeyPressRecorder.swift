@@ -8,13 +8,14 @@ import ProjectFormat
 import Synchronization
 
 /// Records which keys go down while a take runs, for the editor to show them (`keys.mode`): one `keyPress` line a key,
-/// written on its own queue, with the key's code, what it types with only ⇧ (`chars`), its modifiers (only the bits of
-/// `modifierMask`) and whether it is a repeat, at the time the key went down. Only in the takes the user chose to record
+/// written on its own queue, with the key's code, what it types with only ⇧ (`chars`) and with no modifier (`key`), its
+/// modifiers (only the bits of `modifierMask`) and whether it is a repeat, at the time the key went down. Only in the takes the user chose to record
 /// keys for (the app gives it to those alone). Lives alongside `KeyActivityRecorder`, which stays as it is.
 ///
 /// Nothing is written:
 /// - while secure input is on (`IsSecureEventInputEnabled()`, read for each key: a password field, Terminal's Secure
-///   Keyboard Entry), so neither the password nor the ↩ that closes its field leaves a line;
+///   Keyboard Entry), so neither the password nor the ↩ that closes its field leaves a line. It covers the fields where
+///   the app turns secure input on, as password fields do: a field of an app that does not is recorded like any other;
 /// - while paused (the keyboard is not listened to then), nor for a key from before the start or the resume, nor after
 ///   `stop()`;
 /// - if the keyboard cannot be listened to (`isListening` is `false`, and the app's log says so);
@@ -129,12 +130,13 @@ public final class KeyPressRecorder: InputRecorder, FormatRaising, Sendable {
     }
 
     /// One key, on the queue. Raises and appends under the lock, so nothing is appended once `pause()` or `stop()` has
-    /// returned.
+    /// returned. Secure input is read right before the line, so a password field that gets the focus while the first key
+    /// raises the package is seen for that key; a key with secure input on does not raise it either.
     private func record(_ key: KeyEvent, at time: HostTime) {
-        let secure = secureInput()
         let outcome = state.withLock { s -> Outcome in
-            guard let log = s.log, !s.paused, !s.off, !secure, time >= s.acceptsFrom else { return .none }
+            guard let log = s.log, !s.paused, !s.off, time >= s.acceptsFrom else { return .none }
             if !s.raised {
+                guard !secureInput() else { return .none }
                 guard let raise = s.raise else {
                     s.off = true
                     return .noRaiser
@@ -147,9 +149,11 @@ public final class KeyPressRecorder: InputRecorder, FormatRaising, Sendable {
                 }
                 s.raised = true
             }
+            guard !secureInput() else { return .none }
             log.append(InputEvent(
                 t: time,
-                kind: .keyPress(code: key.code, chars: key.chars, mods: key.mods & Self.modifierMask, isRepeat: key.isRepeat)))
+                kind: .keyPress(
+                    code: key.code, chars: key.chars, mods: key.mods & Self.modifierMask, isRepeat: key.isRepeat, key: key.key)))
             return .none
         }
         switch outcome {

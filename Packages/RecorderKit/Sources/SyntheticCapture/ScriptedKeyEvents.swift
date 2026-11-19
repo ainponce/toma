@@ -6,9 +6,9 @@ import Recording
 import Synchronization
 
 /// Types `text` as keys, one every `every` from one interval after the start, with the codes of a US keyboard: each
-/// character's key, with ⇧ for a capital or a shifted symbol, and `chars` the character itself (`nil` for a line break
-/// or a tab, which are ↩ and ⇥). A character the US layout has no key for is left out. Each key's time is
-/// `HostTime.now()` when it is typed. A stop keeps its place: the next start goes on from the next character. Once
+/// character's key, with ⇧ for a capital or a shifted symbol, `chars` the character itself and `key` what the key types
+/// without ⇧ (both `nil` for a line break or a tab, which are ↩ and ⇥). A character the US layout has no key for is
+/// left out. Each key's time is `HostTime.now()` when it is typed. A stop keeps its place: the next start goes on from the next character. Once
 /// typed, it types nothing more. Needs no permission.
 public final class ScriptedKeyEvents: KeyEventSource {
     private struct State {
@@ -69,17 +69,20 @@ public final class ScriptedKeyEvents: KeyEventSource {
         default: break
         }
         if let code = unshifted[character] {
-            return KeyEvent(code: code, chars: String(character), mods: 0, isRepeat: false)
+            return KeyEvent(code: code, chars: String(character), mods: 0, isRepeat: false, key: String(character))
         }
-        if let code = shifted[character] {
-            return KeyEvent(code: code, chars: String(character), mods: shift, isRepeat: false)
+        if let code = shifted[character], let own = own[code] {
+            return KeyEvent(code: code, chars: String(character), mods: shift, isRepeat: false, key: String(own))
         }
         let lower = character.lowercased()
         if lower.count == 1, let letter = lower.first, letter != character, letter.isLetter, let code = unshifted[letter] {
-            return KeyEvent(code: code, chars: String(character), mods: shift, isRepeat: false)
+            return KeyEvent(code: code, chars: String(character), mods: shift, isRepeat: false, key: String(letter))
         }
         return nil
     }
+
+    /// What each key of `unshifted` types without ⇧, by its code.
+    private static let own: [UInt16: Character] = Dictionary(uniqueKeysWithValues: unshifted.map { ($0.value, $0.key) })
 
     /// The keys of a US ANSI keyboard (`kVK_ANSI_*`), by what they type without ⇧.
     private static let unshifted: [Character: UInt16] = [

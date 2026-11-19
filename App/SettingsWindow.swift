@@ -7,7 +7,8 @@ import SwiftUI
 import os
 
 /// The app's settings: the countdown before a take, what a stop does, hiding the desktop's icons, noting when keys are
-/// typed, the shortcut that turns Do Not Disturb on and the global shortcuts. A Mac settings window: its panes' icons in
+/// typed, recording which keys (with its Input Monitoring permission), the shortcut that turns Do Not Disturb on and the
+/// global shortcuts. A Mac settings window: its panes' icons in
 /// the toolbar, as tall as the pane shown. Titled like the permissions one, so while it is open (and no take records) the
 /// app is in the Dock.
 @MainActor
@@ -19,12 +20,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
         hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting,
-        onClose: @escaping () -> Void
+        probe: any PermissionProbe, onClose: @escaping () -> Void
     ) {
         self.onClose = onClose
         model = SettingsModel(
             store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
-            focusShortcut: focusShortcut, appearance: appearance)
+            focusShortcut: focusShortcut, appearance: appearance, probe: probe)
         tabs = SettingsTabsController(model: model)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: SettingsPaneView.width, height: 300), styleMask: [.titled, .closable],
@@ -45,11 +46,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     #if DEBUG
-    /// `-TomaShowcase settings <general|recording|shortcuts>`: the window on that pane.
+    /// `-TomaShowcase settings <general|recording|shortcuts>`: the window on that pane. `recording-keys`: the Recording
+    /// pane with "Record Keys to Show Them" on and Input Monitoring not allowed, made up (nothing is saved or asked).
     func showcase(pane: String) {
+        if pane == "recording-keys" {
+            model.showcaseRecordKeysNotAllowed()
+            tabs.selectedTabViewItemIndex = SettingsPane.recording.index
+        }
         if let pane = SettingsPane(rawValue: pane) { tabs.selectedTabViewItemIndex = pane.index }
     }
     #endif
+
+    /// Back from System Settings (or another app), the window is key again: Input Monitoring may have changed.
+    func windowDidBecomeKey(_ notification: Notification) {
+        model.refreshInputMonitoring()
+    }
 
     /// Typing a shortcut ends when the window is left: the keys go elsewhere.
     func windowDidResignKey(_ notification: Notification) {
@@ -294,6 +305,11 @@ final class SettingsModel {
     private(set) var recording: HotKeyAction?
     /// `RecorderSettings.noteKeyActivity`; the take reads the saved value at every start.
     private(set) var noteKeyActivity: Bool
+    /// `RecorderSettings.recordKeys`; the take reads the saved value at every start, and records keys only with Input
+    /// Monitoring allowed.
+    private(set) var recordKeys: Bool
+    /// Input Monitoring as macOS says now: read when the window opens, becomes key and after asking.
+    private(set) var inputMonitoring: PermissionState
     /// The last shortcut typed for this action was refused.
     private(set) var refusal: (action: HotKeyAction, reason: Refusal)?
 
@@ -304,11 +320,13 @@ final class SettingsModel {
     @ObservationIgnored let focusShortcut: FocusShortcutSetting
     @ObservationIgnored let appearance: AppearanceSetting
     @ObservationIgnored private let store: SettingsStore
+    @ObservationIgnored private var probe: any PermissionProbe
     @ObservationIgnored private var monitor: Any?
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting
+        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting,
+        probe: any PermissionProbe
     ) {
         self.store = store
         self.appearance = appearance
@@ -318,6 +336,9 @@ final class SettingsModel {
         self.hideDesktopIcons = hideDesktopIcons
         self.focusShortcut = focusShortcut
         noteKeyActivity = store.settings.noteKeyActivity
+        self.probe = probe
+        recordKeys = store.settings.recordKeys
+        inputMonitoring = probe.state(of: .inputMonitoring)
     }
 
     var bindings: HotKeyBindings { hotKeys.bindings }
@@ -328,6 +349,58 @@ final class SettingsModel {
         settings.noteKeyActivity = isOn
         store.settings = settings
     }
+
+    /// Saved at once. Turning it on is where Input Monitoring is asked for (a take never asks): the system's prompt, if
+    /// it was never asked for (design §7.3, plan decision 20).
+    func setRecordKeys(_ isOn: Bool) {
+        recordKeys = isOn
+        var settings = store.settings
+        settings.recordKeys = isOn
+        store.settings = settings
+        refreshInputMonitoring()
+        if isOn, inputMonitoring == .notDetermined { askForInputMonitoring() }
+    }
+
+    /// With the keys on and Input Monitoring not allowed: the system's prompt if it was never asked for, System Settings
+    /// after that (asked again first, in case macOS forgot Toma; `PermissionSettingsOpener`).
+    func allowInputMonitoring() {
+        switch PermissionAction(for: inputMonitoring) {
+        case nil: break
+        case .prompt: askForInputMonitoring()
+        case .openSettings:
+            Task {
+                await PermissionSettingsOpener.live(probe: probe).open(.inputMonitoring)
+                refreshInputMonitoring()
+            }
+        }
+    }
+
+    func refreshInputMonitoring() {
+        let state = probe.state(of: .inputMonitoring)
+        if inputMonitoring != state { inputMonitoring = state }
+    }
+
+    private func askForInputMonitoring() {
+        Task {
+            _ = await probe.request(.inputMonitoring)
+            refreshInputMonitoring()
+        }
+    }
+
+    #if DEBUG
+    /// `-TomaShowcase settings recording-keys`: the keys on, and Input Monitoring asked for and not allowed, made up.
+    func showcaseRecordKeysNotAllowed() {
+        probe = NotAllowedProbe()
+        recordKeys = true
+        inputMonitoring = .denied
+    }
+
+    /// Every permission asked for and not allowed; asking changes nothing.
+    private struct NotAllowedProbe: PermissionProbe {
+        func state(of kind: PermissionKind) -> PermissionState { .denied }
+        func request(_ kind: PermissionKind) async -> PermissionState { .denied }
+    }
+    #endif
 
     /// The next key press with modifiers is `action`'s shortcut: Esc gives up, Delete leaves it without one.
     func startRecordingShortcut(for action: HotKeyAction) {
@@ -451,6 +524,15 @@ private struct SettingsPaneView: View {
                     "For the zoom while typing. Nothing is noted in password fields.",
                     comment: "Under the setting that notes when keys are typed")
             }
+            Toggle(isOn: Binding(get: { model.recordKeys }, set: { model.setRecordKeys($0) })) {
+                Text("Record Keys to Show Them", comment: "A setting: a take records which keys are pressed, to show them on screen")
+                Text(
+                    "Needs Input Monitoring permission. Nothing is recorded where an app turns on secure input, as password fields do; a field of an app that doesn't is recorded like any other.",
+                    comment: "Under the setting that records which keys are pressed")
+            }
+            if model.recordKeys, model.inputMonitoring != .granted {
+                InputMonitoringRow(model: model)
+            }
         }
         Section {
             FocusShortcutPicker(setting: model.focusShortcut)
@@ -476,6 +558,38 @@ private struct SettingsPaneView: View {
         }
         // The keys typed next would go to a pane that is not shown.
         .onDisappear { model.stopRecordingShortcut() }
+    }
+}
+
+/// Under "Record Keys to Show Them" while Input Monitoring is not allowed: the takes record no keys until it is. The
+/// permissions window's words: its name, its state, and Allow… the first time or System Settings after.
+private struct InputMonitoringRow: View {
+    let model: SettingsModel
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 8) {
+                if model.inputMonitoring == .denied {
+                    Image(systemName: "exclamationmark.circle.fill")
+                        .foregroundStyle(.red)
+                        .accessibilityHidden(true)
+                }
+                Button { model.allowInputMonitoring() } label: {
+                    if PermissionAction(for: model.inputMonitoring) == .prompt {
+                        Text("Allow…")
+                    } else {
+                        Text("Open System Settings")
+                    }
+                }
+            }
+        } label: {
+            Text("Input Monitoring")
+            if model.inputMonitoring == .denied {
+                Text("Not allowed", comment: "The state of a permission")
+            } else {
+                Text("Not requested yet", comment: "The state of a permission that was never asked for")
+            }
+        }
     }
 }
 

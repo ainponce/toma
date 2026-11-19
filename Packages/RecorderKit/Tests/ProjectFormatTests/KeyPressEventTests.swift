@@ -26,6 +26,34 @@ import ProjectFormat
     #expect(try InputEvent(jsonLine: allLine) == all)
 }
 
+@Test func keyIsWrittenOnlyWhenThereIsOneAndOldLinesReadWithoutIt() throws {
+    // ⌘⇧4 on a keyboard where ⇧4 types "$": `chars` with ⇧, `key` with no modifier.
+    let shifted = InputEvent(
+        t: HostTime(nanoseconds: 6), kind: .keyPress(code: 21, chars: "$", mods: 0x12_0000, isRepeat: false, key: "4"))
+    let line = #"{"chars":"$","code":21,"key":"4","mods":1179648,"repeat":false,"t":6,"type":"keyPress"}"#
+    #expect(try shifted.jsonLine() == line)
+    #expect(try InputEvent(jsonLine: line) == shifted)
+
+    // A line recorded before `key` was written: read as it was, with no `key`, and written back the same.
+    let old = #"{"chars":"$","code":21,"mods":1179648,"repeat":false,"t":6,"type":"keyPress"}"#
+    let read = try InputEvent(jsonLine: old)
+    #expect(read == InputEvent(t: HostTime(nanoseconds: 6), kind: .keyPress(code: 21, chars: "$", mods: 0x12_0000, isRepeat: false)))
+    guard case .keyPress(_, _, _, _, let key) = read.kind else {
+        Issue.record("not a key press")
+        return
+    }
+    #expect(key == nil)
+    #expect(try read.jsonLine() == old)
+
+    // A key that types nothing has neither.
+    let arrow = InputEvent(t: HostTime(nanoseconds: 7), kind: .keyPress(code: 123, chars: nil, mods: 0, isRepeat: false, key: nil))
+    #expect(!(try arrow.jsonLine()).contains(#""key""#))
+    // A `key` that is not text: not a key press this version wrote.
+    #expect(throws: DecodingError.self) {
+        try InputEvent(jsonLine: #"{"code":21,"key":4,"mods":0,"repeat":false,"t":6,"type":"keyPress"}"#)
+    }
+}
+
 @Test func keyPressOutOfRangeOrIncompleteFailsToDecode() {
     // A code over 16 bits, negative modifiers, or a field missing: not a key press this version wrote.
     for line in [

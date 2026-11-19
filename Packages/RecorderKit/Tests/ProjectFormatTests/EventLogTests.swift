@@ -45,6 +45,8 @@ extension InputEvent {
          #"{"t":5,"type":"keyActivity"}"#),
         (InputEvent(t: HostTime(nanoseconds: 5), kind: .keyPress(code: 0, chars: "a", mods: 256, isRepeat: false)),
          #"{"chars":"a","code":0,"mods":256,"repeat":false,"t":5,"type":"keyPress"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 6), kind: .keyPress(code: 21, chars: "$", mods: 131072, isRepeat: false, key: "4")),
+         #"{"chars":"$","code":21,"key":"4","mods":131072,"repeat":false,"t":6,"type":"keyPress"}"#),
     ]
 }
 
