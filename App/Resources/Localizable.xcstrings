@@ -2049,6 +2049,17 @@
         }
       }
     },
+    "Couldn't prepare the audio: %@" : {
+      "comment" : "An alert: an export stopped because the cleanup or the loudness of its sound failed, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar el audio: %@"
+          }
+        }
+      }
+    },
     "Couldn't prepare the camera: %@" : {
       "comment" : "An alert: an export stopped because the camera's analysis (its background or its face) failed, and why",
       "localizations" : {
@@ -2138,6 +2149,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo empezar a grabar"
+          }
+        }
+      }
+    },
+    "Couldn't transcribe: %@" : {
+      "comment" : "The Captions tab: the transcription failed, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo transcribir: %@"
           }
         }
       }
@@ -2841,6 +2863,17 @@
         }
       }
     },
+    "Exported without noise cleanup: this Mac doesn't have the system's voice isolation." : {
+      "comment" : "Said once an export is done: a project cleaned on another Mac was exported without the cleanup",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se exportó sin la limpieza de ruido: esta Mac no tiene el aislamiento de voz del sistema."
+          }
+        }
+      }
+    },
     "Exporting…" : {
       "localizations" : {
         "es" : {
@@ -3516,6 +3549,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Dejar abierta"
+          }
+        }
+      }
+    },
+    "Keep the Current One" : {
+      "comment" : "The alert before a new transcription replaces the corrected one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conservar la actual"
           }
         }
       }
@@ -5519,6 +5563,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Renombrar"
+          }
+        }
+      }
+    },
+    "Replace" : {
+      "comment" : "The alert before a new transcription replaces the corrected one",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reemplazar"
           }
         }
       }
@@ -8148,6 +8203,58 @@
         }
       }
     },
+    "Transcribe Automatically" : {
+      "comment" : "A setting: a project transcribes as it opens in the editor",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribir automáticamente"
+          }
+        }
+      }
+    },
+    "Transcribing again replaces %lld corrected words." : {
+      "comment" : "An alert before a new transcription replaces one whose words were corrected",
+      "localizations" : {
+        "en" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Transcribing again replaces %lld corrected word."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Transcribing again replaces %lld corrected words."
+                }
+              }
+            }
+          }
+        },
+        "es" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Transcribir de nuevo reemplaza %lld palabra corregida."
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Transcribir de nuevo reemplaza %lld palabras corregidas."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Transition" : {
       "comment" : "Camera tab: how a block starts and ends",
       "localizations" : {
@@ -8574,6 +8681,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Al detener"
+          }
+        }
+      }
+    },
+    "When a project opens in the editor, if its language is installed." : {
+      "comment" : "Under the setting that transcribes a project as it opens in the editor",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al abrir un proyecto en el editor, si su idioma está instalado."
           }
         }
       }
@@ -9014,6 +9132,17 @@
         }
       }
     },
+    "its audio can't be read" : {
+      "comment" : "Why the voice's analysis failed, after “Couldn't transcribe:” or “Couldn't prepare the audio:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se puede leer su audio"
+          }
+        }
+      }
+    },
     "its editor has changes that couldn't be saved" : {
       "comment" : "The library: why an action failed",
       "localizations" : {
@@ -9043,6 +9172,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "no se pudo analizar su imagen"
+          }
+        }
+      }
+    },
+    "its sound couldn't be analyzed" : {
+      "comment" : "Why the voice's analysis failed, after “Couldn't transcribe:” or “Couldn't prepare the audio:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo analizar su sonido"
           }
         }
       }
@@ -9383,6 +9523,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "esta Mac no puede analizar su imagen"
+          }
+        }
+      }
+    },
+    "this Mac can't analyze its sound" : {
+      "comment" : "Why the voice's analysis failed, after “Couldn't transcribe:” or “Couldn't prepare the audio:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "esta Mac no puede analizar su sonido"
           }
         }
       }

@@ -234,11 +234,16 @@ final class EditorModel {
     /// jobs are enqueued here; closing the editor cancels them.
     let jobs = ProjectJobs()
     /// What an export does first, in order, before its exporter starts: each feature adds its own (for example, waiting
-    /// for its analysis jobs with progress). One that answers `false` cancels the export, saying nothing of its own.
-    var exportPreparations: [@MainActor (EditorModel) async -> Bool] = []
+    /// for its analysis jobs), given the export on its way (`ExportPreparation`: the document exported, the analysis the
+    /// export reads, which it sets its part of, its progress and what the export says once done). One that answers
+    /// `false` cancels the export, saying nothing of its own.
+    var exportPreparations: [@MainActor (EditorModel, ExportPreparation) async -> Bool] = []
     /// The camera's analysis (plan 2b decision 16): its masks and faces asked for, followed and handed to the preview, and
     /// waited for by the export.
     @ObservationIgnored private(set) lazy var image = EditorImage(model: self)
+    /// The voice (plan 2a, Task A10): the transcription, the clean voice and the loudness asked for, followed and handed
+    /// to the preview's mix, and waited for by the export.
+    @ObservationIgnored private(set) lazy var voice = EditorVoice(model: self)
     /// The last `jobs.setRecording(_:)` told, so the next one goes after it and they arrive in order.
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
@@ -348,7 +353,8 @@ final class EditorModel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.exportPreferencesChanged() }
         }
-        exportPreparations.append { await $0.image.prepareExport($0) }
+        exportPreparations.append { await $0.image.prepareExport($0, $1) }
+        exportPreparations.append { await $0.voice.prepareExport($0, $1) }
     }
 
     // MARK: - Opening
@@ -489,6 +495,7 @@ final class EditorModel {
         sessionChanged()
         makeMix(of: project, document: document, revision: revision)
         image.opened(project: project, caches: session.caches, document: session.document)
+        voice.opened(project: project, caches: session.caches, document: session.document)
     }
 
     /// The mix of the document as it opened, off the main thread: it reads where every audio segment ends. Playback
@@ -754,7 +761,26 @@ final class EditorModel {
         analysis = next
         guard state == .ready, let session else { return }
         showSessionRevision()
-        makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
+        refreshMix(of: session)
+    }
+
+    /// The mix read with the analysis as it is now (plan 2a decision 18): the base mix with it (`EditedMix.with(analysis:)`,
+    /// which opens only the clean files it names and decodes nothing again), then the revision shown is built and heard
+    /// with it; made whole while the first mix is still being made.
+    private func refreshMix(of session: EditSession) {
+        guard let base = baseMix else {
+            makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
+            return
+        }
+        mixGeneration += 1
+        let generation = mixGeneration, analysis = analysis
+        Task {
+            let mix = await base.with(analysis: analysis)
+            guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
+            baseMix = mix
+            player?.setMix(mix)
+            if let session = self.session { build(session.document, revision: session.revision) }
+        }
     }
 
     /// The project as the session has it, for what the overlays place.
@@ -849,6 +875,7 @@ final class EditorModel {
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
             build(next, revision: session.revision)
             image.documentChanged(next)
+            voice.documentChanged(next)
         }
         updateBanner()
     }
@@ -1167,7 +1194,16 @@ final class EditorModel {
         case mp4(ExportSettings, range: ExportRange?)
         /// A GIF of `settings.range`.
         case gif(GIFSettings)
+
+        /// Whether what it exports has sound: a GIF has none.
+        var hasSound: Bool {
+            if case .mp4 = self { true } else { false }
+        }
     }
+
+    /// How much of the ring the preparations of an export are, once one of them waits (plan 2a decision 17): the first
+    /// 20 %, and the export the rest.
+    private static let preparationShare = 0.2
 
     /// The project the export sheet's GIF estimate and preview are made of: the session's, read from where its package is
     /// now; `nil` without a session.
@@ -1184,32 +1220,41 @@ final class EditorModel {
         exportGate.isBusy = true
         exportFinishedTask?.cancel()
         exportState = .running(progress: 0)
-        let throttle = ProgressThrottle()
-        // Called off the main thread, per frame.
-        let progress: @Sendable (Double) -> Void = { [weak self] value in
-            guard throttle.shouldReport(value) else { return }
-            Task { @MainActor in self?.exportProgressed(value) }
-        }
         exportTask = Task {
             do {
-                // What each feature needs before the export (its analysis done); one that says no stops it quietly.
-                for preparation in exportPreparations {
+                // What each feature needs before the export (its analysis done), each with an equal part of the ring's
+                // first 20 % once one of them waits; one that says no stops it quietly.
+                let preparation = ExportPreparation(document: document, project: project, hasSound: job.hasSound, analysis: analysis)
+                let preparations = exportPreparations
+                for (index, prepare) in preparations.enumerated() {
                     try Task.checkCancellation()
-                    guard await preparation(self) else { throw CancellationError() }
+                    preparation.onProgress = { fraction in
+                        self.exportProgressed(Self.preparationShare * (Double(index) + fraction) / Double(preparations.count))
+                    }
+                    guard await prepare(self, preparation) else { throw CancellationError() }
                 }
-                let analysis = analysis
+                preparation.onProgress = { _ in }
+                let analysis = preparation.analysis
+                let start = preparation.waited ? Self.preparationShare : 0
+                let throttle = ProgressThrottle()
+                // Called off the main thread, per frame; held only while the export runs, as the task holds the editor.
+                let progress: @Sendable (Double) -> Void = { value in
+                    guard throttle.shouldReport(value) else { return }
+                    Task { @MainActor in self.exportProgressed(start + (1 - start) * value) }
+                }
                 switch job {
                 case let .mp4(settings, range):
                     let exporter = MP4Exporter(
                         project: project, document: document, settings: settings, range: range, analysis: analysis)
                     let summary = try await exporter.export(to: destination, progress: progress)
                     exportFinished(at: destination)
-                    let leftOut = Self.leftOut(summary, take: project.take)
-                    if !leftOut.isEmpty { showAlert(leftOut.joined(separator: "\n\n"), style: .warning) }
+                    let said = preparation.notices + Self.leftOut(summary, take: project.take)
+                    if !said.isEmpty { showAlert(said.joined(separator: "\n\n"), style: .warning) }
                 case let .gif(settings):
                     let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
                     try await exporter.export(to: destination, progress: progress)
                     exportFinished(at: destination)
+                    if !preparation.notices.isEmpty { showAlert(preparation.notices.joined(separator: "\n\n"), style: .warning) }
                 }
             } catch let error where Self.isCancellation(error) {
                 exportState = .idle
@@ -1430,6 +1475,7 @@ final class EditorModel {
         exportFinishedTask?.cancel()
         tearDownPreview()
         image.close()
+        voice.close()
         Task { [jobs] in await jobs.cancelAll() }
         session?.onChange = nil
         // Where it was last seen, for who looks at it once it closed.
@@ -1470,5 +1516,48 @@ final class EditorModel {
         } else {
             alert.runModal()
         }
+    }
+}
+
+/// An export on its way, as the features' preparations see it (`EditorModel.exportPreparations`): what is exported, what
+/// the export reads of the analysis caches (each preparation sets its part of it), how far the preparation running is,
+/// and what the export says once it is done.
+@MainActor
+final class ExportPreparation {
+    /// The document exported: the copy the export sheet took.
+    let document: EditDocument
+    /// The project, read from where its package is now.
+    let project: LoadedProject
+    /// Whether what is exported has sound (an MP4; a GIF has none).
+    let hasSound: Bool
+    /// What the export reads of the analysis caches: the editor's as it started, each preparation's part replaced by
+    /// what it waited for.
+    var analysis: AnalysisInputs
+    /// What the export says once it is done, before what it had to leave out.
+    private(set) var notices: [String] = []
+    /// Whether a preparation waited for something: it reported less than the whole. The ring shows the preparations
+    /// from then on (plan 2a decision 17).
+    private(set) var waited = false
+    /// Where the progress of the preparation running goes: its part of the ring.
+    fileprivate var onProgress: (Double) -> Void = { _ in }
+
+    init(document: EditDocument, project: LoadedProject, hasSound: Bool, analysis: AnalysisInputs) {
+        self.document = document
+        self.project = project
+        self.hasSound = hasSound
+        self.analysis = analysis
+    }
+
+    /// How far the preparation running is, 0 to 1: once one reported less than 1, the ring shows it.
+    func report(_ fraction: Double) {
+        guard !fraction.isNaN else { return }
+        let fraction = min(max(fraction, 0), 1)
+        if fraction < 1 { waited = true }
+        if waited { onProgress(fraction) }
+    }
+
+    /// A sentence the export says once it is done.
+    func notice(_ text: String) {
+        notices.append(text)
     }
 }

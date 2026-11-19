@@ -6,9 +6,9 @@ import Observation
 import SwiftUI
 import os
 
-/// The app's settings: the countdown before a take, what a stop does, hiding the desktop's icons, noting when keys are
-/// typed, recording which keys (with its Input Monitoring permission), the shortcut that turns Do Not Disturb on and the
-/// global shortcuts. A Mac settings window: its panes' icons in
+/// The app's settings: the countdown before a take, what a stop does, transcribing a project as it opens, hiding the
+/// desktop's icons, noting when keys are typed, recording which keys (with its Input Monitoring permission), the shortcut
+/// that turns Do Not Disturb on and the global shortcuts. A Mac settings window: its panes' icons in
 /// the toolbar, as tall as the pane shown. Titled like the permissions one, so while it is open (and no take records) the
 /// app is in the Dock.
 @MainActor
@@ -312,6 +312,9 @@ final class SettingsModel {
     private(set) var inputMonitoring: PermissionState
     /// The last shortcut typed for this action was refused.
     private(set) var refusal: (action: HotKeyAction, reason: Refusal)?
+    /// "Transcribe Automatically" (`TranscriptionPreferences.automatic`): a project without a transcript transcribes as it
+    /// opens in the editor, if its language is installed. Each editor reads the saved value as its project opens.
+    private(set) var transcribeAutomatically: Bool
 
     @ObservationIgnored let hotKeys: HotKeyCenter
     @ObservationIgnored let countdown: CountdownSetting
@@ -320,6 +323,7 @@ final class SettingsModel {
     @ObservationIgnored let focusShortcut: FocusShortcutSetting
     @ObservationIgnored let appearance: AppearanceSetting
     @ObservationIgnored private let store: SettingsStore
+    @ObservationIgnored private let transcription: TranscriptionPreferencesStore
     @ObservationIgnored private var probe: any PermissionProbe
     @ObservationIgnored private var monitor: Any?
 
@@ -339,9 +343,19 @@ final class SettingsModel {
         self.probe = probe
         recordKeys = store.settings.recordKeys
         inputMonitoring = probe.state(of: .inputMonitoring)
+        let transcription = TranscriptionPreferencesStore()
+        self.transcription = transcription
+        transcribeAutomatically = transcription.preferences.automatic
     }
 
     var bindings: HotKeyBindings { hotKeys.bindings }
+
+    func setTranscribeAutomatically(_ isOn: Bool) {
+        transcribeAutomatically = isOn
+        var preferences = transcription.preferences
+        preferences.automatic = isOn
+        transcription.preferences = preferences
+    }
 
     func setNoteKeyActivity(_ isOn: Bool) {
         noteKeyActivity = isOn
@@ -500,6 +514,12 @@ private struct SettingsPaneView: View {
                 }
             } label: {
                 Text("When Recording Stops")
+            }
+            Toggle(isOn: Binding(get: { model.transcribeAutomatically }, set: { model.setTranscribeAutomatically($0) })) {
+                Text("Transcribe Automatically", comment: "A setting: a project transcribes as it opens in the editor")
+                Text(
+                    "When a project opens in the editor, if its language is installed.",
+                    comment: "Under the setting that transcribes a project as it opens in the editor")
             }
         }
     }

@@ -39,6 +39,8 @@ let package = Package(
             dependencies: [
                 "ProjectFormat", "Recording", "SyntheticCapture", "Recovery", "Export", "Editing", "Analysis", "Render",
                 "Library",
+                // `fake-transcript` only: a made-up transcript (`FakeTranscript`) for screenshots.
+                "RecorderKitTestSupport",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),

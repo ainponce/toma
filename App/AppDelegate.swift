@@ -487,6 +487,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let environment = ProcessInfo.processInfo.environment
             if environment["TOMA_SHOWCASE_TAB"] != nil || environment["TOMA_SHOWCASE_SELECT"] != nil
                 || environment["TOMA_SHOWCASE_ASPECT"] != nil || environment["TOMA_SHOWCASE_SAFEZONES"] != nil
+                || environment["TOMA_SHOWCASE_SEEK"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -496,6 +497,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // TOMA_SHOWCASE_SAFEZONES=1 shows the safe-zone guide over the preview.
                     if environment["TOMA_SHOWCASE_SAFEZONES"] == "1" { model.showsSafeZones = true }
                     if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
+                    // TOMA_SHOWCASE_SEEK=<seconds> puts the playhead on the frame of the project's grid there (phase 2).
+                    if let seconds = environment["TOMA_SHOWCASE_SEEK"].flatMap(Double.init), let rate = model.document?.frameRate {
+                        model.seek(frame: Int((seconds * Double(rate)).rounded()))
+                    }
                     if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
                         model.selection = .zooms([id])
                     }

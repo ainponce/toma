@@ -136,13 +136,22 @@ final class EditorImage {
         return nil
     }
 
-    /// What an export does first (`EditorModel.exportPreparations`): waits for the masks and the faces the session's
-    /// document lacks, first in the queue (`CameraAnalysis.prepareForExport`), and hands them to the preview and the
-    /// export (`updateAnalysis`). `false`, which stops the export, when the export was cancelled meanwhile (saying
-    /// nothing) or a job failed or was cancelled (with "Couldn't prepare the camera: …").
-    func prepareExport(_ model: EditorModel) async -> Bool {
-        guard !closed, let caches, let project = model.exportProject, let document = model.document else { return true }
-        var inputs = model.analysis
+    /// What an export does first (`EditorModel.exportPreparations`): waits for the masks and the faces the exported
+    /// document lacks, first in the queue (`CameraAnalysis.prepareForExport`), reporting how far the jobs that were not
+    /// done yet are (`CameraAnalysis.progress`), and hands them to the export and the preview (`updateAnalysis`).
+    /// `false`, which stops the export, when the export was cancelled meanwhile (saying nothing) or a job failed or was
+    /// cancelled (with "Couldn't prepare the camera: …").
+    func prepareExport(_ model: EditorModel, _ export: ExportPreparation) async -> Bool {
+        guard !closed, let caches else { return true }
+        let document = export.document, project = export.project
+        var inputs = export.analysis
+        let pending = (kinds(document, .faces) + kinds(document, .masks)).filter { states[$0] != .done }
+        let watcher = pending.isEmpty ? nil : Task { [jobs = model.jobs, take = project.take] in
+            for await all in await jobs.updates() {
+                if let fraction = CameraAnalysis.progress(all, of: pending, take: take) { export.report(fraction) }
+            }
+        }
+        defer { watcher?.cancel() }
         do {
             try await CameraAnalysis.prepareForExport(
                 &inputs, document: document, project: project, caches: caches, jobs: model.jobs)
@@ -154,10 +163,17 @@ final class EditorImage {
             return false
         }
         guard !Task.isCancelled, !closed else { return false }
-        // What the export waited for is newer than any reading under way.
-        reading += 1
-        readTask?.cancel()
-        hand(inputs)
+        export.analysis.personMasks = inputs.personMasks
+        export.analysis.faceTracks = inputs.faceTracks
+        if Needs(document) == needs {
+            // What the export waited for is newer than any reading under way.
+            reading += 1
+            readTask?.cancel()
+            hand(inputs)
+        } else {
+            // Edited since the export took its copy: the preview reads what its own document needs.
+            read()
+        }
         return true
     }
 
