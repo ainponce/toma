@@ -10,10 +10,10 @@ import ProjectFormat
 import QuartzCore
 import RecorderKitTestSupport
 // @testable for the engine's hooks, `FrameRenderer.reader(for:)`, `TrackFrameReader.openedReaderCount` and the
-// prefetcher.
+// prefetcher; and for `ScriptedKeyEvents.usKey(for:)`.
 @testable import Render
 import Synchronization
-import SyntheticCapture
+@testable import SyntheticCapture
 import Testing
 
 // The preview off the main thread (design §7.8): the main thread only asks, a queue of the engine's own decodes, draws
@@ -193,6 +193,67 @@ func pausedFrameIsTheExportFrame() async throws {
         #expect(shown == exported)
         // Frame 42 at 60 fps is 0.7 s: frame 21 of the 30 fps source.
         #expect(frameIndex(of: try #require(drawn.videos[trackID])) == 21)
+    }
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+func pausedFrameShowsTheKeysOfASynthesizedTake() async throws {
+    try await withTemporaryDirectory { dir in
+        // What `recorder-dev synth-record --keys "Hola mundo"` writes: a keyPress line a key, of a US keyboard
+        // (`ScriptedKeyEvents`), one every 100 ms from 0.1 s. Read back from the package as the editor opens it, shown first
+        // with the keys off, then Keys on Screen in All as a revision (plan 2c Task P12's check): the paused frame at a key
+        // shows the pill, as the export draws it. At 0 s, before the first key, nothing is on screen yet, and Shortcuts
+        // shows none of it (no ⌘ nor ⌃).
+        let builder = try TakeBuilder(in: dir, formatVersion: 4)
+        try await builder.addVideoTrack(
+            id: trackID, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 4)])
+        let typed = "Hola mundo".compactMap(ScriptedKeyEvents.usKey(for:)).enumerated().map { k, key in
+            InputEvent(
+                t: base.adding(seconds: 0.1 + 0.1 * Double(k)),
+                kind: .keyPress(code: key.code, chars: key.chars, mods: key.mods, isRepeat: key.isRepeat, key: key.key))
+        }
+        try builder.addEvents((cursorEvents(from: base, seconds: 4, across: screenFrame) + typed).sorted { $0.t < $1.t })
+        let project = try LoadedProject.load(try builder.write().package.url)
+        let presses = project.events.compactMap { event -> String? in
+            if case let .keyPress(_, chars, _, _, _) = event.kind { chars } else { nil }
+        }
+        #expect(presses.joined() == "Hola mundo")
+
+        let size = SIMD2(1280, 720)
+        let renderer = try legacyRenderer(project, size, rate: 60)
+        let watched = Watched(renderer)
+        // 1.05 s: every key typed, the last 50 ms before.
+        let atAKey = 63
+        watched.engine.request(.paused(frame: atAKey))
+        try await watched.waitForDrawn(1)
+        let keyless = try await watched.engine.drawnBytes()
+        func scene(_ mode: KeyOverlayMode) -> FrameEvaluator {
+            var document = EditDocument.legacy(for: project)
+            document.keys = KeyOverlayPlan(mode: mode, position: .bottomLeading, size: .large)
+            let paths = MotionPaths(take: project.take, events: project.events, document: document)
+            return renderer.makeScene(document: document, paths: paths, outputSize: size)
+        }
+
+        watched.engine.setScene(scene(.all))
+        let shown = try await watched.waitForDrawn(2)
+        #expect(shown.request == .paused(frame: atAKey))
+        #expect(shown.frame.keys?.items.map(\.content) == [.text("Hola mundo")])
+        let withKeys = try await watched.engine.drawnBytes()
+        #expect(withKeys != keyless)
+        #expect(withKeys == (try await offThePool { try renderer.renderBytes(at: seconds(ofFrame: atAKey, rate: 60)) }))
+
+        watched.engine.request(.paused(frame: 0))
+        #expect(try await watched.waitForDrawn(3).frame.keys == nil, "before the first key")
+
+        // The new scene redraws frame 0 unless the request after it wins first: either way, frame 63 is drawn last.
+        watched.engine.setScene(scene(.shortcuts))
+        watched.engine.request(.paused(frame: atAKey))
+        #expect(await eventually(timeout: .seconds(30)) {
+            watched.drawn.count >= 4 && watched.drawn.last?.request == .paused(frame: atAKey)
+        })
+        let shortcuts = try #require(watched.drawn.last)
+        #expect(shortcuts.frame.keys == nil)
+        #expect(try await watched.engine.drawnBytes() == keyless)
     }
 }
 
