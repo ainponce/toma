@@ -30,9 +30,10 @@ public enum LogCompaction {
     /// `do`; the groups that were undone and then emptied away by a new one, and every `redo`, are gone. The `seq`s grow
     /// and the last one is the original last one, so a snapshot of the current state still names the last line.
     ///
-    /// The `create` stays in its version and every group goes after the `migrate` lines (1c design §13.2): that is the
-    /// same document only because each `migrate` keeps the history (`DocumentMigration.LogWalk`), an additive migration
-    /// no line before it writes inside of, which commutes with every group.
+    /// The `create` stays in its version and every group goes after the `migrate` lines (1c design §13.2), its changes
+    /// carried through them (`DocumentMigration.carried(_:from:to:)`): that is the same document only because each
+    /// `migrate` keeps the history (`DocumentMigration.LogWalk`), an additive migration no line before it writes inside
+    /// of, which commutes with every group so carried.
     ///
     /// Only a log made the way the session makes it with `UndoHistory` has stacks to compact: a `do` of a group the log
     /// already has comes right after a `do` of that group (a burst), an `undo` is of the top of `done` and a `redo` of
@@ -108,6 +109,15 @@ public enum LogCompaction {
                 case let .migrate(_, from, to):
                     guard walk.walkMigrate(from: from, to: to) else { return nil }
                     migrations.append((from, to))
+                    // Every group goes after the `migrate` lines: in the version they leave.
+                    for index in done.indices {
+                        guard let carried = DocumentMigration.carried(done[index].changes, from: from, to: to) else { return nil }
+                        done[index].changes = carried
+                    }
+                    for index in undone.indices {
+                        guard let carried = DocumentMigration.carried(undone[index].changes, from: from, to: to) else { return nil }
+                        undone[index].changes = carried
+                    }
                 case let .do(_, group, label, changes, at):
                     walk.walkDo(changes)
                     if group == burst {

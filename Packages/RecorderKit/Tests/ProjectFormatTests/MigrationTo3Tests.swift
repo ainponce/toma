@@ -257,6 +257,14 @@ private let addedFrom2: [String: JSONValue] = [
             id: "p-00000001", take: "take-001", start: ns(1), end: ns(2), effect: .blur, rect: NormalizedRect(x: 0, y: 0, width: 1, height: 1)))
     let layout = try JSONValue(
         encoding: LayoutBlock(id: "l-00000001", take: "take-001", start: ns(1), end: ns(2), kind: .screenOnly, instant: false))
+    // The objects of the design example in version 2, and the same changed: what a line of 1c writes.
+    let v2 = try parsed(DesignExample.canonical)
+    func whole(_ pointer: String, _ change: (inout JSONValue) -> Void) throws -> EditChange {
+        let before = try #require(v2.at(pointer))
+        var after = before
+        change(&after)
+        return .set(path: try JSONPointer(pointer), before: before, after: after)
+    }
     let cases: [(EditChange, Bool)] = [
         (try set(""), true),
         (try set("/documentVersion"), true),
@@ -264,18 +272,24 @@ private let addedFrom2: [String: JSONValue] = [
         (try set("/captions/show"), true),
         (try set("/captions/style/highlightColor"), true),
         (try set("/keys/mode"), true),
-        (try set("/style"), true),
         (try set("/style/reframe"), true),
-        (try set("/camera"), true),
         (try set("/camera/background"), true),
         (try set("/camera/look/intensity"), true),
         (try set("/camera/syncOffset"), true),
-        (try set("/audio"), true),
         (try set("/audio/normalize"), true),
-        (try set("/audio/tracks"), true),
-        (try set("/audio/tracks/take-001~1mic"), true),
         (try set("/audio/tracks/take-001~1mic/cleanup"), true),
         (.insert(collection: try JSONPointer("/privacy/blocks"), index: 0, value: block), true),
+        // A whole object that holds what the migration adds is carried through it: "Apply a Style" (`/style`), a track's
+        // volume (`/audio/tracks/<track>`, or `/audio/tracks` for one without an entry), the whole camera or sound.
+        (try whole("/style") { $0["padding"] = .number(0.1) }, false),
+        (try whole("/camera") { $0["mirror"] = .bool(true) }, false),
+        (try whole("/audio") { $0["limiter"] = .bool(false) }, false),
+        (try whole("/audio/tracks") { $0["take-002/mic"] = .object(["gain": .integer(1), "muted": .bool(false)]) }, false),
+        (try whole("/audio/tracks/take-001~1mic") { $0["gain"] = .number(0.5) }, false),
+        // Unless the migration cannot write in its values: not objects, or the place there with another value.
+        (try set("/style"), true),
+        (try set("/audio/tracks/take-001~1mic"), true),
+        (try whole("/style") { $0["reframe"] = .string("followCursor") }, true),
         (try set("/style/padding"), false),
         (try set("/style/frame"), false),
         (try set("/camera/mirror"), false),
@@ -294,10 +308,57 @@ private let addedFrom2: [String: JSONValue] = [
         // Nothing is known to commute with a migration that is not additive.
         #expect(DocumentMigration.touchesAddedFields(change, from: 3), "\(change)")
     }
-    // From 1, the rule of 1c stays.
+    // From 1, the same rule with its own places.
     #expect(DocumentMigration.touchesAddedFields(try set("/camera/mirror"), from: 1))
     #expect(!DocumentMigration.touchesAddedFields(try set("/camera/background"), from: 1))
     #expect(!DocumentMigration.touchesAddedFields(try set("/captions/show"), from: 1))
+}
+
+@Test func carriedGivesTheValuesWhatTheMigrationAdds() throws {
+    let v2 = try parsed(DesignExample.canonical)
+    let v3 = try DocumentMigration.migrate(v2, from: 2)
+    // A track's volume, as 1c writes it: its `TrackGain` whole, without `cleanup`.
+    let track = try #require(v2.at("/audio/tracks/take-001~1mic"))
+    var quieter = track
+    quieter["gain"] = .number(0.5)
+    let volume = EditChange.set(path: try JSONPointer("/audio/tracks/take-001~1mic"), before: track, after: quieter)
+    let carried = try #require(DocumentMigration.carried(volume, from: 2))
+    var carriedTrack = track, carriedQuieter = quieter
+    carriedTrack["cleanup"] = .integer(0)
+    carriedQuieter["cleanup"] = .integer(0)
+    #expect(carried == .set(path: try JSONPointer("/audio/tracks/take-001~1mic"), before: carriedTrack, after: carriedQuieter))
+    // Applied after the migration, it gives the migration of applying it before; and its inverse undoes it there.
+    let after = try v3.applying([carried])
+    #expect(after == (try DocumentMigration.migrate(v2.applying([volume]), from: 2)))
+    #expect(try after.applying([carried.inverse]) == v3)
+    // The whole `style` gains `reframe`; the whole tracks, a `cleanup` in each; `null` (a member not there) stays.
+    let style = try #require(v2.at("/style"))
+    let style3 = try #require(v3.at("/style"))
+    let styleChange = EditChange.set(path: try JSONPointer("/style"), before: style, after: style)
+    #expect(DocumentMigration.carried(styleChange, from: 2) == .set(path: try JSONPointer("/style"), before: style3, after: style3))
+    let added = EditChange.set(path: try JSONPointer("/audio/tracks/take-002~1mic"), before: .null, after: track)
+    #expect(DocumentMigration.carried(added, from: 2) == .set(path: try JSONPointer("/audio/tracks/take-002~1mic"), before: .null, after: carriedTrack))
+    let tracks = try #require(v2.at("/audio/tracks"))
+    let tracks3 = try #require(v3.at("/audio/tracks"))
+    let allTracks = EditChange.set(path: try JSONPointer("/audio/tracks"), before: tracks, after: .object([:]))
+    #expect(DocumentMigration.carried(allTracks, from: 2) == .set(path: try JSONPointer("/audio/tracks"), before: tracks3, after: .object([:])))
+    // What the migration does not reach is as it was.
+    let padding = EditChange.set(path: try JSONPointer("/style/padding"), before: .number(0.08), after: .number(0.1))
+    #expect(DocumentMigration.carried(padding, from: 2) == padding)
+    #expect(DocumentMigration.carried([padding, volume], from: 2, to: 2) == [padding, volume])
+    #expect(DocumentMigration.carried([padding, volume], from: 2, to: 3) == [padding, carried])
+    #expect(DocumentMigration.carried([padding], from: 3, to: 2) == nil)
+    #expect(DocumentMigration.carried(padding, from: 3) == nil)
+
+    // From 1 through both: the whole camera of 1b gains the camera's fields of 1c and of phase 2.
+    let v1 = try parsed(DocumentV1Example.canonical)
+    let camera = try #require(v1.at("/camera"))
+    var hidden = camera
+    hidden["show"] = .bool(false)
+    let wholeCamera = EditChange.set(path: try JSONPointer("/camera"), before: camera, after: hidden)
+    let throughBoth = try #require(DocumentMigration.carried([wholeCamera], from: 1, to: 3))
+    let migrated = try DocumentMigration.migrate(DocumentMigration.migrate(v1, from: 1), from: 2)
+    #expect(try migrated.applying(throughBoth) == (try DocumentMigration.migrate(DocumentMigration.migrate(v1.applying([wholeCamera]), from: 1), from: 2)))
 }
 
 // MARK: - The replay goes through the migrate to 3

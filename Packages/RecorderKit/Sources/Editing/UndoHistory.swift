@@ -10,7 +10,8 @@ import ProjectFormat
 /// `redo` moves an undone one back to the top of `done`. A `create`, where a log starts, empties both, and so does a
 /// `migrate`, unless it keeps the history (1c design §13.2, `DocumentMigration.LogWalk`): it follows
 /// (`DocumentMigration.follows(from:to:atVersion:)`, from the version of the `create`) and no `do` line before it writes
-/// inside of what it adds, so a step of before is undone on the migrated document. A line the replay refuses (a `do` of a
+/// inside of what it adds, so a step of before is undone on the migrated document, carried through the migration
+/// (`DocumentMigration.carried(_:from:to:)`). A line the replay refuses (a `do` of a
 /// group that is undone or was emptied away, an `undo` of one that is not applied, a `redo` of one that is not undone)
 /// changes nothing.
 public struct UndoHistory: Equatable, Sendable {

@@ -328,19 +328,20 @@ private enum Pending {
 @MainActor @Test func aMigrateThatCutsTheHistoryRefusesUndoingAcrossIt() async throws {
     try await withTemporaryDirectory { dir in
         let url = try await DocumentV1Fixture.make(in: dir, steps: 0, snapshotAt: nil)
-        // A line of version 1 that writes the whole camera, made by hand, and a step after it: the first edit's
-        // `migrate` does not commute with the first, so it cuts the history (the rule of 1b).
+        // A line of version 1 that writes the whole document, made by hand, and a step after it: the first edit's
+        // `migrate` does not commute with the first, even carried, so it cuts the history (the rule of 1b). (One that
+        // writes the whole camera is carried through it: `MigrationHistoryTests`.)
         let v1 = try #require(DocumentMigration.reverted(JSONValue(encoding: Pending.created(url)), to: 1))
-        guard case let .object(document) = v1, case let .object(camera)? = document["camera"] else {
+        guard case var .object(document) = v1, case var .object(camera)? = document["camera"] else {
             Issue.record("no camera")
             return
         }
-        var hidden = camera
-        hidden["show"] = .bool(false)
+        camera["show"] = .bool(false)
+        document["camera"] = .object(camera)
         let lines = [
             EditLogEntry.do(
                 seq: 2, group: 2, label: EditLabel.camera.rawValue,
-                changes: [.set(path: try JSONPointer("/camera"), before: .object(camera), after: .object(hidden))],
+                changes: [.set(path: JSONPointer(components: []), before: v1, after: .object(document))],
                 at: DocumentV1Fixture.date),
             EditLogEntry.do(
                 seq: 3, group: 3, label: EditLabel.padding.rawValue,
@@ -380,20 +381,20 @@ private enum Pending {
 @MainActor @Test func canUndoAndCanRedoAreFalseWhereAMigrateThatCutsTheHistoryRefuses() async throws {
     try await withTemporaryDirectory { dir in
         let url = try await DocumentV1Fixture.make(in: dir, steps: 0, snapshotAt: nil)
-        // As above, a line of version 1 that writes the whole camera, two steps after it, and the second undone (as 1b
+        // As above, a line of version 1 that writes the whole document, two steps after it, and the second undone (as 1b
         // writes it): an undo and a redo on the stacks that both apply to the document, and both of which the first
         // edit's `migrate` cuts.
         let v1 = try #require(DocumentMigration.reverted(JSONValue(encoding: Pending.created(url)), to: 1))
-        guard case let .object(document) = v1, case let .object(camera)? = document["camera"] else {
+        guard case var .object(document) = v1, case var .object(camera)? = document["camera"] else {
             Issue.record("no camera")
             return
         }
-        var hidden = camera
-        hidden["show"] = .bool(false)
+        camera["show"] = .bool(false)
+        document["camera"] = .object(camera)
         let lines = [
             EditLogEntry.do(
                 seq: 2, group: 2, label: EditLabel.camera.rawValue,
-                changes: [.set(path: try JSONPointer("/camera"), before: .object(camera), after: .object(hidden))],
+                changes: [.set(path: JSONPointer(components: []), before: v1, after: .object(document))],
                 at: DocumentV1Fixture.date),
             EditLogEntry.do(
                 seq: 3, group: 3, label: EditLabel.padding.rawValue,

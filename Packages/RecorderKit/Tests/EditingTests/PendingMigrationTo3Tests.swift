@@ -586,32 +586,244 @@ private enum To3 {
     #expect(LogCompaction.compact(editor.entries) == editor.entries)
 }
 
-@Test func aVolumeStepOf1cIsCutByTheMigrateTo3() throws {
-    // The volume of a track in 1c writes its whole `TrackGain`: the migration writes inside it (`cleanup`), so the undo
-    // of that step after the migrate would not match. The migrate cuts the history before it, as every one did in 1b, and
-    // the log is not compacted; the replay goes on.
-    var document = SmallDocument.document
-    document.audio.tracks["take-001/mic"] = TrackGain(gain: 1, muted: false)
-    let create = EditLogEntry.create(seq: 1, document: document, app: To3.app)
-    let change = EditChange.set(
-        path: try JSONPointer("/audio/tracks/take-001~1mic"), before: .object(["gain": .integer(1), "muted": .bool(false)]),
-        after: .object(["gain": .number(0.5), "muted": .bool(false)]))
-    #expect(DocumentMigration.touchesAddedFields(change, from: 2))
-    let volume = EditLogEntry.do(seq: 2, group: 2, label: EditLabel.volume.rawValue, changes: [change], at: To3.date)
-    let captions = EditLogEntry.do(
-        seq: 4, group: 4, label: EditLabel.captionsShow.rawValue,
-        changes: [.set(path: try JSONPointer("/captions/show"), before: .bool(false), after: .bool(true))], at: To3.date)
-    let log = [create, volume, .migrate(seq: 3, from: 2, to: 3), captions]
-    #expect(UndoHistory(entries: [create, volume], createVersion: 2).done == [2])
-    #expect(UndoHistory(entries: log, createVersion: 2).done == [4])
-    #expect(LogCompaction.compact(log, createVersion: 2) == log)
-    let replayed = try #require(EditReplay.replay(snapshot: nil, entries: log, createVersion: 2))
+// MARK: - Whole objects of phase 1 across the migrate to 3
+
+/// The lines of 1c that write a whole object the migration to 3 extends, in version 2 as 1c writes them: a track's
+/// volume (its `TrackGain`, without `cleanup`) and an applied style (`/style`, without `reframe`, and the cursor).
+private enum WholeObjects {
+    /// `SmallDocument`'s with the microphone of its take at gain 1, as a create of 1c holds it.
+    static let document: EditDocument = {
+        var document = SmallDocument.document
+        document.audio.tracks["take-001/mic"] = TrackGain(gain: 1, muted: false)
+        return document
+    }()
+
+    static let create = EditLogEntry.create(seq: 1, document: document, app: To3.app)
+
+    /// `document` in version 2.
+    static var v2: JSONValue {
+        get throws { try #require(DocumentMigration.reverted(JSONValue(encoding: document), to: 2)) }
+    }
+
+    /// The value at `pointer` of `json`.
+    static func value(_ json: JSONValue, _ pointer: String) throws -> JSONValue {
+        try #require(json.decodedValue(at: pointer))
+    }
+
+    /// The microphone at 50 %, its whole `TrackGain` from `gain` to 0.5.
+    static func volume(_ seq: Int) throws -> EditLogEntry {
+        let path = "/audio/tracks/take-001~1mic"
+        let before = try value(v2, path)
+        guard case var .object(members) = before else { throw TestSupportError.missing("the track's gain") }
+        members["gain"] = .number(0.5)
+        return .do(
+            seq: seq, group: seq, label: EditLabel.volume.rawValue,
+            changes: [.set(path: try JSONPointer(path), before: before, after: .object(members))], at: To3.date)
+    }
+
+    /// Toma's style applied as 1c does: the whole stage and the whole cursor, in version 2.
+    static func style(_ seq: Int) throws -> EditLogEntry {
+        var toma = try JSONValue(encoding: DefaultStyle.toma.style)
+        if case var .object(members) = toma {
+            members["reframe"] = nil
+            toma = .object(members)
+        }
+        let style = EditChange.set(path: try JSONPointer("/style"), before: try value(v2, "/style"), after: toma)
+        let cursor = EditChange.set(
+            path: try JSONPointer("/cursor"), before: try value(v2, "/cursor"), after: try JSONValue(encoding: DefaultStyle.toma.cursor))
+        return .do(seq: seq, group: seq, label: EditLabel.styleApply.rawValue, changes: [style, cursor], at: To3.date)
+    }
+
+    /// The first edit in phase 2: the captions shown.
+    static func captions(_ seq: Int) throws -> EditLogEntry {
+        .do(
+            seq: seq, group: seq, label: EditLabel.captionsShow.rawValue,
+            changes: [.set(path: try JSONPointer("/captions/show"), before: .bool(false), after: .bool(true))], at: To3.date)
+    }
+
+    static func replay(_ entries: [EditLogEntry]) throws -> EditReplay {
+        try #require(EditReplay.replay(snapshot: nil, entries: entries, createVersion: 2))
+    }
+
+    /// `document` at another line of the log.
+    static func state(_ document: EditDocument) -> EditDocument {
+        var document = document
+        document.logSequence = 0
+        return document
+    }
+}
+
+extension JSONValue {
+    /// The value at `pointer`, `nil` if there is none.
+    fileprivate func decodedValue(at pointer: String) -> JSONValue? {
+        guard let components = try? JSONPointer(pointer).components else { return nil }
+        var value = self
+        for component in components {
+            guard case let .object(members) = value, let member = members[component] else { return nil }
+            value = member
+        }
+        return value
+    }
+}
+
+@Test func aVolumeStepOf1cIsUndoneAcrossTheMigrateTo3() throws {
+    // The volume of a track in 1c writes its whole `TrackGain`: the migration writes inside it (`cleanup`), and the line
+    // is carried through the migrate, so the history is kept and its undo after the migrate matches.
+    let volume = try WholeObjects.volume(2)
+    guard case let .do(_, _, _, changes, _) = volume else { return }
+    #expect(!DocumentMigration.touchesAddedFields(changes[0], from: 2))
+    let log = [WholeObjects.create, volume, .migrate(seq: 3, from: 2, to: 3), try WholeObjects.captions(4)]
+    let history = UndoHistory(entries: log, createVersion: 2)
+    #expect(history.done == [2, 4])
+    #expect(history.undoLabel == .captionsShow)
+    let replayed = try WholeObjects.replay(log)
     #expect(replayed.mismatchSeq == nil)
     #expect(replayed.version == 3)
     #expect(replayed.document.audio.tracks["take-001/mic"] == TrackGain(gain: 0.5, muted: false))
     #expect(replayed.document.captions.show)
-    #expect(try #require(EditReplay.replay(snapshot: nil, entries: log + [.undo(seq: 5, group: 2)], createVersion: 2)).mismatchSeq == 5)
-    #expect(try #require(EditReplay.replay(snapshot: nil, entries: log + [.undo(seq: 5, group: 4)], createVersion: 2)).mismatchSeq == nil)
+    // Both undone, in order, back to the create's document; and both redone.
+    let undos: [EditLogEntry] = [.undo(seq: 5, group: 4), .undo(seq: 6, group: 2)]
+    let undone = try WholeObjects.replay(log + undos)
+    #expect(undone.mismatchSeq == nil)
+    #expect(WholeObjects.state(undone.document) == WholeObjects.state(WholeObjects.document))
+    #expect(undone.json == (try JSONValue(encoding: undone.document)))
+    let redone = try WholeObjects.replay(log + undos + [.redo(seq: 7, group: 2), .redo(seq: 8, group: 4)])
+    #expect(redone.mismatchSeq == nil)
+    #expect(WholeObjects.state(redone.document) == WholeObjects.state(replayed.document))
+}
+
+@Test func anAppliedStyleOf1cIsUndoneAcrossTheMigrateTo3() throws {
+    // "Apply a Style" in 1c writes the whole stage (without `reframe`) and the whole cursor: carried through the migrate.
+    let log = [WholeObjects.create, try WholeObjects.style(2), .migrate(seq: 3, from: 2, to: 3), try WholeObjects.captions(4)]
+    #expect(UndoHistory(entries: log, createVersion: 2).done == [2, 4])
+    let replayed = try WholeObjects.replay(log)
+    #expect(replayed.mismatchSeq == nil)
+    #expect(replayed.document.style == DefaultStyle.toma.style)
+    #expect(replayed.document.cursor == DefaultStyle.toma.cursor)
+    let undone = try WholeObjects.replay(log + [.undo(seq: 5, group: 4), .undo(seq: 6, group: 2)])
+    #expect(undone.mismatchSeq == nil)
+    #expect(WholeObjects.state(undone.document) == WholeObjects.state(WholeObjects.document))
+    #expect(undone.document.style.reframe == .fit)
+}
+
+@Test func aLogOfWholeObjectsCompactsAcrossTheMigrateTo3() throws {
+    // Steps of 1c that write whole objects, one undone, the first edit in phase 2 and another step: compacted, the groups
+    // of before the migrate go after it, carried, and replay to the same document, with the same stacks.
+    let log: [EditLogEntry] = [
+        WholeObjects.create, try WholeObjects.volume(2), try WholeObjects.style(3), .undo(seq: 4, group: 3),
+        .migrate(seq: 5, from: 2, to: 3), try WholeObjects.captions(6), .undo(seq: 7, group: 6), .redo(seq: 8, group: 6),
+    ]
+    // The style was undone before the first edit, and a new group ended what could be redone.
+    let history = UndoHistory(entries: log, createVersion: 2)
+    #expect(history.done == [2, 6])
+    let compacted = LogCompaction.compact(log, createVersion: 2)
+    #expect(compacted.count < log.count)
+    #expect(compacted.first == WholeObjects.create)
+    guard compacted.count == 4, case .migrate(_, 2, 3) = compacted[1], case let .do(_, 2, _, changes, _) = compacted[2] else {
+        Issue.record("the create, the migrate and the two groups: \(compacted)")
+        return
+    }
+    guard case let .do(_, _, _, written, _) = log[1] else { return }
+    #expect(changes == (try #require(DocumentMigration.carried(written, from: 2, to: 3))))
+    let original = try WholeObjects.replay(log)
+    let replayed = try WholeObjects.replay(compacted)
+    #expect(original.mismatchSeq == nil && replayed.mismatchSeq == nil)
+    #expect(replayed.document == original.document)
+    #expect(replayed.json == original.json)
+    #expect(UndoHistory(entries: compacted, createVersion: 2).done == history.done)
+    // Written with its create in version 2, read back, and undone to the create's document.
+    try withTemporaryDirectory { dir in
+        let url = dir.appending(path: "edit-log.jsonl")
+        try Data(try compacted.map { try $0.jsonLine(writingDocumentAt: 2) + "\n" }.joined().utf8).write(to: url)
+        let read = try EditLogReader.read(url)
+        #expect(read.createVersion == 2)
+        #expect(read.entries == compacted)
+        let next = (compacted.last?.seq ?? 0) + 1
+        let undone = try WholeObjects.replay(read.entries + [.undo(seq: next, group: 6), .undo(seq: next + 1, group: 2)])
+        #expect(undone.mismatchSeq == nil)
+        #expect(WholeObjects.state(undone.document) == WholeObjects.state(WholeObjects.document))
+    }
+}
+
+@MainActor @Test func undoAfterTheFirstEditReachesTheWholeObjectsOf1c() async throws {
+    try await withTemporaryDirectory { dir in
+        // A project of 1c whose log has a track's volume and an applied style, its snapshot at the last line, in version 2.
+        let builder = try TakeBuilder(in: dir, name: "1c-whole")
+        let base = HostTime(nanoseconds: 5_000_000_000_000)
+        let frame = Rect(x: 0, y: 0, width: 640, height: 360)
+        try await builder.addVideoTrack(
+            id: "display-1", source: TrackSource(name: "Synthetic Display", displayID: 1, globalFrame: frame, pixelScale: 1),
+            segments: [VideoSegmentSpec(start: base, seconds: 1, framesPerSecond: 10)])
+        let project = try builder.write()
+        var document = EditDocument.legacy(for: project)
+        document.audio.tracks["take-001/mic"] = TrackGain(gain: 1, muted: false)
+        document.logSequence = 1
+        let v2 = try #require(DocumentMigration.reverted(JSONValue(encoding: document), to: 2))
+        let track = try WholeObjects.value(v2, "/audio/tracks/take-001~1mic")
+        let volume = EditChange.set(
+            path: try JSONPointer("/audio/tracks/take-001~1mic"), before: track,
+            after: .object(["gain": .number(0.5), "muted": .bool(false)]))
+        var toma = try JSONValue(encoding: DefaultStyle.toma.style)
+        if case var .object(members) = toma {
+            members["reframe"] = nil
+            toma = .object(members)
+        }
+        let style = EditChange.set(path: try JSONPointer("/style"), before: try WholeObjects.value(v2, "/style"), after: toma)
+        let lines: [EditLogEntry] = [
+            .create(seq: 1, document: document, app: AppInfo(name: "Toma", version: "0.3.0")),
+            .do(seq: 2, group: 2, label: EditLabel.volume.rawValue, changes: [volume], at: To3.date),
+            .do(seq: 3, group: 3, label: EditLabel.styleApply.rawValue, changes: [style], at: To3.date),
+        ]
+        let url = project.package.url
+        try DurableFile.writeAtomically(
+            Data(try lines.map { try $0.jsonLine(writingDocumentAt: 2) + "\n" }.joined().utf8), to: project.package.editLogURL)
+        let last = try #require(EditReplay.replay(snapshot: nil, entries: lines, createVersion: 2))
+        #expect(last.mismatchSeq == nil && last.version == 2)
+        try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(last.json), to: project.package.editURL)
+
+        let caches = dir.appending(path: "Caches")
+        // Before the first edit, the Edit menu offers the undo of the style: its changes are carried in memory.
+        let session = try await To3.open(url, To3.context(caches: caches))
+        #expect(session.notices.isEmpty)
+        #expect(session.undoLabel == .styleApply)
+        #expect(session.canUndo)
+        #expect(session.perform(try To3.captions(session.document)) == .applied)
+        // After it, every step of 1c comes back, in order, to the create's document.
+        #expect(session.undo() == .applied)
+        #expect(!session.document.captions.show)
+        #expect(session.undo() == .applied)
+        #expect(session.document.style.background == .tomaClassic)
+        #expect(session.document.style.reframe == .fit)
+        #expect(session.undo() == .applied)
+        #expect(session.document.audio.tracks["take-001/mic"] == TrackGain(gain: 1, muted: false))
+        #expect(To3.state(session.document) == To3.state(document))
+        #expect(session.undo() == .refused)
+        // A redo and its undo, which the compaction drops.
+        #expect(session.redo() == .applied)
+        #expect(session.undo() == .applied)
+        #expect(await session.flushed() == 10)
+        await session.close()
+        #expect(To3.state(try To3.replay(url).document) == To3.state(document))
+
+        // Reopened, compacted on the way (its create in version 2, the migrate right after it), and redone.
+        let compacting = To3.context(caches: caches, compaction: (maxBytes: .max, maxEntries: 3))
+        let again = try await To3.open(url, compacting)
+        #expect(again.notices.isEmpty)
+        let read = try To3.read(url)
+        #expect(read.createVersion == 2)
+        #expect(read.entries.count < 10)
+        if read.entries.count > 1, case .migrate(_, 2, 3) = read.entries[1] {} else { Issue.record("the migrate after the create: \(read.entries)") }
+        #expect(To3.state(again.document) == To3.state(document))
+        #expect(again.redoLabel == .volume)
+        #expect(again.redo() == .applied)
+        #expect(again.redo() == .applied)
+        #expect(again.redo() == .applied)
+        #expect(again.document.captions.show)
+        #expect(again.document.style == DefaultStyle.toma.style)
+        #expect(again.document.audio.tracks["take-001/mic"] == TrackGain(gain: 0.5, muted: false))
+        #expect(again.redo() == .refused)
+        await again.close()
+    }
 }
 
 // MARK: - The labels and collections of phase 2
