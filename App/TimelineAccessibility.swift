@@ -80,6 +80,10 @@ final class TimelineAccessibility {
                     depth, start, end)
             add(zoom.id, .zoom, zoom.output, label: label, actions: [Action(.delete)])
         }
+        for block in content.privacy.items.items {
+            let label = TimelinePrivacyItems.accessibilityLabel(block.info, output: block.output)
+            add(block.id, .privacy, block.output, label: label, actions: [Action(.delete)])
+        }
         for block in content.layoutBlocks.items {
             let label = String(
                 format: String(localized: "Layout %1$@, from %2$@ to %3$@", comment: "VoiceOver: a layout block of the Camera track, its layout, start and end"),
@@ -160,7 +164,8 @@ final class TimelineAccessibility {
                 guard let output = view.hitItems.first(where: { $0.id == id })?.output.lowerBound else { return false }
                 model.selectCameraChange(id, output: output)
             }
-        case .ruler, .screen, .audio, .captions, .privacy: return false
+        case .privacy: model.selection = .privacyBlocks([id])
+        case .ruler, .screen, .audio, .captions: return false
         }
         return true
     }

@@ -107,6 +107,8 @@ struct TimelineContent {
     let screens: TrackItems<Screen>
     let zooms: TrackItems<Zoom>
     let cameraChanges: TrackItems<CameraChangeInfo>
+    /// The privacy blocks (phase 2 design §7.1).
+    let privacy: TimelinePrivacyItems
     /// The layout blocks, where the preview shows them.
     let layoutBlocks: TrackItems<LayoutBlockInfo>
     /// The ids of `layoutBlocks`, to tell a block from a camera change under the mouse.
@@ -177,6 +179,7 @@ struct TimelineContent {
                 id: region.id, output: output,
                 info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
         })
+        privacy = TimelinePrivacyItems(document: document)
         let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
         splitOrientation = orientation
@@ -430,6 +433,8 @@ final class TimelineTracks {
     private let audioClips: LayerPool<CALayer>
     private let cameraNotice = CATextLayer()
     private var waveforms: [String: CAShapeLayer] = [:]
+    /// The Privacy row's blocks (phase 2).
+    private let privacyRow = TimelinePrivacyRow()
 
     /// The thumbnails, and the waveforms worked out so far by audio track.
     var thumbnailCache: ThumbnailCache?
@@ -504,6 +509,7 @@ final class TimelineTracks {
         TimelineText.setUp(cameraNotice, size: 10, weight: .regular)
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
+        rows.addSublayer(privacyRow.layer)
         layer.addSublayer(separators)
         separators.lineWidth = 1
         separators.fillColor = nil
@@ -526,6 +532,7 @@ final class TimelineTracks {
         for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin, audioClips.begin] {
             pool()
         }
+        privacyRow.begin()
         var wanted: Set<ThumbnailKey> = []
         var shownWaveforms: Set<String> = []
         for row in geometry.rows {
@@ -534,8 +541,9 @@ final class TimelineTracks {
             case .video: layOutVideo(content, row, geometry, palette, &wanted)
             case .screen: layOutScreens(content, row, geometry, palette)
             case .zoom: layOutZooms(content, row, geometry, palette)
-            // Drawn by the captions and privacy features (phase 2).
-            case .captions, .privacy: break
+            // Drawn by the captions feature (phase 2).
+            case .captions: break
+            case .privacy: privacyRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
             case .camera: layOutCamera(content, row, geometry, palette)
             case let .audio(id):
                 layOutWaveform(id, content, row, geometry, palette)
@@ -543,6 +551,7 @@ final class TimelineTracks {
             }
         }
         for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }
+        privacyRow.end()
         for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
             waveform.removeFromSuperlayer()
             waveforms[id] = nil
@@ -569,6 +578,7 @@ final class TimelineTracks {
         ] {
             pool()
         }
+        privacyRow.reset()
         tileKeys = [:]
         for waveform in waveforms.values { waveform.removeFromSuperlayer() }
         waveforms = [:]

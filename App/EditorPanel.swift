@@ -40,6 +40,7 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         switch selection {
         case .zooms?: .zoom
         case .cameraChange?, .layoutBlock?: .camera
+        case .privacyBlocks?: .privacy
         case .clips?, .screenChange?, nil: nil
         }
     }

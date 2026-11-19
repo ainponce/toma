@@ -239,6 +239,10 @@ extension EditorModel {
             let clips = document.sequence.filter { TimeMap.outputDuration(of: $0) > 0 }
             guard !clips.isEmpty else { return false }
             selection = .clips(Set(clips.map(\.id)))
+        case .privacyBlocks?:
+            let shown = PrivacyTrackRules.items(document)
+            guard !shown.isEmpty else { return false }
+            selection = .privacyBlocks(Set(shown.map(\.id)))
         case .cameraChange?, .layoutBlock?, .screenChange?:
             return false
         }
@@ -306,6 +310,11 @@ extension EditorModel {
                 let output = LayoutTimeline.blockOutputs(of: document, timeMap: map)[k]
             else { return false }
             step = LayoutCommands.move(document, id: id, toOutputStart: output.lowerBound + delta, timeMap: map)
+        case let .privacyBlocks(ids)? where ids.count == 1:
+            guard let id = ids.first, let range = TimelinePrivacyItems.range(of: id, in: document) else { return false }
+            step = PrivacyCommands.move(document, id: id, toOutputStart: range.lowerBound + delta)
+        case .privacyBlocks?:
+            step = nil
         case .zooms?, .clips?, nil:
             step = nil
         }

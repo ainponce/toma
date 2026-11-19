@@ -301,6 +301,11 @@ final class KeyEditor: ObservableObject {
         model?.askCustomSpeed()
     }
 
+    /// Edit ▸ Add Blur (phase 2 design §7.1).
+    func addBlur() {
+        model?.addBlur()
+    }
+
     func rename() {
         model?.projectActions?.startRenaming()
     }
@@ -460,6 +465,12 @@ struct ProjectCommands: Commands {
             .disabled(project?.canEdit != true)
             Button("Custom Speed…") { editor.askCustomSpeed() }
                 .disabled(project?.canEdit != true)
+        }
+        // Edit ▸ Add Blur (phase 2 design §7.1): a privacy block of 3 s from the playhead, as the timeline's bar makes one.
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Add Blur") { editor.addBlur() }
+                .disabled(editor.project?.canEdit != true)
         }
     }
 }

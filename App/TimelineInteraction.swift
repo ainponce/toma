@@ -65,6 +65,9 @@ final class TimelineInteraction {
         case moveLayout(Base, id: String, range: Range<Int64>, grab: Int64)
         case createLayout(Base, anchor: Int64)
         case moveBoundary(Base, changeID: String)
+        /// A privacy block (phase 2): trimmed by an edge, or moved by its body; neither stops at another block.
+        case trimPrivacy(Base, id: String, edge: ClipEdge, range: Range<Int64>)
+        case movePrivacy(Base, id: String, range: Range<Int64>, grab: Int64)
     }
 
     init(view: EditorTimelineView) {
@@ -128,6 +131,7 @@ final class TimelineInteraction {
         switch model?.selection {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
+        case let .privacyBlocks(ids)?: ids
         case nil: []
         }
     }
@@ -158,7 +162,8 @@ final class TimelineInteraction {
         case .zoom: return .zooms(ids)
         case .camera: return isLayoutBlock(id) ? .layoutBlock(id) : .cameraChange(id)
         case .screen: return id == "initial" ? nil : .screenChange(id)
-        case .ruler, .audio, .captions, .privacy: return nil
+        case .privacy: return .privacyBlocks(ids)
+        case .ruler, .audio, .captions: return nil
         }
     }
 
@@ -180,6 +185,12 @@ final class TimelineInteraction {
             return
         }
         select(hit, shift: event.modifierFlags.contains(.shift))
+        // A double click on a privacy block selects it and takes the playhead into it: the preview shows its rect.
+        if event.clickCount >= 2, case let .item(.privacy, id) = hit {
+            model?.selectPrivacyBlock(id, showingIt: true)
+            drag = .none
+            return
+        }
         switch hit {
         case let .empty(track, τ):
             if track == .zoom, canEdit {
@@ -235,6 +246,8 @@ final class TimelineInteraction {
             updateDrag(event)
         case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
             updateDrag(event)
+        case .trimPrivacy, .movePrivacy:
+            updateDrag(event)
         }
     }
 
@@ -254,6 +267,8 @@ final class TimelineInteraction {
             view.scrub(at: point(event).x)
             view.endScrub()
         case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
+            finish()
+        case .trimPrivacy, .movePrivacy:
             finish()
         }
     }
@@ -412,6 +427,12 @@ final class TimelineInteraction {
             let changeID = edge == .start ? id : (k + 1 < screens.count ? screens[k + 1].id : nil)
             guard let changeID, changeID != "initial", let base = begin() else { return }
             drag = .moveBoundary(base, changeID: changeID)
+        case let .edge(.privacy, id, edge):
+            guard let base = begin(), let range = TimelinePrivacyItems.range(of: id, in: base.document) else { return }
+            drag = .trimPrivacy(base, id: id, edge: edge, range: range)
+        case let .item(.privacy, id):
+            guard let base = begin(), let range = TimelinePrivacyItems.range(of: id, in: base.document) else { return }
+            drag = .movePrivacy(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
         default:
             drag = .none
         }
@@ -453,6 +474,7 @@ final class TimelineInteraction {
         // A trimmed zoom's or layout block's label is placed below, from the document the model applied the step to.
         var trimmedZoom: (id: String, edge: ClipEdge, output: Int64)?
         var trimmedLayout: (id: String, edge: ClipEdge, output: Int64)?
+        var trimmedPrivacy: (id: String, edge: ClipEdge, output: Int64)?
         let base: Base
         switch drag {
         case let .trimClip(trimBase, clip, edge, outputStart, limits):
@@ -515,10 +537,24 @@ final class TimelineInteraction {
             base = boundaryBase
             let τ = snapped(output(at: point), event: event, base: base)
             step = TrackCommands.moveScreenBoundary(base.document, changeID: changeID, toOutput: τ, timeMap: base.map)
+        case let .trimPrivacy(trimBase, id, edge, range):
+            base = trimBase
+            let τ = snapped(output(at: point), event: event, base: base)
+            step = PrivacyCommands.trim(base.document, id: id, edge: edge, toOutput: τ)
+            trimmedPrivacy = (id, edge, edge == .start ? range.lowerBound : range.upperBound)
+        case let .movePrivacy(moveBase, id, range, grab):
+            base = moveBase
+            let proposed = output(at: point) - grab - range.lowerBound
+            let active = TimelineDragRules.snapActive(enabled: view.snapping, commandHeld: event.modifierFlags.contains(.command))
+            let shift = TimelineDragRules.snapShift(
+                of: range, by: proposed, points: base.points, extra: snapTargets(),
+                tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
+            step = PrivacyCommands.move(base.document, id: id, toOutputStart: range.lowerBound + shift)
         default:
             return
         }
         switch drag {
+        case .trimPrivacy: NSCursor.resizeLeftRight.set()
         case .trimClip, .trimZoom, .trimLayout: NSCursor.resizeLeftRight.set()
         default: break
         }
@@ -534,6 +570,11 @@ final class TimelineInteraction {
             } else {
                 label = (0, trimmed.output)
             }
+        }
+        if let trimmed = trimmedPrivacy {
+            let moved = preview.flatMap { TimelinePrivacyItems.range(of: trimmed.id, in: $0) }
+            let now = moved.map { trimmed.edge == .start ? $0.lowerBound : $0.upperBound } ?? trimmed.output
+            label = (now - trimmed.output, now)
         }
         view.setPreview(preview)
         if let label, let total = view.content?.map.duration {
@@ -555,6 +596,10 @@ final class TimelineInteraction {
         case .marks, .emptyZoom, .emptyLayout, .pressed:
             break
         case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
+            lastStep = nil
+            model?.cancelGesture()
+            view.setPreview(nil)
+        case .trimPrivacy, .movePrivacy:
             lastStep = nil
             model?.cancelGesture()
             view.setPreview(nil)
@@ -582,6 +627,7 @@ final class TimelineInteraction {
             model.selection = .layoutBlock(step.target)
             model.rememberBlockLayout(newBlockKind)
         case .moveLayout, .trimLayout: model.selection = .layoutBlock(step.target)
+        case .movePrivacy, .trimPrivacy: model.selection = .privacyBlocks([step.target])
         default: break
         }
     }
@@ -667,6 +713,9 @@ final class TimelineInteraction {
         case let .item(.camera, id) where isLayoutBlock(id), let .edge(.camera, id, _) where isLayoutBlock(id):
             select(hit, shift: false)
             addLayoutItems(to: menu, id: id)
+        case let .item(.privacy, id), let .edge(.privacy, id, _):
+            if !selectedIDs.contains(id) { select(hit, shift: false) }
+            addPrivacyItems(to: menu, id: id)
         case let .item(.camera, id), let .edge(.camera, id, _):
             select(hit, shift: false)
             let delete = MenuAction(String(localized: "Delete Change")) { model.deleteCameraChange(id) }
@@ -939,6 +988,8 @@ extension EditorModel {
             step = TrackCommands.deleteCameraChange(document, id: id)
         case let .layoutBlock(id)?:
             step = LayoutCommands.delete(document, ids: [id])
+        case let .privacyBlocks(ids)?:
+            step = PrivacyCommands.delete(document, ids: ids)
         case .screenChange?, nil:
             step = nil
         }
