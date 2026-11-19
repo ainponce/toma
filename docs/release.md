@@ -938,6 +938,10 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 - Con el permiso: escribir en Notas y en el campo de contraseña de Safari (y en el de una contraseña de Ajustes del Sistema): solo lo de Notas queda en la toma (Cursor ▸ Teclas en pantalla ▸ Todas), ni la contraseña ni la ↩ que cierra su campo. Pausar y reanudar escribiendo: las teclas de justo después de reanudar se ven como las de antes.
 - Con la distribución Español (Latinoamérica) o Español: ⌘⇧4 y ⌘⇧7 en una toma se ven «⌘ ⇧ 4» y «⌘ ⇧ 7» en Teclas en pantalla (no «$» ni «/»), y lo escrito con ⇧ en la píldora de Todas se ve como se escribió («$», «/»).
 
+**Subtítulos quemados** (A8; se prenden y se eligen en la pestaña Subtítulos de A11)
+
+En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico y en Grande, abajo y arriba, con y sin mayúsculas: la vista previa y el MP4 exportado (1080p y 4K, 16:9 y 9:16) se ven iguales y nítidos, sin acentos, eñes ni colas cortados (Á, ñ, ¿, g, p); el contorno de Destacado es parejo en todas las letras y tamaños; la palabra que se dice se pinta de amarillo y pasa a la siguiente sin parpadear entre palabras; con zoom y su desenfoque de movimiento los subtítulos quedan quietos y nítidos. En la M1, la vista previa a 1080p con Destacado se reproduce a 60 fps sin cuadros salteados cuando cambia la palabra (fila A8 de `docs/performance.md`).
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
