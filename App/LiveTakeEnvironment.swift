@@ -9,8 +9,8 @@ import os
 
 /// The take environment of the app: projects in `~/Movies/<app>/`, the displays, window or area, camera,
 /// microphone and system audio chosen (`TakePlanner` with `LiveCaptureSourceFactory`), the cursor, the scroll, when keys
-/// are typed (`RecorderSettings.noteKeyActivity`) and the geometry of what is recorded, the free disk space and the
-/// system's sleep and lock.
+/// are typed (`RecorderSettings.noteKeyActivity`), which keys go down (`RecorderSettings.recordKeys`, with Input
+/// Monitoring allowed) and the geometry of what is recorded, the free disk space and the system's sleep and lock.
 @MainActor
 enum LiveTakeEnvironment {
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Recording")
@@ -32,9 +32,13 @@ enum LiveTakeEnvironment {
             },
             prepareTake: { package, request, granted in
                 let projectURL = package.url
-                // Read at every start: a change applies from the next take or restart.
-                let noteKeyActivity = SettingsStore().settings.noteKeyActivity
-                let factory = LiveCaptureSourceFactory(cameraHost: cameraHost, noteKeyActivity: noteKeyActivity) { visibility in
+                // Read at every start: a change applies from the next take or restart. The keys only with Input
+                // Monitoring allowed, which the take's check wanted (it never asks for it).
+                let settings = SettingsStore().settings
+                let factory = LiveCaptureSourceFactory(
+                    cameraHost: cameraHost, noteKeyActivity: settings.noteKeyActivity,
+                    recordKeys: settings.recordKeys && granted.contains(.inputMonitoring)
+                ) { visibility in
                     Task { @MainActor in windowVisibilityChanged(visibility, projectURL) }
                 }
                 return try prepareTake(in: package, request, granted: granted, factory: factory, volume: folder)

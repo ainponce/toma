@@ -16,7 +16,7 @@ import Testing
             .optionalSourceFailedToStart(.systemAudio), .cameraAccessOff, .systemAudioNotRequested, .windowHidden,
             .streamInterrupted(.display), .trackLost(.microphone), .screenPaused, .trackPaused(.microphone),
             .writerFailed(.display), .samplesDropped(.microphone), .manifestWriteFailed, .diskLow(availableBytes: 1),
-            .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent, .focusShortcutFailed,
+            .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent, .focusShortcutFailed, .keysNotRecorded,
         ]
         for notice in attention {
             #expect(notice.presentation == .attention, "\(notice)")

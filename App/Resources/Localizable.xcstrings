@@ -3300,6 +3300,17 @@
         }
       }
     },
+    "Keys weren't recorded: Input Monitoring permission is missing." : {
+      "comment" : "A take's notice: Record Keys to Show Them is on in Settings, but Input Monitoring isn't allowed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Las teclas no se grabaron: falta el permiso de Monitoreo de entrada."
+          }
+        }
+      }
+    },
     "Lake" : {
       "localizations" : {
         "es" : {
@@ -3902,6 +3913,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Nativa"
+          }
+        }
+      }
+    },
+    "Needs Input Monitoring permission. Nothing is recorded where an app turns on secure input, as password fields do; a field of an app that doesn't is recorded like any other." : {
+      "comment" : "Under the setting that records which keys are pressed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Necesita el permiso de Monitoreo de entrada. No se graba nada donde una app activa la entrada segura, como en los campos de contraseña; un campo de una app que no la activa se graba como cualquier otro."
           }
         }
       }
@@ -4770,6 +4792,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Grabar otra"
+          }
+        }
+      }
+    },
+    "Record Keys to Show Them" : {
+      "comment" : "A setting: a take records which keys are pressed, to show them on screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabar las teclas para mostrarlas"
           }
         }
       }

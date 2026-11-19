@@ -36,6 +36,10 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var newProjectsStyleID: String?
     /// The library's window: its frame, view, order and section (design §6.1).
     public var library: LibraryPreferences = .init()
+    /// "Record Keys to Show Them" (phase 2 design §7.3): whether a take records which keys go down (`KeyPressRecorder`),
+    /// for the keys on screen. Off unless the user turns it on in Settings ▸ Recording, which asks for Input Monitoring;
+    /// a take never asks for it, and without it records all the same, without keys (`TakeNotice.keysNotRecorded`).
+    public var recordKeys: Bool = false
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -46,7 +50,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         cameraStyle: CameraStyle = .default, savedAreas: SavedAreas = .init(), aspectLock: AspectLock = .free,
         focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true,
         export: ExportPreferences = .init(), newProjectsStyleID: String? = nil,
-        library: LibraryPreferences = .init()
+        library: LibraryPreferences = .init(), recordKeys: Bool = false
     ) {
         self.selection = selection
         self.quick = quick
@@ -63,6 +67,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.export = export
         self.newProjectsStyleID = newProjectsStyleID
         self.library = library
+        self.recordKeys = recordKeys
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -87,6 +92,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         newProjectsStyleID =
             (try? container.decodeIfPresent(String.self, forKey: .newProjectsStyleID)) ?? defaults.newProjectsStyleID
         library = (try? container.decodeIfPresent(LibraryPreferences.self, forKey: .library)) ?? defaults.library
+        recordKeys = (try? container.decodeIfPresent(Bool.self, forKey: .recordKeys)) ?? defaults.recordKeys
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

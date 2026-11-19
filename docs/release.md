@@ -915,6 +915,12 @@ Un proyecto de 1b o de 1c sigue siendo de su versión en el disco hasta que se l
 
 En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra el aviso del sistema; después de negarlo, «Abrir Ajustes del Sistema» lo vuelve a pedir y Toma aparece en la lista de Monitoreo de entrada.
 
+**Grabar las teclas** (P9)
+
+- Con Monitoreo de entrada sin pedir nunca (`tccutil reset ListenEvent dev.toma.Toma` y `defaults delete dev.toma.Toma permissionRequested.inputMonitoring`): en Ajustes ▸ Grabación, prender «Grabar las teclas para mostrarlas» muestra el aviso del sistema. Negado, debajo aparece «Monitoreo de entrada · No permitido» con «Abrir Ajustes del Sistema», que abre Ajustes en Monitoreo de entrada con Toma en la lista. Permitido allí, al volver a Toma la fila se va (si macOS pide salir y volver a abrir Toma para aplicarlo, anotarlo).
+- Con la opción prendida y el permiso negado: la toma graba igual, sin pedir nada, y avisa «Las teclas no se grabaron: falta el permiso de Monitoreo de entrada.», entero en el aviso corto y en la isla abierta. El proyecto sigue en la versión 3: lo abre la app de la fase 1.
+- Con el permiso: escribir en Notas y en el campo de contraseña de Safari (y en el de una contraseña de Ajustes del Sistema): solo lo de Notas queda en la toma (Cursor ▸ Teclas en pantalla ▸ Todas), ni la contraseña ni la ↩ que cierra su campo. Pausar y reanudar escribiendo: las teclas de justo después de reanudar se ven como las de antes.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

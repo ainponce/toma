@@ -374,7 +374,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings == nil {
             settings = SettingsWindowController(
                 store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
-                focusShortcut: focusShortcut, appearance: appearance
+                focusShortcut: focusShortcut, appearance: appearance, probe: probe
             ) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil
