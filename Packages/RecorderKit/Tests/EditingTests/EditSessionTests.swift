@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import Darwin
 import Dispatch
 import Foundation
@@ -919,5 +920,72 @@ private enum SessionFixture {
         await again.close()
         #expect(SessionFixture.inode(project.package.editLogURL) == inode)
         #expect(try SessionFixture.entries(project.package).count == 5)
+    }
+}
+
+// MARK: - The cost of an edit
+
+/// `perform` of a small edit (a zoom block added) on the main actor, with an hour of transcript in the document (9000
+/// words, one every 0.4 s): p50, p95 and the longest of 200 after 10 to warm up, each undone (not timed) before the next;
+/// the same for 100 corrections of a word; and the first edit after the project opens again.
+@MainActor @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
+func performWithAnHourOfTranscriptBench() async throws {
+    try await withTemporaryDirectory { dir in
+        let project = try await SessionFixture.package(in: dir)
+        let session = try await SessionFixture.open(project, SessionFixture.context(caches: dir.appending(path: "Caches")))
+        let texts = ["Hoy", "vamos", "a", "grabar", "la", "pantalla", "con", "subtítulos", "en", "español,"]
+        let words = (0..<9000).map { index in
+            let start = 0.4 * Double(index)
+            return TranscriptWord(
+                start: SessionFixture.base.adding(seconds: start), end: SessionFixture.base.adding(seconds: start + 0.3),
+                text: texts[index % 10], breakBefore: index % 20 == 0)
+        }
+        let transcript = Transcript(
+            language: "es-MX", engine: "speechTranscriber-1",
+            takes: [TranscriptTake(take: project.take.id, track: "display-1", words: words)])
+        #expect(session.perform(try #require(TranscriptCommands.create(session.document, transcript))) == .applied)
+        let bytes = try ProjectJSON.encoder().encode(session.document).count
+        let clock = ContinuousClock()
+        func milliseconds(_ duration: Duration) -> Double {
+            Double(duration.components.attoseconds) / 1e15 + Double(duration.components.seconds) * 1e3
+        }
+        func p95(_ times: [Double]) -> Double { times.sorted()[min(Int(Double(times.count) * 0.95), times.count - 1)] }
+        func summary(_ times: [Double]) -> String {
+            let times = times.sorted()
+            return String(format: "p50 %.2f ms, p95 %.2f ms, longest %.2f ms", times[times.count / 2], p95(times), times.last ?? 0)
+        }
+        var times: [Double] = []
+        for run in 0..<210 {
+            let step = try #require(
+                ZoomCommands.add(session.document, output: 100_000_000..<600_000_000, makeID: { $0 + String(format: "%08x", run) }))
+            let elapsed = clock.measure { #expect(session.perform(step) == .applied) }
+            if run >= 10 { times.append(milliseconds(elapsed)) }
+            #expect(session.undo() == .applied)
+        }
+        print("perform with an hour of transcript (\(bytes / 1024) KB), a zoom block added: \(summary(times))")
+        // A word corrected (`transcript.word`): the edit that touches the transcript itself.
+        var corrections: [Double] = []
+        for run in 0..<110 {
+            let step = try #require(
+                TranscriptCommands.correct(session.document, TranscriptWordRef(take: 0, word: 4500), text: "palabra\(run)"))
+            let elapsed = clock.measure { #expect(session.perform(step) == .applied) }
+            if run >= 10 { corrections.append(milliseconds(elapsed)) }
+            #expect(session.undo() == .applied)
+        }
+        print("perform with an hour of transcript, a word corrected: \(summary(corrections))")
+        // The editor's budget for an edit on the main actor (phase 2 final review).
+        #expect(p95(times) <= 8 && p95(corrections) <= 8)
+        #expect(session.document.transcript == transcript)
+        await session.close()
+        // The first edit after opening it again.
+        let again = try await SessionFixture.open(project, SessionFixture.context(caches: dir.appending(path: "Caches")))
+        let step = try #require(ZoomCommands.add(again.document, output: 100_000_000..<600_000_000, makeID: { $0 + "ffffffff" }))
+        let first = clock.measure { #expect(again.perform(step) == .applied) }
+        print(String(format: "the first edit after opening: %.2f ms", milliseconds(first)))
+        #expect(milliseconds(first) <= 8)
+        // What opening does for it, off the main actor: the document's JSON, checked.
+        let held = clock.measure { #expect(again.document.heldJSON() != nil) }
+        print(String(format: "its JSON at opening: %.1f ms", milliseconds(held)))
+        await again.close()
     }
 }

@@ -31,6 +31,14 @@ public enum EditChange: Codable, Equatable, Sendable {
         }
     }
 
+    /// The place this change writes: the value of a `set`, the array of the others.
+    var place: JSONPointer {
+        switch self {
+        case let .set(path, _, _): path
+        case let .insert(collection, _, _), let .remove(collection, _, _), let .replace(collection, _, _, _): collection
+        }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case op, path, before, after, collection, index, value, id
     }
@@ -232,6 +240,132 @@ extension EditDocument {
     /// changes wrote (a key it has no place for, a `null` optional): undoing such a change would no longer match.
     public func applying(_ changes: [EditChange]) throws(EditChangeError) -> EditDocument {
         try Self.holding(jsonValue().applying(changes)).document
+    }
+
+    /// `applying(_:)`, with the JSON of the document it gives (equal to its `jsonValue()`), from `json`, this document's
+    /// JSON as an earlier call or `heldJSON()` gave it; from `jsonValue()` when `nil` (and for a document of an older
+    /// version, which decoding migrates). The same document, or the same error, without encoding and decoding the whole
+    /// document again: the changes go to `json`, and only the members they touch (`/zoom`, `/style`…) are decoded from it
+    /// and checked to hold all of it, the others kept as they are; of the transcript, only the words they touch, when
+    /// they touch nothing else of it (a correction, a break). A change of the whole document, of its `documentVersion` or
+    /// of a member it has no place for, and a member that does not decode or hold, go the way of `applying(_:)`, so
+    /// their error is its own. The editor applies each step this way, so a long transcript costs a small edit nothing.
+    public func applying(
+        _ changes: [EditChange], json: JSONValue?
+    ) throws(EditChangeError) -> (document: EditDocument, json: JSONValue) {
+        guard let json, documentVersion == Self.currentVersion else {
+            return try Self.holding(jsonValue().applying(changes))
+        }
+        let next = try json.applying(changes)
+        guard case var .object(members) = next else { return try Self.holding(next) }
+        var touched: [String] = []
+        // The words of the transcript the changes touch, `nil` once one touches something else of it.
+        var words: [JSONPointer]? = []
+        for change in changes {
+            let place = change.place.components
+            guard let key = place.first else { return try Self.holding(next) }
+            if !touched.contains(key) { touched.append(key) }
+            if key == "transcript" {
+                if let word = transcriptWord(at: place) {
+                    if words?.contains(word) == false { words?.append(word) }
+                } else {
+                    words = nil
+                }
+            }
+        }
+        var document = self
+        for key in touched {
+            if key == "transcript", let words, var transcript = members[key] {
+                for word in words {
+                    guard let value = transcript.value(at: word), let (decoded, own) = Self.held(TranscriptWord.self, value),
+                        let (take, index) = Self.wordIndices(word), document.transcript != nil
+                    else { return try Self.holding(next) }
+                    document.transcript?.takes[take].words[index] = decoded
+                    if let canonical = try? transcript.applying([.set(path: word, before: value, after: own)]) {
+                        transcript = canonical
+                    }
+                }
+                members[key] = transcript
+                continue
+            }
+            guard let held = Self.decode(key, members[key], into: &document) else { return try Self.holding(next) }
+            members[key] = held
+        }
+        return (document, .object(members))
+    }
+
+    /// This document's JSON (`jsonValue()`), for `applying(_:json:)` to start from, if decoding it gives this document
+    /// back (as it does for one that was decoded); `nil` if not, or if it cannot be encoded. Encodes the whole document
+    /// once, and reads it as JSON and as a document.
+    public func heldJSON() -> JSONValue? {
+        guard let data = try? ProjectJSON.compactEncoder().encode(self),
+            let decoded = try? ProjectJSON.decoder().decode(EditDocument.self, from: data), decoded == self
+        else { return nil }
+        return try? JSONValue(parsing: data)
+    }
+
+    /// The word of this document's transcript that a change at `place` (`/transcript/takes/<i>/words/<j>…`) writes in
+    /// or replaces, as a pointer inside the transcript (`/takes/<i>/words/<j>`); `nil` for any other place, or a word
+    /// the transcript does not have (the change then refuses it, or goes the way of `applying(_:)`).
+    private func transcriptWord(at place: [String]) -> JSONPointer? {
+        guard place.count >= 5, place[1] == "takes", place[3] == "words",
+            let take = JSONPointer.arrayIndex(place[2]), let word = JSONPointer.arrayIndex(place[4]),
+            let takes = transcript?.takes, takes.indices.contains(take), takes[take].words.indices.contains(word)
+        else { return nil }
+        return JSONPointer(components: Array(place[1...4]))
+    }
+
+    /// The take and the word of `/takes/<i>/words/<j>`.
+    private static func wordIndices(_ word: JSONPointer) -> (take: Int, word: Int)? {
+        guard word.components.count == 4, let take = JSONPointer.arrayIndex(word.components[1]),
+            let index = JSONPointer.arrayIndex(word.components[3])
+        else { return nil }
+        return (take, index)
+    }
+
+    /// `value` decoded as a `T`, as a document decodes its members, and the JSON it holds: `value` when it encodes back
+    /// to its bytes, its own JSON when only the bytes differ. `nil` if `value` is not there or `null`, does not decode or
+    /// holds something the `T` drops.
+    private static func held<T: Codable>(_ type: T.Type, _ value: JSONValue?) -> (T, JSONValue)? {
+        guard let value, value != .null, let data = try? ProjectJSON.compactEncoder().encode(value),
+            let decoded = try? ProjectJSON.decoder().decode(T.self, from: data)
+        else { return nil }
+        guard (try? ProjectJSON.compactEncoder().encode(decoded)) != data else { return (decoded, value) }
+        guard let own = try? JSONValue(encoding: decoded), own.firstDifference(from: value) == nil else { return nil }
+        return (decoded, own)
+    }
+
+    /// Decodes member `key` of a document, `value` (`nil` when it is not there), into `document`, as `init(from:)`
+    /// decodes it, and gives the JSON it holds (`held`; `nil` for a `transcript` that is not there). `nil` if `key` is
+    /// the `documentVersion` or no member, or the member is not there, does not decode or drops something of `value`.
+    private static func decode(_ key: String, _ value: JSONValue?, into document: inout EditDocument) -> JSONValue?? {
+        func member<T: Codable>(_ type: T.Type, _ set: (inout EditDocument, T) -> Void) -> JSONValue?? {
+            guard let (decoded, json) = held(T.self, value) else { return nil }
+            set(&document, decoded)
+            return .some(json)
+        }
+        switch key {
+        case "logSequence": return member(Int.self) { $0.logSequence = $1 }
+        case "aspect": return member(Aspect.self) { $0.aspect = $1 }
+        case "frameRate": return member(Int.self) { $0.frameRate = $1 }
+        case "sequence": return member([Clip].self) { $0.sequence = $1 }
+        case "screens": return member(ScreenPlan.self) { $0.screens = $1 }
+        case "style": return member(StageStyle.self) { $0.style = $1 }
+        case "cursor": return member(CursorStyle.self) { $0.cursor = $1 }
+        case "zoom": return member(ZoomPlan.self) { $0.zoom = $1 }
+        case "camera": return member(CameraPlan.self) { $0.camera = $1 }
+        case "audio": return member(AudioPlan.self) { $0.audio = $1 }
+        case "transcript":
+            guard value != nil else {
+                document.transcript = nil
+                return .some(nil)
+            }
+            return member(Transcript.self) { $0.transcript = $1 }
+        case "captions": return member(CaptionPlan.self) { $0.captions = $1 }
+        case "privacy": return member(PrivacyPlan.self) { $0.privacy = $1 }
+        case "keys": return member(KeyOverlayPlan.self) { $0.keys = $1 }
+        default: return nil
+        }
     }
 
     /// The document `value` encodes, if it holds all of `value`, and its JSON: the edit log's replay applies its lines

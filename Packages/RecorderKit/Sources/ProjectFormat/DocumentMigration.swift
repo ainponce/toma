@@ -309,14 +309,6 @@ extension DocumentMigration {
 }
 
 extension EditChange {
-    /// The place this change writes: the value of a `set`, the array of the others.
-    fileprivate var place: JSONPointer {
-        switch self {
-        case let .set(path, _, _): path
-        case let .insert(collection, _, _), let .remove(collection, _, _), let .replace(collection, _, _, _): collection
-        }
-    }
-
     /// This change with each value it writes or checks (`before`, `after`, `value`) through `transform`; `nil` if
     /// `transform` gives `nil` for one.
     fileprivate func mappingValues(_ transform: (JSONValue) -> JSONValue?) -> EditChange? {
