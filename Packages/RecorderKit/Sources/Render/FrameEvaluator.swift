@@ -40,6 +40,11 @@ import simd
 /// - Shadow (`style.shadow`, `s` clamped to 0...1, design §7.3): under the screen's rect, or the whole window with a
 ///   frame, with its (bottom) corners: opacity `0.55·s`, σ `(0.004 + 0.016·s) ×` the output width, `0.010·s ×` the
 ///   width down. None at 0, and none without a screen.
+/// - Device frame (`style.frame` `.device`, phase 2 design §6.7, `deviceFrame-1`), around the screen fitted whole
+///   (`style.reframe` `fit`): the screen goes inside the largest device whose bounds fit inside the padding
+///   (`StageLayout.deviceRects(contentAspect:padding:outputSize:model:)`), the zoom keeps to those bounds as to a window,
+///   a card holds them whole, and `DeviceFrameScene` puts the device around the screen as either path left it, with the
+///   device's screen corners and the shadow cast by its body.
 /// - Cursor (`cursor.show`, design §7.5): where the cursor path is at the output time (`CursorPath.sample(atOutput:)`
 ///   of the motion paths: with `smoothing` off, phase 0's rule, the last raw position at or before it moved toward the
 ///   next one within 50 ms), placed on the screen's rect as it is in the region the screen shows; hidden off that
@@ -379,7 +384,8 @@ public struct FrameEvaluator: Sendable {
                 }
             }
         }
-        let screenRect = frame.windowFrame?.rect ?? frame.screen?.rect
+        // What the zoom keeps to: the screen, or the window or the device around it.
+        let screenRect = frame.windowFrame?.rect ?? frame.screen.map { deviceFrame.bounds(around: $0.rect) ?? $0.rect }
         let stage = stageTransform(zoomSpan?.state(atOutput: output) ?? paths.zoom.state(atOutput: output), screen: screenRect)
         frame.stage = stage.depth > 1 ? stage : nil
         if let zoomSpan {
@@ -443,8 +449,8 @@ public struct FrameEvaluator: Sendable {
         var frame = frame
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
         let reference = document.camera.sizeReference
-        // Where 1b's path placed the screen's group, unzoomed: the whole window with a frame.
-        let placed = frame.windowFrame?.rect ?? frame.screen?.rect
+        // Where 1b's path placed the screen's group, unzoomed: the whole window or device with a frame.
+        let placed = frame.windowFrame?.rect ?? frame.screen.map { deviceFrame.bounds(around: $0.rect) ?? $0.rect }
         let aspect = placed.flatMap { $0.width > 0 && $0.height > 0 ? $0.width / $0.height : nil }
         let geometry = layouts.geometry(atOutput: output, LayoutInputs(
             output: size, padding: document.style.padding, cornerRadius: document.style.cornerRadius, screenAspect: aspect,
@@ -752,16 +758,15 @@ public struct FrameEvaluator: Sendable {
 
     /// Where the screen of `view` goes, settled, in an output of `outputSize` with `style` (design §7.3): the rect of its
     /// region's aspect inside the padding (`StageLayout.screenRect`); with a macOS window frame, under the bar of the window
-    /// around it (`StageLayout.windowRect`).
+    /// around it (`StageLayout.windowRect`); with a device frame around the screen fitted whole, inside the device whose
+    /// bounds fit there (`DeviceFrameGeometry.placement`, phase 2 design §6.7).
     private static func placement(of view: ShownScreen, style: StageStyle, outputSize: SIMD2<Double>) -> ScreenPlacement {
         let aspect = view.region.map { $0.width / $0.height }
-        if case let .device(device) = style.frame,
-           let placement = DeviceFrameGeometry.placement(contentAspect: aspect, padding: style.padding, outputSize: outputSize, frame: device)
-        {
-            return placement
+        if case let .device(device) = style.frame, style.reframe == .fit {
+            return DeviceFrameGeometry.placement(contentAspect: aspect, padding: style.padding, outputSize: outputSize, frame: device)
         }
         switch style.frame {
-        // A device without a placement of its own (`DeviceFrameGeometry`) sits as no frame (base plan decision 10).
+        // A device around a screen that follows the cursor is not drawn (phase 2 design §6.5).
         case .none, .device:
             let rect = StageLayout.screenRect(contentAspect: aspect, padding: style.padding, outputSize: outputSize)
             return ScreenPlacement(screen: rect, window: rect, barHeight: 0)

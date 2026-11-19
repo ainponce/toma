@@ -191,8 +191,9 @@ private struct SeamDrawer: @unchecked Sendable {
         ShaderSource.captionsMetal,
     ]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + layers.joined())
-    // The base adds no shader of its own: the library is phase 1's.
-    #expect(layers.allSatisfy { $0.isEmpty })
+    // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's (the device
+    // frame's, 2b's).
+    #expect(layers.dropFirst().allSatisfy { $0.isEmpty })
 }
 
 @Test func cameraSyncAtZeroIsTheSameInstant() throws {
@@ -216,10 +217,7 @@ private struct SeamDrawer: @unchecked Sendable {
     #expect(CaptionScene(document: document, timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
     #expect(KeyOverlayScene(document: document, events: [], timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
     let screen = ScreenLayer(trackID: trackID, sourceTime: base, rect: Rect(x: 10, y: 20, width: 300, height: 200), cornerRadius: 4)
-    #expect(
-        DeviceFrameGeometry.placement(
-            contentAspect: 16.0 / 9, padding: 0.1, outputSize: SIMD2(1280, 720), frame: DeviceFrame(model: .iPhone, finish: .dark))
-            == nil)
+    #expect(DeviceFrameScene(document: document, outputSize: size).bounds(around: screen.rect) == nil)
     let privacy = PrivacyScene(document: document, take: take, events: [])
     #expect(privacy.regions(atSource: base, trackID: trackID).isEmpty)
     var drawn = screen

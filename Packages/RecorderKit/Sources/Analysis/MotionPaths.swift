@@ -136,7 +136,13 @@ public struct MotionPaths: Sendable {
             sequence = document.sequence
             screens = document.screens
             aspect = document.aspect
-            frame = document.style.frame
+            // A device's finish is only drawn: dark or light, the paths are the same. Following the cursor, the screen
+            // has no frame (`StagePoints`).
+            frame = switch document.style.frame {
+            case let .device(device):
+                document.style.reframe == .fit ? .device(DeviceFrame(model: device.model, finish: .dark)) : .none
+            case let other: other
+            }
             padding = document.style.padding
             cursor = document.cursor
             zoom = document.zoom
@@ -144,22 +150,28 @@ public struct MotionPaths: Sendable {
             self.cameraReadable = cameraReadable
         }
 
-        /// What `StagePoints` reads: the screens, the aspect, the padding and whether there is a window frame (its
-        /// appearance, title and buttons are only drawn).
+        /// What `StagePoints` reads: the screens, the aspect, the padding and the frame: none, a window (its appearance,
+        /// title and buttons are only drawn) or the model of a device (its finish is only drawn).
         var stage: Stage {
-            let framed = switch frame {
-            // A device is drawn and measured as no frame until the render draws it (plan decision 10).
-            case .none, .device: false
-            case .macWindow: true
+            let measured: Stage.Frame = switch frame {
+            case .none: .none
+            case .macWindow: .window
+            case let .device(device): .device(device.model)
             }
-            return Stage(screens: screens, aspect: aspect, padding: padding, framed: framed)
+            return Stage(screens: screens, aspect: aspect, padding: padding, frame: measured)
         }
 
         struct Stage: Equatable {
             let screens: ScreenPlan
             let aspect: Aspect
             let padding: Double
-            let framed: Bool
+            let frame: Frame
+
+            /// The frame around the screen, as it is measured.
+            enum Frame: Equatable {
+                case none, window
+                case device(DeviceModel)
+            }
         }
     }
 

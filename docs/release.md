@@ -922,6 +922,7 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
   3. Girar el iPhone a horizontal y volver a vertical durante la toma: `device` sigue en segmentos nuevos (`formatChanged`) y la toma no se corta.
   4. Desconectar el cable 10 s a mitad de la toma y volver a conectarlo: la toma sigue; las dos pistas terminan su segmento y siguen en uno nuevo del mismo iPhone. Con otro iPhone conectado mientras el primero no está, Toma no lo graba en su lugar.
 - **Formatos** (I1): los siete en la barra y en Proyecto ▸ Formato; «Como la grabación» con una toma de un área ancha (el editor, la vista previa, el GIF y el MP4 salen con esa proporción).
+- **Marcos de dispositivo** (I3): iPhone, iPad y MacBook, oscuro y claro, en 16:9 y en 9:16, con una toma ancha y con una vertical: bien proporcionados, el iPhone acostado con un contenido ancho, sin una línea de fondo entre la pantalla y el bisel ni entre la tapa y la base, nítidos en un export 4K; con zoom (y con su desenfoque) se mueven con la pantalla; la isla y el notch tapan el cursor, no los efectos de clic; con Pantalla dividida, el dispositivo entero en su tarjeta; la vista previa es igual al MP4.
 
 **Grabar las teclas** (P9)
 

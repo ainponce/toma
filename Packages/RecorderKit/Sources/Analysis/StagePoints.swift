@@ -16,7 +16,10 @@ import ProjectFormat
 /// is at its floor in both or in neither: a smaller output with a wide padding, whose bar is at its floor and the
 /// reference's is not (720 × 720 with a padding past about 0.11), has its window a few pixels off this one. The zoom
 /// camera keeps to this rect (`ZoomCameraPath`), and the render places its crop again over the window's exact rect at
-/// its own size (`FrameEvaluator`), so even a deep zoom shows no strip of background beside it.
+/// its own size (`FrameEvaluator`), so even a deep zoom shows no strip of background beside it. With a device frame
+/// (`deviceFrame-1`, with the screen fitted, `style.reframe` `fit`), the screen is the device's
+/// (`StageLayout.deviceRects(contentAspect:padding:outputSize:model:)`) and the window its bounds: every measure of a
+/// device is a fraction of its screen, so stage units hold it exactly.
 public struct StagePoints: Sendable {
     /// The output the window frame is placed in: the document's aspect, 1080 px on its shorter side.
     private static let windowFrameShortSide = 1080
@@ -30,6 +33,8 @@ public struct StagePoints: Sendable {
     private let padding: Double
     /// With a macOS window frame, the output its rects are worked out in; `nil` without a frame.
     private let windowFrameOutput: SIMD2<Double>?
+    /// With a device frame around the fitted screen, its model; `nil` without one.
+    private let device: DeviceModel?
     /// The screen track of the take at its start, and from each of its changes on (in time order).
     private let initialScreen: String?
     private let screenChanges: [(t: HostTime, track: String)]
@@ -56,12 +61,15 @@ public struct StagePoints: Sendable {
         ratio = document.aspect.ratio(contentRatio: contentRatio)
         padding = document.style.padding
         switch document.style.frame {
-        // A device is measured as no frame until the render draws it (plan decision 10).
-        case .none, .device:
-            windowFrameOutput = nil
+        case .none:
+            (windowFrameOutput, device) = (nil, nil)
+        case let .device(frame):
+            // Only around the screen fitted whole: following the cursor, the screen is cut and has no frame.
+            (windowFrameOutput, device) = (nil, document.style.reframe == .fit ? frame.model : nil)
         case .macWindow:
             windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(
                 aspect: document.aspect, shortSide: Self.windowFrameShortSide, contentRatio: contentRatio))
+            device = nil
         }
         let initialScreen = document.screens.initial[take.id]
         self.initialScreen = initialScreen
@@ -96,7 +104,8 @@ public struct StagePoints: Sendable {
     }
 
     /// The rect of the screen shown at source instant `host`, in stage units: with a window frame, the whole window, bar
-    /// included (the `R` the zoom's camera keeps to, design §7.4). `nil` with no screen shown.
+    /// included (the `R` the zoom's camera keeps to, design §7.4); with a device frame, the device's bounds. `nil` with no
+    /// screen shown.
     public func screenRect(at host: HostTime) -> Rect? {
         shownScreen(at: host).map { rects(of: $0.view).window }
     }
@@ -116,10 +125,19 @@ public struct StagePoints: Sendable {
     }
 
     /// The screen's rect for `view`, of the region's aspect (of the whole room inside the padding without a region), and
-    /// the window's around it: the same rect without a window frame. The screen's is where `stagePoint(global:at:)` places
-    /// the cursor; the window's is `screenRect(at:)`.
+    /// the window's around it: the same rect without a window frame, the device's bounds with a device frame (an empty
+    /// rect at the centre for both when the padding leaves it no room). The screen's is where `stagePoint(global:at:)`
+    /// places the cursor; the window's is `screenRect(at:)`.
     public func rects(of view: ShownScreen) -> (window: Rect, screen: Rect) {
         let aspect = view.region.map { $0.width / $0.height }
+        if let device {
+            guard let rects = StageLayout.deviceRects(contentAspect: aspect, padding: padding, outputSize: stageSize, model: device)
+            else {
+                let empty = Rect(x: stageSize.x / 2, y: stageSize.y / 2, width: 0, height: 0)
+                return (empty, empty)
+            }
+            return (rects.bounds, rects.screen)
+        }
         guard let output = windowFrameOutput else {
             let rect = StageLayout.screenRect(contentAspect: aspect, padding: padding, outputSize: stageSize)
             return (rect, rect)

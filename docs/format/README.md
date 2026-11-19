@@ -1479,6 +1479,25 @@ Lo que calcula el análisis de la fase 2 (diseño de la fase 2, §10) va a la ca
 
 **`auto` («Como la grabación»).** El `aspect` `auto` usa la proporción del contenido: la región de la pantalla de `screens.initial` (con el recorte de Área) en el inicio de su primer segmento, ancho sobre alto. A menos del 1 % de 16:9, es 16:9; sin pantalla o sin región, también. Los cambios posteriores de ventana o de pantalla no la mueven. Los siete formatos (`16:9`, `9:16`, `1:1`, `4:5`, `4:3`, `3:4` y `auto`) están en la barra y en Proyecto ▸ Formato.
 
+### El marco de dispositivo (`deviceFrame-1`)
+
+`style.frame` `{"type":"device","model":…,"finish":…}` dibuja un iPhone, un iPad o una MacBook alrededor de la pantalla, con vectores propios (distancias con signo a rectángulos redondeados, con el borde antialiasado como las esquinas de la pantalla; sin imágenes ni arte de Apple). Las medidas son fracciones de la pantalla de adentro (`DeviceMeasures`, `StageLayout.deviceRects(around:model:)`), y quedan congeladas:
+
+| | iPhone (`w` y `h`: su ancho y su alto, el lado corto y el largo de la pantalla) | iPad (`s`: el lado corto de la pantalla) | MacBook (`w`: el ancho de la pantalla) |
+|---|---|---|---|
+| Bisel | negro, `0,045 w` | negro, `0,05 s` | `#0A0A0A`, `0,02 w` a los lados y abajo, `0,035 w` arriba |
+| Banda o canto (afuera del bisel) | `0,012 w`, `#2C2C2E` (oscuro) o `#D9D9DE` (claro) | `0,01 s`, los colores del iPhone | canto de la tapa de `0,004 w`, `#2E2F33` o `#D7D8DC` |
+| Esquinas del cuerpo | `0,16 ×` el ancho del cuerpo | `0,06 ×` el lado corto del cuerpo | tapa: `0,02 w` arriba, `0,004 w` abajo |
+| Esquinas de la pantalla | concéntricas: las del cuerpo menos bisel y banda | concéntricas | cuadradas |
+| Sobre la pantalla | la isla, una cápsula de `0,30 w × 0,034 h`, centrada, a `0,018 h` del borde de arriba | — | el notch de `0,11 w × 0,025 w`, centrado arriba, con las esquinas de abajo de `0,28 ×` su alto y esquinas cóncavas de `0,18 ×` su alto donde toca el borde de la pantalla |
+| Afuera del cuerpo | botones de `0,008 w` de ancho desde el borde de arriba del cuerpo: a la izquierda en `0,13 h` (`0,04 h` de largo), `0,20 h` y `0,29 h` (`0,07 h`); a la derecha en `0,24 h` (`0,11 h`) | — | la base debajo de la tapa: `1,12 ×` su ancho y `0,035 ×` su alto, centrada, del color de la tapa, con el frente redondeado por la mitad de su alto y una muesca (media elipse) de `0,16 ×` su ancho por `0,35 ×` su alto en el medio de su borde de arriba, del color de la base `× 0,8` |
+
+- **Se adapta a la proporción del contenido.** La pantalla del dispositivo tiene la proporción de la región que muestra la pantalla de la toma; el dispositivo es el más grande cuyos límites (el cuerpo, los botones y la base) entran en el margen del estilo, centrado (`StageLayout.deviceRects(contentAspect:padding:outputSize:model:)`). Un iPhone con un contenido más ancho que alto está acostado, con su parte de arriba a la izquierda: la isla a la izquierda, los botones de la izquierda abajo y el de la derecha arriba.
+- **El orden.** El cuerpo se dibuja con el fondo, la sombra y el marco de ventana (paso 1, después del de ventana), opaco también debajo de la pantalla, así el borde antialiasado de la pantalla cae sobre el bisel y no se ve el fondo entre los dos. La isla o el notch, después del escenario, una vez y sin el desenfoque de movimiento, sobre el cursor y debajo de los efectos de clic.
+- **La sombra del estilo** la proyecta el cuerpo, con sus esquinas (en la MacBook, la tapa); la base de la MacBook proyecta la misma, debajo de ella.
+- **El zoom** se queda dentro de los límites del dispositivo, como dentro de una ventana, y lo mueve junto con la pantalla. En las disposiciones de tarjetas (Pantalla dividida), el dispositivo entero entra en la tarjeta de la pantalla; en Solo cámara no se ve. **Con Seguir el cursor** (`style.reframe` `followCursor`) no hay marco: la pantalla está recortada.
+- **El acabado (oscuro o claro) solo se dibuja**: cambiarlo no rehace los caminos del movimiento; cambiar el modelo, sí.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.

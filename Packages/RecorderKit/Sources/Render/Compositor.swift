@@ -465,11 +465,14 @@ public final class Compositor: @unchecked Sendable {
         let bands = (culling && opaque && textures.screen != nil ? Self.opaqueInterior(screen: screenLayer, window: window) : nil).map {
             Self.scissorBands(around: $0, outputSize: size, targetSize: targetSize)
         }
-        // The camera layouts' screen's group, fading as one: the shape its shadow is cast by, and the screen as the bar
-        // under it is cut (nothing of it when it is not drawn).
+        // The camera layouts' screen's group, fading as one: the shape its shadow is cast by (the window, or a device's
+        // body), and the screen as the bar under it is cut (nothing of it when it is not drawn).
         let fade = frame.screenOpacity.map { $0.isNaN ? 0 : min(max($0, 0), 1) }
         let group = window.map { window in
             Self.shape(window.rect, cornerRadius: window.cornerRadius, bottomRadius: window.bottomCornerRadius, viewport: viewport)
+        } ?? frame.deviceFrame.map { device in
+            let rects = (stage?.drawn(device, outputSize: size) ?? device).rects
+            return Self.shape(rects.body, cornerRadius: rects.bodyCornerRadius, viewport: viewport)
         } ?? screenLayer.map { Self.shape($0.rect, cornerRadius: $0.cornerRadius, viewport: viewport) }
         let shadowDrawing = fade.flatMap { fade in
             group.map { ShadowDrawing.under(shape: $0, opacity: fade, pipeline: pipelines.screenShadow) }
