@@ -8,7 +8,10 @@ import Foundation
 /// `{"collection":"/zoom/regions","index":0,"op":"insert","value":{…}}`, the same with `"op":"remove"` and
 /// `{"after":{…},"before":{…},"collection":"/sequence","id":"c-00a1b2c3","op":"replace"}`.
 public enum EditChange: Codable, Equatable, Sendable {
-    /// The value at `path`, which exists, goes from `before` to `after`.
+    /// The value at `path` goes from `before` to `after`. It exists, unless it is a member of an object that exists and
+    /// one of them is `null` (plan decision 4 of phase 2): a member that is not there is `null`, so a `set` from `null`
+    /// adds it and one to `null` takes it away. That is how an optional member left out (a `transcript`, a `lut`) comes
+    /// and goes; the document never holds a `null`.
     case set(path: JSONPointer, before: JSONValue, after: JSONValue)
     /// `value` goes into the array `collection` at `index`, from 0 to its count.
     case insert(collection: JSONPointer, index: Int, value: JSONValue)
@@ -105,7 +108,8 @@ public enum EditChangeError: Error, Equatable, Sendable {
 
 extension JSONValue {
     /// This value with `changes` applied in order. Each change checks what it replaces: the `before` of a `set` or a
-    /// `replace`, the `value` of a `remove`, and that the index of an `insert` is a free place (0 to the count).
+    /// `replace`, the `value` of a `remove`, and that the index of an `insert` is a free place (0 to the count). A `set`
+    /// of a member of an object reads a member that is not there as `null`, and writing `null` takes the member away.
     public func applying(_ changes: [EditChange]) throws(EditChangeError) -> JSONValue {
         var value = self
         for change in changes {
@@ -117,9 +121,27 @@ extension JSONValue {
     private mutating func apply(_ change: EditChange) throws(EditChangeError) {
         switch change {
         case let .set(path, before, after):
-            try modify(path.components[...], of: path) { (value: inout JSONValue) throws(EditChangeError) in
-                guard value == before else { throw EditChangeError.mismatch(path.string) }
-                value = after
+            guard let last = path.components.last else {
+                guard self == before else { throw EditChangeError.mismatch(path.string) }
+                self = after
+                return
+            }
+            try modify(path.components.dropLast(), of: path) { (parent: inout JSONValue) throws(EditChangeError) in
+                switch parent {
+                case var .object(members):
+                    guard (members[last] ?? .null) == before else { throw EditChangeError.mismatch(path.string) }
+                    members[last] = after == .null ? nil : after
+                    parent = .object(members)
+                case var .array(elements):
+                    guard let index = JSONPointer.arrayIndex(last), elements.indices.contains(index) else {
+                        throw EditChangeError.noSuchPath(path.string)
+                    }
+                    guard elements[index] == before else { throw EditChangeError.mismatch(path.string) }
+                    elements[index] = after
+                    parent = .array(elements)
+                default:
+                    throw EditChangeError.noSuchPath(path.string)
+                }
             }
         case let .insert(collection, index, element):
             try modifyArray(collection) { (elements: inout [JSONValue]) throws(EditChangeError) in
@@ -194,6 +216,10 @@ public enum EditCollection: String, Sendable {
     case cameraChanges = "/camera/changes"
     case screenChanges = "/screens/changes"
     case cameraLayouts = "/camera/layouts"
+    // Phase 2 design §8.
+    case privacyBlocks = "/privacy/blocks"
+    /// Only while there is a transcription; its takes are inserted and removed, never replaced (they have no `id`).
+    case transcriptTakes = "/transcript/takes"
 
     var pointer: JSONPointer {
         JSONPointer(components: rawValue.split(separator: "/").map(String.init))
@@ -230,12 +256,20 @@ extension EditDocument {
     }
 
     /// A change of the value at `pointer` to `value`; `nil` if the pointer names nothing in this document, `value`
-    /// is what is there already or `value` cannot be encoded.
+    /// is what is there already or `value` cannot be encoded. An optional member left out (a `transcript` that is `nil`)
+    /// is named if the document has a place for it: the change adds it from `null`, as one with a `nil` value takes it
+    /// away to `null` (plan decision 4 of phase 2).
     public func setChange(_ pointer: String, _ value: some Encodable) -> EditChange? {
-        guard let path = try? JSONPointer(pointer), let before = (try? jsonValue())?.value(at: path),
-            let after = try? JSONValue(encoding: value), after != before
+        guard let path = try? JSONPointer(pointer), let json = try? jsonValue(), let after = try? JSONValue(encoding: value)
         else { return nil }
-        return .set(path: path, before: before, after: after)
+        if let before = json.value(at: path) {
+            return after == before ? nil : .set(path: path, before: before, after: after)
+        }
+        // Not there: a member of an object that is, which the document can hold once added.
+        let parent = JSONPointer(components: Array(path.components.dropLast()))
+        guard !path.components.isEmpty, after != .null, case .object? = json.value(at: parent) else { return nil }
+        let change = EditChange.set(path: path, before: .null, after: after)
+        return (try? applying([change])) == nil ? nil : change
     }
 
     /// The insertion of `value` into `collection` at `index`. A value that cannot be encoded (a non-finite number)

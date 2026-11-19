@@ -60,7 +60,7 @@ private func at(_ seq: Int, _ document: EditDocument) -> EditDocument {
     #expect(undone.mismatchSeq == nil)
     #expect(undone.version == 2)
     #expect(undone.document == at(6, SmallDocument.document))
-    #expect(undone.json == (try JSONValue(encoding: undone.document)))
+    #expect(DocumentMigration.reverted(try JSONValue(encoding: undone.document), to: 2) == undone.json)
 
     // And both come back.
     let redos: [EditLogEntry] = [.redo(seq: 7, group: 2), .redo(seq: 8, group: 4)]

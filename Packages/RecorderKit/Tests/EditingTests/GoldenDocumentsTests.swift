@@ -34,7 +34,8 @@ import ProjectFormat
     @Test func everyCaseOfGolden2HasItsDocument() async throws {
         #expect(GoldenDocuments.golden2Cases.map(\.name) == GoldenDocuments.cases.map(\.name) + GoldenDocuments.v2Cases.map(\.name))
         #expect(GoldenDocuments.cases.allSatisfy { $0.documentVersion == 1 })
-        #expect(GoldenDocuments.v2Cases.allSatisfy { $0.documentVersion == EditDocument.currentVersion })
+        // Documents of 1c, in its version, whatever the current one is (3 since phase 2).
+        #expect(GoldenDocuments.v2Cases.allSatisfy { $0.documentVersion == 2 })
         #expect(Set(GoldenDocuments.golden2Cases.map(\.name)).count == GoldenDocuments.golden2Cases.count)
     }
 

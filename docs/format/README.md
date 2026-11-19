@@ -1106,6 +1106,336 @@ La biblioteca nunca escribe dentro de un paquete (abrirla, generar miniaturas, m
 
 Se escriben con `DurableFile.writeAtomically`, fuera del hilo principal, a lo sumo cada 2 s. Lo que la papelera hace con un proyecto (mover, restaurar, eliminar) está en la biblioteca; para el formato, un paquete en la papelera es un paquete como cualquier otro.
 
+## Cambios del documento 3
+
+Desde la fase 2, el documento de edición es la versión 3 (`EditDocument.currentVersion`): una sola versión nueva con todos los campos de la fase 2 (diseño de la fase 2, §4.5 y §8), así las funciones de la voz, la imagen y la privacidad trabajan sobre los mismos tipos y hay una sola migración. Suma la transcripción, los subtítulos, los bloques de privacidad, las teclas en pantalla y campos nuevos del escenario, la cámara y el sonido. El paquete sigue en `formatVersion: 3`; un lector del documento 3 lee los documentos 1 y 2 migrándolos y rechaza el 4 o uno más nuevo (`newerVersion`), esté en `edit.json` o en el `create` del registro.
+
+| Lugar | Qué es | Legado (lo que escribe la migración) |
+|---|---|---|
+| `transcript` | La transcripción, opcional: `language` (BCP 47), `engine` (`speechTranscriber-1`) y `takes[]`, cada una con `take`, `track` y `words[]`: `start` y `end` (`HostTime` de la fuente, `end` excluido), `text` (con la puntuación pegada) y `breakBefore` (un subtítulo empieza en esa palabra) | Ausente |
+| `captions` | `show` y `style`: `preset` (`classic`, `bold` = «Destacado», `minimal`), `size` (`small`, `medium`, `large`), `position` (`bottom`, `top`), `uppercase`, `highlight` y `highlightColor` (RGBA sRGB de 0 a 1) | `show: false`; `bold`, `medium`, `bottom`, `uppercase: false`, `highlight: true`, `highlightColor: [1, 0.8392156862745098, 0.0392156862745098, 1]` (#FFD60A) |
+| `privacy` | `blocks[]`: `id` (`p-` y 8 hex al azar), `take`, `start` y `end`, `effect` (`blur`, `pixelate`, `fill`), `strength` (0 a 1), `color` (RGBA, el del relleno), `rect`, `keys[]` (`t` y `rect`, en orden de tiempo) y `origin` (`manual`, `email`, `phone`, `card`, `secret`, `face`) | `{"blocks": []}` |
+| `keys` | Las teclas en pantalla: `mode` (`off`, `shortcuts`, `all`), `position` (`bottomCenter`, `bottomLeading`, `bottomTrailing`, `top`) y `size` (`small`, `medium`, `large`) | `off`, `bottomCenter`, `medium` |
+| `style.reframe` | `fit` (la pantalla entera, lo de la fase 1) o `followCursor` | `fit` |
+| `style.frame` | Suma `{"type":"device","model":…,"finish":…}`: `model` `iPhone`, `iPad` o `macBook`, `finish` `dark` o `light` | Lo que tenía (`none` o `macWindow`) |
+| `camera.background` | `original`, `blurred` o `removed` | `original` |
+| `camera.framing` | `mode` (`center`, `face`, `manual`), `center` (`x` e `y`, fracciones de la imagen de la cámara) y `zoom` (1 a 2,5; 1,4 al elegir Seguir la cara) | `center`, `{"x": 0.5, "y": 0.5}`, `1` |
+| `camera.look` | `preset` (`natural`, `warm`, `cool`, `vivid`, `soft`, `mono`, `custom`), `lut` opcional (el `.cube` de `custom`, copiado a `assets/<sha256>.cube`) e `intensity` (0 a 1) | `natural`, sin `lut`, `1` |
+| `camera.syncOffset` | Cuánto más tarde se dibuja la cámara contra el sonido, en ns (entero; positivo, más tarde) | `0` |
+| `audio.normalize` | Normalizar el volumen | `false` |
+| `audio.tracks.<toma>/<pista>.cleanup` | La limpieza de ruido de la pista, de 0 a 1 | `0`, en cada pista |
+
+- Un `rect` es `{x, y, width, height}`, en fracciones del contenido de la pantalla, de 0 a 1, con `y` hacia abajo.
+- **Lo que se omite.** `transcript` mientras no hay transcripción, `lut` sin LUT y `breakBefore` cuando es `false` (una transcripción tiene miles de palabras): nunca se escriben como `null`. Una palabra que deja de empezar un subtítulo se escribe entera, o se le saca `breakBefore` con un `set` a `null` (abajo). Todo lo demás se escribe siempre, como los campos del documento 2.
+- **Un valor desconocido hace inválido el documento** (un `preset`, un `model`, un `effect` que no son estos): está dañado, no es más nuevo. Lo mismo la falta de un campo obligatorio, con una excepción: un `style` sin `reframe` se lee como `fit`, porque así lo guardan la fase 1 y sus estilos (`default-style.json` y el `style.json` de un `.tomastyle`); en un documento 3 siempre está, y un cambio que lo saca se rechaza.
+
+El documento de diseño §6.2 con todos los campos de la fase 2 lejos de su valor legado (una transcripción de dos palabras, la segunda empieza un subtítulo; subtítulos Clásico arriba; un bloque de privacidad con dos claves; todas las teclas; la pantalla siguiendo al cursor en un iPhone claro; la cámara sin fondo, encuadrada a mano, con un color propio y 40 ms tarde; el volumen normalizado y el micrófono limpio), como lo escribe `ProjectJSON.encoder()`; lo guarda `version3ExampleRoundTripsByteForByte`, que lo lee y lo vuelve a escribir byte por byte:
+
+```json
+{
+  "aspect" : "16:9",
+  "audio" : {
+    "limiter" : true,
+    "normalize" : true,
+    "tracks" : {
+      "take-001/mic" : {
+        "cleanup" : 0.6,
+        "gain" : 1,
+        "muted" : false
+      },
+      "take-001/system-audio" : {
+        "cleanup" : 0,
+        "gain" : 0.8,
+        "muted" : false
+      }
+    }
+  },
+  "camera" : {
+    "background" : "removed",
+    "border" : {
+      "color" : [
+        1,
+        1,
+        1,
+        1
+      ],
+      "width" : 0
+    },
+    "changes" : [
+      {
+        "id" : "k-1c2d0a9e",
+        "origin" : "recorded",
+        "style" : {
+          "anchor" : "topLeading",
+          "shape" : "circle",
+          "size" : 0.24
+        },
+        "t" : 81290000000000,
+        "take" : "take-001"
+      }
+    ],
+    "framing" : {
+      "center" : {
+        "x" : 0.4,
+        "y" : 0.35
+      },
+      "mode" : "manual",
+      "zoom" : 1.8
+    },
+    "initial" : {
+      "take-001" : {
+        "anchor" : "bottomTrailing",
+        "shape" : "circle",
+        "size" : 0.24
+      }
+    },
+    "layout" : {
+      "kind" : "bubble"
+    },
+    "layoutRules" : "cameraLayout-1",
+    "layouts" : [
+
+    ],
+    "look" : {
+      "intensity" : 0.75,
+      "lut" : "assets/5f0c3a2e9b1d4c7a8e6f0b2d4a6c8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d.cube",
+      "preset" : "custom"
+    },
+    "mirror" : false,
+    "shadow" : 0,
+    "show" : true,
+    "sizeReference" : "height",
+    "spring" : {
+      "damping" : 0.95,
+      "response" : 0.5
+    },
+    "syncOffset" : 40000000
+  },
+  "captions" : {
+    "show" : true,
+    "style" : {
+      "highlight" : false,
+      "highlightColor" : [
+        0.2,
+        0.6,
+        1,
+        1
+      ],
+      "position" : "top",
+      "preset" : "classic",
+      "size" : "large",
+      "uppercase" : true
+    }
+  },
+  "cursor" : {
+    "clickEffect" : "ripple-1",
+    "clickSound" : "none",
+    "clickSoundGain" : 0.5,
+    "hideWhenIdle" : true,
+    "idleDelay" : 2,
+    "motionBlur" : 0.5,
+    "scale" : 1.5,
+    "show" : true,
+    "smoothing" : {
+      "damping" : 1,
+      "response" : 0.16
+    },
+    "style" : "system"
+  },
+  "documentVersion" : 3,
+  "frameRate" : 60,
+  "keys" : {
+    "mode" : "all",
+    "position" : "top",
+    "size" : "small"
+  },
+  "logSequence" : 128,
+  "privacy" : {
+    "blocks" : [
+      {
+        "color" : [
+          0.1,
+          0.1,
+          0.1,
+          1
+        ],
+        "effect" : "pixelate",
+        "end" : 81253000000000,
+        "id" : "p-5e1d0c2a",
+        "keys" : [
+          {
+            "rect" : {
+              "height" : 0.25,
+              "width" : 0.4,
+              "x" : 0.1,
+              "y" : 0.2
+            },
+            "t" : 81250000000000
+          },
+          {
+            "rect" : {
+              "height" : 0.25,
+              "width" : 0.4,
+              "x" : 0.3,
+              "y" : 0.5
+            },
+            "t" : 81252000000000
+          }
+        ],
+        "origin" : "email",
+        "rect" : {
+          "height" : 0.25,
+          "width" : 0.4,
+          "x" : 0.1,
+          "y" : 0.2
+        },
+        "start" : 81250000000000,
+        "strength" : 0.8,
+        "take" : "take-001"
+      }
+    ]
+  },
+  "screens" : {
+    "changes" : [
+      {
+        "id" : "p-9a01b2c3",
+        "origin" : "auto",
+        "t" : 81260000000000,
+        "take" : "take-001",
+        "track" : "display-2"
+      }
+    ],
+    "initial" : {
+      "take-001" : "display-1"
+    },
+    "planner" : "screenFollow-1"
+  },
+  "sequence" : [
+    {
+      "end" : 81276901234567,
+      "id" : "c-00a1b2c3",
+      "speed" : 1,
+      "start" : 81234567890123,
+      "take" : "take-001"
+    },
+    {
+      "end" : 81334000000000,
+      "id" : "c-00d4e5f6",
+      "speed" : 2,
+      "start" : 81277458000000,
+      "take" : "take-001"
+    }
+  ],
+  "style" : {
+    "background" : {
+      "type" : "wallpaper",
+      "wallpaper" : "aurora-1"
+    },
+    "backgroundBlur" : 0,
+    "cornerRadius" : 0.012,
+    "frame" : {
+      "finish" : "light",
+      "model" : "iPhone",
+      "type" : "device"
+    },
+    "geometryTransition" : "spring",
+    "padding" : 0.08,
+    "reframe" : "followCursor",
+    "screenSampling" : "mipmapped",
+    "shadow" : 0.6
+  },
+  "transcript" : {
+    "engine" : "speechTranscriber-1",
+    "language" : "es-AR",
+    "takes" : [
+      {
+        "take" : "take-001",
+        "track" : "mic",
+        "words" : [
+          {
+            "end" : 81235400000000,
+            "start" : 81235000000000,
+            "text" : "Hola,"
+          },
+          {
+            "breakBefore" : true,
+            "end" : 81236000000000,
+            "start" : 81235500000000,
+            "text" : "mundo."
+          }
+        ]
+      }
+    ]
+  },
+  "zoom" : {
+    "auto" : {
+      "depth" : 2,
+      "enabled" : true,
+      "follow" : true,
+      "groupGap" : 2.5,
+      "holdWhileTyping" : true,
+      "leadIn" : 0.5,
+      "leadOut" : 1,
+      "planner" : "autoZoom-1",
+      "triggers" : "clicks"
+    },
+    "motionBlur" : 0.5,
+    "regions" : [
+      {
+        "end" : 81245000000000,
+        "focus" : {
+          "type" : "follow"
+        },
+        "id" : "z-3fa2b1c0",
+        "instant" : false,
+        "origin" : "auto",
+        "start" : 81241000000000,
+        "take" : "take-001"
+      },
+      {
+        "depth" : 1.6,
+        "end" : 81300000000000,
+        "focus" : {
+          "type" : "fixed",
+          "x" : 0.31,
+          "y" : 0.72
+        },
+        "id" : "z-7e11d0aa",
+        "instant" : false,
+        "origin" : "user",
+        "start" : 81296000000000,
+        "take" : "take-001"
+      }
+    ],
+    "show" : true,
+    "spring" : {
+      "damping" : 1,
+      "response" : 0.7
+    },
+    "suppressed" : [
+      {
+        "end" : 81320000000000,
+        "start" : 81318000000000,
+        "take" : "take-001"
+      }
+    ]
+  }
+}
+```
+
+**Migración desde el documento 2.** Una función pura sobre el JSON: escribe (encima de lo que hubiera) los valores de la columna «Legado» de la tabla en `/captions`, `/keys`, `/privacy`, `/style/reframe`, `/camera/background`, `/camera/framing`, `/camera/look`, `/camera/syncOffset` y `/audio/normalize`, y `cleanup = 0` en cada pista de `/audio/tracks`, y pone `documentVersion` en 3. Nada más cambia: con esos valores, el render y la mezcla son los de la fase 1 byte a byte (`make golden-2`). Un documento sin `style`, `camera`, `audio` o `audio.tracks` (o con una pista que no es un objeto) no migra: es inválido. Un documento 1 migra a 2 y después a 3.
+
+- **Una tabla, un algoritmo.** Cada migración es una fila de una tabla (`DocumentMigration.addedPlaces`: por versión de origen, los lugares que agrega como punteros JSON, `*` = cada miembro de ese objeto, con sus valores congelados en el código, nunca tomados de los valores por defecto de los tipos). Con la misma tabla se migra (`migrate`), se vuelve atrás (`reverted`) y se decide qué conmuta con la migración (`touchesAddedFields`). Las dos migraciones, 1 → 2 y 2 → 3, son aditivas.
+- **Volver atrás, de a una versión.** `reverted(_:to: 2)` saca los lugares agregados si cada uno tiene su valor legado y pone `documentVersion` en 2; a 1 sigue bajando (3 → 2 → 1). Un documento que usa la fase 2 no tiene versión 2: da `nil` si algún lugar agregado tiene otro valor o falta, si tiene `transcript` o si `style.frame` es `device`. Un caso nuevo de un tipo que ya estaba en el documento 2 (como los formatos nuevos de `aspect`, diseño de la fase 2 §6.4) se suma a esa lista de valores que el 2 no puede tener.
+- **Qué no conmuta con 2 → 3.** `touchesAddedFields(_:from: 2)` es verdadero para una operación cuyo camino es la raíz, `/documentVersion`, un prefijo de un lugar agregado (`/style`, `/camera`, `/audio`, `/audio/tracks` y cada `/audio/tracks/<clave>` enteros) o algo debajo de uno (`/captions/show`, `/camera/look/intensity`, un `insert` en `/privacy/blocks`…). Con una línea así antes del `migrate`, ese `migrate` corta la historia y el registro no se compacta, como en 1b. **Ojo: la fase 1 sí escribe dos de esos lugares enteros**: el volumen y el silencio de una pista (`/audio/tracks/<clave>`, una sola línea con su `TrackGain`, o `/audio/tracks` entero para una pista sin entrada) y «Aplicar el estilo por defecto» o «Aplicar un estilo» (`/style` entero). En un proyecto de 1b o 1c con una de esas ediciones, después de la primera edición en la fase 2 Deshacer no vuelve a los pasos de antes, y su registro ya no se compacta.
+- **Antes de la primera edición, en el disco sigue en su versión.** Un proyecto de 1b (documento 1) o de 1c (documento 2) que en la fase 2 solo se abre, se reproduce o se exporta no cambia, y la app de la fase 1 lo sigue abriendo; la instantánea al cerrar, la compactación y la reparación del registro se escriben en su versión (`openingAVersion2ProjectWritesNothing`, `openingAVersion1ProjectWritesNothing`). La primera edición agrega en **una sola escritura** el `migrate` de cada versión que falta y el paso: `{"from":2,"seq":N,"to":3,"type":"migrate"}` y el `do` en un proyecto de 1c; `1 → 2`, `2 → 3` y el `do` en uno de 1b. Un registro que termina en uno o más `migrate` sin nada después es esa escritura cortada: al leer se truncan y el proyecto abre como antes de la edición (`cutAtEveryByteOfTheFirstEditOpensBeforeOrAfterTo3`, `diskFullOnTheFirstEditTo3NeverLeavesMigrateAlone`).
+
+### El registro con el documento 3
+
+- **Un `set` agrega y saca un miembro opcional.** Un miembro que no está se lee como `null`: un `set` con `before: null` sobre un miembro de un objeto que existe lo agrega, y uno con `after: null` lo saca. Así van y vienen `transcript`, `lut` y `breakBefore`, y su inversa los deshace; el documento nunca tiene un `null`. Un `before` distinto de `null` sobre un miembro que no está es un `mismatch`; sacar un miembro obligatorio, o agregar uno que el documento no tiene, deja un documento inválido y se rechaza. Solo vale para miembros de un objeto: nunca para un elemento de un arreglo, que se agrega y se saca con `insert` y `remove`.
+- **Las colecciones.** `/privacy/blocks` admite `insert`, `remove` y `replace` (por `id`), como `/zoom/regions`. `/transcript/takes` existe solo con una transcripción y admite `insert` y `remove` (sus elementos no tienen `id`); una palabra se corrige con un `set` por puntero (`/transcript/takes/<i>/words/<j>/text`).
+- **Las etiquetas** (`label`) nuevas son veinticinco, después de las de la fase 1: `transcript.create`, `transcript.cut`, `transcript.restore`, `transcript.word`, `transcript.break`, `transcript.fillers`, `transcript.pauses`, `captions.show`, `captions.style`, `camera.hideSilences`, `camera.background`, `camera.framing`, `camera.look`, `camera.sync`, `audio.cleanup`, `audio.normalize`, `style.reframe`, `privacy.add`, `privacy.change`, `privacy.move`, `privacy.trim`, `privacy.delete`, `privacy.auto`, `keys.overlay` y `speed.typing`.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.

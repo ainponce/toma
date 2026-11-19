@@ -378,7 +378,7 @@ enum CameraSectionExample {
 
 @Test func version1DecodesMigrated() throws {
     let document = try EditDocument.decode(Data(DocumentV1Example.canonical.utf8))
-    #expect(document.documentVersion == 2)
+    #expect(document.documentVersion == EditDocument.currentVersion)
     let camera = document.camera
     #expect(camera.layout == .bubble)
     #expect(camera.layout == CameraLayout(kind: .bubble))
@@ -391,8 +391,9 @@ enum CameraSectionExample {
     #expect(camera.spring == SpringSpec(damping: 0.95, response: 0.5))
     #expect(camera.layoutRules == "cameraLayout-1")
     #expect(document == DesignExample.document)
-    // Everything else is what 1b read from it: 1b wrote it back byte for byte.
-    var asIn1b = try JSONValue(encoding: document)
+    // Everything else is what 1b read from it: 1b wrote it back byte for byte. (In version 2, without what version 3
+    // adds: `MigrationTo3Tests`.)
+    var asIn1b = try #require(DocumentMigration.reverted(JSONValue(encoding: document), to: 2))
     asIn1b["documentVersion"] = .integer(1)
     for key in DocumentMigration.addedCameraFields {
         asIn1b["camera"]?[key] = nil
@@ -434,7 +435,7 @@ enum CameraSectionExample {
         let replay = try #require(EditReplay.replay(snapshot: nil, entries: read.entries))
         #expect(replay.mismatchSeq == nil)
         #expect(replay.lastAppliedSeq == 2)
-        #expect(replay.document.documentVersion == 2)
+        #expect(replay.document.documentVersion == EditDocument.currentVersion)
         #expect(replay.document.style.padding == 0.1)
         #expect(replay.document.camera == DesignExample.document.camera)
     }
@@ -481,10 +482,12 @@ enum CameraSectionExample {
     #expect(try DocumentMigration.migrate(handWritten, from: 1) == migrated)
 
     #expect(DocumentMigration.isAdditive(from: 1))
-    #expect(!DocumentMigration.isAdditive(from: 2))
+    // From 2 too, since phase 2 (`MigrationTo3Tests`).
+    #expect(DocumentMigration.isAdditive(from: 2))
+    #expect(!DocumentMigration.isAdditive(from: 3))
     #expect(!DocumentMigration.isAdditive(from: 0))
     // No migration from another version, nor of a document of another version.
-    for (document, version) in [(v1, 2), (v1, 0), (migrated, 1), (migrated, 2)] {
+    for (document, version) in [(v1, 2), (v1, 0), (migrated, 1), (migrated, 3)] {
         #expect(throws: EditChangeError.invalidDocument("/documentVersion"), "\(version)") {
             try DocumentMigration.migrate(document, from: version)
         }
@@ -500,8 +503,10 @@ enum CameraSectionExample {
     let document = CameraSectionExample.document
     let text = try compact(CameraSectionExample.documentJSON())
     #expect(try EditDocument.decode(Data(text.utf8)) == document)
-    #expect(try pretty(document.camera) == CameraSectionExample.canonical)
-    #expect(try ProjectJSON.decoder().decode(CameraPlan.self, from: Data(CameraSectionExample.canonical.utf8)) == document.camera)
+    // The section as version 2 writes it; in version 3 it has the camera's fields of phase 2 too.
+    let inVersion2 = try #require(DocumentMigration.reverted(JSONValue(encoding: document), to: 2))
+    #expect(try pretty(#require(inVersion2["camera"])) == CameraSectionExample.canonical)
+    #expect(try ProjectJSON.decoder().decode(CameraPlan.self, from: Data(pretty(document.camera).utf8)) == document.camera)
     #expect(try EditDocument.decode(ProjectJSON.encoder().encode(document)) == document)
     // The split block keeps the bubble it was, and the project's bubble the split it was.
     let split = document.camera.layouts[1]
@@ -657,7 +662,7 @@ enum CameraSectionExample {
         #expect(DocumentMigration.touchesAddedFields(change, from: 1) == touches, "\(change)")
         #expect(DocumentMigration.touchesAddedFields(change.inverse, from: 1) == touches, "\(change)")
         // Nothing is known to commute with a migration that is not additive.
-        #expect(DocumentMigration.touchesAddedFields(change, from: 2), "\(change)")
+        #expect(DocumentMigration.touchesAddedFields(change, from: 3), "\(change)")
     }
 }
 
@@ -667,9 +672,9 @@ enum CameraSectionExample {
     try await withTemporaryDirectory { dir in
         let project = try await GoldenProjects.make("phaseZero", in: dir)
         let legacy = EditDocument.legacy(for: project)
-        #expect(legacy.documentVersion == 2)
-        // The legacy document as 1b built it: version 1, without what the migration adds.
-        var of1b = try JSONValue(encoding: legacy)
+        #expect(legacy.documentVersion == EditDocument.currentVersion)
+        // The legacy document as 1b built it: version 1, without what the migrations add.
+        var of1b = try #require(DocumentMigration.reverted(JSONValue(encoding: legacy), to: 2))
         of1b["documentVersion"] = .integer(1)
         for key in DocumentMigration.addedCameraFields {
             of1b["camera"]?[key] = nil

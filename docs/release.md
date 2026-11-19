@@ -894,6 +894,23 @@ Una fila por comprobación; anotar la fecha, la versión exacta de macOS y lo qu
 | 2. Las disposiciones al reproducir, al exportar y en el sonido (Task 13): transiciones como las de la burbuja, clics que no se ven no suenan, la meta del piso en la M1 | pendiente | pendiente | pendiente |
 | 3. Textos que no están en diseño §12: los que cambiarías | pendiente | pendiente | pendiente |
 
+## Pendientes del dueño de la fase 2
+
+Una sola pasada de fin de fase, contra la app de la rama `fase-2`, en orden: la preparación y el detalle por área. Cada comprobación dice qué se tiene que ver; si se ve otra cosa, anotarlo con la versión exacta de macOS. Cada tarea de la fase 2 suma sus comprobaciones al final de esta sección.
+
+### 0. Preparación
+
+1. **Antes de instalar la app de la fase 2, guardar un proyecto de la fase 1.** La app de la fase 1 queda en `build/fase1/Toma.app`: copiarla a otra carpeta (`cp -R build/fase1/Toma.app ~/Desktop/Toma-fase1.app`) y, con ella, abrir un proyecto con cámara, editarlo (un corte y otro margen alcanzan), exportarlo y cerrarlo. Si queda alguno de 1b sin abrir en 1c, guardarlo también. Esos proyectos son los de «Un proyecto de la fase 1 abierto en la fase 2», abajo.
+
+### 2. Detalle por área
+
+**Un proyecto de la fase 1 abierto en la fase 2** (B2a)
+
+Un proyecto de 1b o de 1c sigue siendo de su versión en el disco hasta que se lo edita en la fase 2: mirarlo no lo cambia.
+- Con el proyecto de la preparación: abrirlo en la app de la fase 2, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 1. Abrirlo otra vez con `~/Desktop/Toma-fase1.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
+- Editarlo en la fase 2 (otro margen) y cerrarlo. Abierto con la copia de la fase 1, dice que el proyecto se editó con una versión más nueva de Toma (nunca que está dañado) y no escribe nada.
+- Deshacer en la fase 2 después de esa edición: si el proyecto tenía en 1c un cambio de volumen o de silencio, o un estilo aplicado, Deshacer se detiene en la primera edición de la fase 2 (es lo esperado, `docs/format/README.md`, «Cambios del documento 3»); si no, vuelve paso a paso hasta las ediciones de 1c.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

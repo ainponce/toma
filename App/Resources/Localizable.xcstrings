@@ -381,6 +381,17 @@
         }
       }
     },
+    "Add Blur" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a blur block was added",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar desenfoque"
+          }
+        }
+      }
+    },
     "Add Change at Playhead" : {
       "comment" : "The Camera tab: a button",
       "localizations" : {
@@ -853,6 +864,17 @@
         }
       }
     },
+    "Blur Sensitive Data" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the sensitive data found on the screen was blurred",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfocar datos sensibles"
+          }
+        }
+      }
+    },
     "Border" : {
       "comment" : "Camera tab: the camera's border",
       "localizations" : {
@@ -1164,6 +1186,17 @@
         }
       }
     },
+    "Change Blur" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a blur block's effect, strength, color or rectangle was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el desenfoque"
+          }
+        }
+      }
+    },
     "Change Camera" : {
       "comment" : "An undo step: the camera bubble or its changes",
       "localizations" : {
@@ -1175,6 +1208,17 @@
         }
       }
     },
+    "Change Camera Background" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the background behind the person in the camera was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el fondo de la cámara"
+          }
+        }
+      }
+    },
     "Change Camera Border" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): the camera's border width or color was changed",
       "localizations" : {
@@ -1182,6 +1226,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar el borde de la cámara"
+          }
+        }
+      }
+    },
+    "Change Camera Color" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera's color look or its intensity was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el color de la cámara"
+          }
+        }
+      }
+    },
+    "Change Camera Framing" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the part of the camera's picture that is shown was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el encuadre de la cámara"
           }
         }
       }
@@ -1204,6 +1270,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar la división"
+          }
+        }
+      }
+    },
+    "Change Camera Sync" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera's picture was moved earlier or later against the sound",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la sincronía de la cámara"
+          }
+        }
+      }
+    },
+    "Change Caption Style" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the captions' preset, size, position, capitals or highlight was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el estilo de los subtítulos"
           }
         }
       }
@@ -1263,6 +1351,17 @@
         }
       }
     },
+    "Change Keys on Screen" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): how the pressed keys are shown on the output was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar las teclas en pantalla"
+          }
+        }
+      }
+    },
     "Change Layout" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block's layout, transition or bubble style was changed; also the VoiceOver action on a block",
       "localizations" : {
@@ -1270,6 +1369,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar la disposición"
+          }
+        }
+      }
+    },
+    "Change Noise Cleanup" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the noise cleanup of a microphone track was changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar la limpieza de ruido"
           }
         }
       }
@@ -1303,6 +1413,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cambiar la pantalla"
+          }
+        }
+      }
+    },
+    "Change Screen Framing" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the screen was set to show whole or to follow the cursor",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el encuadre de la pantalla"
           }
         }
       }
@@ -1577,6 +1698,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esquinas"
+          }
+        }
+      }
+    },
+    "Correct a Word" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a word of the transcription was corrected",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corregir una palabra"
           }
         }
       }
@@ -1887,6 +2019,17 @@
         }
       }
     },
+    "Cut Words" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): words were cut from the transcription, and their time from the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cortar palabras"
+          }
+        }
+      }
+    },
     "Dark" : {
       "localizations" : {
         "es" : {
@@ -1959,6 +2102,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Borrar el bloque"
+          }
+        }
+      }
+    },
+    "Delete Blur" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): blur blocks were deleted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el desenfoque"
           }
         }
       }
@@ -2801,6 +2955,17 @@
         }
       }
     },
+    "Hide During Silences" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the camera was set to hide while nobody speaks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ocultar en los silencios"
+          }
+        }
+      }
+    },
     "Hide Panel" : {
       "comment" : "The editor's bar and the View menu: hides the panel",
       "localizations" : {
@@ -3513,6 +3678,17 @@
         }
       }
     },
+    "Move Blur" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a blur block was moved on the timeline",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mover el desenfoque"
+          }
+        }
+      }
+    },
     "Move Layout Block" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a camera layout block was moved",
       "localizations" : {
@@ -3805,6 +3981,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No"
+          }
+        }
+      }
+    },
+    "Normalize Volume" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the volume normalization was turned on or off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Normalizar el volumen"
           }
         }
       }
@@ -4703,6 +4890,17 @@
         }
       }
     },
+    "Remove Filler Words" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the filler words (um, uh) were cut",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar muletillas"
+          }
+        }
+      }
+    },
     "Remove Image" : {
       "localizations" : {
         "es" : {
@@ -4848,6 +5046,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Volver al estilo de Toma"
+          }
+        }
+      }
+    },
+    "Restore Words" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): words cut from the transcription were brought back",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restaurar palabras"
           }
         }
       }
@@ -5205,6 +5414,17 @@
         }
       }
     },
+    "Shorten Pauses" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the long pauses between words were shortened",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acortar pausas"
+          }
+        }
+      }
+    },
     "Show Camera" : {
       "comment" : "The Camera tab: whether the camera shows",
       "localizations" : {
@@ -5265,6 +5485,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar en Finder"
+          }
+        }
+      }
+    },
+    "Show or Hide Captions" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the captions were shown or hidden",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar u ocultar los subtítulos"
           }
         }
       }
@@ -5460,6 +5691,17 @@
         }
       }
     },
+    "Speed Up Typing" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the parts where the user types were sped up",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acelerar el tipeo"
+          }
+        }
+      }
+    },
     "Split" : {
       "comment" : "The timeline's track bar and a clip's menu: cuts the clip in two",
       "localizations" : {
@@ -5566,6 +5808,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Color inicial"
+          }
+        }
+      }
+    },
+    "Start a Caption Here" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): a caption was made to start at a word, or no longer",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empezar un subtítulo acá"
           }
         }
       }
@@ -7025,6 +7278,17 @@
         }
       }
     },
+    "Transcribe" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the project's speech was transcribed, or transcribed again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribir"
+          }
+        }
+      }
+    },
     "Transition" : {
       "comment" : "Camera tab: how a block starts and ends",
       "localizations" : {
@@ -7054,6 +7318,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Recortar"
+          }
+        }
+      }
+    },
+    "Trim Blur" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): an edge of a blur block was trimmed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Recortar el desenfoque"
           }
         }
       }

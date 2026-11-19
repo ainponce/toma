@@ -360,8 +360,13 @@ func canonical(_ document: EditDocument) throws -> String {
     #expect(throws: EditChangeError.mismatch("/zoom/regions/0")) {
         try document.applying([.replace(collection: regions, id: "z-3fa2b1c0", before: first, after: second)])
     }
-    #expect(throws: EditChangeError.noSuchPath("/style/nothing")) {
+    // A member that is not there is `null` (plan decision 4 of phase 2): one the document has no place for is added,
+    // and leaves no document (`DocumentV3Tests.setAddsAndRemovesAnOptionalMember`).
+    #expect(throws: EditChangeError.invalidDocument("/style/nothing")) {
         try document.applying([.set(path: try pointer("/style/nothing"), before: .null, after: .integer(1))])
+    }
+    #expect(throws: EditChangeError.mismatch("/style/nothing")) {
+        try document.applying([.set(path: try pointer("/style/nothing"), before: .integer(1), after: .integer(2))])
     }
     #expect(throws: EditChangeError.noSuchPath("/style/padding/x")) {
         try document.applying([.set(path: try pointer("/style/padding/x"), before: .null, after: .integer(1))])
@@ -402,8 +407,12 @@ func canonical(_ document: EditDocument) throws -> String {
     #expect(throws: EditChangeError.invalidDocument("/zoom/regions/2/extra")) {
         try document.applying([.insert(collection: try pointer("/zoom/regions"), index: 2, value: region)])
     }
+    // A `set` to `null` takes the member away (plan decision 4 of phase 2): an optional one is gone, a needed one leaves no
+    // document.
     let depth = EditChange.set(path: try pointer("/zoom/regions/1/depth"), before: .number(1.6), after: .null)
-    #expect(throws: EditChangeError.invalidDocument("/zoom/regions/1/depth")) { try document.applying([depth]) }
+    #expect(try document.applying([depth]).zoom.regions[1].depth == nil)
+    let instant = EditChange.set(path: try pointer("/zoom/regions/1/instant"), before: .bool(false), after: .null)
+    #expect(throws: EditChangeError.invalidDocument("/zoom/regions/1/instant")) { try document.applying([instant]) }
     // A value that can't be encoded (a non-finite number) can't be in the document: its insert is refused.
     var broken = document.zoom.regions[0]
     broken.focus = .fixed(x: .nan, y: 0)
