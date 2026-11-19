@@ -251,6 +251,8 @@ final class KeyEditor: ObservableObject {
         var canEdit: Bool
         /// The speed of the clips a speed applies to (`EditorModel.speedTargets`); `nil` if they differ.
         var speed: Double?
+        /// Whether File ▸ Export Captions… has captions to export (phase 2 design §5.2).
+        var canExportCaptions = false
     }
 
     /// What the File menu offers for the key editor's project as a whole (design §6.7).
@@ -313,6 +315,11 @@ final class KeyEditor: ObservableObject {
         model?.askTypingSpeed()
     }
 
+    /// File ▸ Export Captions… (phase 2 design §5.2).
+    func exportCaptions() {
+        model?.exportCaptions()
+    }
+
     /// View ▸ Show Safe Zones.
     func toggleSafeZones() {
         model?.showsSafeZones.toggle()
@@ -349,7 +356,9 @@ final class KeyEditor: ObservableObject {
                 model.map { (SafeZones.applies(ratio: $0.previewRatio), $0.showsSafeZones) },
                 model.flatMap { model in
                     model.document.map {
-                        Project(aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets)
+                        Project(
+                            aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets,
+                            canExportCaptions: model.canExportCaptions)
                     }
                 },
                 model?.projectActions.map { actions in
@@ -479,6 +488,11 @@ struct ProjectCommands: Commands {
             .disabled(project?.canEdit != true)
             Button("Custom Speed…") { editor.askCustomSpeed() }
                 .disabled(project?.canEdit != true)
+        }
+        // File ▸ Export Captions… (phase 2 design §5.2): the captions as an .srt or .vtt file; only with a transcript.
+        CommandGroup(after: .importExport) {
+            Button("Export Captions…") { editor.exportCaptions() }
+                .disabled(editor.project?.canExportCaptions != true)
         }
         // Edit ▸ Add Blur (phase 2 design §7.1): a privacy block of 3 s from the playhead, as the timeline's bar makes one.
         CommandGroup(after: .pasteboard) {
