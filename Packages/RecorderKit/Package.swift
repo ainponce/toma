@@ -9,7 +9,7 @@ let package = Package(
         .library(
             name: "RecorderKit", targets: [
                 "ProjectFormat", "Analysis", "Editing", "Recording", "SyntheticCapture", "Recovery", "Render", "Export",
-                "Library",
+                "Library", "Transcription", "ImageAnalysis", "ProjectJobs",
             ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
@@ -28,6 +28,10 @@ let package = Package(
         .target(name: "Export", dependencies: ["Render", "ProjectFormat", "Analysis"]),
         .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
         .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing"]),
+        // Phase 2's analysis (design of phase 2, §10, plan decision 15): no other module depends on these three.
+        .target(name: "Transcription", dependencies: ["ProjectFormat", "Export"]),
+        .target(name: "ImageAnalysis", dependencies: ["ProjectFormat", "Analysis", "Render"]),
+        .target(name: "ProjectJobs", dependencies: ["ProjectFormat", "Editing", "Export", "Transcription", "ImageAnalysis"]),
         // Shared by every test target; not a product.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture"]),
         .executableTarget(
@@ -60,6 +64,9 @@ let package = Package(
                 "Export",
             ]),
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
+        .testTarget(name: "TranscriptionTests", dependencies: ["Transcription", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "ImageAnalysisTests", dependencies: ["ImageAnalysis", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "ProjectJobsTests", dependencies: ["ProjectJobs", "Editing", "ProjectFormat", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )

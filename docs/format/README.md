@@ -1453,6 +1453,23 @@ Es el mismo orden en los dos caminos de la fase 1 (el de 1b y el de los layouts)
 
 **Con los valores legados, cada capa nueva vale `nil` o vacía y no cambia ninguna llamada**: sin marco de dispositivo, sin regiones de privacidad, con la cámara entera, natural, con su fondo original y en el mismo instante, sin teclas y sin subtítulos, el compositor hace las mismas llamadas, en el mismo orden y con los mismos uniforms que la fase 1, y el shader es el de la fase 1. Un documento 1 o 2 migrado se dibuja byte por byte como antes (la dorada 2, `make golden-2`).
 
+### Las cachés de análisis
+
+Lo que calcula el análisis de la fase 2 (diseño de la fase 2, §10) va a la carpeta de cachés del proyecto, fuera del paquete, junto a `thumbnails/` y `waveforms/`: `~/Library/Caches/dev.toma.Toma/Projects/<projectID>/`. Como el resto de esa carpeta, se puede borrar entera o en parte: lo que falta se vuelve a calcular (y el export espera a que esté), y nada de lo que hay en el paquete depende de ella. La transcripción no es una caché: va al documento (`transcript`).
+
+| Carpeta | Qué guarda | Nombre |
+|---|---|---|
+| `masks/` | La máscara de la persona de cada segmento de la cámara | `<take>/<track>/<segmento>-personMask-1.mov` |
+| `faces/` | La cara de cada segmento de la cámara | `<take>/<track>/<segmento>-faceTrack-1.json` |
+| `clean/` | El sonido sin ruido de cada segmento del micrófono | `<take>/<track>/<segmento>-soundIsolation-1.caf` |
+| `loudness/` | La sonoridad de cada segmento de una pista de audio | `<take>/<track>/<segmento>-loudness-1.json` |
+| `scan/` | Los datos sensibles encontrados en la pantalla de una toma | `<take>-sensitiveScan-1.json` |
+
+- **`<segmento>` es la identidad del archivo fuente** (`SegmentIdentity`): la raíz de su nombre, su tamaño en bytes y su fecha de modificación en nanosegundos desde 1970, leídos con `lstat` (un enlace no se sigue: un segmento que es un enlace no tiene identidad ni caché). Por ejemplo `masks/take-001/camera/seg-0001-48213377-1763561234123456789-personMask-1.mov`. Un segmento que se reescribe (la recuperación que lo cierra, una copia que no conservó la fecha) cambia de nombre y se vuelve a analizar; nada compara contenidos. El último guion separa el id del algoritmo, que lleva su versión: un algoritmo nuevo es otro archivo, nunca uno reescrito.
+- **Nombres que no salen de la carpeta.** El `take`, el `track` y el nombre del archivo tienen que ser cada uno un solo nombre (no vacío, ni `.` ni `..`, sin `/` ni NUL); si no, no hay archivo (`ProjectCaches.analysisFile` y `scanFile` dan `nil`).
+- **Enteras o ausentes.** Cada archivo se escribe entero en un temporal oculto de la misma carpeta (`.<nombre>.<UUID>.tmp.<extensión>`, con la extensión al final para los escritores que se guían por ella), con sus bytes ordenados antes del `rename(2)` que lo pone en su nombre (`F_BARRIERFSYNC`): un lector ve el archivo anterior o el nuevo entero, nunca una parte, y tras un corte de luz el nombre tiene los bytes enteros o no existe. Si macOS vació la carpeta, se vuelve a crear. Un temporal que dejó un crash nadie lo lee, y se va con la carpeta del proyecto. Se leen sin seguir enlaces (`SafeRead`).
+- **La cola** (`ProjectJobs`, un actor por proyecto abierto en el editor) corre los trabajos que las escriben de a uno, con QoS `utility`, y los frena mientras se graba: el que corría vuelve a empezar al terminar la toma y encuentra lo que ya había escrito.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
