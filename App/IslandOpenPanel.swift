@@ -479,6 +479,7 @@ struct IslandOpenPanel: View {
             .pickerStyle(.menu)
             .labelsHidden()
             .controlSize(.small)
+            MicrophoneModeRow(preview: panel.levelPreview)
         }
         ColumnSection(title: Text("System Audio")) {
             SystemAudioPicker(panel: panel)
