@@ -12,4 +12,11 @@ public struct AnalysisInputs: Equatable, Sendable {
 
     /// Nothing read from the caches: what every phase-1 caller passes.
     public static let none = AnalysisInputs()
+
+    /// The voice without noise of each audio track that has it for every segment heard, by `AudioPlan.key(take:track:)`
+    /// (phase 2 design §5.6). Empty: every track sounds as recorded.
+    public var cleanVoice: [String: CleanVoice] = [:]
+    /// The loudness measure of each audio track that was measured whole, by `AudioPlan.key(take:track:)` (phase 2 design
+    /// §5.7). Empty: nothing is normalized.
+    public var loudness: [String: TrackLoudness] = [:]
 }
