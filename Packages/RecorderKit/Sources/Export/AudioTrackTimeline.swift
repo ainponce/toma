@@ -364,6 +364,45 @@ final class AudioTrackTimeline: Sendable {
         self.missing = missing
     }
 
+    /// The clean voice of `dry` (`soundIsolation-1`, plan decision 14) as a stream of its own with `channels` channels:
+    /// the same `placed` as `dry`, each segment reading its clean file of `files` (by `SegmentRecord.file`) frame for
+    /// frame from where the segment is heard (a map that is the identity from `placed.start`, the file at 48 kHz read
+    /// from anywhere, `decodedFrames` its length), so it plays over exactly the frames the dry sound plays. A file is
+    /// used only if it is a regular file (by `lstat`: a link is never followed) of mono Float32 LPCM at 48 kHz with
+    /// exactly its span's frames; `nil` if a segment that is heard has no such file. Opens the files, never decodes them.
+    static func cleaned(_ dry: AudioTrackTimeline, files: [String: URL], channels: Int) async -> AudioTrackTimeline? {
+        precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
+        var placed: [Placed] = []
+        for heard in dry.placed {
+            let frames = heard.end - heard.start
+            guard let url = files[heard.segment.file], isCleanFile(url, frames: frames) else { return nil }
+            let asset = AVURLAsset(url: url)
+            guard let track = try? await asset.loadTracks(withMediaType: .audio).first else { return nil }
+            // Decoded frame 0 at timeline frame `heard.start`, one for one.
+            var map = ClockMap(
+                start: HostTime(nanoseconds: 0), anchors: [], sourceRate: sampleRate, timelineStart: HostTime(nanoseconds: 0),
+                outputRate: sampleRate)
+            map.shift(by: Double(heard.start))
+            let segment = Segment(
+                file: url.lastPathComponent, asset: asset, track: track, map: map, channels: 1, sourceRate: sampleRate,
+                frames: Double(frames), start: heard.segment.start, end: heard.segment.end)
+            placed.append(Placed(
+                segment: segment, start: heard.start, end: heard.end, seekOrigin: CMTime.zero, decodedFrames: frames, tail: []))
+        }
+        return AudioTrackTimeline(track: dry.track, channels: channels, placed: placed, missing: [])
+    }
+
+    /// Whether `url` is a regular file (never a link) of mono Float32 LPCM at 48 kHz, `frames` frames long.
+    private static func isCleanFile(_ url: URL, frames: Int64) -> Bool {
+        var info = stat()
+        guard lstat(url.path, &info) == 0, info.st_mode & S_IFMT == S_IFREG,
+              let file = try? AVAudioFile(forReading: url, commonFormat: .pcmFormatFloat32, interleaved: false)
+        else { return false }
+        let format = file.fileFormat
+        return format.commonFormat == .pcmFormatFloat32 && format.sampleRate == sampleRate && format.channelCount == 1
+            && file.length == frames
+    }
+
     /// Reads ranges of the stream, from anywhere: the reader of the segment being read is kept while the ranges go
     /// forward and stay within `readAhead` of what it holds; otherwise the segment is opened again, near the range when
     /// it can be (`seekPreroll`), from its start when not. A range is the same however it is reached.
