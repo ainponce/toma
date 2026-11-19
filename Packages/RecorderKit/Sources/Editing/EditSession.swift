@@ -468,9 +468,12 @@ public final class EditSession {
     /// Redoes the group on top of the redo stack.
     public func redo() -> EditOutcome { take(redoing()) }
 
-    /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), for the step that
+    /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), or with `kind`
+    /// `.lut` the `.cube` at `url` for the camera's colors (`AssetImport.copyLUT`, phase 2 design §6.3), for the step that
     /// names it, which comes after: `.imported(path)` once it is on the drive. The file is decoded first, on the queue of
-    /// files, as the package's asset reader decodes one: `.notAnImage` if it does not, and nothing is written.
+    /// files, as the package's asset reader decodes one: `.notAnImage` if it does not, and nothing is written. A `.cube`
+    /// is read and parsed first instead (`CubeLUT.parse`): `.notALUT(reason)` if it is not a 3D LUT, `.notAnImage` if it
+    /// cannot be read at all, and nothing is written; the copy parses it again, so what is placed is what was parsed.
     ///
     /// A version 1 or 2 package moves to version 3 first, with only the `create` of its legacy document (the upgrade with
     /// no step), or after the upgrade a step started: nothing is copied into a package that is not at version 3 yet. An
@@ -480,9 +483,13 @@ public final class EditSession {
     /// once for an error that never passes (`Opening.lastingRefusal`). A disk's error is never `.notAnImage`.
     /// `.notEditable` while the project cannot be edited, if another process took `edit.lock` first (read-only then) or
     /// changed the package (it is opened again), as with `perform`.
-    public func importAsset(_ url: URL) async -> AssetImportOutcome {
+    public func importAsset(_ url: URL, kind: AssetKind = .image) async -> AssetImportOutcome {
         guard isEditable else { return .notEditable }
-        guard (try? await Self.run(on: files, { AssetImport.decodes(url) })) == true else { return .notAnImage }
+        do {
+            if let refusal = try await Self.run(on: files, { AssetImport.refusal(of: url, as: kind) }) { return refusal }
+        } catch {
+            return .notAnImage
+        }
         guard isEditable else { return .notEditable }
         let reopened = reopenings
         if journal == nil, upgrade == nil, let manifest = legacyManifest, let legacy = pendingCreate,
@@ -513,13 +520,15 @@ public final class EditSession {
         while true {
             let package = ProjectPackage(url: packageURL)
             let placed = (try? await Self.run(on: files) { () -> Result<String, AssetImport.Failure> in
-                Result { () throws(AssetImport.Failure) in try AssetImport.place(url, into: package) }
+                Result { () throws(AssetImport.Failure) in try AssetImport.place(url, into: package, as: kind) }
             }) ?? .failure(.destination(POSIXError(.EIO)))
             switch placed {
             case let .success(path):
                 return .imported(path)
             case .failure(.unsupported), .failure(.source), .failure(.changed):
                 return .notAnImage
+            case let .failure(.notALUT(reason)):
+                return .notALUT(reason)
             case let .failure(.destination(error)):
                 guard Opening.lastingRefusal(error) == nil else { return .saveFailed(error.code) }
                 failing = error.code
@@ -544,7 +553,7 @@ public final class EditSession {
                 switch await importAsset(styleDirectory.appending(path: name)) {
                 case let .imported(path): background = .image(file: path)
                 case .notEditable: return .refused
-                case .notAnImage, .saveFailed: break
+                case .notAnImage, .notALUT, .saveFailed: break
                 }
             }
             style.style.background = background
@@ -571,7 +580,7 @@ public final class EditSession {
                 switch await importAsset(imageDirectory.appending(path: name)) {
                 case let .imported(path): imported = path
                 case .notEditable, .saveFailed: return (.refused, false)
-                case .notAnImage: break
+                case .notAnImage, .notALUT: break
                 }
             }
             imageMissing = imported == nil
