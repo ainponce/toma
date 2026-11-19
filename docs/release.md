@@ -1300,3 +1300,8 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 **Voz y audio: modo del micrófono** (A14)
 
 - Con el micrófono elegido y el medidor andando, la isla dice el modo activo ("Modo: Estándar"); Cambiar… abre el selector de macOS y al elegir Aislamiento de voz o Amplio espectro la fila lo dice enseguida. Con el micrófono apagado (o sin permiso), la fila está deshabilitada. Con el modo más largo la fila no se corta (el botón pasa abajo).
+
+**La hoja de exportar: Códec** (I17)
+
+- En Exportar, la fila Códec ofrece H.264, HEVC, ProRes 422 y ProRes 422 HQ (H.264 por defecto; la hoja recuerda el último). Con ProRes desaparece Calidad y el panel de guardar propone `.mov`; con H.264 y HEVC, `.mp4`.
+- Un ProRes 422 HQ abre en Final Cut con su audio; un HEVC se reproduce en QuickTime y en Safari. Comparar el tamaño estimado de la hoja con el del archivo real (1080p, 60 fps, 12 s: unos 9 MB en HEVC, unos 670 MB en ProRes 422 HQ).

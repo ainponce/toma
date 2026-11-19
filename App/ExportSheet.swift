@@ -63,6 +63,8 @@ final class ExportChoices {
     var resolution: ExportResolution
     var framesPerSecond: Int
     var quality: ExportQuality
+    /// The video's codec: H.264 unless the sheet remembers another (`ExportPreferences.codec`).
+    var codec: ExportCodec
     // The GIF's options.
     var gifLongSide: Int
     var gifFramesPerSecond: Int
@@ -116,6 +118,7 @@ final class ExportChoices {
         resolution = ExportResolution(rawValue: remembered.shortSide) ?? .p1080
         framesPerSecond = StyleCommands.frameRates.contains(document.frameRate) ? document.frameRate : 60
         quality = remembered.highQuality ? .high : .standard
+        codec = ExportCodec(rawValue: remembered.codec) ?? .h264
         let gif = remembered.gif
         gifLongSide = GIFSettings.longSides.contains(gif.longSide) ? gif.longSide : 800
         gifFramesPerSecond = GIFSettings.framesPerSecond.contains(gif.fps) ? gif.fps : 15
@@ -159,10 +162,14 @@ final class ExportChoices {
         ExportRangeRules.canExport(kind: kind, range: range, duration: duration, fps: exportFramesPerSecond)
     }
 
+    /// Whether Quality applies: H.264 and HEVC have a bitrate to choose, ProRes has none.
+    var hasQuality: Bool { codec == .h264 || codec == .hevc }
+
     /// The MP4 these choices make of the document.
     var settings: ExportSettings {
         ExportSettings(
-            aspect: aspect, resolution: resolution, framesPerSecond: framesPerSecond, quality: quality, contentRatio: contentRatio)
+            aspect: aspect, resolution: resolution, framesPerSecond: framesPerSecond, quality: quality, contentRatio: contentRatio,
+            codec: codec)
     }
 
     /// The GIF these choices make of the document.
@@ -185,7 +192,8 @@ final class ExportChoices {
         ExportPreferences(
             shortSide: resolution.rawValue, highQuality: quality == .high, kind: kind,
             gif: GIFPreferences(
-                longSide: gifLongSide, fps: gifFramesPerSecond, quality: gifQuality.rawValue, dither: dither, loops: loops))
+                longSide: gifLongSide, fps: gifFramesPerSecond, quality: gifQuality.rawValue, dither: dither, loops: loops),
+            codec: codec.rawValue)
     }
 
     /// About how big the MP4 of the range is, as a file size ("120 MB").
@@ -373,7 +381,8 @@ struct ExportSheet: View {
     private var whatSection: some View {
         Section {
             Picker("Export As", selection: $choices.kind) {
-                Text("MP4 Video", comment: "The export sheet: Export As a video").tag(ExportKind.mp4)
+                Text(String(localized: "Video (Export As)", defaultValue: "Video", comment: "The export sheet: Export As a video, whatever its codec"))
+                    .tag(ExportKind.mp4)
                 Text("Animated GIF", comment: "The export sheet: Export As a GIF").tag(ExportKind.gif)
             }
             .pickerStyle(.segmented)
@@ -410,17 +419,47 @@ struct ExportSheet: View {
                 }
             }
             .pickerStyle(.segmented)
+            Picker("Codec", selection: $choices.codec) {
+                ForEach(ExportCodec.allCases, id: \.self) { codec in
+                    Text(verbatim: Self.name(codec)).tag(codec)
+                }
+            }
             Picker("Frame Rate", selection: $choices.framesPerSecond) {
                 ForEach(StyleCommands.frameRates, id: \.self) { fps in
                     Text(fps, format: .number).tag(fps)
                 }
             }
-            Picker("Quality", selection: $choices.quality) {
-                Text("Standard", comment: "The export sheet: the quality of 0.08 bits per pixel").tag(ExportQuality.standard)
-                Text("High", comment: "The export sheet: the quality of 0.14 bits per pixel (Spanish: feminine, la calidad)")
-                    .tag(ExportQuality.high)
+            // ProRes has no bitrate to choose: its quality is the codec's.
+            if choices.hasQuality {
+                Picker("Quality", selection: $choices.quality) {
+                    Text("Standard", comment: "The export sheet: the quality of 0.08 bits per pixel").tag(ExportQuality.standard)
+                    Text("High", comment: "The export sheet: the quality of 0.14 bits per pixel (Spanish: feminine, la calidad)")
+                        .tag(ExportQuality.high)
+                }
+                .pickerStyle(.segmented)
             }
-            .pickerStyle(.segmented)
+        } footer: {
+            Text(Self.help(choices.codec))
+        }
+    }
+
+    /// H.264, HEVC, ProRes 422 and ProRes 422 HQ, as the codecs are called in every language.
+    static func name(_ codec: ExportCodec) -> String {
+        switch codec {
+        case .h264: "H.264"
+        case .hevc: "HEVC"
+        case .proRes422: "ProRes 422"
+        case .proRes422HQ: "ProRes 422 HQ"
+        }
+    }
+
+    /// When to pick `codec`, under the options.
+    static func help(_ codec: ExportCodec) -> LocalizedStringKey {
+        switch codec {
+        case .h264: "Plays everywhere. The safest choice for sharing."
+        case .hevc: "Smaller files at the same quality. Some older players can't open it."
+        case .proRes422: "To edit in Final Cut or another editor. Very large files."
+        case .proRes422HQ: "To edit in Final Cut with more quality. The largest files."
         }
     }
 
@@ -551,7 +590,7 @@ extension Notification.Name {
 extension EditorModel {
     /// Export, the bar's button (⌘E) and the keyboard's `EditorCommand.export` (Task 42): the export sheet over the
     /// window. Its "Export…" takes a copy of the document as it is then and goes on to the save panel, with
-    /// `<project>.mp4` or `<project>.gif` in the project's folder; what is edited while it exports is not in the file.
+    /// `<project>.mp4`, `.mov` (ProRes) or `.gif` in the project's folder; what is edited while it exports is not in the file.
     func openExportSheet() {
         guard canExport, let window, window.attachedSheet == nil, let session = panelSession, let project = exportProject else { return }
         let choices = ExportChoices(
@@ -563,10 +602,10 @@ extension EditorModel {
                 guard let window, let sheet = window.attachedSheet else { return }
                 // The document as it is when "Export…" is chosen.
                 let document = export ? self?.panelSession?.document : nil
-                let job = choices.job, kind = choices.kind, preferences = choices.preferences
+                let job = choices.job, kind = choices.kind, preferences = choices.preferences, codec = choices.codec
                 Self.end(sheet, of: window, choices: choices)
                 guard let self, let document else { return }
-                chooseDestination(of: document, job: job, kind: kind, remembering: preferences)
+                chooseDestination(of: document, job: job, kind: kind, codec: codec, remembering: preferences)
             })
         // Sized by its content (the hosting controller's standard bounds).
         let sheet = NSWindow(
@@ -597,6 +636,11 @@ extension EditorModel {
     func showcaseExportSheetGIF() {
         (window?.attachedSheet?.contentViewController as? NSHostingController<ExportSheet>)?.rootView.choices.kind = .gif
     }
+
+    /// `-TomaShowcase export` with `TOMA_SHOWCASE_CODEC=<ExportCodec raw value>`: the open sheet exports with that codec.
+    func showcaseExportSheetCodec(_ codec: ExportCodec) {
+        (window?.attachedSheet?.contentViewController as? NSHostingController<ExportSheet>)?.rootView.choices.codec = codec
+    }
     #endif
 
     /// Ends the export sheet: its GIF preview and estimate stop at once (`ExportChoices.stop()`), and, on the next turn
@@ -615,13 +659,13 @@ extension EditorModel {
     /// The save panel, as a sheet, then the export of `document` as `job` says; once it starts, the sheet remembers what
     /// was exported and its options (`ExportPreferences.remembering`).
     private func chooseDestination(
-        of document: EditDocument, job: ExportJob, kind: ExportKind, remembering chosen: ExportPreferences
+        of document: EditDocument, job: ExportJob, kind: ExportKind, codec: ExportCodec, remembering chosen: ExportPreferences
     ) {
         guard canExport, let window, let current = panelSession?.packageURL else { return }
         let panel = NSSavePanel()
-        panel.allowedContentTypes = [kind == .gif ? .gif : .mpeg4Movie]
+        panel.allowedContentTypes = [kind == .gif ? .gif : (codec.fileType == .mov ? .quickTimeMovie : .mpeg4Movie)]
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = current.deletingPathExtension().lastPathComponent + (kind == .gif ? ".gif" : ".mp4")
+        panel.nameFieldStringValue = current.deletingPathExtension().lastPathComponent + "." + (kind == .gif ? "gif" : codec.fileExtension)
         panel.directoryURL = current.deletingLastPathComponent()
         Task {
             guard await panel.beginSheetModal(for: window) == .OK, let destination = panel.url,
