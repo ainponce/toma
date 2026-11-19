@@ -192,10 +192,10 @@ private struct SeamDrawer: @unchecked Sendable {
     ]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + layers.joined())
     // The base adds no shader of its own: the library is phase 1's, and each layer's part is its milestone's (the device
-    // frame's, 2b's; privacy's, 2c's `privacy-1`; the captions', 2a's).
-    #expect(
-        layers.dropFirst().filter { $0 != ShaderSource.privacyMetal && $0 != ShaderSource.captionsMetal }.allSatisfy { $0.isEmpty })
-    #expect(!ShaderSource.privacyMetal.isEmpty && !ShaderSource.captionsMetal.isEmpty)
+    // frame's, 2b's; privacy's, 2c's `privacy-1`; the captions', 2a's; the keys', 2c's `keyOverlay-1`).
+    let written = [ShaderSource.privacyMetal, ShaderSource.captionsMetal, ShaderSource.keysMetal]
+    #expect(layers.dropFirst().filter { !written.contains($0) }.allSatisfy { $0.isEmpty })
+    #expect(written.allSatisfy { !$0.isEmpty })
 }
 
 @Test func cameraSyncAtZeroIsTheSameInstant() throws {
@@ -217,7 +217,7 @@ private struct SeamDrawer: @unchecked Sendable {
     let timeMap = TimeMap(sequence: document.sequence)
     let size = SIMD2(1280, 720)
     #expect(CaptionScene(document: document, timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
-    #expect(KeyOverlayScene(document: document, events: [], timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
+    #expect(KeyOverlayScene(document: document, take: take.id, events: [], timeMap: timeMap, outputSize: size).layer(atOutput: 0) == nil)
     let screen = ScreenLayer(trackID: trackID, sourceTime: base, rect: Rect(x: 10, y: 20, width: 300, height: 200), cornerRadius: 4)
     #expect(DeviceFrameScene(document: document, outputSize: size).bounds(around: screen.rect) == nil)
     let privacy = PrivacyScene(document: document, take: take, events: [])

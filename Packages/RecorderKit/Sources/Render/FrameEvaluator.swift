@@ -241,7 +241,7 @@ public struct FrameEvaluator: Sendable {
         cameraSync = CameraSyncScene(document: document, take: take)
         cameraLook = CameraLookScene(document: document, take: take, analysis: analysis, layouts: layouts)
         deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
-        keys = KeyOverlayScene(document: document, events: events, timeMap: timeMap, outputSize: outputSize)
+        keys = KeyOverlayScene(document: document, take: take.id, events: events, timeMap: timeMap, outputSize: outputSize)
         captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
     }
 
@@ -257,7 +257,7 @@ public struct FrameEvaluator: Sendable {
         resized.transitions = Self.transitions(
             take: take, events: events, document: document, timeMap: timeMap, paths: paths, outputSize: outputSize)
         resized.deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
-        resized.keys = KeyOverlayScene(document: document, events: events, timeMap: timeMap, outputSize: outputSize)
+        resized.keys = KeyOverlayScene(document: document, take: take.id, events: events, timeMap: timeMap, outputSize: outputSize)
         resized.captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
         return resized
     }
