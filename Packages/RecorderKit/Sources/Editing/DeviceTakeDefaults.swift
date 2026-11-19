@@ -2,18 +2,20 @@
 import ProjectFormat
 
 /// How a take of an iPhone or iPad connected by cable (a `device` track, phase 2 design §7.6) starts in the editor (plan
-/// 2c decision 19, set by `NewDocument.make`): with its device around the screen (design §6.7: an iPhone for content
-/// upright with an aspect of 0.6 or less, an iPad for any other, dark) and without the cursor, which such a take never
-/// records (the Cursor tab says so). The automatic zoom is left as it is: without clicks it plans nothing, and zooms added
-/// by hand work as on any take.
+/// 2c decision 19, set by `NewDocument.make`): with its device around the screen (design §6.7: an iPhone for content whose
+/// short side over its long side is 0.6 or less, in either orientation, an iPad for any other, dark) and without the cursor,
+/// which such a take never records (the Cursor tab says so). The automatic zoom is left as it is: without clicks it plans
+/// nothing, and zooms added by hand work as on any take.
 public enum DeviceTakeDefaults {
-    /// The widest content, width over height, that the iPhone's frame is for.
+    /// The squarest content, its short side over its long side, that the iPhone's frame is for: an iPhone turned before
+    /// the take started is still an iPhone.
     public static let iPhoneMaximumAspect = 0.6
 
-    /// The dark iPhone for content `contentAspect` (width over height) of `iPhoneMaximumAspect` or less, the dark iPad for
-    /// any other.
+    /// The dark iPhone for content `contentAspect` (width over height) whose short side over its long side is
+    /// `iPhoneMaximumAspect` or less, upright or on its side; the dark iPad for any other.
     public static func frame(contentAspect: Double) -> DeviceFrame {
-        DeviceFrame(model: contentAspect <= iPhoneMaximumAspect ? .iPhone : .iPad, finish: .dark)
+        let sides = min(contentAspect, 1 / contentAspect)
+        return DeviceFrame(model: sides <= iPhoneMaximumAspect ? .iPhone : .iPad, finish: .dark)
     }
 
     /// The device `take` recorded, as its frame draws it: by the aspect of its first `device` track's `globalFrame` (the

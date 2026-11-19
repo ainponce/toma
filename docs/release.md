@@ -978,7 +978,7 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Con un iPhone real, grabar 20 s en vertical, girarlo a horizontal a los 10 s y abrir la toma en el editor: empieza con el marco de iPhone Oscuro (Marco ▸ iPhone), sin cursor (la pestaña Cursor lo dice y sus controles quedan apagados) y sin zooms automáticos. Después del giro, la pantalla del iPhone se ve entera, achicada y centrada en el mismo marco vertical, con barras negras arriba y abajo: nada recortado ni estirado, y el marco no cambia de tamaño ni salta en el giro. Lo mismo avanzando cuadro a cuadro, arrastrando el cabezal por el giro y en el MP4 exportado (la vista previa es igual al MP4).
 - Un zoom agregado a mano en la pista Zoom entra y sale sobre la pantalla del iPhone, también con el foco fijo movido.
-- La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad (o un iPhone grabado empezando en horizontal), la toma empieza con el marco de iPad.
+- La pista del sonido del iPhone aparece en la línea de tiempo como «iPhone» (o «iPad»), con su botón de silencio, y en la pestaña Audio como «iPhone o iPad» con el nombre del dispositivo, volumen y silencio; el MP4 lo tiene. Con un iPad, la toma empieza con el marco de iPad; un iPhone grabado empezando en horizontal empieza con el de iPhone, acostado.
 
 **Seguir el cursor en el render** (I5; se recorre con la pestaña Marco de I14)
 
