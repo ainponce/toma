@@ -22,10 +22,10 @@ public struct CameraDeviceInfo: Equatable, Sendable {
 
 /// The cameras connected, and which one to use. Listing them needs no permission.
 public enum CameraCatalog {
-    /// The connected cameras (built-in, Continuity Camera and external), the system's preferred one first, the
-    /// others in the system's order. A process without `NSCameraUseContinuityCameraDeviceType` in its
-    /// Info.plist (`swift test`, `recorder-dev`) is told an iPhone is a built-in camera: it is listed all the
-    /// same, and `isContinuity` still says what it is.
+    /// The connected cameras (built-in, Continuity Camera and external, never the screen of an iPhone or iPad
+    /// connected by cable), the system's preferred one first, the others in the system's order. A process without
+    /// `NSCameraUseContinuityCameraDeviceType` in its Info.plist (`swift test`, `recorder-dev`) is told an iPhone is
+    /// a built-in camera: it is listed all the same, and `isContinuity` still says what it is.
     public static func devices() -> [CameraDeviceInfo] {
         discover().map(\.info)
     }
@@ -58,11 +58,17 @@ public enum CameraCatalog {
         return camera
     }
 
+    /// Whether a device the discovery lists is a camera: not one that also carries muxed media, which is the screen
+    /// of an iPhone or iPad connected by cable (`ExternalDeviceCatalog`) once the iPhone mode allows those.
+    static func isCamera(hasMuxed: Bool) -> Bool {
+        !hasMuxed
+    }
+
     /// The cameras of `devices()`, in its order, with their devices.
     static func discover() -> [(info: CameraDeviceInfo, device: AVCaptureDevice)] {
         let devices = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.builtInWideAngleCamera, .continuityCamera, .external], mediaType: .video, position: .unspecified
-        ).devices
+        ).devices.filter { isCamera(hasMuxed: $0.hasMediaType(.muxed)) }
         let preferredID = AVCaptureDevice.systemPreferredCamera?.uniqueID
         let listed = devices.map { device in
             let info = CameraDeviceInfo(

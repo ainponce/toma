@@ -1485,7 +1485,7 @@ La versión 4 llega con la fase 2, para las tomas que graban un iPhone o un iPad
 
   | `kind` | Qué graba | Segmentos | Campos de `source` |
   |---|---|---|---|
-  | `device` | La pantalla de un iPhone o un iPad conectado por cable: es la pantalla de la toma, como `display` o `window`. | video | `name`, `deviceUniqueID` |
+  | `device` | La pantalla de un iPhone o un iPad conectado por cable: es la pantalla de la toma, como `display` o `window`. | video | `name`, `deviceUniqueID`, `globalFrame`, `pixelScale` |
   | `deviceAudio` | El sonido de ese iPhone o iPad, en una pista aparte. | audio | `name`, `deviceUniqueID` |
 
   La recuperación y la verificación leen video en `device` y audio en `deviceAudio`.
@@ -1516,3 +1516,10 @@ Cómo graba las teclas esta versión (`KeyPressRecorder`, solo en las tomas con 
 - `mods` lleva solo cinco bits de `CGEventFlags` (`KeyPressRecorder.modifierMask`, 10354688 = `0x9E0000`): ⇧ 131072 (`0x20000`), ⌃ 262144 (`0x40000`), ⌥ 524288 (`0x80000`), ⌘ 1048576 (`0x100000`) y fn 8388608 (`0x800000`, que macOS pone también en las flechas y las teclas de función). No quedan Bloq Mayús, el bit del teclado numérico ni los del dispositivo. El lector acepta cualquier valor de 32 bits (como el `256` del ejemplo de arriba); la grabación solo escribe esos bits.
 - **Con la entrada segura de macOS activa no hay línea** (`IsSecureEventInputEnabled()`, leída en cada tecla, al llegar al tap y otra vez al escribirla): ni lo que se escribe en un campo de contraseña ni la ↩ que lo cierra. Tampoco hay líneas en pausa (el teclado no se escucha), de antes del comienzo o de la reanudación, ni después del final de la toma.
 - **El paquete sube a 4 justo antes de la primera línea**: la grabación llama a `ManifestStore.raiseFormatVersion(to: 4)` una vez por toma, en la cola de las teclas, antes de escribir la primera `keyPress`. Si esa subida falla (por ejemplo, con el disco lleno), la toma no escribe ninguna tecla más, así que nunca queda una línea `keyPress` en un paquete 3. Una toma con la opción prendida en la que no se tocó ninguna tecla (o solo con la entrada segura activa) deja el paquete en 3. Una toma con una pista `device` o `deviceAudio` sube a 4 antes de que su registro llegue al manifiesto.
+
+### Las pistas de un iPhone o un iPad
+
+- El `source` de una pista `device`: `name`, el nombre del dispositivo; `deviceUniqueID`, su `AVCaptureDevice.uniqueID` (el mismo cada vez que se conecta ese dispositivo); `globalFrame`, `{"x": 0, "y": 0, "width": …, "height": …}` en **píxeles** del formato activo del dispositivo al empezar la toma, y `pixelScale` 1. No es un lugar en el escritorio de la Mac: con el origen en (0, 0) y la escala 1, la geometría coloca la pantalla del dispositivo tal como es. Si el dispositivo no dice su tamaño, faltan `globalFrame` y `pixelScale`.
+- Al girar el dispositivo cambia el tamaño de sus cuadros: la pista sigue en un segmento nuevo (`formatChanged`) y `globalFrame` sigue siendo el del comienzo, el tamaño del primer segmento.
+- `deviceAudio` es el sonido que llega por el mismo cable, del mismo dispositivo (su `source` lleva el mismo `name` y `deviceUniqueID`, sin `globalFrame`), en el formato propio del dispositivo y en una pista aparte de `mic` y `systemAudio`.
+- Desconectar el cable termina el segmento abierto de las dos pistas (`streamError`); al volver a conectar **el mismo** dispositivo (el mismo `deviceUniqueID`, nunca otro que esté conectado), las dos siguen en segmentos nuevos, como cualquier pista que se reinicia.

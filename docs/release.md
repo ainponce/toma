@@ -915,6 +915,13 @@ Un proyecto de 1b o de 1c sigue siendo de su versión en el disco hasta que se l
 
 En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra el aviso del sistema; después de negarlo, «Abrir Ajustes del Sistema» lo vuelve a pedir y Toma aparece en la lista de Monitoreo de entrada.
 
+- **iPhone o iPad por cable: descubrir y capturar** (P14; se recorre con la isla en modo iPhone de P15 y P17). Con un iPhone conectado por cable, desbloqueado y con «Confiar» tocado:
+  1. El iPhone aparece en la lista del modo iPhone a los pocos segundos de abrirlo, con su nombre. En la lista de cámaras de Toma (la isla y Ajustes) nunca aparece la pantalla del iPhone, ni con el modo iPhone abierto (el iPhone como Cámara de Continuidad es otra cosa y sí puede estar).
+  2. Grabar 20 s con el iPhone en vertical y un video sonando en el iPhone. En `manifest.json` del paquete: `formatVersion` 4, una pista `device` con `globalFrame` `{x: 0, y: 0}` y el tamaño en píxeles de la pantalla del iPhone (por ejemplo 1179 × 2556 en un iPhone 15), `pixelScale` 1, y una pista `deviceAudio` con el mismo `deviceUniqueID`. El primer segmento de `device` tiene exactamente ese tamaño (Información de QuickTime) y se ve fluido cuando la pantalla se mueve; el de `deviceAudio` se oye entero y en sincronía con la imagen. Si a `device` le faltan `globalFrame` y `pixelScale`, anotarlo: el iPhone no dijo su tamaño antes de empezar.
+  3. Girar el iPhone a horizontal y volver a vertical durante la toma: `device` sigue en segmentos nuevos (`formatChanged`) y la toma no se corta.
+  4. Desconectar el cable 10 s a mitad de la toma y volver a conectarlo: la toma sigue; las dos pistas terminan su segmento y siguen en uno nuevo del mismo iPhone. Con otro iPhone conectado mientras el primero no está, Toma no lo graba en su lugar.
+
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
