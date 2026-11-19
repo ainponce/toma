@@ -7,10 +7,13 @@ import Foundation
 import ProjectFormat
 import Render
 import Synchronization
+import VideoToolbox
 import os
 
-/// Exports a take as an MP4: H.264 High video tagged Rec.709 and, as one AAC track, the microphone mixed with system
-/// audio.
+/// Exports a take as a video: H.264 High video tagged Rec.709 and, as one AAC track, the microphone mixed with system
+/// audio, in an MP4; or, by `ExportSettings.codec` (phase 2 design §6.8), HEVC Main 8-bit (`hvc1`) with that AAC in an
+/// MP4, or ProRes 422 or 422 HQ with the mix as 24-bit integer LPCM at 48 kHz in a QuickTime movie. The codec changes how
+/// the frames and the mix are encoded, never what they are: every codec is given the same pixels and the same samples.
 ///
 /// Frame `i` is the frame `FrameRenderer` draws of the edit document at output time `TimeMap.frameTime(i, frameRate:)`,
 /// the same drawing the preview shows (the renderer's motion blur in frames of the export's rate); the video lasts the
@@ -40,9 +43,9 @@ import os
 /// finished it: the same bytes as drawing one frame at a time.
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it
-/// writes `<destination>.partial.mp4` next to it and moves that into place at the end, replacing an
-/// existing file in one step. If it fails or is cancelled, the partial file is removed and the
-/// destination is as it was.
+/// writes `<destination>.partial.<ext>` next to it, with the codec's extension (`ExportCodec.fileExtension`: `mp4`, or
+/// `mov` for ProRes), and moves that into place at the end, replacing an existing file in one step. If it fails or is
+/// cancelled, the partial file is removed and the destination is as it was.
 public final class MP4Exporter: Sendable {
     /// AAC bitrate, in bits per second.
     static let audioBitRate = 160_000
@@ -91,7 +94,7 @@ public final class MP4Exporter: Sendable {
         self.init(project: project, document: .legacy(for: project), settings: settings)
     }
 
-    /// Writes the MP4 to `destination`, replacing a file already there only once the export is complete,
+    /// Writes the video to `destination`, replacing a file already there only once the export is complete,
     /// and returns what it had to leave out: microphone or system audio that could not be read is silence, and
     /// screen or camera video that could not be decoded shows the frame before it.
     ///
@@ -127,7 +130,7 @@ public final class MP4Exporter: Sendable {
         let audio = mix.hasSound ? try AudioMix(mix: mix, frames: audioFrames) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
 
-        let partial = URL(fileURLWithPath: destination.path + ".partial.mp4")
+        let partial = URL(fileURLWithPath: destination.path + ".partial." + settings.codec.fileExtension)
         try Self.removeStalePartial(partial)
         let summary: ExportSummary
         do {
@@ -258,25 +261,79 @@ public final class MP4Exporter: Sendable {
         }
     }
 
-    /// The H.264 settings of the video of `settings`: High profile, CABAC, tagged Rec.709, at `averageBitRate`. Whichever
-    /// encoder VideoToolbox picks: the hardware one is not required, so every size of the export sheet encodes.
+    /// The video settings of `settings`'s codec, tagged Rec.709, whichever encoder VideoToolbox picks (the hardware one
+    /// is not required, so every size of the export sheet encodes):
+    /// - H.264: High profile, CABAC, at `averageBitRate`, as phase 1 exported;
+    /// - HEVC: Main profile (8-bit) at the level the encoder picks, at `videoBitRate` (0.6 × H.264's);
+    /// - ProRes 422 and 422 HQ: without a bitrate, which ProRes does not have.
     static func videoSettings(_ settings: ExportSettings) -> [String: Any] {
-        [
-            AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: settings.outputSize.x,
-            AVVideoHeightKey: settings.outputSize.y,
-            AVVideoColorPropertiesKey: [
-                AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-                AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-                AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-            ],
-            AVVideoCompressionPropertiesKey: [
+        let colors: [String: Any] = [
+            AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
+            AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
+            AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
+        ]
+        let codecType: AVVideoCodecType
+        let compression: [String: Any]?
+        switch settings.codec {
+        case .h264:
+            codecType = .h264
+            compression = [
                 AVVideoAverageBitRateKey: settings.averageBitRate,
                 AVVideoProfileLevelKey: AVVideoProfileLevelH264HighAutoLevel,
                 AVVideoH264EntropyModeKey: AVVideoH264EntropyModeCABAC,
                 AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
-            ],
+            ]
+        case .hevc:
+            codecType = .hevc
+            compression = [
+                AVVideoAverageBitRateKey: settings.hevcBitRate,
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main_AutoLevel as String,
+                AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
+            ]
+        case .proRes422:
+            codecType = .proRes422
+            compression = nil
+        case .proRes422HQ:
+            codecType = .proRes422HQ
+            compression = nil
+        }
+        var video: [String: Any] = [
+            AVVideoCodecKey: codecType,
+            AVVideoWidthKey: settings.outputSize.x,
+            AVVideoHeightKey: settings.outputSize.y,
+            AVVideoColorPropertiesKey: colors,
         ]
+        if let compression { video[AVVideoCompressionPropertiesKey] = compression }
+        return video
+    }
+
+    /// The audio settings of `settings`'s codec for a mix of `channels` channels (1 or 2) at 48 kHz: AAC at 160 kbps,
+    /// constant, for H.264 and HEVC, as phase 1 exported; for ProRes, 24-bit integer LPCM, little-endian and interleaved
+    /// (phase 2 design §6.8).
+    static func audioSettings(_ settings: ExportSettings, channels: Int) -> [String: Any] {
+        var audio: [String: Any] = [
+            AVSampleRateKey: AudioTrackTimeline.sampleRate,
+            AVNumberOfChannelsKey: channels,
+            AVChannelLayoutKey: AudioMix.channelLayoutData(channels: channels),
+        ]
+        if settings.codec.isProRes {
+            audio[AVFormatIDKey] = kAudioFormatLinearPCM
+            audio[AVLinearPCMBitDepthKey] = 24
+            audio[AVLinearPCMIsFloatKey] = false
+            audio[AVLinearPCMIsBigEndianKey] = false
+            audio[AVLinearPCMIsNonInterleaved] = false
+        } else {
+            audio[AVFormatIDKey] = kAudioFormatMPEG4AAC
+            audio[AVEncoderBitRateKey] = audioBitRate
+            // Constant: the default strategy spends far less than asked on a quiet or simple signal.
+            audio[AVEncoderBitRateStrategyKey] = AVAudioBitRateStrategy_Constant
+        }
+        return audio
+    }
+
+    /// What the audio of `settings`'s codec is, for its errors: "AAC at 160 kbps" or "24-bit LPCM".
+    static func audioName(_ settings: ExportSettings) -> String {
+        settings.codec.isProRes ? "24-bit LPCM" : "AAC at \(audioBitRate / 1000) kbps"
     }
 
     // MARK: - Destination
@@ -403,20 +460,21 @@ private final class ExportSession: @unchecked Sendable {
         url: URL, settings: ExportSettings, renderer: FrameRenderer, start: Int64, frameCount: Int, audio: AudioMix?,
         frameSink: MP4Exporter.FrameSink?
     ) throws {
+        let codec = settings.codec
         let writer: AVAssetWriter
         do {
-            writer = try AVAssetWriter(outputURL: url, fileType: .mp4)
+            writer = try AVAssetWriter(outputURL: url, fileType: codec.fileType)
         } catch {
-            throw ExportError.writerFailed("cannot create the writer: \(error)")
+            throw ExportError.writerFailed("cannot create the \(codec.name) writer: \(error)")
         }
 
         let video = MP4Exporter.videoSettings(settings)
         guard writer.canApply(outputSettings: video, forMediaType: .video) else {
-            throw ExportError.writerFailed("H.264 cannot encode \(settings.outputSize.x)×\(settings.outputSize.y) at \(settings.framesPerSecond) fps")
+            throw ExportError.writerFailed("\(codec.name) cannot encode \(settings.outputSize.x)×\(settings.outputSize.y) at \(settings.framesPerSecond) fps")
         }
         let videoInput = AVAssetWriterInput(mediaType: .video, outputSettings: video)
         videoInput.expectsMediaDataInRealTime = false
-        guard writer.canAdd(videoInput) else { throw ExportError.writerFailed("the writer takes no video input") }
+        guard writer.canAdd(videoInput) else { throw ExportError.writerFailed("the \(codec.name) writer takes no video input") }
         writer.add(videoInput)
         adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
@@ -427,21 +485,14 @@ private final class ExportSession: @unchecked Sendable {
         ])
 
         if let audio {
-            let aac: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: AudioTrackTimeline.sampleRate,
-                AVNumberOfChannelsKey: audio.channels,
-                AVChannelLayoutKey: AudioMix.channelLayoutData(channels: audio.channels),
-                AVEncoderBitRateKey: MP4Exporter.audioBitRate,
-                // Constant: the default strategy spends far less than asked on a quiet or simple signal.
-                AVEncoderBitRateStrategyKey: AVAudioBitRateStrategy_Constant,
-            ]
-            guard writer.canApply(outputSettings: aac, forMediaType: .audio) else {
-                throw ExportError.writerFailed("AAC cannot encode \(audio.channels) channel(s) at 48 kHz, 160 kbps")
+            let encoded = MP4Exporter.audioSettings(settings, channels: audio.channels)
+            guard writer.canApply(outputSettings: encoded, forMediaType: .audio) else {
+                throw ExportError.writerFailed(
+                    "\(MP4Exporter.audioName(settings)) cannot encode \(audio.channels) channel(s) at 48 kHz for \(codec.name)")
             }
-            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: aac, sourceFormatHint: audio.formatDescription)
+            let input = AVAssetWriterInput(mediaType: .audio, outputSettings: encoded, sourceFormatHint: audio.formatDescription)
             input.expectsMediaDataInRealTime = false
-            guard writer.canAdd(input) else { throw ExportError.writerFailed("the writer takes no audio input") }
+            guard writer.canAdd(input) else { throw ExportError.writerFailed("the \(codec.name) writer takes no audio input") }
             writer.add(input)
             audioInput = input
         } else {
@@ -624,10 +675,13 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// The writer's error as `writerFailed`, or `diskFull` when that is what it says.
+    /// The writer's error as `writerFailed`, naming the codec, or `diskFull` when that is what it says.
     private func failure() -> ExportError {
         if let error = writer.error, ExportError.isDiskFull(error) { return .diskFull }
-        return .writerFailed(writer.error.map { String(describing: $0) } ?? "the writer stopped (status \(writer.status.rawValue))")
+        let codec = settings.codec.name
+        return .writerFailed(
+            writer.error.map { "the \(codec) writer failed: \(String(describing: $0))" }
+                ?? "the \(codec) writer stopped (status \(writer.status.rawValue))")
     }
 }
 

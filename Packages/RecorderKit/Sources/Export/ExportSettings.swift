@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import AVFoundation
 import ProjectFormat
 import Render
 
@@ -22,7 +23,48 @@ public enum ExportQuality: CaseIterable, Sendable {
     }
 }
 
-/// What an MP4 export produces: frame size and rate, and the quality its video bitrate follows from.
+/// How the video of an export is encoded, and in which file (phase 2 design §6.8): H.264 High or HEVC Main 8-bit (`hvc1`)
+/// in an MP4 with AAC audio, or ProRes 422 or 422 HQ in a QuickTime movie with 24-bit LPCM audio. The `rawValue` is what
+/// the export sheet remembers (`ExportPreferences.codec`).
+public enum ExportCodec: String, CaseIterable, Sendable {
+    case h264, hevc, proRes422, proRes422HQ
+
+    /// The extension of the file it writes: `mp4` for H.264 and HEVC, `mov` for ProRes.
+    public var fileExtension: String {
+        switch self {
+        case .h264, .hevc: "mp4"
+        case .proRes422, .proRes422HQ: "mov"
+        }
+    }
+
+    /// The container the writer makes: MPEG-4 for H.264 and HEVC, QuickTime for ProRes.
+    public var fileType: AVFileType {
+        switch self {
+        case .h264, .hevc: .mp4
+        case .proRes422, .proRes422HQ: .mov
+        }
+    }
+
+    /// Its name in the export's errors (`ExportError.writerFailed`).
+    var name: String {
+        switch self {
+        case .h264: "H.264"
+        case .hevc: "HEVC"
+        case .proRes422: "ProRes 422"
+        case .proRes422HQ: "ProRes 422 HQ"
+        }
+    }
+
+    /// Whether it is ProRes, which has no bitrate and carries LPCM audio.
+    var isProRes: Bool {
+        switch self {
+        case .h264, .hevc: false
+        case .proRes422, .proRes422HQ: true
+        }
+    }
+}
+
+/// What a video export produces: frame size and rate, the quality its video bitrate follows from, and its codec.
 ///
 /// The export sheet's options are parameters of an export, never edits (design §5.6): they are not in the document.
 public struct ExportSettings: Sendable, Equatable {
@@ -40,33 +82,68 @@ public struct ExportSettings: Sendable, Equatable {
     /// ones before them. 1 draws each frame and waits for it before the next (`FrameRenderer.render(at:into:)`), as
     /// before milestone 1b: for tests, which compare the two.
     internal var framesInFlight = 3
+    /// How the video is encoded, and in which file: H.264 in an MP4, as phase 1 exported, unless asked otherwise.
+    public var codec: ExportCodec = .h264
 
-    /// Average H.264 bitrate, in bits per second.
+    /// What HEVC spends of H.264's bitrate for the same quality (phase 2 design §6.8).
+    static let hevcShareOfH264 = 0.6
+    /// ProRes 422's and 422 HQ's bits per pixel per frame, for their size estimate (phase 2 design §6.8).
+    static let proRes422BitsPerPixel = 2.37, proRes422HQBitsPerPixel = 3.54
+    /// The bitrate of the 24-bit stereo LPCM at 48 kHz that ProRes carries, for its size estimate: 2 304 000 bits per
+    /// second (plan 2b decision 13).
+    static let proResAudioBitRate = 48_000 * 24 * 2
+
+    /// Average H.264 bitrate, in bits per second: width × height × fps × the quality's `bitsPerPixel`, whatever the codec.
     public var averageBitRate: Int {
         Int((Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond) * quality.bitsPerPixel).rounded())
     }
 
-    public init(outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60, quality: ExportQuality = .standard) {
+    /// The video bitrate the encoder is asked for, in bits per second: `averageBitRate` for H.264, 0.6 × it (rounded) for
+    /// HEVC; `nil` for ProRes, which has none.
+    public var videoBitRate: Int? {
+        switch codec {
+        case .h264: averageBitRate
+        case .hevc: hevcBitRate
+        case .proRes422, .proRes422HQ: nil
+        }
+    }
+
+    /// HEVC's bitrate for the same quality as H.264's `averageBitRate`: 0.6 × it, rounded.
+    var hevcBitRate: Int { Int((Double(averageBitRate) * Self.hevcShareOfH264).rounded()) }
+
+    public init(
+        outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60, quality: ExportQuality = .standard,
+        codec: ExportCodec = .h264
+    ) {
         self.outputSize = outputSize
         self.framesPerSecond = framesPerSecond
         self.quality = quality
+        self.codec = codec
     }
 
     /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even); `auto` from
     /// `contentRatio`, the ratio of the recording's screen (16:9 without it).
     public init(
         aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality,
-        contentRatio: Double? = nil
+        contentRatio: Double? = nil, codec: ExportCodec = .h264
     ) {
         self.init(
             outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue, contentRatio: contentRatio),
-            framesPerSecond: framesPerSecond, quality: quality)
+            framesPerSecond: framesPerSecond, quality: quality, codec: codec)
     }
 
-    /// About how many bytes an export of `durationSeconds` takes: the video's and the audio's bitrates over that time
-    /// (the export sheet's estimate, design §5.6).
+    /// About how many bytes an export of `durationSeconds` takes (the export sheet's estimate, design §5.6, plan 2b
+    /// decision 13): for H.264 and HEVC, the video's bitrate (`videoBitRate`) and the AAC's over that time; for ProRes,
+    /// width × height × fps × 2.37 bits (422) or 3.54 (422 HQ) and the 24-bit stereo LPCM's 2 304 000 bits per second.
     public func estimatedBytes(durationSeconds: Double) -> Int64 {
-        Int64((Double(averageBitRate + MP4Exporter.audioBitRate) * durationSeconds / 8).rounded())
+        let pixelsPerSecond = Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond)
+        let bitsPerSecond = switch codec {
+        case .h264: Double(averageBitRate + MP4Exporter.audioBitRate)
+        case .hevc: Double(hevcBitRate + MP4Exporter.audioBitRate)
+        case .proRes422: pixelsPerSecond * Self.proRes422BitsPerPixel + Double(Self.proResAudioBitRate)
+        case .proRes422HQ: pixelsPerSecond * Self.proRes422HQBitsPerPixel + Double(Self.proResAudioBitRate)
+        }
+        return Int64((bitsPerSecond * durationSeconds / 8).rounded())
     }
 
     /// Whether `resolution` is more than what was recorded: its shorter side longer than the recorded screen's
@@ -79,10 +156,11 @@ public struct ExportSettings: Sendable, Equatable {
 public enum ExportError: Error, Equatable {
     /// The task running the export was cancelled. Nothing was left behind.
     case cancelled
-    /// Writing the MP4 failed (`AVAssetWriter`'s error, or the file system's when moving it into place).
+    /// Writing the MP4 or the movie failed (`AVAssetWriter`'s error, naming the codec when it cannot encode, or the file
+    /// system's when moving it into place).
     case writerFailed(String)
     /// The destination's disk is full (`AVError.diskFull`, `ENOSPC` or `EDQUOT`, while writing, syncing or moving the
-    /// MP4 into place): its partial file was removed, so the room it took is back (final review C-M3).
+    /// file into place): its partial file was removed, so the room it took is back (final review C-M3).
     case diskFull
     /// The legacy document (`EditDocument.legacy(for:)`) of a take whose screen (`ScreenChoice`: a display or a window)
     /// recorded no segment, or that has none: as in phase 0 and 1a, there is no screen to export. An edited document of
