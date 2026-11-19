@@ -497,6 +497,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || environment["TOMA_SHOWCASE_PICTURE"] != nil
                 || environment["TOMA_SHOWCASE_SEEK"] != nil
                 || environment["TOMA_SHOWCASE_DEVICEFRAME"] != nil || environment["TOMA_SHOWCASE_REFRAME"] != nil
+                || environment["TOMA_SHOWCASE_PLAYHEAD"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -533,6 +534,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // TOMA_SHOWCASE_SEEK=<seconds> puts the playhead on the frame of the project's grid there (phase 2).
                     if let seconds = environment["TOMA_SHOWCASE_SEEK"].flatMap(Double.init), let rate = model.document?.frameRate {
                         model.seek(frame: Int((seconds * Double(rate)).rounded()))
+                    }
+                    // TOMA_SHOWCASE_PLAYHEAD=<seconds> puts the playhead on the frame nearest that output time (a frame
+                    // with keys on screen, say: they show only from the first key).
+                    if let seconds = environment["TOMA_SHOWCASE_PLAYHEAD"].flatMap(Double.init) {
+                        model.scrub(toSeconds: seconds)
+                        model.endScrub()
                     }
                     if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
                         model.selection = .zooms([id])

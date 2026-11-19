@@ -197,7 +197,8 @@ public final class Compositor: @unchecked Sendable {
     /// bar's pixels (`barPixels`) through the stage; none without one. The stage is drawn through `frame.stage`, and
     /// blurred with `frame.subframes` or `frame.cursorSamples` (see the type's notes). The camera's colour and background
     /// (`CameraLayer.look`, `background`) are drawn with `cameraLook`, the renderer's (`CameraLookResources`): `nil`, or
-    /// none of its textures, draws the camera as in phase 1. Throws `RenderError.metalResourceUnavailable`, having
+    /// none of its textures, draws the camera as in phase 1, and a background without its mask is Original's, its shape,
+    /// border and shadow too (`RenderFrame.droppingCameraBackground()`). Throws `RenderError.metalResourceUnavailable`, having
     /// encoded nothing, when Metal cannot make the screen's copy or the blur's tile memory: a frame is never drawn some
     /// other way. `screen`, `previousScreen`, `camera`, `cursor`, `backgroundImage`, `windowTitle` and `cameraLook`'s
     /// textures must stay alive until `commandBuffer` completes.
@@ -234,8 +235,9 @@ public final class Compositor: @unchecked Sendable {
         commandBuffer: any MTLCommandBuffer,
         counts: inout DrawCounts
     ) throws {
-        // Its screens as they are drawn (`screenImage`).
-        var frame = frame
+        // Its screens as they are drawn (`screenImage`). A camera's background whose mask is not decoded is the original:
+        // Removed's shape, border and shadow, and what the camera covers, as Original draws them.
+        var frame = cameraLook?.mask == nil ? frame.droppingCameraBackground() : frame
         // What the camera's colour and background are drawn with, made before any render pass, on every path.
         let look = try prepareCameraLook(frame, camera: camera, textures: cameraLook, commandBuffer: commandBuffer)
         // The camera over every pixel: nothing under it is drawn, nor sampled.

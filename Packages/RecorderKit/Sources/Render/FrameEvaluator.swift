@@ -443,6 +443,7 @@ public struct FrameEvaluator: Sendable {
         deviceFrame.apply(to: &frame)
         frame.keys = keys.layer(atOutput: output)
         frame.captions = captions.layer(atOutput: output)
+        frame.captionsAhead = captions.layersAhead(atOutput: output)
     }
 
     /// What 1b's path read of the paths for the motion blur of a frame, which the card's reads again: the ends of the zoom

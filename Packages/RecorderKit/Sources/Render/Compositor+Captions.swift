@@ -5,7 +5,7 @@ import ProjectFormat
 /// The pipelines of the captions (phase 2 design §5.2, `captionStyle-1`), made with the compositor's (`LayerPipelines`):
 /// their texture, premultiplied, read one texel a pixel (`captionFragment`) in the passes of what goes over the stage,
 /// straight into the target and into the motion blur's target (`captionTargetFragment`); and the textures themselves
-/// (`CaptionTextures`), drawn once for each layer and kept.
+/// (`CaptionTextures`), drawn once for each layer, ahead of its frame when it can be, and kept.
 struct CaptionPipelines {
     private let target: any MTLRenderPipelineState
     private let blurTarget: any MTLRenderPipelineState
@@ -31,9 +31,10 @@ struct CaptionPipelines {
 extension Compositor {
     /// Draws the captions `layer` in output space in an output of `outputSize`, into `pass`, counting it in
     /// `counts.captions`: step 6 of phase 2 design §11, over everything (`drawOverlays`), never blurred. Its texture
-    /// (`CaptionTextures`, made now the first time the layer is drawn) over its region (`CaptionTextures.region(of:)`),
-    /// whole pixels, one texel each. Nothing without one, nor for one with nothing to draw; nor, then, when CoreGraphics
-    /// or Metal cannot make its texture (out of memory): the frame is drawn without its captions.
+    /// (`CaptionTextures`: drawn ahead by an earlier frame, or now the first time the layer is drawn) over its region
+    /// (`CaptionTextures.region(of:)`), whole pixels, one texel each. Nothing without one, nor for one with nothing to
+    /// draw; nor, then, when CoreGraphics or Metal cannot make its texture (out of memory): the frame is drawn without its
+    /// captions.
     func drawCaptions(
         _ layer: CaptionLayer?, outputSize: SIMD2<Int>, pass: LayerPass, encoder: any MTLRenderCommandEncoder,
         counts: inout DrawCounts
