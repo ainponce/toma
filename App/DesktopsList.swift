@@ -161,7 +161,7 @@ struct DesktopsList: View {
         Group {
             switch layout {
             case .column:
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
                     if let spaces = model.spaces {
                         selector(spaces)
                     } else {
@@ -173,10 +173,12 @@ struct DesktopsList: View {
                             .buttonStyle(GlassButtonStyle(compact: true))
                         }
                     }
-                    Text("Recording follows the desktop in front.")
-                        .font(.system(size: 11))
-                        .opacity(0.62)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Where the column has room for it (with two displays, or a notice under the cards, it may not).
+                    ViewThatFits(in: .vertical) {
+                        ColumnNote(text: Text("Recording follows the desktop in front."))
+                        Color.clear.frame(height: 0)
+                    }
+                    .frame(maxHeight: .infinity, alignment: .top)
                 }
             case .row:
                 HStack(spacing: 8) {
@@ -188,18 +190,20 @@ struct DesktopsList: View {
         .onDisappear { model.disappeared() }
     }
 
-    /// Its natural width when it fits; otherwise it scrolls sideways.
+    /// A desktop named after a window is cut past this width, and shows whole as its help.
+    private static let longestTitle = 132.0
+
+    /// Its natural width when it fits; otherwise the desktops scroll sideways inside it, faded at an edge with
+    /// more past it, with the one in front in view.
     private func selector(_ spaces: [DesktopSpace]) -> some View {
-        let segmented = GlassSegmented(
-            items: spaces.map { GlassSegmented.Item(value: $0.id, title: Self.title(of: $0.label)) },
-            selection: Binding(
-                get: { spaces.first(where: \.isCurrent)?.id ?? 0 },
-                set: { model.jump(to: $0) }),
-            compact: true)
+        let items = spaces.map { GlassSegmented.Item(value: $0.id, title: Self.title(of: $0.label)) }
+        let selection = Binding(
+            get: { spaces.first(where: \.isCurrent)?.id ?? 0 },
+            set: { model.jump(to: $0) })
         return ViewThatFits(in: .horizontal) {
-            segmented.fixedSize()
-            ScrollView(.horizontal) { segmented }
-                .scrollIndicators(.hidden)
+            GlassSegmented(items: items, selection: selection, compact: true, maxTitleWidth: Self.longestTitle)
+                .fixedSize()
+            GlassSegmented(items: items, selection: selection, compact: true, scrolls: true, maxTitleWidth: Self.longestTitle)
         }
     }
 

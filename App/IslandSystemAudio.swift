@@ -101,7 +101,7 @@ struct SystemAudioPicker: View {
                             panel.setSystemAudio(.applications([]))
                         }
                     }),
-                compact: true)
+                compact: true, fills: true)
             if case .applications = panel.selection.systemAudio {
                 HStack(spacing: 6) {
                     chosenIcons

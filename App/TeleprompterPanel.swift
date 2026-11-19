@@ -428,7 +428,8 @@ private struct ScriptEditor: View {
     }
 }
 
-/// Edit or Done, the text size, the speed, the opacity, and "Not in the video". Every change is saved.
+/// Edit or Done and the text size on the left, the speed and the opacity with their values in the middle, and
+/// "Not in the video", a quiet note rather than a control, on the right. Every change is saved.
 private struct TeleprompterControls: View {
     let model: TeleprompterModel
 
@@ -436,20 +437,19 @@ private struct TeleprompterControls: View {
         let setting = model.setting
         let settings = setting.value
         HStack(spacing: 10) {
-            HStack(spacing: 8) {
-                Button {
-                    model.isEditing ? model.endEditing() : model.beginEditing()
-                } label: {
-                    Label {
-                        model.isEditing ? Text("Done") : Text("Edit")
-                    } icon: {
-                        Image(systemName: model.isEditing ? "checkmark" : "pencil").symbolRenderingMode(.hierarchical)
-                    }
+            Button {
+                model.isEditing ? model.endEditing() : model.beginEditing()
+            } label: {
+                Label {
+                    model.isEditing ? Text("Done") : Text("Edit")
+                } icon: {
+                    Image(systemName: model.isEditing ? "checkmark" : "pencil").symbolRenderingMode(.hierarchical)
                 }
-                .buttonStyle(GlassButtonStyle(compact: true))
-                TextSizeControl(size: settings.fontSize) { steps in
-                    setting.update { $0.fontSize += Double(steps) * TeleprompterSettings.fontStep }
-                }
+                .contentTransition(.opacity)
+            }
+            .buttonStyle(GlassButtonStyle(compact: true))
+            TextSizeControl(size: settings.fontSize) { steps in
+                setting.update { $0.fontSize += Double(steps) * TeleprompterSettings.fontStep }
             }
             Spacer(minLength: 0)
             SliderControl(
@@ -463,19 +463,29 @@ private struct TeleprompterControls: View {
                 range: TeleprompterSettings.opacities, step: 0.05,
                 valueText: settings.opacity.formatted(.percent.precision(.fractionLength(0))))
             Spacer(minLength: 0)
-            HStack(spacing: 5) {
-                Image(systemName: "eye.slash").symbolRenderingMode(.hierarchical)
+            Label {
                 Text("Not in the video")
+            } icon: {
+                Image(systemName: "eye.slash").symbolRenderingMode(.hierarchical)
             }
-            .font(.system(size: 10.5))
-            .padding(.horizontal, 9)
-            .padding(.vertical, 3)
-            .background(Capsule().fill(Color.white.opacity(0.12)))
+            .labelStyle(TightLabelStyle())
+            .font(.system(size: 11))
+            .opacity(0.5)
             .fixedSize()
         }
         .font(.system(size: 11.5))
         .lineLimit(1)
-        .padding(.horizontal, 10)
+        .padding(.horizontal, 12)
+    }
+}
+
+/// A label with its icon close to its title.
+private struct TightLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon
+            configuration.title
+        }
     }
 }
 
@@ -489,7 +499,8 @@ private struct TextSizeControl: View {
         HStack(spacing: 4) {
             Image(systemName: "textformat.size")
                 .symbolRenderingMode(.hierarchical)
-                .opacity(0.9)
+                .opacity(0.75)
+                .padding(.trailing, 2)
             button("minus", steps: -1, isEnabled: size > TeleprompterSettings.fontSizes.lowerBound)
             button("plus", steps: 1, isEnabled: size < TeleprompterSettings.fontSizes.upperBound)
         }
@@ -512,37 +523,61 @@ private struct TextSizeControl: View {
         Button { step(steps) } label: {
             Image(systemName: symbol)
                 .font(.system(size: 9, weight: .bold))
-                .frame(width: 22, height: 22)
+                .frame(width: 24, height: 24)
         }
         .buttonStyle(GlassButtonStyle(shape: .circle))
         .disabled(!isEnabled)
     }
 }
 
-/// A slider with its symbol, its title as help and for VoiceOver.
+/// A slider with its symbol, and its value after it in tabular digits; its title is its help and what VoiceOver
+/// reads. Continuous under the pointer (no tick marks), its value kept to `step`.
 private struct SliderControl: View {
     let symbol: String
     let title: Text
     @Binding var value: Double
     let range: ClosedRange<Double>
     let step: Double
-    /// The value, for VoiceOver.
+    /// The value as it is shown and read.
     let valueText: String
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 7) {
             Image(systemName: symbol)
                 .symbolRenderingMode(.hierarchical)
-                .opacity(0.9)
+                .opacity(0.75)
                 .accessibilityHidden(true)
-            Slider(value: $value, in: range, step: step) { title }
+            Slider(value: stepped, in: range) { title }
                 .labelsHidden()
                 .controlSize(.mini)
                 .tint(.white)
-                .frame(width: 84)
+                .frame(width: 76)
                 .accessibilityValue(Text(verbatim: valueText))
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: stepped.wrappedValue = value + step
+                    case .decrement: stepped.wrappedValue = value - step
+                    @unknown default: break
+                    }
+                }
+            Text(verbatim: valueText)
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .opacity(0.6)
+                .frame(width: 32, alignment: .leading)
+                .accessibilityHidden(true)
         }
         .contentShape(Rectangle())
         .help(title)
+    }
+
+    /// The value, kept to `step` from the bottom of the range.
+    private var stepped: Binding<Double> {
+        Binding(
+            get: { value },
+            set: { new in
+                let steps = ((new - range.lowerBound) / step).rounded()
+                value = min(max(range.lowerBound + steps * step, range.lowerBound), range.upperBound)
+            })
     }
 }

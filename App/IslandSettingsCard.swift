@@ -30,31 +30,34 @@ extension OpenPanelModel {
     }
 }
 
-/// The settings card (notch design §5.2): on the left, what the take records at — the frame rate of each display
-/// it records (or of the window), one resolution for all, and the camera's quality and frame rate while it is on;
-/// on the right, the countdown, what a stop does, Do Not Disturb and hiding the desktop's icons; at the bottom the
-/// encoder's load, with what would lighten it.
+/// The settings card (notch design §5.2), as wide as the cards it covers: on the left, what the take records at —
+/// the frame rate of each display it records (or of the window), one resolution for all, and the camera's quality
+/// and frame rate while it is on; on the right, the countdown, what a stop does, Do Not Disturb and hiding the
+/// desktop's icons; at the bottom the encoder's load, with what would lighten it. Each row has its name on the
+/// left and its control on the right.
 struct SettingsCard: View {
     @Bindable var panel: OpenPanelModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top, spacing: 12) {
-                capture.frame(width: 262, alignment: .topLeading)
-                Divider().overlay(Color.white.opacity(0.12))
-                takeSettings.frame(width: 250, alignment: .topLeading)
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 14) {
+                capture.frame(width: 296, alignment: .topLeading)
+                Divider().overlay(Color.white.opacity(0.1))
+                takeSettings.frame(maxWidth: .infinity, alignment: .topLeading)
             }
             .fixedSize(horizontal: false, vertical: true)
-            Divider().overlay(Color.white.opacity(0.12))
+            Divider().overlay(Color.white.opacity(0.1))
             LoadSettingsSection(panel: panel, verdict: panel.load)
         }
         .font(.system(size: 12.5))
-        .padding(12)
-        .frame(width: 560, alignment: .leading)
+        .padding(14)
+        // As wide as the cards it covers, its edges on theirs.
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(Color(white: 0.1).opacity(0.96))
-                .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(Color.white.opacity(0.16)))
+            RoundedRectangle(cornerRadius: Column<EmptyView>.radius, style: .continuous)
+                .fill(Color(white: 0.09))
+                .overlay(RoundedRectangle(cornerRadius: Column<EmptyView>.radius, style: .continuous).strokeBorder(Color.white.opacity(0.14)))
+                .shadow(color: .black.opacity(0.45), radius: 18, y: 6)
         }
         // Clicks on the card stay on it.
         .contentShape(Rectangle())
@@ -85,8 +88,7 @@ struct SettingsCard: View {
                 }
             }
             // Native or Points, for the displays and the window alike.
-            HStack {
-                Spacer(minLength: 0)
+            SettingsRow(title: Text("Resolution", comment: "The export sheet: the MP4's resolution")) {
                 GlassSegmented(
                     items: [
                         .init(value: CaptureScale.native, title: Text("Native", comment: "Display resolution: the display's own pixels")),
@@ -140,7 +142,7 @@ struct SettingsCard: View {
             }
             FocusShortcutToggle(setting: panel.focusShortcut)
             SettingsToggle(
-                title: Text("Hide Desktop Icons"), icon: "eye.slash",
+                title: Text("Hide Desktop Icons"),
                 isOn: Binding(get: { panel.hideDesktopIcons.isOn }, set: { panel.hideDesktopIcons.set($0) }))
         }
     }
@@ -150,17 +152,21 @@ struct SettingsCard: View {
     }
 }
 
-/// A setting's name on the left, its control on the right.
+/// A setting's name on the left (two lines if it needs them, never cut in the middle), its control on the right.
 private struct SettingsRow<Control: View>: View {
     let title: Text
     @ViewBuilder let control: Control
 
     var body: some View {
-        HStack(spacing: 8) {
-            title.opacity(0.75).lineLimit(1).truncationMode(.middle)
+        HStack(spacing: 10) {
+            title
+                .opacity(0.75)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
-            control
+            control.fixedSize()
         }
+        .frame(minHeight: 26)
     }
 }
 
@@ -177,11 +183,7 @@ private struct FocusShortcutToggle: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Toggle(isOn: Binding(get: { setting.identifier != nil || isChoosing }, set: turn)) {
-                Label { Text("Do Not Disturb") } icon: { Image(systemName: "moon.fill").symbolRenderingMode(.hierarchical) }
-            }
-            .toggleStyle(.switch)
-            .controlSize(.mini)
+            SettingsToggle(title: Text("Do Not Disturb"), isOn: Binding(get: { setting.identifier != nil || isChoosing }, set: turn))
             if isChoosing { choices }
         }
     }
@@ -224,17 +226,22 @@ private struct FocusShortcutToggle: View {
     }
 }
 
-/// A switch with an icon and a title.
+/// A switch: its title on the left, the switch on the right, as the other rows' controls.
 private struct SettingsToggle: View {
     let title: Text
-    let icon: String
     @Binding var isOn: Bool
 
     var body: some View {
-        Toggle(isOn: $isOn) {
-            Label { title } icon: { Image(systemName: icon).symbolRenderingMode(.hierarchical) }
+        HStack(spacing: 10) {
+            title
+                .opacity(0.75)
+                .accessibilityHidden(true)
+            Spacer(minLength: 0)
+            Toggle(isOn: $isOn) { title }
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .controlSize(.mini)
         }
-        .toggleStyle(.switch)
-        .controlSize(.mini)
+        .frame(minHeight: 26)
     }
 }
