@@ -10,8 +10,10 @@
 /// (`migrate`), goes back (`reverted`) and tells what commutes with a migration (`touchesAddedFields`) for every row.
 ///
 /// Both are *additive*: every place the older version writes still exists, with the same meaning, so a change of the
-/// older version gives the same document applied before or after the migration, unless it writes a place the migration
-/// adds or one that holds one (`touchesAddedFields`).
+/// older version commutes with the migration once it is carried through it (`carried(_:from:)`): one that writes a place
+/// holding a place the migration adds (a whole `TrackGain`, the whole `style`) gets it in its values, at its frozen value.
+/// Only a change that writes a place the migration adds, or under one, the whole document or `documentVersion` does not
+/// (`touchesAddedFields`).
 public enum DocumentMigration {
     /// The members the migration from version 1 adds to `camera`, in key order.
     public static let addedCameraFields = [
@@ -19,7 +21,7 @@ public enum DocumentMigration {
     ]
 
     /// The places each migration adds, by the version it migrates from, as JSON pointers: `*` stands for each member of
-    /// the object it is in (`/audio/tracks/*/cleanup`, the `cleanup` of every track).
+    /// the object it is in, or each element of the array (`/audio/tracks/*/cleanup`, the `cleanup` of every track).
     public static let addedPlaces: [Int: [String]] = migrations.mapValues { migration in
         migration.added.map { JSONPointer(components: $0.place).string }
     }
@@ -94,14 +96,21 @@ public enum DocumentMigration {
 
     /// `json`, a document of `version`, in the next version: the places of `addedPlaces[version]` at their frozen values
     /// (over any value they already had) and `documentVersion` one more. Throws `invalidDocument` at `/documentVersion`
-    /// from a version that has no migration or for a document that is not of `version`, and at the pointer of an object
-    /// it writes in that is missing or is not an object (`/camera` from 1; `/style`, `/camera`, `/audio`, `/audio/tracks`
-    /// or one of its members from 2).
+    /// from a version that has no migration or for a document that is not of `version`, at the pointer of an object it
+    /// writes in that is missing or is not an object (`/camera` from 1; `/style`, `/camera`, `/audio`, `/audio/tracks` or
+    /// one of its members from 2), and at what only the next version can hold, which a document of `version` never has
+    /// (from 2: a `/transcript`, or a `device` at `/style/frame/type`): the same places `reverted` refuses.
     public static func migrate(_ json: JSONValue, from version: Int) throws(EditChangeError) -> JSONValue {
         guard let migration = migrations[version], case .object(let document) = json,
             document["documentVersion"] == .integer(Int64(version))
         else {
             throw .invalidDocument("/documentVersion")
+        }
+        for place in migration.absent where json.value(at: JSONPointer(components: place)) != nil {
+            throw .invalidDocument(JSONPointer(components: place).string)
+        }
+        for (place, value) in migration.newValues where json.value(at: JSONPointer(components: place)) == value {
+            throw .invalidDocument(JSONPointer(components: place).string)
         }
         var migrated = json
         for (place, value) in migration.added {
@@ -118,28 +127,104 @@ public enum DocumentMigration {
 
     /// Whether a `migrate` line from `from` to `to`, where the document is at `version`, is one the edit log goes through
     /// (1c design §13.2): to the next version, from the one the document is at, by an additive migration. The replay
-    /// applies it there and goes on, and the undo history and the compaction keep the groups before it, unless a line
-    /// before it `touchesAddedFields`. Any other `migrate` stops the replay and cuts the history, as every one did in 1b:
+    /// applies it there and goes on, and the undo history and the compaction keep the groups before it, carried through
+    /// it (`carried(_:from:to:)`), unless a line before it `touchesAddedFields`. Any other `migrate` stops the replay and cuts the history, as every one did in 1b:
     /// one to the version the document is already at (`from: 1, to: 1`), one from a version it is not at (a `create` of
     /// version 2 followed by a `migrate` from 1) and one this app has no additive migration for.
     public static func follows(from: Int, to: Int, atVersion version: Int) -> Bool {
         to == from + 1 && from == version && isAdditive(from: from)
     }
 
-    /// Whether `change`, a line written before the migration from `version`, writes a place the migration reads or adds,
-    /// or one that holds one: the whole document, `documentVersion`, or a place that is a prefix of one of
-    /// `addedPlaces[version]` or is under one (`*` matching any member). From 1: `/camera` or anything under one of
-    /// `addedCameraFields`; from 2: `/style`, `/camera`, `/audio`, `/audio/tracks` and each of its tracks, and everything
-    /// under the places it adds. Then it does not commute with the migration. Always `true` for a migration that is not
-    /// additive, with which nothing is known to commute.
+    /// Whether `change`, a line written before the migration from `version`, does not commute with it even carried
+    /// through it (`carried(_:from:)` is `nil`): it writes the whole document, `documentVersion`, a place the migration
+    /// adds or one under it (from 1: one of `addedCameraFields` of `/camera`; from 2: `/captions`, `/style/reframe`,
+    /// `/audio/tracks/<track>/cleanup`…), or a value that holds a place it adds where that place cannot be written (not an
+    /// object on the way, or there already with another value). Then the `migrate` cuts the history before it, as in 1b.
+    /// A change of a place that holds one the migration adds (`/camera`, `/style`, `/audio/tracks/<track>`) commutes,
+    /// carried. Always `true` for a migration that is not additive, with which nothing is known to commute.
     public static func touchesAddedFields(_ change: EditChange, from version: Int) -> Bool {
-        guard let migration = migrations[version] else { return true }
-        let components = change.place.components
-        guard let first = components.first else { return true }
-        if first == "documentVersion" { return true }
-        return migration.added.contains { added in
-            zip(components, added.place).allSatisfy { written, place in place == "*" || written == place }
+        carried(change, from: version) == nil
+    }
+
+    /// `change`, a line written in `version`, as it is in the next version: what the migration from `version` does to
+    /// the document it does to the values the change writes, so applying it after the migration gives the migrated
+    /// document of applying it before. A value written at a place that holds a place the migration adds (a `set` of
+    /// `/audio/tracks/<track>` from 2, or the elements of a collection that hold one) gets that place at its frozen value
+    /// (`cleanup = 0`); a value of `null` (a member not there, plan decision 4) stays `null`; every other value stays as it
+    /// is. `nil` when it does not commute (`touchesAddedFields`): from a version without an additive migration, for the
+    /// whole document or `documentVersion`, a place the migration adds or one under it, and a value where the place
+    /// cannot be written (not an object on the way, or there already with another value).
+    ///
+    /// The replay, `UndoHistory`, `LogCompaction` and the editor all carry the changes of before a `migrate` that keeps
+    /// the history, so an undo or a redo after it applies them to the migrated document. The other way is never needed:
+    /// a document is never "unmigrated", and a change is never applied to a version older than the one it was written in.
+    public static func carried(_ change: EditChange, from version: Int) -> EditChange? {
+        guard let migration = migrations[version] else { return nil }
+        let place = change.place.components
+        guard let first = place.first, first != "documentVersion" else { return nil }
+        // A `set` writes its values at its path, the other changes theirs at an element of the collection.
+        let written = if case .set = change { place } else { place + ["*"] }
+        var carried = change
+        for (added, frozen) in migration.added {
+            switch relation(of: written, to: added) {
+            case .apart:
+                continue
+            case .over:
+                return nil
+            case let .holding(rest):
+                guard let next = carried.mappingValues({ $0.carrying(frozen, at: rest) }) else { return nil }
+                carried = next
+            }
         }
+        return carried
+    }
+
+    /// `changes`, written in `version`, carried through each migration up to `target` (`carried(_:from:)`); themselves
+    /// when `target` is `version`, `nil` if one of them does not commute with one of the migrations or `target` is older.
+    public static func carried(_ changes: [EditChange], from version: Int, to target: Int) -> [EditChange]? {
+        guard version <= target else { return nil }
+        var changes = changes
+        for from in version..<target {
+            var next: [EditChange] = []
+            next.reserveCapacity(changes.count)
+            for change in changes {
+                guard let carried = carried(change, from: from) else { return nil }
+                next.append(carried)
+            }
+            changes = next
+        }
+        return changes
+    }
+
+    /// How the place a change writes its values at (`*` for an element of a collection) stands to a place a migration
+    /// adds (`*` for each member or element).
+    private enum Relation {
+        /// Neither holds the other.
+        case apart
+        /// The change writes the added place, or under it, or the elements of a collection where the place is one of
+        /// them.
+        case over
+        /// The change's values hold the added place, at `rest` under them.
+        case holding(rest: ArraySlice<String>)
+    }
+
+    private static func relation(of written: [String], to added: [String]) -> Relation {
+        for (component, place) in zip(written, added) where component != place {
+            if place == "*", component != "*" { continue }
+            return component == "*" ? .over : .apart
+        }
+        return written.count < added.count ? .holding(rest: added[written.count...]) : .over
+    }
+
+    /// The oldest version, from `floor` on, that holds `document` (`reverted` gives it): the version a document never
+    /// edited is written in, so an older app still opens it until the first edit migrates it. The current version if no
+    /// older one holds it, or it cannot be encoded.
+    public static func oldestVersion(holding document: EditDocument, from floor: Int = 1) -> Int {
+        guard let json = try? JSONValue(encoding: document) else { return EditDocument.currentVersion }
+        for version in max(floor, 1)..<EditDocument.currentVersion where reverted(json, to: version) != nil {
+            return version
+        }
+        return EditDocument.currentVersion
     }
 
     /// `json`, a document, as it is in `version`: itself if it is of `version`; from a newer one, one version at a time
@@ -231,17 +316,42 @@ extension EditChange {
         case let .insert(collection, _, _), let .remove(collection, _, _), let .replace(collection, _, _, _): collection
         }
     }
+
+    /// This change with each value it writes or checks (`before`, `after`, `value`) through `transform`; `nil` if
+    /// `transform` gives `nil` for one.
+    fileprivate func mappingValues(_ transform: (JSONValue) -> JSONValue?) -> EditChange? {
+        switch self {
+        case let .set(path, before, after):
+            guard let before = transform(before), let after = transform(after) else { return nil }
+            return .set(path: path, before: before, after: after)
+        case let .insert(collection, index, value):
+            return transform(value).map { .insert(collection: collection, index: index, value: $0) }
+        case let .remove(collection, index, value):
+            return transform(value).map { .remove(collection: collection, index: index, value: $0) }
+        case let .replace(collection, id, before, after):
+            guard let before = transform(before), let after = transform(after) else { return nil }
+            return .replace(collection: collection, id: id, before: before, after: after)
+        }
+    }
 }
 
 extension JSONValue {
     /// Writes `value` at `place` of this object, under `path` of the document: each object on the way must be there
-    /// (`invalidDocument` at its pointer if it is missing or is not an object), and `*` writes under each member.
+    /// (`invalidDocument` at its pointer if it is missing or is not an object), and `*` writes under each member, or each
+    /// element of an array.
     fileprivate mutating func write(
         _ value: JSONValue, at place: ArraySlice<String>, under path: [String]
     ) throws(EditChangeError) {
-        guard case .object(var members) = self else { throw .invalidDocument(JSONPointer(components: path).string) }
         guard let key = place.first else { return }
         let rest = place.dropFirst()
+        if key == "*", !rest.isEmpty, case .array(var elements) = self {
+            for index in elements.indices {
+                try elements[index].write(value, at: rest, under: path + [String(index)])
+            }
+            self = .array(elements)
+            return
+        }
+        guard case .object(var members) = self else { throw .invalidDocument(JSONPointer(components: path).string) }
         if rest.isEmpty {
             members[key] = value
         } else if key == "*" {
@@ -256,11 +366,19 @@ extension JSONValue {
         self = .object(members)
     }
 
-    /// This object without the member `value` at `place` (`*` for each member on the way): `false`, and this value as it
-    /// was, if one is missing or has another value.
+    /// This object without the member `value` at `place` (`*` for each member or element on the way): `false`, and this
+    /// value as it was, if one is missing or has another value.
     fileprivate mutating func remove(_ value: JSONValue, at place: ArraySlice<String>) -> Bool {
-        guard case .object(var members) = self, let key = place.first else { return false }
+        guard let key = place.first else { return false }
         let rest = place.dropFirst()
+        if key == "*", !rest.isEmpty, case .array(var elements) = self {
+            for index in elements.indices {
+                guard elements[index].remove(value, at: rest) else { return false }
+            }
+            self = .array(elements)
+            return true
+        }
+        guard case .object(var members) = self else { return false }
         if rest.isEmpty {
             guard members.removeValue(forKey: key) == value else { return false }
         } else if key == "*" {
@@ -274,6 +392,44 @@ extension JSONValue {
         }
         self = .object(members)
         return true
+    }
+
+    /// This value, written by a change at a place that holds the place `rest` under it, with that place at `frozen`
+    /// (`*` for each member or element): itself if it is `null` (a member not there); `nil` if an object on the way is
+    /// missing or is not one, or the place is there already with another value.
+    fileprivate func carrying(_ frozen: JSONValue, at rest: ArraySlice<String>) -> JSONValue? {
+        guard self != .null, let key = rest.first else { return self }
+        let next = rest.dropFirst()
+        if key == "*", !next.isEmpty {
+            switch self {
+            case let .object(members):
+                var carried: [String: JSONValue] = [:]
+                for (name, member) in members {
+                    guard let value = member.carrying(frozen, at: next) else { return nil }
+                    carried[name] = value
+                }
+                return .object(carried)
+            case let .array(elements):
+                var carried: [JSONValue] = []
+                carried.reserveCapacity(elements.count)
+                for element in elements {
+                    guard let value = element.carrying(frozen, at: next) else { return nil }
+                    carried.append(value)
+                }
+                return .array(carried)
+            default:
+                return nil
+            }
+        }
+        guard case .object(var members) = self else { return nil }
+        if next.isEmpty {
+            if let there = members[key], there != frozen { return nil }
+            members[key] = frozen
+        } else {
+            guard let member = members[key], let carried = member.carrying(frozen, at: next) else { return nil }
+            members[key] = carried
+        }
+        return .object(members)
     }
 
     /// Sets the member `key` of this object; nothing on anything else.

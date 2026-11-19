@@ -400,8 +400,10 @@ struct EditCheck: ParsableCommand {
             return
         }
         guard isInitial(created) else { throw failure("the create of edit-log.jsonl is not the \(kind) document") }
-        guard let replay = EditReplay.replay(snapshot: nil, entries: entries), replay.mismatchSeq == nil,
-            replay.lastAppliedSeq == seq
+        // A new document's `create` is in the oldest version that holds it (2), and the first edit migrates it.
+        let createVersion = log?.createVersion ?? EditDocument.currentVersion
+        guard let replay = EditReplay.replay(snapshot: nil, entries: entries, createVersion: createVersion),
+            replay.mismatchSeq == nil, replay.lastAppliedSeq == seq
         else {
             throw failure("edit-log.jsonl does not replay to its last line, seq \(seq)")
         }
@@ -409,11 +411,23 @@ struct EditCheck: ParsableCommand {
             throw failure("the project does not open with the replay of edit-log.jsonl: edit.json does not agree with it")
         }
 
-        let history = UndoHistory(entries: entries)
+        let history = UndoHistory(entries: entries, createVersion: createVersion)
         let live = Set(history.done + history.undone)
         var groups: [Int: [EditChange]] = [:]
-        for case let .do(_, group, _, changes, _) in entries where live.contains(group) {
-            groups[group, default: []] += changes
+        var walk = DocumentMigration.LogWalk(createVersion: createVersion)
+        for entry in entries {
+            switch entry {
+            case let .migrate(_, from, to):
+                _ = walk.walkMigrate(from: from, to: to)
+            case let .do(_, group, _, changes, _) where live.contains(group):
+                // Undone on the document of the current version: carried there from the version the line is in.
+                guard let carried = DocumentMigration.carried(changes, from: walk.version, to: EditDocument.currentVersion) else {
+                    throw failure("the changes of group \(group) do not carry to the current version")
+                }
+                groups[group, default: []] += carried
+            default:
+                break
+            }
         }
         var json: JSONValue
         do {

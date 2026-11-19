@@ -908,8 +908,9 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-2`, en orden: la 
 
 Un proyecto de 1b o de 1c sigue siendo de su versión en el disco hasta que se lo edita en la fase 2: mirarlo no lo cambia.
 - Con el proyecto de la preparación: abrirlo en la app de la fase 2, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 1. Abrirlo otra vez con `~/Desktop/Toma-fase1.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
+- Una toma grabada con la copia de la fase 1 y nunca abierta en el editor: abrirla en la fase 2 sin tocar nada y cerrarla. La copia de la fase 1 la sigue abriendo como una toma suya, sin aviso.
 - Editarlo en la fase 2 (otro margen) y cerrarlo. Abierto con la copia de la fase 1, dice que el proyecto se editó con una versión más nueva de Toma (nunca que está dañado) y no escribe nada.
-- Deshacer en la fase 2 después de esa edición: si el proyecto tenía en 1c un cambio de volumen o de silencio, o un estilo aplicado, Deshacer se detiene en la primera edición de la fase 2 (es lo esperado, `docs/format/README.md`, «Cambios del documento 3»); si no, vuelve paso a paso hasta las ediciones de 1c.
+- Deshacer en la fase 2 después de esa edición: vuelve paso a paso hasta las ediciones de 1c, también un cambio de volumen o de silencio de una pista y un estilo aplicado (la pista y el estilo quedan como estaban antes de cada uno), y Rehacer las trae de vuelta en orden.
 
 **Monitoreo de entrada** (B4a)
 

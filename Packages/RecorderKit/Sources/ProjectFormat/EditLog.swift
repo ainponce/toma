@@ -670,7 +670,9 @@ public struct EditReplay: Sendable {
     }
 
     /// The `do` lines of each group and whether they are applied, and the version of the document, as the replay goes
-    /// through the log.
+    /// through the log. A group's changes are always in the version the document is at: a `migrate` that keeps the
+    /// history carries them through it (`DocumentMigration.carried(_:from:to:)`), so its undo or redo after the `migrate`
+    /// applies to the migrated document.
     private struct Groups {
         private enum State {
             case applied, undone
@@ -737,13 +739,16 @@ public struct EditReplay: Sendable {
                     undone.remove(group)
                 }
             case let .migrate(_, from, to):
-                // An additive migrate keeps the history; any other cuts it, and every group closes (rare: one per
-                // change of the document's version).
-                if !walk.walkMigrate(from: from, to: to) {
-                    for (id, group) in groups where group.state != .closed {
+                // An additive migrate keeps the history, every group carried through it; any other cuts it, and every
+                // group closes (rare: one per change of the document's version).
+                let keeps = walk.walkMigrate(from: from, to: to)
+                for (id, group) in groups where group.state != .closed {
+                    if keeps, let carried = DocumentMigration.carried(group.changes, from: from, to: to) {
+                        groups[id]?.changes = carried
+                    } else {
                         groups[id] = Group(state: .closed, changes: [])
+                        undone.remove(id)
                     }
-                    undone.removeAll()
                 }
             }
         }

@@ -640,8 +640,14 @@ enum CameraSectionExample {
     let block = try JSONValue(
         encoding: LayoutBlock(id: "l-00000001", take: "take-001", start: ns(1), end: ns(2), kind: .screenOnly, instant: false))
     let change = try JSONValue(encoding: DesignExample.document.camera.changes[0])
+    // The whole camera of a document of version 1, shown and hidden: carried through the migration, it commutes.
+    let camera = try #require(try parsed(DocumentV1Example.canonical)["camera"])
+    var hidden = camera
+    hidden["show"] = .bool(false)
     let cases: [(EditChange, Bool)] = [
         (try set(""), true),
+        (.set(path: try JSONPointer("/camera"), before: camera, after: hidden), false),
+        // Not a camera: the migration has nothing to write in.
         (try set("/camera"), true),
         (try set("/camera/mirror"), true),
         (try set("/camera/border/width"), true),
