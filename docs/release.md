@@ -946,6 +946,9 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 **Máscaras y caras con Vision** (I8; se recorre con la pestaña Cámara de I13)
 
 - Con una toma real con cámara (una persona que se mueve, gira la cara y sale del cuadro unos segundos): con Fondo Desenfocado, en `~/Library/Caches/dev.toma.Toma/Projects/<id>/masks/<toma>/<pista>/` aparece un `…-personMask-1.mov` por segmento de la cámara. Abierto en QuickTime, dura lo mismo que el segmento, la silueta blanca sigue a la persona sin parpadear y queda negro mientras no hay nadie. Con Seguir la cara, `faces/…/…-faceTrack-1.json` tiene `face` en las muestras con la cara a la vista y no la tiene mientras la persona no está.
+**Subtítulos quemados** (A8; se prenden y se eligen en la pestaña Subtítulos de A11)
+
+En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico y en Grande, abajo y arriba, con y sin mayúsculas: la vista previa y el MP4 exportado (1080p y 4K, 16:9 y 9:16) se ven iguales y nítidos, sin acentos, eñes ni colas cortados (Á, ñ, ¿, g, p); el contorno de Destacado es parejo en todas las letras y tamaños; la palabra que se dice se pinta de amarillo y pasa a la siguiente sin parpadear entre palabras; con zoom y su desenfoque de movimiento los subtítulos quedan quietos y nítidos. En la M1, la vista previa a 1080p con Destacado se reproduce a 60 fps sin cuadros salteados cuando cambia la palabra (fila A8 de `docs/performance.md`).
 
 ## Prueba en seco (ad hoc)
 
