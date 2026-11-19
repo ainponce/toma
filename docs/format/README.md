@@ -1118,7 +1118,7 @@ La versión 4 llega con la fase 2, para las tomas que graban un iPhone o un iPad
 
   | `kind` | Qué graba | Segmentos | Campos de `source` |
   |---|---|---|---|
-  | `device` | La pantalla de un iPhone o un iPad conectado por cable: es la pantalla de la toma, como `display` o `window`. | video | `name`, `deviceUniqueID` |
+  | `device` | La pantalla de un iPhone o un iPad conectado por cable: es la pantalla de la toma, como `display` o `window`. | video | `name`, `deviceUniqueID`, `globalFrame`, `pixelScale` |
   | `deviceAudio` | El sonido de ese iPhone o iPad, en una pista aparte. | audio | `name`, `deviceUniqueID` |
 
   La recuperación y la verificación leen video en `device` y audio en `deviceAudio`.
@@ -1140,3 +1140,10 @@ Compatibilidad:
 - **El lector acepta 1…4** (`Manifest.supportedFormatVersions`, `1...4`) y rechaza cualquier otra antes de decodificar el manifiesto: un manifiesto de la versión 5 o más es de una Toma más nueva (*versión más nueva* en la biblioteca, *para reparar* en la recuperación, que no lo toca).
 - La app de la fase 1 (lector de `1...3`) dice que un paquete v4 es de una versión más nueva, nunca que está dañado, y no lo toca. Un paquete de la fase 2 sin iPhone ni teclas sigue en 3 y lo abre igual.
 - Un lector que no conoce `keyPress` salta esas líneas, como cualquier línea que no entiende; la versión 4 del manifiesto ya avisa antes.
+
+### Las pistas de un iPhone o un iPad
+
+- El `source` de una pista `device`: `name`, el nombre del dispositivo; `deviceUniqueID`, su `AVCaptureDevice.uniqueID` (el mismo cada vez que se conecta ese dispositivo); `globalFrame`, `{"x": 0, "y": 0, "width": …, "height": …}` en **píxeles** del formato activo del dispositivo al empezar la toma, y `pixelScale` 1. No es un lugar en el escritorio de la Mac: con el origen en (0, 0) y la escala 1, la geometría coloca la pantalla del dispositivo tal como es. Si el dispositivo no dice su tamaño, faltan `globalFrame` y `pixelScale`.
+- Al girar el dispositivo cambia el tamaño de sus cuadros: la pista sigue en un segmento nuevo (`formatChanged`) y `globalFrame` sigue siendo el del comienzo, el tamaño del primer segmento.
+- `deviceAudio` es el sonido que llega por el mismo cable, del mismo dispositivo (su `source` lleva el mismo `name` y `deviceUniqueID`, sin `globalFrame`), en el formato propio del dispositivo y en una pista aparte de `mic` y `systemAudio`.
+- Desconectar el cable termina el segmento abierto de las dos pistas (`streamError`); al volver a conectar **el mismo** dispositivo (el mismo `deviceUniqueID`, nunca otro que esté conectado), las dos siguen en segmentos nuevos, como cualquier pista que se reinicia.

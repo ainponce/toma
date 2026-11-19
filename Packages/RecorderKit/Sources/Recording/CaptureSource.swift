@@ -17,7 +17,8 @@ public protocol CaptureSink: AnyObject, Sendable {
     func source(_ trackID: String, didStopWithError error: any Error)
 }
 
-/// A live producer of one track: a display, a window, a camera, a microphone or system audio.
+/// A live producer of one track: a display, a window, a camera, a microphone, system audio, or the screen or the
+/// sound of an iPhone or iPad connected by cable.
 public protocol CaptureSource: AnyObject, Sendable {
     var trackID: String { get }
     var kind: TrackKind { get }
@@ -65,6 +66,13 @@ public enum CaptureSourceError: Error, Equatable {
     /// Core Audio refused a step of system audio capture (listing processes, the tap, its aggregate device or
     /// its IOProc) with `status`, or the tap's format changed (`kAudioDeviceUnsupportedFormatError`).
     case systemAudioUnavailable(status: Int32)
+    /// The iPhone or iPad with this `uniqueID` is not connected (or not unlocked and trusted, or screen devices are
+    /// not allowed yet). Another device connected meanwhile is never taken instead.
+    case deviceNotFound(uniqueID: String)
+    /// The iPhone or iPad being recorded was disconnected.
+    case deviceDisconnected
+    /// The iPhone or iPad stopped delivering: its session was interrupted or stopped running.
+    case deviceInterrupted
 }
 
 extension DispatchSerialQueue {

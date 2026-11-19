@@ -5957,6 +5957,39 @@
         }
       }
     },
+    "The iPhone or iPad isn't connected. Connect it with a cable, unlock it and tap Trust." : {
+      "comment" : "An error: the iPhone or iPad being recorded by cable is not connected.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El iPhone o el iPad no está conectado. Conectarlo con un cable, desbloquearlo y tocar Confiar."
+          }
+        }
+      }
+    },
+    "The iPhone or iPad stopped sending its screen." : {
+      "comment" : "An error: the iPhone or iPad being recorded by cable stopped delivering its screen.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El iPhone o el iPad dejó de enviar su pantalla."
+          }
+        }
+      }
+    },
+    "The iPhone or iPad was disconnected." : {
+      "comment" : "An error: the iPhone or iPad being recorded by cable was disconnected.",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se desconectó el iPhone o el iPad."
+          }
+        }
+      }
+    },
     "The iPhone or iPad's audio capture resumed." : {
       "localizations" : {
         "es" : {
