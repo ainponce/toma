@@ -456,8 +456,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         switch (surface, path) {
+        case ("onboarding", let states?):  // new, mixed or done: made-up permissions
+            onboarding = OnboardingWindowController(showcase: states)
+            present(onboarding)
         case ("onboarding", _): showOnboarding()
-        case ("settings", _): showSettings()
+        case ("settings", let pane):  // general, recording or shortcuts
+            showSettings()
+            if let pane { settings?.showcase(pane: pane) }
         case ("notices", _): showThirdPartyNotices()
         case ("island", _):
             makeIsland()

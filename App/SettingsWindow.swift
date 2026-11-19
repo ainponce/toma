@@ -7,12 +7,14 @@ import SwiftUI
 import os
 
 /// The app's settings: the countdown before a take, what a stop does, hiding the desktop's icons, noting when keys are
-/// typed, the shortcut that turns Do Not Disturb on and the global shortcuts. A titled window like the permissions one,
-/// so while it is open (and no take records) the app is in the Dock.
+/// typed, the shortcut that turns Do Not Disturb on and the global shortcuts. A Mac settings window: its panes' icons in
+/// the toolbar, as tall as the pane shown. Titled like the permissions one, so while it is open (and no take records) the
+/// app is in the Dock.
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let onClose: () -> Void
     private let model: SettingsModel
+    private let tabs: SettingsTabsController
 
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
@@ -23,12 +25,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         model = SettingsModel(
             store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
             focusShortcut: focusShortcut, appearance: appearance)
+        tabs = SettingsTabsController(model: model)
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 330), styleMask: [.titled, .closable], backing: .buffered,
-            defer: false)
+            contentRect: NSRect(x: 0, y: 0, width: SettingsPaneView.width, height: 300), styleMask: [.titled, .closable],
+            backing: .buffered, defer: false)
         window.title = String(localized: "Settings")
+        window.toolbarStyle = .preference
         window.isReleasedWhenClosed = false
-        window.contentView = NSHostingView(rootView: SettingsView(model: model))
+        window.contentViewController = tabs
+        tabs.fitWindow(animated: false)
         window.center()
         super.init(window: window)
         window.delegate = self
@@ -39,6 +44,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         nil
     }
 
+    #if DEBUG
+    /// `-TomaShowcase settings <general|recording|shortcuts>`: the window on that pane.
+    func showcase(pane: String) {
+        if let pane = SettingsPane(rawValue: pane) { tabs.selectedTabViewItemIndex = pane.index }
+    }
+    #endif
+
     /// Typing a shortcut ends when the window is left: the keys go elsewhere.
     func windowDidResignKey(_ notification: Notification) {
         model.stopRecordingShortcut()
@@ -48,6 +60,94 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         model.stopRecordingShortcut()
         // On the next turn: the window is still closing, and dropping this controller releases it.
         Task { self.onClose() }
+    }
+}
+
+/// The settings window's panes, in the toolbar's order.
+private enum SettingsPane: String, CaseIterable {
+    case general, recording, shortcuts
+
+    var index: Int { Self.allCases.firstIndex(of: self) ?? 0 }
+
+    var title: String {
+        switch self {
+        case .general: String(localized: "General", comment: "The settings pane of the app's look and what a stop does")
+        case .recording: String(localized: "Recording")
+        case .shortcuts: String(localized: "Shortcuts")
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .general: "gearshape"
+        case .recording: "record.circle"
+        case .shortcuts: "command"
+        }
+    }
+}
+
+/// The panes as the toolbar's tabs. A tab view controller leaves the window's size alone, so the window is fit to the
+/// pane shown: when it is chosen (animated, unless "Reduce motion") and when its content grows or shrinks.
+@MainActor
+private final class SettingsTabsController: NSTabViewController {
+    private var panes: [NSHostingController<SettingsPaneView>] = []
+
+    init(model: SettingsModel) {
+        super.init(nibName: nil, bundle: nil)
+        tabStyle = .toolbar
+        for pane in SettingsPane.allCases {
+            let controller = NSHostingController(rootView: SettingsPaneView(model: model, pane: pane))
+            controller.sizingOptions = .preferredContentSize
+            controller.title = pane.title
+            let item = NSTabViewItem(viewController: controller)
+            item.label = pane.title
+            item.image = NSImage(systemSymbolName: pane.symbol, accessibilityDescription: nil)
+            addTabViewItem(item)
+            panes.append(controller)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        nil
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        if tabViewItems.indices.contains(selectedTabViewItemIndex) {
+            view.window?.title = tabViewItems[selectedTabViewItemIndex].label
+        }
+        fitWindow(animated: false)
+    }
+
+    override func tabView(_ tabView: NSTabView, didSelect tabViewItem: NSTabViewItem?) {
+        super.tabView(tabView, didSelect: tabViewItem)
+        // A settings window is titled with its pane, as the system's are.
+        if let label = tabViewItem?.label { view.window?.title = label }
+        fitWindow(animated: view.window?.isVisible == true && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
+    }
+
+    override func preferredContentSizeDidChange(for viewController: NSViewController) {
+        super.preferredContentSizeDidChange(for: viewController)
+        guard panes.indices.contains(selectedTabViewItemIndex), viewController === panes[selectedTabViewItemIndex]
+        else { return }
+        fitWindow(animated: false)
+    }
+
+    /// The window as big as the pane shown wants, its top edge where it was.
+    func fitWindow(animated: Bool) {
+        guard let window = view.window, let content = window.contentView, panes.indices.contains(selectedTabViewItemIndex)
+        else { return }
+        let size = panes[selectedTabViewItemIndex].sizeThatFits(
+            in: CGSize(width: SettingsPaneView.width, height: .greatestFiniteMagnitude))
+        let frame = window.frame
+        // The title bar and the toolbar.
+        let chrome = CGSize(width: frame.width - content.frame.width, height: frame.height - content.frame.height)
+        let height = (size.height + chrome.height).rounded(.up)
+        let fitted = NSRect(
+            x: frame.minX, y: frame.maxY - height, width: SettingsPaneView.width + chrome.width, height: height)
+        guard fitted != frame else { return }
+        window.setFrame(fitted, display: true, animate: animated)
     }
 }
 
@@ -297,18 +397,43 @@ final class SettingsModel {
     }
 }
 
-private struct SettingsView: View {
+/// One pane of the settings window: a grouped form, as wide as every other pane so only the window's height changes.
+private struct SettingsPaneView: View {
+    static let width: CGFloat = 500
+
     let model: SettingsModel
+    let pane: SettingsPane
 
     var body: some View {
         Form {
-            Picker(selection: Binding(get: { model.appearance.value }, set: { model.appearance.set($0) })) {
-                ForEach(AppAppearance.allCases, id: \.self) { value in
-                    AppearanceSetting.label(for: value)
+            switch pane {
+            case .general: general
+            case .recording: recording
+            case .shortcuts: shortcuts
+            }
+        }
+        .formStyle(.grouped)
+        .frame(width: Self.width)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    @ViewBuilder
+    private var general: some View {
+        Section {
+            AppearancePicker(setting: model.appearance)
+            Picker(selection: Binding(get: { model.afterStop.value }, set: { model.afterStop.set($0) })) {
+                ForEach(AfterStop.allCases, id: \.self) { value in
+                    AfterStopSetting.label(for: value)
                 }
             } label: {
-                Text("Appearance")
+                Text("When Recording Stops")
             }
+        }
+    }
+
+    @ViewBuilder
+    private var recording: some View {
+        Section {
             Picker(selection: Binding(get: { model.countdown.seconds }, set: { model.countdown.set($0) })) {
                 ForEach(RecorderSettings.countdownOptions, id: \.self) { seconds in
                     CountdownSetting.label(for: seconds)
@@ -317,13 +442,6 @@ private struct SettingsView: View {
                 Text("Countdown")
             }
             .pickerStyle(.segmented)
-            Picker(selection: Binding(get: { model.afterStop.value }, set: { model.afterStop.set($0) })) {
-                ForEach(AfterStop.allCases, id: \.self) { value in
-                    AfterStopSetting.label(for: value)
-                }
-            } label: {
-                Text("When Recording Stops")
-            }
             Toggle(isOn: Binding(get: { model.hideDesktopIcons.isOn }, set: { model.hideDesktopIcons.set($0) })) {
                 Text("Hide desktop icons while recording")
             }
@@ -333,27 +451,174 @@ private struct SettingsView: View {
                     "For the zoom while typing. Nothing is noted in password fields.",
                     comment: "Under the setting that notes when keys are typed")
             }
-            Section {
-                FocusShortcutPicker(setting: model.focusShortcut)
-            } footer: {
+        }
+        Section {
+            FocusShortcutPicker(setting: model.focusShortcut)
+        } footer: {
+            SettingsFooter(
                 Text(
                     "Before the countdown, Toma runs the shortcut with the text “on”. If it answers “changed”, Toma runs it with “off” when the recording ends. The project's README says how to make it.",
-                    comment: "Under the Do Not Disturb shortcut in Settings; “on”, “off” and “changed” stay as they are")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                    comment: "Under the Do Not Disturb shortcut in Settings; “on”, “off” and “changed” stay as they are"))
+        }
+    }
+
+    @ViewBuilder
+    private var shortcuts: some View {
+        Section {
+            ForEach(HotKeyAction.allCases, id: \.self) { action in
+                ShortcutRow(model: model, action: action)
             }
-            Section {
-                ForEach(HotKeyAction.allCases, id: \.self) { action in
-                    ShortcutRow(model: model, action: action)
+        } footer: {
+            SettingsFooter(
+                Text(
+                    "Click a shortcut and type the new one. Esc cancels, ⌫ removes it.",
+                    comment: "Under the shortcuts in Settings"))
+        }
+        // The keys typed next would go to a pane that is not shown.
+        .onDisappear { model.stopRecordingShortcut() }
+    }
+}
+
+/// The text under a section, lined up with the rows' text above it as the system's settings set theirs.
+private struct SettingsFooter: View {
+    let text: Text
+
+    init(_ text: Text) {
+        self.text = text
+    }
+
+    var body: some View {
+        text
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Dark, Match System or Light, each drawn as a small window of that look, as the system's settings draw theirs.
+private struct AppearancePicker: View {
+    let setting: AppearanceSetting
+
+    var body: some View {
+        // Its name centered on the tiles, which a labeled row would top-align.
+        HStack {
+            Text("Appearance")
+            Spacer()
+            HStack(spacing: 4) {
+                ForEach(AppAppearance.allCases, id: \.self) { value in
+                    AppearanceChoice(value: value, isSelected: setting.value == value) { setting.set(value) }
                 }
-            } header: {
-                Text("Shortcuts")
             }
         }
-        .formStyle(.grouped)
-        .frame(width: 460)
-        .fixedSize(horizontal: false, vertical: true)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Appearance"))
+    }
+}
+
+/// One look: its small window, its name under it, a ring in the accent color once chosen.
+private struct AppearanceChoice: View {
+    let value: AppAppearance
+    let isSelected: Bool
+    let choose: () -> Void
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: choose) {
+            VStack(spacing: 6) {
+                AppearanceThumbnail(value: value)
+                    .frame(width: 68, height: 44)
+                    .padding(2)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(
+                                isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.separator.opacity(isHovered ? 1 : 0)),
+                                lineWidth: isSelected ? 2.5 : 1)
+                    }
+                AppearanceSetting.label(for: value)
+                    .font(.subheadline.weight(isSelected ? .semibold : .regular))
+                    .foregroundStyle(isSelected ? .primary : .secondary)
+                    .lineLimit(1)
+                    .fixedSize()
+            }
+            // Every choice as wide, whatever its name's length.
+            .frame(width: 100)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressFeedbackStyle())
+        .onHover { isHovered = $0 }
+        .animation(.spring(response: Motion.hover.response, dampingFraction: Motion.hover.damping), value: isHovered)
+        .accessibilityLabel(AppearanceSetting.label(for: value))
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+/// A small window of `value`'s look: a title bar, a sidebar, lines of text and a control in the accent color. Match
+/// System is half light, half dark.
+private struct AppearanceThumbnail: View {
+    let value: AppAppearance
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        Group {
+            switch value {
+            case .dark: window(dark: true)
+            case .light: window(dark: false)
+            case .system:
+                ZStack {
+                    window(dark: false)
+                    window(dark: true).mask(alignment: .trailing) {
+                        GeometryReader { proxy in
+                            Rectangle().frame(width: proxy.size.width / 2).frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+        }
+        .clipShape(shape)
+        .overlay { shape.strokeBorder(Color.black.opacity(0.25), lineWidth: 0.5) }
+        .accessibilityHidden(true)
+    }
+
+    /// Fixed colors on purpose: each draws a look, whatever the app's is now.
+    private func window(dark: Bool) -> some View {
+        let background = dark ? Color(white: 0.16) : Color(white: 0.97)
+        let sidebar = dark ? Color(white: 0.23) : Color(white: 0.88)
+        let line = dark ? Color(white: 0.38) : Color(white: 0.78)
+        return HStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 2) {
+                    ForEach(0..<3, id: \.self) { _ in Circle().fill(line).frame(width: 3, height: 3) }
+                }
+                .padding(.bottom, 2)
+                Capsule().fill(Color.accentColor).frame(width: 14, height: 3)
+                Capsule().fill(line).frame(width: 11, height: 3)
+                Capsule().fill(line).frame(width: 13, height: 3)
+                Spacer(minLength: 0)
+            }
+            .padding(5)
+            .frame(width: 24)
+            .frame(maxHeight: .infinity)
+            .background(sidebar)
+            VStack(alignment: .leading, spacing: 4) {
+                Capsule().fill(line).frame(width: 26, height: 3)
+                Capsule().fill(line).frame(width: 20, height: 3)
+                Spacer(minLength: 0)
+                Capsule().fill(Color.accentColor).frame(width: 14, height: 5)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            }
+            .padding(6)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .background(background)
+    }
+}
+
+/// A press that answers at once: the control dims while the mouse is down on it.
+private struct PressFeedbackStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.7 : 1)
     }
 }
 
@@ -387,30 +652,17 @@ private struct ShortcutRow: View {
 
     var body: some View {
         LabeledContent {
-            HStack(spacing: 6) {
-                Button { model.startRecordingShortcut(for: action) } label: {
-                    Group {
-                        if model.recording == action {
-                            Text("Type Shortcut")
-                        } else if let combo = model.bindings.combos[action] {
-                            Text(verbatim: combo.shownString)
-                        } else {
-                            Text("No Shortcut")
-                        }
-                    }
-                    .frame(minWidth: 110)
-                }
-                if model.bindings.combos[action] != nil {
-                    Button { model.clear(action) } label: { Image(systemName: "xmark.circle.fill") }
-                        .buttonStyle(.borderless)
-                        .help(Text("Remove Shortcut"))
-                }
-            }
+            ShortcutField(model: model, action: action, isWarned: message != nil)
         } label: {
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 3) {
                 title
                 if let message {
-                    message.font(.caption).foregroundStyle(.orange)
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                        message
+                    }
+                    .font(.caption)
+                    .foregroundStyle(.orange)
                 }
             }
         }
@@ -434,5 +686,69 @@ private struct ShortcutRow: View {
         }
         if model.hotKeys.busy.contains(action) { return Text("This shortcut is used by macOS or another app.") }
         return nil
+    }
+}
+
+/// A shortcut as a field of its own, every one as wide: its keys, "Type Shortcut" in the accent color while it waits
+/// for them, or "No Shortcut"; the button that removes it inside, at its trailing end. Outlined in orange while the
+/// row warns.
+private struct ShortcutField: View {
+    static let width: CGFloat = 160
+
+    let model: SettingsModel
+    let action: HotKeyAction
+    let isWarned: Bool
+    @State private var isHovered = false
+
+    var body: some View {
+        let isRecording = model.recording == action
+        let combo = model.bindings.combos[action]
+        let shape = RoundedRectangle(cornerRadius: 7, style: .continuous)
+        Button { model.startRecordingShortcut(for: action) } label: {
+            Group {
+                if isRecording {
+                    Text("Type Shortcut").foregroundStyle(.tint)
+                } else if let combo {
+                    Text(verbatim: combo.shownString).fontWeight(.medium)
+                } else {
+                    Text("No Shortcut").foregroundStyle(.tertiary)
+                }
+            }
+            .lineLimit(1)
+            // Room for the remove button on both sides, so the keys stay centered.
+            .padding(.horizontal, 24)
+            .frame(width: Self.width, height: 26)
+            .contentShape(shape)
+        }
+        .buttonStyle(PressFeedbackStyle())
+        .background {
+            shape.fill(
+                isRecording
+                    ? AnyShapeStyle(Color.accentColor.opacity(0.14))
+                    : isHovered ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.quinary))
+        }
+        .overlay {
+            shape.strokeBorder(
+                isRecording
+                    ? AnyShapeStyle(.tint)
+                    : isWarned ? AnyShapeStyle(Color.orange.opacity(0.8)) : AnyShapeStyle(.separator),
+                lineWidth: isRecording ? 1.5 : 1)
+        }
+        .overlay(alignment: .trailing) {
+            if combo != nil {
+                Button { model.clear(action) } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 22, height: 22)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(PressFeedbackStyle())
+                .padding(.trailing, 3)
+                .help(Text("Remove Shortcut"))
+                .accessibilityLabel(Text("Remove Shortcut"))
+            }
+        }
+        .onHover { isHovered = $0 }
+        .animation(.spring(response: Motion.hover.response, dampingFraction: Motion.hover.damping), value: isHovered)
     }
 }

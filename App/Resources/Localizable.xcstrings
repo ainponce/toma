@@ -267,6 +267,17 @@
         }
       }
     },
+    "A shortcut you make in Shortcuts turns it on while recording, so notifications don't sound. They never appear in the video." : {
+      "comment" : "Under Do Not Disturb in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un atajo creado en Atajos lo activa al grabar, así no suenan las notificaciones. Nunca salen en el video."
+          }
+        }
+      }
+    },
     "About %1$@ · %2$@ · %3$d frames" : {
       "comment" : "The export sheet: the GIF's estimated size, how long it lasts and its frames",
       "localizations" : {
@@ -1433,6 +1444,17 @@
         }
       }
     },
+    "Click a shortcut and type the new one. Esc cancels, ⌫ removes it." : {
+      "comment" : "Under the shortcuts in Settings",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para cambiar un atajo, hacer clic en él y escribir el nuevo. Esc cancela y ⌫ lo quita."
+          }
+        }
+      }
+    },
     "Click a window to record it." : {
       "localizations" : {
         "es" : {
@@ -2511,6 +2533,17 @@
         }
       }
     },
+    "For the camera bubble over the recording." : {
+      "comment" : "Under the camera in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para la burbuja de la cámara sobre la grabación."
+          }
+        }
+      }
+    },
     "For the zoom while typing. Nothing is noted in password fields." : {
       "comment" : "Under the setting that notes when keys are typed",
       "localizations" : {
@@ -2648,6 +2681,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Los GIF no tienen sonido."
+          }
+        }
+      }
+    },
+    "General" : {
+      "comment" : "The settings pane of the app's look and what a stop does",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "General"
           }
         }
       }
@@ -3872,6 +3916,17 @@
         }
       }
     },
+    "Only to switch desktops from the notch." : {
+      "comment" : "Under Accessibility in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo para cambiar de escritorio desde el notch."
+          }
+        }
+      }
+    },
     "Opacity" : {
       "comment" : "The teleprompter: how opaque its background and script are",
       "localizations" : {
@@ -3996,22 +4051,13 @@
         }
       }
     },
-    "Optional: a shortcut you make in Shortcuts turns it on while recording, so notifications don't sound. They never appear in the video." : {
+    "Optional" : {
+      "comment" : "The header of the permissions a take can do without",
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
-            "value" : "Opcional: un atajo creado en Atajos lo activa mientras se graba, así no suenan las notificaciones. Nunca salen en el video."
-          }
-        }
-      }
-    },
-    "Optional: only to switch desktops from the notch." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Opcional: solo para cambiar de escritorio desde el notch."
+            "value" : "Opcionales"
           }
         }
       }
@@ -4710,6 +4756,17 @@
         }
       }
     },
+    "Required to record the screen or a window." : {
+      "comment" : "Under screen recording in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hace falta para grabar la pantalla o una ventana."
+          }
+        }
+      }
+    },
     "Resolution" : {
       "comment" : "The export sheet: the MP4's resolution",
       "localizations" : {
@@ -5018,16 +5075,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se interrumpió la captura de pantalla. Se vuelve a intentar…"
-          }
-        }
-      }
-    },
-    "Screen recording permission is required to record. The microphone is optional." : {
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Para grabar hace falta el permiso de grabación de pantalla. El micrófono es opcional."
           }
         }
       }
@@ -6141,6 +6188,17 @@
         }
       }
     },
+    "The sound of the apps, on a track of its own." : {
+      "comment" : "Under system audio in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El sonido de las apps, en una pista propia."
+          }
+        }
+      }
+    },
     "The style couldn't be moved to the Trash." : {
       "comment" : "Manage Styles: deleting a style failed",
       "localizations" : {
@@ -6815,6 +6873,17 @@
         }
       }
     },
+    "To record your voice, on a track of its own." : {
+      "comment" : "Under the microphone in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para grabar la voz en una pista propia."
+          }
+        }
+      }
+    },
     "To switch desktops from here, Toma needs the Accessibility permission. ⌃← and ⌃→ work the same from the keyboard." : {
       "localizations" : {
         "es" : {
@@ -6864,6 +6933,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Toma clásico"
+          }
+        }
+      }
+    },
+    "Toma needs permission to record the screen. Everything else is optional." : {
+      "comment" : "Under the app name in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma necesita permiso para grabar la pantalla. Lo demás es opcional."
           }
         }
       }
