@@ -1829,6 +1829,17 @@
         }
       }
     },
+    "Classic" : {
+      "comment" : "A look of the captions: white text on a dark box",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clásico"
+          }
+        }
+      }
+    },
     "Click Effect" : {
       "comment" : "The Cursor tab",
       "localizations" : {
@@ -1946,6 +1957,17 @@
         }
       }
     },
+    "Collapsed" : {
+      "comment" : "VoiceOver: a section of the panel is folded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Plegado"
+          }
+        }
+      }
+    },
     "Color" : {
       "comment" : "A background type, and a colour swatch",
       "localizations" : {
@@ -2042,6 +2064,17 @@
         }
       }
     },
+    "Correct the Word…" : {
+      "comment" : "The Captions tab's context menu: edit the text of a word",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corregir la palabra…"
+          }
+        }
+      }
+    },
     "Couldn't apply the style." : {
       "comment" : "The row Style of the editor's panel: applying a style failed on the disk; nothing was applied",
       "localizations" : {
@@ -2103,6 +2136,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo exportar el GIF: %@"
+          }
+        }
+      }
+    },
+    "Couldn't export the captions" : {
+      "comment" : "An alert: File ▸ Export Captions… could not write the file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron exportar los subtítulos"
           }
         }
       }
@@ -2436,6 +2480,17 @@
         }
       }
     },
+    "Cut" : {
+      "comment" : "The Captions tab: cut the selected words out of the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cortar"
+          }
+        }
+      }
+    },
     "Cut Words" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): words were cut from the transcription, and their time from the video",
       "localizations" : {
@@ -2704,6 +2759,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Listo"
+          }
+        }
+      }
+    },
+    "Download Language" : {
+      "comment" : "The Captions tab: download the chosen language's model",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descargar el idioma"
+          }
+        }
+      }
+    },
+    "Downloading the language… %lld %%" : {
+      "comment" : "The Captions tab: a language's model downloading",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descargando el idioma… %lld %%"
           }
         }
       }
@@ -3008,6 +3085,17 @@
         }
       }
     },
+    "Expanded" : {
+      "comment" : "VoiceOver: a section of the panel is open",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desplegado"
+          }
+        }
+      }
+    },
     "Export" : {
       "comment" : "The editor's Export button",
       "localizations" : {
@@ -3026,6 +3114,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Exportar como"
+          }
+        }
+      }
+    },
+    "Export Captions…" : {
+      "comment" : "File menu: the captions as an .srt or .vtt file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Exportar subtítulos…"
           }
         }
       }
@@ -3484,6 +3583,17 @@
         }
       }
     },
+    "Green" : {
+      "comment" : "A color of the captions' highlight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Verde"
+          }
+        }
+      }
+    },
     "Grid" : {
       "localizations" : {
         "es" : {
@@ -3587,6 +3697,39 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Más que la grabación"
+          }
+        }
+      }
+    },
+    "Highlight" : {
+      "comment" : "A look of the captions: heavy outlined text with the spoken word highlighted",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Destacado"
+          }
+        }
+      }
+    },
+    "Highlight Color" : {
+      "comment" : "The Captions tab: the color of the word being said",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color del resalte"
+          }
+        }
+      }
+    },
+    "Highlight the Word Being Said" : {
+      "comment" : "The Captions tab: the word spoken drawn in the highlight color",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resaltar la palabra que se dice"
           }
         }
       }
@@ -3981,6 +4124,17 @@
         }
       }
     },
+    "Language" : {
+      "comment" : "The Captions tab: the language the transcription is in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Idioma"
+          }
+        }
+      }
+    },
     "Large" : {
       "comment" : "The camera bubble's size",
       "localizations" : {
@@ -4179,6 +4333,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lugar"
+          }
+        }
+      }
+    },
+    "Longer Than" : {
+      "comment" : "The Captions tab: the pauses Shorten Pauses shortens are longer than 0.5, 1 or 2 s",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Más largas que"
+          }
+        }
+      }
+    },
+    "Look" : {
+      "comment" : "VoiceOver: the three looks of the captions",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aspecto"
           }
         }
       }
@@ -4445,6 +4621,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Medianoche"
+          }
+        }
+      }
+    },
+    "Minimal" : {
+      "comment" : "A look of the captions: plain text with a soft shadow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mínimo"
           }
         }
       }
@@ -4918,6 +5105,17 @@
         }
       }
     },
+    "No words were heard." : {
+      "comment" : "The Captions tab: the transcription found no words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se oyó ninguna palabra."
+          }
+        }
+      }
+    },
     "None" : {
       "comment" : "System audio: record none; the countdown: none",
       "localizations" : {
@@ -4947,6 +5145,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No disponible"
+          }
+        }
+      }
+    },
+    "Not Shown" : {
+      "comment" : "The Captions tab's folded Style: the captions are not shown",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se muestran"
           }
         }
       }
@@ -5065,6 +5274,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apagado"
+          }
+        }
+      }
+    },
+    "On This Mac" : {
+      "comment" : "The Captions tab's language menu: the languages whose model is installed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En esta Mac"
           }
         }
       }
@@ -5244,6 +5464,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Opcionales"
+          }
+        }
+      }
+    },
+    "Orange" : {
+      "comment" : "A color of the captions' highlight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Naranja"
           }
         }
       }
@@ -6020,6 +6251,17 @@
         }
       }
     },
+    "Remove Filler Words (%lld)" : {
+      "comment" : "The Captions tab: cut every filler word (eh, um…), and how many there are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Quitar muletillas (%lld)"
+          }
+        }
+      }
+    },
     "Remove Image" : {
       "localizations" : {
         "es" : {
@@ -6505,6 +6747,17 @@
         }
       }
     },
+    "Select words and press Delete to cut them from the video." : {
+      "comment" : "The Captions tab, under its text: how to cut words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seleccionar palabras y apretar ⌫ para cortarlas del video."
+          }
+        }
+      }
+    },
     "Selected Block" : {
       "comment" : "Camera tab: card of the selected layout block",
       "localizations" : {
@@ -6631,6 +6884,17 @@
         }
       }
     },
+    "Shorten Pauses (%lld)" : {
+      "comment" : "The Captions tab: shorten every long pause, and how many there are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acortar pausas (%lld)"
+          }
+        }
+      }
+    },
     "Show" : {
       "comment" : "The Cursor tab, keys on screen: which keys show",
       "localizations" : {
@@ -6649,6 +6913,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mostrar la cámara"
+          }
+        }
+      }
+    },
+    "Show Captions" : {
+      "comment" : "The Captions tab: whether the captions are burned into the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mostrar los subtítulos"
           }
         }
       }
@@ -7210,6 +7485,17 @@
         }
       }
     },
+    "SubRip (.srt)" : {
+      "comment" : "File ▸ Export Captions…: a format of the file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "SubRip (.srt)"
+          }
+        }
+      }
+    },
     "Sunset" : {
       "localizations" : {
         "es" : {
@@ -7327,6 +7613,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Teleprompter"
+          }
+        }
+      }
+    },
+    "Text" : {
+      "comment" : "The Captions tab: the section with the transcript's words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Texto"
           }
         }
       }
@@ -8368,6 +8665,17 @@
         }
       }
     },
+    "This Mac can't transcribe." : {
+      "comment" : "The Captions tab: this Mac has no speech recognition the app can use",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta Mac no puede transcribir."
+          }
+        }
+      }
+    },
     "This Mac has no graphics device to draw the video." : {
       "localizations" : {
         "es" : {
@@ -8395,6 +8703,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se puede deshacer."
+          }
+        }
+      }
+    },
+    "This language isn't on this Mac yet. It's downloaded once, from Apple." : {
+      "comment" : "The Captions tab: the chosen language's model is not installed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este idioma todavía no está en esta Mac. Se descarga una sola vez, de Apple."
           }
         }
       }
@@ -8675,6 +8994,17 @@
         }
       }
     },
+    "To Download" : {
+      "comment" : "The Captions tab's language menu: the languages whose model has to be downloaded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para descargar"
+          }
+        }
+      }
+    },
     "To edit in Final Cut or another editor. Very large files." : {
       "comment" : "The export sheet: when to pick ProRes 422",
       "localizations" : {
@@ -8848,6 +9178,17 @@
         }
       }
     },
+    "Transcribe Again" : {
+      "comment" : "The Captions tab's menu: transcribe the take again, replacing the transcript",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribir de nuevo"
+          }
+        }
+      }
+    },
     "Transcribe Automatically" : {
       "comment" : "A setting: a project transcribes as it opens in the editor",
       "localizations" : {
@@ -8855,6 +9196,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Transcribir automáticamente"
+          }
+        }
+      }
+    },
+    "Transcribe the audio to edit the video through its text and to show captions." : {
+      "comment" : "The Captions tab without a transcript: what transcribing is for",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribir el audio para editar el video por su texto y mostrar subtítulos."
           }
         }
       }
@@ -8896,6 +9248,50 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "Transcribing… %lld %%" : {
+      "comment" : "The Captions tab: the transcription under way",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribiendo… %lld %%"
+          }
+        }
+      }
+    },
+    "Transcript" : {
+      "comment" : "VoiceOver: the Captions tab's text of the words spoken",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcripción"
+          }
+        }
+      }
+    },
+    "Transcript Options" : {
+      "comment" : "The Captions tab: the menu with Transcribe Again and the language",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Opciones de la transcripción"
+          }
+        }
+      }
+    },
+    "Transcription needs macOS 26." : {
+      "comment" : "The Captions tab on macOS 15",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La transcripción necesita macOS 26."
           }
         }
       }
@@ -9129,6 +9525,17 @@
         }
       }
     },
+    "Uppercase" : {
+      "comment" : "The Captions tab: the captions in capital letters",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mayúsculas"
+          }
+        }
+      }
+    },
     "Use This Style for New Projects" : {
       "localizations" : {
         "es" : {
@@ -9354,6 +9761,17 @@
         }
       }
     },
+    "WebVTT (.vtt)" : {
+      "comment" : "File ▸ Export Captions…: a format of the file",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "WebVTT (.vtt)"
+          }
+        }
+      }
+    },
     "What to Record" : {
       "localizations" : {
         "es" : {
@@ -9479,6 +9897,17 @@
         }
       }
     },
+    "Word" : {
+      "comment" : "VoiceOver: the field that corrects a word of the Captions tab",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Palabra"
+          }
+        }
+      }
+    },
     "Write your script…" : {
       "comment" : "The teleprompter without a script",
       "localizations" : {
@@ -9486,6 +9915,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Escribir el guion…"
+          }
+        }
+      }
+    },
+    "Yellow" : {
+      "comment" : "A color of the captions' highlight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Amarillo"
           }
         }
       }
@@ -9618,6 +10058,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Como lista"
+          }
+        }
+      }
+    },
+    "captions.size.large" : {
+      "comment" : "The Captions tab: the captions' size (masculine: el tamaño)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Large"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grande"
+          }
+        }
+      }
+    },
+    "captions.size.medium" : {
+      "comment" : "The Captions tab: the captions' size (masculine: el tamaño)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Medium"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mediano"
+          }
+        }
+      }
+    },
+    "captions.size.small" : {
+      "comment" : "The Captions tab: the captions' size (masculine: el tamaño)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Small"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Chico"
           }
         }
       }
@@ -10439,6 +10930,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "«%@» se movió a la papelera."
+          }
+        }
+      }
+    },
+    "⌫ cuts the selected words from the video." : {
+      "comment" : "The Captions tab, under its text: how to cut words",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "⌫ corta del video las palabras seleccionadas."
           }
         }
       }
