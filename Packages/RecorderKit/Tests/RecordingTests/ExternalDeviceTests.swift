@@ -208,6 +208,36 @@ import Testing
         }
     }
 
+    @Test func aTurnGoesOnInANewSegment() async throws {
+        // Turning the device changes the size of its frames: the take goes on in a new segment of the new size, and no
+        // writer ever gets a frame of another size than its first.
+        try await withTemporaryDirectory { directory in
+            let portrait = ExternalDeviceFormat(name: "iPhone", pixelSize: ExternalDeviceFormat.PixelSize(width: 390, height: 844))
+            let engine = FakeEngine(format: portrait)
+            let video = ExternalDeviceCaptureSource(
+                session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: engine), framesPerSecond: 30)
+            let writers = SizeLog()
+            let rig = try Rig(in: directory, sources: [video]) { url, media in
+                SizeLoggingWriter(inner: try FragmentedTrackWriter(url: url, media: media), log: writers)
+            }
+            let id = try await rig.coordinator.start()
+            await engine.deliverFrames(width: 390, height: 844, count: 10)
+            await engine.deliverFrames(width: 844, height: 390, count: 10)
+            await engine.deliverFrames(width: 390, height: 844, count: 10)
+            _ = try await rig.coordinator.stop()
+
+            let track = try #require(try rig.takeOnDisk(id).track("device"))
+            #expect(track.segments.map(\.endReason) == [.formatChanged, .formatChanged, .stopped])
+            var sizes: [CGSize] = []
+            for segment in track.segments { sizes.append(try await rig.videoSize(of: segment)) }
+            let (tall, wide) = (CGSize(width: 390, height: 844), CGSize(width: 844, height: 390))
+            #expect(sizes == [tall, wide, tall])
+            #expect(writers.sizesPerWriter == [[tall], [wide], [tall]])
+            // The track keeps the size it started with: the editor fits the other segments into it.
+            #expect(track.source == portrait.trackSource(uniqueID: "iphone-1"))
+        }
+    }
+
     @Test func sessionRunsWhileEitherSourceRuns() async throws {
         let engine = FakeEngine(format: Self.iPhone)
         let video = ExternalDeviceCaptureSource(session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: engine))
@@ -397,6 +427,66 @@ import Testing
         }
         await video.stop()
         #expect(engine.counts.stops == 1)
+    }
+}
+
+/// The sizes of the frames each writer got, in the order the writers were made.
+private final class SizeLog: Sendable {
+    private let log = Mutex<[[CGSize]]>([])
+
+    var sizesPerWriter: [[CGSize]] { log.withLock { $0 } }
+
+    /// A new writer; its index.
+    func add() -> Int {
+        log.withLock { log in
+            log.append([])
+            return log.count - 1
+        }
+    }
+
+    func note(_ size: CGSize, writer: Int) {
+        log.withLock { log in
+            if log[writer].last != size { log[writer].append(size) }
+        }
+    }
+}
+
+/// Wraps a real writer, and notes in `log` the size of every frame handed to it.
+private final class SizeLoggingWriter: TrackWriting {
+    private let inner: FragmentedTrackWriter
+    private let log: SizeLog
+    private let index: Int
+
+    init(inner: FragmentedTrackWriter, log: SizeLog) {
+        self.inner = inner
+        self.log = log
+        index = log.add()
+    }
+
+    var onStart: ((HostTime) -> Void)? {
+        get { inner.onStart }
+        set { inner.onStart = newValue }
+    }
+
+    var formatDescription: CMFormatDescription? { inner.formatDescription }
+    var failure: NSError? { inner.failure }
+    var droppedSampleCount: Int { inner.droppedSampleCount }
+    var lastWrittenAudio: AudioFilePosition? { inner.lastWrittenAudio }
+
+    func append(_ sample: CMSampleBuffer) throws {
+        if let format = sample.formatDescription, CMFormatDescriptionGetMediaType(format) == kCMMediaType_Video {
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format)
+            log.note(CGSize(width: Int(dimensions.width), height: Int(dimensions.height)), writer: index)
+        }
+        try inner.append(sample)
+    }
+
+    func appendHeartbeat(at time: HostTime) throws {
+        try inner.appendHeartbeat(at: time)
+    }
+
+    nonisolated(nonsending) func finish(at stopTime: HostTime) async throws -> SegmentResult {
+        try await inner.finish(at: stopTime)
     }
 }
 
