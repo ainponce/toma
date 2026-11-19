@@ -385,3 +385,5 @@ El corpus, hecho en código (`GIFCorpusTests`): cuatro tomas de 10 s, la pantall
 ## Medidas del agente, fase 2
 
 Las medidas del agente para las metas de la fase 2 (diseño de la fase 2, §13). Cada tarea suma sus filas al final, con cómo se midió.
+
+- **Transcripción (`speechTranscriber-1`, es-MX) de 60 s: 2,6 s (23 × tiempo real)** (A6, meta ≥ 10 ×). `TOMA_BENCH=1 swift test --package-path Packages/RecorderKit --filter transcribesTenTimesRealTime`, Debug, M5 Pro, macOS 26.6.2, el 2026-11-19: 60 s de voz de `AVSpeechSynthesizer` (la voz es-MX del sistema) en un micrófono sintético, `Transcriber.transcribe` entero (cargar la pista, el motor en búferes de 1 s y los silencios de los bordes de las palabras), 156 palabras; dos corridas, 2,57 y 2,74 s, con otras tareas corriendo pruebas (carga 25). Con carga 45 y el modelo frío, una corrida dio 17 s (3,5 ×). El analizador pide el audio al ritmo al que lo procesa (los 60 s se le dan a lo largo de 1,5 s) y se lee solo cuando lo pide: nunca más de un segundo por delante.
