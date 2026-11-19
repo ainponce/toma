@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later. Written by scripts/make-app-icon.swift: edit that, not this. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<path fill="#FFFFFF" d="M420,230 A34,34 0 0 1 454,196 L570,196 A34,34 0 0 1 604,230 A34,34 0 0 1 570,264 L454,264 A34,34 0 0 1 420,230 Z"/>
+</svg>

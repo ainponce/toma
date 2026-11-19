@@ -33,6 +33,9 @@ targets:
         LOCALIZATION_PREFERS_STRING_CATALOGS: "YES"
         # The brand's violet (App/Resources/Assets.xcassets), unless the user picked an accent color in System Settings.
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        # The app's icon, App/AppIcon.icon (drawn by scripts/make-app-icon.swift): the layered glass icon on macOS 26,
+        # and AppIcon.icns, which actool makes from it, on older systems.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_EMIT_LOC_STRINGS: "YES"
       configs:
         # Xcode adds com.apple.security.get-task-allow (debugging) unless told not to: never in a release.
