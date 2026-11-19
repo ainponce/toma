@@ -82,15 +82,15 @@ extension JSONValue {
         #expect(replayed.mismatchSeq == nil)
         #expect(replayed.lastAppliedSeq == 4)
         #expect(replayed.version == 2)
-        #expect(replayed.document.documentVersion == 2)
+        #expect(replayed.document.documentVersion == EditDocument.currentVersion)
         #expect(replayed.document.style.padding == 0.1)
         #expect(replayed.document.camera.mirror)
         var expected = legacy
         expected.style.padding = 0.1
         expected.camera.mirror = true
         #expect(replayed.document == at(4, expected))
-        // In version 2 the state on disk is the document's own.
-        #expect(replayed.json == (try JSONValue(encoding: replayed.document)))
+        // In version 2 the state on disk is the document's own, in version 2.
+        #expect(DocumentMigration.reverted(try JSONValue(encoding: replayed.document), to: 2) == replayed.json)
 
         // From a snapshot before the migrate, written in version 1, and from one after it, in version 2: the same.
         var padded = legacy
@@ -126,7 +126,7 @@ extension JSONValue {
         #expect(replayed.json.member("style")?.member("padding") == .number(0.1))
         #expect(replayed.json.member("logSequence") == .integer(2))
         // The document is always of the current version.
-        #expect(replayed.document.documentVersion == 2)
+        #expect(replayed.document.documentVersion == EditDocument.currentVersion)
         #expect(replayed.document.style.padding == 0.1)
 
         // A log written in version 2 stays there.
@@ -135,7 +135,7 @@ extension JSONValue {
         let replayedV2 = try replay(current)
         #expect(replayedV2.version == 2)
         #expect(replayedV2.document == replayed.document)
-        #expect(replayedV2.json == (try JSONValue(encoding: replayedV2.document)))
+        #expect(DocumentMigration.reverted(try JSONValue(encoding: replayedV2.document), to: 2) == replayedV2.json)
 
         // Lines that change nothing replayable leave the create's own JSON, at its line.
         let alone = try replay([create], createVersion: 1)
@@ -177,7 +177,10 @@ extension JSONValue {
         ("from another version", [create, try padding(2), .migrate(seq: 3, from: 0, to: 1), try mirror(4)], 3, 1),
         ("skipping a version", [create, try padding(2), .migrate(seq: 3, from: 1, to: 3), try mirror(4)], 3, 1),
         ("the same one twice", [create, try padding(2), migrate, .migrate(seq: 4, from: 1, to: 2), try mirror(5)], 4, 2),
-        ("one this app has no migration for", [create, try padding(2), migrate, .migrate(seq: 4, from: 2, to: 3), try mirror(5)], 4, 2),
+        (
+            "one this app has no migration for",
+            [create, try padding(2), migrate, .migrate(seq: 4, from: 2, to: 3), .migrate(seq: 5, from: 3, to: 4), try mirror(6)], 5, 3
+        ),
     ]
     for (name, entries, mismatch, version) in cases {
         let replayed = try replay(entries, createVersion: 1)
@@ -251,9 +254,9 @@ extension JSONValue {
 
         // A migrate to a version newer than this app's is never cut, nor the one before it: a newer app wrote it, and
         // the read refuses the log.
-        let newer = headText + migrate + "\n" + (try EditLogEntry.migrate(seq: 4, from: 2, to: 3).jsonLine()) + "\n"
+        let newer = headText + migrate + "\n" + (try EditLogEntry.migrate(seq: 4, from: 3, to: 4).jsonLine()) + "\n"
         try Data(newer.utf8).write(to: url)
-        #expect(throws: EditDocumentError.newerVersion(3)) { try EditLogReader.read(url) }
+        #expect(throws: EditDocumentError.newerVersion(4)) { try EditLogReader.read(url) }
         #expect(try EditLogReader.truncateIncompleteTail(url) == false)
         #expect(try SafeRead.regularFile(at: url) == Data(newer.utf8))
     }
@@ -344,8 +347,10 @@ extension JSONValue {
 // MARK: - Lines written at a version
 
 @Test func createIsWrittenAtTheVersionAsked() throws {
-    // At the current version, the line `jsonLine()` writes; in version 1, the document as 1b wrote it.
-    #expect(try create.jsonLine(writingDocumentAt: 2) == create.jsonLine())
+    // At the current version, the line `jsonLine()` writes; in version 1, the document as 1b wrote it; in 2, as 1c did.
+    #expect(try create.jsonLine(writingDocumentAt: EditDocument.currentVersion) == create.jsonLine())
+    let v2 = try create.jsonLine(writingDocumentAt: 2)
+    #expect(v2.contains(#""documentVersion":2"#) && v2.contains(#""layouts""#) && !v2.contains(#""captions""#))
     let v1 = try create.jsonLine(writingDocumentAt: 1)
     #expect(v1 != (try create.jsonLine()))
     #expect(v1.contains(#""documentVersion":1"#))
@@ -365,7 +370,7 @@ extension JSONValue {
     mirrored.camera.mirror = true
     let newer = EditLogEntry.create(seq: 1, document: mirrored, app: app)
     #expect(throws: (any Error).self) { try newer.jsonLine(writingDocumentAt: 1) }
-    #expect(throws: (any Error).self) { try create.jsonLine(writingDocumentAt: 3) }
+    #expect(throws: (any Error).self) { try create.jsonLine(writingDocumentAt: 4) }
 
     // Every other line is written as it is.
     for entry in [try padding(2), .undo(seq: 3, group: 2), .redo(seq: 4, group: 2), .migrate(seq: 5, from: 1, to: 2)] {

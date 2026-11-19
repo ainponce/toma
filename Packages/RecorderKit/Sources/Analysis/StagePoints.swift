@@ -51,7 +51,8 @@ public struct StagePoints: Sendable {
         ratio = document.aspect.ratio
         padding = document.style.padding
         switch document.style.frame {
-        case .none:
+        // A device is measured as no frame until the render draws it (plan decision 10).
+        case .none, .device:
             windowFrameOutput = nil
         case .macWindow:
             windowFrameOutput = SIMD2<Double>(StageLayout.outputSize(aspect: document.aspect, shortSide: Self.windowFrameShortSide))

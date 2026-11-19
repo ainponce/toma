@@ -7,9 +7,11 @@ import Testing
 private func ns(_ nanoseconds: UInt64) -> HostTime { HostTime(nanoseconds: nanoseconds) }
 
 /// The example of `edit.json` of design §6.2: a new project with two clips (the second at 2×), a change of screen, an
-/// automatic zoom, a manual one and a deleted automatic one. In `documentVersion` 2: 1b's example migrated (1c design
-/// §13.2), so its camera has the bubble layout, no blocks and the rest of what the migration adds. The example as 1b
-/// wrote it, in version 1, is `DocumentV1Example`.
+/// automatic zoom, a manual one and a deleted automatic one. Its texts are in `documentVersion` 2, as 1c wrote it: 1b's
+/// example migrated (1c design §13.2), so its camera has the bubble layout, no blocks and the rest of what the migration
+/// adds. Its value is of the current version, migrated from them (phase 2 design §8), with every field of version 3 at its
+/// legacy value. The example as 1b wrote it, in version 1, is `DocumentV1Example`; one that uses version 3,
+/// `DocumentV3Example`.
 enum DesignExample {
     /// The example as the design writes it, with objects on one line.
     static let json = """
@@ -134,7 +136,8 @@ enum DesignExample {
             tracks: ["take-001/mic": TrackGain(gain: 1, muted: false), "take-001/system-audio": TrackGain(gain: 0.8, muted: false)])
     )
 
-    /// The example as `ProjectJSON.encoder()` writes it: one key per line, as in `docs/format/README.md`.
+    /// The example as `ProjectJSON.encoder()` writes it in version 2 (`DocumentMigration.reverted(_:to: 2)` of
+    /// `document`): one key per line, as in `docs/format/README.md`.
     static let canonical = """
         {
           "aspect" : "16:9",
@@ -322,10 +325,18 @@ private func encoded(_ document: EditDocument) throws -> String {
     String(decoding: try ProjectJSON.encoder().encode(document), as: UTF8.self)
 }
 
+/// `document` as `ProjectJSON.encoder()` writes it in version 2.
+private func encodedInVersion2(_ document: EditDocument) throws -> String {
+    let reverted = try #require(DocumentMigration.reverted(JSONValue(encoding: document), to: 2))
+    return String(decoding: try ProjectJSON.encoder().encode(reverted), as: UTF8.self)
+}
+
 @Test func documentExampleRoundTripsByteForByte() throws {
     #expect(try EditDocument.decode(Data(DesignExample.json.utf8)) == DesignExample.document)
-    #expect(try encoded(DesignExample.document) == DesignExample.canonical)
-    #expect(try encoded(try EditDocument.decode(Data(DesignExample.canonical.utf8))) == DesignExample.canonical)
+    #expect(try encodedInVersion2(DesignExample.document) == DesignExample.canonical)
+    #expect(try encodedInVersion2(try EditDocument.decode(Data(DesignExample.canonical.utf8))) == DesignExample.canonical)
+    // In the current version, it decodes back to itself.
+    #expect(try EditDocument.decode(Data(encoded(DesignExample.document).utf8)) == DesignExample.document)
 }
 
 @Test func everyBackgroundFrameAndFocusRoundTrips() throws {
@@ -470,15 +481,16 @@ private func encoded(_ document: EditDocument) throws -> String {
 
 @Test func newerDocumentVersionIsRefused() throws {
     // Read before the rest: the rest of a newer document need not decode.
-    #expect(throws: EditDocumentError.newerVersion(3)) {
-        try EditDocument.decode(Data(#"{"documentVersion":3,"aspect":"4:3"}"#.utf8))
+    #expect(throws: EditDocumentError.newerVersion(4)) {
+        try EditDocument.decode(Data(#"{"documentVersion":4,"aspect":"4:3"}"#.utf8))
     }
-    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 3")
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 4")
     #expect(newer != DesignExample.canonical)
-    #expect(throws: EditDocumentError.newerVersion(3)) { try EditDocument.decode(Data(newer.utf8)) }
-    #expect(throws: EditDocumentError.newerVersion(3)) {
+    #expect(throws: EditDocumentError.newerVersion(4)) { try EditDocument.decode(Data(newer.utf8)) }
+    #expect(throws: EditDocumentError.newerVersion(4)) {
         try EditDocument.decode(json: ProjectJSON.decoder().decode(JSONValue.self, from: Data(newer.utf8)))
     }
+    #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":3,"aspect":"4:3"}"#.utf8)) }
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":2,"aspect":"4:3"}"#.utf8)) }
     // An older one is migrated first, and one that cannot be is no document either.
     #expect(throws: DecodingError.self) { try EditDocument.decode(Data(#"{"documentVersion":1,"aspect":"4:3"}"#.utf8)) }
@@ -490,13 +502,13 @@ private func encoded(_ document: EditDocument) throws -> String {
     struct Entry: Decodable {
         var document: EditDocument
     }
-    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 3")
+    let newer = DesignExample.canonical.replacingOccurrences(of: "\"documentVersion\" : 2", with: "\"documentVersion\" : 4")
     #expect(newer != DesignExample.canonical)
-    #expect(throws: EditDocumentError.newerVersion(3)) {
+    #expect(throws: EditDocumentError.newerVersion(4)) {
         try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(newer)}".utf8))
     }
-    #expect(throws: EditDocumentError.newerVersion(4)) {
-        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":4,"aspect":"4:3"}]"#.utf8))
+    #expect(throws: EditDocumentError.newerVersion(5)) {
+        try ProjectJSON.decoder().decode([EditDocument].self, from: Data(#"[{"documentVersion":5,"aspect":"4:3"}]"#.utf8))
     }
     let current = try ProjectJSON.decoder().decode(Entry.self, from: Data("{\"document\" : \(DesignExample.canonical)}".utf8))
     #expect(current.document == DesignExample.document)

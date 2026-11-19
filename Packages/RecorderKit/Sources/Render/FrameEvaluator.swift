@@ -702,7 +702,8 @@ public struct FrameEvaluator: Sendable {
     private static func placement(of view: ShownScreen, style: StageStyle, outputSize: SIMD2<Double>) -> ScreenPlacement {
         let aspect = view.region.map { $0.width / $0.height }
         switch style.frame {
-        case .none:
+        // A device sits as no frame until its layer draws it (plan decision 10).
+        case .none, .device:
             let rect = StageLayout.screenRect(contentAspect: aspect, padding: style.padding, outputSize: outputSize)
             return ScreenPlacement(screen: rect, window: rect, barHeight: 0)
         case .macWindow:

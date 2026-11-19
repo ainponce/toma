@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import ProjectFormat
 
-/// The action an undo step is, for the Edit menu's "Undo «action»" (the 21 undo labels of design §5.11, and the 12 of the
-/// 1c design §13.1 after them). Its raw value is the `label` of a `do` line of `edit-log.jsonl`, so the names never
-/// change; the app localizes them.
+/// The action an undo step is, for the Edit menu's "Undo «action»" (the 21 undo labels of design §5.11, the 12 of the
+/// 1c design §13.1 after them, and the 25 of phase 2 design §8 after those). Its raw value is the `label` of a `do` line
+/// of `edit-log.jsonl`, so the names never change; the app localizes them.
 public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case split, delete, trim, speed
     case zoomAdd = "zoom.add", zoomMove = "zoom.move", zoomChange = "zoom.change", zoomDelete = "zoom.delete"
@@ -21,6 +21,20 @@ public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case cameraLayout = "camera.layout", cameraSplit = "camera.split", cameraMirror = "camera.mirror"
     case cameraBorder = "camera.border", cameraShadow = "camera.shadow", cameraChangesDeleteAll = "camera.changes.deleteAll"
     case styleApply = "style.apply"
+    // Phase 2 design §8 (plan decision 19), in its order: the transcription and the captions (2a), the camera's and the
+    // sound's new settings, the screen's framing (2b), the privacy blocks, the keys on screen and the typing sped up (2c).
+    case transcriptCreate = "transcript.create", transcriptCut = "transcript.cut", transcriptRestore = "transcript.restore"
+    case transcriptWord = "transcript.word", transcriptBreak = "transcript.break", transcriptFillers = "transcript.fillers"
+    case transcriptPauses = "transcript.pauses"
+    case captionsShow = "captions.show", captionsStyle = "captions.style"
+    case cameraHideSilences = "camera.hideSilences", cameraBackground = "camera.background", cameraFraming = "camera.framing"
+    case cameraLook = "camera.look", cameraSync = "camera.sync"
+    case audioCleanup = "audio.cleanup", audioNormalize = "audio.normalize"
+    case styleReframe = "style.reframe"
+    case privacyAdd = "privacy.add", privacyChange = "privacy.change", privacyMove = "privacy.move", privacyTrim = "privacy.trim"
+    case privacyDelete = "privacy.delete", privacyAuto = "privacy.auto"
+    case keysOverlay = "keys.overlay"
+    case speedTyping = "speed.typing"
 }
 
 /// What one command changes, before it is a line of the log: its changes, and the grouping key of design §6.4.

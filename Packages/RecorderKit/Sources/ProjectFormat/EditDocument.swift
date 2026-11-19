@@ -12,10 +12,12 @@ import Foundation
 public struct EditDocument: Codable, Equatable, Sendable {
     /// The version of the document this app writes; it reads an older one migrated (`DocumentMigration`) and refuses a
     /// newer one (`decode(_:)`).
-    public static let currentVersion = 2
+    public static let currentVersion = 3
 
     /// The version of the document within format version 3: 1 in milestone 1b; 2 from 1c, with the camera's layouts
-    /// and look (1c design §13.1). A decoded document is always of `currentVersion`.
+    /// and look (1c design §13.1); 3 from phase 2, with the transcription, the captions, the privacy blocks, the keys on
+    /// screen and the new fields of the stage, the camera and the sound (phase 2 design §8). A decoded document is always
+    /// of `currentVersion`.
     public var documentVersion: Int
     /// The `seq` of the last line of the edit log this document already includes.
     public var logSequence: Int
@@ -30,6 +32,13 @@ public struct EditDocument: Codable, Equatable, Sendable {
     public var zoom: ZoomPlan
     public var camera: CameraPlan
     public var audio: AudioPlan
+    // Version 3 (phase 2 design §8). Their defaults are the values the migration from version 2 gives them, which draw
+    // and sound exactly what phase 1 did.
+    /// The words spoken, `nil` until the first transcription; left out of the JSON then.
+    public var transcript: Transcript?
+    public var captions: CaptionPlan
+    public var privacy: PrivacyPlan
+    public var keys: KeyOverlayPlan
 
     public init(
         documentVersion: Int,
@@ -42,7 +51,11 @@ public struct EditDocument: Codable, Equatable, Sendable {
         cursor: CursorStyle,
         zoom: ZoomPlan,
         camera: CameraPlan,
-        audio: AudioPlan
+        audio: AudioPlan,
+        transcript: Transcript? = nil,
+        captions: CaptionPlan = .legacy,
+        privacy: PrivacyPlan = .legacy,
+        keys: KeyOverlayPlan = .legacy
     ) {
         self.documentVersion = documentVersion
         self.logSequence = logSequence
@@ -55,6 +68,10 @@ public struct EditDocument: Codable, Equatable, Sendable {
         self.zoom = zoom
         self.camera = camera
         self.audio = audio
+        self.transcript = transcript
+        self.captions = captions
+        self.privacy = privacy
+        self.keys = keys
     }
 
     /// Decodes an encoded document with `ProjectJSON.decoder()`, as `init(from:)` does: an older one migrated to
@@ -87,6 +104,7 @@ public struct EditDocument: Codable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case documentVersion, logSequence, aspect, frameRate, sequence, screens, style, cursor, zoom, camera, audio
+        case transcript, captions, privacy, keys
     }
 
     /// Reads `documentVersion` first, on its own: a document newer than `currentVersion`, which this version may not
@@ -123,7 +141,11 @@ public struct EditDocument: Codable, Equatable, Sendable {
             cursor: try container.decode(CursorStyle.self, forKey: .cursor),
             zoom: try container.decode(ZoomPlan.self, forKey: .zoom),
             camera: try container.decode(CameraPlan.self, forKey: .camera),
-            audio: try container.decode(AudioPlan.self, forKey: .audio))
+            audio: try container.decode(AudioPlan.self, forKey: .audio),
+            transcript: try container.decodeIfPresent(Transcript.self, forKey: .transcript),
+            captions: try container.decode(CaptionPlan.self, forKey: .captions),
+            privacy: try container.decode(PrivacyPlan.self, forKey: .privacy),
+            keys: try container.decode(KeyOverlayPlan.self, forKey: .keys))
     }
 
     /// `json`, a document of `version`, migrated up to `currentVersion`.
@@ -275,6 +297,9 @@ public struct StageStyle: Codable, Equatable, Sendable {
     public var frame: WindowFrame
     public var screenSampling: ScreenSampling
     public var geometryTransition: GeometryTransition
+    /// How the screen fills the stage (phase 2 design §6.5), from version 3. Always written in a document; a stage saved
+    /// by phase 1 (`default-style.json`, a `.tomastyle`) has none, and reads as `fit`.
+    public var reframe: Reframe
 
     public init(
         background: Background,
@@ -284,7 +309,8 @@ public struct StageStyle: Codable, Equatable, Sendable {
         shadow: Double,
         frame: WindowFrame,
         screenSampling: ScreenSampling,
-        geometryTransition: GeometryTransition
+        geometryTransition: GeometryTransition,
+        reframe: Reframe = .fit
     ) {
         self.background = background
         self.backgroundBlur = backgroundBlur
@@ -294,7 +320,34 @@ public struct StageStyle: Codable, Equatable, Sendable {
         self.frame = frame
         self.screenSampling = screenSampling
         self.geometryTransition = geometryTransition
+        self.reframe = reframe
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case background, backgroundBlur, padding, cornerRadius, shadow, frame, screenSampling, geometryTransition, reframe
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            background: try container.decode(Background.self, forKey: .background),
+            backgroundBlur: try container.decode(Double.self, forKey: .backgroundBlur),
+            padding: try container.decode(Double.self, forKey: .padding),
+            cornerRadius: try container.decode(Double.self, forKey: .cornerRadius),
+            shadow: try container.decode(Double.self, forKey: .shadow),
+            frame: try container.decode(WindowFrame.self, forKey: .frame),
+            screenSampling: try container.decode(ScreenSampling.self, forKey: .screenSampling),
+            geometryTransition: try container.decode(GeometryTransition.self, forKey: .geometryTransition),
+            reframe: try container.decodeIfPresent(Reframe.self, forKey: .reframe) ?? .fit)
+    }
+}
+
+/// How the screen fills the stage (phase 2 design §6.5): `StageStyle.reframe`.
+public enum Reframe: String, Codable, Sendable, CaseIterable {
+    /// The whole content, inside the padding: what phase 1 draws.
+    case fit
+    /// The stage filled with a window of the content as tall as it, following the cursor (`reframe-1`).
+    case followCursor
 }
 
 /// What is behind the screen. Encoded flat with its `type`: `{"type":"gradient","start":[r,g,b,a],"end":[r,g,b,a],
@@ -395,19 +448,23 @@ public struct RGBA: Codable, Equatable, Sendable {
     }
 }
 
-/// A frame drawn around the screen. Encoded flat with its `type`: `{"type":"none"}` or
-/// `{"type":"macWindow","appearance":"dark","title":"…","buttons":true}`.
+/// A frame drawn around the screen. Encoded flat with its `type`: `{"type":"none"}`,
+/// `{"type":"macWindow","appearance":"dark","title":"…","buttons":true}` or, from version 3,
+/// `{"type":"device","model":"iPhone","finish":"dark"}`.
 public enum WindowFrame: Codable, Equatable, Sendable {
     case none
     /// A generic macOS window: its appearance, its title (empty draws none) and whether it has the three buttons.
     case macWindow(appearance: FrameAppearance, title: String, buttons: Bool)
+    /// A device around the screen (phase 2 design §6.7). Until the render draws it (`deviceFrame-1`), it is drawn and
+    /// measured as `none`.
+    case device(DeviceFrame)
 
     private enum CodingKeys: String, CodingKey {
-        case type, appearance, title, buttons
+        case type, appearance, title, buttons, model, finish
     }
 
     private enum Kind: String, Codable {
-        case none, macWindow
+        case none, macWindow, device
     }
 
     public init(from decoder: any Decoder) throws {
@@ -420,6 +477,11 @@ public enum WindowFrame: Codable, Equatable, Sendable {
                 appearance: try container.decode(FrameAppearance.self, forKey: .appearance),
                 title: try container.decode(String.self, forKey: .title),
                 buttons: try container.decode(Bool.self, forKey: .buttons))
+        case .device:
+            self = .device(
+                DeviceFrame(
+                    model: try container.decode(DeviceModel.self, forKey: .model),
+                    finish: try container.decode(FrameAppearance.self, forKey: .finish)))
         }
     }
 
@@ -433,6 +495,10 @@ public enum WindowFrame: Codable, Equatable, Sendable {
             try container.encode(appearance, forKey: .appearance)
             try container.encode(title, forKey: .title)
             try container.encode(buttons, forKey: .buttons)
+        case let .device(device):
+            try container.encode(Kind.device, forKey: .type)
+            try container.encode(device.model, forKey: .model)
+            try container.encode(device.finish, forKey: .finish)
         }
     }
 }
@@ -700,7 +766,8 @@ public struct SourceRange: Codable, Equatable, Sendable {
 
 /// The camera: how its bubble looks at the start of each take and from each change on, the layout of the project and of
 /// each block, and its look in every layout. The fields after `changes` arrived with `documentVersion` 2 (1c design
-/// §13.1); their defaults are the values the migration from version 1 gives them, which draw exactly what 1b drew.
+/// §13.1), and those after `layoutRules` with 3 (phase 2 design §8); their defaults are the values the migrations give
+/// them, which draw exactly what 1b drew.
 public struct CameraPlan: Codable, Equatable, Sendable {
     /// `false` draws every layout as the screen alone, keeping the blocks.
     public var show: Bool
@@ -721,6 +788,15 @@ public struct CameraPlan: Codable, Equatable, Sendable {
     public var spring: SpringSpec
     /// The rules of the layouts, with their version: `cameraLayout-1` (`CameraLayoutRules.id`).
     public var layoutRules: String
+    /// What is behind the person (phase 2 design §6.1).
+    public var background: CameraBackground
+    /// Which part of the picture fills the camera's shape (§6.2).
+    public var framing: CameraFraming
+    /// The picture's colour (§6.3).
+    public var look: CameraColor
+    /// How late the camera's picture is drawn against the sound, in nanoseconds (§5.9): the frame of source time
+    /// `t − syncOffset`. Positive, later.
+    public var syncOffset: Int64
 
     public init(
         show: Bool,
@@ -733,7 +809,11 @@ public struct CameraPlan: Codable, Equatable, Sendable {
         shadow: Double = 0,
         sizeReference: SizeReference = .height,
         spring: SpringSpec = CameraLayoutRules.spring,
-        layoutRules: String = CameraLayoutRules.id
+        layoutRules: String = CameraLayoutRules.id,
+        background: CameraBackground = .original,
+        framing: CameraFraming = .legacy,
+        look: CameraColor = .natural,
+        syncOffset: Int64 = 0
     ) {
         self.show = show
         self.initial = initial
@@ -746,6 +826,10 @@ public struct CameraPlan: Codable, Equatable, Sendable {
         self.sizeReference = sizeReference
         self.spring = spring
         self.layoutRules = layoutRules
+        self.background = background
+        self.framing = framing
+        self.look = look
+        self.syncOffset = syncOffset
     }
 }
 
@@ -777,10 +861,14 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public var limiter: Bool
     /// By `key(take:track:)`.
     public var tracks: [String: TrackGain]
+    /// Whether each track is brought to its target loudness before the user's gain (phase 2 design §5.7, `loudness-1`),
+    /// from version 3.
+    public var normalize: Bool
 
-    public init(limiter: Bool, tracks: [String: TrackGain]) {
+    public init(limiter: Bool, tracks: [String: TrackGain], normalize: Bool = false) {
         self.limiter = limiter
         self.tracks = tracks
+        self.normalize = normalize
     }
 
     /// The key of a track in `tracks`: `<take>/<track>`, for example `take-001/mic`.
@@ -793,9 +881,13 @@ public struct TrackGain: Codable, Equatable, Sendable {
     /// 0 to 2.
     public var gain: Double
     public var muted: Bool
+    /// 0 to 1: how much of the voice isolated from the noise goes into the mix, over the track as recorded (phase 2
+    /// design §5.6, `soundIsolation-1`), from version 3.
+    public var cleanup: Double
 
-    public init(gain: Double, muted: Bool) {
+    public init(gain: Double, muted: Bool, cleanup: Double = 0) {
         self.gain = gain
         self.muted = muted
+        self.cleanup = cleanup
     }
 }

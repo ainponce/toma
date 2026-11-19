@@ -148,7 +148,8 @@ public struct MotionPaths: Sendable {
         /// appearance, title and buttons are only drawn).
         var stage: Stage {
             let framed = switch frame {
-            case .none: false
+            // A device is drawn and measured as no frame until the render draws it (plan decision 10).
+            case .none, .device: false
             case .macWindow: true
             }
             return Stage(screens: screens, aspect: aspect, padding: padding, framed: framed)

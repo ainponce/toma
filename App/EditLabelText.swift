@@ -59,6 +59,87 @@ func localizedTitle(_ label: EditLabel) -> String {
             comment: "Undo label (Edit ▸ Undo «…»): all the camera changes of the recording were deleted")
     case .styleApply:
         String(localized: "Apply a Style", comment: "Undo label (Edit ▸ Undo «…»): a named style was applied to the project")
+    // Phase 2 (design §8, plan decision 19).
+    case .transcriptCreate:
+        String(
+            localized: "Transcribe",
+            comment: "Undo label (Edit ▸ Undo «…»): the project's speech was transcribed, or transcribed again")
+    case .transcriptCut:
+        String(
+            localized: "Cut Words",
+            comment: "Undo label (Edit ▸ Undo «…»): words were cut from the transcription, and their time from the video")
+    case .transcriptRestore:
+        String(
+            localized: "Restore Words",
+            comment: "Undo label (Edit ▸ Undo «…»): words cut from the transcription were brought back")
+    case .transcriptWord:
+        String(localized: "Correct a Word", comment: "Undo label (Edit ▸ Undo «…»): a word of the transcription was corrected")
+    case .transcriptBreak:
+        String(
+            localized: "Start a Caption Here",
+            comment: "Undo label (Edit ▸ Undo «…»): a caption was made to start at a word, or no longer")
+    case .transcriptFillers:
+        String(localized: "Remove Filler Words", comment: "Undo label (Edit ▸ Undo «…»): the filler words (um, uh) were cut")
+    case .transcriptPauses:
+        String(localized: "Shorten Pauses", comment: "Undo label (Edit ▸ Undo «…»): the long pauses between words were shortened")
+    case .captionsShow:
+        String(localized: "Show or Hide Captions", comment: "Undo label (Edit ▸ Undo «…»): the captions were shown or hidden")
+    case .captionsStyle:
+        String(
+            localized: "Change Caption Style",
+            comment: "Undo label (Edit ▸ Undo «…»): the captions' preset, size, position, capitals or highlight was changed")
+    case .cameraHideSilences:
+        String(
+            localized: "Hide During Silences",
+            comment: "Undo label (Edit ▸ Undo «…»): the camera was set to hide while nobody speaks")
+    case .cameraBackground:
+        String(
+            localized: "Change Camera Background",
+            comment: "Undo label (Edit ▸ Undo «…»): the background behind the person in the camera was changed")
+    case .cameraFraming:
+        String(
+            localized: "Change Camera Framing",
+            comment: "Undo label (Edit ▸ Undo «…»): the part of the camera's picture that is shown was changed")
+    case .cameraLook:
+        String(
+            localized: "Change Camera Color",
+            comment: "Undo label (Edit ▸ Undo «…»): the camera's color look or its intensity was changed")
+    case .cameraSync:
+        String(
+            localized: "Change Camera Sync",
+            comment: "Undo label (Edit ▸ Undo «…»): the camera's picture was moved earlier or later against the sound")
+    case .audioCleanup:
+        String(
+            localized: "Change Noise Cleanup",
+            comment: "Undo label (Edit ▸ Undo «…»): the noise cleanup of a microphone track was changed")
+    case .audioNormalize:
+        String(
+            localized: "Normalize Volume",
+            comment: "Undo label (Edit ▸ Undo «…»): the volume normalization was turned on or off")
+    case .styleReframe:
+        String(
+            localized: "Change Screen Framing",
+            comment: "Undo label (Edit ▸ Undo «…»): the screen was set to show whole or to follow the cursor")
+    case .privacyAdd: String(localized: "Add Blur", comment: "Undo label (Edit ▸ Undo «…»): a blur block was added")
+    case .privacyChange:
+        String(
+            localized: "Change Blur",
+            comment: "Undo label (Edit ▸ Undo «…»): a blur block's effect, strength, color or rectangle was changed")
+    case .privacyMove:
+        String(localized: "Move Blur", comment: "Undo label (Edit ▸ Undo «…»): a blur block was moved on the timeline")
+    case .privacyTrim:
+        String(localized: "Trim Blur", comment: "Undo label (Edit ▸ Undo «…»): an edge of a blur block was trimmed")
+    case .privacyDelete: String(localized: "Delete Blur", comment: "Undo label (Edit ▸ Undo «…»): blur blocks were deleted")
+    case .privacyAuto:
+        String(
+            localized: "Blur Sensitive Data",
+            comment: "Undo label (Edit ▸ Undo «…»): the sensitive data found on the screen was blurred")
+    case .keysOverlay:
+        String(
+            localized: "Change Keys on Screen",
+            comment: "Undo label (Edit ▸ Undo «…»): how the pressed keys are shown on the output was changed")
+    case .speedTyping:
+        String(localized: "Speed Up Typing", comment: "Undo label (Edit ▸ Undo «…»): the parts where the user types were sped up")
     }
 }
 

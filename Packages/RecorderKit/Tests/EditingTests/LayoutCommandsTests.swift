@@ -535,5 +535,6 @@ private enum LayoutFixture {
         #expect(label.rawValue == raw)
         #expect(EditLabel(rawValue: raw) == label)
     }
-    #expect(Array(EditLabel.allCases.suffix(12)) == labels.map(\.0))
+    // After the 21 of 1b, before those of phase 2.
+    #expect(Array(EditLabel.allCases.dropFirst(21).prefix(12)) == labels.map(\.0))
 }
