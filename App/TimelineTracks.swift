@@ -134,8 +134,11 @@ struct TimelineContent {
         }.sorted()
     }
 
-    /// `markers`: the take's marker times (`markerTimes(in:)`).
-    init(take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>]) {
+    /// `markers`: the take's marker times (`markerTimes(in:)`); `contentRatio`: what "Like the Recording" follows.
+    init(
+        take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>],
+        contentRatio: Double? = nil
+    ) {
         let map = TimeMap(sequence: document.sequence)
         let takeID = document.sequence.first?.take ?? take.id
         layout = TimelineLayout(take: take, document: document)
@@ -174,7 +177,7 @@ struct TimelineContent {
                 id: region.id, output: output,
                 info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
         })
-        let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080)
+        let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
         splitOrientation = orientation
         projectLayout = document.camera.layout.kind

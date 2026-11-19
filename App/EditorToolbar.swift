@@ -160,7 +160,7 @@ private struct EditorNameEditor: View {
     }
 }
 
-/// The format selector: 16:9, 9:16 and 1:1. Choosing one is an edit. Its formats, titles and symbols are also the
+/// The format selector: the seven formats, 16:9, 9:16, 1:1, 4:5, 4:3, 3:4 and Like the Recording. Choosing one is an edit. Its formats, titles and symbols are also the
 /// Project menu's (`ProjectCommands`).
 struct FormatMenu: View {
     let model: EditorModel
@@ -178,7 +178,7 @@ struct FormatMenu: View {
             .pickerStyle(.inline)
             .labelsHidden()
         } label: {
-            Label(title: { Text(verbatim: aspect.rawValue) }, icon: { Image(systemName: Self.symbol(aspect)) })
+            Label(title: { aspect == .auto ? Text(Self.title(aspect)) : Text(verbatim: aspect.rawValue) }, icon: { Image(systemName: Self.symbol(aspect)) })
                 .labelStyle(.titleAndIcon)
         }
         .menuIndicator(.visible)
@@ -189,7 +189,23 @@ struct FormatMenu: View {
         .accessibilityValue(Text(Self.title(aspect)))
     }
 
-    static let aspects: [Aspect] = [.landscape, .portrait, .square]
+    static let aspects = Aspect.allCases
+
+    #if DEBUG
+    /// The choices as the menu lists them, for `-TomaShowcase formats`.
+    static var showcase: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(aspects, id: \.self) { aspect in
+                Label(title(aspect), systemImage: symbol(aspect))
+            }
+            Divider()
+            Label(title: { Text(title(.auto)) }, icon: { Image(systemName: symbol(.auto)) })
+                .labelStyle(.titleAndIcon)
+        }
+        .padding(16)
+        .frame(width: 260, alignment: .leading)
+    }
+    #endif
 
     static func symbol(_ aspect: Aspect) -> String {
         switch aspect {

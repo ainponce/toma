@@ -925,7 +925,7 @@ struct BenchGIF: AsyncParsableCommand {
             throw ExitCode.failure
         }
         let elapsed = Date().timeIntervalSince(started)
-        let size = settings.outputSize(aspect: document.aspect)
+        let size = settings.outputSize(project: project, document: document)
         print(String(
             format: "exported: %.2f s of video as a GIF of %d × %d at %d fps in %.2f s (%d frames, %d images, %.1f MB)",
             Double(range.end - range.start) / 1e9, size.x, size.y, fps, elapsed, summary.frames, summary.writtenFrames,

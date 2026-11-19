@@ -424,6 +424,20 @@ private func fill(_ folder: URL, leaving: Int) throws {
         #expect(settings.outputSize(aspect: .threeByFour) == [600, 800])
         #expect(settings.outputSize(aspect: .auto) == [800, 450])
         #expect(settings.outputSize(aspect: .auto, contentRatio: 0.5) == [400, 800])
+        #expect(settings.outputSize(aspect: .auto, contentRatio: 2.4) == [800, 334])
+    }
+
+    @Test func gifSizeOfAutoFollowsTheProjectsScreen() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await movingTake(in: dir)
+            var document = edit(of: project)
+            let settings = GIFSettings(longSide: 480, range: ExportRange(start: 0, end: 1_000_000_000))
+            document.aspect = .landscape
+            #expect(settings.outputSize(project: project, document: document) == [480, 270])
+            document.aspect = .auto
+            let ratio = try #require(StageLayout.contentRatio(take: project.take, document: document, events: project.events))
+            #expect(settings.outputSize(project: project, document: document) == settings.outputSize(aspect: .auto, contentRatio: ratio))
+        }
     }
 
     @Test func oddSizesAreEven() {

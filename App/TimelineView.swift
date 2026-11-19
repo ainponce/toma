@@ -275,6 +275,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private var shown: (take: TakeRecord, document: EditDocument, missing: [ClosedRange<Double>])?
     /// The take's marker times (`TimelineContent.markerTimes(in:)`).
     private var shownMarkers: [HostTime] = []
+    /// What "Like the Recording" follows, of the take shown.
+    private var shownContentRatio: Double?
     /// The document a drag shows while it lasts, and until the committed one arrives (`show`): the timeline follows it.
     private var preview: EditDocument?
     /// The next layout settles the items to their new places with `Motion.trackItem`.
@@ -404,7 +406,9 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
 
     /// Shows `document` of `take` (with its `markers`, `TimelineContent.markerTimes(in:)`), the spans in `missing` hatched;
     /// `nil`, nothing (the project is opening or cannot be shown).
-    func show(take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>]) {
+    func show(
+        take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>], contentRatio: Double? = nil
+    ) {
         if let shown, shown.take == take, shown.document == document, shown.missing == missing, shownMarkers == markers,
             preview == nil
         { return }
@@ -413,6 +417,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         preview = nil
         shown = (take, document, missing)
         shownMarkers = markers
+        shownContentRatio = contentRatio
         rebuildContent()
         NSAccessibility.post(element: self, notification: .layoutChanged)
     }
@@ -428,7 +433,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private func rebuildContent() {
         guard let shown else { return }
         let rows = content?.layout.tracks
-        let content = TimelineContent(take: shown.take, markers: shownMarkers, document: preview ?? shown.document, missing: shown.missing)
+        let content = TimelineContent(take: shown.take, markers: shownMarkers, document: preview ?? shown.document, missing: shown.missing,
+            contentRatio: shownContentRatio)
         self.content = content
         itemsCache = nil
         if content.layout.tracks != rows { makeHeaders() } else { updateHeaders() }

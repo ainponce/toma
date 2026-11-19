@@ -224,6 +224,9 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         #expect(LibraryThumbnails.size(for: .landscape) == SIMD2(520, 292))
         #expect(LibraryThumbnails.size(for: .portrait) == SIMD2(164, 292))
         #expect(LibraryThumbnails.size(for: .square) == SIMD2(292, 292))
+        #expect(LibraryThumbnails.size(for: .auto, contentRatio: 2.4) == SIMD2(520, 217))
+        #expect(LibraryThumbnails.size(for: .auto) == SIMD2(520, 292))
+        #expect(LibraryThumbnails.size(for: .fourByFive) == SIMD2(234, 292))
         try await withTemporaryDirectory { dir in
             // In 9:16, half a second long: its thumbnail is of 0.05 s.
             let url = try #require(try await LibraryFixtures.folder(in: dir, kinds: [.v3]).first)
