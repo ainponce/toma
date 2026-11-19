@@ -41,27 +41,63 @@ public enum SpeechLanguages {
         return identifiers(await SpeechTranscriber.installedLocales)
     }
 
-    /// The language to transcribe in when none was chosen: the first of `preferred` (the Mac's languages, in order)
-    /// that `equivalent` takes to one of `supported`; without one, `en-US` if it is supported; without it, the first
-    /// of `supported`; `nil` when nothing is supported.
-    public static func defaultLanguage(
-        preferred: [String], supported: [String], equivalent: (String) async -> String?
-    ) async -> String? {
-        let supported = supported.map(bcp47)
+    /// The language to transcribe in when none was chosen, the same on every run (final review of phase 2: the system's
+    /// `supportedLocale(equivalentTo:)` took es-AR to es-MX on one run and to es-ES on the next). For each of `preferred`
+    /// (the Mac's languages, in order), the first of `supported` that is:
+    /// 1. the same identifier (`es-CL`);
+    /// 2. of the same language and region, whatever else the identifiers say (`zh-Hant-TW` → `zh-TW`);
+    /// 3. for Spanish of Latin America (`es-AR`, `es-419`), `es-419`, `es-MX` or `es-US`, in that order;
+    /// 4. its language's most generic: the language alone (`fr`), then the language where it is most spoken (CLDR's
+    ///    likely region: `fr-FR`, `en-US`, `pt-BR`, `zh-TW` for `zh-Hant`), then the first of its language (`pt-PT`).
+    ///
+    /// Without one for any, `en-US` if it is supported; without it, the first of `supported`; `nil` when nothing is
+    /// supported. `supported` is taken as BCP 47 and sorted, so the order the system lists it in never matters.
+    public static func defaultLanguage(preferred: [String], supported: [String]) -> String? {
+        let supported = Array(Set(supported.map(bcp47))).sorted()
         guard let first = supported.first else { return nil }
         for language in preferred {
-            if let match = await equivalent(language).map(bcp47), supported.contains(match) { return match }
+            if let match = closest(to: bcp47(language), in: supported) { return match }
         }
         return supported.contains("en-US") ? "en-US" : first
     }
 
-    /// `defaultLanguage(preferred:supported:equivalent:)` with the Mac's preferred languages and what
-    /// `SpeechTranscriber.supportedLocale(equivalentTo:)` takes them to (`es-419` → `es-MX`).
+    /// `defaultLanguage(preferred:supported:)` with the Mac's preferred languages.
     public static func defaultLanguage() async -> String? {
         guard #available(macOS 26, *) else { return nil }
-        return await defaultLanguage(preferred: Locale.preferredLanguages, supported: supported()) { language in
-            await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language))?.identifier(.bcp47)
+        return defaultLanguage(preferred: Locale.preferredLanguages, supported: await supported())
+    }
+
+    /// The regions of Latin America where Spanish is spoken, and Latin America itself (`419`).
+    static let latinAmerica: Set<String> = [
+        "419", "AR", "BO", "CL", "CO", "CR", "CU", "DO", "EC", "GT", "HN", "MX", "NI", "PA", "PE", "PR", "PY", "SV", "UY", "VE",
+    ]
+    /// What Spanish of Latin America is transcribed in when its own region is not supported, in this order.
+    static let latinAmericanSpanish = ["es-419", "es-MX", "es-US"]
+
+    /// The one of `supported` (BCP 47, sorted) closest to `language` (BCP 47) by the steps of
+    /// `defaultLanguage(preferred:supported:)`; `nil` if none is of its language.
+    private static func closest(to language: String, in supported: [String]) -> String? {
+        if supported.contains(language) { return language }
+        let wanted = Locale.Language(identifier: language)
+        guard let code = wanted.languageCode?.identifier else { return nil }
+        let candidates = supported.filter { Locale.Language(identifier: $0).languageCode?.identifier == code }
+        guard !candidates.isEmpty else { return nil }
+        func inRegion(_ region: String?) -> String? {
+            guard let region else { return nil }
+            return candidates.first { Locale.Language(identifier: $0).region?.identifier == region }
         }
+        let region = wanted.region?.identifier
+        if let same = inRegion(region) { return same }
+        if code == "es", let region, latinAmerica.contains(region),
+           let spanish = latinAmericanSpanish.first(where: candidates.contains) {
+            return spanish
+        }
+        if candidates.contains(code) { return code }
+        let base = [code, wanted.script?.identifier].compactMap { $0 }.joined(separator: "-")
+        if let likely = inRegion(Locale.Language(identifier: Locale.Language(identifier: base).maximalIdentifier).region?.identifier) {
+            return likely
+        }
+        return candidates.first
     }
 
     /// Whether the model of `language` is on this Mac, can be downloaded or is being downloaded.

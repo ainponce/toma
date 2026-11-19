@@ -212,20 +212,62 @@ private final class PausingEngine: SpeechEngine {
     }
 }
 
-/// The first of the Mac's languages that has an equivalent the engine supports; then en-US; then the first supported.
-@Test func defaultLanguageFollowsThePreferences() async {
-    let supported = ["en-GB", "en-US", "es-MX", "fr-FR"]
-    let equivalents = ["es-419": "es_MX", "fr": "fr-FR"]
-    func language(_ preferred: [String], _ supported: [String]) async -> String? {
-        await SpeechLanguages.defaultLanguage(preferred: preferred, supported: supported) { equivalents[$0] }
+/// What `SpeechTranscriber.supportedLocales` lists on macOS 26.
+private let speechLocales = [
+    "de-AT", "de-CH", "de-DE", "en-AU", "en-CA", "en-GB", "en-IE", "en-IN", "en-NZ", "en-SG", "en-US", "en-ZA", "es-CL",
+    "es-ES", "es-MX", "es-US", "fr-BE", "fr-CA", "fr-CH", "fr-FR", "it-CH", "it-IT", "ja-JP", "ko-KR", "pt-BR", "pt-PT",
+    "yue-CN", "zh-CN", "zh-HK", "zh-TW",
+]
+
+/// The language of the Mac when it is supported; otherwise one of its language, the same on every run (final review of
+/// phase 2: es-AR gave es-MX or es-ES, as `supportedLocale(equivalentTo:)` answered).
+@Test func defaultLanguageIsTheMacsOrTheClosestOfItsLanguage() {
+    func language(_ preferred: String, _ supported: [String] = speechLocales) -> String? {
+        SpeechLanguages.defaultLanguage(preferred: [preferred], supported: supported)
     }
-    #expect(await language(["es-419", "en-GB"], supported) == "es-MX")
-    #expect(await language(["de-DE", "fr"], supported) == "fr-FR")
-    #expect(await language(["de-DE", "ja-JP"], supported) == "en-US")
-    #expect(await language(["de-DE"], ["fr-FR", "es-MX"]) == "fr-FR")
-    // An equivalent that is not supported does not count.
-    #expect(await language(["es-419"], ["fr-FR"]) == "fr-FR")
-    #expect(await language(["es-419"], []) == nil)
+    #expect(language("es-AR") == "es-MX")
+    #expect(language("es-CL") == "es-CL")
+    #expect(language("es-ES") == "es-ES")
+    #expect(language("en-GB") == "en-GB")
+    #expect(language("pt-BR") == "pt-BR")
+    #expect(language("fr-CA") == "fr-CA")
+    // Spanish of Latin America: es-419, es-MX, es-US, in that order.
+    #expect(language("es-AR", speechLocales + ["es-419"]) == "es-419")
+    #expect(language("es-AR", ["es-ES", "es-US"]) == "es-US")
+    #expect(language("es-CL", speechLocales.filter { $0 != "es-CL" }) == "es-MX")
+    #expect(language("es-419") == "es-MX")
+    // Otherwise the language alone, then where it is most spoken, then the first of its language.
+    #expect(language("es-ES", ["es-US", "es-MX"]) == "es-MX")
+    #expect(language("en-GB", speechLocales.filter { $0 != "en-GB" }) == "en-US")
+    #expect(language("fr-CA", speechLocales.filter { $0 != "fr-CA" }) == "fr-FR")
+    #expect(language("fr-CA", ["fr", "fr-FR"]) == "fr")
+    #expect(language("pt-BR", speechLocales.filter { $0 != "pt-BR" }) == "pt-PT")
+    #expect(language("de-LI") == "de-DE")
+    // The same language and region, whatever else the Mac's identifier says.
+    #expect(language("zh-Hant-TW") == "zh-TW")
+    #expect(language("zh-Hant") == "zh-TW")
+    #expect(language("es_AR") == "es-MX")
+}
+
+/// The Mac's languages in order; then en-US; then the first supported, in order; nothing without a language.
+@Test func defaultLanguageFollowsThePreferences() {
+    let supported = ["en-GB", "en-US", "es-MX", "fr-FR"]
+    func language(_ preferred: [String], _ supported: [String]) -> String? {
+        SpeechLanguages.defaultLanguage(preferred: preferred, supported: supported)
+    }
+    #expect(language(["es-419", "en-GB"], supported) == "es-MX")
+    #expect(language(["es-AR", "en-US"], supported) == "es-MX", "the first language of the Mac wins")
+    #expect(language(["de-DE", "fr"], supported) == "fr-FR")
+    #expect(language(["de-DE", "ja-JP"], supported) == "en-US")
+    #expect(language(["de-DE"], ["fr-FR", "es-MX"]) == "es-MX")
+    #expect(language(["es-419"], ["fr-FR"]) == "fr-FR")
+    #expect(language(["es-419"], []) == nil)
+    // Whatever order (and spelling) the system lists them in.
+    for _ in 0..<20 {
+        #expect(language(["es-AR"], speechLocales.shuffled()) == "es-MX")
+        #expect(language(["pt-AO"], speechLocales.filter { $0 != "pt-PT" }.shuffled() + ["pt_BR"]) == "pt-BR")
+        #expect(language(["ru-RU"], speechLocales.filter { $0 != "en-US" }.shuffled()) == "de-AT")
+    }
 }
 
 /// A download reports how it moves, only up, and 1 at the end; cancelling its task cancels it.
