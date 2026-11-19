@@ -330,6 +330,8 @@ private final class GIFEncoding: @unchecked Sendable {
         paletteSink: GIFExporter.PaletteSink?, renderer: FrameRenderer? = nil, analysis: AnalysisInputs = .none
     ) throws {
         size = settings.outputSize(aspect: document.aspect)
+        // A passed renderer draws with its own analysis: `analysis` would be ignored, so the two must agree.
+        precondition(renderer.map { $0.analysis == analysis } ?? true, "GIFExporter: renderer.analysis differs from analysis")
         let drawing = try renderer ?? Self.makeRenderer(project: project, document: document, size: size, analysis: analysis)
         self.renderer = drawing
         quantizer = try GIFQuantizer(device: drawing.device)

@@ -64,6 +64,18 @@ extension Trait where Self == GoldenSeamCases {
 
 @Suite(.goldenSeamCases)
 struct RenderSeamsTests {
+    /// `makeScene` without `analysis:` reads the renderer's own; with it, exactly what it is given (`AnalysisInputs.none`
+    /// is no analysis, not "the renderer's"). `AnalysisInputs` has no field yet, so the two cannot differ in value here:
+    /// the test pins that both overloads exist and carry their analysis to the scene.
+    @Test func makeSceneAnalysisOverloads() throws {
+        let c = try #require(GoldenSeamCases.cases.first)
+        let size = GoldenDocuments.outputSize(of: c.document)
+        let renderer = try FrameRenderer(project: c.project, document: c.document, outputSize: size, analysis: AnalysisInputs())
+        let paths = MotionPaths(take: c.project.take, events: c.project.events, document: c.document)
+        #expect(renderer.makeScene(document: c.document, paths: paths, outputSize: size).analysis == renderer.analysis)
+        #expect(renderer.makeScene(document: c.document, paths: paths, outputSize: size, analysis: AnalysisInputs.none).analysis == .none)
+    }
+
     @Test func legacyFramesFillNoNewLayer() throws {
         let cases = GoldenSeamCases.cases
         try #require(cases.count == GoldenDocuments.golden2Cases.count)
