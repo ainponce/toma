@@ -142,6 +142,15 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// Consecutive spans of a segment for the same reason are merged.
     var gaps: [Gap] { lock.withLock { recordedGaps } }
 
+    /// The files (`SegmentRecord.file`) of `gaps`, each once, in the order found: for the sensitive scan
+    /// (`ImageAnalysis`), which tells a segment reading could not decode from one that holds nothing.
+    public var filesWithGaps: [String] {
+        lock.withLock {
+            var seen = Set<String>()
+            return recordedGaps.map(\.file).filter { seen.insert($0).inserted }
+        }
+    }
+
     /// Never throws and reads nothing yet: every segment is classified without opening it, and opened when it
     /// is first needed, where the package is then (`ProjectPackage.fileURL`).
     public init(package: ProjectPackage, track: TrackRecord) {
