@@ -79,6 +79,7 @@ struct PreviewArea: View {
                     .aspectRatio(CGFloat(model.previewRatio), contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Transport(model: model)
+                    .typingSpeedPopover(model)
             }
             .padding(16)
         }

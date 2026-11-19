@@ -944,6 +944,10 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 - En detalle: «Agregar desenfoque» (la barra de la línea de tiempo y Edición ▸ Agregar desenfoque) crea un bloque de 3 s desde el cabezal, aparece la pista Privacidad y la vista previa muestra un rectángulo centrado de 40 % × 20 % con 8 manijas. Arrastrar el cuerpo lo mueve 1:1 con el puntero, una esquina o un lado lo agranda; cerca de los bordes y del centro de la pantalla dibujada se pega (con una línea de acento y un toque del trackpad) y con ⌘ apretado no. Lo mismo con un zoom de 2× a 4× parado sobre el bloque, con Pantalla dividida y con Seguir el cursor del reencuadre: el rectángulo queda sobre lo que tapa el desenfoque, sin corrimiento. Soltar es un paso: Edición ▸ Deshacer «Cambiar el desenfoque».
 - En la pista: dos bloques pisados se ven uno sobre otro, el más corto arriba, y el que se agarra es el de arriba; moverlo y recortarlo no frena en el otro; doble clic lleva el cabezal al bloque; el menú cambia entre Desenfoque, Pixelado y Relleno y borra; ⌫ borra los elegidos. VoiceOver lee «Desenfoque, de 0:02 a 0:05».
 
+**Acelerar el tipeo** (P13)
+
+- Edición ▸ Acelerar el tipeo… (y el menú contextual del Video) en una toma real con escritura: la ventanita ofrece 2× · 3× · 4× · 8× (3× elegido) y el resultado («Se aceleran 5 tramos: 1:23 → 0:28») coincide con lo que queda; Acelerar lo hace en un solo paso y Edición ▸ Deshacer «Acelerar el tipeo» lo deshace entero. Sin tramos de tipeo de 2 s o más dice «No hay tramos de tipeo de 2 s o más.» y Acelerar queda apagado.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

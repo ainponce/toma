@@ -750,6 +750,9 @@ final class TimelineInteraction {
         let split = MenuAction(String(localized: "Split")) { model.split(atOutput: τ) }
         split.isEnabled = canEdit
         menu.addItem(split)
+        let typing = MenuAction(String(localized: "Speed Up Typing…")) { model.askTypingSpeed() }
+        typing.isEnabled = canEdit
+        menu.addItem(typing)
         menu.addItem(.separator())
         let delete = MenuAction(String(localized: "Delete")) { [weak self] in self?.deleteSelected() }
         delete.isEnabled = canEdit

@@ -125,6 +125,8 @@ final class EditorModel {
     /// A style of the row Style is being applied (`applyStyle`).
     private(set) var isApplyingStyle = false
     var selection: EditorSelection?
+    /// The little window of Speed Up Typing is shown (phase 2 design §7.5).
+    var isAskingTypingSpeed = false
     /// The in and out marks of the timeline's ruler (I and O, or ⌥ and a drag), in output nanoseconds.
     var timelineMarks = TimelineMarks()
     /// Whether the panel is shown; the window shows or hides its inspector by it.
