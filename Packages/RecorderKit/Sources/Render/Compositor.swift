@@ -58,7 +58,8 @@ public final class Compositor: @unchecked Sendable {
     let screenSampler: any MTLSamplerState
     /// Linear between the texels and between the mipmap levels: the cursor, the title and a screen with mipmaps.
     let trilinearSampler: any MTLSamplerState
-    private let mipmappedCopies: MipmappedCopies
+    /// Internal for the privacy's failing closed when one cannot be made (`Compositor+Privacy.swift`).
+    let mipmappedCopies: MipmappedCopies
     /// The copies with mipmaps of the camera's frames a blurred background reads (`prepareCameraLook`), apart from the
     /// screen's.
     let cameraCopies: MipmappedCopies
@@ -233,6 +234,8 @@ public final class Compositor: @unchecked Sendable {
         commandBuffer: any MTLCommandBuffer,
         counts: inout DrawCounts
     ) throws {
+        // Its screens as they are drawn (`screenImage`).
+        var frame = frame
         // What the camera's colour and background are drawn with, made before any render pass, on every path.
         let look = try prepareCameraLook(frame, camera: camera, textures: cameraLook, commandBuffer: commandBuffer)
         // The camera over every pixel: nothing under it is drawn, nor sampled.
@@ -249,12 +252,9 @@ public final class Compositor: @unchecked Sendable {
         // The blur's tile memory, then what the screens are sampled from, their copies with mipmaps made before the render
         // pass.
         let tileMemory = frame.subframes.isEmpty && frame.cursorSamples.isEmpty ? nil : try blurTileMemory(like: target)
-        let screenImage = try frame.screen.flatMap { layer in
-            try screen.flatMap { try image(of: layer, in: $0, commandBuffer: commandBuffer) }
-        }
-        let previousImage = try frame.previousScreen.flatMap { layer in
-            try previousScreen.flatMap { try image(of: layer, in: $0, commandBuffer: commandBuffer) }
-        }
+        // A screen with privacy regions, from its copy with mipmaps or failing closed, is drawn as `screenImage` leaves it.
+        let screenImage = try self.screenImage(of: &frame.screen, in: screen, commandBuffer: commandBuffer)
+        let previousImage = try self.screenImage(of: &frame.previousScreen, in: previousScreen, commandBuffer: commandBuffer)
         let textures = StageTextures(
             screen: screenImage, previousScreen: previousImage, cursor: cursor, backgroundImage: backgroundImage,
             windowTitle: windowTitle)
@@ -316,7 +316,7 @@ public final class Compositor: @unchecked Sendable {
     /// mipmaps of the crop's whole pixels alone, rounded inward (`MipmappedCopies.region(of:width:height:)`), and the crop
     /// as fractions of that copy, so neither the copy nor any of its levels holds anything outside the crop. `nil`, no
     /// screen, for a crop that is not finite.
-    private func image(
+    func image(
         of layer: ScreenLayer, in frame: any MTLTexture, commandBuffer: any MTLCommandBuffer
     ) throws -> ScreenImage? {
         let crop = layer.crop

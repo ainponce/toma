@@ -191,8 +191,9 @@ private struct SeamDrawer: @unchecked Sendable {
         ShaderSource.captionsMetal,
     ]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + layers.joined())
-    // The base adds no shader of its own: the library is phase 1's.
-    #expect(layers.allSatisfy { $0.isEmpty })
+    // The base adds no shader of its own: the library is phase 1's. Milestone 2c's privacy has its part (`privacy-1`).
+    #expect(layers.filter { $0 != ShaderSource.privacyMetal }.allSatisfy { $0.isEmpty })
+    #expect(!ShaderSource.privacyMetal.isEmpty)
 }
 
 @Test func cameraSyncAtZeroIsTheSameInstant() throws {

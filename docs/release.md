@@ -921,6 +921,10 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
   2. Grabar 20 s con el iPhone en vertical y un video sonando en el iPhone. En `manifest.json` del paquete: `formatVersion` 4, una pista `device` con `globalFrame` `{x: 0, y: 0}` y el tamaño en píxeles de la pantalla del iPhone (por ejemplo 1179 × 2556 en un iPhone 15), `pixelScale` 1, y una pista `deviceAudio` con el mismo `deviceUniqueID`. El primer segmento de `device` tiene exactamente ese tamaño (Información de QuickTime) y se ve fluido cuando la pantalla se mueve; el de `deviceAudio` se oye entero y en sincronía con la imagen. Si a `device` le faltan `globalFrame` y `pixelScale`, anotarlo: el iPhone no dijo su tamaño antes de empezar.
   3. Girar el iPhone a horizontal y volver a vertical durante la toma: `device` sigue en segmentos nuevos (`formatChanged`) y la toma no se corta.
   4. Desconectar el cable 10 s a mitad de la toma y volver a conectarlo: la toma sigue; las dos pistas terminan su segmento y siguen en uno nuevo del mismo iPhone. Con otro iPhone conectado mientras el primero no está, Toma no lo graba en su lugar.
+- **Privacidad en el render** (P2; los bloques se agregan con P6). En una toma con texto chico y grande en pantalla (un correo, una clave), tapar tres partes con Desenfoque (intensidad por defecto y en 0), Pixelado y Relleno:
+  1. En la vista previa y en el MP4 exportado no se lee ninguna letra de lo tapado, ni con la intensidad en 0; los bordes del rectángulo son rectos y duros, sin un halo del texto alrededor.
+  2. Con un zoom de 4× que entra rápido (con desenfoque de movimiento) y con un cambio de forma de la pantalla, el rectángulo sigue pegado al mismo texto en cada cuadro, también avanzando cuadro a cuadro.
+  3. En la M1: la vista previa a 1080p con ocho bloques de Desenfoque grandes y un zoom que entra rápido con desenfoque de movimiento se reproduce a 60 fps, sin cuadros salteados (en el M5 Pro, el peor cuadro de la GPU es de unos 4 ms: `docs/performance.md`, fila P2).
 
 
 ## Prueba en seco (ad hoc)

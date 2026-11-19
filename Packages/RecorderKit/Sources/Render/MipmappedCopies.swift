@@ -50,6 +50,8 @@ final class MipmappedCopies: @unchecked Sendable {
         var made = 0
         /// The sizes last asked for, the latest last: `keptSizes` at most.
         var sizes: [Size] = []
+        /// For tests: every copy fails as when Metal cannot make one.
+        var failing = false
 
         /// Notes that `size` was asked for, and lets go of the free copies of a size no longer among the last ones.
         mutating func ask(_ size: Size) {
@@ -68,6 +70,12 @@ final class MipmappedCopies: @unchecked Sendable {
     }
 
     var count: (made: Int, free: Int) { state.withLock { ($0.made, $0.free.count) } }
+
+    /// For tests: every copy asked for while it is set fails, as when Metal cannot make one.
+    var failsForTests: Bool {
+        get { state.withLock { $0.failing } }
+        set { state.withLock { $0.failing = newValue } }
+    }
 
     /// How many sizes the free copies are of, for tests.
     var freeSizes: Int {
@@ -106,7 +114,8 @@ final class MipmappedCopies: @unchecked Sendable {
     /// those pixels of its level 0, then `generateMipmaps`. Throws `RenderError.metalResourceUnavailable`, having encoded
     /// nothing, when Metal cannot make the copy or the blit pass.
     func copy(of source: any MTLTexture, region: MTLRegion, commandBuffer: any MTLCommandBuffer) throws -> any MTLTexture {
-        guard let copy = take(width: region.size.width, height: region.size.height, pixelFormat: source.pixelFormat) else {
+        guard !failsForTests, let copy = take(width: region.size.width, height: region.size.height, pixelFormat: source.pixelFormat)
+        else {
             throw RenderError.metalResourceUnavailable("mipmapped copy of the screen")
         }
         guard let blit = commandBuffer.makeBlitCommandEncoder() else {
