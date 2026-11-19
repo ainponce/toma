@@ -208,7 +208,7 @@ private struct VoiceFixture {
     func cleanFile(_ index: Int) throws -> URL {
         let segment = try #require(micSegments.first { $0.index == index })
         let identity = try #require(SegmentIdentity.of(segment, in: project.package))
-        return try #require(caches.analysisFile(.clean, take: takeID, track: micID, segment: identity, algorithm: "soundIsolation-1", extension: "caf"))
+        return try #require(caches.analysisFile(.clean, take: takeID, track: micID, segment: identity, algorithm: "soundIsolation-2", extension: "caf"))
     }
 
     /// The loudness file of the microphone's segment `index`.
@@ -277,7 +277,7 @@ private func readMeasure(_ url: URL) throws -> SegmentLoudness {
         let jobs = ProjectJobs()
         let expected = try fixture.cleanFile(1)
         #expect(expected.path.hasSuffix("/clean/take-001/mic/\(expected.lastPathComponent)"))
-        #expect(expected.lastPathComponent.hasPrefix("seg-0001-") && expected.lastPathComponent.hasSuffix("-soundIsolation-1.caf"))
+        #expect(expected.lastPathComponent.hasPrefix("seg-0001-") && expected.lastPathComponent.hasSuffix("-soundIsolation-2.caf"))
 
         let output = try await jobs.result(of: clean(1), work: try #require(voice.work(for: clean(1))))
         guard case .cached(let url) = output else { Issue.record("\(output)"); return }

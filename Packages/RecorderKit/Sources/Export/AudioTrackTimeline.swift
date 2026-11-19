@@ -364,7 +364,7 @@ final class AudioTrackTimeline: Sendable {
         self.missing = missing
     }
 
-    /// The clean voice of `dry` (`soundIsolation-1`, plan decision 14) as a stream of its own with `channels` channels:
+    /// The clean voice of `dry` (`soundIsolation-2`, plan decision 14) as a stream of its own with `channels` channels:
     /// the same `placed` as `dry`, each segment reading its clean file of `files` (by `SegmentRecord.file`) frame for
     /// frame from where the segment is heard (a map that is the identity from `placed.start`, the file at 48 kHz read
     /// from anywhere, `decodedFrames` its length), so it plays over exactly the frames the dry sound plays. A file is

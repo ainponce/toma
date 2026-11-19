@@ -60,8 +60,8 @@ private struct AnalysisFixture {
             .masks, take: "take-001", track: "camera", segment: identity, algorithm: "personMask-1", extension: "mov")
         #expect(file?.path == fixture.caches.directory.path + "/masks/take-001/camera/seg-0001-1234-1700000000123456789-personMask-1.mov")
         let clean = fixture.caches.analysisFile(
-            .clean, take: "take-001", track: "mic-1", segment: identity, algorithm: "soundIsolation-1", extension: "caf")
-        #expect(clean?.path == fixture.caches.directory.path + "/clean/take-001/mic-1/seg-0001-1234-1700000000123456789-soundIsolation-1.caf")
+            .clean, take: "take-001", track: "mic-1", segment: identity, algorithm: "soundIsolation-2", extension: "caf")
+        #expect(clean?.path == fixture.caches.directory.path + "/clean/take-001/mic-1/seg-0001-1234-1700000000123456789-soundIsolation-2.caf")
     }
 }
 
