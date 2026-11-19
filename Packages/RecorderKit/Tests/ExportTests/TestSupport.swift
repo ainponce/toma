@@ -5,6 +5,7 @@ import CoreVideo
 import Foundation
 import ProjectFormat
 import Recording
+import RecorderKitTestSupport
 import Synchronization
 import SyntheticCapture
 import Testing
@@ -120,9 +121,9 @@ private enum TrackReadError: Error {
 /// Reads every sample of the first `mediaType` track of `url` with `outputSettings`, folding them into
 /// `initial` with `fold`.
 ///
-/// The reading runs on a thread of its own, as in the recording tests: `copyNextSampleBuffer` blocks until
-/// AVFoundation's own file reads finish, and many test cases blocking the cooperative pool that way at once
-/// can starve those reads of threads and deadlock the test run.
+/// The reading runs on a thread of its own, holding a decoding slot (`offThePool`): `copyNextSampleBuffer` blocks
+/// until AVFoundation's own file reads finish, and many test cases blocking the cooperative pool that way at once, or
+/// pulling readers from threads of their own, can starve those reads of threads and deadlock the test run.
 func readTrack<T: Sendable>(
     of url: URL, mediaType: AVMediaType, outputSettings: [String: any Sendable]?, into initial: T,
     _ fold: @escaping @Sendable (inout T, CMSampleBuffer) throws -> Void
@@ -130,19 +131,15 @@ func readTrack<T: Sendable>(
     let asset = AVURLAsset(url: url)
     // Handed over to the reading thread, and not used here again.
     nonisolated(unsafe) let track = try #require(try await asset.loadTracks(withMediaType: mediaType).first)
-    let (value, status) = try await withCheckedThrowingContinuation { continuation in
-        Thread {
-            continuation.resume(with: Result { () throws -> (T, AVAssetReader.Status) in
-                let reader = try AVAssetReader(asset: asset)
-                let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
-                guard reader.canAdd(output) else { throw TrackReadError.cannotAddOutput }
-                reader.add(output)
-                guard reader.startReading() else { throw reader.error ?? TrackReadError.didNotStart }
-                var value = initial
-                while let sample = output.copyNextSampleBuffer() { try fold(&value, sample) }
-                return (value, reader.status)
-            })
-        }.start()
+    let (value, status) = try await offThePool { () throws -> (T, AVAssetReader.Status) in
+        let reader = try AVAssetReader(asset: asset)
+        let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
+        guard reader.canAdd(output) else { throw TrackReadError.cannotAddOutput }
+        reader.add(output)
+        guard reader.startReading() else { throw reader.error ?? TrackReadError.didNotStart }
+        var value = initial
+        while let sample = output.copyNextSampleBuffer() { try fold(&value, sample) }
+        return (value, reader.status)
     }
     #expect(status == .completed)
     return value

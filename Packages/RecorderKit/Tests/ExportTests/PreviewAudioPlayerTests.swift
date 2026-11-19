@@ -63,12 +63,10 @@ private func edited(
 
 /// `mix.render` of `frames` with `preroll`, as the export renders it (by default), read off the cooperative pool.
 private func rendered(_ mix: EditedMix, _ frames: Range<Int64>, preroll: Double = 0) async throws -> [Float] {
-    try await withCheckedThrowingContinuation { continuation in
-        Thread {
-            var samples: [Float] = []
-            mix.render(outputFrames: frames, into: &samples, preroll: preroll)
-            continuation.resume(returning: samples)
-        }.start()
+    try await offThePool {
+        var samples: [Float] = []
+        mix.render(outputFrames: frames, into: &samples, preroll: preroll)
+        return samples
     }
 }
 

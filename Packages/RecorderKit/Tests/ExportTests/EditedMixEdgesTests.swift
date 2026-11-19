@@ -34,12 +34,10 @@ private func mixed(_ project: LoadedProject, from: Double, to: Double) async thr
     var document = EditDocument.legacy(for: project)
     document.sequence = [Clip(id: "c-00000001", take: project.take.id, start: base.adding(seconds: from), end: base.adding(seconds: to), speed: 1)]
     let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
-    return try await withCheckedThrowingContinuation { continuation in
-        Thread {
-            var samples: [Float] = []
-            mix.render(outputFrames: 0..<mix.totalFrames, into: &samples)
-            continuation.resume(returning: samples)
-        }.start()
+    return try await offThePool {
+        var samples: [Float] = []
+        mix.render(outputFrames: 0..<mix.totalFrames, into: &samples)
+        return samples
     }
 }
 

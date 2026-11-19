@@ -204,10 +204,15 @@ final class AudioTrackTimeline: Sendable {
             logger.error("Audio track \(track.id, privacy: .public): \(rejectedAnchors) audio clock anchor(s) out of order or off by more than 5000 ppm; not used")
         }
         let cancelled = CancellationFlag()
-        let (placed, unread) = try await withTaskCancellationHandler {
-            try await offTheCooperativePool { [segments] in try place(segments, origin: origin, channels: channels, cancelled: cancelled) }
-        } onCancel: {
-            cancelled.cancel()
+        let placed: [Placed], unread: [MissingSpan]
+        do {
+            (placed, unread) = try await withTaskCancellationHandler {
+                try await offTheCooperativePool { [segments] in try place(segments, origin: origin, channels: channels, cancelled: cancelled) }
+            } onCancel: {
+                cancelled.cancel()
+            }
+        } catch is CancellationError {
+            throw ExportError.cancelled  // while it waited for a decoding slot
         }
         return AudioTrackTimeline(track: track.id, channels: channels, placed: placed, missing: missing + unread)
     }
@@ -469,15 +474,13 @@ final class AudioTrackTimeline: Sendable {
     }
 }
 
-/// Runs `body` on a thread of its own and waits for it without holding a thread of Swift's cooperative pool: decoding
-/// blocks in `copyNextSampleBuffer` until AVFoundation's own reads finish, and with every thread of the pool blocked that
-/// way those reads would never run.
+/// Runs `body` on a thread of its own once one of the process's decoding slots is free (`DecodingSlots.shared`), and
+/// waits for it without holding a thread of Swift's cooperative pool: decoding blocks in `copyNextSampleBuffer` until
+/// AVFoundation's own reads finish, and those reads never run with every thread of the pool blocked that way, nor with
+/// too many readers pulled at once from threads of their own.
+/// - Throws: what `body` throws, or `CancellationError` if the task is cancelled while it waits for a slot.
 func offTheCooperativePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
-    try await withCheckedThrowingContinuation { continuation in
-        DispatchQueue(label: "dev.toma.AudioDecoding", qos: .userInitiated).async {
-            continuation.resume(with: Result(catching: body))
-        }
-    }
+    try await DecodingSlots.shared.run(label: "dev.toma.AudioDecoding", body)
 }
 
 /// Set once its task is cancelled, for work that runs off the task.
