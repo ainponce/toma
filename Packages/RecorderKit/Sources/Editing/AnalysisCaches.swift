@@ -2,6 +2,7 @@
 import Darwin
 import Foundation
 import ProjectFormat
+import Synchronization
 
 /// The folders of the project's cache folder that hold what phase 2's analysis makes (design of phase 2, §10), each
 /// written by the job of the same name and read by the render, the mix or the editor.
@@ -82,14 +83,49 @@ extension ProjectCaches {
 
     /// A path to write the cache file `url` to before `commit(_:to:)` moves it there: in the same folder, made if macOS
     /// emptied it, hidden, and with `url`'s extension last, so a writer that goes by it (`AVAudioFile`) writes the right
-    /// kind of file: `.<name>.<UUID>.tmp.<extension>`. Nothing is at that path yet. A reader never looks there; one left
-    /// behind by a crash is removed with the project's cache folder. Throws if the folder cannot be made.
+    /// kind of file: `.<name>.<UUID>.tmp.<extension>`. Nothing is at that path yet. A reader never looks there. The
+    /// first time a folder is used in a session, temporaries a crash left in it that are over an hour old are removed.
+    /// The temporary's whole name is at most 255 bytes (a file system's limit): a long `name` is cut in the temporary's
+    /// name only, never in `url`'s. Throws if the folder cannot be made.
     public static func temporaryFile(for url: URL) throws -> URL {
         let folder = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        if swept.withLock({ $0.insert(folder.path).inserted }) { removeStaleTemporaries(in: folder) }
         let stem = url.deletingPathExtension().lastPathComponent
         let suffix = url.pathExtension.isEmpty ? "tmp" : "tmp.\(url.pathExtension)"
-        return folder.appending(path: ".\(stem).\(UUID().uuidString).\(suffix)", directoryHint: .notDirectory)
+        let id = UUID().uuidString
+        // ".", the stem, ".", the id, ".", the suffix.
+        let room = max(0, maxNameBytes - (1 + 1 + id.utf8.count + 1 + suffix.utf8.count))
+        return folder.appending(path: ".\(cut(stem, toBytes: room)).\(id).\(suffix)", directoryHint: .notDirectory)
+    }
+
+    /// The longest name of a file the cache's volumes take, in bytes.
+    private static let maxNameBytes = 255
+    /// The folders whose old temporaries were looked for in this session.
+    private static let swept = Mutex<Set<String>>([])
+
+    /// `text` cut to at most `bytes` bytes of UTF-8, at a character's end.
+    private static func cut(_ text: String, toBytes bytes: Int) -> String {
+        var used = 0
+        var result = ""
+        for character in text {
+            used += String(character).utf8.count
+            if used > bytes { break }
+            result.append(character)
+        }
+        return result
+    }
+
+    /// Removes from `folder` the hidden temporaries (`.<name>.<UUID>.tmp[.<extension>]`) last modified before
+    /// `now - age` (a link itself, by `lstat`, never what it points to). One directory listing.
+    static func removeStaleTemporaries(in folder: URL, olderThan age: TimeInterval = 3600, now: Date = Date()) {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: folder.path) else { return }
+        for name in names where name.hasPrefix(".") && (name.hasSuffix(".tmp") || name.contains(".tmp.")) {
+            let path = folder.appending(path: name, directoryHint: .notDirectory).path
+            var info = stat()
+            guard lstat(path, &info) == 0, info.st_mode & S_IFMT != S_IFDIR else { continue }
+            if now.timeIntervalSince1970 - TimeInterval(info.st_mtimespec.tv_sec) > age { unlink(path) }
+        }
     }
 
     /// Moves the finished `temporary` (from `temporaryFile(for:)`) over `url` with `rename(2)`, so a reader sees the
@@ -99,8 +135,15 @@ extension ProjectCaches {
     /// Commits nothing and returns `false` if `temporary` is not there, or is a symlink (never followed) or anything
     /// else that is not a regular file, or if the move fails; whatever was at `temporary` is then removed (a link, not
     /// what it points to) and `url` is left as it was. Whether `url` now holds it.
+    ///
+    /// Throws `CancellationError` if the task is cancelled (a job whose editor closed), and removes `temporary`:
+    /// nothing is written after that.
     @discardableResult
-    public static func commit(_ temporary: URL, to url: URL) -> Bool {
+    public static func commit(_ temporary: URL, to url: URL) throws -> Bool {
+        if Task.isCancelled {
+            unlink(temporary.path)
+            throw CancellationError()
+        }
         let fd = open(temporary.path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard fd >= 0 else {
             unlink(temporary.path)
@@ -147,7 +190,7 @@ extension ProjectCaches {
             unlink(temporary.path)
             return false
         }
-        return commit(temporary, to: url)
+        return (try? commit(temporary, to: url)) ?? false
     }
 
     /// Whether `name` names one entry of a folder: not empty, `.` or `..`, and without `/` or NUL.

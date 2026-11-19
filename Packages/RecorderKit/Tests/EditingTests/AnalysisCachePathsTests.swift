@@ -138,6 +138,54 @@ private struct AnalysisFixture {
     #expect(caches.scanFile(take: "take-002", algorithm: "sensitiveScan-1")?.lastPathComponent == "take-002-sensitiveScan-1.json")
 }
 
+@Test func commitOfACancelledTaskWritesNothing() async throws {
+    try await withTemporaryDirectory { dir in
+        let fixture = try AnalysisFixture(in: dir)
+        let url = try #require(fixture.caches.analysisFile(
+            .loudness, take: "take-001", track: "mic-1", segment: SegmentIdentity(stem: "seg-0001", bytes: 1, modified: 2),
+            algorithm: "loudness-1", extension: "json"))
+        let temporary = try ProjectCaches.temporaryFile(for: url)
+        try Data("x".utf8).write(to: temporary)
+        let task = Task.detached {
+            while !Task.isCancelled { await Task.yield() }
+            return try ProjectCaches.commit(temporary, to: url)
+        }
+        task.cancel()
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(!FileManager.default.fileExists(atPath: temporary.path))
+        #expect(ProjectCaches.readAnalysis(url) == nil)
+    }
+}
+
+@Test func staleTemporariesAreRemovedOnceAndNamesStayShort() throws {
+    try withTemporaryDirectory { dir in
+        let folder = dir.appending(path: "folder", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let stale = folder.appending(path: ".a.\(UUID().uuidString).tmp.json")
+        let fresh = folder.appending(path: ".b.\(UUID().uuidString).tmp.json")
+        let real = folder.appending(path: "a.json")
+        for file in [stale, fresh, real] { try Data("x".utf8).write(to: file) }
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: stale.path)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -7200)], ofItemAtPath: real.path)
+
+        // The first use of the folder removes the old temporary, not a recent one nor a final file.
+        _ = try ProjectCaches.temporaryFile(for: real)
+        #expect(!FileManager.default.fileExists(atPath: stale.path))
+        #expect(FileManager.default.fileExists(atPath: fresh.path))
+        #expect(FileManager.default.fileExists(atPath: real.path))
+
+        // A name that would not fit gets a shorter temporary, with the extension last; the final name is as it was.
+        let long = String(repeating: "é", count: 200)
+        let url = folder.appending(path: "\(long).json")
+        let temporary = try ProjectCaches.temporaryFile(for: url)
+        #expect(temporary.lastPathComponent.utf8.count <= 255)
+        #expect(temporary.pathExtension == "json")
+        #expect(url.lastPathComponent == "\(long).json")
+        try Data("y".utf8).write(to: temporary)
+        #expect(try ProjectCaches.commit(temporary, to: url.deletingLastPathComponent().appending(path: "c.json")))
+    }
+}
+
 @Test func commitIsWholeOrNothing() throws {
     try withTemporaryDirectory { dir in
         let fixture = try AnalysisFixture(in: dir)
@@ -157,32 +205,32 @@ private struct AnalysisFixture {
         let data = Data((0..<10_000).map { UInt8($0 % 251) })
         try data.write(to: temporary)
         #expect(ProjectCaches.readAnalysis(url) == nil)
-        #expect(ProjectCaches.commit(temporary, to: url))
+        #expect(try ProjectCaches.commit(temporary, to: url))
         #expect(ProjectCaches.readAnalysis(url) == data)
         #expect(!FileManager.default.fileExists(atPath: temporary.path))
 
         // A commit replaces the older file whole.
         let newer = try ProjectCaches.temporaryFile(for: url)
         try Data("newer".utf8).write(to: newer)
-        #expect(ProjectCaches.commit(newer, to: url))
+        #expect(try ProjectCaches.commit(newer, to: url))
         #expect(ProjectCaches.readAnalysis(url) == Data("newer".utf8))
 
         // A temporary that is not there commits nothing: the file stays as it was.
         let absent = try ProjectCaches.temporaryFile(for: url)
-        #expect(!ProjectCaches.commit(absent, to: url))
+        #expect(try !ProjectCaches.commit(absent, to: url))
         #expect(ProjectCaches.readAnalysis(url) == Data("newer".utf8))
         let other = url.deletingLastPathComponent().appending(path: "other.json")
-        #expect(!ProjectCaches.commit(absent, to: other))
+        #expect(try !ProjectCaches.commit(absent, to: other))
         #expect(!FileManager.default.fileExists(atPath: other.path))
 
         // Nor does a folder, or a symlink, where the temporary should be; neither is followed.
         let folder = try ProjectCaches.temporaryFile(for: other)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
-        #expect(!ProjectCaches.commit(folder, to: other))
+        #expect(try !ProjectCaches.commit(folder, to: other))
         #expect(!FileManager.default.fileExists(atPath: other.path))
         let link = try ProjectCaches.temporaryFile(for: other)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: url)
-        #expect(!ProjectCaches.commit(link, to: other))
+        #expect(try !ProjectCaches.commit(link, to: other))
         #expect(!FileManager.default.fileExists(atPath: other.path))
         #expect(ProjectCaches.readAnalysis(url) == Data("newer".utf8))
 
