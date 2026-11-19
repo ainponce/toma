@@ -70,8 +70,9 @@ public enum CameraBubbleLayout {
 
     /// What the bubble's places are relative to (notch design §5.6): in Display mode, the chosen display that
     /// has `pointer`, otherwise the first chosen (the take's first cursor's, plan decision 2); in Area mode,
-    /// the area; in Window mode, the window's frame. `nil` when there is none (no display chosen or
-    /// connected, no area, no window).
+    /// the area; in Window mode, the window's frame; for an iPhone or iPad, of which no display is recorded, the display
+    /// that has `pointer` (the island's), otherwise the main one, so the camera is still seen. `nil` when there is none
+    /// (no display chosen or connected, no area, no window).
     public static func region(for selection: CaptureSelection, displays: [DisplayInfo], pointer: CGPoint?, windowFrame: Rect?) -> Rect? {
         switch selection.mode {
         case .display:
@@ -82,6 +83,9 @@ public enum CameraBubbleLayout {
             return selection.area?.rect
         case .window:
             return windowFrame
+        case .device:
+            if let pointer, let under = displays.first(where: { CursorGeometry.contains(pointer, $0.frame) }) { return under.frame }
+            return (displays.first(where: \.isMain) ?? displays.first)?.frame
         }
     }
 

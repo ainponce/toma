@@ -154,13 +154,13 @@ final class OpenPanelModel {
     }
 
     /// The displays the take records whole, each at its frame rate: the chosen ones in Display mode, the area's in
-    /// Area mode, none in Window mode.
+    /// Area mode, none in Window mode nor for an iPhone or iPad.
     var recordedDisplays: [DisplayChoice] {
         let ids: [UInt32] =
             switch selection.mode {
             case .display: selection.displayIDs
             case .area: selection.area.map { [$0.displayID] } ?? []
-            case .window: []
+            case .window, .device: []
             }
         return ids.compactMap { id in displays.first { $0.id == id } }
     }
@@ -292,6 +292,7 @@ struct IslandOpenPanel: View {
                         case .display: ModeTab.display
                         case .window: .window
                         case .area: .area
+                        case .device: .iPhone
                         }
                     },
                     set: { tab in
@@ -322,6 +323,7 @@ struct IslandOpenPanel: View {
         case .display: displayColumn
         case .window: WindowChoiceColumn(panel: panel, send: send)
         case .area: AreaChoiceColumn(panel: panel, send: send)
+        case .device: EmptyView()  // the devices' column comes with the iPhone tab (plan P17)
         }
     }
 
@@ -330,6 +332,7 @@ struct IslandOpenPanel: View {
         case .display: "display"
         case .window: "macwindow"
         case .area: "viewfinder"
+        case .device: "iphone"
         }
     }
 

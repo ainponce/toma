@@ -19,10 +19,12 @@ final class LiveTakeHooks: TakeHooks {
         self.store = store
     }
 
-    /// The shortcut and the covers at the same time; the take records the covers.
+    /// The shortcut and the covers at the same time; the take records the covers. An iPhone's take records nothing of
+    /// the Mac's screen: its desktop is left as it is.
     func takeWillStart(_ request: TakeRequest) async -> TakePreparation {
         async let focused = focus.takeWillStart(request)
-        let coverIDs = store.settings.hideDesktopIcons ? await covers.show() : []
+        let coversDesktop = store.settings.hideDesktopIcons && request.selection.mode != .device
+        let coverIDs = coversDesktop ? await covers.show() : []
         var preparation = await focused
         preparation.includedWindowIDs += coverIDs
         return preparation

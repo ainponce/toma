@@ -4318,6 +4318,17 @@
         }
       }
     },
+    "No iPhone or iPad is chosen to record." : {
+      "comment" : "Why Record is off, or a take did not start: iPhone mode without a device chosen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se eligió ningún iPhone o iPad para grabar."
+          }
+        }
+      }
+    },
     "No microphone found." : {
       "localizations" : {
         "es" : {

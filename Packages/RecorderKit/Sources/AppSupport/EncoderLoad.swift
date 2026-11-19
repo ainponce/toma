@@ -8,6 +8,8 @@ public enum LoadSource: Equatable, Sendable {
     case display(UInt32)
     case window
     case camera
+    /// The screen of an iPhone or iPad connected by cable.
+    case device
 }
 
 /// One video track as the encoder sees it: the pixels of each frame and how many frames a second.
@@ -57,8 +59,8 @@ public enum EncoderLoad {
 
     /// The verdict for `items` within `budget` pixels a second. The suggestions, in this order: every display that
     /// is not the main one (`mainDisplayID`) and goes faster than 30 fps, down to 30; a camera larger than
-    /// `.p1080`, down to `.p1080`; a camera faster than 30 fps, down to 30. A window, and the main display, are
-    /// never asked to go lower: they are what the take is about.
+    /// `.p1080`, down to `.p1080`; a camera faster than 30 fps, down to 30. A window, an iPhone or iPad, and the main
+    /// display, are never asked to go lower: they are what the take is about.
     public static func evaluate(
         _ items: [VideoLoadItem], mainDisplayID: UInt32?, budget: Int = defaultBudgetPixelsPerSecond
     ) -> EncoderLoadVerdict {
@@ -92,7 +94,7 @@ public enum EncoderLoad {
                     cameraPreset.append(.lowerCameraPreset(to: largestCamera))
                 }
                 if item.framesPerSecond > reducedRate { cameraRate.append(.lowerCameraRate(to: reducedRate)) }
-            case .window:
+            case .window, .device:
                 break
             }
         }

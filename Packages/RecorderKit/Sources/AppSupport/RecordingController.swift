@@ -202,12 +202,16 @@ public final class RecordingController {
 
     /// Records `selection` with `settings`, once the countdown is over, the camera looking as
     /// `RecorderSettings.cameraStyle` says (read now). A microphone, a camera or system audio that is `.off` is
-    /// neither asked for nor missed. Without screen recording the permissions open, and nothing counts down.
+    /// neither asked for nor missed. Without screen recording the permissions open, and nothing counts down; an iPhone
+    /// or iPad needs the camera's permission instead, which the take asks for as it starts if it was never asked (as
+    /// it does for the camera), and the permissions open once it was refused.
     public func startRecording(selection: CaptureSelection, settings: QuickSettings) {
         guard phase == .idle else { return }
         let request = TakeRequest(
             selection: selection, settings: settings, cameraStyle: SettingsStore(defaults: defaults).settings.cameraStyle)
-        guard RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request)).canRecord else {
+        let required = requiredPermission(request)
+        let canRecord = RecordingPreflight.evaluate(probe: probe, wanted: wantedPermissions(request), required: required).canRecord
+        guard canRecord || (required == .camera && probe.state(of: .camera) == .notDetermined) else {
             openOnboarding()
             return
         }
@@ -234,17 +238,26 @@ public final class RecordingController {
         request.selection.microphone != .off && environment.hasMicrophone()
     }
 
-    /// What the preflight asks about: screen recording, the microphone, the camera and system audio when the take
-    /// uses them, and Input Monitoring when "Record Keys to Show Them" is on (`RecorderSettings.recordKeys`, read now, so
-    /// a change applies from the next take or restart). Input Monitoring is never asked for by a take: only the
-    /// settings do.
+    /// What the preflight asks about: the permission the take requires (`requiredPermission`), the microphone, the
+    /// camera and system audio when the take uses them, and Input Monitoring when "Record Keys to Show Them" is on
+    /// (`RecorderSettings.recordKeys`, read now, so a change applies from the next take or restart). Input Monitoring is
+    /// never asked for by a take: only the settings do. An iPhone's take never wants it: it records nothing of the
+    /// Mac's input.
     private func wantedPermissions(_ request: TakeRequest) -> Set<PermissionKind> {
-        var wanted: Set<PermissionKind> = [.screenRecording]
+        var wanted: Set<PermissionKind> = [requiredPermission(request)]
         if usesMicrophone(request) { wanted.insert(.microphone) }
         if request.selection.camera != .off { wanted.insert(.camera) }
         if request.selection.systemAudio != .off { wanted.insert(.systemAudio) }
-        if SettingsStore(defaults: defaults).settings.recordKeys { wanted.insert(.inputMonitoring) }
+        if request.selection.mode != .device, SettingsStore(defaults: defaults).settings.recordKeys {
+            wanted.insert(.inputMonitoring)
+        }
         return wanted
+    }
+
+    /// What a take of `request` cannot do without: screen recording; for an iPhone or iPad, which AVFoundation records
+    /// as it does a camera, the camera's permission (and never screen recording).
+    private func requiredPermission(_ request: TakeRequest) -> PermissionKind {
+        request.selection.mode == .device ? .camera : .screenRecording
     }
 
     /// The notices of the take start as `carried`, which stay whether or not it starts.
@@ -253,12 +266,13 @@ public final class RecordingController {
         let wantsMicrophone = request.selection.microphone != .off
         let usesMicrophone = usesMicrophone(request)
         let wantsCamera = request.selection.camera != .off
+        let required = requiredPermission(request)
         // Never asked: the system asks now, while the countdown shows its first second, and the take starts with
         // the answer (the prompt is gone by then, so it is not in the video). System audio is never asked for here:
-        // its prompt does not wait for an answer.
+        // its prompt does not wait for an answer. An iPhone needs the camera's, with the Mac's camera or without it.
         if !restarting {
             if usesMicrophone { await askIfNeverAsked(.microphone) }
-            if wantsCamera { await askIfNeverAsked(.camera) }
+            if wantsCamera || required == .camera { await askIfNeverAsked(.camera) }
             // Once the permissions are answered, with the countdown on screen and before its first second, so the
             // notifications are quiet while it runs. A restart keeps what they prepared, as it keeps the permissions.
             if !startCancelled { await beginHooks(for: &request) }
@@ -286,11 +300,11 @@ public final class RecordingController {
             return
         }
         let wanted = wantedPermissions(request)
-        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wanted)
+        let preflight = RecordingPreflight.evaluate(probe: probe, wanted: wanted, required: required)
         guard preflight.canRecord, !startCancelled else {
             notices = carried
             setPhase(.idle)
-            // Screen recording was turned off meanwhile.
+            // Screen recording was turned off meanwhile (an iPhone's camera permission, or refused when asked).
             if !startCancelled { openOnboarding() }
             await endHooks()
             return
@@ -731,7 +745,11 @@ public final class RecordingController {
         case .streamRestarted(let track):
             // What it came back from is resolved: the warning goes, and so does the island's icon.
             let resumed = kind(track)
-            notices.removeAll { $0 == .streamInterrupted(resumed) || $0 == .trackPaused(resumed) || (resumed == .display && $0 == .screenPaused) }
+            // The take's only screen paused is `screenPaused`: a display's, or an iPhone's (a window says `trackPaused`).
+            let screenResumed = resumed == .display || resumed == .device
+            notices.removeAll {
+                $0 == .streamInterrupted(resumed) || $0 == .trackPaused(resumed) || (screenResumed && $0 == .screenPaused)
+            }
             notice = .streamResumed(resumed)
         case .trackLost(let track):
             notice = .trackLost(kind(track))

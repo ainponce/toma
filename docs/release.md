@@ -969,6 +969,11 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 **Teclas en pantalla** (P11; se prenden en la pestaña Cursor de P12)
 
 - En una toma real con teclas grabadas, con Atajos y con Todas, en Chico, Mediano y Grande y en las cuatro posiciones: la vista previa y el MP4 exportado (1080p y 4K, 16:9 y 9:16) se ven iguales y nítidos; ⌘ ⇧ ⌥ y la letra del atajo quedan alineados en las tapas y ⌃ centrado; ⌘␣, ⌘⇥ y ⌘↩ se ven del mismo grosor que las demás; la píldora crece al escribir, se corta por la izquierda con «…» y un atajo la reemplaza con un fundido cruzado, sin saltos. Con los subtítulos abajo las teclas quedan encima de ellos, también entre subtítulos. Repetirlo en macOS 15 (la fuente del sistema cambia con macOS: anotar si falta algún símbolo o se ve de otra fuente).
+**El modo iPhone en la toma** (P15; se recorre con la isla en modo iPhone de P17)
+
+- Con el permiso de Grabación de pantalla negado a Toma y el de Cámara permitido: una toma de iPhone graba igual, sin abrir la ventana de permisos. Con el de Cámara sin pedir nunca (`tccutil reset Camera dev.toma.Toma`): Grabar en modo iPhone muestra el aviso del sistema durante la cuenta atrás y, permitido, graba; negado ahí (o negado de antes), no graba nada y se abre la ventana de permisos con Cámara.
+- Con «Grabar las teclas para mostrarlas» prendido y el Monitoreo de entrada negado: una toma de iPhone no avisa «Las teclas no se grabaron…» y su `events.jsonl` no tiene líneas `keyPress` ni del cursor.
+- Con la cámara y el micrófono de la Mac elegidos: en `manifest.json`, las pistas `device`, `deviceAudio`, `camera` y `microphone`, en ese orden; la burbuja de la cámara se ve en la pantalla de la isla mientras graba, y «Ocultar los íconos del escritorio» no tapa el escritorio (no se graba la Mac).
 
 ## Prueba en seco (ad hoc)
 

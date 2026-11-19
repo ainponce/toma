@@ -220,9 +220,10 @@ private struct ChoosingRow: View {
 
     private var mode: CaptureMode { panel?.selection.mode ?? .display }
 
+    /// iPhone mode chooses nothing on the Mac's screen: if it came to choosing, it would be a display, as without a panel.
     private var symbol: String {
         switch mode {
-        case .display: "display"
+        case .display, .device: "display"
         case .window: "macwindow"
         case .area: "viewfinder"
         }
@@ -230,7 +231,7 @@ private struct ChoosingRow: View {
 
     private var hint: Text {
         switch mode {
-        case .display: Text("Click a display to record it.")
+        case .display, .device: Text("Click a display to record it.")
         case .window: Text("Click a window to record it.")
         case .area:
             panel?.selection.area == nil ? Text("Drag to draw the area.") : Text("Move the area or change its size.")

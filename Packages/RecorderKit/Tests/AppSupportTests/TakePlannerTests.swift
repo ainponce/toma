@@ -245,7 +245,7 @@ import Testing
 
 /// Makes synthetic sources, and records what it was asked for in order: a 64 × 36 display per display
 /// ID, a 64 × 36 window, a 64 × 36 camera that fails its first `cameraFailures` starts, a microphone that fails
-/// its first `microphoneFailures` starts, system audio, and no input.
+/// its first `microphoneFailures` starts, system audio, a 36 × 64 iPhone with its sound, and no input.
 final class FakeFactory: CaptureSourceFactory {
     /// The window track `input` is asked to follow.
     struct WindowTrack: Equatable {
@@ -260,6 +260,7 @@ final class FakeFactory: CaptureSourceFactory {
         case microphone(DeviceChoice)
         case systemAudio(SystemAudioChoice)
         case input(windowTrack: WindowTrack?, displayIDs: [UInt32])
+        case device(uniqueID: String)
     }
 
     /// How many times each new display fails to start.
@@ -274,6 +275,8 @@ final class FakeFactory: CaptureSourceFactory {
     private(set) var cameras: [SyntheticVideoSource] = []
     private(set) var windows: [SyntheticVideoSource] = []
     private(set) var systemAudios: [SyntheticAudioSource] = []
+    /// The iPhones' screens and sounds, in pairs.
+    private(set) var devices: [(video: SyntheticVideoSource, audio: SyntheticAudioSource)] = []
 
     func display(id: UInt32, framesPerSecond: Int, scale: CaptureScale, area: Rect?, includedWindowIDs: [UInt32]) -> any CaptureSource {
         calls.append(.display(id: id, framesPerSecond: framesPerSecond, scale: scale, area: area, includedWindowIDs: includedWindowIDs))
@@ -311,6 +314,17 @@ final class FakeFactory: CaptureSourceFactory {
         let systemAudio = SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio)
         systemAudios.append(systemAudio)
         return systemAudio
+    }
+
+    /// The iPhone's screen at 60 fps, as the app records it.
+    func device(uniqueID: String) -> (video: any CaptureSource, audio: any CaptureSource) {
+        calls.append(.device(uniqueID: uniqueID))
+        let video = SyntheticVideoSource(trackID: "device", kind: .device, width: 36, height: 64, framesPerSecond: 60)
+        video.deviceUniqueID = uniqueID
+        let audio = SyntheticAudioSource(trackID: "deviceAudio", kind: .deviceAudio)
+        audio.deviceUniqueID = uniqueID
+        devices.append((video, audio))
+        return (video, audio)
     }
 
     func input(windowTrack: (trackID: String, windowID: UInt32)?, displayIDs: [UInt32]) -> any InputRecorder {

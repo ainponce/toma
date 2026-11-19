@@ -94,6 +94,8 @@ private func description(of error: TakePlanError) -> String {
         String(localized: "No window is chosen to record.")
     case .noAreaChosen:
         String(localized: "No area is chosen to record.")
+    case .noDeviceChosen:
+        String(localized: "No iPhone or iPad is chosen to record.")
     }
 }
 

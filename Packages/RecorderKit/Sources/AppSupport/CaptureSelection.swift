@@ -9,6 +9,9 @@ public enum CaptureMode: String, Codable, Sendable, CaseIterable {
     case window
     /// A rectangle of one display (`CaptureSelection.area`).
     case area
+    /// The screen of an iPhone or iPad connected by cable (`CaptureSelection.deviceUniqueID`), with its sound: nothing
+    /// of the Mac but its camera, microphone and system audio.
+    case device
 }
 
 /// A rectangle of a display to record.
@@ -55,6 +58,9 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
     public var camera: DeviceChoice
     public var microphone: DeviceChoice
     public var systemAudio: SystemAudioChoice
+    /// The iPhone or iPad recorded in `.device` mode (`ExternalDeviceInfo.uniqueID`); `nil` in a selection saved before
+    /// there was one to choose.
+    public var deviceUniqueID: String? = nil
 
     public init(
         mode: CaptureMode,
@@ -64,7 +70,8 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
         area: AreaChoice? = nil,
         camera: DeviceChoice,
         microphone: DeviceChoice,
-        systemAudio: SystemAudioChoice
+        systemAudio: SystemAudioChoice,
+        deviceUniqueID: String? = nil
     ) {
         self.mode = mode
         self.displayIDs = displayIDs
@@ -74,6 +81,7 @@ public struct CaptureSelection: Codable, Equatable, Sendable {
         self.camera = camera
         self.microphone = microphone
         self.systemAudio = systemAudio
+        self.deviceUniqueID = deviceUniqueID
     }
 
     /// The display alone with the system's microphone: no camera, no system audio.
