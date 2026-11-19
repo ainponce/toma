@@ -132,6 +132,61 @@ private func drawn(_ renderer: FrameRenderer, at t: Double) async throws -> [UIn
     }
 }
 
+/// A person's mask of the analysis caches (`TrackFrameReader(maskFile:trackID:start:end:)`, plan 2b task I10): a video
+/// outside the package, read as its camera's segment, at the camera's host times; what is not a regular file of some bytes
+/// at its path is a gap from the start, and no frame.
+@Test func maskReaderReadsAFileOutsideThePackage() async throws {
+    try await withTemporaryDirectory { dir in
+        let start = base.adding(seconds: 2), end = start.adding(seconds: 1)
+        let url = dir.appendingPathComponent("caches/masks/\(takeID)/camera/seg-0001-personMask-1.mov")
+        // Frame n gray at 8 n.
+        try await CameraPictureFixtures.writeMask(
+            to: url, scratch: dir.appendingPathComponent("scratch"), start: start, seconds: 1, width: 64, height: 36,
+            value: { n, _, _ in UInt8(8 * n) })
+        let id = "personMask:" + url.lastPathComponent
+        let reader = TrackFrameReader(maskFile: url, trackID: id, start: start, end: end)
+        #expect(reader.trackID == id && reader.gaps.isEmpty)
+        /// The gray of the frame `reader` gives at `seconds` after the segment's start, read in its red channel.
+        func gray(_ reader: TrackFrameReader, at seconds: [Double]) async throws -> [Int?] {
+            try await offThePool {
+                seconds.map { t in
+                    reader.pixelBuffer(at: start.adding(seconds: t)).map { Int(packedBytes(of: $0)[(18 * 64 + 32) * 4 + 2]) }
+                }
+            }
+        }
+        // Before the segment, nothing; then each frame at its time, forward and back; past its end, its last frame.
+        let times = [-0.5, 0.5 / 30, 10.5 / 30, 20.5 / 30, 5.5 / 30, 2, 29.5 / 30]
+        let read = try await gray(reader, at: times)
+        let expected: [Int?] = [nil, 0, 80, 160, 40, 232, 232]
+        for (k, (value, want)) in zip(read, expected).enumerated() {
+            if let want {
+                #expect(value.map { abs($0 - want) <= 3 } == true, "at \(times[k]) s: \(String(describing: value)), not \(want)")
+            } else {
+                #expect(value == nil, "at \(times[k]) s")
+            }
+        }
+        #expect(reader.gaps.isEmpty)
+
+        // Not there, a link to it, a folder, a file of 0 bytes: a gap of the whole segment, no frame, nothing opened.
+        let link = dir.appendingPathComponent("link.mov"), folder = dir.appendingPathComponent("folder.mov")
+        let empty = dir.appendingPathComponent("empty.mov")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: url)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: false)
+        try Data().write(to: empty)
+        let cases: [(URL, MissingVideo.Reason)] = [
+            (dir.appendingPathComponent("none.mov"), .fileMissing), (link, .unreadable), (folder, .unreadable), (empty, .empty),
+        ]
+        for (file, reason) in cases {
+            let gap = TrackFrameReader(maskFile: file, trackID: "personMask:" + file.lastPathComponent, start: start, end: end)
+            #expect(try await gray(gap, at: [0.5, 0.1]) == [nil, nil], "\(file.lastPathComponent)")
+            #expect(gap.openedReaderCount == 0, "\(file.lastPathComponent)")
+            #expect(
+                gap.gaps == [TrackFrameReader.Gap(file: file.lastPathComponent, start: start, end: end, reason: reason)],
+                "\(file.lastPathComponent): \(gap.gaps)")
+        }
+    }
+}
+
 @Test func readerTreatsEmptyUnreadableAndMissingSegmentsAsGaps() async throws {
     try await withTemporaryDirectory { dir in
         let builder = try TakeBuilder(in: dir)
