@@ -206,8 +206,12 @@ public enum Aspect: String, Codable, Sendable, CaseIterable {
     /// Width over height; `auto` is 16:9 (see `ratio(contentRatio:)`).
     public var ratio: Double { ratio(contentRatio: nil) }
 
-    /// Width over height. `auto` is `contentRatio` if it is finite, positive and 1 % or more away from 16:9; if not,
-    /// 16:9.
+    /// The ratios `auto` takes: a recording wider or taller than that (an Area strip, a window of a document edited by
+    /// hand) is shown in an output of 4:1 or 1:4, never in one no encoder takes.
+    public static let autoRange: ClosedRange<Double> = 0.25...4
+
+    /// Width over height. `auto` is `contentRatio` held to `autoRange` if it is finite, positive and 1 % or more away
+    /// from 16:9; if not, 16:9.
     public func ratio(contentRatio: Double?) -> Double {
         switch self {
         case .landscape: return 16.0 / 9
@@ -219,7 +223,7 @@ public enum Aspect: String, Codable, Sendable, CaseIterable {
         case .auto:
             let wide = 16.0 / 9
             if let contentRatio, contentRatio.isFinite, contentRatio > 0, abs(contentRatio - wide) / wide >= 0.01 {
-                return contentRatio
+                return min(max(contentRatio, Self.autoRange.lowerBound), Self.autoRange.upperBound)
             }
             return wide
         }
