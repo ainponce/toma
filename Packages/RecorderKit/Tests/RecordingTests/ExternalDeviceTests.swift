@@ -112,6 +112,25 @@ import Testing
         #expect(ExternalDeviceSession.stopError(for: .failed(runtime)) as NSError == runtime)
     }
 
+    @Test func noCameraPermissionIsSaidAsSuch() async throws {
+        // An iPhone is recorded through the camera's permission: without it AVFoundation refuses the device's input.
+        let denied = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.applicationIsNotAuthorizedToUseDevice.rawValue)
+        #expect(ExternalDeviceSession.captureError(denied) as? CaptureSourceError == .cameraAccessDenied)
+        #expect(ExternalDeviceSession.stopError(for: .failed(denied)) as? CaptureSourceError == .cameraAccessDenied)
+        let other = NSError(domain: AVFoundationErrorDomain, code: AVError.Code.deviceWasDisconnected.rawValue)
+        #expect(ExternalDeviceSession.captureError(other) as NSError == other)
+        #expect(ExternalDeviceSession.captureError(CaptureSourceError.sessionDidNotStart) as? CaptureSourceError == .sessionDidNotStart)
+
+        let engine = FakeEngine(format: Self.iPhone)
+        engine.setPrepareError(denied)
+        let video = ExternalDeviceCaptureSource(session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: engine))
+        let queue = DispatchSerialQueue(label: "test.device.video")
+        await #expect(throws: CaptureSourceError.cameraAccessDenied) {
+            try await video.start(on: queue, sink: Sink(queue: queue))
+        }
+        #expect(!engine.isRunning)
+    }
+
     // MARK: - Sources
 
     @Test func sourcesIdentifyTheirTracks() {
@@ -419,6 +438,7 @@ private final class FakeEngine: ExternalDeviceEngine {
         var interrupted = false
         var stopsRightAfterStarting = false
         var tellsSizeBeforeCapturing = true
+        var prepareError: (any Error)?
         var turnsAfterDescribing: ExternalDeviceFormat?
         var counts = Counts()
         var prepares = 0
@@ -445,6 +465,11 @@ private final class FakeEngine: ExternalDeviceEngine {
 
     func setStopsRightAfterStarting(_ stops: Bool) {
         state.withLock { $0.stopsRightAfterStarting = stops }
+    }
+
+    /// What `prepare` throws from now on, as AVFoundation would.
+    func setPrepareError(_ error: (any Error)?) {
+        state.withLock { $0.prepareError = error }
     }
 
     /// `false`: like a muxed device, its size is known only once it captures.
@@ -523,6 +548,7 @@ private final class FakeEngine: ExternalDeviceEngine {
     func prepare(for output: ExternalDeviceSession.Output) throws -> ExternalDeviceFormat {
         try state.withLock { state in
             state.prepares += 1
+            if let error = state.prepareError { throw error }
             guard state.connected, let format = state.format else { throw CaptureSourceError.deviceNotFound(uniqueID: "iphone-1") }
             if !state.running {
                 state.counts.starts += 1

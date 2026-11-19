@@ -48,7 +48,8 @@ protocol ExternalDeviceEngine: AnyObject, Sendable {
     /// Makes it capture the device, running, with `output` in it: as it is if it already does, with the device
     /// connected; otherwise with the device found again by its `uniqueID`, never another one. Returns what it
     /// captures. Throws `CaptureSourceError` (`.deviceNotFound`, `.sessionConfigurationFailed`,
-    /// `.sessionDidNotStart`) or the device's own error (no camera permission, say).
+    /// `.sessionDidNotStart`) or the device's own error (no camera permission, say, which the session reports as
+    /// `.cameraAccessDenied`).
     func prepare(for output: ExternalDeviceSession.Output) throws -> ExternalDeviceFormat
     /// Where the samples of `output` go from now on; `nil`, nowhere.
     func setDelivery(_ delivery: ExternalDeviceSession.Delivery?, for output: ExternalDeviceSession.Output)
@@ -137,8 +138,17 @@ final class ExternalDeviceSession: Sendable {
         switch cause {
         case .disconnected: CaptureSourceError.deviceDisconnected
         case .interrupted, .stoppedRunning: CaptureSourceError.deviceInterrupted
-        case .failed(let error): error
+        case .failed(let error): captureError(error)
         }
+    }
+
+    /// `error` as a run reports it: AVFoundation's refusal of the device for want of the camera's permission is
+    /// `CaptureSourceError.cameraAccessDenied`, which the app says in its own words; anything else stays as it is.
+    static func captureError(_ error: any Error) -> any Error {
+        let failure = error as NSError
+        let denied = failure.domain == AVFoundationErrorDomain
+            && failure.code == AVError.Code.applicationIsNotAuthorizedToUseDevice.rawValue
+        return denied ? CaptureSourceError.cameraAccessDenied : error
     }
 
     /// The clock of the samples delivered; `nil` is the host clock.
@@ -167,8 +177,8 @@ final class ExternalDeviceSession: Sendable {
     /// output's samples go to `delivery`. `onStop` is told, from any thread, when the capture stops by itself while the
     /// lease is alive. `isWanted` is asked on the session's queue right before: if it says no, nothing is done and the
     /// call throws `CancellationError`. While the capture is interrupted nothing is done either, and the call throws
-    /// `CaptureSourceError.deviceInterrupted`. Throws what `prepare` throws; the session then stops if no other lease
-    /// is alive.
+    /// `CaptureSourceError.deviceInterrupted`. Throws what `prepare` throws (`captureError`: no camera permission is
+    /// `.cameraAccessDenied`); the session then stops if no other lease is alive.
     func lease(
         _ output: Output, delivery: Delivery, onStop: @escaping @Sendable (any Error) -> Void,
         isWanted: @escaping @Sendable () -> Bool
@@ -223,7 +233,7 @@ final class ExternalDeviceSession: Sendable {
             format = try engine.prepare(for: output)
         } catch {
             if state.withLock({ $0.counter.release() }) { engine.stop() }
-            throw error
+            throw Self.captureError(error)
         }
         engine.setDelivery(delivery, for: output)
         let id = state.withLock { state in

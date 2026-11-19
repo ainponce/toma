@@ -73,6 +73,9 @@ public enum CaptureSourceError: Error, Equatable {
     case deviceDisconnected
     /// The iPhone or iPad stopped delivering: its session was interrupted or stopped running.
     case deviceInterrupted
+    /// This app may not use the camera (System Settings ▸ Privacy & Security ▸ Camera): an iPhone or iPad is recorded
+    /// through that permission, as a camera is.
+    case cameraAccessDenied
 }
 
 extension DispatchSerialQueue {
