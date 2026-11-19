@@ -157,3 +157,15 @@ private enum StyleFixture {
     #expect(thirty.label == .frameRate)
     #expect(thirty.changes == [try #require(document.setChange("/frameRate", 30))])
 }
+
+@Test func reframeIsOneStep() throws {
+    let doc = EditDocument.legacy(
+        take: TakeRecord(id: "take-001", status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: []),
+        events: [])
+    #expect(StyleCommands.setReframe(doc, .fit) == nil)
+    let step = try #require(StyleCommands.setReframe(doc, .followCursor))
+    #expect(step.label == .styleReframe)
+    #expect(step.target == "/style/reframe")
+    #expect(step.changes.count == 1)
+    #expect(try doc.applying(step.changes).style.reframe == .followCursor)
+}
