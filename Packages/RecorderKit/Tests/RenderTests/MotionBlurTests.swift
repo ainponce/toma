@@ -167,7 +167,9 @@ func stillCameraDrawsTheStageOnce() throws {
     let drawer = try StageDrawing.Drawer()
     var counts = DrawCounts()
     let blurred = try drawer.draw(frame, counts: &counts)
-    #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cursors: samples, clickEffects: 0, accumulations: 0))
+    #expect(
+        counts
+            == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cursors: samples, clickEffects: 0, accumulations: 0, overlaySteps: 1))
     // The same cursor every time: the frame drawn without its samples, within one level.
     var same = frame
     same.cursorSamples = Array(repeating: try #require(frame.cursor), count: samples)
@@ -224,7 +226,9 @@ func subsamplesAccumulateInOnePass() throws {
     let drawer = try StageDrawing.Drawer()
     var counts = DrawCounts()
     let blurred = try drawer.draw(frame, counts: &counts)
-    #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 16, screens: 16, cursors: 16, clickEffects: 0, accumulations: 16))
+    #expect(
+        counts
+            == DrawCounts(renderPasses: 1, backgrounds: 16, screens: 16, cursors: 16, clickEffects: 0, accumulations: 16, overlaySteps: 1))
     // Twice, the same bytes.
     #expect(try drawer.draw(frame) == blurred)
     // 16 equal subsamples: the frame drawn once through that stage, within one level.

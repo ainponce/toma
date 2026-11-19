@@ -124,21 +124,30 @@ public final class GIFExporter: Sendable {
     public let project: LoadedProject
     public let document: EditDocument
     public let settings: GIFSettings
+    /// What the frames read of the project's analysis caches (phase 2 design §10): `.none` in phase 1.
+    public let analysis: AnalysisInputs
     /// For tests: told each frame's palette, in frame order, and whether it was built for that frame (or is the one
     /// before, reused).
     let paletteSink: PaletteSink?
 
     typealias PaletteSink = @Sendable (_ frame: Int, _ palette: GIFPalette, _ isNew: Bool) -> Void
 
-    public convenience init(project: LoadedProject, document: EditDocument, settings: GIFSettings) {
-        self.init(project: project, document: document, settings: settings, paletteSink: nil)
+    /// The GIF of `document` with `settings`, its frames reading `analysis` of the caches.
+    public convenience init(
+        project: LoadedProject, document: EditDocument, settings: GIFSettings, analysis: AnalysisInputs = .none
+    ) {
+        self.init(project: project, document: document, settings: settings, paletteSink: nil, analysis: analysis)
     }
 
-    init(project: LoadedProject, document: EditDocument, settings: GIFSettings, paletteSink: PaletteSink?) {
+    init(
+        project: LoadedProject, document: EditDocument, settings: GIFSettings, paletteSink: PaletteSink?,
+        analysis: AnalysisInputs = .none
+    ) {
         precondition(settings.fps > 0 && settings.longSide > 0, "a GIF of \(settings.longSide) px at \(settings.fps) fps")
         self.project = project
         self.document = document
         self.settings = settings
+        self.analysis = analysis
         self.paletteSink = paletteSink
     }
 
@@ -162,7 +171,8 @@ public final class GIFExporter: Sendable {
             throw ExportError.destinationNotAllowed
         }
         let encoder = try GIFEncoding(
-            project: project, document: document, settings: settings, range: settings.range, paletteSink: paletteSink)
+            project: project, document: document, settings: settings, range: settings.range, paletteSink: paletteSink,
+            analysis: analysis)
         guard !Task.isCancelled else { throw GIFExportError.cancelled }
 
         let partial = URL(fileURLWithPath: destination.path + ".partial.gif")
@@ -213,7 +223,8 @@ public final class GIFExporter: Sendable {
 
     /// The renderer a run draws with, for `encodeInMemory(range:renderer:)` to reuse across several runs.
     func makeRenderer() throws -> FrameRenderer {
-        try GIFEncoding.makeRenderer(project: project, document: document, size: settings.outputSize(aspect: document.aspect))
+        try GIFEncoding.makeRenderer(
+            project: project, document: document, size: settings.outputSize(aspect: document.aspect), analysis: analysis)
     }
 
     /// `encodeInMemory(range:)` drawing with `renderer` (from `makeRenderer()`) instead of a new one: the same bytes. One
@@ -224,7 +235,8 @@ public final class GIFExporter: Sendable {
         guard range.lastsAFrame(fps: settings.fps) else { throw GIFExportError.rangeShorterThanAFrame }
         do {
             let encoder = try GIFEncoding(
-                project: project, document: document, settings: settings, range: range, paletteSink: paletteSink, renderer: renderer)
+                project: project, document: document, settings: settings, range: range, paletteSink: paletteSink, renderer: renderer,
+                analysis: analysis)
             let pipe = try MemoryPipe()
             do {
                 _ = try await encoder.run(into: pipe.writeEnd, loops: settings.loops, progress: nil)
@@ -307,10 +319,10 @@ private final class GIFEncoding: @unchecked Sendable {
 
     init(
         project: LoadedProject, document: EditDocument, settings: GIFSettings, range: ExportRange,
-        paletteSink: GIFExporter.PaletteSink?, renderer: FrameRenderer? = nil
+        paletteSink: GIFExporter.PaletteSink?, renderer: FrameRenderer? = nil, analysis: AnalysisInputs = .none
     ) throws {
         size = settings.outputSize(aspect: document.aspect)
-        let drawing = try renderer ?? Self.makeRenderer(project: project, document: document, size: size)
+        let drawing = try renderer ?? Self.makeRenderer(project: project, document: document, size: size, analysis: analysis)
         self.renderer = drawing
         quantizer = try GIFQuantizer(device: drawing.device)
         guard let drawCommands = drawing.device.makeCommandQueue(), let mapCommands = drawing.device.makeCommandQueue() else {
@@ -324,8 +336,10 @@ private final class GIFEncoding: @unchecked Sendable {
     }
 
     /// The motion blur's shutter is a fraction of a frame of the project, not of the GIF (1c design §7.2).
-    static func makeRenderer(project: LoadedProject, document: EditDocument, size: SIMD2<Int>) throws -> FrameRenderer {
-        try FrameRenderer(project: project, document: document, outputSize: size, frameRate: document.frameRate)
+    static func makeRenderer(
+        project: LoadedProject, document: EditDocument, size: SIMD2<Int>, analysis: AnalysisInputs = .none
+    ) throws -> FrameRenderer {
+        try FrameRenderer(project: project, document: document, outputSize: size, frameRate: document.frameRate, analysis: analysis)
     }
 
     /// Images coded at once at most: the performance cores but one (1c design §7.2, step 6), at least one.

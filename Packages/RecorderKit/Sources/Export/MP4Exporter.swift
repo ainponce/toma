@@ -58,23 +58,32 @@ public final class MP4Exporter: Sendable {
     public let settings: ExportSettings
     /// The part of the output it exports: all of it when `nil`.
     public let range: ExportRange?
+    /// What the frames and the mix read of the project's analysis caches (phase 2 design §10): `.none` in phase 1.
+    public let analysis: AnalysisInputs
     /// For tests: sees each frame's pixel buffer on the export's queue, in frame order, right before it is appended.
     let frameSink: FrameSink?
 
     /// What a test's `frameSink` is given: the frame's index and the pixel buffer drawn for it.
     typealias FrameSink = @Sendable (_ frame: Int, _ pixelBuffer: CVPixelBuffer) -> Void
 
-    /// The export of `range` of `document`'s output, of all of it when `nil`.
-    public convenience init(project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil) {
-        self.init(project: project, document: document, settings: settings, range: range, frameSink: nil)
+    /// The export of `range` of `document`'s output, of all of it when `nil`, reading `analysis` of the caches.
+    public convenience init(
+        project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil,
+        analysis: AnalysisInputs = .none
+    ) {
+        self.init(project: project, document: document, settings: settings, range: range, frameSink: nil, analysis: analysis)
     }
 
-    init(project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil, frameSink: FrameSink?) {
+    init(
+        project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil, frameSink: FrameSink?,
+        analysis: AnalysisInputs = .none
+    ) {
         self.project = project
         self.document = document
         self.settings = settings
         self.range = range
         self.frameSink = frameSink
+        self.analysis = analysis
     }
 
     /// The export of the legacy document (`EditDocument.legacy(for:)`): what phase 0 and 1a export.
@@ -111,8 +120,9 @@ public final class MP4Exporter: Sendable {
         let part = try Self.part(of: range, in: timeMap, framesPerSecond: fps)
         let frameCount = part?.frameCount(fps: fps) ?? timeMap.frameCount(frameRate: fps)
 
-        let renderer = try FrameRenderer(project: project, document: document, outputSize: settings.outputSize, frameRate: fps)
-        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps)
+        let renderer = try FrameRenderer(
+            project: project, document: document, outputSize: settings.outputSize, frameRate: fps, analysis: analysis)
+        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps, analysis: analysis)
         let audioFrames = Self.audioFrames(of: part, frameCount: frameCount, framesPerSecond: fps, mix: mix)
         let audio = mix.hasSound ? try AudioMix(mix: mix, frames: audioFrames) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
@@ -168,19 +178,21 @@ public final class MP4Exporter: Sendable {
     }
 
     /// The samples the AAC encoder gets when `range` of `document` of `project` (all of it when `nil`) is exported at
-    /// `framesPerSecond`: every block of its mix (`AudioMix`), one after the other, interleaved Float32, over the frames
-    /// of video rounded to 48 kHz; empty when the export has no audio.
+    /// `framesPerSecond`, reading `analysis` of the caches: every block of its mix (`AudioMix`), one after the other,
+    /// interleaved Float32, over the frames of video rounded to 48 kHz; empty when the export has no audio.
     /// - Throws: what `export` throws before it writes anything (`nothingToExport`, `noDisplayTrack`, `writerFailed`
     ///   for a frame rate that is not positive), or what reading or mixing the audio throws.
     static func mixSamples(
-        of project: LoadedProject, document: EditDocument, framesPerSecond: Int, range: ExportRange? = nil
+        of project: LoadedProject, document: EditDocument, framesPerSecond: Int, range: ExportRange? = nil,
+        analysis: AnalysisInputs = .none
     ) async throws -> [Float] {
         if let refusal = refusal(of: document, of: project) { throw refusal }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
         let timeMap = TimeMap(sequence: document.sequence)
         let part = try part(of: range, in: timeMap, framesPerSecond: framesPerSecond)
         let frameCount = part?.frameCount(fps: framesPerSecond) ?? timeMap.frameCount(frameRate: framesPerSecond)
-        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond)
+        let mix = try await EditedMix.make(
+            project: project, document: document, framesPerSecond: framesPerSecond, analysis: analysis)
         guard mix.hasSound else { return [] }
         let frames = audioFrames(of: part, frameCount: frameCount, framesPerSecond: framesPerSecond, mix: mix)
         // Mixing decodes: off the cooperative pool, as the export's own queue does it.

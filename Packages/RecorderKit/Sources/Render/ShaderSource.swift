@@ -5,8 +5,17 @@
 ///
 /// Every value comes from the frame being drawn: nothing reads a clock, a random source or memory that
 /// was not written. Colours are premultiplied; positions are output pixels with the origin at the top left.
+///
+/// The library is the core (`coreMetal`, phase 1's shaders) followed by the parts of phase 2's layers, each in its own
+/// file (`ShaderSource+<Layer>.swift`), in the draw order of phase 2 design §11: so each part can use what the core
+/// declares, and a layer's agent writes only its own part. Every part is empty in the base of phase 2, and the library
+/// is phase 1's text.
 public enum ShaderSource {
-    public static let metal: String = #"""
+    public static let metal = coreMetal + deviceFrameMetal + privacyMetal + cameraLookMetal + keysMetal + captionsMetal
+
+    /// Phase 1's shaders: the background, the shadow, the window frame, the screen, the cursor, the click effects, the
+    /// camera and the motion blur.
+    static let coreMetal: String = #"""
     #include <metal_stdlib>
     using namespace metal;
 
