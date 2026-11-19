@@ -213,6 +213,79 @@ import Testing
         await video.stop()
     }
 
+    @Test func anInterruptedCaptureGivesNoSamplesEvenRunning() {
+        // AVFoundation on macOS has no `isInterrupted`, and a session may still say it runs while it is interrupted.
+        #expect(CaptureSessionEngine.stopCause(disconnected: false, interrupted: true, running: true) == .interrupted)
+        #expect(CaptureSessionEngine.stopCause(disconnected: false, interrupted: true, running: false) == .interrupted)
+        #expect(CaptureSessionEngine.stopCause(disconnected: true, interrupted: true, running: true) == .disconnected)
+        #expect(CaptureSessionEngine.stopCause(disconnected: false, interrupted: false, running: false) == .stoppedRunning)
+        #expect(CaptureSessionEngine.stopCause(disconnected: false, interrupted: false, running: true) == nil)
+    }
+
+    @Test func anInterruptedCaptureStartsNoRunUntilItEnds() async throws {
+        let engine = FakeEngine(format: Self.iPhone)
+        let video = ExternalDeviceCaptureSource(session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: engine))
+        let audio = ExternalDeviceAudioSource(video: video)
+        let videoQueue = DispatchSerialQueue(label: "test.device.video")
+        let audioQueue = DispatchSerialQueue(label: "test.device.audio")
+        let videoSink = Sink(queue: videoQueue)
+        let audioSink = Sink(queue: audioQueue)
+        try await video.start(on: videoQueue, sink: videoSink)
+        try await audio.start(on: audioQueue, sink: audioSink)
+
+        engine.interrupt()
+        #expect(await eventually { videoSink.errors == [.deviceInterrupted] && audioSink.errors == [.deviceInterrupted] })
+        // The restart policy tries again at once: while the interruption lasts, no run starts and the session is not
+        // touched, so the policy waits and tries again, as after any other stop.
+        let prepares = engine.prepares
+        await #expect(throws: CaptureSourceError.deviceInterrupted) {
+            try await video.start(on: videoQueue, sink: videoSink)
+        }
+        await #expect(throws: CaptureSourceError.deviceInterrupted) {
+            try await audio.start(on: audioQueue, sink: audioSink)
+        }
+        #expect(engine.prepares == prepares && !engine.isRunning)
+
+        // Once it ends, both come back, on the same session.
+        engine.endInterruption()
+        try await video.start(on: videoQueue, sink: videoSink)
+        try await audio.start(on: audioQueue, sink: audioSink)
+        #expect(engine.isRunning && engine.counts == FakeEngine.Counts(starts: 2, stops: 1))
+        let pts = HostTime(nanoseconds: 9_000_000_000)
+        #expect(engine.deliver(SampleFactory.videoSample(width: 32, height: 64, pts: pts, frameIndex: 0), to: .video))
+        #expect(await eventually { videoSink.pts == [pts] })
+        await video.stop()
+        await audio.stop()
+        #expect(videoSink.errors == [.deviceInterrupted] && audioSink.errors == [.deviceInterrupted])
+    }
+
+    @Test func aRestartDoesNotShareAnInterruptedSession() async throws {
+        // The interruption has come, but its notice has not reached the runs yet: the session still says it runs, and
+        // the sound's run still holds it. A restart of the screen would share a session that gives nothing.
+        let engine = FakeEngine(format: Self.iPhone)
+        let video = ExternalDeviceCaptureSource(session: ExternalDeviceSession(deviceUniqueID: "iphone-1", engine: engine))
+        let audio = ExternalDeviceAudioSource(video: video)
+        let videoQueue = DispatchSerialQueue(label: "test.device.video")
+        let audioQueue = DispatchSerialQueue(label: "test.device.audio")
+        let videoSink = Sink(queue: videoQueue)
+        try await video.start(on: videoQueue, sink: videoSink)
+        try await audio.start(on: audioQueue, sink: Sink(queue: audioQueue))
+
+        engine.interrupt(notifying: false)
+        let prepares = engine.prepares
+        await #expect(throws: CaptureSourceError.deviceInterrupted) {
+            try await video.start(on: videoQueue, sink: videoSink)
+        }
+        #expect(engine.prepares == prepares && engine.isRunning)
+
+        engine.endInterruption()
+        try await video.start(on: videoQueue, sink: videoSink)
+        #expect(video.activeDeviceUniqueID == "iphone-1" && engine.counts == FakeEngine.Counts(starts: 1, stops: 0))
+        await video.stop()
+        await audio.stop()
+        #expect(!engine.isRunning)
+    }
+
     @Test func aStartThatFindsTheSessionStoppedFails() async throws {
         // What ended the capture before the run could hear it.
         let engine = FakeEngine(format: Self.iPhone)
@@ -262,8 +335,10 @@ private final class FakeEngine: ExternalDeviceEngine {
         var format: ExternalDeviceFormat?
         var connected = true
         var running = false
+        var interrupted = false
         var stopsRightAfterStarting = false
         var counts = Counts()
+        var prepares = 0
         var deliveries: [ExternalDeviceSession.Output: ExternalDeviceSession.Delivery] = [:]
         var onStop: (@Sendable (ExternalDeviceSession.StopCause) -> Void)?
     }
@@ -275,6 +350,8 @@ private final class FakeEngine: ExternalDeviceEngine {
     }
 
     var counts: Counts { state.withLock { $0.counts } }
+    /// How many times a lease asked it to capture.
+    var prepares: Int { state.withLock { $0.prepares } }
 
     func setFormat(_ format: ExternalDeviceFormat?) {
         state.withLock { $0.format = format }
@@ -301,6 +378,16 @@ private final class FakeEngine: ExternalDeviceEngine {
         state.withLock { $0.connected = true }
     }
 
+    /// Interrupted, still saying it runs (as an `AVCaptureSession` may); `notifying`, the runs are told.
+    func interrupt(notifying: Bool = true) {
+        state.withLock { $0.interrupted = true }
+        if notifying { report(.interrupted) }
+    }
+
+    func endInterruption() {
+        state.withLock { $0.interrupted = false }
+    }
+
     /// What the capture tells when it stops by itself.
     func report(_ cause: ExternalDeviceSession.StopCause) {
         state.withLock { $0.onStop }?(cause)
@@ -309,6 +396,7 @@ private final class FakeEngine: ExternalDeviceEngine {
     // MARK: - ExternalDeviceEngine
 
     var isRunning: Bool { state.withLock { $0.running } }
+    var isInterrupted: Bool { state.withLock { $0.interrupted } }
     var clock: CMClock? { nil }
 
     func setOnStop(_ handler: @escaping @Sendable (ExternalDeviceSession.StopCause) -> Void) {
@@ -321,6 +409,7 @@ private final class FakeEngine: ExternalDeviceEngine {
 
     func prepare(for output: ExternalDeviceSession.Output) throws -> ExternalDeviceFormat {
         try state.withLock { state in
+            state.prepares += 1
             guard state.connected, let format = state.format else { throw CaptureSourceError.deviceNotFound(uniqueID: "iphone-1") }
             if !state.running {
                 state.counts.starts += 1
@@ -344,7 +433,8 @@ private final class FakeEngine: ExternalDeviceEngine {
     func currentStopCause() -> ExternalDeviceSession.StopCause? {
         state.withLock { state in
             if !state.connected { return .disconnected }
-            return state.running ? nil : .interrupted
+            if state.interrupted { return .interrupted }
+            return state.running ? nil : .stoppedRunning
         }
     }
 }

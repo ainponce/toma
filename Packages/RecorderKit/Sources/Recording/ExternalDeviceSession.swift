@@ -35,6 +35,9 @@ struct ExternalDeviceFormat: Equatable, Sendable {
 protocol ExternalDeviceEngine: AnyObject, Sendable {
     /// Whether it captures now.
     var isRunning: Bool { get }
+    /// Whether the capture is interrupted (another app took the device, say): it gives no samples, even while it says
+    /// it runs, until the interruption ends.
+    var isInterrupted: Bool { get }
     /// The clock of the samples it delivers; `nil` is the host clock.
     var clock: CMClock? { get }
     /// `handler` is told, from any thread, each time the capture stops by itself.
@@ -62,7 +65,8 @@ protocol ExternalDeviceEngine: AnyObject, Sendable {
 /// first one starts it, the last one stops it), and each lease gets its output's samples on the queue it gave. When
 /// the capture stops by itself (the cable is pulled, the session is interrupted, stops or fails) every lease is
 /// told, so both runs end, and the restart policy brings them back: the first new lease finds the same device
-/// again by its `uniqueID`, never another one.
+/// again by its `uniqueID`, never another one. While the session is interrupted no lease is given, so a restart
+/// never shares a session that gives nothing; once the interruption ends the next restart goes through.
 ///
 /// Leases are given and ended on a serial queue of the session's own (`startRunning()` blocks).
 final class ExternalDeviceSession: Sendable {
@@ -147,7 +151,9 @@ final class ExternalDeviceSession: Sendable {
     /// Holds `output` until `ExternalDeviceLease.end()`: the session runs (`ExternalDeviceEngine.prepare`), and the
     /// output's samples go to `delivery`. `onStop` is told, from any thread, when the capture stops by itself while the
     /// lease is alive. `isWanted` is asked on the session's queue right before: if it says no, nothing is done and the
-    /// call throws `CancellationError`. Throws what `prepare` throws; the session then stops if no other lease is alive.
+    /// call throws `CancellationError`. While the capture is interrupted nothing is done either, and the call throws
+    /// `CaptureSourceError.deviceInterrupted`. Throws what `prepare` throws; the session then stops if no other lease
+    /// is alive.
     func lease(
         _ output: Output, delivery: Delivery, onStop: @escaping @Sendable (any Error) -> Void,
         isWanted: @escaping @Sendable () -> Bool
@@ -193,6 +199,9 @@ final class ExternalDeviceSession: Sendable {
     ) throws -> ExternalDeviceLease {
         dispatchPrecondition(condition: .onQueue(queue))
         guard isWanted() else { throw CancellationError() }
+        // An interrupted capture gives nothing, even shared with a lease that still holds it: no run starts until the
+        // interruption ends, and the restart policy waits and tries again, as after any other stop.
+        guard !engine.isInterrupted else { throw CaptureSourceError.deviceInterrupted }
         _ = state.withLock { $0.counter.acquire() }
         let format: ExternalDeviceFormat
         do {
@@ -259,6 +268,8 @@ final class CaptureSessionEngine: ExternalDeviceEngine, @unchecked Sendable {
         var device: DeviceBox?
         /// That device was disconnected since its input was added.
         var disconnected = false
+        /// The session was interrupted, and the interruption has not ended (macOS has no `isInterrupted`).
+        var interrupted = false
         /// What each output delivers to, kept alive here.
         var forwarders: [ExternalDeviceSession.Output: SampleForwarder] = [:]
         var onStop: (@Sendable (ExternalDeviceSession.StopCause) -> Void)?
@@ -280,9 +291,17 @@ final class CaptureSessionEngine: ExternalDeviceEngine, @unchecked Sendable {
                 let error = notification.userInfo?[AVCaptureSessionErrorKey] as? NSError
                 self?.stopped(.failed(error ?? AVError(.unknown) as NSError))
             },
+            // Before the leases are told: a restart that comes at once finds it interrupted.
             center.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: nil) {
                 [weak self] _ in
-                self?.stopped(.interrupted)
+                guard let self else { return }
+                state.withLock { $0.interrupted = true }
+                stopped(.interrupted)
+            },
+            // The next restart may start a run again.
+            center.addObserver(forName: AVCaptureSession.interruptionEndedNotification, object: session, queue: nil) {
+                [weak self] _ in
+                self?.state.withLock { $0.interrupted = false }
             },
             center.addObserver(forName: AVCaptureSession.didStopRunningNotification, object: session, queue: nil) {
                 [weak self] _ in
@@ -292,7 +311,12 @@ final class CaptureSessionEngine: ExternalDeviceEngine, @unchecked Sendable {
             center.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: nil, queue: nil) {
                 [weak self] notification in
                 guard let self, (notification.object as? AVCaptureDevice)?.uniqueID == deviceUniqueID else { return }
-                state.withLock { $0.disconnected = true }
+                // Connected again, it is a new input, which is told its own interruptions; and the end of one from
+                // before may never come for a session that stopped.
+                state.withLock { state in
+                    state.disconnected = true
+                    state.interrupted = false
+                }
                 stopped(.disconnected)
             },
         ]
@@ -303,6 +327,7 @@ final class CaptureSessionEngine: ExternalDeviceEngine, @unchecked Sendable {
     }
 
     var isRunning: Bool { session.isRunning }
+    var isInterrupted: Bool { state.withLock { $0.interrupted } }
     var clock: CMClock? { session.synchronizationClock }
 
     func setOnStop(_ handler: @escaping @Sendable (ExternalDeviceSession.StopCause) -> Void) {
@@ -350,10 +375,18 @@ final class CaptureSessionEngine: ExternalDeviceEngine, @unchecked Sendable {
     }
 
     func currentStopCause() -> ExternalDeviceSession.StopCause? {
-        let (device, disconnected) = state.withLock { ($0.device, $0.disconnected) }
-        if disconnected || device?.device.isConnected == false { return .disconnected }
-        if !session.isRunning { return .stoppedRunning }
-        return nil
+        let (device, disconnected, interrupted) = state.withLock { ($0.device, $0.disconnected, $0.interrupted) }
+        return Self.stopCause(
+            disconnected: disconnected || device?.device.isConnected == false, interrupted: interrupted,
+            running: session.isRunning)
+    }
+
+    /// Why a capture gives no samples: its device is gone; it is interrupted, even if it says it runs; it is not
+    /// running. `nil` when it gives them.
+    static func stopCause(disconnected: Bool, interrupted: Bool, running: Bool) -> ExternalDeviceSession.StopCause? {
+        if disconnected { return .disconnected }
+        if interrupted { return .interrupted }
+        return running ? nil : .stoppedRunning
     }
 
     // MARK: - On the session's queue
