@@ -26,3 +26,10 @@ public final class CompositeInputRecorder: InputRecorder {
         for recorder in recorders { await recorder.stop() }
     }
 }
+
+/// Hands the raise on to each of its recorders that needs it (`KeyPressRecorder`).
+extension CompositeInputRecorder: FormatRaising {
+    public func setFormatRaiser(_ raise: @escaping @Sendable () throws -> Void) {
+        for case let recorder as any FormatRaising in recorders { recorder.setFormatRaiser(raise) }
+    }
+}
