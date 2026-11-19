@@ -81,7 +81,14 @@ public final class ManifestStore: Sendable {
             }
             var manifest = state.manifest
             manifest.formatVersion = version
-            try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
+            do {
+                try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
+            } catch {
+                // The write can fail after its rename (syncing the folder), leaving the disk at `version` while the
+                // memory stays at `current`: the next `flushPending()` writes the manifest from memory again.
+                state.needsWrite = true
+                throw error
+            }
             state.manifest = manifest
             state.needsWrite = false
         }

@@ -211,6 +211,26 @@ private func recordingTake(_ tracks: [TrackRecord]) -> TakeRecord {
     }
 }
 
+@Test func aRaiseThatFailsAfterTheRenameIsRewrittenFromMemory() throws {
+    try withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Late", app: testApp, now: testDate)
+        let store = try ManifestStore(package: package)
+        try store.update { $0.takes.append(recordingTake([track(.microphone)])) }
+
+        // Without read permission the folder cannot be opened to sync it, after the rename has already worked.
+        try FileManager.default.setAttributes([.posixPermissions: 0o311], ofItemAtPath: package.url.path)
+        do {
+            defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: package.url.path) }
+            #expect(throws: (any Error).self) { try store.raiseFormatVersion(to: 4) }
+            #expect(store.manifest.formatVersion == 3)
+        }
+        #expect(try ManifestStore(package: package).manifest.formatVersion == 4, "the rename went through")
+
+        try store.flushPending()
+        #expect(try ManifestStore(package: package).manifest.formatVersion == 3, "the disk follows the memory again")
+    }
+}
+
 @Test func readersAcceptFourAndCallFiveNewer() async throws {
     #expect(Manifest.currentFormatVersion == 3)
     #expect(Manifest.newestFormatVersion == 4)
