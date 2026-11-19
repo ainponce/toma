@@ -50,11 +50,11 @@ public struct GIFPreferences: Codable, Equatable, Sendable {
     }
 }
 
-/// What the export sheet remembers between exports (design §5.6, 1c design §7.1), in the app's settings and never in a
-/// project: the MP4's resolution, by the output's shorter side, and its quality; what was exported last (Export As); and
-/// the GIF's options. The frames per second of the MP4 start at the project's every time, and the range at its default
-/// (`ExportRangeRules.defaultRange`): neither is remembered. The editor draws its paused preview at the remembered
-/// resolution too (plan decision 11).
+/// What the export sheet remembers between exports (design §5.6, 1c design §7.1, phase 2 design §6.8), in the app's
+/// settings and never in a project: the video's resolution, by the output's shorter side, its quality and its codec;
+/// what was exported last (Export As); and the GIF's options. The frames per second of the MP4 start at the project's
+/// every time, and the range at its default (`ExportRangeRules.defaultRange`): neither is remembered. The editor draws
+/// its paused preview at the remembered resolution too (plan decision 11).
 public struct ExportPreferences: Codable, Equatable, Sendable {
     /// The output's shorter side, in pixels: one of `shortSides`.
     public var shortSide: Int = 1080
@@ -63,19 +63,29 @@ public struct ExportPreferences: Codable, Equatable, Sendable {
     /// What the sheet exported last, which it starts at.
     public var kind: ExportKind = .mp4
     public var gif: GIFPreferences = .init()
+    /// The video's codec, as `ExportCodec`'s `rawValue` (`AppSupport` does not see `Export`): one of `codecs`, H.264 by
+    /// default. The app reads it with `ExportCodec(rawValue:) ?? .h264`.
+    public var codec: String = "h264"
 
     /// The resolutions the sheet offers: 720p, 1080p, 1440p and 4K.
     public static let shortSides = [720, 1080, 1440, 2160]
+    /// The codecs the sheet offers, as `ExportCodec`'s raw values: H.264, HEVC, ProRes 422 and ProRes 422 HQ.
+    public static let codecs = ["h264", "hevc", "proRes422", "proRes422HQ"]
 
-    public init(shortSide: Int = 1080, highQuality: Bool = false, kind: ExportKind = .mp4, gif: GIFPreferences = .init()) {
+    public init(
+        shortSide: Int = 1080, highQuality: Bool = false, kind: ExportKind = .mp4, gif: GIFPreferences = .init(),
+        codec: String = "h264"
+    ) {
         self.shortSide = shortSide
         self.highQuality = highQuality
         self.kind = kind
         self.gif = gif
+        self.codec = codec
     }
 
-    /// A field missing from what was saved (all but the first two, in what 1b saved), or that the sheet cannot show (a
-    /// resolution it does not offer, a kind it does not know), takes its default; the others are kept.
+    /// A field missing from what was saved (all but the first two, in what 1b saved; the codec, in what 1c saved), or
+    /// that the sheet cannot show (a resolution it does not offer, a kind or a codec it does not know), takes its default;
+    /// the others are kept.
     public init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let defaults = ExportPreferences()
@@ -84,11 +94,13 @@ public struct ExportPreferences: Codable, Equatable, Sendable {
         highQuality = (try? container.decodeIfPresent(Bool.self, forKey: .highQuality)) ?? defaults.highQuality
         kind = (try? container.decodeIfPresent(ExportKind.self, forKey: .kind)) ?? defaults.kind
         gif = (try? container.decodeIfPresent(GIFPreferences.self, forKey: .gif)) ?? defaults.gif
+        let codec = (try? container.decodeIfPresent(String.self, forKey: .codec)) ?? defaults.codec
+        self.codec = Self.codecs.contains(codec) ? codec : defaults.codec
     }
 
     /// What the sheet remembers once an export of `kind` starts with the options `chosen`: that `kind` was exported, and
-    /// that kind's options as chosen. The other kind's stay as they were: a GIF never changes the MP4's resolution, which
-    /// the paused preview is drawn at.
+    /// that kind's options as chosen (for a video, its resolution, quality and codec). The other kind's stay as they were:
+    /// a GIF never changes the video's resolution, which the paused preview is drawn at, nor its codec.
     public func remembering(_ kind: ExportKind, chosen: ExportPreferences) -> ExportPreferences {
         var remembered = self
         remembered.kind = kind
@@ -96,6 +108,7 @@ public struct ExportPreferences: Codable, Equatable, Sendable {
         case .mp4:
             remembered.shortSide = chosen.shortSide
             remembered.highQuality = chosen.highQuality
+            remembered.codec = chosen.codec
         case .gif:
             remembered.gif = chosen.gif
         }

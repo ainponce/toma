@@ -124,6 +124,43 @@ import Testing
             == ExportPreferences(shortSide: 2160, highQuality: false, kind: .mp4, gif: remembered.gif))
     }
 
+    /// The video's codec (phase 2 design §6.8) is remembered with the video's options: a GIF leaves it as it was.
+    @Test func codecIsRememberedForVideo() throws {
+        #expect(ExportPreferences().codec == "h264")
+        let before = ExportPreferences(shortSide: 1440, codec: "proRes422")
+        let chosen = ExportPreferences(shortSide: 2160, highQuality: true, codec: "hevc")
+        #expect(before.remembering(.mp4, chosen: chosen)
+            == ExportPreferences(shortSide: 2160, highQuality: true, kind: .mp4, codec: "hevc"))
+        #expect(before.remembering(.gif, chosen: chosen).codec == "proRes422")
+        // Every codec comes back as it went.
+        for codec in ExportPreferences.codecs {
+            let preferences = ExportPreferences(shortSide: 720, kind: .gif, codec: codec)
+            #expect(try JSONDecoder().decode(ExportPreferences.self, from: JSONEncoder().encode(preferences)) == preferences)
+        }
+    }
+
+    /// What 1c saved has no codec, and a codec this version does not know (a later one's, or one typed by hand) cannot be
+    /// shown: H.264, with the rest kept.
+    @Test func unknownOrMissingCodecIsH264() throws {
+        let of1c = #"{"shortSide":1440,"highQuality":true,"kind":"mp4","gif":{"longSide":640}}"#
+        #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data(of1c.utf8))
+            == ExportPreferences(shortSide: 1440, highQuality: true, gif: GIFPreferences(longSide: 640), codec: "h264"))
+        for codec in [#""av1""#, #""HEVC""#, #""""#, "4", "null", #"["hevc"]"#] {
+            let json = #"{"shortSide":2160,"kind":"gif","codec":\#(codec)}"#
+            #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data(json.utf8))
+                == ExportPreferences(shortSide: 2160, kind: .gif, codec: "h264"), "\(codec)")
+        }
+        #expect(try JSONDecoder().decode(ExportPreferences.self, from: Data(#"{"codec":"proRes422HQ"}"#.utf8)).codec == "proRes422HQ")
+    }
+
+    /// The codecs the sheet remembers are `ExportCodec`'s raw values (`AppSupport` does not see `Export`: this test ties
+    /// them), H.264 the default.
+    @Test func codecRawValuesAreExports() {
+        #expect(ExportPreferences.codecs == ExportCodec.allCases.map(\.rawValue))
+        #expect(ExportCodec(rawValue: ExportPreferences().codec) == .h264)
+        #expect(ExportSettings().codec.rawValue == ExportPreferences().codec)
+    }
+
     @Test func theRecordedShortSideIsInPixels() {
         // A Retina display, recorded at 2 pixels per point: 1512 × 982 points.
         let display = Self.track(.display, frame: Rect(x: 0, y: 0, width: 1512, height: 982), scale: 2)
