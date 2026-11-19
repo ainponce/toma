@@ -82,6 +82,10 @@ public struct RenderFrame: Equatable, Sendable {
     public var keys: KeyOverlayLayer?
     /// The captions (phase 2 design §5.2), over everything (§11, step 6); `nil` without them, as every document of phase 1.
     public var captions: CaptionLayer?
+    /// The captions' layers the frames draw next after `captions`, in output order (`CaptionScene.layersAhead`): not drawn
+    /// in this frame, but their textures are drawn ahead, off the frame (`CaptionTextures.prepare`), so the frame that
+    /// changes word or caption binds a texture made already. Empty without captions, as every document of phase 1.
+    public var captionsAhead: [CaptionLayer]
 
     /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
     var isCardMode: Bool { card != nil || backgroundTransform != nil }
@@ -109,7 +113,8 @@ public struct RenderFrame: Equatable, Sendable {
         backgroundTransform: StageTransform? = nil,
         deviceFrame: DeviceFrameLayer? = nil,
         keys: KeyOverlayLayer? = nil,
-        captions: CaptionLayer? = nil
+        captions: CaptionLayer? = nil,
+        captionsAhead: [CaptionLayer] = []
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -134,6 +139,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.deviceFrame = deviceFrame
         self.keys = keys
         self.captions = captions
+        self.captionsAhead = captionsAhead
     }
 }
 

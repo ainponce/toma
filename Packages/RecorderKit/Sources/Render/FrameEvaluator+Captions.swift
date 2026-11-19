@@ -109,6 +109,43 @@ struct CaptionScene: Sendable {
             style: style, language: language, fontSize: placed.fontSize, box: placed.box)
     }
 
+    /// How many layers a frame has ahead (`layersAhead(atOutput:)`): the next word, and the one after it for a word too
+    /// short for its texture to be drawn before it comes (or for playback faster than 1×).
+    static let ahead = 2
+
+    /// The layers the frames draw next after the one at output time `output` (`layer(atOutput:)`), in output order, at
+    /// most `ahead`: with the highlight, the layer of each word that starts after `output`, in the caption shown and then
+    /// in the next ones; without it, each caption that starts after `output`. What the compositor draws ahead
+    /// (`RenderFrame.captionsAhead`); a layer the frames then draw otherwise is only drawn in its frame.
+    func layersAhead(atOutput output: Int64) -> [CaptionLayer] {
+        guard !captions.isEmpty else { return [] }
+        // The first caption that ends after `output`: the one shown, or the next.
+        var (low, high) = (0, captions.count)
+        while low < high {
+            let middle = low + (high - low) / 2
+            if captions[middle].output.upperBound <= output { low = middle + 1 } else { high = middle }
+        }
+        var ahead: [CaptionLayer] = []
+        for index in low..<captions.count where ahead.count < Self.ahead {
+            guard let placed = placements[index] else { continue }
+            let caption = captions[index]
+            func layer(_ highlight: CaptionHighlight?) -> CaptionLayer {
+                CaptionLayer(
+                    lines: Self.lines(of: caption), highlight: highlight, style: style, language: language,
+                    fontSize: placed.fontSize, box: placed.box)
+            }
+            guard style.highlight else {
+                if caption.output.lowerBound > output { ahead.append(layer(nil)) }
+                continue
+            }
+            // Each word as the frame at its start draws it.
+            for word in caption.lines.joined() where word.output.lowerBound > output && ahead.count < Self.ahead {
+                ahead.append(layer(Self.highlight(in: caption, atOutput: word.output.lowerBound)))
+            }
+        }
+        return ahead
+    }
+
     /// The lines of `caption` as drawn: their words joined by a space.
     static func lines(of caption: Caption) -> [String] {
         caption.lines.map { $0.map(\.text).joined(separator: " ") }

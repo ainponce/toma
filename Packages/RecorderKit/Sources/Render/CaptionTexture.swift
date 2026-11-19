@@ -115,18 +115,31 @@ enum CaptionTypography {
 /// antialiased, as `TitleTexture`, so the texture depends neither on the system's settings nor on a display: the
 /// preview and the export draw the same. The system font itself changes from one macOS to another, and its bytes with it.
 ///
-/// Drawn the first time a layer is asked for and kept while the frames ask for it: the last four (a caption and its
-/// highlighted words as the preview plays, and back), under a lock.
+/// Drawn the first time a layer is asked for, or ahead of it (`prepare`), and kept while the frames ask for it: the last
+/// six (the caption shown, the two layers drawn ahead of it and a few behind, as the preview plays and back), under a lock.
+///
+/// Drawing a texture on the CPU takes milliseconds (Bold's at 4K, 8 to 14 ms; docs/performance.md, A8), which the frame
+/// that changes word would spend in its encoding. So each frame hands over its layers ahead (`RenderFrame.captionsAhead`)
+/// and they are drawn on a queue of their own in the background, the same function, so the same pixels, as in a frame: the
+/// frame that changes word binds a texture made already. One that comes while its texture is still being drawn ahead
+/// waits for it rather than drawing it again; one that was not drawn ahead (a jump) draws it in its encoding, as before.
 final class CaptionTextures: Sendable {
     private struct State {
-        /// The layers last asked for, the latest last, and their textures (`nil` when they have none).
+        /// The layers last asked for or drawn ahead, the latest last, and their textures (`nil` when they have none).
         var drawn: [(layer: CaptionLayer, texture: (any MTLTexture)?)] = []
+        /// The layers being drawn ahead, with what tells they are done.
+        var pending: [CaptionLayer: DispatchGroup] = [:]
         var drawCount = 0
+        var inlineDrawCount = 0
     }
 
     private let state = Mutex(State())
+    /// Where the layers ahead are drawn, one at a time.
+    private let queue = DispatchQueue(label: "dev.toma.CaptionTextures", qos: .userInitiated)
     /// How many layers are kept.
-    static let kept = 4
+    static let kept = 6
+    /// The most layers being drawn ahead at once: a jump from caption to caption (a scrub) leaves the rest to their frames.
+    static let maxPending = 4
     /// How far past the box a texture reaches, in em, besides two pixels: the outline, the shadow and glyphs that go past
     /// their line (a long tail, a stacked accent).
     static let marginEm = 0.5
@@ -135,8 +148,11 @@ final class CaptionTextures: Sendable {
 
     init() {}
 
-    /// How many textures have been drawn, for tests.
+    /// How many textures have been drawn, ahead or in a frame, for tests and the measures.
     var drawCount: Int { state.withLock { $0.drawCount } }
+    /// How many of them were drawn in a frame's encoding (`texture(for:device:)` found neither the texture nor its drawing
+    /// ahead), for tests and the measures.
+    var inlineDrawCount: Int { state.withLock { $0.inlineDrawCount } }
 
     /// The whole pixels of the output `layer`'s texture covers, from the top left: its box and `marginEm` of its font
     /// size and two pixels around it. `nil` for a box or a size that is not a positive number, or a texture too large.
@@ -153,22 +169,73 @@ final class CaptionTextures: Sendable {
         return (SIMD2(Int(lower.x), Int(lower.y)), SIMD2(Int(size.x), Int(size.y)))
     }
 
-    /// The texture of `layer`, `region(of:)` big; `nil` when it has nothing to draw (no region, no font, no line).
+    /// The texture of `layer`, `region(of:)` big; `nil` when it has nothing to draw (no region, no font, no line). Kept or
+    /// drawn ahead, it is there; being drawn ahead, this waits for it; otherwise it is drawn now.
     /// - Throws: `RenderError.metalResourceUnavailable` if CoreGraphics or Metal cannot make what it needs.
     func texture(for layer: CaptionLayer, device: any MTLDevice) throws -> (any MTLTexture)? {
-        try state.withLock { state in
-            if let index = state.drawn.firstIndex(where: { $0.layer == layer }) {
-                let found = state.drawn.remove(at: index)
-                state.drawn.append(found)
-                return found.texture
+        while true {
+            let found: Result<(any MTLTexture)?, any Error>? = state.withLock { state in
+                if let index = state.drawn.firstIndex(where: { $0.layer == layer }) {
+                    let found = state.drawn.remove(at: index)
+                    state.drawn.append(found)
+                    return .success(found.texture)
+                }
+                guard state.pending[layer] == nil else { return nil }
+                return Result {
+                    let texture = try Self.makeTexture(for: layer, device: device)
+                    Self.keep(layer, texture, in: &state)
+                    state.inlineDrawCount += 1
+                    return texture
+                }
             }
-            // The oldest layer's memory goes before the next one is drawn.
-            if state.drawn.count >= Self.kept { state.drawn.removeFirst() }
-            let texture = try Self.makeTexture(for: layer, device: device)
-            state.drawn.append((layer, texture))
-            state.drawCount += 1
-            return texture
+            if let found { return try found.get() }
+            // Being drawn ahead: done, it is kept (or, failing, drawn here on the next turn).
+            state.withLock { $0.pending[layer] }?.wait()
         }
+    }
+
+    /// Draws ahead, in the background, the textures of `layers` that are neither kept nor being drawn
+    /// (`RenderFrame.captionsAhead`), up to `maxPending` at once; each is kept once drawn. Returns at once.
+    func prepare(_ layers: [CaptionLayer], device: any MTLDevice) {
+        guard !layers.isEmpty else { return }
+        let device = UncheckedDevice(device)
+        let scheduled: [(CaptionLayer, DispatchGroup)] = state.withLock { state in
+            var scheduled: [(CaptionLayer, DispatchGroup)] = []
+            for layer in layers where state.pending.count < Self.maxPending && state.pending[layer] == nil
+                && !state.drawn.contains(where: { $0.layer == layer })
+            {
+                let group = DispatchGroup()
+                group.enter()
+                state.pending[layer] = group
+                scheduled.append((layer, group))
+            }
+            return scheduled
+        }
+        for (layer, group) in scheduled {
+            queue.async { [self] in
+                let made = Made(Result { try Self.makeTexture(for: layer, device: device.device) })
+                state.withLock { state in
+                    state.pending[layer] = nil
+                    // What could not be made is not kept: its frame tries again.
+                    if case .success(let texture) = made.result, !state.drawn.contains(where: { $0.layer == layer }) {
+                        Self.keep(layer, texture, in: &state)
+                    }
+                }
+                group.leave()
+            }
+        }
+    }
+
+    /// Waits until nothing is being drawn ahead, for tests and the measures.
+    func waitUntilDrawnAhead() {
+        while let group = state.withLock({ $0.pending.values.first }) { group.wait() }
+    }
+
+    /// Keeps `texture` of `layer`, just drawn, as the latest: the oldest layer's memory goes first when `kept` are.
+    private static func keep(_ layer: CaptionLayer, _ texture: (any MTLTexture)?, in state: inout State) {
+        if state.drawn.count >= kept { state.drawn.removeFirst() }
+        state.drawn.append((layer, texture))
+        state.drawCount += 1
     }
 
     /// `layer` drawn into a new texture; `nil` when it has nothing to draw.
@@ -261,5 +328,24 @@ final class CaptionTextures: Sendable {
             }
         }
         return bytes
+    }
+}
+
+/// A Metal device handed to the queue that draws the captions' textures ahead: `MTLDevice` is safe to use from any thread.
+private struct UncheckedDevice: @unchecked Sendable {
+    let device: any MTLDevice
+
+    init(_ device: any MTLDevice) {
+        self.device = device
+    }
+}
+
+/// A texture drawn ahead, handed from the queue that drew it to the textures kept, under their lock: nothing else holds
+/// it, and it is only read once kept.
+private struct Made: @unchecked Sendable {
+    let result: Result<(any MTLTexture)?, any Error>
+
+    init(_ result: Result<(any MTLTexture)?, any Error>) {
+        self.result = result
     }
 }

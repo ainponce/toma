@@ -183,4 +183,33 @@ private func style(
         other.style.highlightColor = RGBA(1, 0, 0, 1)
         #expect(Set([layer, other]).count == 2 && layer != other)
     }
+
+    @Test func layersAheadAreTheNextOnesDrawn() throws {
+        // Two captions: "Buenas tardes a todos." and, after a gap of 1.4 s, "Hoy vamos.". What a frame has ahead
+        // (`RenderFrame.captionsAhead`) is the next two layers the frames draw, exactly: the next words highlighted, then
+        // the next caption's first; between captions, the next caption's.
+        let document = captioned(spoken(["Buenas", "tardes", "a", "todos."]) + spoken(["Hoy", "vamos."], from: 3))
+        let evaluator = FrameEvaluator(take: StageDrawing.bareTake(seconds: 12), events: [], document: document, outputSize: SIMD2(1920, 1080))
+        func drawn(at t: Double) -> CaptionLayer? { evaluator.frame(at: t).captions }
+        for (t, next) in [
+            (0.1, [0.4, 0.8]), (0.5, [0.8, 1.2]), (1.0, [1.2, 3.0]), (1.3, [3.0, 3.4]), (2.5, [3.0, 3.4]), (3.1, [3.4]),
+        ] {
+            let ahead = evaluator.frame(at: t).captionsAhead
+            let expected = next.compactMap { drawn(at: $0) }
+            #expect(expected.count == next.count && ahead == expected, "at \(t) s")
+            #expect(!ahead.contains { $0 == drawn(at: t) }, "at \(t) s: never the layer drawn")
+        }
+        #expect(evaluator.frame(at: 3.6).captionsAhead.isEmpty, "the last word")
+        // Without the highlight, a caption is one layer: the next caption's.
+        let plain = FrameEvaluator(
+            take: StageDrawing.bareTake(seconds: 12), events: [],
+            document: captioned(spoken(["Buenas", "tardes", "a", "todos."]) + spoken(["Hoy", "vamos."], from: 3), style: style(.classic, highlight: false)),
+            outputSize: SIMD2(1920, 1080))
+        #expect(plain.frame(at: 0.5).captionsAhead == [try #require(plain.frame(at: 3.1).captions)])
+        // Without captions, nothing ahead.
+        let legacy = FrameEvaluator(
+            take: StageDrawing.bareTake(seconds: 12), events: [], document: captioned(spoken(["Hola"]), show: false),
+            outputSize: SIMD2(1920, 1080))
+        #expect(legacy.frame(at: 0.1).captionsAhead.isEmpty)
+    }
 }

@@ -89,11 +89,13 @@ struct LayerPipelines {
 }
 
 extension Compositor {
-    /// Steps 5 and 6 of phase 2 design §11, over the camera, into `pass`: the keys of `frame`, then its captions. Every
-    /// frame reaches it once (`DrawCounts.overlaySteps`), whatever its path; with neither, nothing is drawn.
+    /// Steps 5 and 6 of phase 2 design §11, over the camera, into `pass`: the keys of `frame`, then its captions, and the
+    /// textures of its captions ahead drawn in the background (`CaptionTextures.prepare`), which draws nothing into the
+    /// frame. Every frame reaches it once (`DrawCounts.overlaySteps`), whatever its path; with neither, nothing is drawn.
     func drawOverlays(_ frame: RenderFrame, pass: LayerPass, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts) {
         counts.overlaySteps += 1
         drawKeys(frame.keys, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
         drawCaptions(frame.captions, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
+        layers.captions.textures.prepare(frame.captionsAhead, device: device)
     }
 }

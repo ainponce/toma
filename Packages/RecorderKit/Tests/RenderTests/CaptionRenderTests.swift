@@ -296,20 +296,75 @@ func captionTexturesAreReused() async throws {
     }
     #expect(counts.0 == 1)
     #expect(counts.1 == 2)
-    // Only the last four are kept.
+    // Only the last six are kept.
     let textures = CaptionTextures()
     let device = try #require(MTLCreateSystemDefaultDevice())
     var layers: [CaptionLayer] = []
-    for word in 0..<5 {
+    for word in 0..<7 {
         var next = first
         next.lines = ["Palabra \(word)"]
         layers.append(next)
         _ = try textures.texture(for: next, device: device)
     }
     _ = try textures.texture(for: layers[1], device: device)
-    #expect(textures.drawCount == 5)
+    #expect(textures.drawCount == 7)
     _ = try textures.texture(for: layers[0], device: device)
-    #expect(textures.drawCount == 6)
+    #expect(textures.drawCount == 8)
+}
+
+@Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+func wordTexturesAreDrawnAhead() async throws {
+    // Bold, its word highlighted, a word every 0.4 s over two captions, drawn frame after frame as the preview plays them:
+    // each frame's layers ahead (`RenderFrame.captionsAhead`) are drawn off the frame (`CaptionTextures.prepare`), so the
+    // frame that changes word, or caption, binds a texture made already. Only the very first frame draws its own; each
+    // texture is drawn once, with the same pixels as drawn in a frame.
+    let words = ["Hoy", "vamos", "a", "grabar.", "La", "pantalla", "con", "subtítulos."]
+    let take = StageDrawing.bareTake(seconds: 6)
+    var document = EditDocument.legacy(take: take, events: [])
+    document.transcript = Transcript(
+        language: "es-MX", engine: "speechTranscriber-1",
+        takes: [TranscriptTake(
+            take: takeID, track: "microphone-1",
+            words: words.enumerated().map { index, text in
+                TranscriptWord(start: base.adding(seconds: 0.4 * Double(index)), end: base.adding(seconds: 0.4 * Double(index) + 0.3), text: text)
+            })])
+    document.captions = CaptionPlan(show: true, style: .default)
+    let scene = FrameEvaluator(take: take, events: [], document: document, outputSize: size1080)
+    let frames = (0..<110).map { scene.frame(at: Double($0) / 30) }
+    let distinct = Set(frames.compactMap(\.captions))
+    try #require(distinct.count == words.count && frames.contains { !$0.captionsAhead.isEmpty })
+    let ahead = try #require(frames.first?.captionsAhead.first)
+    let result = try await offThePool { () -> (inline: Int, drawn: Int, wrong: Int) in
+        let drawer = try CaptionDrawer()
+        var wrong = 0
+        for frame in frames {
+            _ = try drawer.draw(frame)
+            // The next frame is 1/30 s later; a texture takes a few milliseconds.
+            drawer.textures.waitUntilDrawnAhead()
+            // What was drawn ahead has the same pixels as `bitmap(of:)`, which a frame draws in its encoding.
+            for layer in frame.captionsAhead {
+                let texture = try #require(try drawer.textures.texture(for: layer, device: drawer.device))
+                var bytes = [UInt8](repeating: 0, count: texture.width * texture.height * 4)
+                texture.getBytes(
+                    &bytes, bytesPerRow: texture.width * 4, from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+                if bytes != (try CaptionTextures.bitmap(of: layer)) { wrong += 1 }
+            }
+        }
+        return (drawer.textures.inlineDrawCount, drawer.textures.drawCount, wrong)
+    }
+    #expect(result.inline == 1, "drawn in a frame's encoding")
+    #expect(result.drawn == distinct.count, "each texture drawn once")
+    #expect(result.wrong == 0)
+
+    // A frame that comes while its texture is being drawn ahead waits for it: it is not drawn twice.
+    let (inline, drawn) = try await offThePool { () -> (Int, Int) in
+        let textures = CaptionTextures()
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        textures.prepare([ahead], device: device)
+        _ = try textures.texture(for: ahead, device: device)
+        return (textures.inlineDrawCount, textures.drawCount)
+    }
+    #expect(inline == 0 && drawn == 1)
 }
 
 @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
@@ -414,9 +469,10 @@ func previewEqualsExportWithCaptions() async throws {
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
 func captionFrameCostBench() async throws {
-    // 600 frames of 1080p (10 s at 60 fps) with a caption that changes every 0.4 s, its word highlighted (Bold), drawn into
-    // one target as the preview does: the CPU time of each frame's encoding (with a new caption's texture drawn in it)
-    // and the GPU time, with and without the captions, after 8 frames to warm up.
+    // 600 frames (10 s at 60 fps) with a caption that changes every 0.4 s, its word highlighted (Bold), drawn into one
+    // target as the preview plays them, one every 1/60 s, at 1080p and at 4K: the CPU time of each frame's encoding (the
+    // frame that changes word drew its texture in it before the textures were drawn ahead) and the GPU time, with and
+    // without the captions, after 8 frames to warm up; and how many textures were drawn in a frame's encoding.
     let words = (0..<40).map { ["Hoy", "vamos", "a", "grabar", "la", "pantalla", "con", "subtítulos", "en", "español."][$0 % 10] }
     let take = StageDrawing.bareTake(seconds: 12)
     var document = EditDocument.legacy(take: take, events: [])
@@ -428,40 +484,48 @@ func captionFrameCostBench() async throws {
                 TranscriptWord(start: base.adding(seconds: 0.4 * Double(index)), end: base.adding(seconds: 0.4 * Double(index) + 0.3), text: text)
             })])
     document.captions = CaptionPlan(show: true, style: .default)
-    let scene = FrameEvaluator(take: take, events: [], document: document, outputSize: size1080)
-    let frames = (0..<608).map { scene.frame(at: Double($0) / 60) }
-    struct Times: Sendable { var cpu: [Double] = [], gpu: [Double] = [] }
-    let (with, without, textures) = try await offThePool { () -> (Times, Times, Int) in
-        let drawer = try CaptionDrawer()
-        let target = try StageDrawing.target(device: drawer.device, size: size1080)
-        func measure(_ frames: [RenderFrame]) throws -> Times {
-            var times = Times()
-            for (index, frame) in frames.enumerated() {
-                let commandBuffer = try #require(drawer.queue.makeCommandBuffer())
-                let start = DispatchTime.now().uptimeNanoseconds
-                try drawer.compositor.encode(
-                    frame, screen: drawer.screen, camera: nil, cursor: drawer.cursor, into: target, commandBuffer: commandBuffer)
-                let encoded = DispatchTime.now().uptimeNanoseconds
-                commandBuffer.commit()
-                commandBuffer.waitUntilCompleted()
-                guard index >= 8 else { continue }
-                times.cpu.append(Double(encoded - start) / 1e6)
-                times.gpu.append((commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1e3)
+    for size in [size1080, SIMD2(3840, 2160)] {
+        let scene = FrameEvaluator(take: take, events: [], document: document, outputSize: size)
+        let frames = (0..<608).map { scene.frame(at: Double($0) / 60) }
+        struct Times: Sendable { var cpu: [Double] = [], gpu: [Double] = [] }
+        let (with, without, textures, inline) = try await offThePool { () -> (Times, Times, Int, Int) in
+            let drawer = try CaptionDrawer()
+            let target = try StageDrawing.target(device: drawer.device, size: size)
+            func measure(_ frames: [RenderFrame]) throws -> Times {
+                var times = Times()
+                let first = DispatchTime.now().uptimeNanoseconds
+                for (index, frame) in frames.enumerated() {
+                    // At the pace of the preview: each frame at its 1/60 s.
+                    let due = first + UInt64(index) * 1_000_000_000 / 60
+                    while DispatchTime.now().uptimeNanoseconds < due { usleep(200) }
+                    let commandBuffer = try #require(drawer.queue.makeCommandBuffer())
+                    let start = DispatchTime.now().uptimeNanoseconds
+                    try drawer.compositor.encode(
+                        frame, screen: drawer.screen, camera: nil, cursor: drawer.cursor, into: target, commandBuffer: commandBuffer)
+                    let encoded = DispatchTime.now().uptimeNanoseconds
+                    commandBuffer.commit()
+                    commandBuffer.waitUntilCompleted()
+                    guard index >= 8 else { continue }
+                    times.cpu.append(Double(encoded - start) / 1e6)
+                    times.gpu.append((commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1e3)
+                }
+                return times
             }
-            return times
+            let without = try measure(frames.map { var plain = $0; plain.captions = nil; return plain })
+            let before = drawer.textures.drawCount, inlineBefore = drawer.textures.inlineDrawCount
+            let with = try measure(frames)
+            return (with, without, drawer.textures.drawCount - before, drawer.textures.inlineDrawCount - inlineBefore)
         }
-        let without = try measure(frames.map { var plain = $0; plain.captions = nil; return plain })
-        let before = drawer.textures.drawCount
-        let with = try measure(frames)
-        return (with, without, drawer.textures.drawCount - before)
+        func p(_ values: [Double], _ q: Double) -> Double { values.sorted()[min(values.count - 1, Int(Double(values.count) * q))] }
+        print(String(
+            format: "captions %d × %d, %d frames: CPU encode p50 %.3f ms, p95 %.3f, max %.3f (without: p50 %.3f, max %.3f); "
+                + "GPU p50 %.3f ms, p95 %.3f, max %.3f (without: p50 %.3f, p95 %.3f); %d textures in 10 s (%d a minute), "
+                + "%d of them drawn in a frame's encoding",
+            size.x, size.y, with.cpu.count, p(with.cpu, 0.5), p(with.cpu, 0.95), with.cpu.max() ?? 0, p(without.cpu, 0.5),
+            without.cpu.max() ?? 0, p(with.gpu, 0.5), p(with.gpu, 0.95), with.gpu.max() ?? 0, p(without.gpu, 0.5),
+            p(without.gpu, 0.95), textures, textures * 6, inline))
+        #expect(textures >= 20)
     }
-    func p(_ values: [Double], _ q: Double) -> Double { values.sorted()[min(values.count - 1, Int(Double(values.count) * q))] }
-    print(String(
-        format: "captions 1080p, %d frames: CPU encode p50 %.3f ms, p95 %.3f, max %.3f (without: p50 %.3f, max %.3f); "
-            + "GPU p50 %.3f ms, p95 %.3f, max %.3f (without: p50 %.3f, p95 %.3f); %d textures in 10 s (%d a minute)",
-        with.cpu.count, p(with.cpu, 0.5), p(with.cpu, 0.95), with.cpu.max() ?? 0, p(without.cpu, 0.5), without.cpu.max() ?? 0,
-        p(with.gpu, 0.5), p(with.gpu, 0.95), with.gpu.max() ?? 0, p(without.gpu, 0.5), p(without.gpu, 0.95), textures, textures * 6))
-    #expect(textures >= 20)
 }
 
 @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
