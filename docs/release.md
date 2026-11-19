@@ -947,6 +947,12 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 
 - Con una toma real con cámara (una persona que se mueve, gira la cara y sale del cuadro unos segundos): con Fondo Desenfocado, en `~/Library/Caches/dev.toma.Toma/Projects/<id>/masks/<toma>/<pista>/` aparece un `…-personMask-1.mov` por segmento de la cámara. Abierto en QuickTime, dura lo mismo que el segmento, la silueta blanca sigue a la persona sin parpadear y queda negro mientras no hay nadie. Con Seguir la cara, `faces/…/…-faceTrack-1.json` tiene `face` en las muestras con la cara a la vista y no la tiene mientras la persona no está.
 
+**El análisis de la imagen en el editor** (I12; se recorre con la pestaña Cámara de I13)
+
+- Con Quitado elegido, la vista previa muestra Original hasta que la pestaña llega al 100 % y después la persona sin fondo; exportar antes espera y el archivo la tiene; la vista previa del GIF también. Con la hoja de exportar en GIF abierta mientras se prepara, la vista previa del GIF se rehace sola al llegar al 100 % y muestra la persona sin fondo.
+- «Cancelar la exportación» mientras espera la cámara: no aparece ningún aviso, el análisis sigue y la pestaña llega al 100 %. Exportar otra vez ya no espera.
+- Con el editor abierto y la persona ya sin fondo, borrar la carpeta `masks/` de `~/Library/Caches/dev.toma.Toma/Projects/<id>/` y cambiar Fondo a Original y de nuevo a Quitado: la pestaña vuelve a preparar el recorte y la persona aparece otra vez sin fondo; exportar sin cambiar nada espera a que se regenere.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

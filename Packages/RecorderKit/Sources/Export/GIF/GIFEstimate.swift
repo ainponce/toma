@@ -86,24 +86,26 @@ public enum GIFEstimate {
     }
 
     /// The preview: the GIF of `previewRange(settings.range, playhead:)` (from the range's start if what is left of it
-    /// is shorter than a frame).
+    /// is shorter than a frame), its frames reading `analysis` of the caches as the export's do.
     public static func preview(
-        project: LoadedProject, document: EditDocument, settings: GIFSettings, playhead: Int64
+        project: LoadedProject, document: EditDocument, settings: GIFSettings, playhead: Int64,
+        analysis: AnalysisInputs = .none
     ) async throws -> Data {
         var range = previewRange(settings.range, playhead: playhead)
         if !range.lastsAFrame(fps: settings.fps) { range = previewRange(settings.range, playhead: settings.range.start) }
-        let exporter = GIFExporter(project: project, document: document, settings: settings)
+        let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
         return try await exporter.encodeInMemory(range: range)
     }
 
     /// The GIF's size, at two digits, from `sampleRanges` encoded for real: one first image and the bytes per frame after
     /// it (see `GIFEstimate`). A `preview` already made (by `preview(...)`) counts as one of the stretches, in place of the
     /// first (the estimate does not know where the playhead was; the preview is 3 s of real content either way). All the
-    /// stretches are drawn by one renderer.
+    /// stretches are drawn by one renderer, reading `analysis` of the caches as the export's frames do.
     public static func estimate(
-        project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?
+        project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?,
+        analysis: AnalysisInputs = .none
     ) async throws -> GIFEstimateResult {
-        let exporter = GIFExporter(project: project, document: document, settings: settings)
+        let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
         let renderer = try exporter.makeRenderer()
         return try await estimate(settings: settings, preview: preview, first: nil) {
             try await exporter.encodeInMemory(range: $0, renderer: renderer)
@@ -112,15 +114,16 @@ public enum GIFEstimate {
 
     /// The estimate in two steps, for the export sheet: with a `preview` (and a range long enough to be sampled), first
     /// the estimate of the preview alone, as soon as it is called, and then the refined one, once the other stretches are
-    /// encoded; the stream then ends. Without one, only the refined estimate. Cancel the task iterating it, or stop
-    /// iterating, to stop the encoding.
+    /// encoded; the stream then ends. Without one, only the refined estimate. Its stretches read `analysis` of the caches
+    /// as the export's frames do. Cancel the task iterating it, or stop iterating, to stop the encoding.
     public static func estimates(
-        project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?
+        project: LoadedProject, document: EditDocument, settings: GIFSettings, preview: Data?,
+        analysis: AnalysisInputs = .none
     ) -> AsyncThrowingStream<GIFEstimateResult, any Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
-                    let exporter = GIFExporter(project: project, document: document, settings: settings)
+                    let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
                     let renderer = try exporter.makeRenderer()
                     let final = try await estimate(settings: settings, preview: preview, first: { continuation.yield($0) }) {
                         try await exporter.encodeInMemory(range: $0, renderer: renderer)

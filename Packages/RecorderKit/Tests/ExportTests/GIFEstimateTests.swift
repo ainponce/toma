@@ -273,6 +273,57 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
         }
     }
 
+    /// The preview and the estimate draw with the analysis the export draws with (plan 2b task I12): a removed background
+    /// with its person's mask and Follow the Face with its face, so the preview of the GIF is the GIF.
+    @Test func estimateDrawsWithTheAnalysis() async throws {
+        try await withTemporaryDirectory { dir in
+            let builder = try TakeBuilder(in: dir, name: "Estimate with the camera")
+            try await builder.addVideoTrack(id: displayID, source: displaySource, segments: [VideoSegmentSpec(start: base, seconds: 2)])
+            try await builder.addVideoTrack(
+                id: "camera", kind: .camera, source: TrackSource(name: "Synthetic Camera", deviceUniqueID: "synthetic-camera"),
+                segments: [VideoSegmentSpec(start: base, seconds: 2)])
+            try builder.addEvents((0..<240).map { i in InputEvent(t: at(Double(i) / 120), kind: .cursor(x: 40 + Double(i) * 2, y: 80)) })
+            let project = try builder.write()
+            var document = EditDocument.legacy(for: project)
+            document.frameRate = 30
+            document.camera.show = true
+            document.camera.background = .removed
+            document.camera.framing = CameraFraming(mode: .face, center: NormalizedPoint(x: 0.5, y: 0.5), zoom: 1.4)
+            // The mask: a video with the camera segment's own times (its file), as the caches' `personMask-1` has them.
+            let camera = try #require(project.take.track("camera")?.segments.first)
+            let segment = CameraSegment(take: project.take.id, track: "camera", segment: camera.index)
+            var analysis = AnalysisInputs()
+            analysis.personMasks[segment] = project.package.fileURL(camera.file)
+            analysis.faceTracks[segment] = CameraFaceTrack(
+                algorithm: CameraFaceTrack.id, frameSize: [640, 360],
+                samples: (0..<20).map { i in
+                    CameraFaceSample(
+                        t: at(Double(i) / 10), face: NormalizedRect(x: 0.1 + Double(i) * 0.02, y: 0.3, width: 0.2, height: 0.3))
+                })
+            let settings = GIFSettings(longSide: 320, fps: 10, range: .whole(TimeMap(sequence: document.sequence)))
+            let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
+
+            let preview = try await GIFEstimate.preview(
+                project: project, document: document, settings: settings, playhead: second / 2, analysis: analysis)
+            let exported = try await exporter.encodeInMemory(range: GIFEstimate.previewRange(settings.range, playhead: second / 2))
+            #expect(preview == exported, "the preview is the GIF the export writes with the same analysis, byte for byte")
+
+            let estimated = try await GIFEstimate.estimate(
+                project: project, document: document, settings: settings, preview: preview, analysis: analysis)
+            let made = try await GIFEstimate.estimate(settings: settings, preview: preview, first: nil) {
+                try await exporter.encodeInMemory(range: $0)
+            }
+            #expect(estimated == made)
+            var seen: [GIFEstimateResult] = []
+            for try await result in GIFEstimate.estimates(
+                project: project, document: document, settings: settings, preview: preview, analysis: analysis
+            ) {
+                seen.append(result)
+            }
+            #expect(seen.last == made)
+        }
+    }
+
     @Test func estimateCanBeCancelled() async throws {
         let settings = GIFSettings(range: ExportRange(start: 0, end: 60 * second))
         let task = Task {
