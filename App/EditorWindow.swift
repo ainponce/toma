@@ -329,6 +329,12 @@ struct EditorCommands: Commands {
             }
             .keyboardShortcut("i", modifiers: [.command, .option])
             .disabled(isVisible == nil)
+            // For formats of 4:5 and narrower (phase 2 design §6.6): the guide is for the preview only.
+            let zones = editor.safeZones
+            Button(zones?.shown == true ? LocalizedStringKey("Hide Safe Zones") : LocalizedStringKey("Show Safe Zones")) {
+                editor.toggleSafeZones()
+            }
+            .disabled(zones?.applies != true)
         }
     }
 }

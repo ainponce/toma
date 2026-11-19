@@ -1286,3 +1286,7 @@ release: dist/appcast.xml already has Toma 0.0.2 from another build: release thi
 ```
 
 La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 antes y después). El aviso `found mismatch code signing identity` es esperable con firmas ad hoc y el script lo tolera solo con `SIGN_IDENTITY=-`; con el certificado, las versiones tienen la misma firma y ese aviso hace fallar la release.
+
+**Zonas seguras** (I15)
+
+- En un proyecto 9:16, 4:5 o 3:4: Visualización ▸ Mostrar las zonas seguras (o el botón de la derecha de la barra de la vista previa) atenúa arriba, abajo y la derecha con borde punteado y la leyenda. Comparada con un Reel real, el texto de abajo y los botones de la derecha caen en lo atenuado. En 16:9, 1:1 y 4:3 el menú está deshabilitado y no hay botón. Exportar un proyecto con las zonas prendidas no las dibuja.
