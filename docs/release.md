@@ -955,6 +955,12 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Edición ▸ Acelerar el tipeo… (y el menú contextual del Video) en una toma real con escritura: la ventanita ofrece 2× · 3× · 4× · 8× (3× elegido) y el resultado («Se aceleran 5 tramos: 1:23 → 0:28») coincide con lo que queda; Acelerar lo hace en un solo paso y Edición ▸ Deshacer «Acelerar el tipeo» lo deshace entero. Sin tramos de tipeo de 2 s o más dice «No hay tramos de tipeo de 2 s o más.» y Acelerar queda apagado.
 
+**El análisis de la imagen en el editor** (I12; se recorre con la pestaña Cámara de I13)
+
+- Con Quitado elegido, la vista previa muestra Original hasta que la pestaña llega al 100 % y después la persona sin fondo; exportar antes espera y el archivo la tiene; la vista previa del GIF también. Con la hoja de exportar en GIF abierta mientras se prepara, la vista previa del GIF se rehace sola al llegar al 100 % y muestra la persona sin fondo.
+- «Cancelar la exportación» mientras espera la cámara: no aparece ningún aviso, el análisis sigue y la pestaña llega al 100 %. Exportar otra vez ya no espera.
+- Con el editor abierto y la persona ya sin fondo, borrar la carpeta `masks/` de `~/Library/Caches/dev.toma.Toma/Projects/<id>/` y cambiar Fondo a Original y de nuevo a Quitado: la pestaña vuelve a preparar el recorte y la persona aparece otra vez sin fondo; exportar sin cambiar nada espera a que se regenere.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

@@ -1961,6 +1961,17 @@
         }
       }
     },
+    "Couldn't prepare the camera: %@" : {
+      "comment" : "An alert: an export stopped because the camera's analysis (its background or its face) failed, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar la cámara: %@"
+          }
+        }
+      }
+    },
     "Couldn't recover %lld recordings" : {
       "localizations" : {
         "en" : {
@@ -8508,6 +8519,17 @@
         }
       }
     },
+    "its analysis was canceled" : {
+      "comment" : "Why the camera couldn't be prepared, after “Couldn't prepare the camera:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "se canceló su análisis"
+          }
+        }
+      }
+    },
     "its editor has changes that couldn't be saved" : {
       "comment" : "The library: why an action failed",
       "localizations" : {
@@ -8526,6 +8548,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "no se pudieron dibujar sus cuadros"
+          }
+        }
+      }
+    },
+    "its image couldn't be analyzed" : {
+      "comment" : "Why the camera couldn't be prepared, after “Couldn't prepare the camera:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se pudo analizar su imagen"
           }
         }
       }
@@ -8590,6 +8623,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "macOS puede volver a pedir permiso para grabar la pantalla cada mes. Es normal."
+          }
+        }
+      }
+    },
+    "one of its files can't be read" : {
+      "comment" : "Why the camera couldn't be prepared, after “Couldn't prepare the camera:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "no se puede leer uno de sus archivos"
           }
         }
       }
@@ -8844,6 +8888,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "no hay permiso"
+          }
+        }
+      }
+    },
+    "this Mac can't analyze its image" : {
+      "comment" : "Why the camera couldn't be prepared, after “Couldn't prepare the camera:”",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "esta Mac no puede analizar su imagen"
           }
         }
       }

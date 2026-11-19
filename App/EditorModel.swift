@@ -236,6 +236,9 @@ final class EditorModel {
     /// What an export does first, in order, before its exporter starts: each feature adds its own (for example, waiting
     /// for its analysis jobs with progress). One that answers `false` cancels the export, saying nothing of its own.
     var exportPreparations: [@MainActor (EditorModel) async -> Bool] = []
+    /// The camera's analysis (plan 2b decision 16): its masks and faces asked for, followed and handed to the preview, and
+    /// waited for by the export.
+    @ObservationIgnored private(set) lazy var image = EditorImage(model: self)
     /// The last `jobs.setRecording(_:)` told, so the next one goes after it and they arrive in order.
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
@@ -345,6 +348,7 @@ final class EditorModel {
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.exportPreferencesChanged() }
         }
+        exportPreparations.append { await $0.image.prepareExport($0) }
     }
 
     // MARK: - Opening
@@ -484,6 +488,7 @@ final class EditorModel {
         if previewSize(of: document) != size { showSessionRevision() }
         sessionChanged()
         makeMix(of: project, document: document, revision: revision)
+        image.opened(project: project, caches: session.caches, document: session.document)
     }
 
     /// The mix of the document as it opened, off the main thread: it reads where every audio segment ends. Playback
@@ -843,6 +848,7 @@ final class EditorModel {
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
             build(next, revision: session.revision)
+            image.documentChanged(next)
         }
         updateBanner()
     }
@@ -1423,6 +1429,7 @@ final class EditorModel {
         export?.cancel()
         exportFinishedTask?.cancel()
         tearDownPreview()
+        image.close()
         Task { [jobs] in await jobs.cancelAll() }
         session?.onChange = nil
         // Where it was last seen, for who looks at it once it closed.

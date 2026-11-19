@@ -82,6 +82,9 @@ final class ExportChoices {
 
     @ObservationIgnored private let project: LoadedProject
     @ObservationIgnored private let document: EditDocument
+    /// What the GIF's preview and estimate read of the analysis caches, as the export does (`EditorModel.analysis`):
+    /// the editor's when the sheet opened, then as it changes (`analysisChanged(_:)`).
+    @ObservationIgnored private var analysis: AnalysisInputs
     /// Where the preview starts if it is inside the range: the playhead, in output nanoseconds.
     @ObservationIgnored private let playhead: Int64
     /// The user chose a Range: changing Export As no longer moves it to the kind's default.
@@ -95,10 +98,11 @@ final class ExportChoices {
 
     init(
         document: EditDocument, project: LoadedProject, marks: TimelineMarks, playhead: Int64, remembered: ExportPreferences,
-        contentRatio: Double? = nil
+        contentRatio: Double? = nil, analysis: AnalysisInputs = .none
     ) {
         self.document = document
         self.project = project
+        self.analysis = analysis
         self.playhead = playhead
         aspect = document.aspect
         self.contentRatio = contentRatio
@@ -230,6 +234,14 @@ final class ExportChoices {
         }
     }
 
+    /// The editor's analysis is now `analysis` (a camera's mask or face arrived): the GIF's preview and estimate are made
+    /// again with it, as the export will draw. Nothing once the sheet ended.
+    func analysisChanged(_ analysis: AnalysisInputs) {
+        guard analysis != self.analysis else { return }
+        self.analysis = analysis
+        if let request = gifRequest { optionsChanged(to: request) }
+    }
+
     /// The sheet ended: the preview and the estimate under way are cancelled, and none is made again. The work holds
     /// these choices weakly, so they go, with the project and its package's open folder, as soon as it notices.
     func stop() {
@@ -238,13 +250,16 @@ final class ExportChoices {
     }
 
     private func makePreviewAndEstimate(for request: GIFRequest, generation current: Int) async {
-        let settings = request.settings
+        let settings = request.settings, analysis = analysis
         do {
-            let data = try await GIFEstimate.preview(project: project, document: document, settings: settings, playhead: playhead)
+            let data = try await GIFEstimate.preview(
+                project: project, document: document, settings: settings, playhead: playhead, analysis: analysis)
             guard current == generation, !Task.isCancelled else { return }
             preview = GIFPreviewImage(data, id: current)
             isMakingPreview = false
-            for try await result in GIFEstimate.estimates(project: project, document: document, settings: settings, preview: data) {
+            for try await result in GIFEstimate.estimates(
+                project: project, document: document, settings: settings, preview: data, analysis: analysis
+            ) {
                 guard current == generation, !Task.isCancelled else { return }
                 estimate = result
             }
@@ -541,7 +556,7 @@ extension EditorModel {
         guard canExport, let window, window.attachedSheet == nil, let session = panelSession, let project = exportProject else { return }
         let choices = ExportChoices(
             document: session.document, project: project, marks: timelineMarks, playhead: playheadNanoseconds,
-            remembered: SettingsStore().settings.export, contentRatio: contentRatio(of: session.document))
+            remembered: SettingsStore().settings.export, contentRatio: contentRatio(of: session.document), analysis: analysis)
         let host = NSHostingController(
             rootView: ExportSheet(choices: choices, model: self) { [weak self, weak window] export in
                 // The sheet is the window's only one: the save panel comes after it.
@@ -559,6 +574,13 @@ extension EditorModel {
         sheet.isReleasedWhenClosed = false
         sheet.contentViewController = host
         window.beginSheet(sheet)
+    }
+
+    /// The analysis changed (`EditorImage`): an export sheet over the window makes its GIF preview and estimate again with
+    /// it (`ExportChoices.analysisChanged(_:)`).
+    func exportSheetAnalysisChanged() {
+        (window?.attachedSheet?.contentViewController as? NSHostingController<ExportSheet>)?.rootView.choices
+            .analysisChanged(analysis)
     }
 
     /// The window closes with the export sheet over it (the library's Move to Trash, quitting): the sheet ends as Cancel
