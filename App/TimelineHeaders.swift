@@ -3,7 +3,8 @@ import AppKit
 import AppSupport
 import ProjectFormat
 
-/// The header of a track (design §5.5): its icon and name, and on an audio track the Mute button.
+/// The header of a track (design §5.5): its icon and name, and on an audio track the Mute button under the name, both
+/// lines centered in the row as one block.
 final class TrackHeaderView: NSView {
     let track: TimelineTrack
     var onMute: (Bool) -> Void = { _ in }
@@ -102,11 +103,12 @@ final class TrackHeaderView: NSView {
         let height = bounds.height
         // An audio track has its name on top and Mute under it; the others, the name in the middle.
         let two = track == .camera && !subtitle.stringValue.isEmpty
-        let line = mute == nil ? (two ? 3 : (height - 14) / 2) : 4
+        let line = (mute != nil ? (height - 31) / 2 : two ? (height - 27) / 2 : (height - 14) / 2).rounded()
         icon.frame = CGRect(x: 8, y: line, width: 14, height: 14)
         name.frame = CGRect(x: 26, y: line, width: bounds.width - 30, height: 14)
         subtitle.frame = CGRect(x: 26, y: line + 14, width: bounds.width - 30, height: 13)
-        mute?.frame = CGRect(x: 24, y: line + 15, width: 18, height: 15)
+        // Its symbol's left edge under the name's first letter.
+        mute?.frame = CGRect(x: 25, y: line + 16, width: 18, height: 15)
         separator.frame = CGRect(x: 0, y: height - 1, width: bounds.width, height: 1)
     }
 

@@ -21,6 +21,7 @@ struct CursorTab: View {
                     Text("Toma").tag(CursorLook.toma)
                 }
                 .pickerStyle(.segmented)
+                .panelTitled("Style")
                 if !model.hasCursorImages {
                     Text("This recording didn't save the cursor's shape: Toma's arrow is used.")
                         .font(.caption)

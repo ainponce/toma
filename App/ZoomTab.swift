@@ -147,6 +147,7 @@ private struct SelectedZoomCard: View {
                 Text("Instant").tag(true)
             }
             .pickerStyle(.segmented)
+            .panelTitled("Animation")
             Button("Delete Zoom", role: .destructive) { model.deleteZoom(region.id) }
         }
     }

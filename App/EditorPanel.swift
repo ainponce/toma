@@ -95,17 +95,8 @@ struct EditorPanel: View {
                     withAnimation(.panel(Motion.selector, reduceMotion: reduceMotion)) { model.panelTab = item }
                 } label: {
                     Image(systemName: item.symbol)
-                        .frame(maxWidth: .infinity, minHeight: 28)
-                        .contentShape(Rectangle())
-                        .background {
-                            if tab == item {
-                                RoundedRectangle(cornerRadius: 6)
-                                    .fill(Color.primary.opacity(0.12))
-                                    .matchedGeometryEffect(id: "indicator", in: indicator)
-                            }
-                        }
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PanelTabStyle(isSelected: tab == item, indicator: indicator))
                 .keyboardShortcut(KeyEquivalent(Character(String(item.rawValue + 1))), modifiers: .command)
                 .help(Text(item.title))
                 .accessibilityLabel(Text(item.title))
@@ -127,5 +118,44 @@ struct EditorPanel: View {
             case .audio: AudioTab(model: model, audio: document.audio)
             }
         }
+    }
+}
+
+/// A tab of the panel: its symbol, in the accent color on the indicator when it is the one shown (the indicator moves
+/// between tabs by `Motion.selector`); the others secondary, with a wash while the mouse is over them or they are pressed.
+private struct PanelTabStyle: ButtonStyle {
+    let isSelected: Bool
+    let indicator: Namespace.ID
+
+    func makeBody(configuration: Configuration) -> some View {
+        PanelTabLabel(configuration: configuration, isSelected: isSelected, indicator: indicator)
+    }
+}
+
+private struct PanelTabLabel: View {
+    let configuration: ButtonStyleConfiguration
+    let isSelected: Bool
+    let indicator: Namespace.ID
+    @State private var hovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        configuration.label
+            .font(.system(size: 14))
+            .foregroundStyle(isSelected ? AnyShapeStyle(.tint) : AnyShapeStyle(.secondary))
+            .frame(maxWidth: .infinity, minHeight: 30)
+            .contentShape(Rectangle())
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.accentColor.opacity(0.16))
+                        .matchedGeometryEffect(id: "indicator", in: indicator)
+                } else if hovering || configuration.isPressed {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.primary.opacity(configuration.isPressed ? 0.12 : 0.06))
+                }
+            }
+            .onHover { hovering = $0 }
+            .animation(.panel(Motion.hover, reduceMotion: reduceMotion), value: hovering)
     }
 }

@@ -313,9 +313,12 @@ final class ClipLayer: CALayer {
     }
 }
 
-/// A zoom block: filled, its depth written on it, and an automatic one lighter, with a dotted border and an "A".
+/// A zoom block: tinted with its hue, a border of it and a lighter top edge, its depth written on it; an automatic one
+/// lighter, with the symbol of the automatic zoom (✦) before its depth.
 final class BlockLayer: CAShapeLayer {
     let label = CATextLayer()
+    let icon = CALayer()
+    let highlight = CALayer()
     var labelText: String?
     var drawnSize = CGSize.zero
     var automatic: Bool?
@@ -324,6 +327,9 @@ final class BlockLayer: CAShapeLayer {
         super.init()
         lineWidth = 1
         TimelineText.setUp(label, size: 10, weight: .semibold)
+        icon.contentsGravity = .resizeAspect
+        addSublayer(highlight)
+        addSublayer(icon)
         addSublayer(label)
     }
 
@@ -337,11 +343,12 @@ final class BlockLayer: CAShapeLayer {
     }
 }
 
-/// A layout block of the Camera track: filled, with the layout's symbol and its name; an instant one has square corners
-/// where a smooth one has rounded ones (design §5.5).
+/// A layout block of the Camera track: tinted like a zoom block, with the layout's symbol and its name; an instant one
+/// has square corners where a smooth one has rounded ones (design §5.5).
 final class LayoutBlockLayer: CAShapeLayer {
     let icon = CALayer()
     let label = CATextLayer()
+    let highlight = CALayer()
     var labelText: String?
     var symbol: String?
     var drawnShape: (size: CGSize, instant: Bool)?
@@ -350,6 +357,7 @@ final class LayoutBlockLayer: CAShapeLayer {
         super.init()
         TimelineText.setUp(label, size: 10, weight: .semibold)
         icon.contentsGravity = .resizeAspect
+        addSublayer(highlight)
         addSublayer(icon)
         addSublayer(label)
     }
@@ -367,12 +375,14 @@ final class LayoutBlockLayer: CAShapeLayer {
 /// A stretch of the Screen track, with the screen's name.
 final class SpanLayer: CALayer {
     let label = CATextLayer()
+    let highlight = CALayer()
     var labelText: String?
 
     override init() {
         super.init()
         cornerRadius = 4
         TimelineText.setUp(label, size: 10, weight: .medium)
+        addSublayer(highlight)
         addSublayer(label)
     }
 
@@ -387,7 +397,9 @@ final class SpanLayer: CALayer {
 }
 
 /// Draws the rows of the timeline under the ruler (design §5.5): Video, with thumbnails of the screen, its clips and the
-/// hatching where the video could not be read; Screen; Zoom; Camera; and a waveform for each audio track. One layer per
+/// hatching where the video could not be read; Screen; Zoom; Camera; and for each audio track its waveform over a region
+/// per clip. The items are tinted with their track's hue, a border of it and a lighter top edge; selected, a stronger fill
+/// and an outline in the accent color; all of it plain layers, without shadows or offscreen passes. One layer per
 /// item in sight, taken from a pool and given back when it leaves it, so scrolling and scaling an hour with hundreds of
 /// clips and blocks touches only what is in sight.
 ///
@@ -411,6 +423,8 @@ final class TimelineTracks {
     private let spans: LayerPool<SpanLayer>
     private let layouts: LayerPool<LayoutBlockLayer>
     private let diamonds: LayerPool<CALayer>
+    /// Under each audio track's waveform, a region for each clip in sight, so the row reads as sound.
+    private let audioClips: LayerPool<CALayer>
     private let cameraNotice = CATextLayer()
     private var waveforms: [String: CAShapeLayer] = [:]
 
@@ -476,6 +490,14 @@ final class TimelineTracks {
             diamond.zPosition = 2
             return diamond
         }
+        audioClips = LayerPool(parent: rows) {
+            let region = CALayer()
+            region.cornerRadius = 4
+            region.borderWidth = 1
+            // Under the waveforms.
+            region.zPosition = -1
+            return region
+        }
         TimelineText.setUp(cameraNotice, size: 10, weight: .regular)
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
@@ -498,7 +520,9 @@ final class TimelineTracks {
         }
         separators.path = lines
 
-        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin] { pool() }
+        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin, audioClips.begin] {
+            pool()
+        }
         var wanted: Set<ThumbnailKey> = []
         var shownWaveforms: Set<String> = []
         for row in geometry.rows {
@@ -513,7 +537,7 @@ final class TimelineTracks {
                 shownWaveforms.insert(id)
             }
         }
-        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end] { pool() }
+        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }
         for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
             waveform.removeFromSuperlayer()
             waveforms[id] = nil
@@ -534,7 +558,10 @@ final class TimelineTracks {
 
     /// Forgets the layers, so the next update makes them again with new colors.
     func reset() {
-        for pool in [clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, layouts.removeAll, diamonds.removeAll] {
+        for pool in [
+            clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, layouts.removeAll,
+            diamonds.removeAll, audioClips.removeAll,
+        ] {
             pool()
         }
         tileKeys = [:]
@@ -555,7 +582,7 @@ final class TimelineTracks {
     /// How many layers the rows have in sight now, for the benchmark.
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
-            + layouts.shownCount + diamonds.shownCount + waveforms.count
+            + layouts.shownCount + diamonds.shownCount + audioClips.shownCount + waveforms.count
     }
 
     // MARK: - Video
@@ -583,8 +610,8 @@ final class TimelineTracks {
             }
             place(clip, rect, isNew: isNew)
             let isSelected = selected.contains(item.id)
-            clip.borderColor = isSelected ? palette.selection : palette.contrastBorder
-            clip.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
+            clip.borderColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : palette.clipEdge)
+            clip.borderWidth = isSelected ? 2 : 1
             let text = item.info.speed == 1 ? nil : TimelineFormat.multiplier(item.info.speed)
             if clip.badgeText != text {
                 clip.badgeText = text
@@ -716,15 +743,16 @@ final class TimelineTracks {
             guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
             let (span, isNew) = spans.layer(item.id)
             if isNew {
-                span.backgroundColor = palette.screenFill
-                span.borderColor = palette.contrastBorder
-                span.label.foregroundColor = palette.screenText
+                span.label.foregroundColor = palette.screen.text
                 span.label.contentsScale = geometry.backingScale
+                span.highlight.backgroundColor = palette.highlight
             }
             place(span, rect, isNew: isNew)
             let isSelected = selected.contains(item.id)
-            span.borderColor = isSelected ? palette.selection : palette.contrastBorder
-            span.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
+            span.backgroundColor = isSelected ? palette.screen.selectedFill : palette.screen.fill
+            span.borderColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : palette.screen.stroke)
+            span.borderWidth = isSelected ? 2 : 1
+            Self.placeHighlight(span.highlight, width: rect.width, radius: 4, geometry)
             if span.labelText != item.info.name {
                 span.labelText = item.info.name
                 span.label.string = item.info.name
@@ -744,17 +772,21 @@ final class TimelineTracks {
         content.zooms.forEach(from: lower, to: upper) { item in
             guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
             let (block, isNew) = blocks.layer(item.id)
-            if isNew { block.label.contentsScale = geometry.backingScale }
+            if isNew {
+                block.label.contentsScale = geometry.backingScale
+                block.icon.contentsScale = geometry.backingScale
+                block.highlight.backgroundColor = palette.highlight
+            }
             let automatic = item.info.automatic
+            let tint = automatic ? palette.zoomAuto : palette.zoom
             if block.automatic != automatic || isNew {
                 block.automatic = automatic
-                block.fillColor = automatic ? palette.zoomAutoFill : palette.zoomFill
-                block.lineDashPattern = automatic ? [3, 2] : nil
-                block.label.foregroundColor = automatic ? palette.zoomAutoText : palette.zoomText
+                block.label.foregroundColor = tint.text
+                block.icon.contents = automatic ? Self.symbolImage("sparkles", scale: geometry.backingScale, color: tint.text) : nil
             }
             let isSelected = selected.contains(item.id)
-            block.strokeColor = isSelected ? palette.selection
-                : automatic ? palette.zoomStroke : (palette.increaseContrast ? palette.contrastBorder : nil)
+            block.fillColor = isSelected ? tint.selectedFill : tint.fill
+            block.strokeColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : tint.stroke)
             block.lineWidth = isSelected ? 2 : 1
             let previousPath = block.path
             place(block, rect, isNew: isNew)
@@ -771,14 +803,20 @@ final class TimelineTracks {
                     block.add(morph, forKey: "settleShape")
                 }
             }
-            let text = (automatic ? "A " : "") + TimelineFormat.multiplier(item.info.depth)
+            let text = TimelineFormat.multiplier(item.info.depth)
             if block.labelText != text {
                 block.labelText = text
                 block.label.string = text
             }
-            let left = max(5, -rect.minX + 5)
-            block.label.frame = CGRect(x: left, y: (height - 13) / 2, width: max(rect.width - left - 3, 0), height: 13)
+            // The depth (and an automatic block's symbol) stays at the left of what is in sight.
+            let left = max(6, -rect.minX + 6)
+            let icon = automatic && rect.width >= 36
+            block.icon.isHidden = !icon
+            block.icon.frame = CGRect(x: left, y: (height - 10) / 2, width: 10, height: 10)
+            let textLeft = icon ? left + 13 : left
+            block.label.frame = CGRect(x: textLeft, y: (height - 13) / 2, width: max(rect.width - textLeft - 3, 0), height: 13)
             block.label.isHidden = rect.width < 22
+            Self.placeHighlight(block.highlight, width: rect.width, radius: min(5, rect.width / 2, rect.height / 2), geometry)
         }
     }
 
@@ -798,8 +836,9 @@ final class TimelineTracks {
                 diamond.borderColor = palette.contrastBorder
             }
             let isSelected = selected.contains(item.id)
-            diamond.borderColor = isSelected ? palette.selection : palette.contrastBorder
-            diamond.borderWidth = isSelected ? 2 : (palette.increaseContrast ? 1 : 0)
+            // A ring of the timeline's background keeps it apart from a block under it.
+            diamond.borderColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : palette.background)
+            diamond.borderWidth = isSelected ? 2 : 1
             // Inside a block it is not seen while the block rules: dimmed, and its help says so (the view's tooltip).
             diamond.opacity = item.info.hiddenBy == nil ? 1 : Float(LayoutTrackRules.dimmedDiamondOpacity)
             diamond.bounds = CGRect(x: 0, y: 0, width: side, height: side)
@@ -837,11 +876,13 @@ final class TimelineTracks {
             if isNew {
                 block.label.contentsScale = geometry.backingScale
                 block.icon.contentsScale = geometry.backingScale
-                block.fillColor = palette.layoutFill
-                block.label.foregroundColor = palette.layoutText
+                block.label.foregroundColor = palette.layout.text
+                block.highlight.backgroundColor = palette.highlight
+                block.symbol = nil
             }
             let isSelected = selected.contains(item.id)
-            block.strokeColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : nil)
+            block.fillColor = isSelected ? palette.layout.selectedFill : palette.layout.fill
+            block.strokeColor = isSelected ? palette.selection : (palette.increaseContrast ? palette.contrastBorder : palette.layout.stroke)
             block.lineWidth = isSelected ? 2 : 1
             let previousPath = block.path
             place(block, rect, isNew: isNew)
@@ -862,7 +903,7 @@ final class TimelineTracks {
             let symbol = LayoutTrackRules.symbol(item.info.kind, orientation: content.splitOrientation)
             if block.symbol != symbol {
                 block.symbol = symbol
-                block.icon.contents = Self.symbolImage(symbol, scale: geometry.backingScale)
+                block.icon.contents = Self.symbolImage(symbol, scale: geometry.backingScale, color: palette.layout.text)
             }
             let text = Self.title(item.info, orientation: content.splitOrientation)
             if block.labelText != text {
@@ -874,7 +915,17 @@ final class TimelineTracks {
             block.icon.isHidden = rect.width < 22
             block.label.frame = CGRect(x: left + 16, y: (height - 13) / 2, width: max(rect.width - left - 19, 0), height: 13)
             block.label.isHidden = rect.width < 60
+            Self.placeHighlight(
+                block.highlight, width: rect.width, radius: item.info.instant ? 0 : min(5, rect.width / 2, rect.height / 2), geometry)
         }
+    }
+
+    /// The lighter top edge of a tinted item `width` wide with corners of `radius`: a line of a pixel, inside its border
+    /// and between its corners.
+    private static func placeHighlight(_ highlight: CALayer, width: Double, radius: Double, _ geometry: TimelineGeometry) {
+        let inset = max(radius, 1)
+        highlight.isHidden = width < 2 * inset + 2
+        highlight.frame = CGRect(x: inset, y: 1, width: max(width - 2 * inset, 0), height: 1 / geometry.backingScale)
     }
 
     /// The name of a block's layout, with the side of the camera in a split (design §5.5).
@@ -890,12 +941,13 @@ final class TimelineTracks {
 
     private static var symbols: [String: CGImage] = [:]
 
-    /// The symbol in white, at the block's text size, for a display of `scale` pixels per point.
-    private static func symbolImage(_ name: String, scale: Double) -> CGImage? {
-        let key = "\(name)@\(scale)"
+    /// The symbol in `color`, at the block's text size, for a display of `scale` pixels per point.
+    private static func symbolImage(_ name: String, scale: Double, color: CGColor) -> CGImage? {
+        let key = "\(name)@\(scale) \(color.components ?? [])"
         if let image = symbols[key] { return image }
+        let tint = NSColor(cgColor: color) ?? .white
         let configuration = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold)
-            .applying(NSImage.SymbolConfiguration(paletteColors: [.white]))
+            .applying(NSImage.SymbolConfiguration(paletteColors: [tint]))
         guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(configuration)
         else { return nil }
         var rect = CGRect(origin: .zero, size: image.size)
@@ -921,16 +973,31 @@ final class TimelineTracks {
             waveforms[id] = shape
         }
         let track = content.audio[id]
-        shape.fillColor = track?.isMicrophone == false ? palette.systemAudio : palette.microphone
+        let isMicrophone = track?.isMicrophone != false
+        shape.fillColor = isMicrophone ? palette.microphone : palette.systemAudio
         shape.opacity = track?.muted == true ? 0.5 : 1
-        let height = row.height - 4
-        shape.frame = CGRect(x: 0, y: row.top + 2, width: geometry.areaWidth, height: height)
+        let top = row.top + 2, height = row.height - 4
+        shape.frame = CGRect(x: 0, y: top, width: geometry.areaWidth, height: height)
+        // A region under the waveform for each clip in sight, tinted as the track.
+        let tint = isMicrophone ? palette.microphoneClip : palette.systemAudioClip
+        let (lower, upper) = geometry.visibleOutput
+        content.clips.forEach(from: lower, to: upper) { item in
+            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
+            let (region, isNew) = audioClips.layer("\(id) \(item.id)")
+            if isNew {
+                region.backgroundColor = tint.fill
+                region.borderColor = palette.increaseContrast ? palette.contrastBorder : tint.stroke
+            }
+            region.opacity = shape.opacity
+            place(region, rect, isNew: isNew)
+        }
         guard let track, let levels = waveformLevels[id] else {
             shape.path = nil
             return
         }
         let gain = Float(track.muted ? 0 : min(max(track.gain, 0), 2))
-        let middle = height / 2, half = height / 2
+        // Inside the regions, clear of their borders.
+        let middle = height / 2, half = height / 2 - 3
         let clips = content.clips.items
         let columns = Int(geometry.areaWidth.rounded(.up))
         var tops: [CGPoint] = []

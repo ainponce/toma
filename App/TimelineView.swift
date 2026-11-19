@@ -76,11 +76,18 @@ struct TimelineGeometry {
 /// The timeline's colors in an appearance (the system's, which also follow Increase Contrast), and whether items get a
 /// 1 pt border (Increase Contrast, design §5.10).
 struct TimelinePalette {
+    /// The colors of the items of one track: a fill tinted with the track's hue, stronger when selected; a 1 pt border of
+    /// the hue; and the text (and symbol) over them, the hue lightened in dark and darkened in light.
+    struct Tint {
+        var fill, selectedFill, stroke, text: CGColor
+    }
+
     var background, rulerBackground, separator, tick, label: CGColor
     var clipFill, badgeFill, badgeText, hatchStroke, hatchFill: CGColor
-    var zoomFill, zoomAutoFill, zoomStroke, zoomText, zoomAutoText: CGColor
-    var layoutFill, layoutText: CGColor
-    var screenFill, screenText, camera, microphone, systemAudio: CGColor
+    /// The hairline around a clip of the Video track, and the lighter top edge of the tinted items.
+    var clipEdge, highlight: CGColor
+    var zoom, zoomAuto, layout, screen, microphoneClip, systemAudioClip: Tint
+    var camera, microphone, systemAudio: CGColor
     var marker, marksFill, marksEdge, playhead, contrastBorder: CGColor
     /// The selection's outline, the hovered item's wash and the label of a drag.
     var selection, hoverFill, dragLabelFill, dragLabelText: CGColor
@@ -90,6 +97,16 @@ struct TimelinePalette {
     static func make(_ appearance: NSAppearance) -> TimelinePalette {
         var palette: TimelinePalette?
         appearance.performAsCurrentDrawingAppearance {
+            let dark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            func tint(_ hue: NSColor, fill: CGFloat, stroke: CGFloat) -> Tint {
+                let resolved = hue.usingColorSpace(.sRGB) ?? hue
+                let text = dark
+                    ? resolved.blended(withFraction: 0.6, of: .white) ?? .white
+                    : resolved.blended(withFraction: 0.5, of: .black) ?? .black
+                return Tint(
+                    fill: resolved.withAlphaComponent(fill).cgColor, selectedFill: resolved.withAlphaComponent(fill + 0.16).cgColor,
+                    stroke: resolved.withAlphaComponent(stroke).cgColor, text: text.cgColor)
+            }
             palette = TimelinePalette(
                 background: NSColor.controlBackgroundColor.cgColor, rulerBackground: NSColor.windowBackgroundColor.cgColor,
                 separator: NSColor.separatorColor.cgColor, tick: NSColor.tertiaryLabelColor.cgColor,
@@ -97,13 +114,16 @@ struct TimelinePalette {
                 clipFill: NSColor.systemGray.withAlphaComponent(0.45).cgColor, badgeFill: NSColor.black.withAlphaComponent(0.6).cgColor,
                 badgeText: NSColor.white.cgColor, hatchStroke: NSColor.systemOrange.cgColor,
                 hatchFill: NSColor.systemOrange.withAlphaComponent(0.18).cgColor,
-                zoomFill: NSColor.systemPurple.withAlphaComponent(0.85).cgColor,
-                zoomAutoFill: NSColor.systemPurple.withAlphaComponent(0.28).cgColor, zoomStroke: NSColor.systemPurple.cgColor,
-                zoomText: NSColor.white.cgColor, zoomAutoText: NSColor.labelColor.cgColor,
-                layoutFill: NSColor.systemIndigo.withAlphaComponent(0.85).cgColor, layoutText: NSColor.white.cgColor,
-                screenFill: NSColor.systemTeal.withAlphaComponent(0.35).cgColor, screenText: NSColor.labelColor.cgColor,
-                camera: NSColor.systemPink.cgColor, microphone: NSColor.systemGreen.withAlphaComponent(0.85).cgColor,
-                systemAudio: NSColor.systemBlue.withAlphaComponent(0.85).cgColor, marker: NSColor.systemOrange.cgColor,
+                clipEdge: (dark ? NSColor.white.withAlphaComponent(0.14) : NSColor.black.withAlphaComponent(0.16)).cgColor,
+                highlight: (dark ? NSColor.white.withAlphaComponent(0.12) : NSColor.white.withAlphaComponent(0.55)).cgColor,
+                zoom: tint(.systemTeal, fill: dark ? 0.30 : 0.24, stroke: dark ? 0.62 : 0.7),
+                zoomAuto: tint(.systemTeal, fill: dark ? 0.15 : 0.16, stroke: dark ? 0.40 : 0.5),
+                layout: tint(.systemPink, fill: dark ? 0.28 : 0.20, stroke: dark ? 0.58 : 0.6),
+                screen: tint(.systemGray, fill: dark ? 0.26 : 0.18, stroke: dark ? 0.5 : 0.5),
+                microphoneClip: tint(.systemGreen, fill: dark ? 0.13 : 0.12, stroke: dark ? 0.34 : 0.4),
+                systemAudioClip: tint(.systemBlue, fill: dark ? 0.14 : 0.10, stroke: dark ? 0.36 : 0.4),
+                camera: NSColor.systemPink.cgColor, microphone: NSColor.systemGreen.withAlphaComponent(dark ? 0.9 : 0.8).cgColor,
+                systemAudio: NSColor.systemBlue.withAlphaComponent(dark ? 0.9 : 0.8).cgColor, marker: NSColor.systemOrange.cgColor,
                 marksFill: NSColor.controlAccentColor.withAlphaComponent(0.22).cgColor, marksEdge: NSColor.controlAccentColor.cgColor,
                 playhead: NSColor.systemRed.cgColor, contrastBorder: NSColor.labelColor.cgColor,
                 selection: NSColor.controlAccentColor.cgColor, hoverFill: NSColor.labelColor.withAlphaComponent(0.12).cgColor,

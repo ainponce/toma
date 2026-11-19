@@ -28,6 +28,7 @@ struct FrameTab: View {
                     Text("Dark").tag(FrameAppearance.dark)
                 }
                 .pickerStyle(.segmented)
+                .panelTitled("Appearance")
                 TextField(
                     "Title", text: Binding(get: { title }, set: { set(.macWindow(appearance: appearance, title: $0, buttons: buttons)) })
                 )

@@ -6,7 +6,9 @@ import ProjectFormat
 
 /// The timeline's track bar (design §5.1 and §5.5), 32 pt over the ruler: on the left Split, the speed menu and Add Zoom;
 /// on the right Snapping, the scale (− slider +) and Fit to Window. It holds no state of the document: the controller says
-/// what is enabled and the speed shown, and each control calls back.
+/// what is enabled and the speed shown, and each control calls back. Its controls are the accessory bar's, each as wide as
+/// its label needs (none is cut): the actions and the menus with their bezel; Snapping with one only while it is on, its
+/// symbol then in the accent color; the scale's −, + and Fit to Window quiet until the mouse is over them.
 @MainActor
 final class TimelineBar: NSView {
     static let height = 32.0
@@ -44,8 +46,7 @@ final class TimelineBar: NSView {
         addSubview(separator)
         configure(split, symbol: "scissors", title: String(localized: "Split"), action: #selector(splitClicked))
         configure(addZoom, symbol: "plus.magnifyingglass", title: String(localized: "Add Zoom"), action: #selector(addZoomClicked))
-        addLayout.controlSize = .small
-        addLayout.bezelStyle = .texturedRounded
+        Self.style(addLayout)
         addLayout.setAccessibilityLabel(String(localized: "Add Layout"))
         addLayout.toolTip = String(localized: "Add Layout")
         addLayout.addItem(withTitle: String(localized: "Add Layout"))
@@ -58,14 +59,17 @@ final class TimelineBar: NSView {
             addLayout.menu?.addItem(item)
         }
         addLayout.isHidden = true
-        configure(snapping, symbol: "magnet", title: String(localized: "Snapping"), action: #selector(snappingClicked))
+        configure(snapping, symbol: "arrow.right.and.line.vertical.and.arrow.left", title: String(localized: "Snapping"), action: #selector(snappingClicked))
         snapping.setButtonType(.pushOnPushOff)
+        snapping.bezelStyle = .accessoryBar
+        snapping.alternateImage = snapping.image
         snapping.state = .on
+        showSnapping()
         configure(smaller, symbol: "minus", title: String(localized: "Zoom Out"), action: #selector(smallerClicked), iconOnly: true)
         configure(larger, symbol: "plus", title: String(localized: "Zoom In"), action: #selector(largerClicked), iconOnly: true)
         configure(fit, symbol: "arrow.left.and.right", title: String(localized: "Fit to Window"), action: #selector(fitClicked), iconOnly: true)
-        speed.controlSize = .small
-        speed.bezelStyle = .texturedRounded
+        for quiet in [smaller, larger, fit, snapping] { quiet.showsBorderOnlyWhileMouseInside = true }
+        Self.style(speed)
         speed.setAccessibilityLabel(String(localized: "Speed"))
         speed.toolTip = String(localized: "Speed")
         slider.controlSize = .small
@@ -83,10 +87,10 @@ final class TimelineBar: NSView {
     }
 
     private func configure(_ button: NSButton, symbol: String, title: String, action: Selector, iconOnly: Bool = false) {
-        button.bezelStyle = .texturedRounded
-        button.controlSize = .small
+        Self.style(button)
         button.image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)
         button.imagePosition = iconOnly ? .imageOnly : .imageLeading
+        button.imageHugsTitle = true
         button.title = iconOnly ? "" : title
         button.toolTip = title
         button.setAccessibilityLabel(title)
@@ -94,29 +98,52 @@ final class TimelineBar: NSView {
         button.action = action
     }
 
+    /// The accessory bar's look, small.
+    private static func style(_ button: NSButton) {
+        button.bezelStyle = .accessoryBarAction
+        button.controlSize = .small
+    }
+
     override var isFlipped: Bool { true }
+
+    /// As wide as `button`'s title and symbol need, at least `minimum`; a pull-down menu by its title (its first item),
+    /// not by the widest of its items, and room for its arrow.
+    private static func width(_ button: NSButton, minimum: Double) -> Double {
+        guard let popUp = button as? NSPopUpButton else { return max(ceil(button.intrinsicContentSize.width) + 6, minimum) }
+        let item = popUp.itemArray.first
+        let font = popUp.font ?? .systemFont(ofSize: NSFont.smallSystemFontSize)
+        let text = ((item?.title ?? "") as NSString).size(withAttributes: [.font: font]).width
+        let image = item?.image.map { $0.size.width + 5 } ?? 0
+        return max(ceil(text + image + 30), minimum)
+    }
 
     override func layout() {
         super.layout()
         separator.frame = NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
         let y = (bounds.height - 22) / 2
         var x = 8.0
-        for (view, width) in [(split, 84.0), (speed, 72), (addZoom, 104), (addLayout, 118)] as [(NSView, Double)] {
+        for (view, minimum) in [(split, 60.0), (speed, 52), (addZoom, 80), (addLayout, 80)] as [(NSButton, Double)] {
+            guard !view.isHidden else { continue }
+            let width = Self.width(view, minimum: minimum)
             view.frame = NSRect(x: x, y: y, width: width, height: 22)
             x += width + 6
         }
         var right = bounds.width - 8
-        for (view, width) in [(fit, 28.0), (larger, 26), (slider, 110), (smaller, 26), (snapping, 96)] as [(NSView, Double)] {
+        for (view, width) in [(fit, 26.0), (larger, 24), (slider, 110), (smaller, 24)] as [(NSView, Double)] {
             right -= width
             view.frame = NSRect(x: right, y: y, width: width, height: 22)
-            right -= 4
+            right -= 2
         }
+        right -= 8
+        let snappingWidth = Self.width(snapping, minimum: 60)
+        snapping.frame = NSRect(x: right - snappingWidth, y: y, width: snappingWidth, height: 22)
     }
 
     // MARK: - State
 
     /// Enables the controls that edit (`canEdit`), and shows `speed` (`nil`: none, or mixed) in the speed menu.
     func setEnabled(_ canEdit: Bool, hasClip: Bool, hasCamera: Bool = false) {
+        if addLayout.isHidden == hasCamera { needsLayout = true }
         addLayout.isHidden = !hasCamera
         addLayout.isEnabled = canEdit && hasCamera
         split.isEnabled = canEdit
@@ -130,6 +157,7 @@ final class TimelineBar: NSView {
         shownSpeed = .some(value)
         speed.removeAllItems()
         speed.addItem(withTitle: value.map { TimelineFormat.multiplier($0) } ?? "—")
+        needsLayout = true
         guard let menu = speed.menu else { return }
         for preset in SequenceCommands.speedPresets {
             let item = NSMenuItem(title: TimelineFormat.multiplier(preset), action: #selector(speedChosen(_:)), keyEquivalent: "")
@@ -156,6 +184,12 @@ final class TimelineBar: NSView {
 
     func setSnapping(_ on: Bool) {
         snapping.state = on ? .on : .off
+        showSnapping()
+    }
+
+    /// On, the magnet in the accent color; off, as the other symbols.
+    private func showSnapping() {
+        snapping.contentTintColor = snapping.state == .on ? .controlAccentColor : nil
     }
 
     /// The scale is `scale` now, in a range that starts at `fit`.
@@ -177,7 +211,10 @@ final class TimelineBar: NSView {
     @objc private func layoutChosen(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let kind = LayoutKind(rawValue: raw) { onAddLayout(kind) }
     }
-    @objc private func snappingClicked() { onSnapping(snapping.state == .on) }
+    @objc private func snappingClicked() {
+        showSnapping()
+        onSnapping(snapping.state == .on)
+    }
     @objc private func smallerClicked() { onZoomOut() }
     @objc private func largerClicked() { onZoomIn() }
     @objc private func fitClicked() { onFit() }

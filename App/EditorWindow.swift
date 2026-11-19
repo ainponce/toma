@@ -305,10 +305,14 @@ private struct EditorPreviewPane: View {
     let togglePanel: () -> Void
 
     var body: some View {
-        PreviewArea(model: model)
-            .toolbar(id: "editor") {
-                EditorToolbar(model: model, togglePanel: togglePanel)
-            }
+        let toolbar = EditorToolbar(model: model, togglePanel: togglePanel)
+        if #available(macOS 26, *) {
+            PreviewArea(model: model)
+                .toolbar(id: "editor") { TitledEditorToolbar(toolbar: toolbar) }
+        } else {
+            PreviewArea(model: model)
+                .toolbar(id: "editor") { toolbar }
+        }
     }
 }
 

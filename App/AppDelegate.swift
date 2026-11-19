@@ -471,6 +471,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case ("editor", let path?), ("export", let path?):
             let url = URL(fileURLWithPath: path).standardizedFileURL
             showEditor(for: url, take: nil)
+            // TOMA_SHOWCASE_TAB=<0-5> shows that tab of the panel; TOMA_SHOWCASE_SELECT=zoom selects the first zoom, `items`
+            // adds a zoom at 7 s and a Split block at the playhead (selected), `items-none` the same with nothing selected.
+            let environment = ProcessInfo.processInfo.environment
+            if environment["TOMA_SHOWCASE_TAB"] != nil || environment["TOMA_SHOWCASE_SELECT"] != nil {
+                Task {
+                    while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
+                    guard let model = editors[url]?.model else { return }
+                    if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
+                    if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
+                        model.selection = .zooms([id])
+                    }
+                    if environment["TOMA_SHOWCASE_SELECT"]?.hasPrefix("items") == true {
+                        model.addZoom(at: 7_000_000_000)
+                        model.addLayoutBlock(kind: .split)
+                        if environment["TOMA_SHOWCASE_SELECT"] == "items-none" { model.selection = nil }
+                    }
+                }
+            }
             guard surface == "export" else { return }
             Task {
                 let deadline = ContinuousClock.now + .seconds(30)
@@ -479,6 +497,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 try? await Task.sleep(for: .seconds(1))
                 editors[url]?.model.openExportSheet()
+                // TOMA_SHOWCASE_EXPORT=gif shows the sheet's GIF.
+                if environment["TOMA_SHOWCASE_EXPORT"] == "gif" { editors[url]?.model.showcaseExportSheetGIF() }
             }
         default:
             print("unknown surface \(surface)")

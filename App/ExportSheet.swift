@@ -289,12 +289,12 @@ final class ExportChoices {
     }
 }
 
-/// The export sheet over the editor's window (design §5.6, 1c design §7.1): Export As (MP4 Video · Animated GIF), the
-/// format (shown) and the Range (Whole Video · Between the Marks, only with both marks); for an MP4, 1b's resolution with
-/// "Higher than the recording", frames per second and quality, and its estimated size; for a GIF, the preview with
-/// Actual Size beside its options (size, frames per second, quality, dithering, loop forever), the estimate and its
-/// warnings, and "GIFs have no sound."; then "Export…", which goes on to the save panel. A range shorter than a frame
-/// disables it.
+/// The export sheet over the editor's window (design §5.6, 1c design §7.1), under "Export" and the project's name: Export
+/// As (MP4 Video · Animated GIF), the format (shown) and the Range (Whole Video · Between the Marks, only with both marks);
+/// for an MP4, 1b's resolution (a segmented control, "Higher than the recording" for the chosen one), frames per second and
+/// quality, and its estimated size; for a GIF, the preview with Actual Size beside its options (size, frames per second,
+/// quality, dithering, loop forever), the estimate and its warnings, and "GIFs have no sound."; then, beside the estimate,
+/// "Export…", which goes on to the save panel. A range shorter than a frame disables it.
 struct ExportSheet: View {
     @Bindable var choices: ExportChoices
     let model: EditorModel
@@ -304,30 +304,20 @@ struct ExportSheet: View {
     var body: some View {
         let request = choices.gifRequest
         VStack(alignment: .leading, spacing: 0) {
-            Text("Export")
-                .font(.headline)
-                .padding([.top, .horizontal], 20)
-            Form {
-                Picker("Export As", selection: $choices.kind) {
-                    Text("MP4 Video", comment: "The export sheet: Export As a video").tag(ExportKind.mp4)
-                    Text("Animated GIF", comment: "The export sheet: Export As a GIF").tag(ExportKind.gif)
-                }
-                .pickerStyle(.segmented)
-                LabeledContent("Format") {
-                    Text(FormatMenu.title(choices.aspect))
-                }
-                Picker("Range", selection: Binding(get: { choices.rangeChoice }, set: { choices.chooseRange($0) })) {
-                    Text("Whole Video", comment: "The export sheet's Range: all of the video").tag(ExportChoices.RangeChoice.whole)
-                    if let marksTitle = choices.marksTitle {
-                        Text(verbatim: marksTitle).tag(ExportChoices.RangeChoice.marks)
-                    }
-                }
-                .disabled(choices.marked == nil)
-            }
-            .formStyle(.grouped)
+            header
             switch choices.kind {
-            case .mp4: mp4Options
-            case .gif: gifOptions
+            case .mp4:
+                // One form: its sections apart by the system's spacing, not two forms' margins.
+                Form {
+                    whatSection
+                    mp4Section
+                }
+                .formStyle(.grouped)
+            case .gif:
+                Form { whatSection }
+                    .formStyle(.grouped)
+                gifOptions
+                    .padding(.top, -12)
             }
             footer
         }
@@ -343,14 +333,61 @@ struct ExportSheet: View {
         }
     }
 
-    private var mp4Options: some View {
-        Form {
-            Picker("Resolution", selection: $choices.resolution) {
-                ForEach(ExportResolution.allCases, id: \.self) { resolution in
-                    resolutionLabel(resolution).tag(resolution)
+    /// "Export", and under it the project's name.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Export")
+                .font(.headline)
+            Text(verbatim: model.name)
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .padding([.top, .horizontal], 20)
+    }
+
+    /// What is exported: Export As, the format and the Range (with how to mark a part, while there are no marks).
+    private var whatSection: some View {
+        Section {
+            Picker("Export As", selection: $choices.kind) {
+                Text("MP4 Video", comment: "The export sheet: Export As a video").tag(ExportKind.mp4)
+                Text("Animated GIF", comment: "The export sheet: Export As a GIF").tag(ExportKind.gif)
+            }
+            .pickerStyle(.segmented)
+            LabeledContent("Format") {
+                Text(FormatMenu.title(choices.aspect))
+            }
+            Picker(selection: Binding(get: { choices.rangeChoice }, set: { choices.chooseRange($0) })) {
+                Text("Whole Video", comment: "The export sheet's Range: all of the video").tag(ExportChoices.RangeChoice.whole)
+                if let marksTitle = choices.marksTitle {
+                    Text(verbatim: marksTitle).tag(ExportChoices.RangeChoice.marks)
+                }
+            } label: {
+                Text("Range")
+                if choices.marked == nil {
+                    Text("To export a part, mark it with I and O.", comment: "The export sheet: under Range, while the timeline has no marks")
                 }
             }
-            .pickerStyle(.radioGroup)
+            .disabled(choices.marked == nil)
+        }
+    }
+
+    /// The MP4's resolution (a segmented control, "Higher than the recording" under its name for the chosen one only),
+    /// frames per second and quality.
+    private var mp4Section: some View {
+        Section {
+            Picker(selection: $choices.resolution) {
+                ForEach(ExportResolution.allCases, id: \.self) { resolution in
+                    Text(verbatim: Self.name(resolution)).tag(resolution)
+                }
+            } label: {
+                Text("Resolution")
+                if choices.exceedsRecording(choices.resolution) {
+                    Text("Higher than the recording", comment: "The export sheet: beside a resolution above what was recorded of the screen")
+                }
+            }
+            .pickerStyle(.segmented)
             Picker("Frame Rate", selection: $choices.framesPerSecond) {
                 ForEach(StyleCommands.frameRates, id: \.self) { fps in
                     Text(fps, format: .number).tag(fps)
@@ -363,14 +400,14 @@ struct ExportSheet: View {
             }
             .pickerStyle(.segmented)
         }
-        .formStyle(.grouped)
     }
 
     private var gifOptions: some View {
         HStack(alignment: .top, spacing: 0) {
+            // Its top level with the options' section.
             GIFPreviewBox(choices: choices)
                 .padding(.leading, 20)
-                .padding(.top, 10)
+                .padding(.top, 21)
             Form {
                 Picker("Size", selection: $choices.gifLongSide) {
                     ForEach(GIFSettings.longSides, id: \.self) { longSide in
@@ -402,54 +439,67 @@ struct ExportSheet: View {
         }
     }
 
+    /// What there is to say about the export (a range too short, the GIF's warnings, that a GIF has no sound), then one
+    /// row: the estimate on the left, Cancel and Export… on the right.
     private var footer: some View {
         VStack(alignment: .leading, spacing: 6) {
             if !choices.lastsAFrame {
-                Text("The range has to last at least one frame.", comment: "The export sheet: a range shorter than a frame; Export is disabled")
-                    .foregroundStyle(.red)
-            } else if choices.kind == .mp4 {
-                Text("About \(choices.estimatedSize)", comment: "The export sheet: the MP4's estimated size, as “120 MB”")
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-            } else if !choices.estimateFailed {
-                Group {
-                    if let text = choices.estimateText {
-                        Text(verbatim: text)
-                    } else {
-                        Text("Calculating…", comment: "The export sheet: while the GIF's size is being estimated")
-                    }
+                Label {
+                    Text("The range has to last at least one frame.", comment: "The export sheet: a range shorter than a frame; Export is disabled")
+                } icon: {
+                    Image(systemName: "exclamationmark.triangle.fill")
                 }
-                .foregroundStyle(.secondary)
-                .monospacedDigit()
+                .foregroundStyle(.red)
+            } else if choices.kind == .gif, !choices.estimateFailed {
                 ForEach(choices.estimate?.warnings ?? [], id: \.self) { warning in
                     Label(ExportChoices.text(warning), systemImage: "exclamationmark.triangle")
                         .foregroundStyle(.secondary)
                 }
             }
             if choices.kind == .gif {
-                Text("GIFs have no sound.", comment: "The export sheet: a GIF exports no audio")
-                    .foregroundStyle(.secondary)
+                Label {
+                    Text("GIFs have no sound.", comment: "The export sheet: a GIF exports no audio")
+                } icon: {
+                    Image(systemName: "speaker.slash")
+                }
+                .foregroundStyle(.secondary)
             }
-            HStack {
-                Spacer()
+            HStack(spacing: 12) {
+                estimate
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+                Spacer(minLength: 12)
                 Button("Cancel", role: .cancel) { finish(false) }
                     .keyboardShortcut(.cancelAction)
                 Button("Export…") { finish(true) }
                     .keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent)
                     .disabled(!model.canExport || !choices.lastsAFrame)
             }
+            .controlSize(.large)
             .padding(.top, 6)
         }
         .fixedSize(horizontal: false, vertical: true)
         .padding([.bottom, .horizontal], 20)
+        .padding(.top, 4)
     }
 
-    private func resolutionLabel(_ resolution: ExportResolution) -> some View {
-        HStack(spacing: 8) {
-            Text(verbatim: Self.name(resolution))
-            if choices.exceedsRecording(resolution) {
-                Text("Higher than the recording", comment: "The export sheet: beside a resolution above what was recorded of the screen")
-                    .foregroundStyle(.secondary)
+    /// "About 120 MB · 0:12" for an MP4; the GIF's estimate ("Calculating…" until there is one); nothing for a range too
+    /// short, or a GIF whose estimate failed.
+    @ViewBuilder
+    private var estimate: some View {
+        if !choices.lastsAFrame {
+            EmptyView()
+        } else if choices.kind == .mp4 {
+            Text("About \(choices.estimatedSize)", comment: "The export sheet: the MP4's estimated size, as “120 MB”")
+                + Text(verbatim: " · " + Timecode.duration(choices.rangeSeconds))
+        } else if !choices.estimateFailed {
+            if let text = choices.estimateText {
+                Text(verbatim: text)
+            } else {
+                Text("Calculating…", comment: "The export sheet: while the GIF's size is being estimated")
             }
         }
     }
@@ -512,6 +562,13 @@ extension EditorModel {
         else { return }
         Self.end(sheet, of: window, choices: host.rootView.choices)
     }
+
+    #if DEBUG
+    /// `-TomaShowcase export` with `TOMA_SHOWCASE_EXPORT=gif`: the open sheet exports a GIF.
+    func showcaseExportSheetGIF() {
+        (window?.attachedSheet?.contentViewController as? NSHostingController<ExportSheet>)?.rootView.choices.kind = .gif
+    }
+    #endif
 
     /// Ends the export sheet: its GIF preview and estimate stop at once (`ExportChoices.stop()`), and, on the next turn
     /// (out of the button's action that may have called this), its content goes and it closes. `endSheet` alone would keep

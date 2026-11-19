@@ -70,7 +70,8 @@ struct LayoutTiles: View {
                 Text(verbatim: name)
                     .font(.caption2)
                     .multilineTextAlignment(.center)
-                    .lineLimit(3)
+                    // "Cámara a pantalla completa" takes four lines under its tile: none is cut.
+                    .lineLimit(4)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity)
             }

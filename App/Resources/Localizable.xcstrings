@@ -4231,6 +4231,17 @@
         }
       }
     },
+    "Playhead" : {
+      "comment" : "VoiceOver: the time of the playhead under the preview",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cabezal de reproducción"
+          }
+        }
+      }
+    },
     "Playhead, %1$@ of %2$@" : {
       "comment" : "VoiceOver: the timeline's playhead, its time and what the output lasts",
       "localizations" : {
@@ -6870,6 +6881,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Título"
+          }
+        }
+      }
+    },
+    "To export a part, mark it with I and O." : {
+      "comment" : "The export sheet: under Range, while the timeline has no marks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para exportar una parte, marcarla con I y O."
           }
         }
       }
