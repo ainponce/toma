@@ -511,6 +511,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if environment["TOMA_SHOWCASE_SELECT"]?.hasPrefix("privacy") == true {
                         model.showcasePrivacy(fill: environment["TOMA_SHOWCASE_SELECT"] == "privacy-fill")
                     }
+                    // TOMA_SHOWCASE_SELECT=scan-running, scan-none, scan-found or scan-blurred: the Privacy tab's search of
+                    // sensitive data, running, having found nothing, seven findings with their sheet, or those blurred (phase 2).
+                    if let variant = environment["TOMA_SHOWCASE_SELECT"], variant.hasPrefix("scan-") {
+                        model.showcaseSensitiveSearch(variant)
+                    }
                 }
             }
             guard surface == "export" else { return }

@@ -524,6 +524,17 @@
         }
       }
     },
+    "Add a blur or find sensitive data to hide what shouldn't be seen." : {
+      "comment" : "The Privacy tab without privacy blocks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar un desenfoque o buscar datos sensibles para tapar lo que no se quiere mostrar."
+          }
+        }
+      }
+    },
     "Add to Favorites" : {
       "comment" : "The library: a project's menu, and the star",
       "localizations" : {
@@ -606,6 +617,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Permitir…"
+          }
+        }
+      }
+    },
+    "Already Blurred" : {
+      "comment" : "The findings sheet: a finding the project already has a blur block over",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya desenfocado"
           }
         }
       }
@@ -952,6 +974,17 @@
         }
       }
     },
+    "Blur %lld" : {
+      "comment" : "The findings sheet's button: adds blur blocks over the checked findings, how many",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfocar %lld"
+          }
+        }
+      }
+    },
     "Blur Sensitive Data" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): the sensitive data found on the screen was blurred",
       "localizations" : {
@@ -959,6 +992,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Desenfocar datos sensibles"
+          }
+        }
+      }
+    },
+    "Blurs" : {
+      "comment" : "The Privacy tab: the list of the privacy blocks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfoques"
           }
         }
       }
@@ -1258,6 +1302,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Subtítulos"
+          }
+        }
+      }
+    },
+    "Card" : {
+      "comment" : "What a privacy block made by the sensitive data search hides: a credit card number",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarjeta"
+          }
+        }
+      }
+    },
+    "Cards" : {
+      "comment" : "A group of the findings of the sensitive data search: credit card numbers",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tarjetas"
           }
         }
       }
@@ -2582,6 +2648,50 @@
         }
       }
     },
+    "Effect" : {
+      "comment" : "The Privacy tab: what the selected block does (Blur, Pixelate, Fill)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Efecto"
+          }
+        }
+      }
+    },
+    "Effect, %1$@, %2$d of %3$d" : {
+      "comment" : "VoiceOver: a tile of the privacy block's effect, its name, which one and how many",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Efecto, %1$@, %2$d de %3$d"
+          }
+        }
+      }
+    },
+    "Email" : {
+      "comment" : "What a privacy block made by the sensitive data search hides: an email address",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Correo"
+          }
+        }
+      }
+    },
+    "Emails" : {
+      "comment" : "A group of the findings of the sensitive data search: email addresses",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Correos"
+          }
+        }
+      }
+    },
     "Ember" : {
       "localizations" : {
         "es" : {
@@ -2752,6 +2862,28 @@
         }
       }
     },
+    "Face" : {
+      "comment" : "A finding of the sensitive data search, or what a block made by it hides: a face on the screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cara"
+          }
+        }
+      }
+    },
+    "Faces" : {
+      "comment" : "A group of the findings of the sensitive data search: faces on the screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Caras"
+          }
+        }
+      }
+    },
     "Fast" : {
       "comment" : "The Cursor tab: smoothing",
       "localizations" : {
@@ -2781,6 +2913,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Relleno"
+          }
+        }
+      }
+    },
+    "Find Sensitive Data" : {
+      "comment" : "The Privacy tab's button: looks for emails, phones, cards, keys and faces on the recording's screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscar datos sensibles"
           }
         }
       }
@@ -2929,6 +3072,17 @@
     },
     "From %1$@ to %2$@" : {
       "comment" : "Camera tab: the selected block's range",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De %1$@ a %2$@"
+          }
+        }
+      }
+    },
+    "From %@ to %@" : {
+      "comment" : "The Privacy tab: where the output shows the selected privacy block, as 0:12 and 0:15",
       "localizations" : {
         "es" : {
           "stringUnit" : {
@@ -3377,6 +3531,28 @@
         }
       }
     },
+    "Key or Token" : {
+      "comment" : "What a privacy block made by the sensitive data search hides: an API key or an access token",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clave o token"
+          }
+        }
+      }
+    },
+    "Keys and Tokens" : {
+      "comment" : "A group of the findings of the sensitive data search: API keys, access tokens",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claves y tokens"
+          }
+        }
+      }
+    },
     "Keys weren't recorded: Input Monitoring permission is missing." : {
       "comment" : "A take's notice: Record Keys to Show Them is on in Settings, but Input Monitoring isn't allowed",
       "localizations" : {
@@ -3607,6 +3783,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Buscando proyectos… %lld"
+          }
+        }
+      }
+    },
+    "Looks for emails, phones, cards, keys and faces on the whole recording's screen." : {
+      "comment" : "The Privacy tab, under Find Sensitive Data",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se buscan correos, teléfonos, tarjetas, claves y caras en la pantalla de toda la grabación."
           }
         }
       }
@@ -4172,6 +4359,17 @@
         }
       }
     },
+    "No sensitive data found." : {
+      "comment" : "The Privacy tab: the sensitive data search found nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se encontraron datos sensibles."
+          }
+        }
+      }
+    },
     "No shortcuts found." : {
       "localizations" : {
         "es" : {
@@ -4308,6 +4506,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se está grabando nada."
+          }
+        }
+      }
+    },
+    "Nothing is hidden yet" : {
+      "comment" : "The Privacy tab without privacy blocks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Todavía no hay nada tapado"
           }
         }
       }
@@ -4576,6 +4785,17 @@
         }
       }
     },
+    "Part of the recording couldn't be read." : {
+      "comment" : "The Privacy tab: why the sensitive data search failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo leer una parte de la grabación."
+          }
+        }
+      }
+    },
     "Part of the recording couldn't be saved." : {
       "localizations" : {
         "es" : {
@@ -4666,6 +4886,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Permisos…"
+          }
+        }
+      }
+    },
+    "Phone" : {
+      "comment" : "What a privacy block made by the sensitive data search hides: a phone number",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teléfono"
+          }
+        }
+      }
+    },
+    "Phones" : {
+      "comment" : "A group of the findings of the sensitive data search: phone numbers",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Teléfonos"
           }
         }
       }
@@ -5669,6 +5911,28 @@
         }
       }
     },
+    "Searching… %@" : {
+      "comment" : "The sensitive data search runs: how far, as 42 %",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Buscando… %@"
+          }
+        }
+      }
+    },
+    "See Findings (%lld)" : {
+      "comment" : "The Privacy tab: opens the sheet of what the sensitive data search found, and how many",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ver los hallazgos (%lld)"
+          }
+        }
+      }
+    },
     "Selected Block" : {
       "comment" : "Camera tab: card of the selected layout block",
       "localizations" : {
@@ -5680,6 +5944,17 @@
         }
       }
     },
+    "Selected Blur" : {
+      "comment" : "The Privacy tab: the card of the selected privacy block",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Desenfoque seleccionado"
+          }
+        }
+      }
+    },
     "Selected Zoom" : {
       "comment" : "The Zoom tab: the card of the selected zoom",
       "localizations" : {
@@ -5687,6 +5962,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zoom seleccionado"
+          }
+        }
+      }
+    },
+    "Sensitive Data Found" : {
+      "comment" : "The title of the sheet of the findings of the sensitive data search",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Datos sensibles encontrados"
           }
         }
       }
@@ -6297,6 +6583,17 @@
         }
       }
     },
+    "Strength" : {
+      "comment" : "The Privacy tab: how much the selected blur or pixelation hides",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Intensidad"
+          }
+        }
+      }
+    },
     "Style" : {
       "comment" : "The Cursor tab: the cursor's look",
       "localizations" : {
@@ -6447,6 +6744,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Tamaño de letra"
+          }
+        }
+      }
+    },
+    "Text recognition isn't available on this Mac." : {
+      "comment" : "The Privacy tab: why the sensitive data search cannot run",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El reconocimiento de texto no está disponible en esta Mac."
+          }
+        }
+      }
+    },
+    "Text that scrolls fast between two samples can show for an instant. Check before publishing." : {
+      "comment" : "The findings sheet: the known limit of the sensitive data search",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un texto que se desplaza rápido entre dos muestras puede verse un instante. Revisar antes de publicar."
           }
         }
       }
@@ -6955,6 +7274,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla dejó de grabarse."
+          }
+        }
+      }
+    },
+    "The search couldn't finish." : {
+      "comment" : "The Privacy tab: why the sensitive data search failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La búsqueda no pudo terminar."
+          }
+        }
+      }
+    },
+    "The search couldn't finish: the disk is full." : {
+      "comment" : "The Privacy tab: why the sensitive data search failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La búsqueda no pudo terminar: el disco está lleno."
           }
         }
       }
@@ -8152,6 +8493,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esperando espacio en el disco para aplicar el estilo…"
+          }
+        }
+      }
+    },
+    "Waiting…" : {
+      "comment" : "The sensitive data search waits for another analysis of the project to end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En espera…"
           }
         }
       }
