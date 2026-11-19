@@ -6,7 +6,7 @@ import ProjectFormat
 import Recording
 import Synchronization
 
-/// A fake display, window or camera: `SampleFactory` frames at `framesPerSecond`, each timestamped with
+/// A fake display, window, camera or iPhone: `SampleFactory` frames at `framesPerSecond`, each timestamped with
 /// `clock()` when it is made. Delivers on the start queue like `DisplayCaptureSource`, and can fail on demand.
 public final class SyntheticVideoSource: CaptureSource {
     public let trackID: String
@@ -14,7 +14,7 @@ public final class SyntheticVideoSource: CaptureSource {
     public let media: TrackMedia
 
     /// By kind: a display (`displayID`) or a window (`windowID` 4242) with its frame at `globalOrigin` in global
-    /// points, as large as its frames are now, or a camera with its `deviceUniqueID`.
+    /// points, as large as its frames are now, or a camera or an iPhone with its `deviceUniqueID`.
     public var sourceInfo: TrackSource {
         let (size, device) = state.withLock { ($0.size, $0.deviceUniqueID) }
         let frame = Rect(x: globalOrigin.x, y: globalOrigin.y, width: Double(size.width), height: Double(size.height))
@@ -27,7 +27,9 @@ public final class SyntheticVideoSource: CaptureSource {
                 bundleIdentifier: "dev.toma.synthetic")
         case .camera:
             return TrackSource(name: "Synthetic Camera", deviceUniqueID: device)
-        case .microphone, .systemAudio:
+        case .device:
+            return TrackSource(name: "Synthetic iPhone", deviceUniqueID: device)
+        case .microphone, .systemAudio, .deviceAudio:
             preconditionFailure("SyntheticVideoSource: \(kind) is not a video kind")
         }
     }
@@ -154,14 +156,16 @@ public final class SyntheticAudioSource: CaptureSource {
     public let kind: TrackKind
     public let media = TrackMedia.audio
 
-    /// A microphone with its `deviceUniqueID`, or system audio of every app but Toma.
+    /// A microphone or an iPhone's audio with its `deviceUniqueID`, or system audio of every app but Toma.
     public var sourceInfo: TrackSource {
         switch kind {
         case .microphone:
             TrackSource(name: "Synthetic Microphone", deviceUniqueID: deviceUniqueID)
         case .systemAudio:
             TrackSource(name: "Synthetic System Audio", excludedBundleIDs: ["dev.toma.Toma"])
-        case .display, .window, .camera:
+        case .deviceAudio:
+            TrackSource(name: "Synthetic iPhone Audio", deviceUniqueID: deviceUniqueID)
+        case .display, .window, .camera, .device:
             preconditionFailure("SyntheticAudioSource: \(kind) is not an audio kind")
         }
     }

@@ -159,7 +159,9 @@ public final class TakeBuilder {
     /// Creates `<directory>/<name>.toma` with an empty manifest of `formatVersion`. With a version below 3, the
     /// package an earlier version of the app would have created, which keeps that version: without `projectID` and
     /// `upgradedFrom`, so its id is the derived one (`upgradedFrom` must be `nil`). From version 3, the `projectID` of
-    /// `ProjectPackage.create` and `upgradedFrom` as given: a package an edit upgraded from that version.
+    /// `ProjectPackage.create` and `upgradedFrom` as given: a package an edit upgraded from that version. Version 4 is
+    /// the one of a take with a track of a device (`TrackKind.device`, `.deviceAudio`) or `keyPress` events, which a
+    /// package of an earlier version refuses when the take is written, as the recorder's would.
     public init(
         in directory: URL, name: String = "Fixture", formatVersion: Int = Manifest.currentFormatVersion,
         upgradedFrom: Int? = nil
@@ -332,6 +334,12 @@ public final class TakeBuilder {
     /// `LoadedProject.load` reads it. Call it once, after adding everything.
     public func write(status: TakeStatus = .complete) throws -> LoadedProject {
         try checkNotWritten()
+        if let key = events.first(where: \.kind.requiresFormatVersion4) {
+            let version = try ManifestStore(package: package).manifest.formatVersion
+            if version < 4 {
+                throw TestSupportError.failed("a package of version \(version) has no \(key.kind) event: make it with formatVersion 4")
+            }
+        }
         written = true
         try FileManager.default.createDirectory(at: package.takeDirectory(takeID), withIntermediateDirectories: true)
         var tracks = tracks

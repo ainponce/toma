@@ -18,7 +18,7 @@ import ProjectFormat
 ///   `mouseDown` less than 1 s before or after: at the instant it stopped, where it stopped. Standing still, a pause or
 ///   not, starts the 80 pt again from where it leaves.
 /// - Typing: `keyActivity` events at most 1.0 s apart, from the first to 0.25 s after the last (the 250 ms each one
-///   stands for).
+///   stands for). `keyPress` events (version 4) never count: typing is the same with or without the keys recorded.
 /// - Scroll: `scroll` events at most 0.5 s apart, from the first to the last.
 ///
 /// The clips of a take are in source order (as `TimeMap` reads them in 1b), so source order is output order.

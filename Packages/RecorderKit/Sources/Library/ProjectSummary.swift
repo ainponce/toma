@@ -13,7 +13,7 @@ public enum ProjectState: Codable, Equatable, Sendable {
     /// The project cannot be opened; why, for the help text: a manifest that cannot be read, a path in it that could
     /// leave the package, a document or an event log that cannot be read.
     case needsRepair(RepairReason)
-    /// `formatVersion` > 3 or `documentVersion` > 2: a newer Toma wrote it.
+    /// `formatVersion` > `Manifest.newestFormatVersion` (4) or `documentVersion` > 2: a newer Toma wrote it.
     case newerVersion
     /// Its volume cannot be written to: it opens only to be looked at.
     case readOnlyVolume
@@ -240,7 +240,7 @@ public enum ProjectReader {
             let data = try fileSystem.read(package.manifestURL, maxBytes: maxManifestBytes)
             let version = try Manifest.formatVersion(of: data)
             summary.formatVersion = version
-            guard version <= Manifest.currentFormatVersion else {
+            guard version <= Manifest.newestFormatVersion else {
                 summary.state = .newerVersion
                 return summary
             }
@@ -275,7 +275,7 @@ public enum ProjectReader {
                 summary.documentVersion = version
                 summary.state = .newerVersion
                 return summary
-            } catch let LoadedProjectError.unsupportedFormatVersion(version) where version > Manifest.currentFormatVersion {
+            } catch let LoadedProjectError.unsupportedFormatVersion(version) where version > Manifest.newestFormatVersion {
                 // The manifest changed since it was read.
                 summary.formatVersion = version
                 summary.state = .newerVersion

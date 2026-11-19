@@ -76,8 +76,8 @@ public enum RecordingError: Error, Equatable {
     case volumeNotAllowed(VolumeEligibility)
     case alreadyStarted
     case notRecording
-    /// The package is of this format version, not `Manifest.currentFormatVersion`: a take is only recorded
-    /// into a package of the current version, so an older one never gets what its version does not define.
+    /// The package is of this format version, outside `Manifest.recordableFormatVersions` (3 and 4): a take is only
+    /// recorded into a package of those, so an older one never gets what its version does not define.
     case notCurrentFormatVersion(Int)
 }
 
@@ -290,7 +290,7 @@ public actor RecordingCoordinator {
 
         let store = try ManifestStore(package: package)
         let formatVersion = store.manifest.formatVersion
-        guard formatVersion == Manifest.currentFormatVersion else {
+        guard Manifest.recordableFormatVersions.contains(formatVersion) else {
             throw RecordingError.notCurrentFormatVersion(formatVersion)
         }
         let takeID = package.nextTakeID(existing: store.manifest.takes)
@@ -344,7 +344,7 @@ public actor RecordingCoordinator {
                     // Where it is as the take starts; the app's window watcher logs every change after this.
                     guard let frame = info.globalFrame else { continue }
                     log.append(InputEvent(t: clock(), kind: .windowGeometry(track: source.trackID, frame: frame, onScreen: true)))
-                case .camera, .microphone, .systemAudio:
+                case .camera, .microphone, .systemAudio, .device, .deviceAudio:
                     break
                 }
             }

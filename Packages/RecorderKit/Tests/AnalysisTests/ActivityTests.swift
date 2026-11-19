@@ -207,6 +207,17 @@ extension ActivityFixtures {
             #expect(scrolled.scrolls == [ns(2)..<ns(2.9), ns(4)..<ns(4), ns(4.6)..<ns(4.6)])
         }
 
+        @Test func keyPressesAreNotTyping() {
+            // Typing comes from `keyActivity` alone: a take with its keys recorded (version 4) types the same.
+            let presses = stride(from: 20.0, through: 24, by: 0.1).map {
+                InputEvent(t: at($0), kind: .keyPress(code: 0, chars: "a", mods: 0, isRepeat: false))
+            }
+            #expect(activity(presses).typing.isEmpty)
+            let both = activity((keys(from: 6, to: 8) + presses).sortedByTime())
+            #expect(both.typing == activity(keys(from: 6, to: 8)).typing)
+            #expect(both.typing == [ns(6)..<ns(8.25)])
+        }
+
         /// 100 pt in 25 steps of 4 pt from 2 s, still from 2.5 s until a step of 50 pt, and the output ends 0.5 s after
         /// that step (a cursor that stops for good before the end also pauses).
         private func pauses(stillFor: Double, travel: Double = 100, from x: Double = 500, with extra: [InputEvent] = [])

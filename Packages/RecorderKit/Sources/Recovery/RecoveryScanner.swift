@@ -49,8 +49,8 @@ public enum RecoveryScanner {
             // The version first: a newer manifest may not decode as this version's `Manifest`.
             let version = try Manifest.formatVersion(of: data)
             guard Manifest.supportedFormatVersions.contains(version) else {
-                let reason = version > Manifest.currentFormatVersion
-                    ? "format version \(version) is newer than \(Manifest.currentFormatVersion)"
+                let reason = version > Manifest.newestFormatVersion
+                    ? "format version \(version) is newer than \(Manifest.newestFormatVersion)"
                     : "format version \(version) is unknown"
                 return [.needsRepair(package: package, reason: reason)]
             }

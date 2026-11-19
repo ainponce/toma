@@ -128,13 +128,13 @@ public enum TakeVerifier {
                 }
                 guard countingFrames else { continue }
                 switch track.kind {
-                case .display, .window, .camera:
+                case .display, .window, .camera, .device:
                     do {
                         result.frames += Double(try countSamples(of: mediaTrack, in: asset))
                     } catch {
                         result.problems.append("\(name): frames cannot be counted: \(error.localizedDescription)")
                     }
-                case .microphone, .systemAudio:
+                case .microphone, .systemAudio, .deviceAudio:
                     result.frames += seconds * audioFramesPerSecond
                 }
             }

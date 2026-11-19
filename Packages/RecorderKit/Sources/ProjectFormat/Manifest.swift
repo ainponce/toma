@@ -27,11 +27,19 @@ public struct Rect: Codable, Equatable, Sendable {
 /// The contents of `manifest.json`: what was recorded and where it lives in the package.
 public struct Manifest: Codable, Equatable, Sendable {
     /// The version new packages are created with. A package keeps the version it was created with until the user
-    /// edits it: recording and recovery never rewrite it (a version 1 package they touch stays at version 1), and the
-    /// first edit of a version 1 or 2 package upgrades it to version 3, with `upgradedFrom`.
+    /// edits it or records what an older app cannot read: recovery never rewrites it (a version 1 package it touches
+    /// stays at version 1), the first edit of a version 1 or 2 package upgrades it to version 3, with `upgradedFrom`, and
+    /// a version 3 package goes to version 4 only when a take records a track of a device or a key press
+    /// (`ManifestStore.raiseFormatVersion(to:)`). A package without them stays at 3, which the app of phase 1 opens.
     public static let currentFormatVersion = 3
+    /// The newest version this version writes and reads: 4, with the tracks of an iPhone or iPad (`TrackKind.device`,
+    /// `.deviceAudio`) and `keyPress` events. A manifest of a later version was written by a newer Toma.
+    public static let newestFormatVersion = 4
     /// The versions this version reads. A manifest of any other version is refused before it is decoded.
-    public static let supportedFormatVersions = 1...3
+    public static let supportedFormatVersions = 1...4
+    /// The versions a take is recorded into: an older package gets what its version does not define only through its
+    /// first edit, which upgrades it to 3.
+    public static let recordableFormatVersions = 3...4
 
     public var formatVersion: Int
     public var app: AppInfo
@@ -58,6 +66,12 @@ public struct Manifest: Codable, Equatable, Sendable {
 
     /// The project's id: `projectID`, or the one derived from the manifest when it has none (version 1 and 2).
     public var resolvedProjectID: String { projectID ?? ProjectID.derived(from: self) }
+
+    /// Whether a track of any take is of a kind only version 4 defines (`TrackKind.requiresFormatVersion4`).
+    /// `keyPress` events also need it, but they are in `events.jsonl`: whoever writes the first one raises the version.
+    public var needsFormatVersion4: Bool {
+        takes.contains { take in take.tracks.contains { $0.kind.requiresFormatVersion4 } }
+    }
 }
 
 /// One recording session: every track recorded between Record and Stop.
@@ -108,7 +122,8 @@ public struct TrackRecord: Codable, Equatable, Sendable {
     }
 }
 
-/// What a track records. `window`, `camera` and `systemAudio` are new in format version 2.
+/// What a track records. `window`, `camera` and `systemAudio` are new in format version 2, `device` and `deviceAudio`
+/// in version 4.
 public enum TrackKind: String, Codable, Sendable, CaseIterable {
     /// A whole display, or an area of it (`TrackSource.captureArea`).
     case display
@@ -119,6 +134,18 @@ public enum TrackKind: String, Codable, Sendable, CaseIterable {
     case microphone
     /// The sound the Mac plays: every app but the excluded ones, or only the chosen ones.
     case systemAudio
+    /// The screen of an iPhone or iPad connected by cable (version 4): the take's screen.
+    case device
+    /// The sound of an iPhone or iPad connected by cable (version 4), in a track of its own.
+    case deviceAudio
+
+    /// Whether a track of this kind is only in a package of version 4 or later: the app of phase 1 cannot read it.
+    public var requiresFormatVersion4: Bool {
+        switch self {
+        case .device, .deviceAudio: true
+        case .display, .window, .camera, .microphone, .systemAudio: false
+        }
+    }
 }
 
 /// What a track recorded. Only the fields that apply to its kind are set.
@@ -127,7 +154,7 @@ public struct TrackSource: Codable, Equatable, Sendable {
     public var name: String
     /// The `CGDirectDisplayID` of a display.
     public var displayID: UInt32?
-    /// The `uniqueID` of a microphone or a camera.
+    /// The `uniqueID` of a microphone, a camera or an iPhone or iPad (`device`, `deviceAudio`).
     public var deviceUniqueID: String?
     /// Where a display or a window is, in global points.
     public var globalFrame: Rect?

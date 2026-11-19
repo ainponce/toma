@@ -287,9 +287,9 @@ private let version1Example = #"""
 }
 
 @Test func trackKindsSayWhatTheyHold() {
-    #expect(TrackKind.allCases == [.display, .window, .camera, .microphone, .systemAudio])
-    #expect(TrackKind.allCases.filter(\.isVideo) == [.display, .window, .camera])
-    #expect(TrackKind.allCases.filter(\.isScreen) == [.display, .window])
+    #expect(TrackKind.allCases == [.display, .window, .camera, .microphone, .systemAudio, .device, .deviceAudio])
+    #expect(TrackKind.allCases.filter(\.isVideo) == [.display, .window, .camera, .device])
+    #expect(TrackKind.allCases.filter(\.isScreen) == [.display, .window, .device])
 }
 
 // MARK: - Version 3
@@ -432,7 +432,7 @@ private let version2Example = #"""
 
 @Test func newPackagesAreVersion3WithARandomProjectID() throws {
     #expect(Manifest.currentFormatVersion == 3)
-    #expect(Manifest.supportedFormatVersions == 1...3)
+    #expect(Manifest.supportedFormatVersions == 1...4)
     try withTemporaryDirectory { dir in
         let app = AppInfo(name: "Toma", version: "0.1.0")
         let first = try ProjectPackage.create(in: dir, name: "New", app: app, now: Date())

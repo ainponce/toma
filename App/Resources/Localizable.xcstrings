@@ -4988,6 +4988,16 @@
         }
       }
     },
+    "Saving the iPhone or iPad's audio failed. Continuing in a new file." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Falló el guardado del audio del iPhone o el iPad. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
     "Saving the image…" : {
       "comment" : "A background image being copied into the project",
       "localizations" : {
@@ -5373,6 +5383,16 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo guardar parte del audio del micrófono."
+          }
+        }
+      }
+    },
+    "Some of the iPhone or iPad's audio couldn't be saved." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar parte del audio del iPhone o el iPad."
           }
         }
       }
@@ -5933,6 +5953,56 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Los primeros %lld se abren ahora; los demás están en la carpeta de proyectos."
+          }
+        }
+      }
+    },
+    "The iPhone or iPad's audio capture resumed." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se reanudó la captura del audio del iPhone o el iPad."
+          }
+        }
+      }
+    },
+    "The iPhone or iPad's audio capture was interrupted. Trying again…" : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se interrumpió la captura del audio del iPhone o el iPad. Se vuelve a intentar…"
+          }
+        }
+      }
+    },
+    "The iPhone or iPad's audio couldn't start. Recording without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo iniciar el audio del iPhone o el iPad. Se graba sin él."
+          }
+        }
+      }
+    },
+    "The iPhone or iPad's audio stopped recording. Still trying to bring it back." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El audio del iPhone o el iPad dejó de grabarse. Se sigue intentando recuperarlo."
+          }
+        }
+      }
+    },
+    "The iPhone or iPad's audio stopped recording. The recording continues without it." : {
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El audio del iPhone o el iPad dejó de grabarse. La grabación sigue sin él."
           }
         }
       }
@@ -7711,6 +7781,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "oculto por el bloque «%1$@» de %2$@"
+          }
+        }
+      }
+    },
+    "iPhone or iPad" : {
+      "comment" : "What a saved take recorded: the screen of an iPhone or iPad",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "iPhone o iPad"
+          }
+        }
+      }
+    },
+    "iPhone or iPad Audio" : {
+      "comment" : "What a saved take recorded: the sound of an iPhone or iPad",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio del iPhone o el iPad"
           }
         }
       }

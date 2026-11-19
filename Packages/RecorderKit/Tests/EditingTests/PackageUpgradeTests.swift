@@ -759,8 +759,8 @@ private enum UpgradeFixture {
 }
 
 @MainActor @Test func aPackageMovedToANewerFormatMeanwhileShowsNothing() async throws {
-    let newer = Data(#"{"formatVersion":4,"somethingNew":true}"#.utf8)
-    try await unopenableAfterAnotherApp(newer, gives: .newerDocument(4))
+    let newer = Data(#"{"formatVersion":5,"somethingNew":true}"#.utf8)
+    try await unopenableAfterAnotherApp(newer, gives: .newerDocument(5))
 }
 
 @MainActor @Test func aManifestThatNoLongerDecodesShowsNothing() async throws {
