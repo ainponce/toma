@@ -1109,3 +1109,34 @@ Se escriben con `DurableFile.writeAtomically`, fuera del hilo principal, a lo su
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
+
+## Cambios de la versión 4
+
+La versión 4 llega con la fase 2, para las tomas que graban un iPhone o un iPad por cable o las teclas. Los paquetes nuevos se siguen creando con `formatVersion: 3` (`Manifest.currentFormatVersion`); la versión más nueva que escribe y lee esta versión es la 4 (`Manifest.newestFormatVersion`).
+
+- Tipos de pista nuevos, al final de la lista:
+
+  | `kind` | Qué graba | Segmentos | Campos de `source` |
+  |---|---|---|---|
+  | `device` | La pantalla de un iPhone o un iPad conectado por cable: es la pantalla de la toma, como `display` o `window`. | video | `name`, `deviceUniqueID` |
+  | `deviceAudio` | El sonido de ese iPhone o iPad, en una pista aparte. | audio | `name`, `deviceUniqueID` |
+
+  La recuperación y la verificación leen video en `device` y audio en `deviceAudio`.
+- Evento nuevo, `keyPress`: una tecla que bajó, solo en las tomas en que el usuario eligió grabar las teclas y nunca con la entrada segura de macOS activa. `code` es el código virtual de la tecla (`kCGKeyboardEventKeycode`, de 0 a 65535), `chars` lo que escribe sin modificadores (falta en una tecla que no escribe nada, como una flecha o una tecla de función), `mods` los modificadores (`CGEventFlags`, sus 32 bits bajos, de 0 a 4294967295) y `repeat` si es la repetición automática de la tecla. Convive con `keyActivity`, que sigue igual y es lo único que usa la actividad de tipeo:
+
+  ```
+  {"chars":"a","code":0,"mods":256,"repeat":false,"t":5,"type":"keyPress"}
+  {"code":123,"mods":0,"repeat":true,"t":7,"type":"keyPress"}
+  ```
+
+Cuándo un paquete pasa a la versión 4:
+
+- **Un paquete pasa a 4 solo cuando una toma los usa**: la grabación sube el manifiesto a 4 (`ManifestStore.raiseFormatVersion(to: 4)`, una escritura) antes de sumar la primera pista `device` o `deviceAudio` o de escribir la primera línea `keyPress`. Si no, sigue en 3 y lo abre la app de la fase 1. Un manifiesto de una versión anterior a 4 nunca se escribe con una pista `device` o `deviceAudio` (`ManifestStoreError.needsFormatVersion(4)`), y una subida que no se pudo escribir deja la versión como estaba.
+- La versión solo sube, y solo desde 3: un paquete v1 o v2 pasa a 3 con su primera edición y no se graba en él (`Manifest.recordableFormatVersions`, `3...4`), así que nunca salta a 4.
+- Una vez en 4, el paquete se queda en 4: nada lo baja, y las tomas siguientes y la recuperación lo escriben en 4 aunque no tengan pistas de dispositivo ni teclas. El documento de edición no cambia por la versión 4.
+
+Compatibilidad:
+
+- **El lector acepta 1…4** (`Manifest.supportedFormatVersions`, `1...4`) y rechaza cualquier otra antes de decodificar el manifiesto: un manifiesto de la versión 5 o más es de una Toma más nueva (*versión más nueva* en la biblioteca, *para reparar* en la recuperación, que no lo toca).
+- La app de la fase 1 (lector de `1...3`) dice que un paquete v4 es de una versión más nueva, nunca que está dañado, y no lo toca. Un paquete de la fase 2 sin iPhone ni teclas sigue en 3 y lo abre igual.
+- Un lector que no conoce `keyPress` salta esas líneas, como cualquier línea que no entiende; la versión 4 del manifiesto ya avisa antes.

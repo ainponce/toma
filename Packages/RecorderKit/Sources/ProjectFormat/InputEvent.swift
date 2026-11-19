@@ -74,6 +74,18 @@ public struct InputEvent: Codable, Equatable, Sendable {
         case scroll(dx: Double, dy: Double, x: Double, y: Double)
         /// At least one key was pressed in the 250 ms that start at `t` (version 3). Never which, nor how many.
         case keyActivity
+        /// A key went down at `t` (version 4, only in takes the user chose to record keys for, never while secure input
+        /// is on): its virtual key code (`kCGKeyboardEventKeycode`), the characters it types without modifiers (`nil`
+        /// for one that types nothing, an arrow or a function key), the modifier flags (`CGEventFlags`, its low 32 bits)
+        /// and whether it is the key's automatic repeat. Written as `{"chars":"a","code":0,"mods":0,"repeat":false,…}`.
+        case keyPress(code: UInt16, chars: String?, mods: UInt32, isRepeat: Bool)
+
+        /// Whether an event of this kind is only in a package of version 4 or later: `keyPress`. Whoever writes the
+        /// first one raises the package to 4 before (`ManifestStore.raiseFormatVersion(to:)`).
+        public var requiresFormatVersion4: Bool {
+            if case .keyPress = self { return true }
+            return false
+        }
     }
 
     /// The event as one line of compact JSON with its keys in alphabetical order,
@@ -97,6 +109,8 @@ public struct InputEvent: Codable, Equatable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case t, type, x, y, button, displayID, frame, scale, track, index, domain, code, reason, deviceUniqueID, count
         case onScreen, style, hash, hotspot, size, kind, dx, dy
+        case chars, mods
+        case isRepeat = "repeat"
     }
 
     /// The keys of `hotspot`.
@@ -111,7 +125,7 @@ public struct InputEvent: Codable, Equatable, Sendable {
 
     private enum EventType: String, Codable {
         case cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker
-        case droppedSamples, audioClock, windowGeometry, cameraStyle, cursorImage, scroll, keyActivity
+        case droppedSamples, audioClock, windowGeometry, cameraStyle, cursorImage, scroll, keyActivity, keyPress
     }
 
     public init(from decoder: any Decoder) throws {
@@ -201,6 +215,13 @@ public struct InputEvent: Codable, Equatable, Sendable {
             )
         case .keyActivity:
             kind = .keyActivity
+        case .keyPress:
+            kind = .keyPress(
+                code: try container.decode(UInt16.self, forKey: .code),
+                chars: try container.decodeIfPresent(String.self, forKey: .chars),
+                mods: try container.decode(UInt32.self, forKey: .mods),
+                isRepeat: try container.decode(Bool.self, forKey: .isRepeat)
+            )
         }
         self.init(t: t, kind: kind)
     }
@@ -282,6 +303,12 @@ public struct InputEvent: Codable, Equatable, Sendable {
             try container.encode(y, forKey: .y)
         case .keyActivity:
             try container.encode(EventType.keyActivity, forKey: .type)
+        case let .keyPress(code, chars, mods, isRepeat):
+            try container.encode(EventType.keyPress, forKey: .type)
+            try container.encode(code, forKey: .code)
+            try container.encodeIfPresent(chars, forKey: .chars)
+            try container.encode(mods, forKey: .mods)
+            try container.encode(isRepeat, forKey: .isRepeat)
         }
     }
 }

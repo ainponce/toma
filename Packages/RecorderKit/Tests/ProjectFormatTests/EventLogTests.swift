@@ -43,6 +43,8 @@ extension InputEvent {
          #"{"dx":0,"dy":-42.5,"t":5,"type":"scroll","x":640.5,"y":402}"#),
         (InputEvent(t: HostTime(nanoseconds: 5), kind: .keyActivity),
          #"{"t":5,"type":"keyActivity"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .keyPress(code: 0, chars: "a", mods: 256, isRepeat: false)),
+         #"{"chars":"a","code":0,"mods":256,"repeat":false,"t":5,"type":"keyPress"}"#),
     ]
 }
 
@@ -70,7 +72,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
     #expect(Set(types) == [
         "cursor", "mouseDown", "mouseUp", "displayGeometry", "segmentStarted",
         "streamInterrupted", "paused", "resumed", "deviceChanged", "marker", "droppedSamples", "audioClock",
-        "windowGeometry", "cameraStyle", "cursorImage", "scroll", "keyActivity",
+        "windowGeometry", "cameraStyle", "cursorImage", "scroll", "keyActivity", "keyPress",
     ])
 }
 

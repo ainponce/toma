@@ -17,8 +17,9 @@ extension TakeNotice {
             case .camera: String(localized: "The camera couldn't start. Recording without it.")
             case .microphone: String(localized: "The microphone couldn't start. Recording without it.")
             case .systemAudio: String(localized: "System audio couldn't start. Recording without it.")
+            case .deviceAudio: String(localized: "The iPhone or iPad's audio couldn't start. Recording without it.")
             // Does not happen: a screen is never optional.
-            case .display, .window: String(localized: "The screen couldn't start.")
+            case .display, .window, .device: String(localized: "The screen couldn't start.")
             }
         case .cameraAccessOff:
             String(localized: "Camera access is off. Recording without the camera.")
@@ -28,54 +29,60 @@ extension TakeNotice {
             String(localized: "The window you're recording is minimized or hidden. Recording continues when it's back.")
         case .streamInterrupted(let kind):
             switch kind {
-            case .display: String(localized: "Screen capture was interrupted. Trying again…")
+            case .display, .device: String(localized: "Screen capture was interrupted. Trying again…")
             case .window: String(localized: "Window capture was interrupted. Trying again…")
             case .camera: String(localized: "Camera capture was interrupted. Trying again…")
             case .microphone: String(localized: "Microphone capture was interrupted. Trying again…")
             case .systemAudio: String(localized: "System audio capture was interrupted. Trying again…")
+            case .deviceAudio: String(localized: "The iPhone or iPad's audio capture was interrupted. Trying again…")
             }
         case .streamResumed(let kind):
             switch kind {
-            case .display: String(localized: "Screen capture resumed.")
+            case .display, .device: String(localized: "Screen capture resumed.")
             case .window: String(localized: "Window capture resumed.")
             case .camera: String(localized: "Camera capture resumed.")
             case .microphone: String(localized: "Microphone capture resumed.")
             case .systemAudio: String(localized: "System audio capture resumed.")
+            case .deviceAudio: String(localized: "The iPhone or iPad's audio capture resumed.")
             }
         case .trackLost(let kind):
             switch kind {
-            case .display: String(localized: "The screen stopped recording.")
+            case .display, .device: String(localized: "The screen stopped recording.")
             case .window: String(localized: "The window stopped recording.")
             case .camera: String(localized: "The camera stopped recording. The recording continues without it.")
             case .microphone: String(localized: "The microphone stopped recording. The recording continues without it.")
             case .systemAudio: String(localized: "System audio stopped recording. The recording continues without it.")
+            case .deviceAudio: String(localized: "The iPhone or iPad's audio stopped recording. The recording continues without it.")
             }
         case .screenPaused:
             String(localized: "Screen capture is paused. Still trying to restart it.")
         case .trackPaused(let kind):
             switch kind {
             // Does not happen: a display that is not the only one is lost, not paused.
-            case .display: String(localized: "Screen capture is paused. Still trying to restart it.")
+            case .display, .device: String(localized: "Screen capture is paused. Still trying to restart it.")
             case .window: String(localized: "Window capture is paused. Still trying to restart it.")
             case .camera: String(localized: "The camera stopped recording. Still trying to bring it back.")
             case .microphone: String(localized: "The microphone stopped recording. Still trying to bring it back.")
             case .systemAudio: String(localized: "System audio stopped recording. Still trying to bring it back.")
+            case .deviceAudio: String(localized: "The iPhone or iPad's audio stopped recording. Still trying to bring it back.")
             }
         case .writerFailed(let kind):
             switch kind {
-            case .display: String(localized: "Saving the screen failed. Continuing in a new file.")
+            case .display, .device: String(localized: "Saving the screen failed. Continuing in a new file.")
             case .window: String(localized: "Saving the window failed. Continuing in a new file.")
             case .camera: String(localized: "Saving the camera failed. Continuing in a new file.")
             case .microphone: String(localized: "Saving the microphone failed. Continuing in a new file.")
             case .systemAudio: String(localized: "Saving system audio failed. Continuing in a new file.")
+            case .deviceAudio: String(localized: "Saving the iPhone or iPad's audio failed. Continuing in a new file.")
             }
         case .samplesDropped(let kind):
             switch kind {
-            case .display: String(localized: "Some screen frames couldn't be saved.")
+            case .display, .device: String(localized: "Some screen frames couldn't be saved.")
             case .window: String(localized: "Some window frames couldn't be saved.")
             case .camera: String(localized: "Some camera frames couldn't be saved.")
             case .microphone: String(localized: "Some microphone audio couldn't be saved.")
             case .systemAudio: String(localized: "Some system audio couldn't be saved.")
+            case .deviceAudio: String(localized: "Some of the iPhone or iPad's audio couldn't be saved.")
             }
         case .manifestWriteFailed:
             String(localized: "Couldn't update the project file. Trying again.")

@@ -69,8 +69,8 @@ private func removeEventLog(of package: ProjectPackage) throws {
     }
 }
 
-/// A manifest of format version 4 that this version's `Manifest` cannot decode.
-private let newerManifest = Data(#"{"formatVersion":4,"projects":[{"takes":[]}]}"#.utf8)
+/// A manifest of format version 5 that this version's `Manifest` cannot decode.
+private let newerManifest = Data(#"{"formatVersion":5,"projects":[{"takes":[]}]}"#.utf8)
 
 @Test func scanFlagsNewerFormatVersionWithoutRecoveringIt() async throws {
     try await withTemporaryDirectory { dir in
@@ -86,8 +86,8 @@ private let newerManifest = Data(#"{"formatVersion":4,"projects":[{"takes":[]}]}
             return
         }
         #expect(found == package)
-        #expect(reason == "format version 4 is newer than 3")
-        await #expect(throws: RecoveryError.unsupportedFormatVersion(4)) {
+        #expect(reason == "format version 5 is newer than 4")
+        await #expect(throws: RecoveryError.unsupportedFormatVersion(5)) {
             try await TakeRecovery.recover(package: package, takeID: "take-001")
         }
         #expect(try Data(contentsOf: package.manifestURL) == newerManifest)
@@ -315,6 +315,48 @@ func segmentFileThatCannotBeOpenedLeavesTakeRecording() async throws {
             #expect(try #require(segment.endHostTime).seconds(since: base) >= 1.9)
             #expect(try takeOnDisk(package, "take-001") == record)
         }
+    }
+}
+
+@Test func readersAcceptFourAndCallFiveNewer() async throws {
+    try await withTemporaryDirectory { dir in
+        // A take of an iPhone left open by a crash, in a package of version 4: found, recovered, and kept at 4.
+        let phone = TrackSource(name: "iPhone", deviceUniqueID: "00008110-000A1234")
+        let builder = try TakeBuilder(in: dir, formatVersion: 4)
+        try await builder.addVideoTrack(id: "device", kind: .device, source: phone, segments: [
+            VideoSegmentSpec(start: base, seconds: 3, width: 360, height: 640, endReason: nil, leaveOpen: true),
+        ])
+        try await builder.addAudioTrack(id: "device-audio", kind: .deviceAudio, source: phone, segments: [])
+        try builder.addEmptySegment(track: "device-audio", index: 1, start: base, endReason: nil, file: .zeroBytes)
+        let package = try builder.write(status: .recording).package
+        try removeEventLog(of: package)
+        let url = package.segmentURL(take: "take-001", track: "device", index: 1)
+        #expect(RecoveryScanner.scan(directory: dir) == [.recoverable(package: package, takeID: "take-001")])
+
+        try await withExtendedLifetime(builder) {
+            #expect(await readableDuration(of: url, reaching: 1.9) >= 1.9)
+            let record = try await TakeRecovery.recover(package: package, takeID: "take-001")
+
+            #expect(record.status == .recovered)
+            // The iPhone's screen holds video: read as audio, its file would have nothing and be marked empty.
+            let segment = try #require(record.track("device")?.segments.first)
+            #expect(segment.endReason == .recoveredAfterCrash)
+            #expect(try #require(segment.endHostTime).seconds(since: base) >= 1.9)
+            #expect(record.track("device-audio")?.segments.first?.endReason == .empty)
+            #expect(try takeOnDisk(package, "take-001") == record)
+            #expect(try manifestOnDisk(package).formatVersion == 4)
+        }
+
+        // Version 5 is newer: needs repair, never recovered nor touched.
+        let newer = Data(#"{"formatVersion":5,"takes":[]}"#.utf8)
+        try newer.write(to: package.manifestURL)
+        #expect(RecoveryScanner.scan(directory: dir) == [
+            .needsRepair(package: package, reason: "format version 5 is newer than 4"),
+        ])
+        await #expect(throws: RecoveryError.unsupportedFormatVersion(5)) {
+            try await TakeRecovery.recover(package: package, takeID: "take-001")
+        }
+        #expect(try Data(contentsOf: package.manifestURL) == newer)
     }
 }
 

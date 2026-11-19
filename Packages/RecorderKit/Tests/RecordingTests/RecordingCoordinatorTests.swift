@@ -1381,6 +1381,41 @@ extension RealTimeRecordingTests {
             }
         }
 
+        @Test func recordingAcceptsThreeAndFour() async throws {
+            #expect(Manifest.recordableFormatVersions == 3...4)
+            // A package of version 4 (an earlier take recorded an iPhone) gets more takes, and stays at 4.
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory)
+                var manifest = try rig.manifestOnDisk()
+                manifest.formatVersion = 4
+                try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: rig.package.manifestURL)
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .milliseconds(600))
+                _ = try await rig.coordinator.stop()
+                let after = try rig.manifestOnDisk()
+                #expect(after.formatVersion == 4)
+                #expect(after.projectID == manifest.projectID)
+                let take = try rig.takeOnDisk(id)
+                #expect(take.status == .complete)
+                #expect(take.tracks.map(\.id) == ["mic", "display-1"])
+                #expect(!after.needsFormatVersion4)
+            }
+            // A package of version 2 is refused, as one of version 1: nothing in it changes.
+            try await withTemporaryDirectory { directory in
+                let rig = try Rig(in: directory)
+                var manifest = try rig.manifestOnDisk()
+                manifest.formatVersion = 2
+                manifest.projectID = nil
+                let version2 = try ProjectJSON.encoder().encode(manifest)
+                try version2.write(to: rig.package.manifestURL)
+                await #expect(throws: RecordingError.notCurrentFormatVersion(2)) { try await rig.coordinator.start() }
+                #expect(try Data(contentsOf: rig.package.manifestURL) == version2)
+                #expect(try FileManager.default.contentsOfDirectory(atPath: rig.package.takesURL.path).isEmpty)
+                #expect(rig.display.startCount == 0 && rig.mic.startCount == 0)
+                await rig.warningsDone.value
+            }
+        }
+
         @Test func stateErrors() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory, tracks: [.display])

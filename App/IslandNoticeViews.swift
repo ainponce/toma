@@ -359,6 +359,8 @@ extension TrackKind {
         case .camera: String(localized: "Camera")
         case .microphone: String(localized: "Microphone")
         case .systemAudio: String(localized: "System Audio")
+        case .device: String(localized: "iPhone or iPad", comment: "What a saved take recorded: the screen of an iPhone or iPad")
+        case .deviceAudio: String(localized: "iPhone or iPad Audio", comment: "What a saved take recorded: the sound of an iPhone or iPad")
         }
     }
 }
