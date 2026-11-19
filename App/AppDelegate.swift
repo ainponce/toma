@@ -495,6 +495,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || environment["TOMA_SHOWCASE_ASPECT"] != nil || environment["TOMA_SHOWCASE_SAFEZONES"] != nil
                 || environment["TOMA_SHOWCASE_FRAME"] != nil || environment["TOMA_SHOWCASE_KEYS"] != nil
                 || environment["TOMA_SHOWCASE_PICTURE"] != nil
+                || environment["TOMA_SHOWCASE_SEEK"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -510,6 +511,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
                     // TOMA_SHOWCASE_FRAME=<n> moves the playhead to output frame n (an iPhone's turned segment, say).
                     if let frame = environment["TOMA_SHOWCASE_FRAME"].flatMap(Int.init) { model.seek(frame: frame) }
+                    // TOMA_SHOWCASE_SEEK=<seconds> puts the playhead on the frame of the project's grid there (phase 2).
+                    if let seconds = environment["TOMA_SHOWCASE_SEEK"].flatMap(Double.init), let rate = model.document?.frameRate {
+                        model.seek(frame: Int((seconds * Double(rate)).rounded()))
+                    }
                     if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
                         model.selection = .zooms([id])
                     }
