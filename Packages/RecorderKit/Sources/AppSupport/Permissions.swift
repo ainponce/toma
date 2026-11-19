@@ -290,7 +290,7 @@ public struct PreflightResult: Equatable, Sendable {
     public var missing: [PermissionKind]
     /// The permissions wanted that are granted: the sources the take can record.
     public var granted: Set<PermissionKind>
-    /// Whether screen recording is granted.
+    /// Whether the permission the take cannot do without is granted: screen recording, or the camera's for an iPhone.
     public var canRecord: Bool
 
     public init(missing: [PermissionKind], granted: Set<PermissionKind>, canRecord: Bool) {
@@ -303,18 +303,21 @@ public struct PreflightResult: Equatable, Sendable {
     public var recordMicrophone: Bool { granted.contains(.microphone) }
 }
 
-/// The check before every take: screen recording is required, every other permission is optional (the take is
-/// recorded without that source). Only the permissions wanted are asked about: a take never needs
-/// Accessibility, and a microphone, a camera or system audio that is off is neither missing nor recorded.
+/// The check before every take: one permission is required (screen recording; for an iPhone or iPad, the camera's),
+/// every other permission is optional (the take is recorded without that source). Only the permissions wanted are
+/// asked about: a take never needs Accessibility, and a microphone, a camera or system audio that is off is neither
+/// missing nor recorded.
 public enum RecordingPreflight {
-    /// `wanted` holds screen recording, plus the microphone, the camera and system audio when the take would
-    /// record them (for example, not when the Mac has no microphone).
-    public static func evaluate(probe: any PermissionProbe, wanted: Set<PermissionKind>) -> PreflightResult {
-        let kinds = PermissionKind.allCases.filter(wanted.contains)
+    /// `wanted` holds the `required` permission, plus the microphone, the camera and system audio when the take would
+    /// record them (for example, not when the Mac has no microphone); `required` is asked about even if it does not.
+    public static func evaluate(
+        probe: any PermissionProbe, wanted: Set<PermissionKind>, required: PermissionKind = .screenRecording
+    ) -> PreflightResult {
+        let kinds = PermissionKind.allCases.filter { wanted.contains($0) || $0 == required }
         let granted = Set(kinds.filter { probe.state(of: $0) == .granted })
         return PreflightResult(
             missing: kinds.filter { !granted.contains($0) },
             granted: granted,
-            canRecord: granted.contains(.screenRecording))
+            canRecord: granted.contains(required))
     }
 }

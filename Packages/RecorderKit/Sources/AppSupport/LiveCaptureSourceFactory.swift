@@ -2,7 +2,8 @@
 import ProjectFormat
 import Recording
 
-/// The app's sources for one take: ScreenCaptureKit displays and windows, the camera of the shared
+/// The app's sources for one take: ScreenCaptureKit displays and windows, an iPhone or iPad connected by cable (its
+/// screen and its sound, on one `AVCaptureSession`), the camera of the shared
 /// `CameraSessionHost`, the Core Audio microphone and system audio, the cursor (its position and its images), the
 /// scroll, when keys are typed and which keys go down (each if the settings say so) and the geometry of what is
 /// recorded. Make one for each take:
@@ -71,6 +72,14 @@ public final class LiveCaptureSourceFactory: CaptureSourceFactory {
         case .off:
             preconditionFailure("LiveCaptureSourceFactory: system audio that is off is never made")
         }
+    }
+
+    /// The iPhone or iPad `uniqueID`: its screen at `TakePlanner.deviceFramesPerSecond` and its sound, sharing one capture
+    /// session. Nothing is asked of the device here (on the main actor): the session finds it, and allows the screens of
+    /// iPhones to be seen if the island has not, on its own queue as the take starts; only that same device, ever.
+    public func device(uniqueID: String) -> (video: any CaptureSource, audio: any CaptureSource) {
+        let video = ExternalDeviceCaptureSource(deviceUniqueID: uniqueID, framesPerSecond: TakePlanner.deviceFramesPerSecond)
+        return (video, ExternalDeviceAudioSource(video: video))
     }
 
     /// The cursor and the images of its shapes, the scroll, with `noteKeyActivity` when keys are typed, with `recordKeys`

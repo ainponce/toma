@@ -17,8 +17,12 @@ public protocol CaptureSourceFactory {
     func systemAudio(_ choice: SystemAudioChoice) -> any CaptureSource
     /// What records the take's input: the cursor, the geometry of `displayIDs` and, in Window mode, where the window
     /// of `windowTrack` is. Called after the take's sources are made, so the window's source is the one `window`
-    /// made for that ID.
+    /// made for that ID. Never called in `.device` mode: nothing of the Mac's input is recorded.
     func input(windowTrack: (trackID: String, windowID: UInt32)?, displayIDs: [UInt32]) -> any InputRecorder
+    /// The screen (`device` track, at `TakePlanner.deviceFramesPerSecond`) and the sound (`deviceAudio`) of the iPhone
+    /// or iPad `uniqueID` connected by cable, sharing its one capture. Made on the main actor, they ask the device
+    /// nothing until the take's coordinator reads them off it.
+    func device(uniqueID: String) -> (video: any CaptureSource, audio: any CaptureSource)
 }
 
 /// The sources of a take, in track order, and what records its input.
@@ -55,17 +59,28 @@ public enum TakePlanError: Error, Equatable {
     case noWindowChosen
     /// Area mode without an area.
     case noAreaChosen
+    /// iPhone mode without an iPhone or iPad.
+    case noDeviceChosen
 }
 
 /// Turns what the user chose into the sources of a take.
 public enum TakePlanner {
+    /// The frame rate an iPhone or iPad is recorded at: its screen's own.
+    public static let deviceFramesPerSecond = 60
+    /// What an iPhone or iPad weighs on the encoder while its size is not known: the largest screen one sends (an iPad
+    /// Pro of 13 in, upright). A device tells its size only once its first run has started, and is never asked on
+    /// the main thread, where the take is planned.
+    public static let unknownDeviceSize = CGSize(width: 2064, height: 2752)
+
     /// The sources, in track order (the manifest's): the displays in the order of `selection.displayIDs` (each
     /// once), at their frame rate; or the display of the area, whole, with the area; or the window, at
-    /// `windowFramesPerSecond`; all at the display scale of `settings`. Then the camera (at `cameraPreset` and
-    /// `cameraFramesPerSecond`), the microphone (metered: `microphoneMeter`) and system audio, each only when it is
-    /// chosen, its permission is in `granted` and its kind is not in `skipping`, and each in `optional`.
-    /// `includedWindowIDs` go to every display. The load is that of what the plan records (`loadItems`, with the
-    /// window's size as its source gives it) against `budget`.
+    /// `windowFramesPerSecond`; all at the display scale of `settings`; or the screen and then the sound of the iPhone
+    /// or iPad (`factory.device`), which need no permission here (the take's check wants the camera's). Then the
+    /// camera (at `cameraPreset` and `cameraFramesPerSecond`), the microphone (metered: `microphoneMeter`) and system
+    /// audio, each only when it is chosen, its permission is in `granted` and its kind is not in `skipping`, and each in
+    /// `optional`. `includedWindowIDs` go to every display. The input is `factory.input`'s, or none for a device. The
+    /// load is that of what the plan records (`loadItems`, with the window's size as its source gives it, a device at
+    /// `unknownDeviceSize`) against `budget`.
     public static func plan(
         _ selection: CaptureSelection,
         settings: QuickSettings,
@@ -80,6 +95,7 @@ public enum TakePlanner {
         var sources: [any CaptureSource]
         var windowTrack: (trackID: String, windowID: UInt32)?
         var windowSize: CGSize?
+        var recordsInput = true
         let inputDisplayIDs: [UInt32]
         switch selection.mode {
         case .display:
@@ -104,6 +120,13 @@ public enum TakePlanner {
             sources = [window]
             windowTrack = (window.trackID, windowID)
             windowSize = pixelSize(of: window.sourceInfo)
+        case .device:
+            // Its `sourceInfo` is never read here: finding the device takes a while, and is not done on the main thread.
+            guard let uniqueID = selection.deviceUniqueID else { throw TakePlanError.noDeviceChosen }
+            inputDisplayIDs = []
+            let device = factory.device(uniqueID: uniqueID)
+            sources = [device.video, device.audio]
+            recordsInput = false
         }
 
         func records(_ kind: TrackKind, chosen: Bool, permission: PermissionKind) -> Bool {
@@ -134,17 +157,19 @@ public enum TakePlanner {
         let load = EncoderLoad.evaluate(
             loadItems(recorded, settings: settings, displays: displays, windowSize: windowSize),
             mainDisplayID: displays.first(where: \.isMain)?.id, budget: budget)
-        return TakePlan(
-            sources: sources, optional: optional, input: factory.input(windowTrack: windowTrack, displayIDs: inputDisplayIDs),
-            load: load, microphoneMeter: microphoneMeter)
+        // An iPhone's take records nothing of the Mac's input: no cursor, no keys, no geometry of a display.
+        let input = recordsInput ? factory.input(windowTrack: windowTrack, displayIDs: inputDisplayIDs) : NoInputRecorder()
+        return TakePlan(sources: sources, optional: optional, input: input, load: load, microphoneMeter: microphoneMeter)
     }
 
     /// The video tracks `selection` records with `settings`, in track order, as the encoder sees them: each display
     /// (the whole display of an area) at its pixels (`DisplayInfo.scale` per point, or one at `.points`) and frame
-    /// rate; the window at `windowSize` (pixels) and `windowFramesPerSecond`, if its size is known; the camera, if it
-    /// is not off, at `cameraPreset` and `cameraFramesPerSecond`. A display that is not connected weighs nothing.
+    /// rate; the window at `windowSize` (pixels) and `windowFramesPerSecond`, if its size is known; the iPhone or iPad
+    /// at `deviceSize` (pixels; `unknownDeviceSize` while it is not known) and `deviceFramesPerSecond`; the camera, if
+    /// it is not off, at `cameraPreset` and `cameraFramesPerSecond`. A display that is not connected weighs nothing.
     public static func loadItems(
-        _ selection: CaptureSelection, settings: QuickSettings, displays: [DisplayInfo], windowSize: CGSize?
+        _ selection: CaptureSelection, settings: QuickSettings, displays: [DisplayInfo], windowSize: CGSize?,
+        deviceSize: CGSize? = nil
     ) -> [VideoLoadItem] {
         var items: [VideoLoadItem] = []
         func addDisplay(_ id: UInt32) {
@@ -165,6 +190,11 @@ public enum TakePlanner {
                     source: .window, width: Int(windowSize.width.rounded()), height: Int(windowSize.height.rounded()),
                     framesPerSecond: settings.windowFramesPerSecond))
             }
+        case .device:
+            let size = deviceSize ?? unknownDeviceSize
+            items.append(VideoLoadItem(
+                source: .device, width: Int(size.width.rounded()), height: Int(size.height.rounded()),
+                framesPerSecond: deviceFramesPerSecond))
         }
         if selection.camera != .off {
             items.append(VideoLoadItem(
@@ -189,6 +219,9 @@ public enum TakePlanner {
         case .area:
             guard let area = selection.area else { return .noAreaChosen }
             guard connected.contains(area.displayID) else { return .displayNotFound(area.displayID) }
+        case .device:
+            // Whether it is connected is the device's to say as the take starts (`CaptureSourceError.deviceNotFound`).
+            guard selection.deviceUniqueID != nil else { return .noDeviceChosen }
         }
         return nil
     }

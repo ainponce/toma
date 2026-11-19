@@ -103,7 +103,8 @@ public enum WallpaperSnapshot {
 
     /// The displays of `displays` whose wallpaper a take of `selection` keeps, in track order: the ones it records in
     /// Display mode, the area's in Area mode, and in Window mode the one with most of the window's frame now
-    /// (`windowFrame`, global points); none when the window is on none of them.
+    /// (`windowFrame`, global points); none when the window is on none of them, nor for an iPhone or iPad (nothing of
+    /// the Mac's screen is recorded).
     public static func displayIDs(recording selection: CaptureSelection, displays: [DisplayInfo], windowFrame: Rect?) -> [UInt32] {
         let connected = Set(displays.map(\.id))
         switch selection.mode {
@@ -120,6 +121,8 @@ public enum WallpaperSnapshot {
             }
             guard let most = overlaps.max(by: { $0.area < $1.area }), most.area > 0 else { return [] }
             return [most.id]
+        case .device:
+            return []
         }
     }
 

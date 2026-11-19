@@ -529,6 +529,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         case .display: return .display
         case .window: return .window(panel)
         case .area: return .area(panel)
+        // Nothing of the Mac's screen to choose: what there is without a panel.
+        case .device: return .display
         }
     }
 

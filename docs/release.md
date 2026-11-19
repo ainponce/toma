@@ -954,6 +954,12 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 
 - Edición ▸ Acelerar el tipeo… (y el menú contextual del Video) en una toma real con escritura: la ventanita ofrece 2× · 3× · 4× · 8× (3× elegido) y el resultado («Se aceleran 5 tramos: 1:23 → 0:28») coincide con lo que queda; Acelerar lo hace en un solo paso y Edición ▸ Deshacer «Acelerar el tipeo» lo deshace entero. Sin tramos de tipeo de 2 s o más dice «No hay tramos de tipeo de 2 s o más.» y Acelerar queda apagado.
 
+**El modo iPhone en la toma** (P15; se recorre con la isla en modo iPhone de P17)
+
+- Con el permiso de Grabación de pantalla negado a Toma y el de Cámara permitido: una toma de iPhone graba igual, sin abrir la ventana de permisos. Con el de Cámara sin pedir nunca (`tccutil reset Camera dev.toma.Toma`): Grabar en modo iPhone muestra el aviso del sistema durante la cuenta atrás y, permitido, graba; negado ahí (o negado de antes), no graba nada y se abre la ventana de permisos con Cámara.
+- Con «Grabar las teclas para mostrarlas» prendido y el Monitoreo de entrada negado: una toma de iPhone no avisa «Las teclas no se grabaron…» y su `events.jsonl` no tiene líneas `keyPress` ni del cursor.
+- Con la cámara y el micrófono de la Mac elegidos: en `manifest.json`, las pistas `device`, `deviceAudio`, `camera` y `microphone`, en ese orden; la burbuja de la cámara se ve en la pantalla de la isla mientras graba, y «Ocultar los íconos del escritorio» no tapa el escritorio (no se graba la Mac).
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
