@@ -384,6 +384,15 @@ public final class EditSession {
         return restartingLog || journal.state != .saved
     }
 
+    /// Whether the document on disk is already of `EditDocument.currentVersion`, in a package of format version 3 (or
+    /// one an edit here is upgrading), so that a step performed now migrates nothing an older app reads: false for a
+    /// package of version 1 or 2, one upgraded and never edited, a project whose log is of an older version (phase 1's)
+    /// and a new document written in an older version, until the first edit here. What the editor does by itself as a
+    /// project opens (`AutomaticTranscription`) asks it first.
+    public var documentIsCurrentOnDisk: Bool {
+        !pendingMigration && pendingCreate == nil && (project.manifest.formatVersion >= 3 || upgrade != nil)
+    }
+
     /// Applies `step` and hands its `do` line to the journal, without waiting for the disk. A step with the same label
     /// and target as the last one, less than 1 s after it, joins its undo group (design §6.4). The first step of a
     /// version 1 or 2 package starts its upgrade to version 3, and the line waits for it, as those of the steps that come

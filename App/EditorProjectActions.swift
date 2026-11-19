@@ -20,6 +20,9 @@ struct EditorProjectHost {
     var open: (URL) -> Void = { _ in }
     /// The editor's package is somewhere else now: the app tells the library again where its editors' packages are.
     var moved: () -> Void = {}
+    /// Whether a take of this launch recorded into the package at this URL (`RecordingController.recordedThisSession`):
+    /// its editor may transcribe it by itself (`AutomaticTranscription`).
+    var recordedHere: (URL) -> Bool = { _ in false }
 }
 
 /// What an editor does with its project as a whole (design §6.7), with the library's operations (`LibraryOperations`),

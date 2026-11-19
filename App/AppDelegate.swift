@@ -753,7 +753,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             isRecording: { launchState.isRecording() },
             look: { [weak self] urls in self?.library?.model.look(at: urls) },
             open: { [weak self] url in self?.showEditor(for: url, take: nil) },
-            moved: { [weak self] in self?.tellLibraryEditors() })
+            moved: { [weak self] in self?.tellLibraryEditors() },
+            recordedHere: { [weak self] url in self?.recording.recordedThisSession(url) ?? false })
     }
 
     /// The editor whose package `url` names now (`EditorPlace`): it follows a package renamed or moved while open, and a

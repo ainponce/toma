@@ -66,3 +66,18 @@ public final class TranscriptionPreferencesStore {
         }
     }
 }
+
+/// Whether a project opening in the editor transcribes by itself (phase 2 design §5.1): "Transcribe Automatically" on,
+/// the model of its language installed, no transcript yet and the project editable, and only where the step it makes
+/// changes nothing the app of phase 1 reads: the session's document is already of the current version on disk
+/// (`EditSession.documentIsCurrentOnDisk`), or this app recorded the package since it launched
+/// (`RecordingController.recordedThisSession(_:)`). Merely opening an untouched project of phase 1 never migrates it,
+/// upgrades its package or turns its captions on; the Captions tab offers Transcribe instead.
+public enum AutomaticTranscription {
+    public static func starts(
+        automatic: Bool, modelInstalled: Bool, hasTranscript: Bool, canEdit: Bool, documentIsCurrentOnDisk: Bool,
+        recordedThisSession: Bool
+    ) -> Bool {
+        automatic && modelInstalled && !hasTranscript && canEdit && (documentIsCurrentOnDisk || recordedThisSession)
+    }
+}

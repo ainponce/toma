@@ -1108,6 +1108,26 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
+    /// The packages its takes recorded into are known as this launch's, also renamed; no other folder is.
+    @Test func knowsThePackagesItRecordedThisSession() async throws {
+        try await withRig(afterStop: .stayHere) { rig in
+            let other = rig.folder.appending(path: "Earlier.\(ProjectPackage.fileExtension)", directoryHint: .isDirectory)
+            try FileManager.default.createDirectory(at: other, withIntermediateDirectories: true)
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let package = try #require(rig.takes.packages.first)
+            #expect(!rig.controller.recordedThisSession(package.url))
+            rig.controller.stopRecording()
+            #expect(await eventually { rig.controller.phase == .idle && rig.controller.lastSaved != nil })
+            #expect(rig.controller.recordedThisSession(package.url))
+            #expect(!rig.controller.recordedThisSession(other))
+            let renamed = rig.folder.appending(path: "Renamed.\(ProjectPackage.fileExtension)", directoryHint: .isDirectory)
+            try FileManager.default.moveItem(at: package.url, to: renamed)
+            #expect(rig.controller.recordedThisSession(renamed))
+            #expect(!rig.controller.recordedThisSession(package.url))
+        }
+    }
+
     @Test(arguments: AfterStop.allCases) func diskAutoStopFollowsTheAfterStopSetting(afterStop: AfterStop) async throws {
         try await withRig(afterStop: afterStop) { rig in
             rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
