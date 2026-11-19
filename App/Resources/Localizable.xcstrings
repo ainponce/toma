@@ -653,6 +653,17 @@
         }
       }
     },
+    "An iPhone or iPad has no cursor to follow." : {
+      "comment" : "The Frame tab: why Follow the Cursor is disabled for a take of an iPhone or iPad",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un iPhone o un iPad no tiene cursor que seguir."
+          }
+        }
+      }
+    },
     "An iPhone or iPad has no cursor, so this recording has none to show." : {
       "comment" : "The Cursor tab: a note on a take of an iPhone or iPad",
       "localizations" : {
@@ -2972,6 +2983,17 @@
         }
       }
     },
+    "Finish" : {
+      "comment" : "The Frame tab: a device frame dark or light",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Acabado"
+          }
+        }
+      }
+    },
     "Fit to Window" : {
       "comment" : "The timeline's track bar: the whole sequence in the width",
       "localizations" : {
@@ -3088,6 +3110,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cuadros por segundo"
+          }
+        }
+      }
+    },
+    "Frame, %1$@, %2$d of %3$d" : {
+      "comment" : "VoiceOver: a frame tile",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Marco, %1$@, %2$d de %3$d"
           }
         }
       }
@@ -3881,6 +3914,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Video MP4"
+          }
+        }
+      }
+    },
+    "MacBook" : {
+      "comment" : "The Frame tab: a MacBook drawn around the screen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "MacBook"
           }
         }
       }
@@ -5937,6 +5981,17 @@
         }
       }
     },
+    "Screen Framing" : {
+      "comment" : "The Frame tab: how the screen fills the stage, whole or following the cursor",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encuadre de la pantalla"
+          }
+        }
+      }
+    },
     "Screen Only" : {
       "comment" : "Layout name",
       "localizations" : {
@@ -7343,6 +7398,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La grabación no está en este proyecto."
+          }
+        }
+      }
+    },
+    "The recording isn't wide enough for this format." : {
+      "comment" : "The Frame tab: why Follow the Cursor is disabled",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La grabación no es lo bastante ancha para este formato."
           }
         }
       }
@@ -8823,6 +8889,17 @@
         }
       }
     },
+    "With Follow the Cursor, no frame is drawn." : {
+      "comment" : "The Frame tab: why the frames are dimmed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Con Seguir el cursor no se dibuja el marco."
+          }
+        }
+      }
+    },
     "With many menus, Area or Display works better." : {
       "localizations" : {
         "es" : {
@@ -9022,6 +9099,40 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "favorito"
+          }
+        }
+      }
+    },
+    "finish.dark" : {
+      "comment" : "The Frame tab: a device frame's finish, dark (masculine in Spanish, «acabado»)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Dark"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Oscuro"
+          }
+        }
+      }
+    },
+    "finish.light" : {
+      "comment" : "The Frame tab: a device frame's finish, light (masculine in Spanish, «acabado»)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Light"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Claro"
           }
         }
       }
@@ -9400,6 +9511,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "grabado ayer a las %@"
+          }
+        }
+      }
+    },
+    "reframe.fit" : {
+      "comment" : "The Frame tab, Screen Framing: the whole screen fitted inside the padding",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Completa"
           }
         }
       }

@@ -992,6 +992,14 @@ En una toma transcrita en español, con Clásico, Destacado y Mínimo, en Chico 
 - Con el permiso de Cámara sin pedir (`tccutil reset Camera dev.toma.Toma`): la columna muestra «Grabar un iPhone o un iPad necesita el permiso de Cámara.» con «Dar permiso…», que muestra el aviso del sistema con la isla debajo; permitido, la fila desaparece. Negado, «Dar permiso…» abre Ajustes del Sistema en Cámara. Ningún texto de la columna se corta.
 - Con VoiceOver: cada dispositivo se lee con su nombre, «Conectado por cable» y si está elegido; el estado vacío y la fila del permiso se leen enteros.
 
+**La pestaña Marco** (I14)
+
+- Con una toma 16:9 en 9:16, en la pestaña Marco (⌘2): elegir Ninguno, Ventana de macOS, iPhone, iPad y MacBook; cada mosaico se ve como queda (el iPhone acostado con un contenido ancho), el anillo violeta se mueve con un resorte (con Reducir movimiento, un fundido) y la vista previa cambia. Con un dispositivo, «Acabado: Oscuro / Claro» lo cambia; pasar de un dispositivo a otro conserva el acabado. Cada cambio es un deshacer.
+- «Encuadre de la pantalla: Completa / Seguir el cursor»: con la toma 16:9 en 16:9 (y en «Como la grabación») Seguir el cursor está apagado y debajo dice «La grabación no es lo bastante ancha para este formato.»; en 9:16, 1:1, 4:5, 3:4 y 4:3 se puede elegir. Con Seguir el cursor, la pestaña dice «Con Seguir el cursor no se dibuja el marco.» y los mosaicos y el acabado se ven atenuados, sin marco en la vista previa; volver a Completa lo dibuja otra vez.
+- Con Seguir el cursor en 9:16, cambiar el formato a 16:9: el control sigue usable para volver a Completa y dice por qué Seguir el cursor no se ofrece.
+- Con una toma de iPhone: Seguir el cursor está apagado y dice «Un iPhone o un iPad no tiene cursor que seguir.».
+- Con el panel en su ancho mínimo, en español: ningún texto de la pestaña se corta. Con VoiceOver: cada mosaico se lee «Marco, iPhone, 3 de 5» y si está elegido; el control de Encuadre apagado lee su motivo.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
