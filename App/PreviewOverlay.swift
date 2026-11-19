@@ -112,12 +112,16 @@ final class PreviewOverlayView: NSView {
     private var settling = false
     private var displayLink: CADisplayLink?
     private var lastTick: CFTimeInterval?
+    /// The rect of the privacy block selected (phase 2), over everything else here.
+    private let privacyEditor: PrivacyRectEditorView
 
     init(model: EditorModel) {
         self.model = model
+        privacyEditor = PrivacyRectEditorView(model: model)
         super.init(frame: .zero)
         wantsLayer = true
         setAccessibilityElement(false)
+        addSubview(privacyEditor)
     }
 
     @available(*, unavailable)
@@ -137,6 +141,7 @@ final class PreviewOverlayView: NSView {
         let document = model.document, selection = model.selection, playing = model.isPlaying, editable = model.canEdit
         _ = model.playheadFrame
         let project = model.overlayProject, now = model.playheadNanoseconds
+        privacyEditor.refresh()
         guard boxDrag == nil, bubbleDrag == nil, splitDrag == nil else { return }
         zoom = nil
         splitState = nil
@@ -367,6 +372,7 @@ final class PreviewOverlayView: NSView {
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
+        if let editor = privacyEditor.hitTest(local) { return editor }
         return hit(at: local) == nil ? nil : self
     }
 

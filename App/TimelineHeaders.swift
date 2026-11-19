@@ -105,7 +105,8 @@ final class TrackHeaderView: NSView {
         let two = track == .camera && !subtitle.stringValue.isEmpty
         let line = (mute != nil ? (height - 31) / 2 : two ? (height - 27) / 2 : (height - 14) / 2).rounded()
         icon.frame = CGRect(x: 8, y: line, width: 14, height: 14)
-        name.frame = CGRect(x: 26, y: line, width: bounds.width - 30, height: 14)
+        // To 1 pt from the separator: "Privacidad" fits whole.
+        name.frame = CGRect(x: 26, y: line, width: bounds.width - 27, height: 14)
         subtitle.frame = CGRect(x: 26, y: line + 14, width: bounds.width - 30, height: 13)
         // Its symbol's left edge under the name's first letter.
         mute?.frame = CGRect(x: 25, y: line + 16, width: 18, height: 15)

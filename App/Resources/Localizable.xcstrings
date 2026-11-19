@@ -12,6 +12,17 @@
         }
       }
     },
+    "%1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a privacy block of the timeline, its effect, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "%@ (and %lld more)" : {
       "comment" : "The library's strip: the first failure, and how many more",
       "localizations" : {
@@ -2719,6 +2730,17 @@
         }
       }
     },
+    "Fill" : {
+      "comment" : "A privacy block's effect (the Privacy track and tab): the rectangle is covered with a plain color",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relleno"
+          }
+        }
+      }
+    },
     "Fit to Window" : {
       "comment" : "The timeline's track bar: the whole sequence in the width",
       "localizations" : {
@@ -4545,6 +4567,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Permisos…"
+          }
+        }
+      }
+    },
+    "Pixelate" : {
+      "comment" : "A privacy block's effect (the Privacy track and tab): the rectangle is drawn in big squares",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pixelado"
           }
         }
       }

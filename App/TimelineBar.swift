@@ -17,6 +17,8 @@ final class TimelineBar: NSView {
     var onSpeed: (Double) -> Void = { _ in }
     var onCustomSpeed: () -> Void = {}
     var onAddZoom: () -> Void = {}
+    /// "Add Blur" (phase 2 design §7.1): a privacy block of 3 s from the playhead.
+    var onAddBlur: () -> Void = {}
     /// A layout of "Layout ▾": a block of it at the playhead or over the marked range.
     var onAddLayout: (LayoutKind) -> Void = { _ in }
     var onSnapping: (Bool) -> Void = { _ in }
@@ -29,6 +31,7 @@ final class TimelineBar: NSView {
     private let split = NSButton()
     private let speed = NSPopUpButton(frame: .zero, pullsDown: true)
     private let addZoom = NSButton()
+    private let addBlur = NSButton()
     private let addLayout = NSPopUpButton(frame: .zero, pullsDown: true)
     private let snapping = NSButton()
     private let smaller = NSButton()
@@ -46,6 +49,7 @@ final class TimelineBar: NSView {
         addSubview(separator)
         configure(split, symbol: "scissors", title: String(localized: "Split"), action: #selector(splitClicked))
         configure(addZoom, symbol: "plus.magnifyingglass", title: String(localized: "Add Zoom"), action: #selector(addZoomClicked))
+        configure(addBlur, symbol: "eye.slash", title: String(localized: "Add Blur"), action: #selector(addBlurClicked))
         Self.style(addLayout)
         addLayout.setAccessibilityLabel(String(localized: "Add Layout"))
         addLayout.toolTip = String(localized: "Add Layout")
@@ -77,7 +81,7 @@ final class TimelineBar: NSView {
         slider.action = #selector(sliderMoved)
         slider.isContinuous = true
         slider.setAccessibilityLabel(String(localized: "Timeline Scale"))
-        for view in [split, speed, addZoom, addLayout, snapping, smaller, slider, larger, fit] { addSubview(view) }
+        for view in [split, speed, addZoom, addBlur, addLayout, snapping, smaller, slider, larger, fit] { addSubview(view) }
         setSpeed(nil)
     }
 
@@ -122,7 +126,7 @@ final class TimelineBar: NSView {
         separator.frame = NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1)
         let y = (bounds.height - 22) / 2
         var x = 8.0
-        for (view, minimum) in [(split, 60.0), (speed, 52), (addZoom, 80), (addLayout, 80)] as [(NSButton, Double)] {
+        for (view, minimum) in [(split, 60.0), (speed, 52), (addZoom, 80), (addBlur, 80), (addLayout, 80)] as [(NSButton, Double)] {
             guard !view.isHidden else { continue }
             let width = Self.width(view, minimum: minimum)
             view.frame = NSRect(x: x, y: y, width: width, height: 22)
@@ -148,6 +152,7 @@ final class TimelineBar: NSView {
         addLayout.isEnabled = canEdit && hasCamera
         split.isEnabled = canEdit
         addZoom.isEnabled = canEdit
+        addBlur.isEnabled = canEdit
         speed.isEnabled = canEdit && hasClip
     }
 
@@ -207,6 +212,7 @@ final class TimelineBar: NSView {
 
     @objc private func splitClicked() { onSplit() }
     @objc private func addZoomClicked() { onAddZoom() }
+    @objc private func addBlurClicked() { onAddBlur() }
 
     @objc private func layoutChosen(_ sender: NSMenuItem) {
         if let raw = sender.representedObject as? String, let kind = LayoutKind(rawValue: raw) { onAddLayout(kind) }

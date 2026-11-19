@@ -20,6 +20,8 @@ enum EditorSelection: Equatable {
     case cameraChange(String)
     case screenChange(String)
     case layoutBlock(String)
+    /// Privacy blocks (phase 2 design §7.1), all of the Privacy track.
+    case privacyBlocks(Set<String>)
 }
 
 /// A track of sound of the take, as a row of the Audio tab.
@@ -168,6 +170,9 @@ final class EditorModel {
     @ObservationIgnored private(set) var takeScreens: TakeScreens?
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
+    /// The scene the preview draws now (the last revision built and shown): the overlays read the frame at the playhead
+    /// from it, as the render draws it (the rect of a privacy block, `PrivacyRectEditorView`).
+    private(set) var shownScene: FrameEvaluator?
 
     /// Whether the session can change the project, as it last said.
     private(set) var access = EditAccess.readOnly(.openElsewhere)
@@ -853,6 +858,9 @@ final class EditorModel {
             if !document.screens.changes.contains(where: { $0.id == id }) { selection = nil }
         case let .layoutBlock(id)?:
             if !document.camera.layouts.contains(where: { $0.id == id }) { selection = nil }
+        case let .privacyBlocks(ids)?:
+            let kept = ids.intersection(document.privacy.blocks.map(\.id))
+            selection = kept.isEmpty ? nil : .privacyBlocks(kept)
         case nil:
             break
         }
@@ -867,6 +875,7 @@ final class EditorModel {
     private func revisionBuilt(_ built: RevisionBuilder.Built) {
         guard let engine, state == .ready, builds.accepts(built.ticket, playheadRevision: timeline?.revision) else { return }
         engine.setScene(built.scene)
+        shownScene = built.scene
         previewAspect = built.document.aspect
         if let mix = built.mix, let player {
             player.setMix(mix)

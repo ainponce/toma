@@ -501,6 +501,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         model.addLayoutBlock(kind: .split)
                         if environment["TOMA_SHOWCASE_SELECT"] == "items-none" { model.selection = nil }
                     }
+                    // TOMA_SHOWCASE_SELECT=privacy: two privacy blocks, one over the other, the second selected (phase 2);
+                    // `privacy-fill`, the second a black fill.
+                    if environment["TOMA_SHOWCASE_SELECT"]?.hasPrefix("privacy") == true {
+                        model.showcasePrivacy(fill: environment["TOMA_SHOWCASE_SELECT"] == "privacy-fill")
+                    }
                 }
             }
             guard surface == "export" else { return }

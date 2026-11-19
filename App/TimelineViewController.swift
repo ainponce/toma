@@ -73,6 +73,7 @@ final class TimelineViewController: NSViewController {
         bar.onSpeed = { [weak model] in model?.setSpeed($0) }
         bar.onCustomSpeed = { [weak timeline] in timeline?.interaction.askCustomSpeed() }
         bar.onAddZoom = { [weak model] in model?.addZoom() }
+        bar.onAddBlur = { [weak model] in model?.addBlur() }
         bar.onAddLayout = { [weak model] in model?.addLayoutBlock(kind: $0) }
         bar.onSnapping = { [weak timeline] in timeline?.snapping = $0 }
         bar.onScale = { [weak timeline] in timeline?.setScale($0) }
@@ -172,6 +173,7 @@ final class TimelineViewController: NSViewController {
         switch selection {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
+        case let .privacyBlocks(ids)?: ids
         case nil: []
         }
     }

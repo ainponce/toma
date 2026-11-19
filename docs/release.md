@@ -938,6 +938,12 @@ En la ventana de permisos, «Permitir…» de «Monitoreo de entrada» muestra e
 - Con el permiso: escribir en Notas y en el campo de contraseña de Safari (y en el de una contraseña de Ajustes del Sistema): solo lo de Notas queda en la toma (Cursor ▸ Teclas en pantalla ▸ Todas), ni la contraseña ni la ↩ que cierra su campo. Pausar y reanudar escribiendo: las teclas de justo después de reanudar se ven como las de antes.
 - Con la distribución Español (Latinoamérica) o Español: ⌘⇧4 y ⌘⇧7 en una toma se ven «⌘ ⇧ 4» y «⌘ ⇧ 7» en Teclas en pantalla (no «$» ni «/»), y lo escrito con ⇧ en la píldora de Todas se ve como se escribió («$», «/»).
 
+**Privacidad a mano** (P6)
+
+- Privacidad: Agregar desenfoque desde la barra y desde Edición; mover y agrandar el rectángulo con zoom y sin él; mover, recortar y borrar en la pista; el export tapa lo mismo que la vista previa.
+- En detalle: «Agregar desenfoque» (la barra de la línea de tiempo y Edición ▸ Agregar desenfoque) crea un bloque de 3 s desde el cabezal, aparece la pista Privacidad y la vista previa muestra un rectángulo centrado de 40 % × 20 % con 8 manijas. Arrastrar el cuerpo lo mueve 1:1 con el puntero, una esquina o un lado lo agranda; cerca de los bordes y del centro de la pantalla dibujada se pega (con una línea de acento y un toque del trackpad) y con ⌘ apretado no. Lo mismo con un zoom de 2× a 4× parado sobre el bloque, con Pantalla dividida y con Seguir el cursor del reencuadre: el rectángulo queda sobre lo que tapa el desenfoque, sin corrimiento. Soltar es un paso: Edición ▸ Deshacer «Cambiar el desenfoque».
+- En la pista: dos bloques pisados se ven uno sobre otro, el más corto arriba, y el que se agarra es el de arriba; moverlo y recortarlo no frena en el otro; doble clic lleva el cabezal al bloque; el menú cambia entre Desenfoque, Pixelado y Relleno y borra; ⌫ borra los elegidos. VoiceOver lee «Desenfoque, de 0:02 a 0:05».
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

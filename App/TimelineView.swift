@@ -45,13 +45,14 @@ struct TimelineGeometry {
         switch item.track {
         case .video, .screen: return itemRect(item.output, top: top + 2, height: row.height - 4, gap: 1)
         case .zoom: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
+        case .privacy: return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1)
         case .camera:
             // A layout block is a rectangle; a change of the bubble, a diamond.
             if !item.output.isEmpty { return itemRect(item.output, top: top + 3, height: row.height - 6, gap: 1) }
             let x = snapped(self.x(item.output.lowerBound))
             guard x > -8, x < areaWidth + 8 else { return nil }
             return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
-        case .ruler, .audio, .captions, .privacy: return nil
+        case .ruler, .audio, .captions: return nil
         }
     }
 
@@ -451,6 +452,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
             + content.layoutBlocks.items.map { TimelineItem(id: $0.id, track: .camera, output: $0.output) }
             // After the blocks: a diamond inside one is pointed at before it.
             + content.cameraChanges.items.map { TimelineItem(id: $0.id, track: .camera, output: $0.output) }
+            // The longest first: the shortest under the pointer is found (plan 2c decision 4).
+            + content.privacy.hitOrder
         itemsCache = items
         return items
     }
