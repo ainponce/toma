@@ -222,7 +222,7 @@ func blurInTheCardUsesTheCardPath() throws {
     let drawer = try StageDrawing.Drawer()
     var counts = DrawCounts()
     let blurred = try drawer.draw(frame, counts: &counts)
-    #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: count, accumulations: count), "\(counts)")
+    #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: count, accumulations: count, overlaySteps: 1), "\(counts)")
     var once = frame
     once.subframes = []
     let sharp = try drawer.draw(once)

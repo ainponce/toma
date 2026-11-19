@@ -219,7 +219,7 @@ func legacyLookDrawsNothingNew() async throws {
         #expect(!camera.mirror && camera.opacity == 1 && camera.border == nil && camera.shadow == nil)
         let drawer = try Drawer()
         let drawn = try await offThePool { try drawer.draw(legacyFrame) }
-        #expect(drawn.counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1), "\(drawn.counts)")
+        #expect(drawn.counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1, overlaySteps: 1), "\(drawn.counts)")
         let bytes = try await render(project, legacy, size: size)
 
         // The legacy values said again (and a border of no width in another colour), the values read as them (below 0, not
@@ -257,7 +257,9 @@ func legacyLookDrawsNothingNew() async throws {
             camera.shadow = 0.4
         }, size: size)
         let styledCounts = try await offThePool { try drawer.draw(styled) }.counts
-        #expect(styledCounts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1, cameraShadows: 1, cameraBorders: 1))
+        #expect(
+            styledCounts
+                == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1, cameraShadows: 1, cameraBorders: 1, overlaySteps: 1))
     }
 }
 

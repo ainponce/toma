@@ -88,6 +88,9 @@ public final class FrameRenderer: @unchecked Sendable {
     /// builds the paths of a scene (`MotionPaths(take:events:document:cameraReadable:)`) and draws over the preview reads
     /// it here, so they see the layouts the render draws.
     public let cameraReadable: Bool
+    /// What every scene of the renderer reads of the project's analysis caches unless it is given its own
+    /// (`makeScene(document:paths:outputSize:analysis:)`, phase 2 design §10): `.none` in phase 1.
+    public let analysis: AnalysisInputs
     /// The reader of each track read so far, by track ID, made the first time a frame (or `missingVideo`) needs it.
     private let readers = Mutex<[String: TrackFrameReader]>([:])
     private let compositor: Compositor
@@ -188,12 +191,13 @@ public final class FrameRenderer: @unchecked Sendable {
     ///   - device: the system default device when `nil`.
     ///   - frameRate: the frames per second the output is drawn at, whose frame the motion blur's shutters are
     ///     fractions of (`FrameEvaluator`), in every scene of the renderer; the document's when `nil`.
+    ///   - analysis: what the scenes read of the project's analysis caches (phase 2 design §10).
     /// - Throws: `RenderError.noMetalDevice` without a Metal device, `invalidOutputSize`, and the
     ///   errors of `Compositor.init` and `CursorSprite.makeTexture`. Builds the document's motion paths
     ///   (`MotionPaths`), which takes tens of milliseconds for an hour of take: never on the main thread.
     public init(
         project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, device: (any MTLDevice)? = nil,
-        frameRate: Int? = nil
+        frameRate: Int? = nil, analysis: AnalysisInputs = .none
     ) throws {
         guard outputSize.x > 0, outputSize.y > 0 else { throw RenderError.invalidOutputSize(outputSize) }
         guard let device = device ?? MTLCreateSystemDefaultDevice() else { throw RenderError.noMetalDevice }
@@ -219,9 +223,10 @@ public final class FrameRenderer: @unchecked Sendable {
         }
         current = Mutex(FrameEvaluator(
             take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate,
-            cameraReadable: cameraReadable))
+            cameraReadable: cameraReadable, analysis: analysis))
         frameRateOverride = frameRate
         self.cameraReadable = cameraReadable
+        self.analysis = analysis
         package = project.package
         take = project.take
         events = project.events
@@ -230,11 +235,14 @@ public final class FrameRenderer: @unchecked Sendable {
     /// A scene of this renderer's take: `document` at `outputSize`, with `paths`
     /// (`MotionPaths(take:events:document:cameraReadable:)` of `document` with `cameraReadable`, built off the main thread),
     /// at the renderer's frames per second (the document's unless the renderer was given some), with the camera readable
-    /// as the renderer found it. Cheap: the paths are what costs.
-    public func makeScene(document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
+    /// as the renderer found it, reading `analysis` of the caches (the renderer's when `nil`; mind that `.none` there is
+    /// `Optional.none`, write `AnalysisInputs.none` for no analysis). Cheap: the paths are what costs.
+    public func makeScene(
+        document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>, analysis: AnalysisInputs? = nil
+    ) -> FrameEvaluator {
         FrameEvaluator(
             take: take, events: events, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride,
-            cameraReadable: cameraReadable)
+            cameraReadable: cameraReadable, analysis: analysis ?? self.analysis)
     }
 
     /// Makes `scene` the renderer's scene, and its size the one `encode(at:into:commandBuffer:)` checks: what was decoded

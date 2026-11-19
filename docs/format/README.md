@@ -1438,6 +1438,21 @@ El documento de diseño §6.2 con todos los campos de la fase 2 lejos de su valo
 - **Las colecciones.** `/privacy/blocks` admite `insert`, `remove` y `replace` (por `id`), como `/zoom/regions`. `/transcript/takes` existe solo con una transcripción y admite `insert` y `remove` (sus elementos no tienen `id`); una palabra se corrige con un `set` por puntero (`/transcript/takes/<i>/words/<j>/text`).
 - **Las etiquetas** (`label`) nuevas son veinticinco, después de las de la fase 1: `transcript.create`, `transcript.cut`, `transcript.restore`, `transcript.word`, `transcript.break`, `transcript.fillers`, `transcript.pauses`, `captions.show`, `captions.style`, `camera.hideSilences`, `camera.background`, `camera.framing`, `camera.look`, `camera.sync`, `audio.cleanup`, `audio.normalize`, `style.reframe`, `privacy.add`, `privacy.change`, `privacy.move`, `privacy.trim`, `privacy.delete`, `privacy.auto`, `keys.overlay` y `speed.typing`.
 
+### El orden de dibujo con el documento 3
+
+Un cuadro se dibuja en este orden (diseño de la fase 2, §11); lo nuevo, en negrita:
+
+1. El fondo, la sombra y el marco de ventana **o de dispositivo** (`style.frame` `device`, después del de ventana).
+2. La pantalla a través del zoom **y del reencuadre** (`style.reframe`), con **los desenfoques de privacidad** (`privacy.blocks`) en su shader.
+3. El cursor y los efectos de clic.
+4. La cámara, con **el recorte de su encuadre** (`camera.framing`), **su color** (`camera.look`), **su fondo** y **su máscara** (`camera.background`), tomada en **`t − syncOffset`** (`camera.syncOffset`).
+5. **Las teclas en pantalla** (`keys`).
+6. **Los subtítulos** (`captions`, sobre la transcripción).
+
+Es el mismo orden en los dos caminos de la fase 1 (el de 1b y el de los layouts) y en cada forma de dibujar un cuadro: directo, con el desenfoque de movimiento del zoom o del cursor, con el zoom dentro de la tarjeta y con la cámara a pantalla completa asentada (ahí, la cámara y encima las teclas y los subtítulos). El render y la mezcla nunca llaman a Vision, Speech ni a un Audio Unit: leen lo que guardan las cachés de análisis, que les llega como `AnalysisInputs` (vacío en la fase 1).
+
+**Con los valores legados, cada capa nueva vale `nil` o vacía y no cambia ninguna llamada**: sin marco de dispositivo, sin regiones de privacidad, con la cámara entera, natural, con su fondo original y en el mismo instante, sin teclas y sin subtítulos, el compositor hace las mismas llamadas, en el mismo orden y con los mismos uniforms que la fase 1, y el shader es el de la fase 1. Un documento 1 o 2 migrado se dibuja byte por byte como antes (la dorada 2, `make golden-2`).
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.

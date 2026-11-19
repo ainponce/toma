@@ -115,6 +115,12 @@ import simd
 ///   The camera and the cursor of the subsamples are read from one simulation of the span of the shutter
 ///   (`ZoomCameraPath.span(from:through:)`, `CursorPath.span(from:through:)`), not from a checkpoint for each.
 ///
+/// - Phase 2's layers (phase 2 design §11 and §12): each is worked out by its own scene, in its own file
+///   (`FrameEvaluator+<Layer>.swift`), built once with the scene (those of the size again by `resized(to:)`), and put onto
+///   a frame of the take last (`finishLayers`), on 1b's path and on the layouts': privacy on the screens, the camera's
+///   sync, framing, colour and background, the device frame, the keys and the captions. With the legacy values each is
+///   `nil` or empty and changes nothing of the frame.
+///
 /// The motion paths (`MotionPaths`: the screens, the cursor's path) are the document's revision's, given or built.
 public struct FrameEvaluator: Sendable {
     public let document: EditDocument
@@ -128,6 +134,8 @@ public struct FrameEvaluator: Sendable {
     public private(set) var outputSize: SIMD2<Int>
     /// The frames per second the output is drawn at: the motion blur's frame, and the grid a frame `n` is on.
     public let frameRate: Int
+    /// What the frames read of the project's analysis caches (phase 2 design §10): `.none` in phase 1.
+    public let analysis: AnalysisInputs
 
     private let take: TakeRecord
     private let events: [InputEvent]
@@ -162,6 +170,13 @@ public struct FrameEvaluator: Sendable {
     private let cursorShutter: Double
     /// Which layout rules at each output instant, and what is shown as they change: built once for the scene.
     private let layouts: LayoutTimeline
+    /// Phase 2's layers (`finishLayers`): those that depend on the output's size are made again by `resized(to:)`.
+    private let privacy: PrivacyScene
+    private let cameraSync: CameraSyncScene
+    private let cameraLook: CameraLookScene
+    private var deviceFrame: DeviceFrameScene
+    private var keys: KeyOverlayScene
+    private var captions: CaptionScene
 
     /// The two ways a frame is drawn (plan decision 13).
     enum Path {
@@ -180,10 +195,10 @@ public struct FrameEvaluator: Sendable {
     /// document's when `nil`.
     /// `cameraReadable`: some camera track of the take has a segment that can be read (plan decision 40, which the renderer
     /// finds in the package); without one, or without a camera track with a segment, the layouts that need the camera are
-    /// shown as Screen only.
+    /// shown as Screen only. `analysis`: what the frames read of the analysis caches (phase 2 design §10).
     public init(
         take: TakeRecord, events: [InputEvent], document: EditDocument, outputSize: SIMD2<Int>, paths: MotionPaths? = nil,
-        frameRate: Int? = nil, cameraReadable: Bool = true
+        frameRate: Int? = nil, cameraReadable: Bool = true, analysis: AnalysisInputs = .none
     ) {
         let timeMap = TimeMap(sequence: document.sequence)
         self.document = document
@@ -215,11 +230,18 @@ public struct FrameEvaluator: Sendable {
         zoomShutter = shutter(document.zoom.motionBlur)
         cursorShutter = shutter(document.cursor.motionBlur)
         layouts = LayoutTimeline(document: document, take: take, timeMap: timeMap, cameraReadable: cameraReadable && bubble != nil)
+        self.analysis = analysis
+        privacy = PrivacyScene(document: document, take: take, events: events)
+        cameraSync = CameraSyncScene(document: document, take: take)
+        cameraLook = CameraLookScene(document: document, take: take, analysis: analysis)
+        deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
+        keys = KeyOverlayScene(document: document, events: events, timeMap: timeMap, outputSize: outputSize)
+        captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
     }
 
-    /// The same document, motion paths and frames per second drawn at `outputSize`: only what depends on the size (the
-    /// background's blur, where the screens go and how a change moves them) is worked out again, so it is cheap; the
-    /// paths, which are in output time and stage units, are shared.
+    /// The same document, motion paths, frames per second and analysis drawn at `outputSize`: only what depends on the
+    /// size (the background's blur, where the screens go and how a change moves them, the device frame, the keys and the
+    /// captions) is worked out again, so it is cheap; the paths, which are in output time and stage units, are shared.
     public func resized(to outputSize: SIMD2<Int>) -> FrameEvaluator {
         guard outputSize != self.outputSize else { return self }
         var resized = self
@@ -228,6 +250,9 @@ public struct FrameEvaluator: Sendable {
             of: document.style, take: take, outputSize: outputSize, screens: document.screens)
         resized.transitions = Self.transitions(
             take: take, events: events, document: document, timeMap: timeMap, paths: paths, outputSize: outputSize)
+        resized.deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
+        resized.keys = KeyOverlayScene(document: document, events: events, timeMap: timeMap, outputSize: outputSize)
+        resized.captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
         return resized
     }
 
@@ -365,12 +390,38 @@ public struct FrameEvaluator: Sendable {
         }
         guard (forcedPath ?? (layouts.isTrivial ? .legacy : .layouts)) == .layouts else {
             frame.camera = camera(at: source, output: output)
+            finishLayers(&frame, source: source, output: output)
             return frame
         }
         let motion = Motion(
             zoomEnds: zoomEnds, zoomSpan: zoomSpan,
             cursor: cursorPlace.flatMap { place in cursorSpan.map { (span: $0, ends: cursorEnds, place: place) } })
-        return laidOut(frame, source: source, output: output, motion: motion)
+        var laid = laidOut(frame, source: source, output: output, motion: motion)
+        finishLayers(&laid, source: source, output: output)
+        return laid
+    }
+
+    /// Puts phase 2's layers (phase 2 design §11) onto `frame`, a frame of the take at output time `output` showing source
+    /// instant `source`, as either path left it, in this order: privacy on the screen and on the one being left; the
+    /// camera's frame taken at its sync (`CameraSyncScene`), then its framing, colour and background; the device frame
+    /// around the screen; the keys; the captions. With the legacy values each is `nil` or empty, and `frame` is as it was.
+    private func finishLayers(_ frame: inout RenderFrame, source: HostTime, output: Int64) {
+        if var screen = frame.screen {
+            privacy.apply(to: &screen, atSource: source)
+            frame.screen = screen
+        }
+        if var previous = frame.previousScreen {
+            privacy.apply(to: &previous, atSource: source)
+            frame.previousScreen = previous
+        }
+        if var camera = frame.camera {
+            camera.sourceTime = cameraSync.cameraTime(atSource: camera.sourceTime)
+            cameraLook.apply(to: &camera, atSource: source, output: output)
+            frame.camera = camera
+        }
+        frame.deviceFrame = deviceFrame.layer(around: frame.screen)
+        frame.keys = keys.layer(atOutput: output)
+        frame.captions = captions.layer(atOutput: output)
     }
 
     /// What 1b's path read of the paths for the motion blur of a frame, which the card's reads again: the ends of the zoom
@@ -701,8 +752,13 @@ public struct FrameEvaluator: Sendable {
     /// around it (`StageLayout.windowRect`).
     private static func placement(of view: ShownScreen, style: StageStyle, outputSize: SIMD2<Double>) -> ScreenPlacement {
         let aspect = view.region.map { $0.width / $0.height }
+        if case let .device(device) = style.frame,
+           let placement = DeviceFrameGeometry.placement(contentAspect: aspect, padding: style.padding, outputSize: outputSize, frame: device)
+        {
+            return placement
+        }
         switch style.frame {
-        // A device sits as no frame until its layer draws it (plan decision 10).
+        // A device without a placement of its own (`DeviceFrameGeometry`) sits as no frame (base plan decision 10).
         case .none, .device:
             let rect = StageLayout.screenRect(contentAspect: aspect, padding: style.padding, outputSize: outputSize)
             return ScreenPlacement(screen: rect, window: rect, barHeight: 0)

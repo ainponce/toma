@@ -53,6 +53,9 @@ public final class EditedMix: Sendable {
     let source: Source
     /// The segments this mix decoded to find where their audio ends: none for one made by `with(document:framesPerSecond:)`.
     let prereadSegments: Int
+    /// What the mix reads of the project's analysis caches (phase 2 design §10), kept by the mixes of other revisions
+    /// (`with(document:framesPerSecond:)`): `.none` in phase 1.
+    public let analysis: AnalysisInputs
 
     /// The clips with any output, in order.
     private let pieces: [Piece]
@@ -144,11 +147,14 @@ public final class EditedMix: Sendable {
     /// 4 ms at 48 kHz: the fades between two clips.
     static let fadeFrames: Int64 = 192
 
-    /// The mix of `document` of `project` at `framesPerSecond`: reads every microphone and system audio track of the take
-    /// (opening its segments and decoding them once, off Swift's cooperative pool, to find where each one's audio ends).
+    /// The mix of `document` of `project` at `framesPerSecond`, reading `analysis` of the caches: reads every microphone and
+    /// system audio track of the take (opening its segments and decoding them once, off Swift's cooperative pool, to find
+    /// where each one's audio ends).
     /// - Precondition: `framesPerSecond` is positive.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while reading.
-    public static func make(project: LoadedProject, document: EditDocument, framesPerSecond: Int) async throws -> EditedMix {
+    public static func make(
+        project: LoadedProject, document: EditDocument, framesPerSecond: Int, analysis: AnalysisInputs = .none
+    ) async throws -> EditedMix {
         let tracks = project.take.tracks.filter { !$0.kind.isVideo }
         var channels = 1
         for track in tracks { channels = max(channels, await AudioTrackTimeline.channelCount(of: track, in: project)) }
@@ -167,22 +173,23 @@ public final class EditedMix: Sendable {
         let source = Source(
             take: project.take, origin: origin, editable: editable.start...editable.end, channels: channels, tracks: timelines,
             clicks: clicks, cameraReadable: cameraReadable)
-        return EditedMix(source: source, document: document, framesPerSecond: framesPerSecond, prereadSegments: timelines.reduce(0) {
-            $0 + $1.decodedSegments
-        })
+        return EditedMix(
+            source: source, document: document, framesPerSecond: framesPerSecond,
+            prereadSegments: timelines.reduce(0) { $0 + $1.decodedSegments }, analysis: analysis)
     }
 
     /// The mix of another revision of the document, `document` at `framesPerSecond`, of the same project: it reads the
     /// same source, without decoding it again to place it.
     /// - Precondition: `framesPerSecond` is positive.
     public func with(document: EditDocument, framesPerSecond: Int) -> EditedMix {
-        EditedMix(source: source, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0)
+        EditedMix(source: source, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
-    private init(source: Source, document: EditDocument, framesPerSecond: Int, prereadSegments: Int) {
+    private init(source: Source, document: EditDocument, framesPerSecond: Int, prereadSegments: Int, analysis: AnalysisInputs) {
         precondition(framesPerSecond > 0, "EditedMix: \(framesPerSecond) frames per second")
         self.source = source
         self.prereadSegments = prereadSegments
+        self.analysis = analysis
         channels = source.channels
         let timeMap = TimeMap(sequence: document.sequence)
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)

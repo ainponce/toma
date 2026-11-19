@@ -246,15 +246,15 @@ func cameraFullDrawsNothingBelow() async throws {
     let drawer = try Drawer()
     let frames = [covered, below, stage]
     let drawn = try await offThePool { try frames.map { try drawer.draw($0) } }
-    #expect(drawn[0].counts == DrawCounts(renderPasses: 1, cameras: 1), "\(drawn[0].counts)")
-    #expect(drawn[1].counts == DrawCounts(renderPasses: 1, backgrounds: 1, cameras: 1), "\(drawn[1].counts)")
-    #expect(drawn[2].counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1), "\(drawn[2].counts)")
+    #expect(drawn[0].counts == DrawCounts(renderPasses: 1, cameras: 1, overlaySteps: 1), "\(drawn[0].counts)")
+    #expect(drawn[1].counts == DrawCounts(renderPasses: 1, backgrounds: 1, cameras: 1, overlaySteps: 1), "\(drawn[1].counts)")
+    #expect(drawn[2].counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1, overlaySteps: 1), "\(drawn[2].counts)")
     #expect(drawn[0].bytes == drawn[1].bytes)
     #expect(drawn[0].bytes == drawn[2].bytes)
 
     // Without a camera frame to draw, what is under it is drawn: never a black frame.
     let cameraless = try await offThePool { try drawer.draw(covered, cameraless: true) }
-    #expect(cameraless.counts == DrawCounts(renderPasses: 1, backgrounds: 1))
+    #expect(cameraless.counts == DrawCounts(renderPasses: 1, backgrounds: 1, overlaySteps: 1))
     #expect(isBackdrop(pixel(cameraless.bytes, width: size.x, x: 320, y: 180)))
 }
 
@@ -336,7 +336,7 @@ func transitionIsOneComposition() async throws {
         #expect(isBetween(camera.rect, bubble.rect, split.rect), "\(time): \(camera.rect)")
         #expect(isBetween(screen.rect, bubbleScreen.rect, splitScreen.rect), "\(time): \(screen.rect)")
         let counts = try await offThePool { try drawer.draw(frame) }.counts
-        #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1), "\(time): \(counts)")
+        #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1, overlaySteps: 1), "\(time): \(counts)")
     }
 
     // Bubble, then Camera only from 2 s on: the screen fades out as one group while the camera grows into its card.
@@ -348,7 +348,7 @@ func transitionIsOneComposition() async throws {
         #expect(shadow.rect == screen.rect && shadow.cornerRadius == screen.cornerRadius, "\(time)")
         #expect(isBetween(try #require(frame.camera).rect, bubble.rect, try #require(cameraOnly.frame(at: 4).camera).rect))
         let counts = try await offThePool { try drawer.draw(frame) }.counts
-        #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1), "\(time): \(counts)")
+        #expect(counts == DrawCounts(renderPasses: 1, backgrounds: 1, screens: 1, cameras: 1, overlaySteps: 1), "\(time): \(counts)")
     }
     #expect(cameraOnly.frame(at: 4).screen == nil && cameraOnly.frame(at: 4).screenOpacity == 0)
 }

@@ -74,6 +74,14 @@ public struct RenderFrame: Equatable, Sendable {
     /// still (an identity) in a card, the stage's zoom (`StageTransform.mix`) on the way between the two during a
     /// transition. `nil` on the stage, 1b's mode: everything through `stage`.
     public var backgroundTransform: StageTransform?
+    /// The device around the screen (phase 2 design §6.7), drawn after the window frame (§11, step 1); `nil` without one,
+    /// as every document of phase 1.
+    public var deviceFrame: DeviceFrameLayer?
+    /// The keys on screen (phase 2 design §7.4), over the camera (§11, step 5); `nil` without them, as every document of
+    /// phase 1.
+    public var keys: KeyOverlayLayer?
+    /// The captions (phase 2 design §5.2), over everything (§11, step 6); `nil` without them, as every document of phase 1.
+    public var captions: CaptionLayer?
 
     /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
     var isCardMode: Bool { card != nil || backgroundTransform != nil }
@@ -98,7 +106,10 @@ public struct RenderFrame: Equatable, Sendable {
         screenOpacity: Double? = nil,
         coveredByCamera: Bool = false,
         card: CardPlacement? = nil,
-        backgroundTransform: StageTransform? = nil
+        backgroundTransform: StageTransform? = nil,
+        deviceFrame: DeviceFrameLayer? = nil,
+        keys: KeyOverlayLayer? = nil,
+        captions: CaptionLayer? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -120,6 +131,9 @@ public struct RenderFrame: Equatable, Sendable {
         self.coveredByCamera = coveredByCamera
         self.card = card
         self.backgroundTransform = backgroundTransform
+        self.deviceFrame = deviceFrame
+        self.keys = keys
+        self.captions = captions
     }
 }
 
@@ -261,10 +275,13 @@ public struct ScreenLayer: Equatable, Sendable {
     /// 1 opaque, as the recorded video always is; below it while it fades in over the screen going away
     /// (`RenderFrame.previousScreen`), or with its group in the camera layouts (`RenderFrame.screenOpacity`); 0 not drawn.
     public var opacity: Double
+    /// What privacy hides of it (phase 2 design §7.1), in its shader (§11, step 2): at most `PrivacyRegion.maxPerFrame`,
+    /// as fractions of `crop`. None, as in phase 1: the screen's own shader.
+    public var privacy: [PrivacyRegion]
 
     public init(
         trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double, crop: Rect = Rect(x: 0, y: 0, width: 1, height: 1),
-        mipmapped: Bool = false, opacity: Double = 1
+        mipmapped: Bool = false, opacity: Double = 1, privacy: [PrivacyRegion] = []
     ) {
         self.trackID = trackID
         self.sourceTime = sourceTime
@@ -273,6 +290,7 @@ public struct ScreenLayer: Equatable, Sendable {
         self.crop = crop
         self.mipmapped = mipmapped
         self.opacity = opacity
+        self.privacy = privacy
     }
 }
 
@@ -323,10 +341,19 @@ public struct CameraLayer: Equatable, Sendable {
     /// Under the camera, drawn before it; `nil` without one. It fades with the camera as one group, so the camera hides
     /// its own shadow at any opacity, as it does opaque.
     public var shadow: ShadowLayer?
+    /// The part of the camera's picture its framing shows (phase 2 design §6.2), as fractions of the picture (0, 0 its
+    /// top-left corner), which fills `rect` without stretching as the whole picture does without it. The whole picture,
+    /// as in phase 1: the fill of 1b, not even worked out again.
+    public var crop: Rect
+    /// Its colour (phase 2 design §6.3); `nil`, natural, as in phase 1.
+    public var look: CameraLookLayer?
+    /// What is behind the person (phase 2 design §6.1); `nil`, the original, as in phase 1.
+    public var background: CameraBackgroundLayer?
 
     public init(
         trackID: String, sourceTime: HostTime, rect: Rect, cornerRadius: Double, mirror: Bool = false, opacity: Double = 1,
-        border: CameraBorderLayer? = nil, shadow: ShadowLayer? = nil
+        border: CameraBorderLayer? = nil, shadow: ShadowLayer? = nil, crop: Rect = Rect(x: 0, y: 0, width: 1, height: 1),
+        look: CameraLookLayer? = nil, background: CameraBackgroundLayer? = nil
     ) {
         self.trackID = trackID
         self.sourceTime = sourceTime
@@ -336,6 +363,9 @@ public struct CameraLayer: Equatable, Sendable {
         self.opacity = opacity
         self.border = border
         self.shadow = shadow
+        self.crop = crop
+        self.look = look
+        self.background = background
     }
 }
 

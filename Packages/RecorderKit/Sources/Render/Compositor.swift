@@ -25,6 +25,12 @@ import ProjectFormat
 /// window frame are drawn through the background's transform, and the screens, the cursor and the click effects through
 /// the card's content, cut to the card (`Compositor+Card.swift`).
 ///
+/// Phase 2's layers (phase 2 design §11) are drawn in that order by their own files (`Compositor+<Layer>.swift`), with
+/// their own pipelines (`LayerPipelines`): the device frame after the window frame, the screen's privacy in its shader,
+/// the camera's colour and background in its shader and its framing's crop in its fill, then the keys and the captions
+/// over the camera, on every path (`drawOverlays`). A layer that is `nil` or empty, as with the legacy values, draws
+/// nothing and changes no call, so the frame is drawn as in phase 1.
+///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
 public final class Compositor: @unchecked Sendable {
@@ -51,6 +57,8 @@ public final class Compositor: @unchecked Sendable {
     /// Linear between the texels and between the mipmap levels: the cursor, the title and a screen with mipmaps.
     private let trilinearSampler: any MTLSamplerState
     private let mipmappedCopies: MipmappedCopies
+    /// The pipelines of phase 2's layers (`Compositor+<Layer>.swift`), made last.
+    let layers: LayerPipelines
 
     /// Throws the compiler's error if the shaders do not build, and `RenderError` if Metal cannot make a
     /// pipeline or sampler.
@@ -67,45 +75,16 @@ public final class Compositor: @unchecked Sendable {
         let options = MTLCompileOptions()
         options.mathMode = .safe
         let library = try device.makeLibrary(source: ShaderSource.metal, options: options)
-        func function(_ name: String) throws -> any MTLFunction {
-            guard let function = library.makeFunction(name: name) else { throw RenderError.missingShaderFunction(name) }
-            return function
-        }
+        let maker = PipelineMaker(device: device, library: library)
+        // Phase 1's pipelines, made as they always were.
         func pipeline(
             vertex: String, fragment: String, blending: Blending, into attachments: Attachments = .target
         ) throws -> any MTLRenderPipelineState {
-            let descriptor = MTLRenderPipelineDescriptor()
-            descriptor.vertexFunction = try function(vertex)
-            descriptor.fragmentFunction = try function(fragment)
-            let written: Int
-            switch attachments {
-            case .target:
-                descriptor.colorAttachments[0].pixelFormat = Self.pixelFormat
-                written = 0
-            case let .blurPass(index):
-                for (i, format) in [Self.pixelFormat, Self.sumFormat, Self.pixelFormat].enumerated() {
-                    descriptor.colorAttachments[i].pixelFormat = format
-                    if i != index { descriptor.colorAttachments[i].writeMask = [] }
-                }
-                written = index
-            }
-            let color = descriptor.colorAttachments[written]!
-            switch blending {
-            case .none:
-                break
-            case .over, .add:
-                color.isBlendingEnabled = true
-                color.rgbBlendOperation = .add
-                color.alphaBlendOperation = .add
-                color.sourceRGBBlendFactor = .one
-                color.sourceAlphaBlendFactor = .one
-                color.destinationRGBBlendFactor = blending == .over ? .oneMinusSourceAlpha : .one
-                color.destinationAlphaBlendFactor = blending == .over ? .oneMinusSourceAlpha : .one
-            }
-            return try device.makeRenderPipelineState(descriptor: descriptor)
+            try maker.pipeline(vertex: vertex, fragment: fragment, blending: blending, into: attachments)
         }
-        func stagePipelines(into attachments: Attachments) throws -> StagePipelines {
-            try StagePipelines(
+        func stagePipelines(into pass: LayerPass) throws -> StagePipelines {
+            let attachments = pass.attachments
+            return try StagePipelines(
                 gradient: pipeline(vertex: "gradientVertex", fragment: "gradientFragment", blending: .none, into: attachments),
                 stageGradient: pipeline(vertex: "gradientVertex", fragment: "stageGradientFragment", blending: .none, into: attachments),
                 wallpaper: pipeline(vertex: "quadVertex", fragment: "wallpaperFragment", blending: .none, into: attachments),
@@ -125,18 +104,19 @@ public final class Compositor: @unchecked Sendable {
                 clippedScreen: pipeline(vertex: "quadVertex", fragment: "clippedScreenFragment", blending: .over, into: attachments),
                 clippedMipmappedScreen: pipeline(
                     vertex: "quadVertex", fragment: "clippedMipmappedScreenFragment", blending: .over, into: attachments),
-                clippedCursor: pipeline(vertex: "quadVertex", fragment: "clippedCursorFragment", blending: .over, into: attachments))
+                clippedCursor: pipeline(vertex: "quadVertex", fragment: "clippedCursorFragment", blending: .over, into: attachments),
+                pass: pass)
         }
         self.library = library
         self.device = device
         direct = try stagePipelines(into: .target)
-        subsample = try stagePipelines(into: .blurPass(writing: 0))
+        subsample = try stagePipelines(into: .subsample)
         clickEffectPipeline = try pipeline(vertex: "quadVertex", fragment: "clickEffectFragment", blending: .over)
         clippedClickEffectPipeline = try pipeline(vertex: "quadVertex", fragment: "clippedClickEffectFragment", blending: .over)
         directCamera = try CameraPipelines(
             picture: direct.screen,
             bordered: pipeline(vertex: "quadVertex", fragment: "borderedCameraFragment", blending: .over),
-            shadow: pipeline(vertex: "quadVertex", fragment: "cameraShadowFragment", blending: .over))
+            shadow: pipeline(vertex: "quadVertex", fragment: "cameraShadowFragment", blending: .over), pass: .target)
         blur = try BlurPipelines(
             accumulate: pipeline(vertex: "gradientVertex", fragment: "accumulateFragment", blending: .none, into: .blurPass(writing: 1)),
             cursorSample: pipeline(vertex: "quadVertex", fragment: "cursorSampleFragment", blending: .add, into: .blurPass(writing: 1)),
@@ -150,7 +130,8 @@ public final class Compositor: @unchecked Sendable {
                 bordered: pipeline(
                     vertex: "quadVertex", fragment: "borderedCameraTargetFragment", blending: .over, into: .blurPass(writing: 2)),
                 shadow: pipeline(
-                    vertex: "quadVertex", fragment: "cameraShadowTargetFragment", blending: .over, into: .blurPass(writing: 2))),
+                    vertex: "quadVertex", fragment: "cameraShadowTargetFragment", blending: .over, into: .blurPass(writing: 2)),
+                pass: .blurTarget),
             clear: pipeline(vertex: "gradientVertex", fragment: "transparentFragment", blending: .none, into: .blurPass(writing: 0)),
             clippedCursorSample: pipeline(
                 vertex: "quadVertex", fragment: "clippedCursorSampleFragment", blending: .add, into: .blurPass(writing: 1)),
@@ -172,6 +153,7 @@ public final class Compositor: @unchecked Sendable {
         self.screenSampler = screenSampler
         self.trilinearSampler = trilinearSampler
         mipmappedCopies = MipmappedCopies(device: device)
+        layers = try LayerPipelines(maker: maker)
     }
 
     /// Encodes the frame into `target`, which must be `.bgra8Unorm` (`pixelFormat`). Positions in `frame` map onto the
@@ -234,6 +216,7 @@ public final class Compositor: @unchecked Sendable {
             let encoder = renderPass(into: target, commandBuffer: commandBuffer)
             counts.renderPasses += 1
             drawCamera(layer, texture: camera, outputSize: frame.outputSize, pipelines: directCamera, encoder: encoder, counts: &counts)
+            drawOverlays(frame, pass: directCamera.pass, encoder: encoder, counts: &counts)
             encoder.endEncoding()
             return
         }
@@ -489,9 +472,15 @@ public final class Compositor: @unchecked Sendable {
         // 4. Screen, cut by the window around it if there is one: the one being left first, then the one coming over it.
         for (layer, screenImage) in [(contentPrevious, textures.previousScreen), (contentScreen, textures.screen)] {
             guard let layer, let screenImage, layer.opacity > 0 else { continue }
-            let pipeline = card == nil
+            // With privacy regions (phase 2 design §11, step 2), the screen's shader with them, bound first.
+            let privacy = privacyScreenPipeline(for: layer, clipped: card != nil, mipmapped: layer.mipmapped, pass: pipelines.pass)
+            if privacy != nil {
+                bindPrivacy(layer.privacy, encoder: encoder)
+                counts.privacyScreens += 1
+            }
+            let pipeline = privacy ?? (card == nil
                 ? (layer.mipmapped ? pipelines.mipmappedScreen : pipelines.screen)
-                : (layer.mipmapped ? pipelines.clippedMipmappedScreen : pipelines.clippedScreen)
+                : (layer.mipmapped ? pipelines.clippedMipmappedScreen : pipelines.clippedScreen))
             // Only an area's crop is clamped: the whole frame is drawn exactly as before (the golden frames).
             drawImage(
                 screenImage.texture, in: layer.rect, cornerRadius: contentWindow?.cornerRadius ?? layer.cornerRadius,
@@ -512,7 +501,8 @@ public final class Compositor: @unchecked Sendable {
     }
 
     /// The stage's frame of `drawStage` (design §7.2, steps 1 to 3): the background, the shadow and the window frame,
-    /// through `stage`; `window`, `screenLayer` and `shadow` as they are drawn, the rest as `drawStage` works it out.
+    /// through `stage`, then the device frame (phase 2 design §11, step 1); `window`, `screenLayer` and `shadow` as they
+    /// are drawn, the rest as `drawStage` works it out.
     private func drawFrame(
         _ frame: RenderFrame, through stage: StageTransform?, window: WindowFrameLayer?, screenLayer: ScreenLayer?,
         shadow: ShadowLayer?, shadowDrawing: ShadowDrawing, fade: Double?, bands: [MTLScissorRect]?, textures: StageTextures,
@@ -563,10 +553,14 @@ public final class Compositor: @unchecked Sendable {
                     pipeline: fade == nil ? pipelines.sprite : pipelines.cursor, viewport: viewport, encoder: encoder)
             }
         }
+
+        // The device frame (phase 2 design §11, step 1), after the window frame.
+        drawDeviceFrame(frame.deviceFrame, through: stage, outputSize: size, pass: pipelines.pass, encoder: encoder, counts: &counts)
     }
 
     /// Draws what goes over the stage of `frame`: its click effects through `stage` (design §7.2, step 6), never blurred,
-    /// with `clickEffect` (in a card, cut to it: `card`), then the camera in output space (step 7) with `cameraPipelines`.
+    /// with `clickEffect` (in a card, cut to it: `card`), then the camera in output space (step 7) with `cameraPipelines`,
+    /// then the keys and the captions in its pass (phase 2 design §11, steps 5 and 6).
     func drawOverTheStage(
         _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, camera: (any MTLTexture)?,
         clickEffect: any MTLRenderPipelineState, cameraPipelines: CameraPipelines, encoder: any MTLRenderCommandEncoder,
@@ -577,10 +571,13 @@ public final class Compositor: @unchecked Sendable {
             frame.clickEffects, through: stage, outputSize: frame.outputSize, clip: card, pipeline: clickEffect, encoder: encoder,
             counts: &counts)
 
-        // 7. Camera, over everything.
+        // 7. Camera, over the stage.
         if let layer = frame.camera, let camera {
             drawCamera(layer, texture: camera, outputSize: frame.outputSize, pipelines: cameraPipelines, encoder: encoder, counts: &counts)
         }
+
+        // Phase 2's keys and captions, over everything.
+        drawOverlays(frame, pass: cameraPipelines.pass, encoder: encoder, counts: &counts)
     }
 
     /// Draws the camera `layer` with `texture`, its frame (design §7.2, step 7, and 1c design §14.3), in output space with
@@ -588,7 +585,9 @@ public final class Compositor: @unchecked Sendable {
     /// rect's shape), flipped with `mirror` (`u` becomes `1 − u` across that crop), and its border over the picture in the
     /// same drawing, all at its opacity (0 to 1). Nothing of one hidden (its opacity not above 0, or not a number). With
     /// no shadow and no border, the one drawing of 1b, with its values: at opacity 1, the picture exactly as opaque as
-    /// ever.
+    /// ever. Its framing's crop (`CameraLayer.crop`, phase 2 design §6.2) is the part of the picture that fills the rect,
+    /// the whole picture as in 1b; with a colour or a background (`look`, `background`), the camera's pipeline of
+    /// `cameraLookPipeline` draws it, with what `bindCameraLook` binds.
     private func drawCamera(
         _ layer: CameraLayer, texture: any MTLTexture, outputSize: SIMD2<Int>, pipelines: CameraPipelines,
         encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
@@ -602,14 +601,23 @@ public final class Compositor: @unchecked Sendable {
         {
             counts.cameraShadows += 1
         }
-        var fill = Self.aspectFill(SIMD2(Double(texture.width), Double(texture.height)), in: layer.rect)
+        let pictureSize = SIMD2(Double(texture.width), Double(texture.height))
+        var fill = layer.crop == Rect(x: 0, y: 0, width: 1, height: 1)
+            ? Self.aspectFill(pictureSize, in: layer.rect) : Self.aspectFill(pictureSize, cropped: layer.crop, in: layer.rect)
         if layer.mirror {
             fill = (SIMD2(fill.origin.x + fill.size.x, fill.origin.y), SIMD2(-fill.size.x, fill.size.y))
         }
         let border = layer.border.flatMap { $0.width > 0 && $0.width.isFinite ? $0 : nil }
+        // With a colour or a background (phase 2 design §11, step 4), the camera's shader with them, bound first.
+        let look = cameraLookPipeline(for: layer, bordered: border != nil, pass: pipelines.pass)
+        if look != nil {
+            bindCameraLook(layer, encoder: encoder)
+            counts.cameraLooks += 1
+        }
         drawImage(
             texture, in: layer.rect, cornerRadius: layer.cornerRadius, uvOrigin: fill.origin, uvSize: fill.size, opacity: opacity,
-            border: border, pipeline: border == nil ? pipelines.picture : pipelines.bordered, viewport: viewport, encoder: encoder)
+            border: border, pipeline: look ?? (border == nil ? pipelines.picture : pipelines.bordered), viewport: viewport,
+            encoder: encoder)
         counts.cameras += 1
         if border != nil { counts.cameraBorders += 1 }
     }
@@ -1006,6 +1014,17 @@ public final class Compositor: @unchecked Sendable {
         let height = imageAspect / rectAspect
         return (SIMD2(0, Float((1 - height) / 2)), SIMD2(1, Float(height)))
     }
+
+    /// The part of an image of `size` that fills `rect` without stretching from its part `crop` (fractions of it): the
+    /// part of `crop`'s pixels that `aspectFill` gives, as fractions of the whole image. A crop that is not finite or has
+    /// no size is the whole image.
+    static func aspectFill(_ size: SIMD2<Double>, cropped crop: Rect, in rect: Rect) -> (origin: SIMD2<Float>, size: SIMD2<Float>) {
+        let parts = [crop.x, crop.y, crop.width, crop.height]
+        guard parts.allSatisfy(\.isFinite), crop.width > 0, crop.height > 0 else { return aspectFill(size, in: rect) }
+        let part = aspectFill(SIMD2(size.x * crop.width, size.y * crop.height), in: rect)
+        let origin = SIMD2(Float(crop.x), Float(crop.y)), extent = SIMD2(Float(crop.width), Float(crop.height))
+        return (origin + part.origin * extent, part.size * extent)
+    }
 }
 
 /// What `Compositor.encode` drew, for tests: its render passes, and its drawings of each kind (a cursor or a click effect
@@ -1024,17 +1043,27 @@ struct DrawCounts: Equatable, Sendable {
     var cameraShadows = 0
     /// Its pictures drawn with a border.
     var cameraBorders = 0
+    /// Phase 2's layers drawn (phase 2 design §11): device frames, screens drawn with their privacy regions, cameras with
+    /// their colour or background, keys and captions.
+    var deviceFrames = 0
+    var privacyScreens = 0
+    var cameraLooks = 0
+    var keyOverlays = 0
+    var captions = 0
+    /// How many times the keys' and the captions' step was reached (`Compositor.drawOverlays`): once a frame, on every
+    /// path, drawn or not.
+    var overlaySteps = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1
 /// the sum, 2 the target), the others left as they are.
-private enum Attachments {
+enum Attachments {
     case target
     case blurPass(writing: Int)
 }
 
 /// How a pipeline blends what it draws: not at all, premultiplied "over", or added.
-private enum Blending {
+enum Blending {
     case none, over, add
 }
 
@@ -1059,6 +1088,8 @@ struct StagePipelines {
     let clippedScreen: any MTLRenderPipelineState
     let clippedMipmappedScreen: any MTLRenderPipelineState
     let clippedCursor: any MTLRenderPipelineState
+    /// The pass they draw in: a layer drawn with them picks its own pipelines of it.
+    let pass: LayerPass
 }
 
 /// The pipelines of the motion blur's pass that do not draw the stage.
@@ -1088,6 +1119,8 @@ struct CameraPipelines {
     let bordered: any MTLRenderPipelineState
     /// Its shadow, under it.
     let shadow: any MTLRenderPipelineState
+    /// The pass they draw in: a layer drawn with them picks its own pipelines of it.
+    let pass: LayerPass
 }
 
 /// The screen's frame as it is sampled: its texture and the part of it shown, as fractions of it.
