@@ -79,6 +79,8 @@ private func description(of error: CaptureSourceError) -> String {
         String(localized: "The iPhone or iPad was disconnected.")
     case .deviceInterrupted:
         String(localized: "The iPhone or iPad stopped sending its screen.")
+    case .cameraAccessDenied:
+        String(localized: "Camera access is off.")
     }
 }
 
