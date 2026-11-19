@@ -390,6 +390,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         present(settings)
     }
 
+    /// Settings, on the Recording pane (the editor's notes that point to it).
+    func showRecordingSettings() {
+        showSettings()
+        settings?.showRecordingPane()
+    }
+
     /// A global shortcut was pressed.
     private func perform(_ action: HotKeyAction) {
         switch action {
@@ -495,6 +501,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if let aspect = environment["TOMA_SHOWCASE_ASPECT"].flatMap(Aspect.init(rawValue:)) { model.setAspect(aspect) }
                     // TOMA_SHOWCASE_SAFEZONES=1 shows the safe-zone guide over the preview.
                     if environment["TOMA_SHOWCASE_SAFEZONES"] == "1" { model.showsSafeZones = true }
+                    // TOMA_SHOWCASE_KEYS=<shortcuts|all> turns the keys on screen on (phase 2).
+                    if let mode = environment["TOMA_SHOWCASE_KEYS"].flatMap(KeyOverlayMode.init(rawValue:)) {
+                        model.setKeyOverlay(mode: mode, position: .bottomLeading, size: .large)
+                    }
                     if let tab = environment["TOMA_SHOWCASE_TAB"].flatMap(Int.init).flatMap(EditorPanelTab.init) { model.panelTab = tab }
                     if environment["TOMA_SHOWCASE_SELECT"] == "zoom", let id = model.document?.zoom.regions.first?.id {
                         model.selection = .zooms([id])

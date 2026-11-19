@@ -155,6 +155,10 @@ final class EditorModel {
     var renderCameraReadable: Bool { renderer?.cameraReadable ?? false }
     /// The take saved the shapes of the cursor (`cursorImage` events): macOS's cursor can be drawn.
     private(set) var hasCursorImages = false
+    /// The take recorded key presses (`keyPress` events): the keys on screen have something to show.
+    private(set) var hasKeyPresses = false
+    /// The take's screen is an iPhone or an iPad (a `device` track): it has no cursor.
+    private(set) var screenIsDevice = false
     /// The take has clicks to make zooms from; without them the Zoom tab says so.
     private(set) var hasClicks = false
     /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
@@ -474,6 +478,8 @@ final class EditorModel {
         self.document = document
         hasCamera = project.take.tracks.contains { $0.kind == .camera && !$0.segments.isEmpty }
         hasCursorImages = project.events.contains { if case .cursorImage = $0.kind { true } else { false } }
+        hasKeyPresses = project.events.contains { if case .keyPress = $0.kind { true } else { false } }
+        screenIsDevice = project.take.tracks.contains { $0.kind == .device }
         hasClicks = ZoomPanelRules.hasClicks(events: project.events)
         canHoldWhileTyping = ZoomPanelRules.canHoldWhileTyping(events: project.events)
         audioTracks = project.take.tracks.filter { ($0.kind == .microphone || $0.kind == .systemAudio) && !$0.segments.isEmpty }

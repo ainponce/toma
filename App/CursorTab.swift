@@ -76,6 +76,7 @@ struct CursorTab: View {
                     set("motionBlur", PanelValues.motionBlur(slider: $0))
                 }
             }
+            KeysOnScreenSection(model: model)
         }
     }
 
