@@ -1052,6 +1052,10 @@ Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y 
 - Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
 - Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
 
+**Placas de título** (A8)
+
+- Con una placa de cada estilo (Centrado, A la izquierda, Grande, Mínimo) y cada fondo (el del proyecto, un color, el cuadro desenfocado), en 16:9 y en 9:16, apenas la pestaña Anotaciones permita agregarlas (A14): se ven como dice `docs/format/README.md` («Las placas»), sin un texto cortado ni una palabra partida; la vista previa reproduciendo y el export a 4K muestran la misma placa, con el fundido de 0,3 s contra el último cuadro del clip de antes y el primero del de después, quietos. Con el cuadro desenfocado sobre un tramo con un bloque de privacidad, nada de lo que el bloque esconde se ve nítido durante la placa ni su fundido.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

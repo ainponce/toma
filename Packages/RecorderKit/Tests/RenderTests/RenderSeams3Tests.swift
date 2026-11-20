@@ -166,8 +166,9 @@ private struct Seam3Drawer: @unchecked Sendable {
     ]
     let phase3 = [ShaderSource.mediaClipMetal, ShaderSource.calmZoomMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + (phase2 + phase3).joined())
-    // The base adds no shader of its own: phase 3's parts are their milestones' (3a's and 3b's), empty in the base.
-    #expect(phase3.allSatisfy { $0.isEmpty })
+    // The base adds no shader of its own: phase 3's parts are their milestones' (3a's and 3b's), empty in the base until
+    // each fills its own (3a's title card, A8).
+    #expect(phase3.filter { $0 != ShaderSource.titleCardMetal }.allSatisfy { $0.isEmpty })
 }
 
 /// The scenes of phase 3's layers with a document that has none of them: nothing, and the background as it is.
@@ -258,7 +259,11 @@ private func zoomingDocument() -> (take: TakeRecord, events: [InputEvent], docum
     let background = scene.frame(at: 3.5)
     #expect(background.screen == nil && background.cursor == nil && background.camera == nil && background.stage == nil)
     #expect(background.subframes.isEmpty && background.cursorSamples.isEmpty && background.clickEffects.isEmpty)
-    for seconds in [1.0, 1.5, 1.9999, 2.0, 2.5, 2.9999] {
+    // The card is drawn since 3a (A8, `TitleCardRenderTests`).
+    for seconds in [1.0, 1.5, 1.9999] {
+        #expect(scene.frame(at: seconds).titleCard != nil, "\(seconds) s")
+    }
+    for seconds in [2.0, 2.5, 2.9999] {
         #expect(scene.frame(at: seconds) == background, "\(seconds) s")
     }
     #expect(scene.frame(at: 0.5).screen != nil && scene.frame(at: 4.5).screen != nil)
