@@ -126,6 +126,30 @@ import Testing
         #expect(rerecord.word == 11)
         #expect(TeleprompterFollow.Place(script: script, from: 99).word == script.words.count)
     }
+
+    @Test func finalWordsHeardWhilePausedAreConfirmedNotShown() {
+        let script = ScriptWords("Hoy vamos a ver cómo se graba la pantalla con Toma, paso a paso.")
+        var place = TeleprompterFollow.Place(script: script, from: 0)
+        place.hear("Hoy vamos", isFinal: false)
+        #expect(place.word == 2)
+        // The take is paused: the final result of what was said before comes, and nothing moves.
+        place.confirm("Hoy vamos a ver")
+        #expect(place.word == 2 && place.alignment.position == 4)
+        // Nor does a confirmation that says less than what is shown, or nothing.
+        place.confirm("")
+        #expect(place.word == 2 && place.alignment.position == 4)
+        // The take goes on: what was confirmed shows, and what is heard next aligns after it.
+        place.showConfirmed()
+        #expect(place.word == 4)
+        place.hear("cómo se", isFinal: true)
+        #expect(place.word == 6 && place.alignment.position == 6)
+        // Showing what was confirmed never goes back.
+        var ahead = TeleprompterFollow.Place(script: script, from: 0)
+        ahead.hear("Hoy vamos a ver cómo", isFinal: false)
+        ahead.confirm("Hoy vamos")
+        ahead.showConfirmed()
+        #expect(ahead.word == 5 && ahead.alignment.position == 2)
+    }
 }
 
 extension TeleprompterLinesTests {
