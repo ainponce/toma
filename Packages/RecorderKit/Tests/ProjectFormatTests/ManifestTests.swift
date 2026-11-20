@@ -432,7 +432,7 @@ private let version2Example = #"""
 
 @Test func newPackagesAreVersion3WithARandomProjectID() throws {
     #expect(Manifest.currentFormatVersion == 3)
-    #expect(Manifest.supportedFormatVersions == 1...4)
+    #expect(Manifest.supportedFormatVersions == 1...5)
     try withTemporaryDirectory { dir in
         let app = AppInfo(name: "Toma", version: "0.1.0")
         let first = try ProjectPackage.create(in: dir, name: "New", app: app, now: Date())

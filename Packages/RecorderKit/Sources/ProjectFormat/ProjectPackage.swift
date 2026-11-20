@@ -11,6 +11,7 @@ import Synchronization
 ///   edit.json
 ///   edit-log.jsonl
 ///   edit.lock
+///   script.txt
 ///   assets/<sha>.<ext>
 ///   takes/<take>/<track>/seg-0001.mov
 ///   takes/<take>/events.jsonl
@@ -89,8 +90,12 @@ public struct ProjectPackage: Sendable, Hashable {
     public var editLogURL: URL { url.appendingPathComponent("edit-log.jsonl", isDirectory: false) }
     /// `edit.lock`: held with `flock` by the editor that writes the package (version 3).
     public var editLockURL: URL { url.appendingPathComponent("edit.lock", isDirectory: false) }
-    /// `assets/`: the images of the user's own backgrounds, copied into the package (version 3).
+    /// `assets/`: the images of the user's own backgrounds, copied into the package (version 3), and the `.cube`s, the
+    /// clips and the sounds of the user's own (`PackageFileKind`).
     public var assetsURL: URL { url.appendingPathComponent("assets", isDirectory: true) }
+    /// `script.txt`: the project's script for the teleprompter (phase 3 design §8.5), read and written with
+    /// `readScript()` and `writeScript(_:)`, never through this URL.
+    public var scriptURL: URL { url.appendingPathComponent(PackageFileKind.scriptFileName, isDirectory: false) }
     public var cacheURL: URL { url.appendingPathComponent("cache", isDirectory: true) }
     /// `takes/`, which holds one folder per take.
     public var takesURL: URL { url.appendingPathComponent("takes", isDirectory: true) }

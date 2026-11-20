@@ -1381,8 +1381,8 @@ extension RealTimeRecordingTests {
             }
         }
 
-        @Test func recordingAcceptsThreeAndFour() async throws {
-            #expect(Manifest.recordableFormatVersions == 3...4)
+        @Test func recordingAcceptsThreeToFive() async throws {
+            #expect(Manifest.recordableFormatVersions == 3...5)
             // A package of version 4 (an earlier take recorded an iPhone) gets more takes, and stays at 4.
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(in: directory)

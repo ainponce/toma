@@ -217,10 +217,10 @@ private func unblocking<T>(
         // A package of a newer format.
         let newerFormat = dir.appending(path: "Newer format.toma", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: newerFormat, withIntermediateDirectories: false)
-        try Data(#"{"formatVersion": 5, "whatever": true}"#.utf8).write(to: ProjectPackage(url: newerFormat).manifestURL)
+        try Data(#"{"formatVersion": 6, "whatever": true}"#.utf8).write(to: ProjectPackage(url: newerFormat).manifestURL)
         let newerFormatSummary = Reading.summary(newerFormat, in: dir)
         #expect(newerFormatSummary.state == .newerVersion)
-        #expect(newerFormatSummary.formatVersion == 5)
+        #expect(newerFormatSummary.formatVersion == 6)
 
         // On a volume that cannot be written to; in the trash, since it got there.
         let readOnly = DelayingFileSystem(volumes: [
@@ -243,7 +243,7 @@ private func unblocking<T>(
     }
 }
 
-@Test func readersAcceptFourAndCallFiveNewer() async throws {
+@Test func readersAcceptFourAndFiveAndCallSixNewer() async throws {
     try await withTemporaryDirectory { dir in
         // A take of an iPhone with its key presses, in a package of version 4: read as any other.
         let base = HostTime(nanoseconds: 5_000_000_000_000)
@@ -265,11 +265,19 @@ private func unblocking<T>(
         #expect(abs(try #require(v4.outputSeconds) - 1) < 0.01)
         #expect(!v4.hasCamera)
 
-        // Version 5 is a newer Toma's.
-        try Data(#"{"formatVersion": 5, "whatever": true}"#.utf8).write(to: ProjectPackage(url: url).manifestURL)
-        let v5 = Reading.summary(url, in: dir)
-        #expect(v5.state == .newerVersion)
+        // Version 5 (a package of two takes or more) is read as any other.
+        let five = try TakeBuilder(in: dir, name: "Five", formatVersion: 5)
+        try await five.addAudioTrack(
+            id: "mic", source: TrackSource(name: "Microphone", deviceUniqueID: "mic"), segments: [AudioSegmentSpec(start: base, seconds: 1)])
+        let v5 = Reading.summary(try five.write().package.url, in: dir)
+        #expect(v5.state == .normal)
         #expect(v5.formatVersion == 5)
+
+        // Version 6 is a newer Toma's.
+        try Data(#"{"formatVersion": 6, "whatever": true}"#.utf8).write(to: ProjectPackage(url: url).manifestURL)
+        let v6 = Reading.summary(url, in: dir)
+        #expect(v6.state == .newerVersion)
+        #expect(v6.formatVersion == 6)
     }
 }
 

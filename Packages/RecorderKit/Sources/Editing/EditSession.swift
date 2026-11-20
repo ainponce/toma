@@ -491,11 +491,14 @@ public final class EditSession {
     public func redo() -> EditOutcome { take(redoing()) }
 
     /// Copies the image at `url` into the package's `assets/` for a background (`AssetImport.copy`), or with `kind`
-    /// `.lut` the `.cube` at `url` for the camera's colors (`AssetImport.copyLUT`, phase 2 design §6.3), for the step that
-    /// names it, which comes after: `.imported(path)` once it is on the drive. The file is decoded first, on the queue of
-    /// files, as the package's asset reader decodes one: `.notAnImage` if it does not, and nothing is written. A `.cube`
-    /// is read and parsed first instead (`CubeLUT.parse`): `.notALUT(reason)` if it is not a 3D LUT, `.notAnImage` if it
-    /// cannot be read at all, and nothing is written; the copy parses it again, so what is placed is what was parsed.
+    /// `.lut` the `.cube` at `url` for the camera's colors (`AssetImport.copyLUT`, phase 2 design §6.3), or with `.video`
+    /// or `.audio` the clip or the sound at `url` (phase 3), for the step that names it, which comes after:
+    /// `.imported(path)` once it is on the drive. The file is decoded first, on the queue of files, as the package's asset
+    /// reader decodes one: `.notAnImage` if it does not, and nothing is written. A `.cube` is read and parsed first instead
+    /// (`CubeLUT.parse`): `.notALUT(reason)` if it is not a 3D LUT, `.notAnImage` if it cannot be read at all, and nothing
+    /// is written; the copy parses it again, so what is placed is what was parsed. A clip or a sound is opened with
+    /// AVFoundation first (`AssetImport.mediaRefusal`): `.notPlayable` if it does not play, and nothing is written; it is
+    /// then copied as an image is, named by its content (`.notPlayable` too if it changed meanwhile).
     ///
     /// A version 1 or 2 package moves to version 3 first, with only the `create` of its legacy document (the upgrade with
     /// no step), or after the upgrade a step started: nothing is copied into a package that is not at version 3 yet. An
@@ -507,10 +510,14 @@ public final class EditSession {
     /// changed the package (it is opened again), as with `perform`.
     public func importAsset(_ url: URL, kind: AssetKind = .image) async -> AssetImportOutcome {
         guard isEditable else { return .notEditable }
-        do {
-            if let refusal = try await Self.run(on: files, { AssetImport.refusal(of: url, as: kind) }) { return refusal }
-        } catch {
-            return .notAnImage
+        if kind.isMedia {
+            if let refusal = await AssetImport.mediaRefusal(of: url, as: kind) { return refusal }
+        } else {
+            do {
+                if let refusal = try await Self.run(on: files, { AssetImport.refusal(of: url, as: kind) }) { return refusal }
+            } catch {
+                return .notAnImage
+            }
         }
         guard isEditable else { return .notEditable }
         let reopened = reopenings
@@ -548,7 +555,7 @@ public final class EditSession {
             case let .success(path):
                 return .imported(path)
             case .failure(.unsupported), .failure(.source), .failure(.changed):
-                return .notAnImage
+                return kind.isMedia ? .notPlayable : .notAnImage
             case let .failure(.notALUT(reason)):
                 return .notALUT(reason)
             case let .failure(.destination(error)):
@@ -575,7 +582,7 @@ public final class EditSession {
                 switch await importAsset(styleDirectory.appending(path: name)) {
                 case let .imported(path): background = .image(file: path)
                 case .notEditable: return .refused
-                case .notAnImage, .notALUT, .saveFailed: break
+                case .notAnImage, .notALUT, .notPlayable, .saveFailed: break
                 }
             }
             style.style.background = background
@@ -602,7 +609,7 @@ public final class EditSession {
                 switch await importAsset(imageDirectory.appending(path: name)) {
                 case let .imported(path): imported = path
                 case .notEditable, .saveFailed: return (.refused, false)
-                case .notAnImage, .notALUT: break
+                case .notAnImage, .notALUT, .notPlayable: break
                 }
             }
             imageMissing = imported == nil

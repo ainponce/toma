@@ -80,7 +80,8 @@ extension EditorModel {
                 finished(.idle)
             case let .notALUT(reason):
                 finished(.refused(reason))
-            case .notAnImage:
+            case .notAnImage, .notPlayable:
+                // `.notPlayable` is only a clip's or a sound's, never a `.cube`'s.
                 finished(.unreadable)
             case .saveFailed:
                 // Cancelled by the user while it waited for room on a full disk: nothing to say.

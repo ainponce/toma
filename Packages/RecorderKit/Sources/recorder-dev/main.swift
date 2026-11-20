@@ -42,7 +42,8 @@ struct SynthRecord: AsyncParsableCommand {
         discussion: """
             Creates <directory>/synth-<date>-<time>.toma and prints its absolute path as the first line \
             once recording has started. Warnings follow as "warning: …" lines, and a summary of the take \
-            once it is closed.
+            once it is closed. With --into, the take is added to that package instead (the next take-NNN; a \
+            package that has a take goes to version 5 first).
 
             The tracks, in this order: display-1 at the origin of the global space (or, with --window, \
             window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
@@ -107,6 +108,9 @@ struct SynthRecord: AsyncParsableCommand {
     @Option(help: "With --device, the seconds after which the synthetic device turns: <height>x<width> from then on.")
     var rotateAt: Double?
 
+    @Option(help: "Add the take to this existing .toma package instead of creating one in <directory>.")
+    var into: String?
+
     func validate() throws {
         guard duration > 0 else { throw ValidationError("--duration must be positive.") }
         guard fps > 0, width > 0, height > 0 else { throw ValidationError("--fps, --width and --height must be positive.") }
@@ -141,7 +145,7 @@ struct SynthRecord: AsyncParsableCommand {
             }
             // No cursor, clicks or keys: the iPhone mode records none.
             try await recordTake(
-                in: directory, prefix: "synth", duration: duration, sources: sources, input: NoInputRecorder(),
+                in: directory, into: into, prefix: "synth", duration: duration, sources: sources, input: NoInputRecorder(),
                 systemActivity: AsyncStream { $0.finish() })
             return
         }
@@ -172,7 +176,7 @@ struct SynthRecord: AsyncParsableCommand {
             input = CompositeInputRecorder([input, typed])
         }
         try await recordTake(
-            in: directory, prefix: "synth", duration: duration,
+            in: directory, into: into, prefix: "synth", duration: duration,
             sources: sources, input: input,
             systemActivity: AsyncStream { $0.finish() },
             whileRecording: {
@@ -454,11 +458,12 @@ struct ListSources: AsyncParsableCommand {
 
 extension CameraPreset: ExpressibleByArgument {}
 
-/// Creates a package in `directory` and records one take into it for `duration` seconds, or until the
-/// take stops by itself because the disk is full. Prints the package's absolute path as the first line
-/// once recording has started, then the take's warnings, then a summary of the closed take.
+/// Creates a package in `directory` (or, with `into`, takes that existing package) and records one take into it for
+/// `duration` seconds, or until the take stops by itself because the disk is full. Prints the package's absolute path as
+/// the first line once recording has started, then the take's warnings, then a summary of the closed take.
 private func recordTake(
     in directory: String,
+    into existing: String? = nil,
     prefix: String,
     duration: Double,
     sources: [any CaptureSource],
@@ -468,7 +473,8 @@ private func recordTake(
 ) async throws {
     let folder = URL(fileURLWithPath: directory, isDirectory: true)
     try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let package = try createPackage(in: folder, prefix: prefix)
+    let package = try existing.map { ProjectPackage(url: URL(fileURLWithPath: $0, isDirectory: true)) }
+        ?? createPackage(in: folder, prefix: prefix)
     let coordinator = RecordingCoordinator(
         package: package, sources: sources, input: input,
         diskMonitor: DiskSpaceMonitor(volumeURL: folder), systemActivity: systemActivity)
