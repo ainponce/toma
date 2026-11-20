@@ -9,9 +9,11 @@
 /// The library is the core (`coreMetal`, phase 1's shaders) followed by the parts of phase 2's layers, each in its own
 /// file (`ShaderSource+<Layer>.swift`), in the draw order of phase 2 design §11: so each part can use what the core
 /// declares, and a layer's agent writes only its own part. Every part is empty in the base of phase 2, and the library
-/// is phase 1's text.
+/// is phase 1's text. Phase 3's layers' parts follow, the same way (phase 3 design §12): the imported clip, the calm zoom,
+/// the annotations and the title card, all empty in the base of phase 3.
 public enum ShaderSource {
     public static let metal = coreMetal + deviceFrameMetal + privacyMetal + cameraLookMetal + keysMetal + captionsMetal
+        + mediaClipMetal + calmZoomMetal + annotationsMetal + titleCardMetal
 
     /// Phase 1's shaders: the background, the shadow, the window frame, the screen, the cursor, the click effects, the
     /// camera and the motion blur.

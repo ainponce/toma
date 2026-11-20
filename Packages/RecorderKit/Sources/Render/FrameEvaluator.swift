@@ -134,6 +134,14 @@ import simd
 ///   a frame of the take last (`finishLayers`), on 1b's path and on the layouts': privacy on the screens, the camera's
 ///   sync, framing, colour and background, the device frame, the keys and the captions. With the legacy values each is
 ///   `nil` or empty and changes nothing of the frame.
+/// - Phase 3's layers and clips with content (phase 3 design §12, base plan decisions 8 and 9), each by its own scene in
+///   its own file like phase 2's: the frame of a clip with content (`TimeMap.contentOffset(atOutput:)`) is worked out
+///   before the take's path, which does not change: a frozen frame is the take's frame of the clip's start `O_k` and its
+///   point, without the motion blur (`takeFrame(atOutput:source:blurs:cursorImageIsReadable:)`), the same over all of it;
+///   a title card and an imported clip are their scenes' over the frame with the background alone (`TitleCardScene`,
+///   `MediaClipScene`). The calm zoom and the annotations stuck to the recording go onto a frame of the take after phase
+///   2's layers (`finishLayers`); the output's annotations of the output time onto every frame, after its clip's
+///   (`frame(at:cursorImageIsReadable:)`). With the legacy values each is `nil` or empty and changes nothing of the frame.
 ///
 /// The motion paths (`MotionPaths`: the screens, the cursor's path) are the document's revision's, given or built.
 public struct FrameEvaluator: Sendable {
@@ -192,6 +200,11 @@ public struct FrameEvaluator: Sendable {
     private var deviceFrame: DeviceFrameScene
     private var keys: KeyOverlayScene
     private var captions: CaptionScene
+    /// Phase 3's layers (phase 3 design §12): those that depend on the output's size are made again by `resized(to:)`.
+    private var mediaClip: MediaClipScene
+    private var titleCard: TitleCardScene
+    private let calmZoom: CalmZoomScene
+    private var annotations: AnnotationScene
 
     /// The two ways a frame is drawn (plan decision 13).
     enum Path {
@@ -252,11 +265,16 @@ public struct FrameEvaluator: Sendable {
         deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
         keys = KeyOverlayScene(document: document, take: take.id, events: events, timeMap: timeMap, outputSize: outputSize)
         captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
+        mediaClip = MediaClipScene(document: document, timeMap: timeMap, outputSize: outputSize)
+        titleCard = TitleCardScene(document: document, timeMap: timeMap, outputSize: outputSize)
+        calmZoom = CalmZoomScene(document: document, take: take, timeMap: timeMap, paths: paths)
+        annotations = AnnotationScene(document: document, take: take, events: events, timeMap: timeMap, outputSize: outputSize)
     }
 
     /// The same document, motion paths, frames per second and analysis drawn at `outputSize`: only what depends on the
-    /// size (the background's blur, where the screens go and how a change moves them, the device frame, the keys and the
-    /// captions) is worked out again, so it is cheap; the paths, which are in output time and stage units, are shared.
+    /// size (the background's blur, where the screens go and how a change moves them, the device frame, the keys, the
+    /// captions, the imported clips, the title cards and the annotations) is worked out again, so it is cheap; the paths,
+    /// which are in output time and stage units, are shared.
     public func resized(to outputSize: SIMD2<Int>) -> FrameEvaluator {
         guard outputSize != self.outputSize else { return self }
         var resized = self
@@ -268,6 +286,10 @@ public struct FrameEvaluator: Sendable {
         resized.deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
         resized.keys = KeyOverlayScene(document: document, take: take.id, events: events, timeMap: timeMap, outputSize: outputSize)
         resized.captions = CaptionScene(document: document, timeMap: timeMap, outputSize: outputSize)
+        resized.mediaClip = MediaClipScene(document: document, timeMap: timeMap, outputSize: outputSize)
+        resized.titleCard = TitleCardScene(document: document, timeMap: timeMap, outputSize: outputSize)
+        resized.annotations = AnnotationScene(
+            document: document, take: take, events: events, timeMap: timeMap, outputSize: outputSize)
         return resized
     }
 
@@ -303,20 +325,66 @@ public struct FrameEvaluator: Sendable {
     }
 
     /// The frame at `outputTime`, with the recorded cursor images `cursorImageIsReadable` says can be read (by hash):
-    /// Toma's arrow is drawn for one it cannot read (the renderer's, `CursorImages`).
+    /// Toma's arrow is drawn for one it cannot read (the renderer's, `CursorImages`). What its clip shows
+    /// (`clipFrame(atOutput:cursorImageIsReadable:)`), then the output's annotations of that output time over it (phase 3
+    /// design §12, step 7): over a frozen frame, a title card and an imported clip too (plan 3a decision 21).
     public func frame(at outputTime: Double, cursorImageIsReadable: (_ hash: String) throws -> Bool) rethrows -> RenderFrame {
+        let τ = TimeMap.outputNanoseconds(seconds: outputTime)
+        var frame = try clipFrame(atOutput: τ, cursorImageIsReadable: cursorImageIsReadable)
+        if timeMap.duration > 0 {
+            frame.outputAnnotations = annotations.output(atOutput: min(max(τ, 0), timeMap.duration - 1))
+        }
+        return frame
+    }
+
+    /// The frame at output time `τ` (clamped to the output, as `TimeMap.source(atOutput:)` clamps it) before the output's
+    /// annotations, as its clip shows it: the background alone for an output of 0 s and a clip of another take; for a clip
+    /// with content (phase 3 base plan decision 8), a frozen frame's instant drawn at the clip's start without the motion
+    /// blur, or the scene of a title card or of an imported clip over the background alone; the take's frame of the
+    /// instant shown otherwise, as in phase 2.
+    func clipFrame(atOutput τ: Int64, cursorImageIsReadable: (_ hash: String) throws -> Bool) rethrows -> RenderFrame {
+        guard let shown = timeMap.source(atOutput: τ), document.sequence[shown.clip].take == takeID else { return backgroundFrame }
+        if let (k, offset) = timeMap.contentOffset(atOutput: τ), let content = document.sequence[k].content {
+            switch content {
+            case .freeze:
+                return try takeFrame(
+                    atOutput: timeMap.clipOutputStarts[k], source: shown.source, blurs: false,
+                    cursorImageIsReadable: cursorImageIsReadable)
+            case .card:
+                return try titleCard.frame(clip: k, offset: offset, background: backgroundFrame) { output in
+                    try clipFrame(atOutput: output, cursorImageIsReadable: cursorImageIsReadable)
+                }
+            case .media:
+                return mediaClip.frame(clip: k, offset: offset, background: backgroundFrame)
+            }
+        }
+        // The output time shown, as `source(atOutput:)` clamps it.
+        let output = min(max(τ, 0), timeMap.duration - 1)
+        return try takeFrame(atOutput: output, source: shown.source, blurs: true, cursorImageIsReadable: cursorImageIsReadable)
+    }
+
+    /// A frame of this output's size with the background alone: what an output of 0 s, a clip of another take, and in the
+    /// base a title card and an imported clip, show.
+    private var backgroundFrame: RenderFrame {
+        RenderFrame(
+            outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle,
+            background: background)
+    }
+
+    /// The take's frame at output time `output` (within the output) showing its source instant `source`, with the recorded
+    /// cursor images `cursorImageIsReadable` says can be read: phase 2's frame, with the motion blurs of the zoom camera's
+    /// and the cursor's shutters about `output` with `blurs`, and without them (one drawing, no `subframes` nor
+    /// `cursorSamples`) without, as a frozen frame is drawn.
+    func takeFrame(
+        atOutput output: Int64, source: HostTime, blurs: Bool, cursorImageIsReadable: (_ hash: String) throws -> Bool
+    ) rethrows -> RenderFrame {
         var frame = RenderFrame(
             outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle,
             background: background)
-        let τ = TimeMap.outputNanoseconds(seconds: outputTime)
-        guard let shown = timeMap.source(atOutput: τ), document.sequence[shown.clip].take == takeID else { return frame }
-        let source = shown.source
-        // The output time shown, as `source(atOutput:)` clamps it.
-        let output = min(max(τ, 0), timeMap.duration - 1)
         let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
         // The ends of each shutter, and the paths over them, from which `t` is read too: one simulation for each.
-        let zoomEnds = shutterEnds(zoomShutter, at: output, jumps: paths.zoom.jumps)
-        let cursorEnds = document.cursor.show ? shutterEnds(cursorShutter, at: output, jumps: paths.cursor.jumps) : [output]
+        let zoomEnds = blurs ? shutterEnds(zoomShutter, at: output, jumps: paths.zoom.jumps) : [output]
+        let cursorEnds = blurs && document.cursor.show ? shutterEnds(cursorShutter, at: output, jumps: paths.cursor.jumps) : [output]
         let zoomSpan = zoomEnds.count > 1 ? paths.zoom.span(from: zoomEnds[0], through: zoomEnds[1]) : nil
         let cursorSpan = cursorEnds.count > 1 ? paths.cursor.span(from: cursorEnds[0], through: cursorEnds[1]) : nil
         /// Where the cursor is placed and what it is drawn with, while it is shown.
@@ -425,7 +493,9 @@ public struct FrameEvaluator: Sendable {
     /// camera's frame taken at its sync (`CameraSyncScene`), then its framing, colour and background, which may change the
     /// camera's shape and whether the frame is covered by it (`CameraLookScene`, over the whole frame); the device frame
     /// around the screen, which may change the screens' corners and the shadow (`DeviceFrameScene`, over the whole frame);
-    /// the keys; the captions. With the legacy values each is `nil` or empty, and `frame` is as it was.
+    /// the keys; the captions; then phase 3's (phase 3 design §12): the calm zoom over the frame (`CalmZoomScene`) and the
+    /// annotations stuck to the recording it shows (`AnnotationScene`); the output's are the output time's, put on by
+    /// `frame(at:cursorImageIsReadable:)`. With the legacy values each is `nil` or empty, and `frame` is as it was.
     private func finishLayers(_ frame: inout RenderFrame, source: HostTime, output: Int64) {
         if var screen = frame.screen {
             privacy.apply(to: &screen, atSource: source)
@@ -444,6 +514,8 @@ public struct FrameEvaluator: Sendable {
         frame.keys = keys.layer(atOutput: output)
         frame.captions = captions.layer(atOutput: output)
         frame.captionsAhead = captions.layersAhead(atOutput: output)
+        frame.calmZoom = calmZoom.layer(atOutput: output, frame: frame)
+        frame.contentAnnotations = annotations.content(atSource: source, output: output, frame: frame)
     }
 
     /// What 1b's path read of the paths for the motion blur of a frame, which the card's reads again: the ends of the zoom

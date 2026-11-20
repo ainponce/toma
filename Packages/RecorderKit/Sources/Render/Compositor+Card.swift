@@ -63,12 +63,13 @@ extension Compositor {
     /// `camera` and what its colour and background are drawn with, `cameraLook`, and the blur's `tileMemory` (`nil` without
     /// a blur), counting what it draws in `counts`. The background is drawn once, as without the blur, so a sharp
     /// wallpaper's mesh is not asked for (`FrameRenderer.backgroundTexture`); the device frame goes with it, its island or
-    /// notch through the background's transform too.
+    /// notch through the background's transform too. Phase 3's layers are drawn with `textures.layers`. Throws what
+    /// `drawOverTheStage` throws, having ended its pass.
     func encodeCard(
         _ frame: RenderFrame, textures: StageTextures, camera: (any MTLTexture)?, cameraLook: CameraLookTextures?,
         tileMemory: (subsample: any MTLTexture, sum: any MTLTexture)?, into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer, counts: inout DrawCounts
-    ) {
+    ) throws {
         let background = Self.moving(frame.backgroundTransform, outputSize: frame.outputSize)
         let card = Self.cardContent(of: frame)
         // What the content and the click effects are drawn through: the card's content, or the background without one.
@@ -76,19 +77,19 @@ extension Compositor {
         let targetSize = SIMD2(target.width, target.height)
 
         guard let tileMemory else {
-            let encoder = renderPass(into: target, commandBuffer: commandBuffer)
+            var encoder = renderPass(into: target, commandBuffer: commandBuffer)
             counts.renderPasses += 1
             drawStage(
                 frame, through: background, card: card, cursor: frame.cursor, textures: textures, pipelines: direct,
                 targetSize: targetSize, encoder: encoder, counts: &counts)
-            drawOverTheStage(
+            try drawOverTheStage(
                 frame, through: content, card: card, device: background, camera: camera, cameraLook: cameraLook,
-                clickEffect: card == nil ? clickEffectPipeline : clippedClickEffectPipeline, cameraPipelines: directCamera,
-                encoder: encoder, counts: &counts)
+                layerTextures: textures.layers, clickEffect: card == nil ? clickEffectPipeline : clippedClickEffectPipeline,
+                cameraPipelines: directCamera, encoder: &encoder, target: target, commandBuffer: commandBuffer, counts: &counts)
             encoder.endEncoding()
             return
         }
-        let encoder = blurPass(into: target, tileMemory: tileMemory, commandBuffer: commandBuffer)
+        var encoder = blurPass(into: target, tileMemory: tileMemory, commandBuffer: commandBuffer)
         counts.renderPasses += 1
         if !frame.subframes.isEmpty {
             var weight = Float(1 / Double(frame.subframes.count))
@@ -124,10 +125,10 @@ extension Compositor {
         // The average over the stage drawn once, into the target.
         encoder.setRenderPipelineState(blur.resolveCursor)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-        drawOverTheStage(
+        try drawOverTheStage(
             frame, through: content, card: card, device: background, camera: camera, cameraLook: cameraLook,
-            clickEffect: card == nil ? blur.clickEffect : blur.clippedClickEffect, cameraPipelines: blur.camera,
-            encoder: encoder, counts: &counts)
+            layerTextures: textures.layers, clickEffect: card == nil ? blur.clickEffect : blur.clippedClickEffect,
+            cameraPipelines: blur.camera, encoder: &encoder, target: target, commandBuffer: commandBuffer, counts: &counts)
         encoder.endEncoding()
     }
 }
