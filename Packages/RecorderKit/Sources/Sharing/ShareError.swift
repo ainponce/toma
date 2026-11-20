@@ -26,4 +26,8 @@ public enum ShareError: Error, Equatable, Sendable {
     case cancelled
     /// The package's `shares.json` cannot be read, so it is never written.
     case historyUnreadable
+    /// The link was uploaded but the package's `shares.json` could not record it (it became unreadable, it is full, the
+    /// disk failed), so its three objects were removed from the storage: nothing stays shared that the project cannot
+    /// list and delete.
+    case notSaved
 }
