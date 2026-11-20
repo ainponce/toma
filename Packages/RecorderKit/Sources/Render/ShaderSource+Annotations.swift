@@ -23,8 +23,10 @@ extension ShaderSource {
     ///   its alpha premultiplied; a clip's frame opaque, `opaque`), read through `texOrigin`, `texAcross` and `texDown`
     ///   (a fill's crop, a clip's turn upright, `MediaOrientation`), the level chosen from the coordinates before they are
     ///   held to the picture; under it, with `shadow`, the core's shadow of a rounded box (`shadowValue`, of `ShadowUniforms`
-    ///   in buffer 1, in the layer's coordinates, moved down the output), but not under the picture's own rect, so a
-    ///   transparent image does not show it through; all at `opacity`.
+    ///   in buffer 1, in the layer's coordinates, moved down the output): at 1, an opaque picture's, not under its own
+    ///   rect; at 2, an image's that is not all opaque, no more than its alpha moved as the shadow is and blurred, read
+    ///   from its mipmaps at `shadowLevel` (`shadowSampler`, transparent past its edges), so a logo casts its own shape and
+    ///   no rectangular halo; all at `opacity`.
     /// - `overlayFragment`, `overlayTargetFragment` (into the motion blur's target), and both cut to a card
     ///   (`clippedOverlayFragment`, `clippedOverlayTargetFragment`: its clip and its strength in buffers 2 and 3).
     static let annotationsMetal = #"""
@@ -134,7 +136,7 @@ extension ShaderSource {
         float pixels;           // output pixels a unit of the layer's coordinates: scale × depth
         float shadow;           // 1: its shadow under it (buffer 1)
         float opaque;           // 1: the texture's alpha is not read (a clip's frame)
-        float padding;
+        float shadowLevel;      // the mipmap level the alpha is read at for a shadow of 2
     };
 
     struct OverlayOut {
@@ -159,7 +161,7 @@ extension ShaderSource {
 
     // The picture over its rounded rect, its shadow under it, at its opacity: premultiplied.
     static float4 overlayColor(OverlayOut in, constant OverlayUniforms &u, constant ShadowUniforms &s,
-                               texture2d<float> picture, sampler pictureSampler) {
+                               texture2d<float> picture, sampler pictureSampler, sampler shadowSampler) {
         float2 halfSize = u.pictureSize * 0.5;
         float radius = min(u.radius, min(halfSize.x, halfSize.y));
         float d = roundedRectDistance(in.q - (u.pictureOrigin + halfSize), halfSize, radius) * u.pixels;
@@ -174,7 +176,15 @@ extension ShaderSource {
         }
         color *= coverage;
         if (u.shadow != 0.0) {
-            float shadow = s.opacity * shadowValue(in.q, s) * (1.0 - coverage);
+            float shadow = s.opacity * shadowValue(in.q, s);
+            if (u.shadow > 1.5) {
+                // The alpha under the shadow's point, the picture moved as the shadow is (to `s.lower`), blurred.
+                float2 g = (in.q - s.lower) / u.pictureSize;
+                float2 shadowUV = u.texOrigin + g.x * u.texAcross + g.y * u.texDown;
+                shadow = min(shadow, s.opacity * picture.sample(shadowSampler, shadowUV, level(u.shadowLevel)).a);
+            } else {
+                shadow *= 1.0 - coverage;
+            }
             color.a += shadow * (1.0 - color.a);
         }
         return color * u.opacity;
@@ -184,17 +194,19 @@ extension ShaderSource {
                                     constant OverlayUniforms &u [[buffer(0)]],
                                     constant ShadowUniforms &s [[buffer(1)]],
                                     texture2d<float> picture [[texture(0)]],
-                                    sampler pictureSampler [[sampler(0)]]) {
-        return overlayColor(in, u, s, picture, pictureSampler);
+                                    sampler pictureSampler [[sampler(0)]],
+                                    sampler shadowSampler [[sampler(1)]]) {
+        return overlayColor(in, u, s, picture, pictureSampler, shadowSampler);
     }
 
     fragment TargetOut overlayTargetFragment(OverlayOut in [[stage_in]],
                                              constant OverlayUniforms &u [[buffer(0)]],
                                              constant ShadowUniforms &s [[buffer(1)]],
                                              texture2d<float> picture [[texture(0)]],
-                                             sampler pictureSampler [[sampler(0)]]) {
+                                             sampler pictureSampler [[sampler(0)]],
+                                             sampler shadowSampler [[sampler(1)]]) {
         TargetOut out;
-        out.color = overlayColor(in, u, s, picture, pictureSampler);
+        out.color = overlayColor(in, u, s, picture, pictureSampler, shadowSampler);
         return out;
     }
 
@@ -205,8 +217,9 @@ extension ShaderSource {
                                            constant QuadUniforms &clip [[buffer(2)]],
                                            constant float &strength [[buffer(3)]],
                                            texture2d<float> picture [[texture(0)]],
-                                           sampler pictureSampler [[sampler(0)]]) {
-        return overlayColor(in, u, s, picture, pictureSampler) * clipCoverage(in.p, clip, strength);
+                                           sampler pictureSampler [[sampler(0)]],
+                                           sampler shadowSampler [[sampler(1)]]) {
+        return overlayColor(in, u, s, picture, pictureSampler, shadowSampler) * clipCoverage(in.p, clip, strength);
     }
 
     fragment TargetOut clippedOverlayTargetFragment(OverlayOut in [[stage_in]],
@@ -215,9 +228,10 @@ extension ShaderSource {
                                                     constant QuadUniforms &clip [[buffer(2)]],
                                                     constant float &strength [[buffer(3)]],
                                                     texture2d<float> picture [[texture(0)]],
-                                                    sampler pictureSampler [[sampler(0)]]) {
+                                                    sampler pictureSampler [[sampler(0)]],
+                                                    sampler shadowSampler [[sampler(1)]]) {
         TargetOut out;
-        out.color = overlayColor(in, u, s, picture, pictureSampler) * clipCoverage(in.p, clip, strength);
+        out.color = overlayColor(in, u, s, picture, pictureSampler, shadowSampler) * clipCoverage(in.p, clip, strength);
         return out;
     }
     """#

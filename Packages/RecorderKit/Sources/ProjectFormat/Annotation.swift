@@ -308,7 +308,7 @@ public struct ImageAnnotation: Codable, Equatable, Sendable {
     /// Its path from the package root, `assets/<32 hex>.<ext>`.
     public var asset: String
     public var fit: ImageFit
-    /// The radius of its corners, a fraction of the height of its space.
+    /// The radius of its corners, a fraction of the shorter side of its box: 0 to 0.5 (plan 3a decision 4).
     public var corner: Double
     public var shadow: Bool
 
@@ -336,7 +336,7 @@ public struct ClipAnnotation: Codable, Equatable, Sendable {
     /// Its sound's gain, in dB.
     public var volume: Double
     public var muted: Bool
-    /// The radius of its corners, a fraction of the height of its space.
+    /// The radius of its corners, a fraction of the shorter side of its box: 0 to 0.5 (plan 3a decision 4).
     public var corner: Double
     public var shadow: Bool
 

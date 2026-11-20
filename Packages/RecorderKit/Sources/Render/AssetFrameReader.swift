@@ -40,9 +40,14 @@ public enum AssetFrameReader {
     /// when that gives nothing (not a video of `assets/`, gone, a link, too large). Opens nothing yet. When it loads the
     /// file's video track (on the thread that decodes its first frame, before that frame), it loads how a player turns the
     /// file's frames upright too and notes it in `orientations` (`loadTrack(of:noting:as:)`).
-    static func make(asset: String, package: ProjectPackage, orientations: MediaOrientations) -> TrackFrameReader? {
+    /// Its `trackID` is `id` when given, the reader id it is kept by (one of the clips over the video's,
+    /// `asset:<path>#overlay…`), so letting it go names that reader and never the sequence's of the same file;
+    /// `readerID(of:)` otherwise.
+    static func make(
+        asset: String, id: String? = nil, package: ProjectPackage, orientations: MediaOrientations
+    ) -> TrackFrameReader? {
         guard let url = package.mediaAsset(asset, as: .video) else { return nil }
-        let reader = TrackFrameReader(maskFile: url, trackID: readerID(of: asset), start: HostTime(nanoseconds: 0), end: nil)
+        let reader = TrackFrameReader(maskFile: url, trackID: id ?? readerID(of: asset), start: HostTime(nanoseconds: 0), end: nil)
         reader.trackLoader = { loadTrack(of: $0, noting: orientations, as: asset) }
         return reader
     }
