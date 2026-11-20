@@ -161,6 +161,32 @@ import ProjectFormat
         #expect(Self.state(F.text(anchor: .whole), 9, document: d) != nil)
     }
 
+    /// A clip over the output is shown in its anchor cut to its file's stretch (plan 3a decision 13), which the track, the
+    /// commands and the render all read here.
+    @Test func clipIsCutToItsFile() throws {
+        let d = F.document()
+        let map = TimeMap(sequence: d.sequence)
+        func clip(_ anchor: AnnotationAnchor, file: Double) -> Annotation {
+            let asset = "assets/" + String(repeating: "c", count: 32) + ".mov"
+            return F.text(anchor: anchor, kind: .clip(ClipAnnotation(asset: asset, start: F.ns(0.5), end: F.ns(0.5 + file))))
+        }
+        func range(_ a: Annotation) -> Range<Int64>? { AnnotationTiming.outputRange(of: a, document: d, timeMap: map) }
+        // 1.5 s of its file over [1, 4) s: from 1 s to 2.5 s, its exit there.
+        let over = clip(.output(start: F.ns(1), end: F.ns(4)), file: 1.5)
+        #expect(range(over) == F.ns(1)..<F.ns(2.5))
+        #expect(Self.state(over, 2.6) == nil && Self.state(over, 3) == nil)
+        #expect(try #require(Self.state(over, 2.4)).opacity < 1)
+        // A file longer than its anchor keeps the anchor.
+        #expect(range(clip(.output(start: F.ns(1), end: F.ns(4)), file: 10)) == F.ns(1)..<F.ns(4))
+        // The whole video from 0, as long as its file or the output (20 s).
+        #expect(range(clip(.whole, file: 1.5)) == 0..<F.ns(1.5))
+        #expect(range(clip(.whole, file: 60)) == 0..<F.ns(20))
+        // No file, or stuck to the take: never.
+        #expect(range(clip(.output(start: F.ns(1), end: F.ns(4)), file: 0)) == nil)
+        let stuck = clip(F.content(1, 5), file: 2)
+        #expect(range(stuck) == nil && Self.state(stuck, 2) == nil)
+    }
+
     @Test func outsideTheOutputIsNil() {
         let a = F.text(anchor: .whole)
         #expect(Self.state(a, -1) == nil && Self.state(a, 20) == nil)

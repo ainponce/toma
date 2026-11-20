@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Analysis
 import ProjectFormat
+import Synchronization
 
 /// An annotation as a frame draws it (phase 3 design §5.1 and §12, `annotation-1`): stuck to the recording (step 5, in the
 /// stage, under the camera) or of the output (step 7, over the camera and under the keys), with everything about its place
@@ -31,8 +32,9 @@ public struct AnnotationLayer: Equatable, Sendable {
     public var id: String
     public var content: Content
     /// Its box: the annotation's rect, held where its anchor lets it be (`AnnotationGeometry.clamped`), in its space. A
-    /// text's and a speech bubble's are as tall as their text measured (`AnnotationTypography.box`), an arrow's the box
-    /// around its ends and its bend (`AnnotationGeometry.arrowRect`).
+    /// text's and a speech bubble's are as tall as their text measured (`AnnotationTypography.box`), and held with that
+    /// height; of the output, as wide as their rect's width times the output frame's own proportion (see
+    /// `AnnotationScene`). An arrow's is the box around its ends and its bend (`AnnotationGeometry.arrowRect`).
     public var rect: Rect
     /// Its space: stuck to the recording, where the whole content of the screen shown is drawn
     /// (`AnnotationGeometry.contentSpace`); of the output, the output frame.
@@ -67,33 +69,38 @@ public struct AnnotationLayer: Equatable, Sendable {
 
 /// The annotations of a document (`EditDocument.annotations`) as the frames of its take `take` draw them, with the take's
 /// `events` (what the screen shown holds, as `PrivacyScene` reads it), worked out once for the scene and again for each
-/// size (`FrameEvaluator.init` and `resized(to:)`), `annotation-1` (phase 3 plan 3a, decisions 2, 3, 7, 9 and 13).
+/// size (`FrameEvaluator.init` and `resized(to:)`), `annotation-1` (phase 3 plan 3a, decisions 2, 3, 5, 7, 9 and 13).
 ///
 /// - Two groups: those stuck to the take's recording (anchored to `take`), and those of the output and of the whole video
 ///   (of any take's scene). Each in its layers' order: by `layer`, then by the order of `document.annotations.items`.
 /// - When: `AnnotationTiming.state` at the output time, so one stuck to the recording only where the output shows its
 ///   source range of the take (never in a cut, another take's clip, a title card or an imported clip; in a frozen frame
 ///   whose point is in that range, also one at an edge of its output range, as at the frame's point), with its entrance
-///   and its exit. A clip is shown in its anchor cut to the length of its file (`end − start`), and its file's time at
-///   output time `τ` is `start + (τ − c)`, with `c` where its anchor so cut starts; anchored to the take, it is never
-///   shown.
+///   and its exit. A clip is shown in its range (`AnnotationTiming.outputRange`, its anchor cut to its file), and its
+///   file's time at output time `τ` is `start + (τ − c)`, with `c` where that range starts.
 /// - Where: stuck to the recording, in the space where the whole content of the frame's screen would be drawn
 ///   (`AnnotationGeometry.contentSpace`: what the screen shows at that instant, `ScreenGeometry.shown(at:)`, the Area in
 ///   Area mode, carried through the crop the layer draws onto its rect), so it stays on the same pixel of the content with
 ///   another padding, format, frame, reframe, change of shape, card or zoom; none without a screen in the frame (the camera
 ///   over all of it, a screen hidden by its layout, a take without one). Of the output, in the output frame. The unit is
 ///   the space's height.
+/// - A text's and a speech bubble's box is as tall as its text measured (`AnnotationTypography`), and is then held where
+///   its anchor lets it be with that height. Of the output, it is as wide as its rect's width times the output's own
+///   proportion (`outputAspect`) times the frame's height, not times its width: every size of the output rounds its sides
+///   to whole even pixels, and a proportion 0.06 % off would wrap a word at the limit on another line in the preview than
+///   at 4K. Stuck to the recording, the content's proportion is not rounded. Each one's lines and line height are kept
+///   while its frames ask for the same (`TextMeasure`): a still stage measures nothing after its first frame.
 /// - Steps are numbered once, for the whole output (`StepNumbering`); one without a number is not shown.
 ///
 /// A document without annotations measures nothing, and both groups are empty everywhere.
 struct AnnotationScene: Sendable {
-    /// An annotation the scene shows: as the document has it, as its timing reads it (a clip's anchor cut to its file),
-    /// the output range it can be seen in, and its step's number.
+    /// An annotation the scene shows: as the document has it, the output range it can be seen in
+    /// (`AnnotationTiming.outputRange`), its step's number and what its text measured.
     private struct Item: Sendable {
         var annotation: Annotation
-        var timed: Annotation
         var range: Range<Int64>
         var number: Int?
+        var measure: TextMeasure
         /// Of the output's group: what does not depend on the output time, worked out once for the size.
         var placed: Placed?
     }
@@ -124,18 +131,15 @@ struct AnnotationScene: Sendable {
             return
         }
         let numbers = StepNumbering.numbers(in: document, timeMap: timeMap)
-        let outputSpace = AnnotationGeometry.outputSpace(outputSize: SIMD2(Double(outputSize.x), Double(outputSize.y)))
+        let size = SIMD2(Double(outputSize.x), Double(outputSize.y))
+        let outputSpace = AnnotationGeometry.outputSpace(outputSize: size)
+        var aspect: Double?
         var content: [(item: Item, order: Int)] = []
         var output: [(item: Item, order: Int)] = []
         for (order, annotation) in document.annotations.items.enumerated() {
-            var timed = annotation
-            if case let .clip(clip) = annotation.kind {
-                guard let anchor = Self.cut(annotation.anchor, toFile: clip, duration: timeMap.duration) else { continue }
-                timed.anchor = anchor
-            }
             if case let .content(anchorTake, _, _) = annotation.anchor, anchorTake != take.id { continue }
             // One of the take with an empty range can still be on a frozen frame of its source range.
-            guard let range = AnnotationTiming.outputRange(of: timed, document: document, timeMap: timeMap),
+            guard let range = AnnotationTiming.outputRange(of: annotation, document: document, timeMap: timeMap),
                 !range.isEmpty || annotation.anchor.isContent
             else { continue }
             var number: Int?
@@ -143,11 +147,13 @@ struct AnnotationScene: Sendable {
                 guard let step = numbers[annotation.id] else { continue }
                 number = step
             }
-            var item = Item(annotation: annotation, timed: timed, range: range, number: number)
+            var item = Item(annotation: annotation, range: range, number: number, measure: TextMeasure())
             if case .content = annotation.anchor {
                 content.append((item, order))
             } else {
-                item.placed = Self.placed(annotation, number: number, fileTime: 0, space: outputSpace)
+                let proportion = aspect ?? Self.outputAspect(document: document, take: take, events: events, outputSize: size)
+                aspect = proportion
+                item.placed = Self.placed(item, space: outputSpace, aspect: proportion, fileTime: 0)
                 guard item.placed != nil else { continue }
                 output.append((item, order))
             }
@@ -180,8 +186,8 @@ struct AnnotationScene: Sendable {
         let frozen = timeMap.contentOffset(atOutput: output) != nil
         return contentItems.compactMap { item in
             guard frozen || item.range.contains(output),
-                let state = AnnotationTiming.state(of: item.timed, atOutput: output, document: document, timeMap: timeMap),
-                let placed = Self.placed(item.annotation, number: item.number, fileTime: 0, space: space)
+                let state = AnnotationTiming.state(of: item.annotation, atOutput: output, document: document, timeMap: timeMap),
+                let placed = Self.placed(item, space: space, aspect: nil, fileTime: 0)
             else { return nil }
             return Self.layer(item.annotation, placed, state)
         }
@@ -193,7 +199,7 @@ struct AnnotationScene: Sendable {
         guard !outputItems.isEmpty else { return [] }
         return outputItems.compactMap { item in
             guard item.range.contains(output), var placed = item.placed,
-                let state = AnnotationTiming.state(of: item.timed, atOutput: output, document: document, timeMap: timeMap)
+                let state = AnnotationTiming.state(of: item.annotation, atOutput: output, document: document, timeMap: timeMap)
             else { return nil }
             if case let .clip(clip, _) = placed.content {
                 // Within the range, which is never longer than the file's stretch: from its start to before its end.
@@ -201,6 +207,22 @@ struct AnnotationScene: Sendable {
             }
             return Self.layer(item.annotation, placed, state)
         }
+    }
+
+    /// How many times the texts' lines and line heights were measured, for tests and the measures.
+    var measureCount: Int {
+        (contentItems + outputItems).reduce(0) { $0 + $1.measure.count }
+    }
+
+    /// The proportion of the output frame the boxes of the output's texts are measured with: the one the document names
+    /// (its aspect; the recording's for `.auto`, `StageLayout.contentRatio`, as the export sizes it), which each size of the
+    /// output rounds to whole even pixels; `outputSize`'s own when it is not within 1 % of that (a frame drawn at a size
+    /// of another proportion).
+    static func outputAspect(document: EditDocument, take: TakeRecord, events: [InputEvent], outputSize: SIMD2<Double>) -> Double {
+        let actual = outputSize.y > 0 ? outputSize.x / outputSize.y : 1
+        let ratio = document.aspect == .auto ? StageLayout.contentRatio(take: take, document: document, events: events) : nil
+        let named = document.aspect.ratio(contentRatio: ratio)
+        return named.isFinite && named > 0 && abs(named / actual - 1) < 0.01 ? named : actual
     }
 
     // MARK: - Private
@@ -212,27 +234,44 @@ struct AnnotationScene: Sendable {
             rotation: placed.rotation, opacity: state.opacity, scale: state.scale, drawn: state.drawn)
     }
 
-    /// Where `annotation` is in `space` and what it draws there (a step with its `number`, a clip at `fileTime`): its rect
-    /// held where its anchor lets it be, a text's and a speech bubble's as tall as their text, an arrow's around its path.
-    /// `nil` for a step without a number.
-    private static func placed(_ annotation: Annotation, number: Int?, fileTime: Int64, space: Rect) -> Placed? {
+    /// Where `item`'s annotation is in `space` and what it draws there (a step with its number, a clip at `fileTime`): its
+    /// rect held where its anchor lets it be; a text's and a speech bubble's as tall as their text, measured with `aspect`
+    /// as the space's proportion when it is given (the output's, `outputAspect`), then held with that height; an arrow's
+    /// around its path. `nil` for a step without a number.
+    private static func placed(_ item: Item, space: Rect, aspect: Double?, fileTime: Int64) -> Placed? {
+        let annotation = item.annotation
         let unit = space.height
-        var rect = AnnotationGeometry.pixels(AnnotationGeometry.clamped(annotation.rect, anchor: annotation.anchor), in: space)
+        let held = AnnotationGeometry.clamped(annotation.rect, anchor: annotation.anchor)
+        var rect = AnnotationGeometry.pixels(held, in: space)
         var rotation = annotation.rotation.isFinite ? annotation.rotation : 0
+        /// The box of `text` with the padding of `padding`: as wide as the rect (in the frame's height times `aspect`),
+        /// as tall as its text, held there with that height.
+        func box(_ text: TextAnnotation, padding: TextPreset?) -> Rect {
+            let width = aspect.map { held.width * $0 * unit } ?? rect.width
+            let height = item.measure.height(of: text, width: width, unit: unit, padding: padding)
+            var box = rect
+            if unit > 0, height.isFinite {
+                var measured = held
+                measured.height = height / unit
+                box = AnnotationGeometry.pixels(AnnotationGeometry.clamped(measured, anchor: annotation.anchor), in: space)
+            }
+            (box.width, box.height) = (width, height)
+            return box
+        }
         let content: AnnotationLayer.Content
         switch annotation.kind {
         case let .text(text):
-            rect.height = AnnotationTypography.box(of: text, width: rect.width, unit: unit).y
+            rect = box(text, padding: nil)
             content = .text(text)
         case let .arrow(arrow):
-            let aspect = space.height > 0 ? space.width / space.height : 1
-            rect = AnnotationGeometry.pixels(AnnotationGeometry.arrowRect(arrow, aspect: aspect), in: space)
+            let proportion = space.height > 0 ? space.width / space.height : 1
+            rect = AnnotationGeometry.pixels(AnnotationGeometry.arrowRect(arrow, aspect: proportion), in: space)
             content = .arrow(arrow, path: AnnotationGeometry.arrow(arrow, in: space))
             rotation = 0
         case let .shape(shape):
             content = .shape(shape)
         case let .callout(callout):
-            rect.height = AnnotationTypography.box(of: callout.text, width: rect.width, unit: unit, padding: .label).y
+            rect = box(callout.text, padding: .label)
             let em = callout.text.size * unit
             let corner = max(min(AnnotationTypography.calloutCornerEm * em, rect.width / 2, rect.height / 2), 0)
             let tail = AnnotationGeometry.calloutTail(
@@ -241,7 +280,7 @@ struct AnnotationScene: Sendable {
             content = .callout(callout, tail: tail)
             rotation = 0
         case let .step(step):
-            guard let number else { return nil }
+            guard let number = item.number else { return nil }
             content = .step(step, number: number)
         case let .image(image):
             content = .image(image)
@@ -250,21 +289,45 @@ struct AnnotationScene: Sendable {
         }
         return Placed(content: content, rect: rect, space: space, rotation: rotation)
     }
+}
 
-    /// The anchor a clip over the output is shown in (plan 3a decision 13): `anchor` cut to the length of its file's
-    /// stretch, `end − start`, from where it starts, so it never repeats; `nil` for a stretch of nothing, and anchored to
-    /// the take (a clip is only of the output). The whole video is `[0, D)`.
-    private static func cut(_ anchor: AnnotationAnchor, toFile clip: ClipAnnotation, duration: Int64) -> AnnotationAnchor? {
-        let (length, overflow) = clip.end.subtractingReportingOverflow(clip.start)
-        guard !overflow, length > 0 else { return nil }
-        switch anchor {
-        case .content:
-            return nil
-        case let .output(start, end):
-            let (last, past) = start.addingReportingOverflow(length)
-            return .output(start: start, end: past ? end : min(end, last))
-        case .whole:
-            return .output(start: 0, end: min(duration, length))
+/// What a text of one annotation measured (`AnnotationTypography`), kept while the frames ask for the same, under a lock:
+/// its lines' count for the last width they were wrapped at (in pixels of `AnnotationTypography.referenceUnit`, which only
+/// the space's proportion changes), and the height of a line for the last em. So a text whose stage does not change
+/// measures once, and one whose screen's card grows measures again only while it grows. The same numbers as
+/// `AnnotationTypography.box`, so the same box.
+final class TextMeasure: Sendable {
+    private struct State {
+        var lines: (width: Double?, count: Int?)?
+        var line: (em: Double, height: Double?)?
+        var count = 0
+    }
+
+    private let state = Mutex(State())
+
+    init() {}
+
+    /// How many times it measured: lines or a line's height.
+    var count: Int { state.withLock { $0.count } }
+
+    /// The height of `text`'s box `width` pixels wide with the padding of `paddingPreset` (its own preset's when `nil`),
+    /// with `unit` the height of its space: `AnnotationTypography.box(of:width:unit:padding:).y`.
+    func height(of text: TextAnnotation, width: Double, unit: Double, padding paddingPreset: TextPreset?) -> Double {
+        let em = text.size * unit
+        let padding = AnnotationTypography.padding(paddingPreset ?? text.preset, em: em)
+        let wrap = AnnotationTypography.referenceWidth(of: text, width: width, unit: unit, padding: paddingPreset)
+        return state.withLock { state in
+            if state.lines.map({ $0.width == wrap }) != true {
+                let lines = AnnotationTypography.lines(of: text, width: width, unit: unit, padding: paddingPreset)
+                state.lines = (wrap, lines?.count)
+                state.count += 1
+            }
+            if state.line.map({ $0.em == em }) != true {
+                state.line = (em, AnnotationTypography.font(text, unit: unit, scale: 1).map(AnnotationTypography.lineHeight(of:)))
+                state.count += 1
+            }
+            guard let count = state.lines?.count, let lineHeight = state.line?.height else { return 2 * padding.y }
+            return Double(count) * lineHeight + 2 * padding.y
         }
     }
 }

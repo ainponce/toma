@@ -34,16 +34,29 @@ public enum AnnotationTiming {
     /// range is seen (`TimeMap.outputRange(ofSource:take:)`, freezes inside it included); `nil` if all of it is cut;
     /// anchored to the output, `[start, end)` (`nil` if it is empty); the whole video, `0..<D` (`nil` for an output of 0 ns).
     /// The range can be empty when what is kept lasts 0 ns of output.
+    ///
+    /// A clip (plan 3a decision 13) is that range cut to the length of its file's stretch, `end − start`, from where the
+    /// range starts, so it never repeats: the track, the commands and the render all read the same span. `nil` for a
+    /// stretch of nothing, and for one anchored to the take (a clip is only of the output).
     public static func outputRange(of annotation: Annotation, document: EditDocument, timeMap: TimeMap) -> Range<Int64>? {
+        let range: Range<Int64>
         switch annotation.anchor {
         case let .content(take, start, end):
+            if case .clip = annotation.kind { return nil }
             guard start < end else { return nil }
             return timeMap.outputRange(ofSource: start..<end, take: take)
         case let .output(start, end):
-            return start < end ? start..<end : nil
+            guard start < end else { return nil }
+            range = start..<end
         case .whole:
-            return timeMap.duration > 0 ? 0..<timeMap.duration : nil
+            guard timeMap.duration > 0 else { return nil }
+            range = 0..<timeMap.duration
         }
+        guard case let .clip(clip) = annotation.kind else { return range }
+        let (length, overflow) = clip.end.subtractingReportingOverflow(clip.start)
+        guard !overflow, length > 0 else { return nil }
+        let (last, past) = range.lowerBound.addingReportingOverflow(length)
+        return past ? range : range.lowerBound..<min(range.upperBound, last)
     }
 
     /// The look of `annotation` at output time `τ`; `nil` where it is not shown: outside its range; for one anchored to the

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // `NSFontDescriptor.withDesign(_:)` only: the public way to the system font's rounded, serif and mono designs, on the
 // descriptor CoreText uses (the two are the same object). Nothing of AppKit's interface.
-import AppKit
+import class AppKit.NSFontDescriptor
 import CoreText
 import Foundation
 import ProjectFormat
@@ -126,9 +126,19 @@ enum AnnotationTypography {
     /// a speech bubble's is `.label`), with `unit` the height of its space, wrapped at `referenceUnit` (see the type's
     /// notes): the same for every `unit`. `nil` without a font (`font(_:unit:scale:)`) or a unit.
     static func lines(of text: TextAnnotation, width: Double, unit: Double, padding paddingPreset: TextPreset? = nil) -> [String]? {
-        guard unit > 0, unit.isFinite, let font = Self.font(text, unit: referenceUnit, scale: 1) else { return nil }
+        guard let wrap = referenceWidth(of: text, width: width, unit: unit, padding: paddingPreset),
+            let font = Self.font(text, unit: referenceUnit, scale: 1)
+        else { return nil }
+        return Self.lines(of: text.string, font: font, width: wrap)
+    }
+
+    /// The width the lines of `text`, as a box `width` pixels wide in a space of unit `unit` with the padding of
+    /// `paddingPreset` (its own preset's when `nil`), are wrapped at, in pixels of `referenceUnit`: the box's width less its
+    /// padding on both sides, scaled from `unit` to `referenceUnit`. `nil` without a unit.
+    static func referenceWidth(of text: TextAnnotation, width: Double, unit: Double, padding paddingPreset: TextPreset? = nil) -> Double? {
+        guard unit > 0, unit.isFinite else { return nil }
         let padding = Self.padding(paddingPreset ?? text.preset, em: text.size * unit)
-        return Self.lines(of: text.string, font: font, width: (width - 2 * padding.x) * referenceUnit / unit)
+        return (width - 2 * padding.x) * referenceUnit / unit
     }
 
     /// The box of `text`, `width` pixels wide, in pixels: that width, and the height of its lines
