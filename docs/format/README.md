@@ -2613,3 +2613,42 @@ Replay/
   - **El corte** (`ReplayCut`) está N segundos antes del fin de la pantalla (el mayor fin de sus pistas), o en su comienzo si se grabó menos. De cada pista se guardan los segmentos cerrados que terminan después del corte (el que lo cruza, entero) y empiezan antes del fin, renumerados desde `seg-0001.mov`, con `rotated` como `stopped` y los demás motivos como estaban; una pista sin ninguno no se guarda. El documento empieza en el corte (`Clip.start`), porque el primer segmento empieza antes.
   - **`events.jsonl`** (`ReplayEvents`) empieza en el comienzo del primer segmento guardado (hasta 10 s antes del corte) con el estado vigente re-emitido en ese instante, antes que lo demás: `displayGeometry` de cada pantalla, `windowGeometry` de cada ventana guardada, `cursorImage`, la posición del cursor (`cursor`, la de su último `cursor`, `mouseDown`, `mouseUp` o `scroll`) y el último `focus` si lo hay. El estilo de cámara vigente va en `TakeRecord.cameraStyle`, no como evento. Un botón apretado en ese instante no se re-emite: un `mouseUp` solo no dibuja un clic. Se sacan los eventos de una pista que no se guarda, los del ciclo de vida de un segmento que no se guarda (`segmentStarted`, `audioClock`, `droppedSamples`, `streamInterrupted` y `deviceChanged` antes del primer segmento guardado de su pista o después del fin del último) y todo lo que pasa después del fin; los `segmentStarted` llevan el índice nuevo.
   - **El manifiesto** (`ReplayManifest`): `startedAt` es el momento de guardar menos lo que dura la toma guardada, en segundos enteros, y `projectID` uno nuevo.
+### `shares.json`, los links para compartir
+
+«Compartir» (hito 5a, diseño de las fases 4 y 5, §8.2 y §8.3; decisión 4 del plan 5a) anota cada link en `shares.json`, en la raíz del paquete. Es el único archivo que el hito escribe en un paquete: el documento, el manifiesto y el registro de edición no cambian, y el manifiesto no lo nombra (un lector que no lo conoce lo ignora, como cualquier archivo de la raíz que no es suyo). Lo escriben el editor y `toma share`, siempre con `ShareHistory`.
+
+```json
+{
+  "shares" : [
+    {
+      "bucket" : "videos",
+      "bytes" : 48213990,
+      "createdAt" : "2026-11-20T15:04:05Z",
+      "documentHash" : "9f2c…64 dígitos hex…",
+      "endpoint" : "https://0123abcd.r2.cloudflarestorage.com",
+      "expiresAt" : "2026-11-27T15:04:05Z",
+      "folder" : "toma/k3m7q2x4za/",
+      "id" : "k3m7q2x4za",
+      "url" : "https://0123abcd.r2.cloudflarestorage.com/videos/toma/k3m7q2x4za/index.html?X-Amz-Algorithm=…"
+    }
+  ],
+  "version" : 1
+}
+```
+
+| Campo | Qué |
+|---|---|
+| `version` | `1`. Un archivo de una versión más nueva no se lee ni se reescribe |
+| `shares[].id` | El id del link (`ShareID`): 10 caracteres al azar de base 32 en minúsculas (`a`–`z`, `2`–`7`) |
+| `shares[].url` | El link: con URL pública base, `<base>/<prefijo><id>/index.html`, permanente; sin ella, la URL prefirmada de `index.html`, que vence |
+| `shares[].createdAt` | Cuándo se compartió, ISO 8601 en segundos enteros |
+| `shares[].expiresAt` | Opcional: cuándo vence un link firmado (lo mismo que su video y su póster, firmados en el mismo instante y por el mismo tiempo); ausente en un link público, que no vence. Nunca `null` |
+| `shares[].bytes` | Los bytes de los tres objetos juntos |
+| `shares[].documentHash` | El SHA-256 en hex del documento exportado tal como lo escribe `ProjectJSON.encoder()` (`ShareInputs.documentHash`) |
+| `shares[].endpoint`, `shares[].bucket` | El almacenamiento al que se subió, como lo tenían los Ajustes: «Borrar del almacenamiento» se niega si los Ajustes de ahora apuntan a otro |
+| `shares[].folder` | Dónde están sus objetos: `<prefijo><id>/`. Los tres son `video.mp4`, `poster.jpg` e `index.html` (la página `sharePage-1`), y borrar el link borra esos tres |
+
+- **Se escribe** entero y atómico con `ProjectJSON.encoder()` (claves ordenadas, con sangría, fechas ISO 8601) desde el descriptor de la carpeta del paquete (`DurableFile.writeAtomically(_:named:inDirectory:)`: `shares.json.tmp`, `F_FULLFSYNC` y `renameat`), así un lector ve las filas de antes o las de después, nunca una parte. Leer, agregar y escribir van bajo un `flock` exclusivo de ese descriptor: la app y `toma` sobre el mismo paquete nunca pierden una fila (en un volumen sin `flock`, como SMB o exFAT, sin el candado; cada escritura sigue siendo atómica). Agregar pone la fila al final; borrar saca las filas de ese id, y sin ninguna no escribe nada. La lista se muestra de la más nueva a la más vieja.
+- **Se lee** con `SafeRead` sin seguir enlaces, hasta 1 MiB (`ShareHistory.maxBytes`). Lo que no conoce sobrevive a una escritura: las claves de arriba que no son `version` ni `shares`, los campos de una fila que no conoce y las filas que no decodifica (no se listan, se guardan tal cual). Una fila decodifica si tiene los nueve campos de arriba (`expiresAt` puede faltar), su `id` es un `ShareID` y su `folder` es un prefijo y ese id (`<prefijo><id>/`, sin `/` al principio ni partes vacías, `.` o `..`): una fila editada a mano nunca nombra otros objetos para borrar.
+- **Ilegible.** Un `shares.json` que no es JSON, que no es un objeto con `version` 1 y una lista `shares`, de más de 1 MiB, un enlace o algo que no es un archivo común es ilegible (`ShareError.historyUnreadable`) y nunca se reescribe: compartir da el link igual y avisa que no se anotó. Un agregado que lo haría pasar de 1 MiB no se escribe (`EFBIG`), para que siga siendo legible.
+- **Nunca tiene el secreto**: la clave secreta vive solo en el Llavero. La única firma que guarda es la de la URL de un link firmado, que es lo que la persona comparte.
