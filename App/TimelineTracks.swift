@@ -139,6 +139,8 @@ struct TimelineContent {
     let audioCuts: [(clip: Int, picture: Int64, audio: Int64)]
     /// The width of the screen the take starts on over its height: the thumbnails' shape.
     let screenAspect: Double
+    /// The document shown: the Music and Imported Clips rows draw its music and its imported clips (phase 3).
+    let document: EditDocument
     /// The screen shown from each source instant on: the take's first, then its changes in time order.
     private let initialScreen: String?
     private let screenChanges: [(t: UInt64, track: String)]
@@ -257,6 +259,7 @@ struct TimelineContent {
         let first = initialScreen.flatMap(take.track)
         let frame = first?.source.captureArea ?? first?.source.globalFrame
         screenAspect = frame.map { $0.height > 0 ? min(max($0.width / $0.height, 0.5), 3) : 16.0 / 9 } ?? 16.0 / 9
+        self.document = document
     }
 
     /// The screen track shown at source instant `t` of the take: the last change at or before it, or the first screen.
@@ -466,6 +469,8 @@ final class TimelineTracks {
     private let cameraNotice = CATextLayer()
     /// The audio rows: their waveforms, volume lines, stretches and cuts of the sound (phase 3).
     let audioRows = TimelineAudioRows()
+    /// The Music and Imported Clips rows (phase 3).
+    let musicRow = TimelineMusicRow()
     /// The Privacy row's blocks (phase 2).
     private let privacyRow = TimelinePrivacyRow()
     /// The Annotations row's blocks (phase 3).
@@ -539,6 +544,7 @@ final class TimelineTracks {
             return diamond
         }
         rows.addSublayer(audioRows.layer)
+        rows.addSublayer(musicRow.layer)
         TimelineText.setUp(cameraNotice, size: 10, weight: .regular)
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
@@ -573,6 +579,7 @@ final class TimelineTracks {
         contentClips.begin()
         captionsRow.begin()
         audioRows.begin()
+        musicRow.begin()
         var wanted: Set<ThumbnailKey> = []
         for row in geometry.rows {
             switch row.track {
@@ -586,8 +593,8 @@ final class TimelineTracks {
             case let .audio(id):
                 audioRows.layOut(id, content, row, geometry, palette, levels: waveformLevels[id], selected: selected, settling: settling)
             case .annotations: annotationsRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
-            // Empty in the base of phase 3: the sound (3c) draws in them.
-            case .importedAudio, .music: break
+            case .importedAudio: musicRow.layOutImported(content, row, geometry, palette, settling: settling)
+            case .music: musicRow.layOutMusic(content, row, geometry, palette, selected: selected, settling: settling)
             }
         }
         for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end] { pool() }
@@ -596,6 +603,7 @@ final class TimelineTracks {
         contentClips.end()
         captionsRow.end()
         audioRows.end()
+        musicRow.end()
         // What is no longer in sight is not made.
         for (key, task) in loading where !wanted.contains(key) {
             task.cancel()
@@ -630,6 +638,7 @@ final class TimelineTracks {
         contentClips.reset()
         captionsRow.reset()
         audioRows.reset()
+        musicRow.reset()
         tileKeys = [:]
     }
 
@@ -648,7 +657,7 @@ final class TimelineTracks {
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
             + layouts.shownCount + diamonds.shownCount + audioRows.layerCount + captionsRow.layerCount
-            + contentClips.layerCount
+            + contentClips.layerCount + musicRow.layerCount
     }
 
     // MARK: - Video

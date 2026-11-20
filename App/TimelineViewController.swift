@@ -128,6 +128,8 @@ final class TimelineViewController: NSViewController {
         timeline.marks = model.timelineMarks
         timeline.selected = Self.selectedIDs(model.selection)
         timeline.audioSolo = model.audioSolo
+        // The music's lengths, waveforms and what is being made (3c), as `EditorAudio` has them.
+        timeline.musicInfo = TimelineMusicInfo(shown: model.audio.shown, waveforms: model.audio.waveforms)
         guard model.state == .ready, let document = model.document, let project = model.overlayProject else {
             timeline.showNothing()
             return
@@ -181,6 +183,7 @@ final class TimelineViewController: NSViewController {
         case let .privacyBlocks(ids)?: ids
         case let .annotations(ids)?: ids
         case let .gainRange(id)?: [id]
+        case let .musicItem(id)?: [id]
         case nil: []
         }
     }

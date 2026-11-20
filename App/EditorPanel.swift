@@ -45,6 +45,7 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .privacyBlocks?: .privacy
         case .annotations?: .annotations
         case .gainRange?: .audio
+        case .musicItem?: .audio
         case .clips?, .screenChange?, nil: nil
         }
     }

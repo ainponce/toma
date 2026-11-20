@@ -258,9 +258,18 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     /// Solo (phase 3 design §7.2): the headers' Solo shows it and the audio rows it leaves out are dimmed; a header's Solo
     /// pressed is `onSolo`.
     var audioSolo = AudioSolo() {
-        didSet { if audioSolo != oldValue { tracks.audioRows.solo = audioSolo; updateHeaders(); needsLayout = true } }
+        didSet {
+            if audioSolo != oldValue { tracks.audioRows.solo = audioSolo; tracks.musicRow.solo = audioSolo; updateHeaders(); needsLayout = true }
+        }
     }
     var onSolo: (AudioRowID) -> Void = { _ in }
+    /// What `EditorAudio` has of the music's files (3c): the Music and Imported Clips rows draw with it.
+    var musicInfo = TimelineMusicInfo() {
+        didSet {
+            tracks.musicRow.info = musicInfo
+            if musicInfo.shown != oldValue.shown { needsLayout = true }
+        }
+    }
     /// What is selected, by id: drawn outlined in the accent color.
     var selected: Set<String> = [] {
         didSet { if selected != oldValue { tracks.selected = selected; needsLayout = true } }
@@ -283,6 +292,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private lazy var accessibility = TimelineAccessibility(view: self)
     /// A video file dropped on the Video track (phase 3 design §5.4).
     private lazy var mediaDrop = TimelineMediaDrop(view: self)
+    /// A sound file dropped on the Music track (phase 3 design §7.7).
+    private lazy var musicDrop = TimelineMusicDrop(view: self)
 
     let tracks = TimelineTracks()
     private(set) var content: TimelineContent?
@@ -855,26 +866,38 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         interaction.menu(for: event)
     }
 
-    // A video file dragged from Finder onto the Video track goes into the sequence (phase 3, `TimelineMediaDrop`).
+    // A video file dragged from Finder onto the Video track goes into the sequence (phase 3, `TimelineMediaDrop`); a
+    // sound file onto the Music track goes in there (3c, `TimelineMusicDrop`).
 
     override func draggingEntered(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        mediaDrop.update(sender)
+        dragUpdated(sender)
     }
 
     override func draggingUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
-        mediaDrop.update(sender)
+        dragUpdated(sender)
+    }
+
+    private func dragUpdated(_ sender: any NSDraggingInfo) -> NSDragOperation {
+        let music = musicDrop.update(sender)
+        guard music.isEmpty else {
+            mediaDrop.hide()
+            return music
+        }
+        return mediaDrop.update(sender)
     }
 
     override func draggingExited(_ sender: (any NSDraggingInfo)?) {
         mediaDrop.hide()
+        musicDrop.hide()
     }
 
     override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
-        mediaDrop.perform(sender)
+        musicDrop.perform(sender) || mediaDrop.perform(sender)
     }
 
     override func concludeDragOperation(_ sender: (any NSDraggingInfo)?) {
         mediaDrop.hide()
+        musicDrop.hide()
     }
 
     override func updateTrackingAreas() {

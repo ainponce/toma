@@ -75,6 +75,8 @@ final class TimelineInteraction {
         case moveAnnotation(Base, id: String, range: Range<Int64>, grab: Int64)
         /// An audio row's (phase 3, `TimelineAudioDrags`).
         case audio(AudioDrag)
+        /// The Music track's (phase 3, `TimelineMusicDrags`).
+        case music(MusicDrag)
         /// A clip with content (phase 3): the right edge of a frozen frame or a title card sets its length; the edges of an
         /// imported clip trim its file, `fileDuration` ns long.
         case contentDuration(Base, clip: Clip, outputStart: Int64)
@@ -157,6 +159,7 @@ final class TimelineInteraction {
         case let .privacyBlocks(ids)?: ids
         case let .annotations(ids)?: ids
         case let .gainRange(id)?: [id]
+        case let .musicItem(id)?: [id]
         case nil: []
         }
     }
@@ -212,6 +215,8 @@ final class TimelineInteraction {
         }
         // An audio row (3c): its volume line, its stretches and its cuts of the sound (`TimelineAudioDrags`).
         if audioMouseDown(event, at: point, hit: hit) { return }
+        // The Music track (3c): its pieces, moved, trimmed, slid and their volume (`TimelineMusicDrags`).
+        if musicMouseDown(event, at: point, hit: hit) { return }
         // A caption is not selected, dragged or trimmed; a double click shows its word in the Captions tab.
         if case let .item(.captions, id) = hit {
             if event.clickCount >= 2 { revealCaption(id, at: output(at: point)) }
@@ -298,6 +303,8 @@ final class TimelineInteraction {
             updateDrag(event)
         case let .audio(audio):
             audioMouseDragged(audio, event)
+        case let .music(music):
+            musicMouseDragged(music, event)
         case .contentDuration, .trimMedia:
             updateDrag(event)
         }
@@ -326,6 +333,8 @@ final class TimelineInteraction {
             finish()
         case let .audio(audio):
             audioMouseUp(audio, event)
+        case let .music(music):
+            musicMouseUp(music, event)
         case .contentDuration, .trimMedia:
             finish()
         }
@@ -343,6 +352,7 @@ final class TimelineInteraction {
         let next = hit(at: point)
         setCursor(for: next)
         if case .empty(.audio, _) = next { setAudioCursor(event, at: point) }
+        if case .empty(.music, _) = next { setMusicCursor(event, at: point) }
         guard next != hover else { return }
         hover = next
         refreshHighlight()
@@ -736,6 +746,8 @@ final class TimelineInteraction {
             view.setPreview(nil)
         case let .audio(audio):
             cancelAudioDrag(audio)
+        case let .music(music):
+            cancelMusicDrag(music)
         case .contentDuration, .trimMedia:
             lastStep = nil
             model?.cancelGesture()
@@ -869,6 +881,8 @@ final class TimelineInteraction {
             menu.addItem(delete)
         case .empty(.audio, _):
             return audioMenu(at: point)
+        case .empty(.music, _):
+            return musicMenu(at: point)
         default:
             return nil
         }
@@ -1153,6 +1167,8 @@ extension EditorModel {
             step = AnnotationCommands.delete(document, ids: ids)
         case let .gainRange(id)?:
             step = gainRangeDeletion(id)
+        case let .musicItem(id)?:
+            step = MusicCommands.delete(document, id: id)
         case .screenChange?, nil:
             step = nil
         }

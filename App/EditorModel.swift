@@ -26,6 +26,8 @@ enum EditorSelection: Equatable {
     case annotations(Set<String>)
     /// A stretch at another volume of an audio row (phase 3 design §7.2), by its id (`GainRange.id`, one in every take).
     case gainRange(String)
+    /// A piece of music of the Music track (phase 3 design §7.4), by its id (`MusicItem.id`).
+    case musicItem(String)
 }
 
 /// A track of sound, as a row of the Audio tab and of the timeline: a track by its id in every take the sequence shows
@@ -316,6 +318,9 @@ final class EditorModel {
     /// The voice (plan 2a, Task A10): the transcription, the clean voice and the loudness asked for, followed and handed
     /// to the preview's mix, and waited for by the export.
     @ObservationIgnored private(set) lazy var voice = EditorVoice(model: self)
+    /// The music (plan 3c, Task U12): its themes and imported sounds made into the caches and handed to the preview's mix,
+    /// waited for by the export, and the library's themes heard before one is chosen.
+    @ObservationIgnored private(set) lazy var audio = EditorAudio(model: self)
     /// The last `jobs.setRecording(_:)` told, so the next one goes after it and they arrive in order.
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
@@ -430,6 +435,7 @@ final class EditorModel {
         }
         exportPreparations.append { await $0.image.prepareExport($0, $1) }
         exportPreparations.append { await $0.voice.prepareExport($0, $1) }
+        exportPreparations.append { await $0.audio.prepareExport($0, $1) }
     }
 
     // MARK: - Opening
@@ -580,6 +586,7 @@ final class EditorModel {
         makeMix(of: project, document: document, revision: revision)
         image.opened(project: project, caches: session.caches, document: session.document)
         voice.opened(project: project, caches: session.caches, document: session.document)
+        audio.opened(project: project, caches: session.caches, document: session.document)
     }
 
     /// The mix of the document as it opened, off the main thread: it reads where every audio segment ends. Playback
@@ -999,6 +1006,7 @@ final class EditorModel {
             build(next, revision: session.revision)
             image.documentChanged(next)
             voice.documentChanged(next)
+            audio.documentChanged(next)
         }
         updateBanner()
     }
@@ -1026,6 +1034,8 @@ final class EditorModel {
             selection = kept.isEmpty ? nil : .annotations(kept)
         case let .gainRange(id)?:
             if !document.audio.tracks.values.contains(where: { $0.ranges.contains { $0.id == id } }) { selection = nil }
+        case let .musicItem(id)?:
+            if !document.music.items.contains(where: { $0.id == id }) { selection = nil }
         case nil:
             break
         }
@@ -1611,6 +1621,7 @@ final class EditorModel {
         tearDownPreview()
         image.close()
         voice.close()
+        audio.close()
         Task { [jobs] in await jobs.cancelAll() }
         session?.onChange = nil
         // Where it was last seen, for who looks at it once it closed.

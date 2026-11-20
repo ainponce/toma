@@ -254,6 +254,8 @@ extension EditorModel {
             return false
         case .gainRange?:
             return false
+        case .musicItem?:
+            return false
         }
         return true
     }
@@ -329,6 +331,10 @@ extension EditorModel {
             step = AnnotationCommands.move(document, id: id, toOutputStart: range.lowerBound + delta)
         case .annotations?, .gainRange?:
             step = nil
+        case let .musicItem(id)?:
+            // A piece of music moves between its neighbours (3c).
+            guard let item = document.music.items.first(where: { $0.id == id }) else { return false }
+            step = MusicCommands.move(document, id: id, toOutputStart: item.start + delta, timeMap: map)
         case .zooms?, .clips?, nil:
             step = nil
         }

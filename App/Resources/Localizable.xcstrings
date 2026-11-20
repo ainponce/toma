@@ -590,6 +590,17 @@
         }
       }
     },
+    "Add Music…" : {
+      "comment" : "Adds a theme of the library or a file of the user's under the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar música…"
+          }
+        }
+      }
+    },
     "Add Title Card" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a title card was added to the video",
       "localizations" : {
@@ -727,6 +738,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ya desenfocado"
+          }
+        }
+      }
+    },
+    "Ambient" : {
+      "comment" : "The style of a theme of the music library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ambiental"
+          }
+        }
+      }
+    },
+    "Amount" : {
+      "comment" : "The Music section: how far the music goes down while someone speaks, in dB",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cantidad"
           }
         }
       }
@@ -941,6 +974,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Orden ascendente"
+          }
+        }
+      }
+    },
+    "Attack" : {
+      "comment" : "The Music section: how long before the voice the music starts going down",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ataque"
           }
         }
       }
@@ -1260,6 +1304,17 @@
         }
       }
     },
+    "Breeze" : {
+      "comment" : "A theme of the music library (plucked strings)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Brisa"
+          }
+        }
+      }
+    },
     "Bring Forward" : {
       "comment" : "The menu of an annotation: one layer up, over the next one it overlaps",
       "localizations" : {
@@ -1343,6 +1398,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Globo «%@»"
+          }
+        }
+      }
+    },
+    "Calm" : {
+      "comment" : "A theme of the music library (ambient)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Calma"
           }
         }
       }
@@ -2062,6 +2128,17 @@
         }
       }
     },
+    "Choose a File…" : {
+      "comment" : "The music library’s list: a sound file of the user’s instead of a theme",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir un archivo…"
+          }
+        }
+      }
+    },
     "Choose another .cube file" : {
       "comment" : "Camera tab, Color: the help of Change…",
       "localizations" : {
@@ -2628,6 +2705,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo preparar el recorte: %@"
+          }
+        }
+      }
+    },
+    "Couldn't prepare the music: %@" : {
+      "comment" : "An alert: an export stopped because a theme of the music library or an imported sound could not be made, and why",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo preparar la música: %@"
           }
         }
       }
@@ -3233,6 +3321,17 @@
         }
       }
     },
+    "Drive" : {
+      "comment" : "A theme of the music library (upbeat pop)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Impulso"
+          }
+        }
+      }
+    },
     "Dune" : {
       "localizations" : {
         "es" : {
@@ -3370,6 +3469,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Efecto, %1$@, %2$d de %3$d"
+          }
+        }
+      }
+    },
+    "Electronic" : {
+      "comment" : "The style of a theme of the music library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Electrónica"
           }
         }
       }
@@ -3617,6 +3727,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Caras"
+          }
+        }
+      }
+    },
+    "Fade In" : {
+      "comment" : "The Music section: how long a piece of music takes to come in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrada"
+          }
+        }
+      }
+    },
+    "Fade Out" : {
+      "comment" : "The Music section: how long a piece of music takes to go out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salida"
           }
         }
       }
@@ -4290,6 +4422,28 @@
         }
       }
     },
+    "Import Audio…" : {
+      "comment" : "Adds a sound file of the user's (M4A, MP3, WAV, AIFF or CAF) as music",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Importar audio…"
+          }
+        }
+      }
+    },
+    "Imported Audio" : {
+      "comment" : "A piece of music of the Music track that is a file of the user's, not a theme of the library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Audio importado"
+          }
+        }
+      }
+    },
     "Imported Clip, %@" : {
       "comment" : "VoiceOver: an imported video in the sequence on the Video track and what it lasts (\"4,5 s\")",
       "localizations" : {
@@ -4821,6 +4975,17 @@
         }
       }
     },
+    "Lo-fi" : {
+      "comment" : "The style of a theme of the music library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo-fi"
+          }
+        }
+      }
+    },
     "Loading the camera's picture…" : {
       "comment" : "Camera tab: the small view of Manual framing, while its frame is read",
       "localizations" : {
@@ -4908,6 +5073,17 @@
         }
       }
     },
+    "Loop" : {
+      "comment" : "The Music section: the piece of music starts again when its file ends",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetir"
+          }
+        }
+      }
+    },
     "Loop Forever" : {
       "comment" : "The export sheet: the GIF plays in a loop; otherwise once",
       "localizations" : {
@@ -4925,6 +5101,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Queda poco espacio en el disco: %@."
+          }
+        }
+      }
+    },
+    "Lower Music While Speaking" : {
+      "comment" : "The Music section: the music goes down while someone speaks (ducking)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Bajar la música cuando se habla"
           }
         }
       }
@@ -5185,6 +5372,17 @@
         }
       }
     },
+    "Minimal Piano" : {
+      "comment" : "The style of a theme of the music library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano mínimo"
+          }
+        }
+      }
+    },
     "Mint" : {
       "localizations" : {
         "es" : {
@@ -5434,6 +5632,17 @@
         }
       }
     },
+    "Music, %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a piece of music of the Music track, its name, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Música, %1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "Mute" : {
       "comment" : "The Audio tab: a track's switch",
       "localizations" : {
@@ -5652,6 +5861,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Todavía no hay grabaciones."
+          }
+        }
+      }
+    },
+    "No room for more music." : {
+      "comment" : "The Music section of the Audio tab: no free gap of 1 s or more at the playhead for a new piece",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No hay lugar para más música."
           }
         }
       }
@@ -5955,6 +6175,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se acelera 1 tramo: %@ → %@"
+          }
+        }
+      }
+    },
+    "Only the first 30 minutes are used." : {
+      "comment" : "The Music section: an imported sound longer than 30 minutes is cut there",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se usan los primeros 30 minutos."
           }
         }
       }
@@ -6330,6 +6561,17 @@
         }
       }
     },
+    "Piano" : {
+      "comment" : "A theme of the music library (minimal piano)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Piano"
+          }
+        }
+      }
+    },
     "Pixelate" : {
       "comment" : "A privacy block's effect (the Privacy track and tab): the rectangle is drawn in big squares",
       "localizations" : {
@@ -6391,6 +6633,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se reproduce en cualquier lado. Lo más seguro para compartir."
+          }
+        }
+      }
+    },
+    "Plucked Strings" : {
+      "comment" : "The style of a theme of the music library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuerdas pulsadas"
           }
         }
       }
@@ -6472,6 +6725,17 @@
         }
       }
     },
+    "Preparing…" : {
+      "comment" : "A theme of the music library or an imported sound being made before it can be heard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Preparando…"
+          }
+        }
+      }
+    },
     "Preview" : {
       "comment" : "VoiceOver: the editor's preview",
       "localizations" : {
@@ -6532,6 +6796,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Los proyectos que se abran desde otras carpetas aparecen aquí."
+          }
+        }
+      }
+    },
+    "Pulse" : {
+      "comment" : "A theme of the music library (electronic)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pulso"
           }
         }
       }
@@ -6943,6 +7218,17 @@
         }
       }
     },
+    "Release" : {
+      "comment" : "The Music section: how long the music takes to come back up after the voice",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Relajación"
+          }
+        }
+      }
+    },
     "Remove Filler Words" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): the filler words (um, uh) were cut",
       "localizations" : {
@@ -7047,6 +7333,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Reemplazar"
+          }
+        }
+      }
+    },
+    "Replace Music…" : {
+      "comment" : "The menu of a piece of music: another theme or file plays in its place",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reemplazar la música…"
           }
         }
       }
@@ -10449,6 +10746,17 @@
         }
       }
     },
+    "Upbeat Pop" : {
+      "comment" : "The style of a theme of the music library",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pop alegre"
+          }
+        }
+      }
+    },
     "Update “%@” with This Project" : {
       "comment" : "The row Style of the editor's panel: save this project's look over the style it came from",
       "localizations" : {
@@ -11509,6 +11817,23 @@
         }
       }
     },
+    "music.stop" : {
+      "comment" : "The music library's list: stops the theme being heard (Stop)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Stop"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Parar"
+          }
+        }
+      }
+    },
     "one of its files can't be read" : {
       "comment" : "Why the camera couldn't be prepared, after “Couldn't prepare the camera:”",
       "localizations" : {
@@ -11776,6 +12101,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "el rango dura menos de un cuadro"
+          }
+        }
+      }
+    },
+    "theme.focus" : {
+      "comment" : "A theme of the music library (lo-fi): Focus",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Focus"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Foco"
           }
         }
       }
