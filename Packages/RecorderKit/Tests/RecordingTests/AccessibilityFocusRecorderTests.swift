@@ -505,10 +505,146 @@ private let reading = FocusReading(element: field, caret: caret, isSecure: false
         try await Task.sleep(for: .milliseconds(300))
         // At most a reading that was under way at the stop.
         #expect(readings.withLock { $0.count } <= count + 1)
+        // The element comes as the app gives it (the recorder checks it); the text cursor is checked before it is given.
         for reading in readings.withLock({ $0 }) {
-            if let element = reading.element { #expect(AccessibilityFocusRecorder.isValid(element, as: .element)) }
             if let caret = reading.caret { #expect(AccessibilityFocusRecorder.isValid(caret, as: .caret)) }
             if reading.isSecure { #expect(reading.caret == nil) }
         }
+    }
+
+    @Test func aRoleThatCannotBeReadCountsAsSecure() {
+        let text = "AXTextField" as CFString
+        #expect(AXFocusSource.AttributeAnswer(error: .success, value: text) == .value("AXTextField"))
+        #expect(AXFocusSource.AttributeAnswer(error: .noValue, value: nil) == AXFocusSource.AttributeAnswer.none)
+        #expect(AXFocusSource.AttributeAnswer(error: .attributeUnsupported, value: nil) == AXFocusSource.AttributeAnswer.none)
+        // The app did not answer in 50 ms, or any other error, or not a string: not known.
+        for error: AXError in [.cannotComplete, .failure, .invalidUIElement, .apiDisabled, .notImplemented] {
+            #expect(AXFocusSource.AttributeAnswer(error: error, value: nil) == .unknown, "\(error.rawValue)")
+        }
+        #expect(AXFocusSource.AttributeAnswer(error: .success, value: nil) == .unknown)
+        #expect(AXFocusSource.AttributeAnswer(error: .success, value: 3 as CFNumber) == .unknown)
+
+        let plain = AXFocusSource.AttributeAnswer.value("AXTextField")
+        let secure = AXFocusSource.AttributeAnswer.value("AXSecureTextField")
+        #expect(!AXFocusSource.isSecure(role: plain, subrole: .none))
+        #expect(AXFocusSource.isSecure(role: plain, subrole: secure))
+        #expect(AXFocusSource.isSecure(role: secure, subrole: .none))
+        #expect(AXFocusSource.isSecure(role: .unknown, subrole: .none))
+        #expect(AXFocusSource.isSecure(role: plain, subrole: .unknown))
+        #expect(AXFocusSource.isSecure(role: .unknown, subrole: .unknown))
+    }
+
+    @Test func aFieldWhoseRoleCannotBeReadGivesNoCaret() {
+        for (role, subrole) in [
+            (FakeQueries.unknown, FakeQueries.noSubrole), (FakeQueries.textField, FakeQueries.unknown),
+            (FakeQueries.textField, .value("AXSecureTextField")), (.value("AXSecureTextField"), FakeQueries.noSubrole),
+        ] {
+            let queries = FakeQueries()
+            (queries.role, queries.subrole) = (role, subrole)
+            let reading = AXFocusSource.reading(of: 1, with: queries, stopped: { false })
+            #expect(reading == FocusReading(element: field, caret: nil, isSecure: true), "\(role) \(subrole)")
+            // Not even asked for.
+            #expect(queries.asked == ["role", "subrole", "frame"], "\(role) \(subrole)")
+        }
+        // A plain field gives its cursor.
+        let queries = FakeQueries()
+        #expect(AXFocusSource.reading(of: 1, with: queries, stopped: { false }) == reading)
+    }
+
+    @Test func aStoppedReadingAsksNothingMore() {
+        let stopped = Mutex(false)
+        let queries = FakeQueries()
+        queries.whenAsked = { if $0 == "frame" { stopped.withLock { $0 = true } } }
+        #expect(AXFocusSource.reading(of: 1, with: queries, stopped: { stopped.withLock { $0 } }) == nil)
+        #expect(queries.asked == ["role", "subrole", "frame"])
+
+        stopped.withLock { $0 = false }
+        let late = FakeQueries()
+        late.bounds = [:]
+        late.whenAsked = { if $0 == "bounds 5 0" { stopped.withLock { $0 = true } } }
+        #expect(AXFocusSource.reading(of: 1, with: late, stopped: { stopped.withLock { $0 } }) == nil)
+        #expect(late.asked == ["role", "subrole", "frame", "selection", "bounds 5 0"])
+    }
+
+    @Test func theTextsLengthIsAskedOnlyWhenTheCursorsBoxIsNotEnough() {
+        // The empty range at the cursor gives it: the length is not asked.
+        let queries = FakeQueries()
+        #expect(AXFocusSource.reading(of: 1, with: queries, stopped: { false })?.caret == caret)
+        #expect(queries.asked == ["role", "subrole", "frame", "selection", "bounds 5 0"])
+
+        // It gives nothing usable: the length, then the character at the cursor, narrowed to its leading edge.
+        let fallback = FakeQueries()
+        fallback.bounds = ["5 0": rect(0, 0, 0, 0), "5 1": rect(100, 40, 8, 16)]
+        #expect(AXFocusSource.reading(of: 1, with: fallback, stopped: { false })?.caret == rect(100, 40, 0, 16))
+        #expect(fallback.asked == ["role", "subrole", "frame", "selection", "bounds 5 0", "count", "bounds 5 1"])
+
+        // At the end of the text, the character before it, narrowed to its trailing edge.
+        let end = FakeQueries()
+        end.selection = CFRange(location: 10, length: 0)
+        end.bounds = ["9 1": rect(100, 40, 8, 16)]
+        #expect(AXFocusSource.reading(of: 1, with: end, stopped: { false })?.caret == rect(108, 40, 0, 16))
+        #expect(end.asked.suffix(3) == ["bounds 10 0", "count", "bounds 9 1"])
+    }
+
+    @Test func concurrentStartsLeaveNoThreadBehind() async throws {
+        // `isTrusted` says yes; where the process has no Accessibility, the queries fail and the threads still run.
+        let source = AXFocusSource(isTrusted: { true }, clock: HostTime.now)
+        DispatchQueue.concurrentPerform(iterations: 8) { _ in _ = source.start { _, _ in } }
+        source.stop()
+        try await Task.sleep(for: .milliseconds(300))
+        let deadline = ContinuousClock.now + .seconds(3)
+        while source.runningThreads > 0, ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        #expect(source.runningThreads == 0)
+    }
+}
+
+/// The queries of a reading, answered as the test says, in the order they were asked.
+private final class FakeQueries: AXFocusSource.FocusQueries {
+    static let textField = AXFocusSource.AttributeAnswer.value("AXTextField")
+    static let noSubrole = AXFocusSource.AttributeAnswer.none
+    static let unknown = AXFocusSource.AttributeAnswer.unknown
+
+    var role = textField
+    var subrole = noSubrole
+    var selection: CFRange? = CFRange(location: 5, length: 0)
+    var count: Int? = 10
+    /// By "location length".
+    var bounds: [String: Rect] = ["5 0": rect(44, 44, 0, 16)]
+    private(set) var asked: [String] = []
+    var whenAsked: (String) -> Void = { _ in }
+
+    private func ask(_ query: String) {
+        asked.append(query)
+        whenAsked(query)
+    }
+
+    func role(of element: Int) -> AXFocusSource.AttributeAnswer {
+        ask("role")
+        return role
+    }
+
+    func subrole(of element: Int) -> AXFocusSource.AttributeAnswer {
+        ask("subrole")
+        return subrole
+    }
+
+    func frame(of element: Int) -> Rect? {
+        ask("frame")
+        return field
+    }
+
+    func selection(of element: Int) -> CFRange? {
+        ask("selection")
+        return selection
+    }
+
+    func characterCount(of element: Int) -> Int? {
+        ask("count")
+        return count
+    }
+
+    func bounds(of element: Int, for range: CFRange) -> Rect? {
+        ask("bounds \(range.location) \(range.length)")
+        return bounds["\(range.location) \(range.length)"]
     }
 }
