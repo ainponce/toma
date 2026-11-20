@@ -239,6 +239,112 @@ import Testing
         }
     }
 
+    /// A span missing in a take is listed only where that take is heard, in each run of its clips: with take-001's
+    /// microphone empty from 8 to 14 s in [take-001 0–10 s, take-002 0–5 s, take-001 12–20 s], 8–10 s and 15–17 s of the
+    /// output, never 10–15 s, where take-002's microphone sounds (a range export of 11–14 s has no gap).
+    @Test func aMissingSpanNeverCoversAnotherTake() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await twoTakes(
+                in: dir, TakeAudio(seconds: 20, micGap: (from: 8, to: 14)), TakeAudio(seconds: 6, mic: (frequency: 660, channels: 1)))
+            let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 10), ("take-002", 0, 5), ("take-001", 12, 20)])
+            #expect(document.sequence.map(\.start) == [base, base.adding(seconds: 60), base.adding(seconds: 12)])
+            let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+            let file = try gapFile(of: project)
+            #expect(mix.missingAudio == [
+                MissingAudio(track: micID, file: file, start: 8, end: 10, reason: .empty),
+                MissingAudio(track: micID, file: file, start: 15, end: 17, reason: .empty),
+            ])
+            #expect(!mix.missingAudio.contains { $0.start < 14 && $0.end > 11 })
+            let samples = try await rendered(mix)
+            #expect(toneAmplitude(samples, start: 0, frequency: 660, from: 11, to: 14) > 0.2)
+            #expect(samples[(8 * 48_000)..<(10 * 48_000)].allSatisfy { $0 == 0 })
+        }
+    }
+
+    /// A span open to the end (a segment without an end) is listed to the end of each run of its take, and to the end of
+    /// the mix only in the run that ends the output: take-001's microphone gone from 8 s on in [take-001 0–10 s,
+    /// take-002 0–5 s, take-001 12–20 s] is 8–10 s and 15–23 s.
+    @Test func aSpanOpenToTheEndStopsAtAnotherTake() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await twoTakes(
+                in: dir, TakeAudio(seconds: 20, micGap: (from: 8, to: nil)), TakeAudio(seconds: 6, mic: (frequency: 660, channels: 1)))
+            let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 10), ("take-002", 0, 5), ("take-001", 12, 20)])
+            let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+            #expect(mix.totalFrames == 23 * 48_000)
+            let file = try gapFile(of: project)
+            #expect(mix.missingAudio == [
+                MissingAudio(track: micID, file: file, start: 8, end: 10, reason: .empty),
+                MissingAudio(track: micID, file: file, start: 15, end: 23, reason: .empty),
+            ])
+            // Ended by a clip of another take, the same span stops at the end of the run.
+            var other = document
+            other.sequence.append(try #require(MultiTakeFixtures.sequence(of: project, [("take-002", 5, 6)]).sequence.first))
+            #expect(mix.with(document: other, framesPerSecond: 60).missingAudio == [
+                MissingAudio(track: micID, file: file, start: 8, end: 10, reason: .empty),
+                MissingAudio(track: micID, file: file, start: 15, end: 23, reason: .empty),
+            ])
+        }
+    }
+
+    /// A clip of a take the manifest does not have is silent, whatever source instants it names: it never plays another
+    /// take's audio. A sequence of only such clips mixes the project's own take, silent.
+    @Test func aClipOfAnUnknownTakeIsSilent() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await MultiTakeFixtures.twoTakes(in: dir)
+            // `take-009` names the source instants of `project`'s own take, take-002.
+            let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-009", 0, 2), ("take-002", 0, 2)])
+            let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+            #expect(mix.takeIDs == ["take-001", "take-002"])
+            let samples = try await rendered(mix)
+            #expect(samples[96_000..<192_000].allSatisfy { $0 == 0 })
+            #expect(toneAmplitude(samples, start: 0, frequency: 660, from: 4.5, to: 5.5) > 0.2)
+            let only = try await EditedMix.make(
+                project: project, document: MultiTakeFixtures.sequence(of: project, [("take-009", 0, 2)]), framesPerSecond: 60)
+            #expect(only.takeIDs == ["take-002"] && only.totalFrames == 96_000)
+            #expect(try await rendered(only).allSatisfy { $0 == 0 })
+        }
+    }
+
+    /// A take whose event log cannot be read (here a link to the other take's, never followed) is silent: none of its
+    /// tracks nor its clicks, and never the other take's audio; the clips of the other take sound as they do.
+    @Test func aTakeWhoseEventsCannotBeReadIsSilent() async throws {
+        try await withTemporaryDirectory { dir in
+            let written = try await twoTakes(in: dir, TakeAudio(clicks: [0.5]), TakeAudio(mic: (frequency: 660, channels: 1), clicks: [0.5]))
+            let package = written.package
+            try FileManager.default.removeItem(at: package.eventsURL(take: "take-002"))
+            try FileManager.default.createSymbolicLink(at: package.eventsURL(take: "take-002"), withDestinationURL: package.eventsURL(take: "take-001"))
+            let project = try LoadedProject.load(package.url, take: "take-001")
+            var document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-002", 0, 2)])
+            document.cursor.clickSound = "soft-1"
+            document.cursor.clickSoundGain = 1
+            let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+            #expect(mix.takeIDs == ["take-001", "take-002"] && mix.clickFrames == [24_000])
+            let samples = try await rendered(mix)
+            #expect(samples[(96_000 + 192)...].allSatisfy { $0 == 0 })
+            #expect(toneAmplitude(samples, start: 0, frequency: 440, from: 1.0, to: 1.9) > 0.2)
+        }
+    }
+
+    /// A take whose segments cannot be read is silent where it is shown, and its spans are listed there: the other take's
+    /// audio never fills them.
+    @Test func aTakeWhoseSegmentsCannotBeReadIsSilent() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await twoTakes(in: dir, TakeAudio(), TakeAudio(micUnreadable: true))
+            let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-002", 0, 2)])
+            let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: 60)
+            #expect(mix.missingAudio.count == 1)
+            let missing = try #require(mix.missingAudio.first)
+            #expect(missing.track == micID && missing.file.hasPrefix("takes/take-002/") && missing.start == 2 && missing.end == 4)
+            guard case .cannotOpen = missing.reason else {
+                Issue.record("\(missing.reason)")
+                return
+            }
+            let samples = try await rendered(mix)
+            #expect(samples[(96_000 + 192)...].allSatisfy { $0 == 0 })
+            #expect(toneAmplitude(samples, start: 0, frequency: 440, from: 0.5, to: 1.5) > 0.2)
+        }
+    }
+
     /// The mix of another revision keeps the takes it has (`takeIDs`): a clip of a take it has no source for is silent
     /// there, and the mix made anew has both.
     @Test func anotherRevisionKeepsItsTakes() async throws {
@@ -267,6 +373,11 @@ private struct TakeAudio {
     var mic: (frequency: Double, channels: Int)? = (frequency: 440, channels: 1)
     /// How the microphone's segment ended, as the manifest says.
     var micEndReason: SegmentEndReason? = .stopped
+    /// A segment of 0 bytes in the microphone from `from` (seconds from the take's start): closed at `to` as `.empty`,
+    /// with the sine again from there to the end, or open (no end) when `to` is `nil`.
+    var micGap: (from: Double, to: Double?)?
+    /// The microphone is one segment of the whole take whose file is not a movie.
+    var micUnreadable = false
     /// System audio's sine and channels (`system-audio`), at 1/4 of full scale; none when `nil`.
     var systemAudio: (frequency: Double, channels: Int)?
     /// Seconds from the take's start of its left clicks.
@@ -291,10 +402,24 @@ private func record(_ take: TakeAudio, into builder: TakeBuilder, start: HostTim
         id: displayID, source: displaySource,
         segments: [VideoSegmentSpec(start: start, seconds: take.seconds, framesPerSecond: 10, width: 320, height: 180)])
     if let mic = take.mic {
-        try await builder.addAudioTrack(
-            id: micID, source: micSource,
-            segments: [AudioSegmentSpec(
-                start: start, seconds: take.seconds, channels: mic.channels, frequency: mic.frequency, endReason: take.micEndReason)])
+        func sine(from: Double, to: Double) -> AudioSegmentSpec {
+            AudioSegmentSpec(
+                start: start.adding(seconds: from), seconds: to - from, channels: mic.channels, frequency: mic.frequency,
+                endReason: take.micEndReason)
+        }
+        if take.micUnreadable {
+            try await builder.addAudioTrack(id: micID, source: micSource, segments: [])
+            try builder.addEmptySegment(
+                track: micID, index: 1, start: start, end: start.adding(seconds: take.seconds), endReason: .stopped, file: .garbage())
+        } else if let gap = take.micGap {
+            try await builder.addAudioTrack(id: micID, source: micSource, segments: [sine(from: 0, to: gap.from)])
+            try builder.addEmptySegment(
+                track: micID, index: 2, start: start.adding(seconds: gap.from), end: gap.to.map { start.adding(seconds: $0) },
+                endReason: gap.to == nil ? nil : .empty, file: .zeroBytes)
+            if let to = gap.to { try await builder.addAudioTrack(id: micID, source: micSource, segments: [sine(from: to, to: take.seconds)]) }
+        } else {
+            try await builder.addAudioTrack(id: micID, source: micSource, segments: [sine(from: 0, to: take.seconds)])
+        }
     }
     if let system = take.systemAudio {
         try await builder.addAudioTrack(
@@ -307,6 +432,12 @@ private func record(_ take: TakeAudio, into builder: TakeBuilder, start: HostTim
             InputEvent(t: start.adding(seconds: t + 0.05), kind: .mouseUp(.left, x: 100, y: 100)),
         ]
     })
+}
+
+/// The file of take-001's microphone segment of 0 bytes (`TakeAudio.micGap`).
+private func gapFile(of project: LoadedProject) throws -> String {
+    let take = try #require(project.focused(on: "take-001")?.take)
+    return try #require(take.tracks.first { $0.id == micID }?.segments.first { $0.index == 2 }?.file)
 }
 
 /// `mix.render` of the whole mix, read off the cooperative pool.

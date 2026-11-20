@@ -97,12 +97,15 @@ public enum EditorCommand: Equatable, Sendable {
     case layout(LayoutKind)
     /// ⌘A on the timeline: every item of the track with the focus (design §5.5).
     case selectAll
+    /// ⇧↑ and ⇧↓ (phase 3 plan 3a, decision 16): moves the annotations chosen by that many points of the preview (−10 up,
+    /// 10 down), the vertical of ← → with ⇧ (`stepSeconds`). Does nothing without annotations chosen.
+    case nudgeVertically(points: Int)
 
     /// Whether holding the key does it again with each repeat: only what moves the playhead, the selection or the scale
     /// by a step. The rest happens once a press (held L does not run up to 8×).
     public var repeats: Bool {
         switch self {
-        case .step, .stepSeconds, .previousEditPoint, .nextEditPoint, .nudge, .zoomIn, .zoomOut: true
+        case .step, .stepSeconds, .previousEditPoint, .nextEditPoint, .nudge, .nudgeVertically, .zoomIn, .zoomOut: true
         default: false
         }
     }
@@ -111,7 +114,7 @@ public enum EditorCommand: Equatable, Sendable {
     /// document as the drag found it), as Undo is.
     public var edits: Bool {
         switch self {
-        case .split, .delete, .trimStartToPlayhead, .trimEndToPlayhead, .nudge, .addZoom, .layout: true
+        case .split, .delete, .trimStartToPlayhead, .trimEndToPlayhead, .nudge, .nudgeVertically, .addZoom, .layout: true
         default: false
         }
     }
@@ -193,6 +196,8 @@ public struct KeyboardCommands {
         case ("→", []): .step(frames: 1)
         case ("←", [.shift]): .stepSeconds(-1)
         case ("→", [.shift]): .stepSeconds(1)
+        case ("↑", [.shift]): .nudgeVertically(points: -10)
+        case ("↓", [.shift]): .nudgeVertically(points: 10)
         case ("↑", []): .previousEditPoint
         case ("↓", []): .nextEditPoint
         case ("home", []): .start

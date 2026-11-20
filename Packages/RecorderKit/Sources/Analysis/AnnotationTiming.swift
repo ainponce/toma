@@ -48,11 +48,12 @@ public enum AnnotationTiming {
 
     /// The look of `annotation` at output time `τ`; `nil` where it is not shown: outside its range; for one anchored to the
     /// take, where the output shows something else than its source range (a cut, another take, a title card or an imported
-    /// clip). In a frozen frame it is shown when the frame's point is inside its source range and strictly inside its
-    /// output range, and the progress of its entrance and exit stands still there.
+    /// clip). In a frozen frame of its take it is shown when the frame's point is inside its source range (decision 3),
+    /// also one at an edge of its output range rather than inside it (one put at the end of a run of the take, or before
+    /// the stretch its source starts in), and the progress of its entrance and exit stands still there.
     public static func state(of annotation: Annotation, atOutput τ: Int64, document: EditDocument, timeMap: TimeMap) -> AnnotationState? {
         guard τ >= 0, τ < timeMap.duration, let range = outputRange(of: annotation, document: document, timeMap: timeMap),
-            range.contains(τ)
+            range.contains(τ) || isFrozenInside(annotation, atOutput: τ, document: document, timeMap: timeMap)
         else { return nil }
         let length = range.upperBound - range.lowerBound
         let t = min(transition, length / 2)
@@ -93,6 +94,15 @@ public enum AnnotationTiming {
             guard isStroke else { return AnnotationState(opacity: own * smoothstep(into) * fadeOut, scale: 1, drawn: 1) }
             return AnnotationState(opacity: own * fadeOut, scale: 1, drawn: smoothstep(into))
         }
+    }
+
+    /// Whether output time `τ` is in a frozen frame of the take `annotation` is anchored to whose point is inside its
+    /// source range.
+    private static func isFrozenInside(_ annotation: Annotation, atOutput τ: Int64, document: EditDocument, timeMap: TimeMap) -> Bool {
+        guard case let .content(take, start, end) = annotation.anchor, let (k, x) = timeMap.source(atOutput: τ),
+            document.sequence.indices.contains(k), case .freeze? = document.sequence[k].content
+        else { return false }
+        return document.sequence[k].take == take && x >= start && x < end
     }
 
     /// The scale of a pop at `progress` of its entrance (0 to 1): `0.9 + 0.1 × s(p·0.25 s) / s(0.25 s)` with the critical
