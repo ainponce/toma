@@ -270,7 +270,9 @@ public final class EditedMix: Sendable {
         let prereadSegments = sources.reduce(0) { sum, source in source.tracks.reduce(sum) { $0 + $1.decodedSegments } }
         let timeMap = TimeMap(sequence: document.sequence)
         let media = await MediaAudio.make(project: project, document: document, timeMap: timeMap, channels: channels)
-        let music = await MusicMix.make(project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels)
+        let music = await MusicMix.make(
+            project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
+            cuts: cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(sources.flatMap(\.keys)))
         return EditedMix(
             project: project, sources: sources, cleanLines: await cleanLines(of: sources, analysis: analysis), media: media, music: music,
             document: document, framesPerSecond: framesPerSecond, prereadSegments: prereadSegments, analysis: analysis)
@@ -319,12 +321,15 @@ public final class EditedMix: Sendable {
 
     /// The mix of another revision of the document, `document` at `framesPerSecond`, of the same project: it reads the
     /// same sources and the same clean voice, without decoding the one again to place it nor opening the other. A clip of
-    /// a take it has no source for (`takeIDs`) is silent in it. It keeps the sound of the imported clips and the music
-    /// this mix opened (empty in the base of phase 3: plans 3a and 3c plan them again here for `document`, without
-    /// waiting).
+    /// a take it has no source for (`takeIDs`) is silent in it. It keeps the sound of the imported clips this mix opened
+    /// (empty in the base of phase 3: plan 3a plans it again here for `document`, without waiting), and plans the music
+    /// again for `document` with the files this mix opened (`MusicMix.with(document:timeMap:cuts:)`), without waiting: a
+    /// source this mix has no file for is silent in it until `with(analysis:)`.
     /// - Precondition: `framesPerSecond` is positive.
     public func with(document: EditDocument, framesPerSecond: Int) -> EditedMix {
-        EditedMix(
+        let timeMap = TimeMap(sequence: document.sequence)
+        let music = music.with(document: document, timeMap: timeMap, cuts: Self.cuts(of: document, timeMap: timeMap, sources: sources))
+        return EditedMix(
             project: project, sources: sources, cleanLines: cleanLines, media: media, music: music, document: document,
             framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
@@ -333,17 +338,27 @@ public final class EditedMix: Sendable {
     /// decoding them again; only the clean files `analysis` names are opened (never decoded), and the music is made again
     /// (`MusicMix.make`), its files and its voice being `analysis`'s.
     public func with(analysis: AnalysisInputs) async -> EditedMix {
+        let timeMap = TimeMap(sequence: document.sequence)
         let music = await MusicMix.make(
-            project: project, document: document, timeMap: TimeMap(sequence: document.sequence), analysis: analysis, channels: channels)
+            project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels,
+            cuts: Self.cuts(of: document, timeMap: timeMap, sources: sources), tracks: Set(keys))
         return EditedMix(
             project: project, sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis), media: media,
             music: music, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
-    /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice and the same loudness. The
-    /// person's masks and the faces are the picture's, so a mix made with one sounds as one made with the other.
+    /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice, the same loudness, the same files
+    /// of the music and the same voice for its ducking. The person's masks and the faces are the picture's, so a mix made
+    /// with one sounds as one made with the other.
     public static func hearsTheSame(_ a: AnalysisInputs, _ b: AnalysisInputs) -> Bool {
-        a.cleanVoice == b.cleanVoice && a.loudness == b.loudness
+        a.cleanVoice == b.cleanVoice && a.loudness == b.loudness && a.musicFiles == b.musicFiles && a.voiceActivity == b.voiceActivity
+    }
+
+    /// The cuts of the sound of `document`, whose map is `timeMap`, held to what each of `sources` has (phase 3 design
+    /// §7.3): the one rule of the tracks and of the music's voice.
+    private static func cuts(of document: EditDocument, timeMap: TimeMap, sources: [Source]) -> AudioCuts {
+        let takeBounds = Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
+        return AudioCuts(document: document, timeMap: timeMap, takeBounds: takeBounds)
     }
 
     /// The clean voice of each track of `sources` (one take after the other) that `analysis` has, by the track's own key,
