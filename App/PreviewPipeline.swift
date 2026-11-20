@@ -22,6 +22,8 @@ final class RevisionBuilder: Sendable {
         var scene: FrameEvaluator
         /// The revision's mix, if the project's was made.
         var mix: EditedMix?
+        /// What the mix was made from when it is not `document`: the document with the solo (phase 3 design §7.2).
+        var mixDocument: EditDocument?
     }
 
     private struct Request: Sendable {
@@ -30,6 +32,9 @@ final class RevisionBuilder: Sendable {
         var outputSize: SIMD2<Int>
         var mix: EditedMix?
         var analysis: AnalysisInputs
+        /// What the mix hears, `nil` for `document`: the document with the solo (`AudioSolo.applied(to:takes:)`), which only
+        /// the preview's mix hears.
+        var mixDocument: EditDocument?
     }
 
     private let renderer: FrameRenderer
@@ -58,14 +63,15 @@ final class RevisionBuilder: Sendable {
         state.withLock { $0.paths = paths }
     }
 
-    /// Builds the request of `ticket`, `document` at `outputSize`, and its mix from `mix` (the project's); the scene reads
-    /// `analysis` of the caches.
+    /// Builds the request of `ticket`, `document` at `outputSize`, and its mix from `mix` (the project's) with
+    /// `mixDocument` (`nil`: `document`); the scene reads `analysis` of the caches.
     func build(
         ticket: PreviewBuilds.Ticket, document: EditDocument, outputSize: SIMD2<Int>, mix: EditedMix?,
-        analysis: AnalysisInputs
+        analysis: AnalysisInputs, mixDocument: EditDocument? = nil
     ) {
         let start = state.withLock { state in
-            state.pending = Request(ticket: ticket, document: document, outputSize: outputSize, mix: mix, analysis: analysis)
+            state.pending = Request(
+                ticket: ticket, document: document, outputSize: outputSize, mix: mix, analysis: analysis, mixDocument: mixDocument)
             defer { state.building = true }
             return !state.building
         }
@@ -96,7 +102,8 @@ final class RevisionBuilder: Sendable {
                 ticket: request.ticket, document: request.document,
                 scene: renderer.makeScene(
                     document: request.document, paths: paths, outputSize: request.outputSize, analysis: request.analysis),
-                mix: request.mix?.with(document: request.document, framesPerSecond: request.document.frameRate))
+                mix: request.mix?.with(document: request.mixDocument ?? request.document, framesPerSecond: request.document.frameRate),
+                mixDocument: request.mixDocument)
             let built = self.built
             Task { @MainActor in built(result) }
         }

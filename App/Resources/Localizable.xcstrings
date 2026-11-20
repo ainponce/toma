@@ -67,6 +67,17 @@
         }
       }
     },
+    "%@ dB" : {
+      "comment" : "A volume of an audio row of the timeline, in decibels: «−6 dB»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ dB"
+          }
+        }
+      }
+    },
     "%@ in the trash" : {
       "comment" : "The library's sidebar: what the trash takes",
       "localizations" : {
@@ -951,6 +962,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Audio y guion"
+          }
+        }
+      }
+    },
+    "Audio cut moved %@ earlier" : {
+      "comment" : "VoiceOver: a J cut of the timeline, how much sooner the next clip is heard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte del audio %@ antes"
+          }
+        }
+      }
+    },
+    "Audio cut moved %@ later" : {
+      "comment" : "VoiceOver: an L cut of the timeline, how much longer the clip before is heard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte del audio %@ después"
           }
         }
       }
@@ -2974,6 +3007,17 @@
         }
       }
     },
+    "Delete Range" : {
+      "comment" : "The menu of a stretch at another volume of an audio row",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Borrar el tramo"
+          }
+        }
+      }
+    },
     "Delete Zoom" : {
       "comment" : "The Zoom tab: a button",
       "localizations" : {
@@ -4410,6 +4454,17 @@
         }
       }
     },
+    "J Cut" : {
+      "comment" : "The cut of the sound moved before the picture's: the next clip is heard sooner",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte J"
+          }
+        }
+      }
+    },
     "Keep Open" : {
       "comment" : "Closing with unsaved changes: the window stays open (the default)",
       "localizations" : {
@@ -4483,6 +4538,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Las teclas no se grabaron: falta el permiso de Monitoreo de entrada."
+          }
+        }
+      }
+    },
+    "L Cut" : {
+      "comment" : "The cut of the sound moved after the picture's: the clip before is heard longer",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Corte L"
           }
         }
       }
@@ -6468,6 +6534,28 @@
         }
       }
     },
+    "Range Volume" : {
+      "comment" : "The volume of a stretch of an audio row of the timeline, in dB",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen del tramo"
+          }
+        }
+      }
+    },
+    "Range Volume, %1$@, from %2$@ to %3$@" : {
+      "comment" : "VoiceOver: a stretch at another volume of an audio row of the timeline, its volume, start and end",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Volumen del tramo, %1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
     "Re-record from Here" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): a new take recorded from the playhead replaced the rest of the video",
       "localizations" : {
@@ -6937,6 +7025,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hace falta para grabar la pantalla o una ventana."
+          }
+        }
+      }
+    },
+    "Reset Audio Cut" : {
+      "comment" : "The menu of an audio row: the cut of the sound back to the picture's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Restablecer el corte del audio"
           }
         }
       }
@@ -7724,6 +7823,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Suave"
+          }
+        }
+      }
+    },
+    "Solo" : {
+      "comment" : "An audio row's button of the timeline: only the rows with it are heard in the preview",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo"
           }
         }
       }
@@ -11728,6 +11838,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "«%@» se movió a la papelera."
+          }
+        }
+      }
+    },
+    "−∞ dB" : {
+      "comment" : "A volume of an audio row of the timeline: silence (minus infinity decibels)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "−∞ dB"
           }
         }
       }

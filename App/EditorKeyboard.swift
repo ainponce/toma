@@ -252,6 +252,8 @@ extension EditorModel {
             selection = .annotations(Set(shown.map(\.item.id)))
         case .cameraChange?, .layoutBlock?, .screenChange?:
             return false
+        case .gainRange?:
+            return false
         }
         return true
     }
@@ -325,7 +327,7 @@ extension EditorModel {
         case let .annotations(ids)? where ids.count == 1:
             guard let id = ids.first, let range = TimelineAnnotationItems.range(of: id, in: document) else { return false }
             step = AnnotationCommands.move(document, id: id, toOutputStart: range.lowerBound + delta)
-        case .annotations?:
+        case .annotations?, .gainRange?:
             step = nil
         case .zooms?, .clips?, nil:
             step = nil

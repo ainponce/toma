@@ -24,6 +24,8 @@ enum EditorSelection: Equatable {
     case privacyBlocks(Set<String>)
     /// Annotations (phase 3 design §5.6), by id.
     case annotations(Set<String>)
+    /// A stretch at another volume of an audio row (phase 3 design §7.2), by its id (`GainRange.id`, one in every take).
+    case gainRange(String)
 }
 
 /// A track of sound, as a row of the Audio tab and of the timeline: a track by its id in every take the sequence shows
@@ -40,6 +42,8 @@ struct AudioTrackRow: Equatable, Identifiable {
     /// Every take the sequence shows that recorded it, in the order it first shows them: its volume and Mute are written
     /// in each (`TrackCommands.setTrackGain`).
     var takes: [String]
+    /// The app whose sound it is, for a track of one app (phase 3 design §7.1, `TrackRecord.appName`).
+    var appName: String?
 
     /// The track's id: one row whichever takes recorded it.
     var id: String { track }
@@ -60,7 +64,7 @@ struct AudioTrackRow: Equatable, Identifiable {
                 index[track.id] = rows.count
                 rows.append((track.kind, AudioTrackRow(
                     take: take.id, track: track.id, isMicrophone: track.kind == .microphone, deviceName: track.source.name,
-                    isDevice: track.kind == .deviceAudio, takes: [take.id])))
+                    isDevice: track.kind == .deviceAudio, takes: [take.id], appName: track.appName)))
             }
         }
         return [TrackKind.microphone, .systemAudio, .deviceAudio].flatMap { kind in rows.filter { $0.kind == kind }.map(\.row) }
@@ -213,6 +217,12 @@ final class EditorModel {
     private(set) var canHoldWhileTyping = false
     /// The tracks of sound of the takes the sequence shows, as the Audio tab and the timeline list them.
     private(set) var audioTracks: [AudioTrackRow] = []
+    /// Solo (phase 3 design §7.2): the audio rows the preview lets be heard, none for all of them; never saved, so it is
+    /// gone when the window closes (`EditorModel+AudioRows`).
+    var audioSolo = AudioSolo()
+    /// Each take's source the sound can be read in, by take id, read off the main thread (`audioTakeBounds`).
+    @ObservationIgnored var audioBoundsCache: [String: ClosedRange<HostTime>] = [:]
+    @ObservationIgnored var audioBoundsTask: Task<Void, Never>?
     /// The automatic zoom's settings that are being planned again off the main thread: the controls show them meanwhile.
     var autoZoomPending: AutoZoomSettings?
     @ObservationIgnored var autoZoomTask: Task<Void, Never>?
@@ -598,8 +608,8 @@ final class EditorModel {
             if isGesturing {
                 // The gesture's look, with the mix.
                 showGesture()
-            } else if shownRevision != revision, session != nil {
-                // Edited meanwhile: the mix (and scene) of the revision shown, played once built if playing.
+            } else if shownRevision != revision || !audioSolo.isEmpty, session != nil {
+                // Edited (or soloed, 3c) meanwhile: the mix (and scene) of the revision shown, played once built if playing.
                 showSessionRevision()
             } else if isPlaying {
                 startClock(at: clockSeconds())
@@ -799,7 +809,9 @@ final class EditorModel {
         let applied: EditDocument? = gestureStep.flatMap { try? document.applying($0.changes) }
         let shown = gestureLook(applied ?? document)
         let ticket = builds.request(revision: session.revision, ofGesture: true)
-        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis)
+        builder.build(
+            ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis,
+            mixDocument: soloDocument(of: shown))
         return applied
     }
 
@@ -812,7 +824,7 @@ final class EditorModel {
     /// The preview is built again as it is shown now (with a new mix or analysis): the gesture's look while one lasts
     /// (a session revision's build would put the document from before the drag back and drop the drag's own builds on
     /// their way, `PreviewBuilds`), otherwise the session's document.
-    private func showCurrentDocument() {
+    func showCurrentDocument() {
         if isGesturing { showGesture() } else { showSessionRevision() }
     }
 
@@ -821,7 +833,9 @@ final class EditorModel {
         guard let builder else { return }
         let shown = heldLook?(document) ?? document
         let ticket = builds.request(revision: revision, ofGesture: false)
-        builder.build(ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis)
+        builder.build(
+            ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis,
+            mixDocument: soloDocument(of: shown))
     }
 
     /// A take starts or stops recording: the analysis queue pauses while it does (`ProjectJobs.setRecording(_:)`; an
@@ -990,6 +1004,8 @@ final class EditorModel {
         case let .annotations(ids)?:
             let kept = ids.intersection(document.annotations.items.map(\.id))
             selection = kept.isEmpty ? nil : .annotations(kept)
+        case let .gainRange(id)?:
+            if !document.audio.tracks.values.contains(where: { $0.ranges.contains { $0.id == id } }) { selection = nil }
         case nil:
             break
         }
@@ -1008,7 +1024,8 @@ final class EditorModel {
         previewAspect = built.document.aspect
         if let mix = built.mix, let player {
             player.setMix(mix)
-            sound.hold(built.document)
+            // What the mix hears: the document with the solo (`soloDocument(of:)`), so a change of it is heard playing.
+            sound.hold(built.mixDocument ?? built.document)
         }
         if isPlaying, built.ticket.gesture != nil {
             if player != nil, sound.needsPlay { startClock(at: clockSeconds()) }

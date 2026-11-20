@@ -255,6 +255,12 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     var onScrub: (Int64) -> Void = { _ in }
     var onScrubEnd: () -> Void = {}
     var onMute: (_ track: String, _ muted: Bool) -> Void = { _, _ in }
+    /// Solo (phase 3 design §7.2): the headers' Solo shows it and the audio rows it leaves out are dimmed; a header's Solo
+    /// pressed is `onSolo`.
+    var audioSolo = AudioSolo() {
+        didSet { if audioSolo != oldValue { tracks.audioRows.solo = audioSolo; updateHeaders(); needsLayout = true } }
+    }
+    var onSolo: (AudioRowID) -> Void = { _ in }
     /// What is selected, by id: drawn outlined in the accent color.
     var selected: Set<String> = [] {
         didSet { if selected != oldValue { tracks.selected = selected; needsLayout = true } }
@@ -918,6 +924,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
                 self?.onMute(id, muted)
             }
             header.onPress = { [weak self] in self?.onCameraHeader() }
+            header.onSolo = { [weak self] in TrackHeaderView.soloRow(row.track).map { self?.onSolo($0) } }
             headerRows.addSubview(header)
             return header
         }
@@ -934,6 +941,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
 
     private func updateHeaders() {
         for header in headers {
+            if let row = TrackHeaderView.soloRow(header.track) { header.setSolo(audioSolo.rows.contains(row)) }
             if case .camera = header.track {
                 header.setSubtitle(content.map { LayoutNames.name($0.projectLayout) })
                 continue

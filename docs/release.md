@@ -1051,6 +1051,15 @@ Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y 
 - Con cámara y micrófono reales, regrabar, hablar unos segundos y parar con «Al parar» en «Quedarse acá»: el editor vuelve igual (no se abre otra ventana) con la toma nueva desde el cursor; se oye la voz nueva.
 - Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
 - Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
+**Filas de audio** (U11)
+
+Con una toma con micrófono y dos apps en Por app (Safari y Música, por ejemplo), partida en dos clips (C en la mitad), en claro y en oscuro.
+- Las cabeceras de las apps dicen su nombre entero con su ícono («Safari», «Música»); el panel ▸ Audio las titula igual. Cada fila de audio tiene Silenciar y Solo (una «S»); Clips importados y Música, si están, solo Solo. Nada se corta en español.
+- Solo en el micrófono: se oye solo él, las otras filas se ven atenuadas y la música (si hay) sigue bajando cuando se habla como sin el solo. Dos solos a la vez se oyen los dos. Prender y apagar el solo reproduciendo cambia lo que se oye enseguida. Exportar con un solo prendido exporta todo. Al cerrar y abrir el proyecto, ningún solo queda prendido.
+- Arrastrar de lado sobre la onda del micrófono marca un tramo punteado con la cápsula «0 dB»; Esc o un clic afuera lo sacan sin cambiar nada (Edición ▸ Deshacer no tiene un paso nuevo). Subir la línea dentro del tramo lo crea (un ⌘Z) y la cápsula sigue el valor: a +6 dB se oye más fuerte con fundidos suaves, sin clic; bajarla del todo dice «−∞ dB» y calla. Doble clic en la cápsula y escribir «-12» lo pone a −12 dB. Los bordes del tramo se arrastran (el cursor cambia); un clic lo selecciona y ⌫ o «Borrar el tramo» (menú contextual) lo borran.
+- Fuera de los tramos, arrastrar la línea cambia el volumen de toda la fila (llega a +6 dB y se imanta a 0 dB), igual que el control de Volumen del panel.
+- ⌥ y arrastrar en el borde entre los dos clips sobre una fila de audio: hacia la izquierda la muesca dice «J» y se oye antes el clip que viene; hacia la derecha dice «L» y sigue el que se fue; la etiqueta dice «Corte J · 0,30 s». La imagen corta donde cortaba y la cámara también. Cerca del corte de la imagen se imanta a 0; no pasa de la mitad del clip más corto. Doble clic en la muesca o «Restablecer el corte del audio» lo vuelve a 0; ⌘Z deshace cada cambio.
+- Con VoiceOver, un tramo se lee «Volumen del tramo, −6 dB, de 0:01 a 0:03» con la acción Borrar el tramo, y un corte movido «Corte del audio 0,30 s antes» con Restablecer el corte del audio; al soltar un corte J o L lo anuncia.
 
 **Escuchar Calma, Piano y Brisa** (U2)
 

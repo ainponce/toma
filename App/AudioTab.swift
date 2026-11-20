@@ -35,6 +35,10 @@ struct AudioTab: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                        } else if let app = track.appName {
+                            // A track of one app (phase 3 design §7.1).
+                            Text(verbatim: app)
+                                .font(.subheadline.weight(.semibold))
                         } else {
                             Text("System Audio")
                                 .font(.subheadline.weight(.semibold))

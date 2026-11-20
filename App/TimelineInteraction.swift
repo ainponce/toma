@@ -23,20 +23,20 @@ import QuartzCore
 ///   end, within 8 pt (`snapping` of the view, ⌘ inverts it while dragging).
 @MainActor
 final class TimelineInteraction {
-    private unowned let view: EditorTimelineView
+    unowned let view: EditorTimelineView
     weak var model: EditorModel?
 
-    private var drag = Drag.none
+    var drag = Drag.none
     private var hover: TimelineHit?
     private let highlight = CALayer()
     private let dragLabel = CATextLayer()
     private let noticeLabel = CATextLayer()
     private var noticeTask: Task<Void, Never>?
     /// The step the gesture in progress has now.
-    private var lastStep: EditStep?
+    var lastStep: EditStep?
 
     /// What a drag started from: the document and what it needs to work out its steps, taken once at its start.
-    private struct Base {
+    struct Base {
         var document: EditDocument
         var map: TimeMap
         /// The edit points that edges snap to, in output time.
@@ -44,7 +44,7 @@ final class TimelineInteraction {
         var project: LoadedProject?
     }
 
-    private enum Drag {
+    enum Drag {
         case none
         /// The playhead follows the mouse.
         case playhead
@@ -71,6 +71,8 @@ final class TimelineInteraction {
         /// An annotation (phase 3): trimmed by an edge, or moved by its body, in one step; one of the take through the cuts.
         case trimAnnotation(Base, id: String, edge: ClipEdge, range: Range<Int64>)
         case moveAnnotation(Base, id: String, range: Range<Int64>, grab: Int64)
+        /// An audio row's (phase 3, `TimelineAudioDrags`).
+        case audio(AudioDrag)
     }
 
     init(view: EditorTimelineView) {
@@ -90,9 +92,9 @@ final class TimelineInteraction {
 
     // MARK: - Looking
 
-    private var canEdit: Bool { model?.canEdit == true }
+    var canEdit: Bool { model?.canEdit == true }
 
-    private func point(_ event: NSEvent) -> CGPoint {
+    func point(_ event: NSEvent) -> CGPoint {
         view.convert(event.locationInWindow, from: nil)
     }
 
@@ -124,11 +126,11 @@ final class TimelineInteraction {
     }
 
     /// The output time at `point`.
-    private func output(at point: CGPoint) -> Int64 {
+    func output(at point: CGPoint) -> Int64 {
         view.content?.layout.output(atX: point.x, scale: view.scale, offset: view.offset) ?? 0
     }
 
-    private func clamped(_ τ: Int64) -> Int64 {
+    func clamped(_ τ: Int64) -> Int64 {
         min(max(τ, 0), view.content?.map.duration ?? 0)
     }
 
@@ -144,6 +146,7 @@ final class TimelineInteraction {
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
         case let .privacyBlocks(ids)?: ids
         case let .annotations(ids)?: ids
+        case let .gainRange(id)?: [id]
         case nil: []
         }
     }
@@ -197,6 +200,8 @@ final class TimelineInteraction {
             }
             return
         }
+        // An audio row (3c): its volume line, its stretches and its cuts of the sound (`TimelineAudioDrags`).
+        if audioMouseDown(event, at: point, hit: hit) { return }
         // A caption is not selected, dragged or trimmed; a double click shows its word in the Captions tab.
         if case let .item(.captions, id) = hit {
             if event.clickCount >= 2 { revealCaption(id, at: output(at: point)) }
@@ -281,6 +286,8 @@ final class TimelineInteraction {
             updateDrag(event)
         case .trimAnnotation, .moveAnnotation:
             updateDrag(event)
+        case let .audio(audio):
+            audioMouseDragged(audio, event)
         }
     }
 
@@ -305,6 +312,8 @@ final class TimelineInteraction {
             finish()
         case .trimAnnotation, .moveAnnotation:
             finish()
+        case let .audio(audio):
+            audioMouseUp(audio, event)
         }
     }
 
@@ -319,6 +328,7 @@ final class TimelineInteraction {
         }
         let next = hit(at: point)
         setCursor(for: next)
+        if case .empty(.audio, _) = next { setAudioCursor(event, at: point) }
         guard next != hover else { return }
         hover = next
         refreshHighlight()
@@ -419,7 +429,7 @@ final class TimelineInteraction {
     // MARK: - Drags
 
     /// Starts the model's gesture and takes what the drag's steps are made from: nothing if the document cannot be edited.
-    private func begin() -> Base? {
+    func begin() -> Base? {
         guard let model, canEdit, !model.isGesturing, let document = model.document else { return nil }
         model.beginGesture()
         guard model.isGesturing else { return nil }
@@ -500,7 +510,7 @@ final class TimelineInteraction {
     }
 
     /// `τ` at what it snaps to: the edit points, the playhead and the marks (nothing, without a base: only the last two).
-    private func snapped(_ τ: Int64, event: NSEvent, base: Base?) -> Int64 {
+    func snapped(_ τ: Int64, event: NSEvent, base: Base?) -> Int64 {
         let active = TimelineDragRules.snapActive(enabled: view.snapping, commandHeld: event.modifierFlags.contains(.command))
         return TimelineDragRules.snap(
             τ, points: base?.points ?? [], extra: snapTargets(), tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
@@ -654,7 +664,8 @@ final class TimelineInteraction {
     func cancelDrag() -> Bool {
         switch drag {
         case .none:
-            return false
+            // Esc gives up a stretch marked on an audio row, as it does a drag.
+            return cancelAudioMark()
         case .playhead:
             view.endScrub()
         case .marks, .emptyZoom, .emptyLayout, .pressed:
@@ -671,6 +682,8 @@ final class TimelineInteraction {
             lastStep = nil
             model?.cancelGesture()
             view.setPreview(nil)
+        case let .audio(audio):
+            cancelAudioDrag(audio)
         }
         drag = .none
         hideLabel()
@@ -703,7 +716,7 @@ final class TimelineInteraction {
 
     // MARK: - Labels
 
-    private func showLabel(_ text: String, at x: Double) {
+    func showLabel(_ text: String, at x: Double) {
         let palette = view.palette
         dragLabel.string = text
         dragLabel.foregroundColor = palette.dragLabelText
@@ -720,7 +733,7 @@ final class TimelineInteraction {
         CATransaction.commit()
     }
 
-    private func hideLabel() {
+    func hideLabel() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         dragLabel.opacity = 0
@@ -793,6 +806,8 @@ final class TimelineInteraction {
             let delete = MenuAction(String(localized: "Delete Change")) { model.deleteCameraChange(id) }
             delete.isEnabled = canEdit
             menu.addItem(delete)
+        case .empty(.audio, _):
+            return audioMenu(at: point)
         default:
             return nil
         }
@@ -1073,6 +1088,8 @@ extension EditorModel {
             step = PrivacyCommands.delete(document, ids: ids)
         case let .annotations(ids)?:
             step = AnnotationCommands.delete(document, ids: ids)
+        case let .gainRange(id)?:
+            step = gainRangeDeletion(id)
         case .screenChange?, nil:
             step = nil
         }
