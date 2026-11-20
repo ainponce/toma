@@ -145,12 +145,13 @@ final class SettingsShareModel {
 
     // MARK: - The secret
 
-    /// Reads whether the Keychain has the secret of the Access Key ID, off the main thread: the pane appeared.
+    /// Asks whether the Keychain has the secret of the Access Key ID, without reading it (`SecretStore.hasSecret(for:)`),
+    /// off the main thread: the pane appeared. Only "Test Connection" reads the secret.
     func load() {
         let account = savedAccount, secrets = secrets
         enqueue { [weak self] in
             let result = Result { () throws -> Bool in
-                account.isEmpty ? false : !(try secrets.secret(for: account) ?? "").isEmpty
+                account.isEmpty ? false : try secrets.hasSecret(for: account)
             }
             await self?.loaded(result)
         }

@@ -12,8 +12,8 @@ import os
 
 /// Share, the editor's (plan 5a, Task S4; design §8.2–§8.4): the video uploaded with its poster and its page to the
 /// person's own storage, and the link to it. Nothing connects until "Share" or "Delete from Storage" is chosen: opening
-/// the little window (`ShareControl`) only reads the settings, whether the Keychain has the secret, and the project's
-/// `shares.json`, off the main thread.
+/// the little window (`ShareControl`) only reads the settings, whether the Keychain has the secret (never the secret
+/// itself, which only sharing reads), and the project's `shares.json`, off the main thread.
 ///
 /// A share holds the app's `ExportGate` from its start to its end (export and upload: one heavy job at a time, and the
 /// update and quitting wait for it); closing the window cancels it without asking (the project loses nothing and what
@@ -47,8 +47,9 @@ final class EditorShare {
     private(set) var historyProblem: String?
     /// Settings ▸ Share as read when the little window opened (or a share started).
     private(set) var preferences = SharePreferences()
-    /// Whether the Keychain has the secret of `preferences`' Access Key ID.
-    private(set) var hasSecret = false
+    /// Whether Settings ▸ Share make a configuration with the secret the Keychain has (`ShareRules.isConfigured`: asked
+    /// whether the secret is there, never read), as found when the little window opened.
+    private(set) var isConfigured = false
     /// The settings and the links were read once: until then nothing is said of them.
     private(set) var isLoaded = false
     /// A share was cancelled and is removing what it uploaded.
@@ -64,10 +65,6 @@ final class EditorShare {
     /// The little window is open.
     var isPresented = false
 
-    /// Whether Settings ▸ Share make a configuration with the secret the Keychain has.
-    var isConfigured: Bool {
-        ShareConfiguration.problems(in: preferences, hasSecret: hasSecret).isEmpty
-    }
 
     var isRunning: Bool {
         if case .running = state { true } else { false }
@@ -127,15 +124,18 @@ final class EditorShare {
         #endif
         let preferences = SettingsStore().settings.share
         self.preferences = preferences
-        let account = preferences.secretAccount, secrets = secrets
+        let secrets = secrets
         let package = model?.exportProject?.package
         loading?.cancel()
         loading = Task {
-            let (hasSecret, history) = await Task.detached { () -> (Bool, Result<[ShareRecord], any Error>?) in
-                (Self.hasSecret(account, in: secrets), package.map { package in Result { try ShareHistory(package: package).records() } })
+            let (configured, history) = await Task.detached { () -> (Bool, Result<[ShareRecord], any Error>?) in
+                (
+                    ShareRules.isConfigured(preferences, secrets: secrets),
+                    package.map { package in Result { try ShareHistory(package: package).records() } }
+                )
             }.value
             guard !Task.isCancelled else { return }
-            self.hasSecret = hasSecret
+            isConfigured = configured
             switch history {
             case .success(let records)?:
                 self.records = records
@@ -149,17 +149,6 @@ final class EditorShare {
                 break
             }
             isLoaded = true
-        }
-    }
-
-    /// Whether `secrets` has a secret for `account`. One the Keychain cannot give (locked, refused) counts as there: the
-    /// share reads it again and says why it cannot.
-    nonisolated private static func hasSecret(_ account: String, in secrets: any SecretStore) -> Bool {
-        guard !account.isEmpty else { return false }
-        do {
-            return !(try secrets.secret(for: account) ?? "").isEmpty
-        } catch {
-            return true
         }
     }
 
@@ -333,7 +322,7 @@ final class EditorShare {
         self.state = state
         self.records = records
         self.preferences = preferences
-        self.hasSecret = hasSecret
+        isConfigured = ShareConfiguration.problems(in: preferences, hasSecret: hasSecret).isEmpty
         self.copied = copied
         isLoaded = true
         isPresented = true

@@ -8,6 +8,10 @@ import Synchronization
 public protocol SecretStore: Sendable {
     /// The secret saved for `account`; `nil` when there is none.
     func secret(for account: String) throws -> String?
+    /// Whether a secret is saved for `account`, without reading it: what Share's little window and Settings ▸ Share ask
+    /// to say whether sharing is set up. The Keychain answers it from the item's attributes and never asks the person;
+    /// the secret itself is read only to share or to test the connection.
+    func hasSecret(for account: String) throws -> Bool
     /// Saves `secret` for `account`, replacing the one there was; `nil` removes it (none there is not an error).
     func setSecret(_ secret: String?, for account: String) throws
 }
@@ -30,6 +34,10 @@ public final class InMemorySecretStore: SecretStore {
 
     public func secret(for account: String) throws -> String? {
         secrets.withLock { $0[account] }
+    }
+
+    public func hasSecret(for account: String) throws -> Bool {
+        secrets.withLock { $0[account] != nil }
     }
 
     public func setSecret(_ secret: String?, for account: String) throws {

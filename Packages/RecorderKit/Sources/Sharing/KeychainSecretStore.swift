@@ -35,6 +35,22 @@ public struct KeychainSecretStore: SecretStore {
         }
     }
 
+    /// Whether the item of `account` is there, asking for its attributes only (never `kSecReturnData`), and with
+    /// `kSecUseAuthenticationUISkip`: an item that would need the person to authenticate is left out instead of asking.
+    public func hasSecret(for account: String) throws -> Bool {
+        var query = Self.query(account)
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+        var result: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &result)
+        switch status {
+        case errSecSuccess: return true
+        case errSecItemNotFound: return false
+        default: throw SecretStoreError.keychain(status)
+        }
+    }
+
     public func setSecret(_ secret: String?, for account: String) throws {
         let query = Self.query(account)
         guard let secret else {

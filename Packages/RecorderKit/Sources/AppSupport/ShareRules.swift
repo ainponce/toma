@@ -52,6 +52,16 @@ public enum ShareRules {
         return export.url
     }
 
+    /// Whether Settings ▸ Share make a configuration with the secret `secrets` has (Share's little window): it only asks
+    /// whether the secret is there (`SecretStore.hasSecret(for:)`), never reads it. A store that cannot say (the Keychain
+    /// locked or refusing) counts as having it: sharing reads it and says why it cannot. Not on the main thread: the
+    /// Keychain is asked.
+    public static func isConfigured(_ preferences: SharePreferences, secrets: any SecretStore) -> Bool {
+        let account = preferences.secretAccount
+        let hasSecret = account.isEmpty ? false : ((try? secrets.hasSecret(for: account)) ?? true)
+        return ShareConfiguration.problems(in: preferences, hasSecret: hasSecret).isEmpty
+    }
+
     /// What is said of a link (design §8.4): public, which never expires, or the instant a signed one expires, or expired.
     public enum LinkNote: Equatable, Sendable {
         case permanent
