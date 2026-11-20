@@ -3,8 +3,11 @@ import Analysis
 import ProjectFormat
 
 /// The transcript as the Captions tab's Text shows it (phase 2 design §5.3, plan 2a Task A11): every word of it, cut or
-/// not, as running text in the order of the transcript, and the rules of the tab that are not drawing.
+/// not, as running text, and the rules of the tab that are not drawing.
 ///
+/// - The takes go in the order the sequence first shows each of them (phase 3 design §8.1, plan 3d decision 16), as
+///   `LoadedProject.takesShown(by:)` lists them, and each take's words in their order; a take of the transcript the
+///   sequence does not show is not in the text. With one take, the text of the phase 2.
 /// - Words are separated by a space, or by a paragraph (`"\n\n"`) where the source gap from the word before is at least
 ///   `paragraphPause`, and at the start of each take after the first. A line break inside a word's text (written by
 ///   hand) shows as a space, so the paragraphs are only the pauses'.
@@ -48,9 +51,12 @@ public struct TranscriptText: Equatable, Sendable {
     public static let playingLinger: Int64 = 1_000_000_000
 
     public var string: String
-    /// Every word of the transcript, in its order (by take, then word).
+    /// Every word of the takes in the text, in its order (by take as `takes` orders them, then word).
     public var words: [Word]
-    /// The index in `words` of the first word of each take of the transcript.
+    /// The takes in the text, by their index in `transcript.takes`, in its order: those the sequence shows, in the order
+    /// it first shows each.
+    public var takes: [Int]
+    /// The index in `words` of the first word of each of `takes`.
     public var takeStarts: [Int]
 
     /// The text of `document`'s transcript; empty without one.
@@ -60,7 +66,9 @@ public struct TranscriptText: Equatable, Sendable {
         var words: [Word] = []
         var takeStarts: [Int] = []
         let takes = document.transcript?.takes ?? []
-        for (takeIndex, take) in takes.enumerated() {
+        let order = Self.order(of: takes, in: document.sequence)
+        for takeIndex in order {
+            let take = takes[takeIndex]
             takeStarts.append(words.count)
             let clips = document.sequence.filter { $0.take == take.take }
             words.reserveCapacity(words.count + take.words.count)
@@ -85,6 +93,7 @@ public struct TranscriptText: Equatable, Sendable {
         }
         self.string = string
         self.words = words
+        self.takes = order
         self.takeStarts = takeStarts
     }
 
@@ -133,11 +142,12 @@ public struct TranscriptText: Equatable, Sendable {
         self.words[words.lowerBound].characters.lowerBound..<self.words[words.upperBound].characters.upperBound
     }
 
-    /// The index in `words` of the word `ref`; `nil` if the transcript has none there.
+    /// The index in `words` of the word `ref`; `nil` if the text has none there (the transcript has none, or its take is
+    /// not in the text).
     public func index(of ref: TranscriptWordRef) -> Int? {
-        guard takeStarts.indices.contains(ref.take), ref.word >= 0 else { return nil }
-        let end = ref.take + 1 < takeStarts.count ? takeStarts[ref.take + 1] : words.count
-        let index = takeStarts[ref.take] + ref.word
+        guard ref.word >= 0, let run = takes.firstIndex(of: ref.take) else { return nil }
+        let end = run + 1 < takeStarts.count ? takeStarts[run + 1] : words.count
+        let index = takeStarts[run] + ref.word
         return index < end ? index : nil
     }
 
@@ -167,14 +177,16 @@ public struct TranscriptText: Equatable, Sendable {
 
     /// The words (indices in `words`) after which each of `pauses` (`TranscriptCommands.pauses`) is, where the text
     /// marks it: the word kept last before the pause starts, past the cut words inside the pause. A pause of a take the
-    /// transcript does not have is left out.
+    /// text does not have is left out.
     public func wordsBefore(pauses: [SourceRange], in document: EditDocument) -> [Int] {
         guard let takes = document.transcript?.takes else { return [] }
+        // The first take of the transcript of each id, and where its words start in the text.
         var takeIndex: [String: Int] = [:]
         for (index, take) in takes.enumerated() where takeIndex[take.take] == nil { takeIndex[take.take] = index }
         var result: [Int] = []
         for pause in pauses {
-            guard let t = takeIndex[pause.take], takeStarts.indices.contains(t) else { continue }
+            guard let t = takeIndex[pause.take], let run = self.takes.firstIndex(of: t) else { continue }
+            let start = takeStarts[run]
             let take = takes[t].words
             // The last word starting before the pause.
             var (low, high) = (0, take.count)
@@ -183,8 +195,8 @@ public struct TranscriptText: Equatable, Sendable {
                 if take[middle].start < pause.start { low = middle + 1 } else { high = middle }
             }
             var j = low - 1
-            while j >= 0, words[takeStarts[t] + j].isCut { j -= 1 }
-            if j >= 0 { result.append(takeStarts[t] + j) }
+            while j >= 0, words[start + j].isCut { j -= 1 }
+            if j >= 0 { result.append(start + j) }
         }
         return result
     }
@@ -236,6 +248,16 @@ public struct TranscriptText: Equatable, Sendable {
     }
 
     // MARK: - Private
+
+    /// The takes of `takes` (their indices) that `sequence` shows, in the order it first shows each of them (any clip of
+    /// its take, one with content too); two of the same take (a transcript edited by hand) in their order.
+    private static func order(of takes: [TranscriptTake], in sequence: [Clip]) -> [Int] {
+        var first: [String: Int] = [:]
+        for (index, clip) in sequence.enumerated() where first[clip.take] == nil { first[clip.take] = index }
+        return takes.indices.compactMap { index in first[takes[index].take].map { (place: $0, take: index) } }
+            .sorted { ($0.place, $0.take) < ($1.place, $1.take) }
+            .map(\.take)
+    }
 
     /// The words of `range` that there are.
     private func slice(_ range: ClosedRange<Int>) -> ArraySlice<Word> {

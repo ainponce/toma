@@ -132,8 +132,12 @@ private typealias F = Fixture
     @Test func takesAreParagraphsAndRuns() {
         let second = TranscriptTake(
             take: "take-002", track: "microphone-1", words: [F.word("cinco", at: 0), F.word("seis", at: 0.4)])
-        let text = TranscriptText(document: F.document(words: F.words(["uno", "dos", "tres"]), takes: [second]))
+        let text = TranscriptText(
+            document: F.document(
+                sequence: [F.clip(1, from: 0, to: 30), F.clip(2, from: 0, to: 30, take: "take-002")],
+                words: F.words(["uno", "dos", "tres"]), takes: [second]))
         #expect(text.string == "uno dos tres\n\ncinco seis")
+        #expect(text.takes == [0, 1])
         #expect(text.takeStarts == [0, 3])
         #expect(text.index(of: TranscriptWordRef(take: 1, word: 1)) == 4)
         #expect(text.index(of: TranscriptWordRef(take: 0, word: 3)) == nil)
@@ -142,6 +146,75 @@ private typealias F = Fixture
             text.takeRuns(1...4)
                 == [TranscriptText.TakeRun(take: 0, words: 1...2), TranscriptText.TakeRun(take: 1, words: 0...1)])
         #expect(text.takeRuns(3...3) == [TranscriptText.TakeRun(take: 1, words: 0...0)])
+    }
+
+    /// The takes go in the order the sequence first shows each, whatever the order of the transcript: a word is still
+    /// found by its place in the transcript, and a selection is still a run of each take.
+    @Test func textFollowsTheSequenceOrder() {
+        let second = TranscriptTake(
+            take: "take-002", track: "microphone-1", words: [F.word("cinco", at: 0), F.word("seis", at: 2)])
+        // take-002, then take-001, then take-002 again.
+        let sequence = [
+            F.clip(1, from: 0, to: 1, take: "take-002"), F.clip(2, from: 0, to: 30), F.clip(3, from: 1, to: 30, take: "take-002"),
+        ]
+        let document = F.document(sequence: sequence, words: F.words(["uno", "dos", "tres"]), takes: [second])
+        let text = TranscriptText(document: document)
+        #expect(text.string == "cinco\n\nseis\n\nuno dos tres")
+        #expect(text.takes == [1, 0])
+        #expect(text.takeStarts == [0, 2])
+        #expect(text.words.map(\.ref) == [
+            TranscriptWordRef(take: 1, word: 0), TranscriptWordRef(take: 1, word: 1), TranscriptWordRef(take: 0, word: 0),
+            TranscriptWordRef(take: 0, word: 1), TranscriptWordRef(take: 0, word: 2),
+        ])
+        #expect(text.index(of: TranscriptWordRef(take: 0, word: 0)) == 2)
+        #expect(text.index(of: TranscriptWordRef(take: 1, word: 1)) == 1)
+        #expect(text.index(of: TranscriptWordRef(take: 1, word: 2)) == nil)
+        #expect(
+            text.takeRuns(1...3)
+                == [TranscriptText.TakeRun(take: 1, words: 1...1), TranscriptText.TakeRun(take: 0, words: 0...1)])
+        // A pause of take-001 after "dos" is marked after it, where the text has it now.
+        let pause = SourceRange(take: "take-001", start: F.source(0.5), end: F.source(0.6))
+        #expect(text.wordsBefore(pauses: [pause], in: document) == [3])
+    }
+
+    /// A take the sequence does not show is not in the text, though the transcript has it.
+    @Test func unusedTakesAreLeftOut() {
+        let second = TranscriptTake(
+            take: "take-002", track: "microphone-1", words: [F.word("cinco", at: 0), F.word("seis", at: 0.4)])
+        let document = F.document(words: F.words(["uno", "dos", "tres"]), takes: [second])
+        let text = TranscriptText(document: document)
+        #expect(text.string == "uno dos tres")
+        #expect(text.takes == [0])
+        #expect(text.takeStarts == [0])
+        #expect(text.words.map(\.ref.take) == [0, 0, 0])
+        #expect(text.index(of: TranscriptWordRef(take: 1, word: 0)) == nil)
+        #expect(text.wordsBefore(pauses: [SourceRange(take: "take-002", start: F.source(0.3), end: F.source(0.4))], in: document) == [])
+        // Shown again later, it is back, after the take that is first.
+        var shown = document
+        shown.sequence.append(F.clip(2, from: 0, to: 1, take: "take-002"))
+        #expect(TranscriptText(document: shown).string == "uno dos tres\n\ncinco seis")
+    }
+
+    /// The documents of the phase 2, of one take: the text of then, character for character.
+    @Test func oneTakeIsTheTextOfToday() {
+        let words = [
+            F.word("uno", at: 0), F.word("dos", at: 0.4, breakBefore: true), F.word("tres\ncuatro", at: 0.8), F.word("cinco", at: 3),
+        ]
+        // [0.35, 0.75) is cut: "dos" keeps 0.05 of its 0.3 s.
+        let document = F.document(sequence: [F.clip(1, from: 0, to: 0.35), F.clip(2, from: 0.75, to: 30)], words: words)
+        let text = TranscriptText(document: document)
+        #expect(text.string == "uno dos tres cuatro\n\ncinco")
+        #expect(
+            text.words == [
+                TranscriptText.Word(ref: TranscriptWordRef(take: 0, word: 0), characters: 0..<3, isCut: false),
+                TranscriptText.Word(ref: TranscriptWordRef(take: 0, word: 1), characters: 4..<7, isCut: true, breakBefore: true),
+                TranscriptText.Word(ref: TranscriptWordRef(take: 0, word: 2), characters: 8..<19, isCut: false),
+                TranscriptText.Word(ref: TranscriptWordRef(take: 0, word: 3), characters: 21..<26, isCut: false),
+            ])
+        #expect(text.takes == [0])
+        #expect(text.takeStarts == [0])
+        #expect(text.index(of: TranscriptWordRef(take: 0, word: 3)) == 3)
+        #expect(text.takeRuns(0...3) == [TranscriptText.TakeRun(take: 0, words: 0...3)])
     }
 
     /// No transcript, no text.
