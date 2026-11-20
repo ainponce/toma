@@ -738,4 +738,31 @@ private func offThePool<T: Sendable>(_ body: @escaping @Sendable () throws -> T)
             #expect(median <= 80)
         }
     }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func aTakeTheSequenceDoesNotUseNeverStopsTheThumbnail() async throws {
+        try await withTemporaryDirectory { dir in
+            // Phase 3 design §9: a package of two takes whose document shows take-001 alone, and take-002, the last one,
+            // with an event log that cannot be read. The library reads and draws it as take-001 alone.
+            let project = try await MultiTakeFixtures.twoTakes(in: dir)
+            let first = try #require(project.focused(on: "take-001"))
+            let document = MultiTakeFixtures.sequence(of: first, [("take-001", 0, 3)])
+            try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(document), to: project.package.editURL)
+            let url = project.package.url, size = LibraryThumbnails.pixelSize
+            let at = LibraryThumbnails.time(outputSeconds: 3)
+            let renderer = try FrameRenderer(project: first, document: document, outputSize: size)
+            let alone = try await offThePool { try renderer.renderBytes(at: at) }
+
+            // A FIFO, which a look at it refuses without opening it.
+            let unused = project.package.eventsURL(take: "take-002")
+            try FileManager.default.removeItem(at: unused)
+            #expect(mkfifo(unused.path, 0o644) == 0)
+            let summary = Thumbs.summary(url, in: dir)
+            #expect(summary.outputSeconds == 3)
+            let thumbnails = LibraryThumbnails(directory: Thumbs.cache(dir), isRecording: { false })
+            let image = try #require(await thumbnails.render(url, summary: summary, context: Thumbs.context(dir)))
+            #expect(try Thumbs.bgra(image) == alone)
+            #expect(try await Thumbs.exportFrame(url, at: at, size: size, in: dir) == alone)
+        }
+    }
 }

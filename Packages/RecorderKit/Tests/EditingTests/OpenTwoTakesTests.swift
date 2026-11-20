@@ -123,6 +123,62 @@ import ProjectFormat
         }
     }
 
+    @Test func anUnreadableUnusedTakeNeverStopsTheProject() async throws {
+        try await withTemporaryDirectory { dir in
+            // take-002, the last one, an unused take whose log cannot be read: unreadable, a FIFO, a link. The project
+            // opens and reads on take-001 all the same, and take-002's log is never opened.
+            let project = try await Self.package(in: dir, [("take-001", 0, 2), ("take-001", 2.5, 3.5)])
+            let url = project.package.url
+            let first = project.events(ofTake: "take-001")
+            let events = project.package.eventsURL(take: "take-002")
+            let saved = dir.appending(path: "take-002-events.jsonl")
+            try FileManager.default.copyItem(at: events, to: saved)
+            let unreadable: [(String, () throws -> Void)] = [
+                ("unreadable", { #expect(chmod(events.path, 0) == 0) }),
+                ("FIFO", {
+                    try FileManager.default.removeItem(at: events)
+                    #expect(mkfifo(events.path, 0o644) == 0)
+                }),
+                ("link", {
+                    try FileManager.default.removeItem(at: events)
+                    try FileManager.default.createSymbolicLink(at: events, withDestinationURL: saved)
+                }),
+            ]
+            for (kind, spoil) in unreadable {
+                try spoil()
+                let session = try await EditSession.open(url, take: nil, context: Self.context(dir))
+                #expect(session.access == .editable, "\(kind)")
+                #expect(session.project.take.id == "take-001", "\(kind)")
+                #expect(session.project.events == first, "\(kind)")
+                #expect(session.project.events(ofTake: "take-002") == [], "\(kind)")
+                await session.close()
+
+                let readOnly = try await EditSession.open(url, take: nil, context: Self.context(dir, forcedReadOnly: .inTrash))
+                #expect(readOnly.project.take.id == "take-001" && readOnly.project.events == first, "\(kind)")
+                await readOnly.close()
+
+                let (read, document) = try EditSession.readDocument(url, take: nil, context: Self.context(dir))
+                #expect(read.take.id == "take-001" && read.events == first, "\(kind)")
+                #expect(document.sequence.map(\.take) == ["take-001", "take-001"], "\(kind)")
+                let (outlined, outline) = try EditSession.readOutline(url, take: nil, context: Self.context(dir))
+                #expect(outlined.take.id == "take-001", "\(kind)")
+                #expect(outline.outputSeconds == 3, "\(kind)")
+
+                // Asked for, take-002 is refused, as it would be alone.
+                await #expect(throws: (any Error).self, "\(kind)") {
+                    _ = try await EditSession.open(url, take: "take-002", context: Self.context(dir))
+                }
+                #expect(throws: (any Error).self, "\(kind)") {
+                    _ = try EditSession.readDocument(url, take: "take-002", context: Self.context(dir))
+                }
+
+                if kind == "unreadable" { #expect(chmod(events.path, 0o644) == 0) }
+                try FileManager.default.removeItem(at: events)
+                try FileManager.default.copyItem(at: saved, to: events)
+            }
+        }
+    }
+
     @Test func aNewProjectOfTwoTakesShowsTheLastOne() async throws {
         try await withTemporaryDirectory { dir in
             // No edit files: a `NewDocument` of the last take, as with one take.

@@ -98,12 +98,23 @@ private final class CountingReader: Sendable {
             #expect(focused.events == (try Self.logged("take-001", of: project)))
             #expect(focused.events(ofTake: "take-002") == project.events)
             #expect(try #require(focused.focused(on: "take-002")).events == project.events)
-            // Its own take is itself, events set on it included.
+            // Its own take is itself, events set on it included, and so are the values focused from it afterwards; its
+            // copies keep theirs.
             var edited = project
-            edited.events = []
-            #expect(edited.focused(on: "take-002")?.events == [])
-            #expect(edited.events(ofTake: "take-002") == [])
+            let one = [InputEvent(t: HostTime(nanoseconds: 7), kind: .marker)]
+            edited.events = one
+            #expect(edited.focused(on: "take-002")?.events == one)
+            #expect(edited.events(ofTake: "take-002") == one)
+            #expect(edited.focused(on: "take-001")?.events(ofTake: "take-002") == one)
+            #expect(edited.focused(on: "take-001")?.focused(on: "take-002")?.events == one)
+            #expect(edited.takesShown(by: MultiTakeFixtures.sequence(of: edited, [("take-001", 0, 1), ("take-002", 0, 1)]))
+                .map(\.events) == [project.events(ofTake: "take-001"), one])
             #expect(project.events(ofTake: "take-002") == (try Self.logged("take-002", of: project)))
+            #expect(project.focused(on: "take-001")?.events(ofTake: "take-002") == project.events)
+            var focused001 = focused
+            focused001.events = one
+            #expect(focused001.focused(on: "take-002")?.focused(on: "take-001")?.events == one)
+            #expect(focused.events == (try Self.logged("take-001", of: project)))
             // A take the manifest does not have.
             #expect(project.focused(on: "take-009") == nil)
             #expect(project.events(ofTake: "take-009") == [])
@@ -135,12 +146,69 @@ private final class CountingReader: Sendable {
             #expect(withFifo.events(ofTake: "take-001") == [])
             #expect(throws: POSIXError(.EFTYPE)) { try withFifo.focused(on: "take-001")?.readEvents() }
 
-            // No log: a take without events.
+            // No log as the package loads: a take without events.
             try FileManager.default.removeItem(at: events)
             let without = try LoadedProject.load(url)
             #expect(without.events(ofTake: "take-001") == [])
             try #require(without.focused(on: "take-001")).readEvents()
             #expect(without.events == second)
+        }
+    }
+
+    @Test func aLogGoneSinceTheLoadIsAnErrorForEveryTake() async throws {
+        try await withTemporaryDirectory { dir in
+            // As `load(_:take:deferringEvents:)` says of the take loaded: there when the package loaded and gone when the
+            // events are asked for (the package moved meanwhile) is an error, never a take without one.
+            let project = try await MultiTakeFixtures.twoTakes(in: dir)
+            let url = project.package.url
+            let first = try Self.logged("take-001", of: project)
+            for loaded in [
+                try LoadedProject.load(url), try LoadedProject.load(url, take: nil, deferringEvents: LoadedProject.takeEvents),
+                try LoadedProject.load(url, take: nil, lookingAtEvents: LoadedProject.takeEvents),
+            ] {
+                let elsewhere = dir.appending(path: "moved.toma", directoryHint: .isDirectory)
+                try FileManager.default.moveItem(at: url, to: elsewhere)
+                let focused = try #require(loaded.focused(on: "take-001"))
+                #expect(throws: POSIXError(.ENOENT)) { try focused.readEvents() }
+                #expect(throws: POSIXError(.ENOENT)) { try focused.checkEvents() }
+                #expect(loaded.events(ofTake: "take-001") == [])
+                try FileManager.default.moveItem(at: elsewhere, to: url)
+                // Read before, they stay.
+                let again = try LoadedProject.load(url)
+                #expect(again.events(ofTake: "take-001") == first)
+                try FileManager.default.moveItem(at: url, to: elsewhere)
+                #expect(again.events(ofTake: "take-001") == first)
+                try FileManager.default.moveItem(at: elsewhere, to: url)
+            }
+        }
+    }
+
+    @Test func lookingAtEventsRefusesNoTakeAtOnce() async throws {
+        try await withTemporaryDirectory { dir in
+            // For who does not know yet which take it shows: the take loaded's log is looked at as the others' are.
+            let project = try await MultiTakeFixtures.twoTakes(in: dir)
+            let url = project.package.url
+            let events = project.package.eventsURL(take: "take-002")
+            let first = try Self.logged("take-001", of: project)
+            try FileManager.default.removeItem(at: events)
+            #expect(mkfifo(events.path, 0o644) == 0)
+            #expect(throws: POSIXError(.EFTYPE)) { try LoadedProject.load(url) }
+            #expect(throws: POSIXError(.EFTYPE)) {
+                try LoadedProject.load(url, take: nil, deferringEvents: LoadedProject.takeEvents)
+            }
+            let counter = CountingReader()
+            let lazy = try LoadedProject.load(url, take: nil, lookingAtEvents: counter.read)
+            #expect(lazy.take.id == "take-002")
+            #expect(throws: POSIXError(.EFTYPE)) { try lazy.checkEvents() }
+            #expect(throws: POSIXError(.EFTYPE)) { try lazy.readEvents() }
+            #expect(lazy.events == [])
+            let shown = try #require(lazy.focused(on: "take-001"))
+            try shown.checkEvents()
+            #expect(counter.reads.isEmpty)
+            try shown.readEvents()
+            #expect(shown.events == first)
+            // The FIFO was never opened: only take-001's log was read.
+            #expect(counter.reads == ["take-001": 1])
         }
     }
 
