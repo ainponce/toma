@@ -94,7 +94,7 @@ public enum SegmentFileFixture: Sendable {
 /// Writes one take, `take-001`, into a new package the way the recorder does: segments with
 /// `FragmentedTrackWriter` (not in real time) and `SampleFactory` media, the manifest, and `events.jsonl` with
 /// the events the pipeline logs (`segmentStarted` at the start of every segment, `audioClock` anchors) plus
-/// any added with `addEvents`.
+/// any added with `addEvents`. `init(appendingTo:take:)` writes another take into a package that has some.
 ///
 /// What the builder does not produce (a segment the manifest does not list, a file without its
 /// `segmentStarted`, a lock or a reserve) a test writes by hand on `package`.
@@ -149,7 +149,7 @@ public final class TakeBuilder {
 
     public typealias VideoWriterFactory = (_ url: URL, _ framesPerSecond: Int, _ encoder: VideoEncoderChoice) throws -> FragmentedTrackWriter
 
-    private let takeID = "take-001"
+    private let takeID: String
     private var tracks: [TrackRecord] = []
     private var events: [InputEvent] = []
     /// Frames written to each video track so far: the number of its next frame.
@@ -170,6 +170,7 @@ public final class TakeBuilder {
             throw TestSupportError.failed("a package of version \(formatVersion) has no upgradedFrom")
         }
         package = try ProjectPackage.create(in: directory, name: name, app: AppInfo(name: "Tests", version: "0"), now: Date())
+        takeID = "take-001"
         if formatVersion != Manifest.currentFormatVersion || upgradedFrom != nil {
             // Written here: `ManifestStore` keeps the version a package was created with.
             var manifest = try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL))
@@ -178,6 +179,21 @@ public final class TakeBuilder {
             if formatVersion < 3 { manifest.projectID = nil }
             try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: package.manifestURL)
         }
+    }
+
+    /// Writes the take `take` into `package`, which has a manifest (of the takes written before, which it never
+    /// touches): `write(status:)` appends it to the manifest's takes, in the version the package has (raising the
+    /// version for a second take is the recorder's rule, not the builder's). Throws for a take the manifest already has.
+    public init(appendingTo package: ProjectPackage, take: String) throws {
+        let manifest = try ManifestStore(package: package).manifest
+        guard !manifest.takes.contains(where: { $0.id == take }) else {
+            throw TestSupportError.failed("the package already has a take \(take)")
+        }
+        guard !FileManager.default.fileExists(atPath: package.takeDirectory(take).path) else {
+            throw TestSupportError.failed("the package already has a folder for take \(take)")
+        }
+        self.package = package
+        takeID = take
     }
 
     /// Adds a video track of `segments`, numbered from 1. Called again for the same track (same kind and
@@ -329,9 +345,9 @@ public final class TakeBuilder {
         self.events += events
     }
 
-    /// Writes the take with `status` to the manifest and its events to `events.jsonl`, in time order (events
-    /// at the same time in the order they were added), as the pipeline logs them; returns the take as
-    /// `LoadedProject.load` reads it. Call it once, after adding everything.
+    /// Writes the take with `status` to the manifest (after the takes it has) and its events to `events.jsonl`, in
+    /// time order (events at the same time in the order they were added), as the pipeline logs them; returns the take
+    /// as `LoadedProject.load` reads it. Call it once, after adding everything.
     public func write(status: TakeStatus = .complete) throws -> LoadedProject {
         try checkNotWritten()
         if let key = events.first(where: \.kind.requiresFormatVersion4) {
