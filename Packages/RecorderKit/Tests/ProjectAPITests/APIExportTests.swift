@@ -254,22 +254,31 @@ private let small = ExportSettings(outputSize: [320, 180], framesPerSecond: 10)
         }
     }
 
-    @Test func unsupportedCodecIsNotAvailable() async throws {
+    /// HEVC with alpha and ProRes 4444 (milestone 4c) through the API: a QuickTime movie whose stage's background is
+    /// transparent (Toma's style pads the screen, so a corner is background) and whose screen is opaque.
+    @Test(.enabled(if: metal)) func alphaCodecsKeepTheTransparency() async throws {
         try await withTemporaryDirectory { dir in
             let environment = APIFixtures.environment(in: dir)
             let url = try await APIFixtures.package(in: dir).package.url
             let project = try await TomaProject.open(url, mode: .read, environment: environment)
-            for codec in [ExportCodec.hevcAlpha, .proRes4444] {
-                var settings = small
-                settings.codec = codec
-                // Without an extension, the codec's.
-                let error = await APIFixtures.apiError {
-                    _ = try await project.export(to: dir.appending(path: "alpha"), format: .video(settings), progress: nil)
+            for name in ["hevc-alpha", "prores4444"] {
+                guard case var .video(settings) = try await project.format(for: ExportRequest(codec: name)) else {
+                    Issue.record("\(name): not a video")
+                    continue
                 }
-                #expect(error?.code == .notAvailable && error?.message.contains(ExportRequest.name(of: codec)) == true)
+                settings.outputSize = small.outputSize
+                settings.framesPerSecond = small.framesPerSecond
+                // Without an extension, the codec's.
+                let result = try await project.export(to: dir.appending(path: name), format: .video(settings), progress: nil)
+                #expect(result.path == dir.appending(path: "\(name).mov").path)
+                #expect(result.format == "mov" && result.codec == name && result.width == 320 && result.height == 180)
+                let frame = try #require(try await videoFrames(of: URL(fileURLWithPath: result.path)).first)
+                func alpha(_ x: Int, _ y: Int) -> UInt8 { frame.bytes[(y * 320 + x) * 4 + 3] }
+                // HEVC's alpha is lossy: at most 2 where there is nothing, at least 253 where the screen is.
+                #expect(alpha(2, 2) <= 2 && alpha(317, 177) <= 2, "\(name): the corners are \(alpha(2, 2)), \(alpha(317, 177))")
+                #expect(alpha(160, 90) >= 253, "\(name): the middle of the screen is \(alpha(160, 90))")
             }
             await project.close()
-            #expect(!FileManager.default.fileExists(atPath: dir.appending(path: "alpha.mov").path))
         }
     }
 

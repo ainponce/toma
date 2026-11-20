@@ -5,6 +5,7 @@ import Export
 import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
+import Synchronization
 import Testing
 import Transcription
 @testable import ProjectAPI
@@ -125,6 +126,54 @@ import Transcription
             await opened.close()
         }
     }
+
+    /// The app opens the project while the API transcribes it (the session, and `edit.lock`, open only once there is a
+    /// transcript): the transcription is `locked`, and nothing of it reaches the log.
+    @Test func theAppTakingTheProjectMeanwhileIsLocked() async throws {
+        try await withTemporaryDirectory { dir in
+            let gate = Gate()
+            var environment = APIFixtures.environment(in: dir)
+            environment.speech = Held(gate: gate)
+            let url = try await APIFixtures.version4(in: dir)
+            let entries = try APIFixtures.logEntries(url).count
+            let project = try await TomaProject.open(url, mode: .edit, environment: environment)
+            let transcribing = Task { try await project.apply(.transcribe(language: "es-MX", replace: false)) }
+            #expect(await eventually(timeout: .seconds(60)) { gate.arrived })
+            let app = try await EditSession.open(url, take: nil, context: environment.editContext)
+            #expect(app.access == .editable)
+            gate.open()
+            let error = await APIFixtures.apiError { _ = try await transcribing.value }
+            #expect(error?.code == .locked, "\(String(describing: error))")
+            #expect(project.document.transcript == nil)
+            await app.close()
+            await project.close()
+            #expect(try APIFixtures.logEntries(url).count == entries)
+        }
+    }
+
+    /// The app corrects the transcript and closes while the API transcribes: the step is made of the document the session
+    /// opens on, so the correction it would lose is `refused` without `replace`.
+    @Test func aCorrectionMadeMeanwhileNeedsReplace() async throws {
+        try await withTemporaryDirectory { dir in
+            let gate = Gate()
+            var environment = APIFixtures.environment(in: dir)
+            environment.speech = Held(gate: gate)
+            let url = try await APIFixtures.transcribed(in: dir, environment: environment)
+            let project = try await TomaProject.open(url, mode: .edit, environment: environment)
+            let transcribing = Task { try await project.apply(.transcribe(language: nil, replace: false)) }
+            #expect(await eventually(timeout: .seconds(60)) { gate.arrived })
+            let app = try await EditSession.open(url, take: nil, context: environment.editContext)
+            let corrected = try #require(TranscriptCommands.toggleBreak(app.document, TranscriptWordRef(take: 0, word: 3)))
+            #expect(app.perform(corrected) == .applied)
+            _ = await app.flushed()
+            await app.close()
+            gate.open()
+            let error = await APIFixtures.apiError { _ = try await transcribing.value }
+            #expect(error?.code == .refused && error?.message.contains("1 corrected word") == true, "\(String(describing: error))")
+            #expect(project.document.transcript?.takes.first?.words[3].breakBefore == true)
+            await project.close()
+        }
+    }
 }
 
 // MARK: - Engines
@@ -146,5 +195,28 @@ private struct Words: SpeechEngine {
 private struct NoModel: SpeechEngine {
     func transcribe(_ audio: TrackAudio, language: String, progress: @escaping @Sendable (Double) -> Void) async throws -> [SpeechRun] {
         throw TranscriptionError.modelNotInstalled(language)
+    }
+}
+
+/// Where `Held` waits until the test opens it, and says when the engine got there.
+private final class Gate: Sendable {
+    private let state = Mutex((arrived: false, open: false))
+
+    var arrived: Bool { state.withLock { $0.arrived } }
+    func open() { state.withLock { $0.open = true } }
+
+    func wait() async throws {
+        state.withLock { $0.arrived = true }
+        while !state.withLock({ $0.open }) { try await Task.sleep(for: .milliseconds(5)) }
+    }
+}
+
+/// `Words`, once `gate` opens.
+private struct Held: SpeechEngine {
+    let gate: Gate
+
+    func transcribe(_ audio: TrackAudio, language: String, progress: @escaping @Sendable (Double) -> Void) async throws -> [SpeechRun] {
+        try await gate.wait()
+        return try await Words().transcribe(audio, language: language, progress: progress)
     }
 }

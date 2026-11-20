@@ -63,8 +63,8 @@ extension TomaProject {
     /// its first fifth. Nothing is ever written into a package; a file at `destination` is replaced once the export is
     /// whole. A destination without an extension gets its format's; another extension is `invalidCommand`.
     /// - Throws: `APIError` (`refused` for a destination inside a package or where it cannot be written, `outOfRange`
-    ///   for an output that lasts less than a frame, `notAvailable` for a codec this version does not write yet or an
-    ///   export for an external editor, `exportFailed` for the rest, with the stage of the preparation that failed);
+    ///   for an output that lasts less than a frame, `notAvailable` for an export for an external editor, `exportFailed`
+    ///   for the rest, with the stage of the preparation that failed);
     ///   `CancellationError` if the task is cancelled, leaving nothing.
     public func export(
         to destination: URL, format: ExportFormat, progress: (@Sendable (Double) -> Void)?
@@ -201,6 +201,7 @@ extension TomaProject {
         case ExportError.nothingToExport, GIFExportError.rangeShorterThanAFrame:
             return APIError(.outOfRange, "the output lasts less than a frame: there is nothing to export")
         case ExportError.unsupportedCodec:
+            // No exporter throws it since milestone 4c (the alpha codecs are written); a codec a later one refuses.
             let name = codec.map(ExportRequest.name(of:)) ?? "the codec"
             return APIError(.notAvailable, "this version of Toma does not export \(name) yet")
         case ExportError.diskFull, GIFExportError.diskFull:
