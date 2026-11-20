@@ -18,8 +18,8 @@ minutos cada uno, son estéreo a 48 kHz y se repiten sin costura.
 Cada uno dura exactamente 5 760 000 cuadros (120 s a 48 kHz) y cierra su frase en la vuelta. Un documento nombra un tema
 como `library:music-1/<id>`; en la mezcla suena 14 dB por debajo de la voz (diseño §7.4).
 
-Mientras no se componen (tareas U2 y U3 del hito 3c), cada tema es un marcador: un pad que sostiene un acorde durante los
-dos minutos (`MusicScore.isPlaceholder`).
+Los seis están compuestos (tareas U2 y U3 del hito 3c): cada uno a −16 LUFS, con su costura de vuelta medida (±1 dB). Un
+tema que todavía fuera un marcador (`MusicScore.isPlaceholder`) no se guarda nunca en la caché.
 
 ## Licencia
 
