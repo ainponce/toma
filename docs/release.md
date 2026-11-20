@@ -1237,6 +1237,12 @@ Con el proyecto de «El menú Tomas y «Regrabar desde acá»».
 - Un clip vertical grabado con un iPhone (MOV HEVC, de pie) y uno horizontal (MP4 H.264 de una cámara o de otro export), cada uno en la secuencia: se ven derechos y enteros dentro del margen, con las esquinas y la sombra del estilo y sin cursor ni cámara; en pausa, reproduciendo, arrastrando el cursor de reproducción por encima y en el video exportado, igual. A 1,5× se mueven más rápido y terminan donde termina su tramo. Un ProRes 4444 con alfa se ve opaco y nada se traba.
 - Con el proyecto cerrado, sacar el archivo del clip de `assets/` (o cambiarlo por un alias): al abrirlo, en su tramo se ve el fondo solo; reproducir y exportar no se traban ni dan error.
 
+**Imágenes y clips encima** (A7)
+
+- Desde la pestaña Anotaciones, encima del video: un PNG con transparencia (un logo), una foto JPEG o HEIC mucho más grande que su caja y un clip (un MOV HEVC de pie de un iPhone y un MP4 horizontal). La transparencia del PNG deja ver el video sin un recuadro ni una sombra adentro; la foto se ve nítida, sin escalones ni parpadeo; Encajar deja franjas vacías y Llenar recorta el medio; las esquinas, la sombra, la rotación y la opacidad se ven como en el inspector. El clip se ve derecho, avanza con el video y desaparece cuando termina su tramo; en pausa, reproduciendo y en el video exportado, igual.
+- El mismo archivo en la secuencia y encima a la vez, y dos clips encima del mismo archivo a la vez en otros instantes: reproducir no se traba y cada uno avanza por su cuenta.
+- En la Mac base (M1), reproducir en 1080p con diez anotaciones a la vista, dos imágenes y un clip entre ellas: sigue a 60 fps, sin un salto cuando aparece una imagen.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

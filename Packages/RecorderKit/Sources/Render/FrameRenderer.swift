@@ -307,6 +307,7 @@ public final class FrameRenderer: @unchecked Sendable {
         lock.withLock {
             backgroundImages.forgetUnreadable()
             cameraLook.forgetUnreadable()
+            annotationResources.images.forgetUnreadable()
         }
     }
 

@@ -25,11 +25,13 @@ public enum AssetFrameReader {
         prefix + asset
     }
 
-    /// The clip a reader id of `readerID(of:)` names; `nil` for any other id (a track's, a person's mask's).
+    /// The clip a reader id of `readerID(of:)` names, or of one of the readers of the clips over the video
+    /// (`FrameRenderer.overlayReaderID(of:lane:)`, `asset:<path>#overlay…`: a path of `assets/` has no `#`); `nil` for any
+    /// other id (a track's, a person's mask's).
     public static func asset(ofReaderID id: String) -> String? {
         guard id.hasPrefix(prefix) else { return nil }
-        let asset = String(id.dropFirst(prefix.count))
-        return asset.isEmpty ? nil : asset
+        let asset = id.dropFirst(prefix.count).prefix { $0 != "#" }
+        return asset.isEmpty ? nil : String(asset)
     }
 
     /// A reader of the clip `asset` of `package` where it is now, as `ProjectPackage.mediaAsset(_:as:)` gives it; `nil`
