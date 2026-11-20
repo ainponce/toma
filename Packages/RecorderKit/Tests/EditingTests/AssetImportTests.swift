@@ -168,12 +168,18 @@ private enum ImportFixture {
         try jpeg.write(to: photo)
         #expect(try AssetImport.copy(photo, into: project.package) == "assets/\(ImportFixture.hash(jpeg)).jpg")
 
-        // Only PNG, JPEG and HEIC, the images a package's asset decodes as.
+        // Copied as they are, only PNG, JPEG and HEIC, the images a package's asset decodes as; a TIFF, a GIF or a PDF
+        // is converted (`ImageImportFormatsTests`), and only if it is one: a PNG named `.gif` is not.
         #expect(AssetImport.allowedExtensions == ["png", "jpg", "heic"])
-        for (file, type) in [("Animation.gif", "gif"), ("Scan.tiff", "tiff"), ("Scan.tif", "tif"), ("Notes", "")] {
+        for (file, type) in [("Clip.mov", "mov"), ("Notes", "")] {
             let url = dir.appending(path: file)
             try png.write(to: url)
             #expect(throws: AssetImportError.unsupportedExtension(type)) { try AssetImport.copy(url, into: project.package) }
+        }
+        for file in ["Animation.gif", "Scan.tiff", "Scan.tif", "Slides.pdf"] {
+            let url = dir.appending(path: file)
+            try png.write(to: url)
+            #expect(throws: POSIXError(.EFTYPE)) { try AssetImport.copy(url, into: project.package) }
         }
         // Larger than an asset is read: never copied.
         let huge = dir.appending(path: "Huge.png")
