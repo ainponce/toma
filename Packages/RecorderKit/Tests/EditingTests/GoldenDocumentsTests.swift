@@ -39,6 +39,28 @@ import ProjectFormat
         #expect(Set(GoldenDocuments.golden2Cases.map(\.name)).count == GoldenDocuments.golden2Cases.count)
     }
 
+    /// Golden 3 draws and mixes golden 2's cases first, unchanged (their names, times, mix, versions and size, so their
+    /// frames are golden 2's), then phase 2's, in their order, of documents of version 3, drawn at 360 px; only
+    /// `keysOnScreen`'s package is of format version 4. Changing this order changes the golden files of phase 3.
+    @Test func golden3CasesKeepThe2OnesFirst() {
+        func fields(_ c: GoldenDocuments.Case) -> String {
+            "\(c.name) \(c.times) \(c.mixes) \(c.documentVersion) \(c.formatVersion) \(c.shortSide)"
+        }
+        let golden2 = GoldenDocuments.golden2Cases
+        #expect(golden2.count == 9)
+        #expect(GoldenDocuments.golden3Cases.prefix(golden2.count).map(fields) == golden2.map(fields))
+        #expect(golden2.allSatisfy { $0.formatVersion == 3 && $0.shortSide == 720 })
+        #expect(GoldenDocuments.golden3Cases.dropFirst(golden2.count).map(fields) == GoldenDocuments.v3Cases.map(fields))
+        #expect(GoldenDocuments.v3Cases.map(\.name) == [
+            "captionsBold", "captionsClassicTop", "privacyManual", "keysOnScreen", "deviceFrameIPhone", "cameraLookWarm",
+            "followCursorPortrait", "fourByFive", "likeTheRecording", "normalizedMix",
+        ])
+        #expect(GoldenDocuments.v3Cases.allSatisfy { $0.documentVersion == 3 && $0.shortSide == 360 })
+        #expect(GoldenDocuments.v3Cases.filter { $0.formatVersion == 4 }.map(\.name) == ["keysOnScreen"])
+        #expect(GoldenDocuments.v3Cases.filter(\.mixes).map(\.name) == ["captionsBold", "keysOnScreen", "cameraLookWarm", "normalizedMix"])
+        #expect(Set(GoldenDocuments.golden3Cases.map(\.name)).count == GoldenDocuments.golden3Cases.count)
+    }
+
     /// The Camera track's blocks made one after the other over the output, one Bubble given its own style and the
     /// Camera only made instant, and a zoom of the user's with its depth and a fixed point.
     @Test func layoutBlocksIsWhatTheCameraTrackWrites() async throws {

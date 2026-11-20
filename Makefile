@@ -2,7 +2,7 @@
 VERSION ?=
 
 .PHONY: project test tsan crash-test golden golden-record golden-fixtures golden-accept build install release golden-1c golden-1c-record \
-	golden-2 golden-2-record
+	golden-2 golden-2-record golden-3 golden-3-record
 
 project:
 	xcodegen generate
@@ -284,6 +284,86 @@ golden-2-record:
 		echo "recorded $(GOLDEN_2) from $$(cat "$(GOLDEN_2)/COMMIT")"; \
 	else \
 		rm -rf "$(GOLDEN_2).partial"; echo "nothing recorded in $(GOLDEN_2)" >&2; \
+	fi; \
+	exit $$status
+
+# The golden files of phase 3 (phase 3 design §16, "golden 3"): the frames and the mix of the edit documents of 1b
+# (documentVersion 1), of 1c (2) and of phase 2 (3) of GoldenDocuments (golden3Cases: golden 2's cases, then phase 2's
+# captions, privacy, keys, device frame, camera look, Follow the Cursor, formats and Normalize, without any model of the
+# system: frames.bin and frames.bin.mix), with those documents as the app writes them (documents/<case>.json: 1b's and
+# 1c's reverted to their versions), recorded once from the branch golden-3-base (main with no change to the app's
+# sources, only test code and this Makefile), outside git, with fixtures.sha (the digests of the cases' video the frames
+# were drawn from, which tell a change of the render from other video of the encoder), VERSION (the fingerprint of
+# scripts/golden-system.sh) and COMMIT (the commit they were recorded from). They live next to the others in the main
+# checkout. Recording needs EditDocument.currentVersion 3, which no code of phase 3 has; with phase 3's code the same
+# documents, migrated, must draw and sound the same. In phase 3 it is the gate of every change of the render or the
+# export. Record them with the Mac doing no other video work.
+GOLDEN_3_DIR ?= $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-3
+GOLDEN_3 = $(abspath $(GOLDEN_3_DIR))
+GOLDEN_3_SRC = $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-3-src
+GOLDEN_3_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden3FramesMatch|golden3MixMatches'
+# Sets $$commit to the commit the golden files of phase 3 were recorded from.
+GOLDEN_3_COMMIT = commit=$$(cat "$(GOLDEN_3)/COMMIT" 2>/dev/null || echo "<the last commit of the branch golden-3-base>")
+# Records them again from $$commit, in a worktree of that commit, with the ones there moved aside.
+GOLDEN_3_RECORD_AGAIN = mv '$(GOLDEN_3)' '$(GOLDEN_3).old' && git worktree add '$(GOLDEN_3_SRC)' $$commit \
+	&& make -C '$(GOLDEN_3_SRC)' golden-3-record GOLDEN_3_DIR='$(GOLDEN_3)' && git worktree remove '$(GOLDEN_3_SRC)'
+# Whether both golden tests of phase 3 ran and passed, from the output of GOLDEN_3_TESTS in file $(1): a filter that
+# matches no test exits with 0 too.
+GOLDEN_3_RAN = { grep -qF 'golden3FramesMatch() passed' "$(1)" && grep -qF 'golden3MixMatches() passed' "$(1)" \
+	|| { echo "golden3FramesMatch and golden3MixMatches did not both run and pass: nothing was compared" >&2; false; }; }
+
+golden-3 golden-3-record: SHELL := /bin/bash
+
+golden-3:
+	@$(GOLDEN_3_COMMIT); \
+	for file in frames.bin frames.bin.mix documents fixtures.sha COMMIT; do \
+		if [ ! -e "$(GOLDEN_3)/$$file" ]; then \
+			echo "no $(GOLDEN_3)/$$file: the golden files of phase 3 are recorded whole, once; record them again from the commit in $(GOLDEN_3_DIR)/COMMIT, never from later code (phase 3 design §16):" >&2; \
+			echo "  $(GOLDEN_3_RECORD_AGAIN)" >&2; \
+			exit 1; \
+		fi; \
+	done; \
+	if [ ! -f "$(GOLDEN_3)/VERSION" ]; then \
+		echo "no $(GOLDEN_3)/VERSION, the fingerprint of the system the golden files of phase 3 were recorded on: they cannot be compared without it; record them again from the commit in $(GOLDEN_3_DIR)/COMMIT, never from later code (phase 3 design §16):" >&2; \
+		echo "  $(GOLDEN_3_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	now=$$(mktemp -t toma-golden-3); \
+	bash scripts/golden-system.sh > "$$now" || { rm -f "$$now"; echo "scripts/golden-system.sh failed: no fingerprint of this system to compare" >&2; exit 1; }; \
+	if ! cmp -s "$(GOLDEN_3)/VERSION" "$$now"; then \
+		echo "the system changed since the golden files in $(GOLDEN_3) were recorded (< then, > now):" >&2; \
+		diff "$(GOLDEN_3)/VERSION" "$$now" >&2; \
+		rm -f "$$now"; \
+		echo "record them again from the commit in $(GOLDEN_3_DIR)/COMMIT, never from later code (phase 3 design §16):" >&2; \
+		echo "  $(GOLDEN_3_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi; \
+	rm -f "$$now"
+	@set -o pipefail; log=$$(mktemp -t toma-golden-3); \
+	TOMA_GOLDEN_3_DIR="$(GOLDEN_3)" $(GOLDEN_3_TESTS) 2>&1 | tee "$$log" && $(call GOLDEN_3_RAN,$$log); \
+	status=$$?; rm -f "$$log"; exit $$status
+
+# Records into $(GOLDEN_3).partial and moves that into place only once both tests passed and VERSION and COMMIT are
+# written: the golden files of phase 3 are there whole or not at all.
+golden-3-record:
+	@$(GOLDEN_3_COMMIT); \
+	if [ -e "$(GOLDEN_3)" ]; then \
+		echo "$(GOLDEN_3) is already there: the golden files of phase 3 are recorded once, from the branch golden-3-base, never over others (phase 3 design §16)." >&2; \
+		echo "To record them again from the commit in $(GOLDEN_3_DIR)/COMMIT, never from later code (phase 3 design §16): $(GOLDEN_3_RECORD_AGAIN)" >&2; \
+		exit 1; \
+	fi
+	@test -z "$$(git status --porcelain)" || { echo "this checkout has uncommitted changes: the golden files of phase 3 are recorded from a commit, which they name in COMMIT" >&2; exit 1; }
+	@set -o pipefail; log=$$(mktemp -t toma-golden-3); \
+	rm -rf "$(GOLDEN_3).partial" && mkdir -p "$(GOLDEN_3).partial" && \
+	TOMA_GOLDEN_3_DIR="$(GOLDEN_3).partial" TOMA_GOLDEN_RECORD=1 $(GOLDEN_3_TESTS) 2>&1 | tee "$$log" && \
+	$(call GOLDEN_3_RAN,$$log) && \
+	bash scripts/golden-system.sh > "$(GOLDEN_3).partial/VERSION" && git rev-parse HEAD > "$(GOLDEN_3).partial/COMMIT" && \
+	test ! -e "$(GOLDEN_3)" && mv "$(GOLDEN_3).partial" "$(GOLDEN_3)"; \
+	status=$$?; rm -f "$$log"; \
+	if [ $$status -eq 0 ]; then \
+		echo "recorded $(GOLDEN_3) from $$(cat "$(GOLDEN_3)/COMMIT")"; \
+	else \
+		rm -rf "$(GOLDEN_3).partial"; echo "nothing recorded in $(GOLDEN_3)" >&2; \
 	fi; \
 	exit $$status
 
