@@ -9,7 +9,7 @@ let package = Package(
         .library(
             name: "RecorderKit", targets: [
                 "ProjectFormat", "Analysis", "Editing", "Recording", "SyntheticCapture", "Recovery", "Render", "Export",
-                "Library", "Transcription", "ImageAnalysis", "ProjectJobs",
+                "Library", "Transcription", "ImageAnalysis", "ProjectJobs", "Sharing",
             ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
@@ -29,7 +29,7 @@ let package = Package(
         .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat", "Analysis"]),
         .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
-        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing"]),
+        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing", "Sharing"]),
         // Phase 2's analysis (design of phase 2, §10, plan decision 15): no other module depends on these three.
         .target(name: "Transcription", dependencies: ["ProjectFormat", "Export"]),
         .target(name: "ImageAnalysis", dependencies: ["ProjectFormat", "Analysis", "Render"]),
@@ -39,6 +39,8 @@ let package = Package(
             name: "ProjectAPI",
             dependencies: ["ProjectFormat", "Analysis", "Editing", "Render", "Export", "ProjectJobs", "Transcription"]),
         .executableTarget(name: "toma", dependencies: ["ProjectAPI", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        // Phase 5's share links (milestone 5a): SigV4, the S3 client, the page and shares.json. No AppKit, no user text.
+        .target(name: "Sharing", dependencies: ["ProjectFormat", "Analysis"]),
         // Shared by every test target; not a product. `Editing` for `MediaFixtures.imported`, which imports as the editor does.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture", "Editing"]),
         .executableTarget(
@@ -73,12 +75,15 @@ let package = Package(
                 "Export",
                 // Only the tests: a metered microphone's listener feeding Follow the Voice's live feed (plan 3d, T5).
                 "Transcription",
+                "Sharing",
             ]),
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
         .testTarget(name: "TranscriptionTests", dependencies: ["Transcription", "ProjectFormat", "Export", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
         .testTarget(name: "ImageAnalysisTests", dependencies: ["ImageAnalysis", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(name: "ProjectJobsTests", dependencies: ["ProjectJobs", "Editing", "ProjectFormat", "Export", "Transcription", "RecorderKitTestSupport"]),
         .testTarget(name: "ProjectAPITests", dependencies: ["ProjectAPI", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(
+            name: "SharingTests", dependencies: ["Sharing", "ProjectFormat", "Analysis", "SyntheticCapture", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )
