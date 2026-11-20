@@ -472,13 +472,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate()
         switch (surface, path) {
+        // With TOMA_SHOWCASE_PANEL_PNG=<path>, the welcome and the settings are also drawn into `<path>-window.png`: a
+        // locked screen captures nothing.
         case ("onboarding", let states?):  // new, mixed or done: made-up permissions
             onboarding = OnboardingWindowController(showcase: states)
             present(onboarding)
-        case ("onboarding", _): showOnboarding()
+            CaptionsShowcase.snapshotLater(onboarding?.window)
+        case ("onboarding", _):
+            showOnboarding()
+            CaptionsShowcase.snapshotLater(onboarding?.window)
         case ("settings", let pane):  // general, recording or shortcuts
             showSettings()
             if let pane { settings?.showcase(pane: pane) }
+            CaptionsShowcase.snapshotLater(settings?.window)
         case ("notices", _): showThirdPartyNotices()
         case ("formats", _):  // the format selector's choices, as the toolbar's menu and the Project menu list them
             let window = NSWindow(contentViewController: NSHostingController(rootView: FormatMenu.showcase))
@@ -577,6 +583,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await model.showcasePhase3(environment)
                     // TOMA_SHOWCASE_AI=<info|info-working|sheet|sheet-working|unavailable|no-transcript>: the local AI (5b).
                     await model.showcaseAI(environment)
+                    // TOMA_SHOWCASE_PANEL_PNG on the Zoom tab (its "Follow the Focus", 4a): the window and the panel drawn
+                    // into PNGs, unless a showcase above drew them already.
+                    if model.panelTab == .zoom { CaptionsShowcase.snapshotLater(model.window) }
                 }
             }
             guard surface == "export" else { return }

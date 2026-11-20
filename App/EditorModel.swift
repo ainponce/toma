@@ -217,6 +217,8 @@ final class EditorModel {
     private(set) var isDeviceTake = false
     /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
     private(set) var canHoldWhileTyping = false
+    /// The take recorded the keyboard focus (`focus` events): the Zoom tab shows "Follow the Focus".
+    private(set) var hasFocusEvents = false
     /// The flags above of the takes the sequence shows (`takeFlags(of:)`, `EditorModel+Takes`): each one set only when
     /// it changes.
     func show(_ flags: TakeFlags) {
@@ -227,6 +229,7 @@ final class EditorModel {
         if hasClicks != flags.hasClicks { hasClicks = flags.hasClicks }
         if canHoldWhileTyping != flags.canHoldWhileTyping { canHoldWhileTyping = flags.canHoldWhileTyping }
         if isDeviceTake != flags.isDeviceTake { isDeviceTake = flags.isDeviceTake }
+        if hasFocusEvents != flags.hasFocusEvents { hasFocusEvents = flags.hasFocusEvents }
     }
     /// The tracks of sound of the takes the sequence shows, as the Audio tab and the timeline list them.
     private(set) var audioTracks: [AudioTrackRow] = []

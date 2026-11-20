@@ -29,6 +29,8 @@ extension EditorModel {
         var canHoldWhileTyping = false
         /// Every take recorded an iPhone or iPad: no cursor, clicks or keys in any of them.
         var isDeviceTake = false
+        /// Some take recorded the keyboard focus (`focus` events): "Follow the Focus" has something to follow.
+        var hasFocusEvents = false
     }
 
     /// The flags of `projects`, the takes the sequence shows (`LoadedProject.takesShown(by:)`) with their events: what
@@ -49,6 +51,7 @@ extension EditorModel {
             if tracks.contains(where: { $0.kind == .device }) { devices += 1 }
             if !flags.hasClicks, ZoomPanelRules.hasClicks(events: events) { flags.hasClicks = true }
             if !flags.canHoldWhileTyping, ZoomPanelRules.canHoldWhileTyping(events: events) { flags.canHoldWhileTyping = true }
+            if !flags.hasFocusEvents, ZoomPanelRules.hasFocus(events: events) { flags.hasFocusEvents = true }
         }
         flags.screenIsDevice = !projects.isEmpty && devices == projects.count
         flags.isDeviceTake = flags.screenIsDevice

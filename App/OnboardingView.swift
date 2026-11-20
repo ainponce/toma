@@ -453,7 +453,9 @@ private struct PermissionRow: View {
             Text(
                 "The sound of the apps, on a track of its own.", comment: "Under system audio in the permissions window")
         case .accessibility:
-            Text("Only to switch desktops from the notch.", comment: "Under Accessibility in the permissions window")
+            Text(
+                "To switch desktops from the notch, and for the zoom that follows what's typed.",
+                comment: "Under Accessibility in the permissions window")
         case .inputMonitoring:
             Text(
                 "Only to show the keys you press on screen, if you turn it on in Settings ▸ Recording.",

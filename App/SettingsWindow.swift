@@ -52,19 +52,26 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     #if DEBUG
     /// `-TomaShowcase settings <general|recording|shortcuts>`: the window on that pane. `recording-keys`: the Recording
-    /// pane with "Record Keys to Show Them" on and Input Monitoring not allowed, made up (nothing is saved or asked).
+    /// pane with "Record Keys to Show Them" on and Input Monitoring not allowed, made up (nothing is saved or asked);
+    /// `recording-focus`, the same with "Follow Keyboard Focus" and Accessibility.
     func showcase(pane: String) {
         if pane == "recording-keys" {
             model.showcaseRecordKeysNotAllowed()
+            tabs.selectedTabViewItemIndex = SettingsPane.recording.index
+        }
+        if pane == "recording-focus" {
+            model.keyboardFocus.showcaseNotAllowed()
             tabs.selectedTabViewItemIndex = SettingsPane.recording.index
         }
         if let pane = SettingsPane(rawValue: pane) { tabs.selectedTabViewItemIndex = pane.index }
     }
     #endif
 
-    /// Back from System Settings (or another app), the window is key again: Input Monitoring may have changed.
+    /// Back from System Settings (or another app), the window is key again: Input Monitoring and Accessibility may have
+    /// changed.
     func windowDidBecomeKey(_ notification: Notification) {
         model.refreshInputMonitoring()
+        model.keyboardFocus.refresh()
     }
 
     /// Typing a shortcut ends when the window is left: the keys go elsewhere.
@@ -331,6 +338,8 @@ final class SettingsModel {
     @ObservationIgnored let hideDesktopIcons: HideDesktopIconsSetting
     @ObservationIgnored let focusShortcut: FocusShortcutSetting
     @ObservationIgnored let appearance: AppearanceSetting
+    /// "Follow Keyboard Focus", with Accessibility.
+    @ObservationIgnored let keyboardFocus: KeyboardFocusSetting
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private let transcription: TranscriptionPreferencesStore
     @ObservationIgnored private var probe: any PermissionProbe
@@ -352,6 +361,7 @@ final class SettingsModel {
         self.probe = probe
         recordKeys = store.settings.recordKeys
         inputMonitoring = probe.state(of: .inputMonitoring)
+        keyboardFocus = KeyboardFocusSetting(store: store, probe: probe)
         let transcription = TranscriptionPreferencesStore()
         self.transcription = transcription
         transcribeAutomatically = transcription.preferences.automatic
@@ -564,6 +574,7 @@ private struct SettingsPaneView: View {
             if model.recordKeys, model.inputMonitoring != .granted {
                 InputMonitoringRow(model: model)
             }
+            KeyboardFocusRows(setting: model.keyboardFocus)
         }
         Section {
             FocusShortcutPicker(setting: model.focusShortcut)

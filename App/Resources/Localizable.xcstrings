@@ -4511,6 +4511,17 @@
         }
       }
     },
+    "Follow Keyboard Focus" : {
+      "comment" : "A setting: a take records where the focused field and the text cursor are",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir el foco del teclado"
+          }
+        }
+      }
+    },
     "Follow the Cursor" : {
       "comment" : "The Zoom tab: the selected zoom's focus",
       "localizations" : {
@@ -4529,6 +4540,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Seguir el cursor dentro del zoom"
+          }
+        }
+      }
+    },
+    "Follow the Focus" : {
+      "comment" : "The Zoom tab: the automatic zoom follows the keyboard focus the take recorded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seguir el foco"
           }
         }
       }
@@ -4573,6 +4595,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Para la burbuja de la cámara sobre la grabación."
+          }
+        }
+      }
+    },
+    "For the zoom that follows what's typed. Needs Accessibility permission. Only where the focused field and the text cursor are is recorded, never what they say; in password fields, only the field." : {
+      "comment" : "Under the setting that records where the keyboard focus is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para el zoom que sigue lo que se escribe. Necesita el permiso de Accesibilidad. Solo se graba dónde están el campo con el foco y el cursor de texto, nunca lo que dicen; en los campos de contraseña, solo el campo."
           }
         }
       }
@@ -11873,6 +11906,17 @@
         }
       }
     },
+    "To switch desktops from the notch, and for the zoom that follows what's typed." : {
+      "comment" : "Under Accessibility in the permissions window",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para cambiar de escritorio desde el notch y para el zoom que sigue lo que se escribe."
+          }
+        }
+      }
+    },
     "Today" : {
       "comment" : "The library: the heading of today's projects",
       "localizations" : {
@@ -12961,6 +13005,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Zoom de %1$@, de %2$@ a %3$@"
+          }
+        }
+      }
+    },
+    "Zooms in where text is typed and on what's reached with the keyboard." : {
+      "comment" : "The Zoom tab, under Follow the Focus",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hace zoom donde se escribe y en lo que se alcanza con el teclado."
           }
         }
       }
