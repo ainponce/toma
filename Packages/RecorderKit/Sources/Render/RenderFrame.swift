@@ -111,6 +111,11 @@ public struct RenderFrame: Equatable, Sendable {
     /// not drawn in this frame, but their texts' textures are drawn ahead, off the frame (`TitleCardTextures.prepare`), so
     /// a card's first frame binds a texture made already. Empty without title cards, as every document of phases 1 and 2.
     public var titleCardsAhead: [TitleCardLayer]
+    /// The annotations' layers the frames draw soon after this one, at the scales they will be drawn at (`AnnotationScene`'s
+    /// `outputAhead` and `contentAhead`): not drawn in this frame, but their bitmaps are drawn ahead, off the frame
+    /// (`AnnotationRasters.prepare`), so a frame where they come in, a step of one being drawn in or a step of √2 of a zoom
+    /// binds a texture made already. Empty without annotations, as every document of phases 1 and 2.
+    public var annotationsAhead: [AnnotationAhead]
 
     /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
     var isCardMode: Bool { card != nil || backgroundTransform != nil }
@@ -146,7 +151,8 @@ public struct RenderFrame: Equatable, Sendable {
         outputAnnotations: [AnnotationLayer] = [],
         titleCard: TitleCardLayer? = nil,
         take: String? = nil,
-        titleCardsAhead: [TitleCardLayer] = []
+        titleCardsAhead: [TitleCardLayer] = [],
+        annotationsAhead: [AnnotationAhead] = []
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -179,6 +185,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.titleCard = titleCard
         self.take = take
         self.titleCardsAhead = titleCardsAhead
+        self.annotationsAhead = annotationsAhead
     }
 }
 

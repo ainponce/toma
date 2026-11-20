@@ -165,7 +165,7 @@ private func touches(_ x: Int, _ y: Int, _ rect: Rect) -> Bool {
                 }
             }
             for ((at, frame), counts) in zip(frames, counts) {
-                #expect(frame.contentAnnotations.isEmpty && frame.outputAnnotations.isEmpty, "\(at)")
+                #expect(frame.contentAnnotations.isEmpty && frame.outputAnnotations.isEmpty && frame.annotationsAhead.isEmpty, "\(at)")
                 #expect(counts.contentAnnotations == 0 && counts.outputAnnotations == 0, "\(at): \(counts)")
                 #expect(counts.overlaySteps == 1, "\(at): \(counts)")
             }
@@ -249,6 +249,8 @@ private func touches(_ x: Int, _ y: Int, _ rect: Rect) -> Bool {
             rect: NormalizedRect(x: 0, y: 0, width: 1, height: 1), enter: .none, exit: .none)])
         document.zoom.regions = [StageDrawing.zoom(1, from: 0.5, to: 3.5, depth: 2, focus: .fixed(x: 0.5, y: 0.5))]
         var zoomed = FrameEvaluator(take: take, events: events, document: document, outputSize: size).frame(at: 2)
+        // Drawn alone, without what the frames after it would draw ahead.
+        zoomed.annotationsAhead = []
         let stage = try #require(zoomed.stage)
         #expect(stage.depth > 1.9 && stage.depth <= 2, "\(stage)")
         let screen = try #require(zoomed.screen)
@@ -436,10 +438,13 @@ private func touches(_ x: Int, _ y: Int, _ rect: Rect) -> Bool {
             }
             document.annotations = AnnotationPlan(items: items)
             document.zoom.regions = [StageDrawing.zoom(1, from: 1, to: 2.8, depth: 1.6, focus: .fixed(x: 0.4, y: 0.5))]
+            // The export's renderer draws its frames in order, so it draws ahead what the next ones show; the preview's is
+            // another, which draws each in its frame: fresh bitmaps, the same bytes.
             let renderer = try FrameRenderer(project: project, document: document, outputSize: [1280, 720])
             let legacy = try FrameRenderer(project: project, outputSize: [1280, 720])
-            let preview = PreviewRenderer(renderer: renderer)
-            for t in [0.3, 0.42, 1.2, 1.9] {
+            let preview = PreviewRenderer(renderer: try FrameRenderer(project: project, document: document, outputSize: [1280, 720]))
+            #expect(!renderer.scene.frame(at: 0).annotationsAhead.isEmpty, "the annotations coming in at 0.2 s")
+            for t in [0, 0.3, 0.42, 1.2, 1.9] {
                 let exported = try await offThePool {
                     var created: CVPixelBuffer?
                     let attributes = [
@@ -453,11 +458,111 @@ private func touches(_ x: Int, _ y: Int, _ rect: Rect) -> Bool {
                 let previewed = try await offThePool { try preview.snapshot(at: t) }
                 let without = try await offThePool { try legacy.renderBytes(at: t) }
                 #expect(exported == previewed, "at \(t) s")
-                #expect(exported != without, "at \(t) s, the annotations drawn")
+                #expect(t == 0 || exported != without, "at \(t) s, the annotations drawn")
             }
             let frame = renderer.scene.frame(at: 0.3)
             #expect(frame.contentAnnotations.count == kinds.count && frame.outputAnnotations.count == kinds.count)
         }
+    }
+
+    /// Ten annotations (five stuck to the recording, five of the output) coming in together, an arrow and a shape drawn in,
+    /// and a zoom of 2.4× coming in over five of them: every bitmap of every frame drawn ahead by the frames before it
+    /// (`RenderFrame.annotationsAhead`), none in a frame's encoding, and the same bytes as drawn in the frame.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func annotationBitmapsAreDrawnAhead() throws {
+        let (take, events, document) = Self.comingInTogether()
+        let scene = FrameEvaluator(take: take, events: events, document: document, outputSize: size)
+        let fps = scene.frameRate
+        let drawer = try AnnotationDrawer()
+        let fresh = try AnnotationDrawer()
+        var shown = 0, depths: Set<Double> = [], inline: [Int] = []
+        for n in (6 * fps / 10)...(26 * fps / 10) {
+            let frame = scene.frame(at: Double(TimeMap.frameTime(n, frameRate: fps)) / 1e9)
+            let before = drawer.rasters.inlineDrawCount
+            let bytes = try drawer.draw(frame)
+            if drawer.rasters.inlineDrawCount != before { inline.append(n) }
+            drawer.rasters.waitUntilDrawnAhead()
+            shown = max(shown, frame.contentAnnotations.count + frame.outputAnnotations.count)
+            depths.insert(AnnotationRaster.contentDepth(of: frame))
+            if n % 7 == 0 {
+                var alone = frame
+                alone.annotationsAhead = []
+                #expect(try fresh.draw(alone) == bytes, "frame \(n)")
+            }
+        }
+        #expect(shown == 10)
+        #expect(depths.contains(1) && depths.contains { $0 > 2 }, "\(depths.sorted())")
+        #expect(drawer.rasters.inlineDrawCount == 0, "\(drawer.rasters.inlineDrawCount) of \(drawer.rasters.drawCount) drawn in frames \(inline)")
+        #expect(drawer.rasters.drawCount > 10)
+        #expect(fresh.rasters.inlineDrawCount == fresh.rasters.drawCount)
+    }
+
+    /// A frame that shows 40 layers, more than `AnnotationRasters.kept`, keeps them all: the next frame draws none again.
+    /// So do eight bitmaps of a deep zoom, more than `maxBytes`; once the frames go on to others, they go.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func visibleBitmapsAreNeverDropped() throws {
+        let drawer = try AnnotationDrawer()
+        var forty: [AnnotationLayer] = []
+        for i in 0..<40 {
+            let f = Double(i) / 40
+            let rect = Rect(x: Double(i % 8) * 155 + 20, y: Double(i / 8) * 135 + 20, width: 120, height: 100)
+            forty.append(layer(box(RGBA(f, 0.5, 1 - f, 1)), rect: rect))
+        }
+        for _ in 0..<3 { _ = try drawer.draw(frame(output: forty)) }
+        #expect(drawer.rasters.drawCount == 40 && drawer.rasters.inlineDrawCount == 40)
+        #expect(drawer.rasters.keptCount.textures == 40)
+        // Eight layers of 1000 × 600 at 4×, about 38 MB each.
+        var large: [AnnotationLayer] = []
+        for i in 0..<8 {
+            large.append(layer(box(RGBA(1, Double(i) / 8, 0, 1)), rect: Rect(x: 140, y: 60, width: 1000, height: 600)))
+        }
+        var deep = frame(content: large)
+        deep.stage = StageTransform(depth: 3.5, center: [640, 360])
+        for _ in 0..<3 { _ = try drawer.draw(deep) }
+        #expect(drawer.rasters.drawCount == 48, "\(drawer.rasters.drawCount)")
+        #expect(drawer.rasters.keptCount.bytes > AnnotationRasters.maxBytes, "\(drawer.rasters.keptCount)")
+        // The forty, which those frames did not use, went while they were kept past `maxBytes`; frames of four of them draw
+        // those again, and the eight large ones, which no frame uses any more, go.
+        for _ in 0..<3 { _ = try drawer.draw(frame(output: Array(forty.prefix(4)))) }
+        #expect(drawer.rasters.drawCount == 52, "\(drawer.rasters.drawCount)")
+        #expect(drawer.rasters.keptCount.bytes <= AnnotationRasters.maxBytes, "\(drawer.rasters.keptCount)")
+        #expect(drawer.rasters.keptCount.textures <= AnnotationRasters.kept)
+    }
+
+    /// Five kinds coming in together at 1 s, stuck to the recording and of the output, and a zoom of 2.4× from 1.6 s: the
+    /// take, its events and the document of `annotationBitmapsAreDrawnAhead` and its measure.
+    static func comingInTogether(allStuck: Bool = false) -> (take: TakeRecord, events: [InputEvent], document: EditDocument) {
+        let take = StageDrawing.bareTake(seconds: 4)
+        let events = cursorEvents(from: base, seconds: 4, across: Rect(x: 0, y: 0, width: 640, height: 360))
+        var document = EditDocument.legacy(take: take, events: events)
+        let stuck = AnnotationAnchor.content(take: takeID, start: base.adding(seconds: 1), end: base.adding(seconds: 3.8))
+        let over = AnnotationAnchor.output(start: TimeMap.outputNanoseconds(seconds: 1), end: TimeMap.outputNanoseconds(seconds: 3.8))
+        let label: AnnotationKind = .text(TextAnnotation(string: "Open the settings", preset: .label))
+        let arrow: AnnotationKind = .arrow(ArrowAnnotation(
+            from: NormalizedPoint(x: 0.2, y: 0.6), to: NormalizedPoint(x: 0.45, y: 0.45), curve: 0.3, head: .filled))
+        let shape: AnnotationKind = .shape(ShapeAnnotation(shape: .roundedRect, fill: RGBA(1, 1, 0, 0.3)))
+        let bubbleText = TextAnnotation(string: "Here", preset: .label, color: RGBA(0, 0, 0, 1), fill: RGBA(1, 1, 1, 1))
+        let callout: AnnotationKind = .callout(CalloutAnnotation(text: bubbleText, target: NormalizedPoint(x: 0.75, y: 0.35)))
+        let step: AnnotationKind = .step(StepAnnotation())
+        var kinds: [(AnnotationKind, NormalizedRect, AnnotationEnter)] = []
+        kinds.append((label, NormalizedRect(x: 0.05, y: 0.05, width: 0.35, height: 0.1), .fade))
+        kinds.append((arrow, NormalizedRect(x: 0, y: 0, width: 1, height: 1), .draw))
+        kinds.append((shape, NormalizedRect(x: 0.5, y: 0.55, width: 0.3, height: 0.25), .draw))
+        kinds.append((callout, NormalizedRect(x: 0.7, y: 0.1, width: 0.2, height: 0.1), .pop))
+        kinds.append((step, NormalizedRect(x: 0.46, y: 0.4, width: 0.07, height: 0.07), .fade))
+        var items: [Annotation] = []
+        for (index, (kind, rect, enter)) in kinds.enumerated() {
+            for (group, anchor) in [(0, stuck), (1, allStuck ? stuck : over)] {
+                var moved = rect
+                moved.y += group == 1 ? 0.03 : 0
+                items.append(Annotation(
+                    id: String(format: "a-%08x", 2 * index + group), anchor: anchor, layer: index, kind: kind, rect: moved, enter: enter,
+                    exit: .fade))
+            }
+        }
+        document.annotations = AnnotationPlan(items: items)
+        document.zoom.regions = [StageDrawing.zoom(1, from: 1.6, to: 3.6, depth: 2.4, focus: .fixed(x: 0.4, y: 0.5))]
+        return (take, events, document)
     }
 
     /// The preview's budget at 1080p with ten annotations (phase 3 design §15): what the CPU takes to encode a frame with
@@ -571,5 +676,60 @@ private func touches(_ x: Int, _ y: Int, _ rect: Rect) -> Bool {
             drawer.rasters.drawCount))
         #expect(m[1].cpu + m[1].gpu < 1000.0 / 60, "\(m[1])")
         #expect(m[2].cpu + m[2].gpu < 1000.0 / 60, "\(m[2])")
+    }
+
+    /// What drawing ahead saves at 1080p (A6's review): the most a frame's encoding takes on the CPU (and the GPU its
+    /// drawing), frames drawn one after the other at the frame rate, while ten annotations come in together (five stuck to
+    /// the recording, five of the output, two of them drawn in) and while a zoom of 2.4× comes in over ten stuck to the
+    /// recording; with the frames' annotations ahead, and without them (every bitmap in its frame).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
+    func drawingAheadKeepsTheFrames() throws {
+        let size1080 = SIMD2(1920, 1080)
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let screen = try StageDrawing.screenTexture(device: device, width: 1920, height: 1080)
+        let cursor = try CursorSprite.makeTexture(device: device)
+        let queue = try #require(device.makeCommandQueue())
+        let target = try StageDrawing.target(device: device, size: size1080)
+        /// The most a frame took over `range` (seconds), CPU and GPU, in ms, the frames of `scene` drawn in order by a new
+        /// compositor at the frame rate, ahead or not, after its first (which draws what it shows, as after a jump); and
+        /// how many bitmaps were drawn in a frame after the first.
+        func worst(_ scene: FrameEvaluator, _ range: ClosedRange<Double>, ahead: Bool) throws -> (cpu: Double, gpu: Double, inline: Int) {
+            let compositor = try Compositor(device: device)
+            let fps = scene.frameRate
+            var cpu = 0.0, gpu = 0.0, first = 0
+            let frames = Int(range.lowerBound * Double(fps))...Int(range.upperBound * Double(fps))
+            for n in frames {
+                if n == frames.lowerBound + 1 { (cpu, gpu, first) = (0, 0, compositor.layers.annotations.rasters.inlineDrawCount) }
+                let start = DispatchTime.now().uptimeNanoseconds
+                var frame = scene.frame(at: Double(TimeMap.frameTime(n, frameRate: fps)) / 1e9)
+                if !ahead { frame.annotationsAhead = [] }
+                let commandBuffer = try #require(queue.makeCommandBuffer())
+                let encode = DispatchTime.now().uptimeNanoseconds
+                try compositor.encode(frame, screen: screen, camera: nil, cursor: cursor, into: target, commandBuffer: commandBuffer)
+                cpu = max(cpu, Double(DispatchTime.now().uptimeNanoseconds - encode) / 1e6)
+                commandBuffer.commit()
+                commandBuffer.waitUntilCompleted()
+                gpu = max(gpu, (commandBuffer.gpuEndTime - commandBuffer.gpuStartTime) * 1000)
+                // The next frame at the frame rate.
+                let spent = Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9
+                if spent < 1 / Double(fps) { Thread.sleep(forTimeInterval: 1 / Double(fps) - spent) }
+            }
+            return (cpu, gpu, compositor.layers.annotations.rasters.inlineDrawCount - first)
+        }
+        let together = Self.comingInTogether()
+        let entering = FrameEvaluator(take: together.take, events: together.events, document: together.document, outputSize: size1080)
+        let stuck = Self.comingInTogether(allStuck: true)
+        let zooming = FrameEvaluator(take: stuck.take, events: stuck.events, document: stuck.document, outputSize: size1080)
+        // The fonts loaded once, as in an editor already drawing.
+        _ = try worst(entering, 0.9...1.1, ahead: false)
+        var lines: [String] = []
+        for (name, scene, range) in [("ten coming in", entering, 0.6...1.4), ("a zoom over ten", zooming, 1.4...2.8)] {
+            let with = try worst(scene, range, ahead: true), without = try worst(scene, range, ahead: false)
+            lines.append(String(
+                format: "%@: ahead %.3f / %.3f ms (%d in a frame), without %.3f / %.3f ms (%d in a frame)", name, with.cpu, with.gpu,
+                with.inline, without.cpu, without.gpu, without.inline))
+            #expect(with.cpu + with.gpu < 1000.0 / 60, "\(name): \(with)")
+        }
+        print("Annotations drawn ahead at 1080p, the worst frame (CPU encode / GPU): " + lines.joined(separator: "; "))
     }
 }

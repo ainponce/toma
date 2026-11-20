@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Analysis
+import CoreText
 import Foundation
 import ProjectFormat
 // @testable for `AnnotationRaster` and `AnnotationTypography`.
@@ -269,8 +270,16 @@ private func close(_ a: SIMD4<Int>, _ b: SIMD4<Int>, _ tolerance: Int = 1) -> Bo
     #expect(AnnotationRaster.scale(for: shape, depth: 1) == 1)
     #expect(AnnotationRaster.scale(for: shape, depth: 0.8) == 1)
     #expect(AnnotationRaster.scale(for: shape, depth: .nan) == 1)
-    #expect(AnnotationRaster.scale(for: shape, depth: 1.01) == root2)
+    // The end of a zoom that settles is drawn as at rest, up to 1.01.
+    #expect(AnnotationRaster.scale(for: shape, depth: 1.005) == 1)
+    #expect(AnnotationRaster.scale(for: shape, depth: 1.01) == 1)
+    #expect(AnnotationRaster.scale(for: shape, depth: 1.011) == root2)
     #expect(AnnotationRaster.scale(for: shape, depth: root2) == root2)
+    // Smaller than the stage (a Split's card): never shrunk by more than √2.
+    #expect(AnnotationRaster.scale(for: shape, depth: 0.75) == 1)
+    #expect(abs(AnnotationRaster.scale(for: shape, depth: 0.6) - 1 / root2) < 1e-12)
+    #expect(abs(AnnotationRaster.scale(for: shape, depth: 0.4) - 0.5) < 1e-12)
+    #expect(abs(AnnotationRaster.scale(for: shape, depth: 1e-9) - pow(2, -8)) < 1e-12)
     #expect(AnnotationRaster.scale(for: shape, depth: 1.5) == 2)
     #expect(AnnotationRaster.scale(for: shape, depth: 2) == 2)
     #expect(AnnotationRaster.scale(for: shape, depth: 2.5) == 2 * root2)
@@ -282,4 +291,40 @@ private func close(_ a: SIMD4<Int>, _ b: SIMD4<Int>, _ tolerance: Int = 1) -> Bo
     // The region is whole pixels of the bitmap, around what it touches.
     let region = AnnotationRaster.region(of: shape, scale: 2)!
     #expect(region.x * 2 == (region.x * 2).rounded() && region.x <= 100 && region.x + region.width >= 300)
+}
+
+/// A text's width drawn at every scale is in proportion to it (its optical size is the one at the reference unit): a
+/// centred line stays where it is from one step of √2 of a zoom to the next, and its box measured is the one drawn.
+@Test func textWidthsAreInProportionAtEveryScale() throws {
+    for font in TextFont.allCases {
+        for size in [0.015, 0.03, 0.05, 0.1] {
+            let text = TextAnnotation(string: "Click here to start", preset: .plain, font: font, size: size)
+            func width(_ scale: Double) throws -> Double {
+                let drawn = try #require(AnnotationTypography.font(text, unit: 720, scale: scale))
+                let line = CTLineCreateWithAttributedString(
+                    NSAttributedString(string: text.string, attributes: AnnotationTypography.attributes(font: drawn)))
+                return CTLineGetTypographicBounds(line, nil, nil, nil) / scale
+            }
+            let one = try width(1)
+            for scale in [0.5, 2.0.squareRoot(), 2, 4] {
+                #expect(abs(try width(scale) / one - 1) < 1e-6, "\(font) at \(size): \(scale)")
+            }
+        }
+    }
+    // Drawn: a centred line's ink is centred in its box at 1 and at 2, within a pixel of the bitmap at 1.
+    let text = TextAnnotation(string: "Hello", preset: .plain, size: 0.02)
+    let height = AnnotationTypography.box(of: text, width: 300, unit: 720).y
+    let shown = layer(.text(text), rect: Rect(x: 200, y: 200, width: 300, height: height))
+    func inkCentre(_ scale: Double) throws -> Double {
+        let bitmap = try #require(try AnnotationRaster.bitmap(of: shown, scale: scale))
+        let columns = Int((bitmap.region.width * scale).rounded())
+        var low = Int.max, high = Int.min
+        for i in stride(from: 3, to: bitmap.bytes.count, by: 4) where bitmap.bytes[i] > 128 && bitmap.bytes[i - 1] > 128 {
+            low = min(low, (i / 4) % columns)
+            high = max(high, (i / 4) % columns)
+        }
+        return bitmap.region.x + (Double(low + high + 1) / 2) / scale
+    }
+    let (one, two) = (try inkCentre(1), try inkCentre(2))
+    #expect(abs(two - one) <= 1, "\(one) and \(two)")
 }
