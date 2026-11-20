@@ -2,6 +2,7 @@
 import AppKit
 import AppSupport
 import Observation
+import Recording
 import SwiftUI
 
 /// System audio's permission (plan decision 7): macOS never says whether it was allowed, so it is "not asked"
@@ -52,11 +53,24 @@ extension OpenPanelModel {
         if choice != .off { systemAudio.requestIfNeverAsked() }
     }
 
-    /// By App: `bundleID` is recorded, or no longer.
+    /// By App: `bundleID` is recorded, or no longer. Each app is a track of its own (phase 3), at most
+    /// `SystemAudioTracks.maximumTracks`: a ninth is not added (a selection saved with more keeps them; the take then
+    /// shares the last track).
     func toggle(audioApplication bundleID: String) {
         guard case .applications(var chosen) = selection.systemAudio else { return }
-        if let index = chosen.firstIndex(of: bundleID) { chosen.remove(at: index) } else { chosen.append(bundleID) }
+        if let index = chosen.firstIndex(of: bundleID) {
+            chosen.remove(at: index)
+        } else {
+            guard !isFullOfAudioApplications else { return }
+            chosen.append(bundleID)
+        }
         selection.systemAudio = .applications(chosen)
+    }
+
+    /// By App has as many apps as it records tracks of: no other can be chosen.
+    var isFullOfAudioApplications: Bool {
+        guard case .applications(let chosen) = selection.systemAudio else { return false }
+        return chosen.count >= SystemAudioTracks.maximumTracks
     }
 
     /// The apps chosen By App, open or not.
@@ -67,7 +81,8 @@ extension OpenPanelModel {
 }
 
 /// System audio, without Toma or notifications: No · All · By App. By App, the chosen apps' icons and "Choose
-/// Apps…", a menu of the open apps (the ones playing audio first), each with its icon and a check once chosen.
+/// Apps…", a menu of the open apps (the ones playing audio first), each with its icon and a check once chosen, under
+/// "One Track per App": each is recorded in a track of its own, up to 8 (then the others are off, with "Up to 8 apps").
 struct SystemAudioPicker: View {
     @Bindable var panel: OpenPanelModel
     @Environment(\.islandReduceMotion) private var reduceMotion
@@ -139,14 +154,19 @@ struct SystemAudioPicker: View {
         let playing = applications.filter(\.isPlayingAudio)
         let others = applications.filter { !$0.isPlayingAudio }
         return Menu {
-            ForEach(playing) { app in item(app, isOn: chosen.contains(app.id)) }
-            if !playing.isEmpty, !others.isEmpty { Divider() }
-            ForEach(others) { app in item(app, isOn: chosen.contains(app.id)) }
-            // Chosen before, and not open now: they can still be left out.
-            let closed = panel.chosenAudioApplications.filter { app in !applications.contains { $0.id == app.id } }
-            if !closed.isEmpty {
-                Divider()
-                ForEach(closed) { app in item(app, isOn: true) }
+            Section("One Track per App") {
+                if panel.isFullOfAudioApplications {
+                    Text("Up to 8 apps")
+                }
+                ForEach(playing) { app in item(app, isOn: chosen.contains(app.id)) }
+                if !playing.isEmpty, !others.isEmpty { Divider() }
+                ForEach(others) { app in item(app, isOn: chosen.contains(app.id)) }
+                // Chosen before, and not open now: they can still be left out.
+                let closed = panel.chosenAudioApplications.filter { app in !applications.contains { $0.id == app.id } }
+                if !closed.isEmpty {
+                    Divider()
+                    ForEach(closed) { app in item(app, isOn: true) }
+                }
             }
         } label: {
             Text("Choose Apps…")
@@ -161,6 +181,7 @@ struct SystemAudioPicker: View {
         .onAppear { panel.audioApplications.refresh() }
     }
 
+    /// Off once 8 are chosen, unless it is one of them.
     private func item(_ app: AudioApplication, isOn: Bool) -> some View {
         Toggle(isOn: Binding(get: { isOn }, set: { _ in panel.toggle(audioApplication: app.id) })) {
             Label {
@@ -169,6 +190,7 @@ struct SystemAudioPicker: View {
                 if let icon = app.icon.map(Self.menuSized) { Image(nsImage: icon) }
             }
         }
+        .disabled(!isOn && panel.isFullOfAudioApplications)
     }
 
     /// Menus draw an image at its own size: an app's icon at the size of the menu's text.

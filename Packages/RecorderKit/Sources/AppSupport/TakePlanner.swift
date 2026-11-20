@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import CoreGraphics
+import Foundation
 import ProjectFormat
 import Recording
 
@@ -13,8 +14,8 @@ public protocol CaptureSourceFactory {
     func camera(_ choice: DeviceChoice, preset: CameraPreset, framesPerSecond: Int) -> any CaptureSource
     /// Never called with `.off`: the plan then has no microphone.
     func microphone(_ choice: DeviceChoice) -> any CaptureSource
-    /// Never called with `.off`: the plan then has no system audio.
-    func systemAudio(_ choice: SystemAudioChoice) -> any CaptureSource
+    /// One track of system audio (`SystemAudioTracks.plan`): all of the system, one app, or the apps past the seventh.
+    func systemAudio(_ track: SystemAudioTrackPlan) -> any CaptureSource
     /// What records the take's input: the cursor, the geometry of `displayIDs` and, in Window mode, where the window
     /// of `windowTrack` is. Called after the take's sources are made, so the window's source is the one `window`
     /// made for that ID. Never called in `.device` mode: nothing of the Mac's input is recorded.
@@ -63,6 +64,17 @@ public enum TakePlanError: Error, Equatable {
     case noDeviceChosen
 }
 
+extension SystemAudioChoice {
+    /// What system audio records, `nil` when it is off.
+    public var scope: SystemAudioScope? {
+        switch self {
+        case .off: nil
+        case .all: .all
+        case .applications(let bundleIDs): .applications(bundleIDs)
+        }
+    }
+}
+
 /// Turns what the user chose into the sources of a take.
 public enum TakePlanner {
     /// The frame rate an iPhone or iPad is recorded at: its screen's own.
@@ -78,8 +90,9 @@ public enum TakePlanner {
     /// or iPad (`factory.device`), which need no permission here (the take's check wants the camera's). Then the
     /// camera (at `cameraPreset` and `cameraFramesPerSecond`), the microphone (metered: `microphoneMeter`) and system
     /// audio, each only when it is chosen, its permission is in `granted` and its kind is not in `skipping`, and each in
-    /// `optional`. `includedWindowIDs` go to every display. The input is `factory.input`'s, or none for a device. The
-    /// load is that of what the plan records (`loadItems`, with the window's size as its source gives it, a device at
+    /// `optional`. System audio is one source per track of `SystemAudioTracks.plan` (By App, one per app but
+    /// `ownBundleIdentifier`), in its order: one that fails to start skips them all. `includedWindowIDs` go to every
+    /// display. The input is `factory.input`'s, or none for a device. The load is that of what the plan records (`loadItems`, with the window's size as its source gives it, a device at
     /// `unknownDeviceSize`) against `budget`.
     public static func plan(
         _ selection: CaptureSelection,
@@ -88,6 +101,7 @@ public enum TakePlanner {
         granted: Set<PermissionKind>,
         skipping: Set<TrackKind> = [],
         includedWindowIDs: [UInt32] = [],
+        ownBundleIdentifier: String? = Bundle.main.bundleIdentifier,
         factory: any CaptureSourceFactory,
         budget: Int = EncoderLoad.defaultBudgetPixelsPerSecond
     ) throws -> TakePlan {
@@ -148,8 +162,12 @@ public enum TakePlanner {
             add(meter)
             microphoneMeter = meter
         }
-        if records(.systemAudio, chosen: selection.systemAudio != .off, permission: .systemAudio) {
-            add(factory.systemAudio(selection.systemAudio))
+        if records(.systemAudio, chosen: selection.systemAudio != .off, permission: .systemAudio),
+            let scope = selection.systemAudio.scope
+        {
+            for track in SystemAudioTracks.plan(scope, ownBundleIdentifier: ownBundleIdentifier) {
+                add(factory.systemAudio(track))
+            }
         }
 
         var recorded = selection

@@ -28,7 +28,7 @@ import Synchronization
 ///
 /// No permission can be read: if the user refused it, the tap delivers silence without an error.
 public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
-    public let trackID = "system-audio"
+    public let trackID: String
     public let kind = TrackKind.systemAudio
     public let media = TrackMedia.audio
     public let sourceInfo: TrackSource
@@ -42,11 +42,17 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     private let controlQueue = DispatchSerialQueue(label: "dev.toma.ProcessTapSource.control")
     /// Where the IOProc runs (it is dispatched here synchronously from the audio thread). Only copies run here.
     private let ioQueue = DispatchSerialQueue(label: "dev.toma.ProcessTapSource.io")
-    private let runs = CaptureRunLifecycle<Tap>(trackID: "system-audio")
+    private let runs: CaptureRunLifecycle<Tap>
 
-    public init(scope: SystemAudioScope) {
+    /// `trackID` is `system-audio`, or an app's (`SystemAudioTracks.plan`, phase 3); with `appName`, the track records that
+    /// one app and `sourceInfo.name` is its name (`SystemAudioTracks.trackRecord(of:)`), otherwise "System Audio".
+    public init(scope: SystemAudioScope, trackID: String = "system-audio", appName: String? = nil) {
         self.scope = scope
-        sourceInfo = SystemAudioSelection.trackSource(scope: scope, ownBundleIdentifier: Bundle.main.bundleIdentifier)
+        self.trackID = trackID
+        runs = CaptureRunLifecycle<Tap>(trackID: trackID)
+        var info = SystemAudioSelection.trackSource(scope: scope, ownBundleIdentifier: Bundle.main.bundleIdentifier)
+        if let appName { info.name = appName }
+        sourceInfo = info
     }
 
     /// System audio has no device.

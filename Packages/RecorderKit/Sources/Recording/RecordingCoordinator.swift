@@ -309,7 +309,7 @@ public actor RecordingCoordinator {
         let startedAt = Date().roundedToWholeSeconds
         let record = TakeRecord(
             id: takeID, status: .recording, startedAt: startedAt,
-            tracks: sources.map { TrackRecord(id: $0.trackID, kind: $0.kind, source: $0.sourceInfo, segments: []) },
+            tracks: sources.map(SystemAudioTracks.trackRecord(of:)),
             cameraStyle: initialCameraStyle)
         // A take with a track only version 4 defines (an iPhone's) raises the package to 4: the store refuses that
         // record in a package of 3, and a take without one leaves it at 3. A take added to a package that has one raises

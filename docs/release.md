@@ -1033,6 +1033,14 @@ Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que s
 - Con el proyecto de la preparación: abrirlo en la app de la fase 3, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 2. Abrirlo otra vez con `build/fase2/Toma.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
 - Abrirlo en la app de la fase 3 y deshacer (⌘Z) hasta el principio: cada paso de la fase 2 se deshace en orden (el volumen, el margen, el corte) y Edición ▸ Deshacer nombra cada uno. Rehacer los devuelve. Con un paso nuevo (otro margen), cerrar y abrirlo con la app de la fase 2: dice que es de una versión más nueva y no lo cambia.
 
+**Una pista por app** (U9)
+
+- En la isla, Audio del sistema ▸ Por app ▸ «Elegir apps…»: el menú se titula «Una pista por app». Con 8 apps elegidas, arriba dice «Hasta 8 apps» y las demás están apagadas (las elegidas se pueden sacar). Con el panel en español, ningún texto se corta.
+- Elegir Safari y Música en Por app y grabar 20 s con las dos sonando: en `manifest.json` de la toma hay dos pistas, `system-audio-com-apple-Safari` y `system-audio-com-apple-Music`, cada una con su `appBundleID` y su `appName` («Safari», «Música» o «Music» según el idioma del sistema), y cada una tiene solo lo suyo: en el editor, silenciar una calla solo esa app.
+- Con Música cerrada al empezar y abierta a los 10 s: su pista está en el manifiesto desde el principio y suena en silencio hasta que Música abre; después graba su sonido.
+- Ese proyecto lo abre la app de la fase 2 (`build/fase2/Toma.app`) sin aviso y mezcla las dos apps.
+- «Todo» sigue en una sola pista `system-audio`; Por app sin apps elegidas graba una pista `system-audio` en silencio, como en la fase 2.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

@@ -182,14 +182,15 @@ import Testing
         let settings = QuickSettings(cameraPreset: .p720, cameraFramesPerSecond: 60)
         let factory = FakeFactory()
         let plan = try TakePlanner.plan(selection, settings: settings, displays: Self.displays, granted: Self.allGranted, factory: factory)
-        #expect(plan.sources.map(\.trackID) == ["display-1", "camera", "mic", "system-audio"])
+        #expect(plan.sources.map(\.trackID) == ["display-1", "camera", "mic", "system-audio-com-example-app"])
         #expect(plan.optional.map(\.kind) == [.camera, .microphone, .systemAudio])
         #expect(plan.sources.count == 4 && zip(plan.sources.dropFirst(), plan.optional).allSatisfy { $0 === $1 })
         #expect(factory.calls == [
             .display(id: 1, framesPerSecond: 60, scale: .native, area: nil, includedWindowIDs: []),
             .camera(.device(uniqueID: "camera-1"), preset: .p720, framesPerSecond: 60),
             .microphone(.systemDefault),
-            .systemAudio(.applications(["com.example.app"])),
+            .systemAudio(SystemAudioTrackPlan(
+                trackID: "system-audio-com-example-app", scope: .applications(["com.example.app"]), appBundleID: "com.example.app")),
             .input(windowTrack: nil, displayIDs: [1]),
         ])
         #expect(plan.optional.map(\.base).first === factory.cameras.first)
@@ -208,6 +209,55 @@ import Testing
         let noSystemAudio = try TakePlanner.plan(
             selection, settings: settings, displays: Self.displays, granted: [.screenRecording, .camera], factory: FakeFactory())
         #expect(noSystemAudio.sources.map(\.trackID) == ["display-1", "camera"])
+    }
+
+    // Phase 3 (plan 3c, Task U9, decision 1): By App records each app in a track of its own.
+    @Test func byAppPlansOneSourcePerApp() throws {
+        var selection = CaptureSelection.mainDisplay(1)
+        selection.systemAudio = .applications(["com.apple.Safari", "dev.toma.Toma", "com.spotify.client"])
+        let factory = FakeFactory()
+        let plan = try TakePlanner.plan(
+            selection, settings: QuickSettings(), displays: Self.displays, granted: Self.allGranted,
+            ownBundleIdentifier: "dev.toma.Toma", factory: factory)
+        #expect(plan.sources.map(\.trackID) == ["display-1", "mic", "system-audio-com-apple-Safari", "system-audio-com-spotify-client"])
+        #expect(plan.optional.map(\.kind) == [.microphone, .systemAudio, .systemAudio])
+        #expect(zip(plan.sources.dropFirst(), plan.optional).allSatisfy { $0 === $1 })
+        #expect(factory.calls == [
+            .display(id: 1, framesPerSecond: 60, scale: .native, area: nil, includedWindowIDs: []),
+            .microphone(.systemDefault),
+            .systemAudio(SystemAudioTrackPlan(
+                trackID: "system-audio-com-apple-Safari", scope: .applications(["com.apple.Safari"]), appBundleID: "com.apple.Safari")),
+            .systemAudio(SystemAudioTrackPlan(
+                trackID: "system-audio-com-spotify-client", scope: .applications(["com.spotify.client"]),
+                appBundleID: "com.spotify.client")),
+            .input(windowTrack: nil, displayIDs: [1]),
+        ])
+        #expect(plan.sources.map(\.sourceInfo).suffix(2) == [
+            TrackSource(name: "com.apple.Safari", includedBundleIDs: ["com.apple.Safari"]),
+            TrackSource(name: "com.spotify.client", includedBundleIDs: ["com.spotify.client"]),
+        ])
+        // Skipped (a tap that did not start), none of them.
+        let skipped = try TakePlanner.plan(
+            selection, settings: QuickSettings(), displays: Self.displays, granted: Self.allGranted, skipping: [.systemAudio],
+            ownBundleIdentifier: "dev.toma.Toma", factory: FakeFactory())
+        #expect(skipped.sources.map(\.trackID) == ["display-1", "mic"])
+        #expect(SystemAudioChoice.off.scope == nil)
+        #expect(SystemAudioChoice.all.scope == .all)
+        #expect(SystemAudioChoice.applications(["a"]).scope == .applications(["a"]))
+    }
+
+    @Test func allStaysOneTrack() throws {
+        var selection = CaptureSelection.mainDisplay(1)
+        selection.systemAudio = .all
+        let factory = FakeFactory()
+        let plan = try TakePlanner.plan(selection, settings: QuickSettings(), displays: Self.displays, granted: Self.allGranted, factory: factory)
+        #expect(plan.sources.map(\.trackID) == ["display-1", "mic", "system-audio"])
+        #expect(factory.calls.filter { if case .systemAudio = $0 { true } else { false } }
+            == [.systemAudio(SystemAudioTrackPlan(trackID: "system-audio", scope: .all, appBundleID: nil))])
+        // By App with no app is one track too, of silence.
+        selection.systemAudio = .applications([])
+        let none = try TakePlanner.plan(selection, settings: QuickSettings(), displays: Self.displays, granted: Self.allGranted, factory: FakeFactory())
+        #expect(none.sources.map(\.trackID) == ["display-1", "mic", "system-audio"])
     }
 
     @Test func loadItemsFollowTheSelectionAndTheSettings() {
@@ -258,7 +308,7 @@ final class FakeFactory: CaptureSourceFactory {
         case window(id: UInt32, framesPerSecond: Int, scale: CaptureScale)
         case camera(DeviceChoice, preset: CameraPreset, framesPerSecond: Int)
         case microphone(DeviceChoice)
-        case systemAudio(SystemAudioChoice)
+        case systemAudio(SystemAudioTrackPlan)
         case input(windowTrack: WindowTrack?, displayIDs: [UInt32])
         case device(uniqueID: String)
     }
@@ -309,9 +359,11 @@ final class FakeFactory: CaptureSourceFactory {
         return microphone
     }
 
-    func systemAudio(_ choice: SystemAudioChoice) -> any CaptureSource {
-        calls.append(.systemAudio(choice))
-        let systemAudio = SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio)
+    /// An app's track is named after its bundle ID.
+    func systemAudio(_ track: SystemAudioTrackPlan) -> any CaptureSource {
+        calls.append(.systemAudio(track))
+        let systemAudio = SyntheticAudioSource(
+            trackID: track.trackID, kind: .systemAudio, app: track.appBundleID.map { (bundleID: $0, name: $0) })
         systemAudios.append(systemAudio)
         return systemAudio
     }

@@ -63,15 +63,13 @@ public final class LiveCaptureSourceFactory: CaptureSourceFactory {
         MicrophoneCaptureSource(preferredDeviceUniqueID: uniqueID(of: choice, kind: "microphone"))
     }
 
-    public func systemAudio(_ choice: SystemAudioChoice) -> any CaptureSource {
-        switch choice {
-        case .all:
-            ProcessTapSource(scope: .all)
-        case .applications(let bundleIDs):
-            ProcessTapSource(scope: .applications(bundleIDs))
-        case .off:
-            preconditionFailure("LiveCaptureSourceFactory: system audio that is off is never made")
-        }
+    /// A tap of its own for each track; an app's track is named after the app as the Finder shows it
+    /// (`NSWorkspace.urlForApplication(withBundleIdentifier:)` and `FileManager.displayName(atPath:)`), or its bundle
+    /// ID if it is not installed.
+    public func systemAudio(_ track: SystemAudioTrackPlan) -> any CaptureSource {
+        ProcessTapSource(
+            scope: track.scope, trackID: track.trackID,
+            appName: track.appBundleID.map(SystemAudioTracks.installedAppName(bundleID:)))
     }
 
     /// The iPhone or iPad `uniqueID`: its screen at `TakePlanner.deviceFramesPerSecond` and its sound, sharing one capture

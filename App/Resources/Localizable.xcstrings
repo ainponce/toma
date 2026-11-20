@@ -5706,6 +5706,17 @@
         }
       }
     },
+    "One Track per App" : {
+      "comment" : "System audio By App: the title of the menu of apps; each chosen app is recorded in a track of its own",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una pista por app"
+          }
+        }
+      }
+    },
     "One stretch sped up: %@ → %@" : {
       "comment" : "Speed Up Typing result with a single stretch (1:23 → 0:28)",
       "localizations" : {
@@ -10038,6 +10049,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hasta 4× el sonido se acelera sin cambiar el tono; más rápido, el tramo va sin sonido."
+          }
+        }
+      }
+    },
+    "Up to 8 apps" : {
+      "comment" : "System audio By App: in the menu of apps once 8 are chosen; no other can be chosen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hasta 8 apps"
           }
         }
       }
