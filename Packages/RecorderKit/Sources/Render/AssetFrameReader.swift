@@ -14,7 +14,7 @@ import Synchronization
 /// `-`). So it decodes where the take's videos decode, ahead in the preview and the export alike, in the export's slot of
 /// the process's decoding slots (`DecodingSlots`), and blocks as they block; the renderer lets no more than
 /// `MediaClipResources.decodesAtOnce` of its clips' readers open and decode at once (`DecodeGate`), and lets go of those
-/// the frames coming do not show (`FrameRenderer.releaseMedia(keeping:)`).
+/// the frames coming do not show (`FrameRenderer.releaseVideos(keeping:)`).
 ///
 /// The file is found only through the package's safe reader (`ProjectPackage.mediaAsset(_:as:)`, `.video`): one that is
 /// not a regular file of `assets/` reached through no link gives no reader, so its clip draws the background alone.

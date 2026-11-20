@@ -121,7 +121,7 @@ public final class PreviewEngine: @unchecked Sendable {
         /// While scrubbing: the output second of the last scrub, and the frames of the grid decoded ahead for it.
         var lastScrub: Double?
         var decodingAhead: [Int] = []
-        /// The tracks those frames show: the imported clips' among them are kept (`releaseMedia(keeping:)`).
+        /// The tracks those frames show: the imported clips' and other takes' among them are kept (`releaseVideos(keeping:)`).
         var decodingAheadTracks: Set<TrackKey> = []
         /// While playing: the frame of the grid presented last, of which scene and at which size, and the last one
         /// scheduled ahead.
@@ -206,6 +206,14 @@ public final class PreviewEngine: @unchecked Sendable {
         }
     }
 
+    /// The tracks whose last frame the engine keeps to show while a newer one is not decoded, once the requests queued
+    /// before are drawn: for tests.
+    func shownTracks() async throws -> Set<TrackKey> {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume(returning: Set(self.drawing.shown.keys)) }
+        }
+    }
+
     // MARK: - On the engine's queue
 
     /// Draws the pending requests, the latest each time, until there is none.
@@ -254,7 +262,7 @@ public final class PreviewEngine: @unchecked Sendable {
             for key in keys where exact[key] == nil { exact[key] = drawing.exact[key] }
             drawing.exact = exact
             try present(frame, request: request, seconds: seconds, late: false, started: started, hooks: hooks) { exact[$0] ?? nil }
-            releaseMedia(keeping: Set(keys.map(\.track)))
+            releaseVideos(keeping: Set(keys.map(\.track)))
         case let .scrubbing(seconds):
             stopPlaying()
             let frame = try renderer.frame(of: scene, at: seconds)
@@ -271,7 +279,7 @@ public final class PreviewEngine: @unchecked Sendable {
                 keyFrames[$0] ?? nil
             }
             if hooks.decodesExactFramesWhileScrubbing { try decodeExactFramesAhead(around: seconds, of: scene) }
-            releaseMedia(keeping: Set(videos(of: frame).map(\.track)).union(drawing.decodingAheadTracks))
+            releaseVideos(keeping: Set(videos(of: frame).map(\.track)).union(drawing.decodingAheadTracks))
         case let .playing(seconds):
             drawing.lastScrub = nil
             drawing.decodingAhead = []
@@ -340,8 +348,8 @@ public final class PreviewEngine: @unchecked Sendable {
             try renderer.prefetcher(for: key.track)?.schedule(key.time)
         }
         drawing.playing = (n, number, size, max(ahead.scheduledThrough ?? n, n))
-        // The imported clips neither this frame nor those a second ahead show are let go.
-        releaseMedia(keeping: Set(self.videos(of: frame).map(\.track)).union(ahead.tracksAhead))
+        // The imported clips and other takes' tracks neither this frame nor those a second ahead show are let go.
+        releaseVideos(keeping: Set(self.videos(of: frame).map(\.track)).union(ahead.tracksAhead))
         // The first frame of a playback is not late: nothing was decoded ahead for it.
         if previous == nil { late = false }
         _ = drawing.quality.record(late: late, atSeconds: CACurrentMediaTime())
@@ -406,10 +414,11 @@ public final class PreviewEngine: @unchecked Sendable {
         }
     }
 
-    /// Lets go of the imported clips' readers and prefetchers that `kept` does not name (`FrameRenderer.releaseMedia(keeping:)`),
-    /// and of the frames of theirs the engine keeps (shown, or decoded for a pause).
-    private func releaseMedia(keeping kept: Set<TrackKey>) {
-        let released = Set(renderer.releaseMedia(keeping: kept))
+    /// Lets go of the imported clips' and other takes' readers and prefetchers that `kept` does not name
+    /// (`FrameRenderer.releaseVideos(keeping:)`), and of the frames of theirs the engine keeps (shown, or decoded for a
+    /// pause).
+    private func releaseVideos(keeping kept: Set<TrackKey>) {
+        let released = Set(renderer.releaseVideos(keeping: kept))
         guard !released.isEmpty else { return }
         for track in released { drawing.shown[track] = nil }
         drawing.exact = drawing.exact.filter { !released.contains($0.key.track) }

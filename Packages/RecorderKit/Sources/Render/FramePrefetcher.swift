@@ -151,12 +151,13 @@ final class FramePrefetcher: @unchecked Sendable {
         decodeIfThereIsRoom()
     }
 
-    /// Drops every instant scheduled and every frame decoded ahead, as after a jump. A frame being decoded is dropped
-    /// once it is; a caller waiting is woken and asks again.
+    /// Drops every instant scheduled and every frame decoded ahead, as after a jump, and the last frame decoded with them.
+    /// A frame being decoded is dropped once it is; a caller waiting is woken and asks again.
     func reset() {
         let waiting = state.withLock { state in
             state.entries.removeAll()
             state.newest = nil
+            state.lastDecoded = nil
             defer { state.waiters.removeAll() }
             return state.waiters.values.map(\.waiter)
         }
@@ -392,7 +393,7 @@ struct DecodeAhead {
     }
 
     /// The tracks the frames looked at and not drawn yet show (from the one drawn next to `far` after it): those whose
-    /// readers the frames coming need (`FrameRenderer.releaseMedia(keeping:)`).
+    /// readers the frames coming need (`FrameRenderer.releaseVideos(keeping:)`).
     var tracksAhead: Set<TrackKey> {
         Set(looked.flatMap { $0.videos.map(\.track) })
     }
