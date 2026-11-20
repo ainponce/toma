@@ -150,10 +150,15 @@ public final class TrackFrameReader: @unchecked Sendable {
     /// Whether an `AVAssetReader` is open, holding the frames read ahead of the last one asked for: for tests.
     var isOpen: Bool { lock.withLock { open != nil } }
 
-    /// Lets its open `AVAssetReader` go, with the frames it holds, as a jump does (cancelled on a queue of its own); the
-    /// next frame asked for opens one again. Waits for a frame being decoded: never call it where that must not wait.
+    /// Lets its open `AVAssetReader` go, with the frames it holds (and the last frame fitted, with its pool), as a jump
+    /// does (cancelled on a queue of its own); the next frame asked for opens one again. What it could not read stays
+    /// (`gaps`). Waits for a frame being decoded: never call it where that must not wait.
     func letGo() {
-        lock.withLock { close() }
+        lock.withLock {
+            close()
+            lastFit = nil
+            fitPool = nil
+        }
     }
 
     /// Whether every host time a frame is asked for is noted (`askedTimes`), from now on: for tests.

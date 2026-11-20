@@ -103,8 +103,17 @@ public final class FrameRenderer: @unchecked Sendable {
     /// What every scene of the renderer reads of the project's analysis caches unless it is given its own
     /// (`makeScene(document:paths:outputSize:analysis:)`, phase 2 design §10): `.none` in phase 1.
     public let analysis: AnalysisInputs
-    /// The reader of each track read so far, by take and track, made the first time a frame (or `missingVideo`) needs it.
-    private let readers = Mutex<[TrackKey: TrackFrameReader]>([:])
+    /// The reader of each track read so far, by take and track, made the first time a frame (or `missingVideo`) needs it,
+    /// and kept for what it could not read; with the other takes' tracks asked for since they were last let go.
+    private let readers = Mutex(Readers())
+
+    /// The readers of the takes' tracks, and which of the other takes' are awake (`releaseVideos(keeping:in:)`).
+    private struct Readers {
+        var all: [TrackKey: TrackFrameReader] = [:]
+        /// The tracks of other takes than the project's own (and those takes' masks) a frame or `missingVideo` asked for
+        /// since they were last let go: each is let go once the frames drawn and coming no longer show it.
+        var awake: Set<TrackKey> = []
+    }
     private let compositor: Compositor
     /// The textures of the frames' background images; used with `lock` held.
     let backgroundImages: BackgroundImages
@@ -345,8 +354,9 @@ public final class FrameRenderer: @unchecked Sendable {
             }
             return frame
         }
-        // The imported clips this frame does not show are let go (after the lock: `ahead` is taken before it elsewhere).
-        releaseMedia(keeping: Set(videos(of: frame).map(\.track)))
+        // The imported clips and other takes' tracks this frame does not show are let go (after the lock: `ahead` is taken
+        // before it elsewhere).
+        releaseVideos(keeping: Set(videos(of: frame).map(\.track)))
     }
 
     /// The frame at `outputTime` of `scene`, with the cursor images the renderer can read: what
@@ -518,8 +528,8 @@ public final class FrameRenderer: @unchecked Sendable {
     /// for. Schedules the frames of the grid ahead of it, from the one expected next: from it, when it is not; and, a
     /// second of output ahead, the first frame of a track that comes back (`DecodeAhead`). Runs on `renderQueue`.
     ///
-    /// The imported clips' readers that neither it nor the frames looked at ahead show are let go
-    /// (`releaseMedia(keeping:in:)`), once `ahead` is no longer held.
+    /// The imported clips' readers, and other takes' tracks, that neither it nor the frames looked at ahead show are let go
+    /// (`releaseVideos(keeping:in:)`), once `ahead` is no longer held.
     private func prepare(at outputTime: Double) throws -> PreparedFrame {
         let scene = self.scene, frameRate = scene.frameRate
         let index = gridIndex(of: outputTime, frameRate: frameRate)
@@ -543,12 +553,12 @@ public final class FrameRenderer: @unchecked Sendable {
                 ahead.plan = plan
                 ahead.frames += evaluated
                 for key in keys { try prefetcher(for: key.track, in: &ahead)?.schedule(key.time) }
-                let released = releaseMedia(keeping: plan.tracksAhead, in: &ahead).1
+                let released = releaseVideos(keeping: plan.tracksAhead, in: &ahead).1
                 let first = ahead.frames.removeFirst()
                 return (PreparedFrame(frame: first.frame, sources: try sources(of: first.frame, in: &ahead)), released)
             }
             let frame = try self.frame(of: scene, at: outputTime)
-            let released = releaseMedia(keeping: Set(videos(of: frame).map(\.track)), in: &ahead).1
+            let released = releaseVideos(keeping: Set(videos(of: frame).map(\.track)), in: &ahead).1
             try schedule(frame, in: &ahead)
             return (PreparedFrame(frame: frame, sources: try sources(of: frame, in: &ahead)), released)
         }
@@ -744,7 +754,7 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The earliest and the latest source instants a frame was asked of track `trackID` of the project's own take so far
     /// (`nil` before the first, and for a track without a reader yet), for tests.
     func askedFor(track trackID: String) -> ClosedRange<HostTime>? {
-        readers.withLock { $0[TrackKey(take: nil, track: trackID)] }?.askedFor
+        readers.withLock { $0.all[TrackKey(take: nil, track: trackID)] }?.askedFor
     }
 
     /// The reader of `track`, a track of a take of the package (`TrackKey.take`: `nil` for the project's own), made the
@@ -760,16 +770,87 @@ public final class FrameRenderer: @unchecked Sendable {
         let take = track.take == self.take.id ? nil : track.take
         let owner: TakeRecord? = if let take { takeRecords[take] } else { self.take }
         guard let record = owner?.track(track.track) else {
-            return cameraLook.reader(for: track.track)
-                ?? (makingMedia ? mediaReader(for: track.track) : mediaResources.existingReader(for: track.track))
+            if let mask = cameraLook.reader(for: track.track) {
+                if Self.isOtherTakes(track) { readers.withLock { _ = $0.awake.insert(track) } }
+                return mask
+            }
+            return makingMedia ? mediaReader(for: track.track) : mediaResources.existingReader(for: track.track)
         }
         let key = TrackKey(take: take, track: track.track)
         return readers.withLock { readers in
-            if let reader = readers[key] { return reader }
+            if take != nil { readers.awake.insert(key) }
+            if let reader = readers.all[key] { return reader }
             let reader = TrackFrameReader(package: package, track: record)
-            readers[key] = reader
+            readers.all[key] = reader
             return reader
         }
+    }
+
+    /// Whether `track` is of another take than the project's own (`TrackKey.take`, as `takeKey(of:)` names it), or the
+    /// person's mask of one (`personMask:<take>/<file>`, `FrameEvaluator.keptApart(_:take:)`).
+    static func isOtherTakes(_ track: TrackKey) -> Bool {
+        track.take != nil || (track.track.hasPrefix("personMask:") && track.track.contains("/"))
+    }
+
+    /// Lets go of what the frames drawn and coming do not show of `kept`'s kinds (`releaseVideos(keeping:in:)`), and
+    /// returns the tracks let go, for whoever keeps their frames (`PreviewEngine`).
+    @discardableResult
+    func releaseVideos(keeping kept: Set<TrackKey>) -> [TrackKey] {
+        let (released, readers) = withAhead { releaseVideos(keeping: kept, in: &$0) }
+        Self.letGo(readers)
+        return released
+    }
+
+    /// Lets go of the imported clips' readers and of the other takes' tracks (and masks) that `kept` does not name: the
+    /// tracks of the project's own take and its masks are never let go, so a single take is drawn as ever. Each prefetcher
+    /// of them is reset and dropped, with the frames it holds; a clip's reader stops being kept (`MediaClipResources`),
+    /// another take's stays, for what it could not read (`missingVideo`); and each reader's `AVAssetReader` goes with its
+    /// frames once `ahead` is no longer held (`letGo(_:)`). A frame that shows them again makes them again. Returns the
+    /// tracks let go and the readers to let go.
+    func releaseVideos(keeping kept: Set<TrackKey>, in ahead: inout Ahead) -> ([TrackKey], [TrackFrameReader]) {
+        var released: [TrackKey] = []
+        for (track, prefetcher) in ahead.prefetchers
+        where (Self.isMedia(track) || Self.isOtherTakes(track)) && !kept.contains(track) {
+            prefetcher.reset()
+            ahead.prefetchers[track] = nil
+            released.append(track)
+        }
+        var idle = mediaResources.release(keeping: Set(kept.filter(Self.isMedia).map(\.track)))
+        for reader in idle where !released.contains(TrackKey(take: nil, track: reader.trackID)) {
+            released.append(TrackKey(take: nil, track: reader.trackID))
+        }
+        let asleep = readers.withLock { readers -> [(TrackKey, TrackFrameReader?)] in
+            let gone = readers.awake.subtracting(kept)
+            readers.awake.subtract(gone)
+            return gone.map { ($0, readers.all[$0]) }
+        }
+        for (track, reader) in asleep {
+            if let reader = reader ?? cameraLook.reader(for: track.track) { idle.append(reader) }
+            if !released.contains(track) { released.append(track) }
+        }
+        return (released, idle)
+    }
+
+    /// Lets each of `readers` go (`TrackFrameReader.letGo()`) on a queue of their own, so no caller waits for a frame one
+    /// is decoding.
+    static func letGo(_ readers: [TrackFrameReader]) {
+        guard !readers.isEmpty else { return }
+        closingQueue.async {
+            for reader in readers { reader.letGo() }
+        }
+    }
+
+    /// Where the readers let go wind down (`letGo(_:)`), one after the other.
+    private static let closingQueue = DispatchQueue(label: "dev.toma.FrameRenderer.closing", qos: .utility)
+
+    /// Whether the reader of another take's `track` is awake (asked for since it was last let go): for tests.
+    func isAwake(_ track: TrackKey) -> Bool {
+        readers.withLock { $0.awake.contains(track) }
+    }
+
+    /// How many prefetchers the renderer keeps: for tests.
+    var prefetcherCount: Int {
+        withAhead { $0.prefetchers.count }
     }
 
     /// `reader(for:)` of the track `trackID` of the project's own take (or of a person's mask or a file of `assets/`).

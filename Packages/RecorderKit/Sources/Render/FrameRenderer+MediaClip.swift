@@ -13,7 +13,7 @@ import Synchronization
 ///
 /// - **Made when asked for, let go when not needed.** A reader is made the first time a frame asks for it, and kept while
 ///   the frames drawn and those coming show its file; whoever draws lets go of the others (`release(keeping:)`, from
-///   `FrameRenderer.releaseMedia(keeping:)`): their `AVAssetReader`s and the frames they hold go, and a reader is made
+///   `FrameRenderer.releaseVideos(keeping:)`): their `AVAssetReader`s and the frames they hold go, and a reader is made
 ///   again when a frame shows the file again.
 /// - **A few at once.** At most `decodesAtOnce` of its readers open or decode at once (`gate`), whichever thread decodes:
 ///   the clips the next second shows start decoding then, two at a time.
@@ -187,44 +187,6 @@ extension FrameRenderer {
         return MediaClipTextures(frame: copy, orientation: orientation, mipmapped: true)
     }
 
-    /// Lets go of the imported clips' readers and prefetchers that `kept` does not name (`asset:` ids; the tracks of the
-    /// takes and the masks are not touched): each prefetcher is reset and dropped, and each reader's `AVAssetReader` let go
-    /// with the frames it holds, off the caller's thread (`TrackFrameReader.letGo()`, which waits for a frame being
-    /// decoded). A frame that shows the file again makes them again. Returns the tracks let go, for whoever keeps their
-    /// frames (`PreviewEngine`).
-    @discardableResult
-    func releaseMedia(keeping kept: Set<TrackKey>) -> [TrackKey] {
-        let (released, readers) = withAhead { releaseMedia(keeping: kept, in: &$0) }
-        Self.letGo(readers)
-        return released
-    }
-
-    /// `releaseMedia(keeping:)` with the renderer's prefetchers held (`ahead`): the tracks let go, and the readers to let
-    /// go once they are no longer held (`letGo(_:)`).
-    func releaseMedia(keeping kept: Set<TrackKey>, in ahead: inout Ahead) -> ([TrackKey], [TrackFrameReader]) {
-        let ids = Set(kept.filter(Self.isMedia).map(\.track))
-        var released: [TrackKey] = []
-        for (track, prefetcher) in ahead.prefetchers where Self.isMedia(track) && !ids.contains(track.track) {
-            prefetcher.reset()
-            ahead.prefetchers[track] = nil
-            released.append(track)
-        }
-        let readers = mediaResources.release(keeping: ids)
-        for reader in readers where !released.contains(TrackKey(take: nil, track: reader.trackID)) {
-            released.append(TrackKey(take: nil, track: reader.trackID))
-        }
-        return (released, readers)
-    }
-
-    /// Lets each of `readers` go (`TrackFrameReader.letGo()`) on a queue of their own, so no caller waits for a frame one
-    /// is decoding.
-    static func letGo(_ readers: [TrackFrameReader]) {
-        guard !readers.isEmpty else { return }
-        mediaClosingQueue.async {
-            for reader in readers { reader.letGo() }
-        }
-    }
-
     /// The imported clips of the sequence that cannot be drawn, in output seconds (`missingVideo`'s): the whole of each clip
     /// whose file the package's safe reader does not give (`.fileMissing`: gone, a link, not a video of `assets/`) or
     /// whose latest reader gives no frame at all (its reason); otherwise each span of the file its readers could not
@@ -269,6 +231,3 @@ extension FrameRenderer {
         return missing
     }
 }
-
-/// Where the clips' readers let go wind down (`FrameRenderer.letGo(_:)`), one after the other.
-private let mediaClosingQueue = DispatchQueue(label: "dev.toma.FrameRenderer.mediaClosing", qos: .utility)
