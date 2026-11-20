@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import Dispatch
 import Editing
@@ -19,12 +20,13 @@ public enum MediaFixtures {
     /// `pattern + i` (its palette's colour, which `SampleFactory.frameIndex(nearestTo:)` tells after encoding, and a white
     /// square that moves every frame), so every frame differs from the one before and clips of other patterns differ.
     /// With `tone`, also an AAC track of that many Hz of sine at 1/4 of full scale on each of `channels`, at
-    /// `sampleRate`, for the same `seconds`.
+    /// `sampleRate`, for the same `seconds`. `transform` is its video track's `preferredTransform`, how a player turns it
+    /// upright (a phone's clip shot upright is encoded on its side, with a quarter turn).
     ///
     /// It blocks the calling thread while AVFoundation encodes, on its own queues.
     public static func clip(
         in dir: URL, seconds: Double, size: SIMD2<Int>, pattern: Int, tone: Double? = nil, sampleRate: Double = 48_000,
-        channels: Int = 2
+        channels: Int = 2, transform: CGAffineTransform = .identity
     ) throws -> URL {
         guard seconds > 0, size.x > 0, size.y > 0, sampleRate > 0, channels > 0 else {
             throw TestSupportError.failed("MediaFixtures.clip: nothing to write")
@@ -36,6 +38,7 @@ public enum MediaFixtures {
             mediaType: .video,
             outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: size.x, AVVideoHeightKey: size.y])
         video.expectsMediaDataInRealTime = false
+        video.transform = transform
         writer.add(video)
         var audio: AVAssetWriterInput?
         if tone != nil {

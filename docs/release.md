@@ -1068,6 +1068,11 @@ La vara del agente fueron las medidas (sonoridad, pico, costura, mono, graves y 
 - Anotar el que no convence y por qué (un instrumento, el tempo, una parte que cansa, el crujido de Foco, el bombeo de Pulso, el anticipo de la vuelta): se cambia antes del merge a `main` (decisión 4 del plan 3c); después del merge, otro sonido es `music-2`.
 - Sin la app: `swift run -c release --package-path Packages/RecorderKit recorder-dev music --out /tmp/toma-music --theme focus` (o `drive`, `pulse`) y `afplay /tmp/toma-music/focus.caf` (`docs/music.md`, «Escucharlos»); `afplay` toca una vuelta sola.
 
+**Clips en la secuencia: el dibujo** (A9)
+
+- Un clip vertical grabado con un iPhone (MOV HEVC, de pie) y uno horizontal (MP4 H.264 de una cámara o de otro export), cada uno en la secuencia: se ven derechos y enteros dentro del margen, con las esquinas y la sombra del estilo y sin cursor ni cámara; en pausa, reproduciendo, arrastrando el cursor de reproducción por encima y en el video exportado, igual. A 1,5× se mueven más rápido y terminan donde termina su tramo. Un ProRes 4444 con alfa se ve opaco y nada se traba.
+- Con el proyecto cerrado, sacar el archivo del clip de `assets/` (o cambiarlo por un alias): al abrirlo, en su tramo se ve el fondo solo; reproducir y exportar no se traban ni dan error.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
