@@ -1726,3 +1726,11 @@ Con la línea de comandos instalada (A4) y un proyecto de prueba en la bibliotec
 - Con el proyecto abierto en Toma, pedirle a Claude Code un cambio: la herramienta responde `locked` y Claude lo dice; leer y exportar siguen andando.
 - Lo mismo desde Claude Desktop: sumar `{"mcpServers":{"toma":{"command":"/usr/local/bin/toma","args":["mcp"]}}}` (o la ruta de `~/.local/bin/toma` entera) a `~/Library/Application Support/Claude/claude_desktop_config.json` y reiniciar; el ícono de herramientas muestra las de `toma`, y las tres órdenes de arriba hacen lo mismo.
 - Pedir un export largo (por ejemplo a 2160) y detener la respuesta de Claude (Esc) a mitad: si el cliente cancela la llamada, el export para y no queda archivo (ni `.partial`) en el Escritorio; si no la cancela, el export termina igual (anotar cuál de las dos). Salir de Claude Desktop, o cerrar Claude Code, a mitad de un export no deja nada.
+
+**Capítulos con IA desde la línea de comandos y el MCP (I4)**
+
+En un Mac con macOS 26 y Apple Intelligence activado, con un proyecto de prueba de más de un minuto y con transcripción (nunca uno de `~/Movies/Toma` que importe).
+- `toma ai --help` lista `chapters`, `title` y `summary`. `toma ai chapters <proyecto>` imprime una línea por capítulo («00:00 …») y deja el proyecto igual (`toma info` antes y después no cambia). `--json` trae `commands` con un `addMarker` por capítulo; `toma edit <proyecto> --file` con esa lista los agrega y el editor los muestra como marcadores.
+- Con Claude Code (`claude mcp add toma -- toma mcp`): «proponé capítulos para <proyecto> y agregalos» llama a `suggest_chapters` y después a `apply_commands`, y los capítulos aparecen en el editor (Edición ▸ Deshacer los quita de a uno).
+- Con Apple Intelligence apagado en Ajustes del Sistema: `toma ai chapters <proyecto>` sale con 1 y «Apple Intelligence is not turned on»; `suggest_chapters` vuelve con `isError` y `notAvailable`.
+- En una Mac con macOS 15 (o la Toma de esta rama copiada a una): `toma --version` anda y `toma ai chapters` dice que requiere macOS 26, sin cerrarse. `otool -l Toma.app/Contents/Helpers/toma | grep -B2 FoundationModels` muestra `LC_LOAD_WEAK_DYLIB`.

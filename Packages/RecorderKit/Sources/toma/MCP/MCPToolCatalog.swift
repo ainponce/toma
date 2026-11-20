@@ -14,5 +14,6 @@ enum MCPToolCatalog {
         RedoTool(),
         ExportVideoTool(),
         ShareTool(),
+        SuggestChaptersTool(),
     ]
 }
