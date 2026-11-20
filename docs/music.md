@@ -68,7 +68,7 @@ macOS vacía la caché, se vuelven a sintetizar iguales y el export espera. El f
 ## El id del algoritmo
 
 `music-1` es el id del sonido de la biblioteca con su versión. Los bytes de cada tema se fijan en sus pruebas
-(`samplesArePinned`) y pueden cambiar mientras la fase 3 no se mergea a `main`. Después, cualquier cambio que haga sonar
+(`samplesArePinned`) y pueden cambiar hasta que se publique la primera versión de Toma. Después, cualquier cambio que haga sonar
 distinto un tema (una nota, un instrumento, el motor) es `music-2`: otra carpeta de la caché y otras fuentes
 (`library:music-2/<id>`), y un documento que nombra `library:music-1/<id>` sigue sonando igual.
 
