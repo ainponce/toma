@@ -383,10 +383,12 @@ public final class EditedMix: Sendable {
         let timeMap = TimeMap(sequence: document.sequence)
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)
         contentFrames = Self.frames(ofNanoseconds: timeMap.duration)
-        let cuts = AudioCuts(document: document, timeMap: timeMap)
+        // The cuts of the sound held to what each take has (phase 3 design §7.3).
+        let takeBounds = Dictionary(sources.map { ($0.takeID, $0.editable) }) { first, _ in first }
+        let cuts = AudioCuts(document: document, timeMap: timeMap, takeBounds: takeBounds)
         self.cuts = cuts
         (pieces, runs) = Self.pieces(of: document.sequence, cuts: cuts, contentFrames: contentFrames, sources: sources)
-        gainRanges = GainRangePlan(document: document, timeMap: timeMap, keys: sources.map(\.keys))
+        gainRanges = GainRangePlan(document: document, timeMap: timeMap, keys: sources.map(\.keys), cuts: cuts)
         // The takes the sequence shows, in the order it first shows them: where a track's gain is looked for by its id
         // when its own take has none (phase 3 base plan decision 11).
         var seen: Set<String> = []
@@ -668,7 +670,8 @@ public final class EditedMix: Sendable {
     // MARK: - From the document
 
     /// The clips of `sequence` with any output frames, in order, as the mix plays them, each from the source of its take:
-    /// from where `cuts` starts its sound, reading its take from where `cuts` moves its start to; faded where the sound
+    /// from where `cuts` starts its sound, reading its take from where `cuts` moves its start to (and fed to its stretch
+    /// on past its end where an L cut has it heard after it, `AudioCuts.heardEnd(ofClip:)`); faded where the sound
     /// would jump (between two takes too, as at a cut), read on where a clip goes on with the source of the one before
     /// (at 1× frame for frame, at another speed in the same run), and the runs the stretched ones play. A clip with
     /// content is silent here (phase 3 base plan decision 8: the sound of an imported clip is `EditedMix+Media`'s), and so
@@ -697,7 +700,12 @@ public final class EditedMix: Sendable {
             let take = sourceOf[clip.take]
             let origin = take.map { sources[$0].origin } ?? clip.start
             let from = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.start)) + cuts.sourceShift[k]
-            let to = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.end))
+            var to = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.end))
+            if let take, let heard = cuts.heardEnd(ofClip: k) {
+                // An L cut at the clip after has this one heard on past its end, never past what its take has.
+                let last = min(heard, Int64(clamping: sources[take].editable.upperBound.nanoseconds))
+                to = max(to, frames(ofNanoseconds: last - Int64(clamping: origin.nanoseconds)))
+            }
             var piece = Piece(start: start, end: end, sound: .silent, fadesIn: false, fadesOut: false)
             if clip.content != nil {
                 // Silent: a point of the take that lasts.
@@ -732,7 +740,7 @@ public final class EditedMix: Sendable {
             // A stretch is fed the source heard in one go with it, from where that starts to where this clip ends.
             if case .stretched(_, let run) = piece.sound, !heardRuns.contains(run) {
                 heardRuns.append(run)
-                runs[run].heard = (heardFrom ?? from)..<to
+                runs[run].heard = min(heardFrom ?? from, from)..<to
             }
             for run in heardRuns { runs[run].heard = runs[run].heard.lowerBound..<max(runs[run].heard.lowerBound, to) }
             pieces.append(piece)
