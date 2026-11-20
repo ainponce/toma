@@ -5,7 +5,8 @@ import SwiftUI
 
 /// The Zoom tab (design §5.4): above, the card of the selected zoom if one is selected; then whether zooms show, the
 /// automatic zoom's settings (a change of any plans the automatic zooms again, in one step; their mode, phase 3 design §6,
-/// is a step of its own), the zoom's speed and its motion blur, and the button that plans them again.
+/// is a step of its own; "Follow the Focus" only when a take recorded the focus, phases 4–5 design §5.3), the zoom's speed
+/// and its motion blur, and the button that plans them again.
 struct ZoomTab: View {
     let model: EditorModel
     let document: EditDocument
@@ -51,6 +52,15 @@ struct ZoomTab: View {
                 .disabled(!model.canHoldWhileTyping)
                 if !model.canHoldWhileTyping {
                     Text("This recording didn't note when keys were typed.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if model.hasFocusEvents {
+                    Toggle(
+                        "Follow the Focus",
+                        isOn: Binding(get: { auto.followsFocus }, set: { on in model.changeAutoZoom { $0.followsFocus = on } })
+                    )
+                    Text("Zooms in where text is typed and on what's reached with the keyboard.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
