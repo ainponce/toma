@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Testing
 // Not @testable: the app uses only the public API.
+import Analysis
 import Editing
 import ProjectFormat
 
@@ -106,4 +107,17 @@ private extension TwoClips {
     #expect(points.snap(TwoClips.output(-0.01), tolerance: TwoClips.output(0.060), also: []) == 0)
     #expect(points.snap(TwoClips.output(8.05), tolerance: TwoClips.output(0.060), also: []) == TwoClips.output(8))
     #expect(points.snap(TwoClips.output(1), tolerance: -1, also: []) == TwoClips.output(1))
+}
+
+@Test func editPointsFromTheMarkersThatShow() {
+    let document = TwoClips.document()
+    let recorded: MarkerList.Recorded = [TwoClips.takeID: [TwoClips.at(2), TwoClips.at(8), TwoClips.at(50)]]
+    let map = TimeMap(sequence: document.sequence)
+    let points = EditPoints(document: document, timeMap: map, recorded: recorded)
+    // The same points the take's markers gave before; the one in the cut and the one past the clips are not there.
+    #expect(points.all == EditPoints(document: document, timeMap: map, markers: [TwoClips.at(2), TwoClips.at(8)]).all)
+    #expect(points.all.contains(TwoClips.output(1)))
+    var hidden = document
+    hidden.markers = MarkerPlan(items: [Marker(id: "m-00000001", take: TwoClips.takeID, t: TwoClips.at(2), origin: .recorded, hidden: true)])
+    #expect(!EditPoints(document: hidden, timeMap: map, recorded: recorded).all.contains(TwoClips.output(1)))
 }
