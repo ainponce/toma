@@ -30,6 +30,7 @@ struct Toma: AsyncParsableCommand {
             UndoCommand.self,
             RedoCommand.self,
             ExportCommand.self,
+            MCPCommand.self,
         ])
 
     static func main() async {
