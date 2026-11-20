@@ -335,7 +335,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private var displayLink: CADisplayLink?
     private var lastTick: CFTimeInterval?
     /// The playhead drawn: `playhead`, or while playing the last time read.
-    private var drawnPlayhead: Int64 = 0
+    private(set) var drawnPlayhead: Int64 = 0
 
     // MARK: Parts
 

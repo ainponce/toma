@@ -1608,3 +1608,4 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 **Revisión final de la fase 3: aplicación** (final-fix-3, 2.ª ronda)
 
 - Con dos tomas en la secuencia (la segunda regrabada), tocar el volumen o Silenciar del micrófono y después elegir Limpieza "Fuerte": las dos tomas suenan y se exportan limpias (ambas generan su audio limpio), y un solo Deshacer vuelve la limpieza a como estaba.
+- Con la cabeza de la línea de reproducción sobre un marcador (después de ⌥→, de elegirlo en el menú Marcadores o de hacer clic en su bandera), arrastrar la cabeza mueve la reproducción y no el marcador; arrastrar la bandera por su lado derecho, o con la reproducción en otro lado, sigue moviendo el marcador (también con marcadores grabados).
