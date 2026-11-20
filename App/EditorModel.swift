@@ -1724,7 +1724,8 @@ final class EditorModel {
         let export = exportTask
         export?.cancel()
         exportFinishedTask?.cancel()
-        share.cancel()
+        // A share is cancelled too: its cleanup removes what it uploaded, and the closing waits for it.
+        let sharing = share.cancelForClose()
         tearDownPreview()
         image.close()
         voice.close()
@@ -1740,12 +1741,13 @@ final class EditorModel {
             await openTask?.value
             await session?.close()
             await export?.value
+            await sharing?.value
         }
         session = nil
         packageHandle = nil
     }
 
-    /// Returns once `close()` has closed the session and the export it cancelled has ended.
+    /// Returns once `close()` has closed the session and the export and the share it cancelled have ended.
     func waitUntilClosed() async {
         await closing?.value
     }

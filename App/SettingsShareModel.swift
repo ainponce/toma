@@ -40,6 +40,8 @@ final class SettingsShareModel {
     /// The Keychain's work, one after another, off the main thread.
     @ObservationIgnored private var keychain: Task<Void, Never>?
     @ObservationIgnored private var testing: Task<Void, Never>?
+    /// Which "Test Connection" may still say how it went: each test and each change counts one more.
+    @ObservationIgnored private var testGeneration = 0
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Share")
 
@@ -181,6 +183,7 @@ final class SettingsShareModel {
             return
         }
         secretDraft = ""
+        forgetTest()
         let secrets = secrets
         enqueue { [weak self] in
             let result = Result { try secrets.setSecret(secret, for: account) }
@@ -194,6 +197,7 @@ final class SettingsShareModel {
         let account = preferences.secretAccount, old = savedAccount
         guard account != old else { return }
         savedAccount = account
+        forgetTest()
         let secret = secretDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         let saving = account.isEmpty || secret.isEmpty ? nil : secret
         if saving != nil { secretDraft = "" }
@@ -212,6 +216,7 @@ final class SettingsShareModel {
     func deleteSecret() {
         let account = savedAccount, secrets = secrets
         secretDraft = ""
+        forgetTest()
         enqueue { [weak self] in
             let result = Result { if !account.isEmpty { try secrets.setSecret(nil, for: account) } }
             await self?.saved(result, has: false)
@@ -223,7 +228,6 @@ final class SettingsShareModel {
         case .success:
             hasSecret = has
             secretProblem = nil
-            test = .idle
         case .failure(let error):
             Self.logger.error("Cannot change the share secret: \(String(describing: error), privacy: .public)")
             if case let SecretStoreError.keychain(status) = error {
@@ -248,20 +252,24 @@ final class SettingsShareModel {
         commitAccessKey()
         let preferences = preferences, account = preferences.secretAccount, secrets = secrets, tester = tester
         let before = keychain
+        testGeneration += 1
+        let generation = testGeneration
         test = .testing
         testing = Task {
             await before?.value
+            let outcome: Test
             do {
                 let secret = try await Task.detached { try secrets.secret(for: account) }.value
                 guard let secret, !secret.isEmpty else { throw ShareError.notConfigured(.missingSecret) }
                 try await tester(preferences, secret)
-                guard self.preferences == preferences else { return }
-                test = .succeeded
+                outcome = .succeeded
             } catch {
                 Self.logger.error("Test Connection failed: \(String(describing: error), privacy: .public)")
-                guard self.preferences == preferences else { return }
-                test = .failed(ShareTexts.describe(error))
+                outcome = .failed(ShareTexts.describe(error))
             }
+            // A field changed meanwhile: what it found is of the settings before, and was forgotten.
+            guard testGeneration == generation else { return }
+            test = outcome
         }
     }
 
@@ -272,7 +280,16 @@ final class SettingsShareModel {
         guard changed != preferences else { return }
         preferences = changed
         save(changed)
-        if test != .testing { test = .idle }
+        forgetTest()
+    }
+
+    /// The settings or the secret changed: what "Test Connection" said, or is finding, is of the ones before. One that
+    /// runs is cancelled (its test file is deleted all the same) and what it finds is dropped; the button is ready again.
+    private func forgetTest() {
+        testGeneration += 1
+        testing?.cancel()
+        testing = nil
+        test = .idle
     }
 
     /// `work` after the Keychain's work before it, off the main thread.

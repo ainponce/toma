@@ -1696,7 +1696,9 @@ Contra la Toma.app de la rama, con buckets propios del dueño (ningún agente cr
 - El link abre la página en Safari y en Chrome, en claro y en oscuro (según el sistema): el video con su póster, el título, el resumen y los capítulos, que saltan en el mismo reproductor. Pegado en Mensajes y en Slack se ve con el póster.
 - Un link prefirmado de 1 día (Ajustes ▸ Compartir ▸ Vencimiento del link: 1 día) deja de andar (403) pasado el día, el video y el póster también; en «Links anteriores» sale «Vencido» y sin «Abrir».
 - «Borrar del almacenamiento» pregunta «¿Borrar del almacenamiento?» con el nombre del bucket; al confirmar, la fila se va y el link da 403 o 404. Con Ajustes ▸ Compartir apuntando a otro bucket, borrar un link viejo dice que está en otro almacenamiento y no borra nada.
-- Cerrar la ventana del editor a mitad de una subida no pregunta, y el bucket queda sin objetos de ese link (mirar `toma/<id>/` en la consola del servicio); salir de Toma a mitad pregunta como con un export y tampoco deja objetos.
+- Cerrar la ventana del editor a mitad de una subida no pregunta, y el bucket queda sin objetos de ese link (mirar `toma/<id>/` en la consola del servicio); salir de Toma a mitad pregunta como con un export y tampoco deja objetos. Lo mismo al cerrar la ventana a mitad y salir enseguida con ⌘Q: la salida espera la limpieza (10 s como mucho).
+- Recién compartido, el tacho junto a «Copiar» y «Abrir» borra ese link (con la confirmación), y el link ya aparece en «Links de este proyecto».
+- Tocar «Probar conexión» y, mientras gira, escribir una letra en Bucket: deja de girar y el botón vuelve a estar disponible, sin quedar trabado.
 - Exportar el video entero en H.264 1080p y enseguida «Compartir» sin editar nada: no vuelve a exportar (va directo a «Subiendo…»). Después de una edición, sí exporta.
 - Exportar normal desde la hoja (MP4 entero, un tramo y un GIF) sigue igual que antes de esta versión: el anillo, «Cancelar export», los avisos de lo que quedó afuera.
 - Mientras corre un export de otro editor, «Compartir» está atenuado con «Esperar a que termine el export.».

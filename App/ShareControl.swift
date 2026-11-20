@@ -5,8 +5,8 @@ import Sharing
 import SwiftUI
 
 /// Share, in the editor's bar (plan 5a, Task S4; design §8.3): a button that opens a little window (a popover) with what
-/// sharing is now (not set up, ready, exporting or uploading, the link, or why it failed) and the project's earlier
-/// links. While a share runs, the button is a ring of its progress.
+/// sharing is now (not set up, ready, exporting or uploading, the link, or why it failed) and the project's links, the
+/// one just shared too. While a share runs, the button is a ring of its progress.
 struct ShareControl: View {
     let model: EditorModel
 
@@ -53,10 +53,9 @@ private struct SharePopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             current
-            let earlier = earlierLinks
-            if !earlier.isEmpty || share.historyProblem != nil {
+            if !share.records.isEmpty || share.historyProblem != nil {
                 Divider()
-                history(earlier)
+                history(share.records)
             }
         }
         .padding(16)
@@ -78,12 +77,6 @@ private struct SharePopover: View {
                 "The video, the poster and the page are deleted from “\(record.bucket)”. The link stops working. This can't be undone.",
                 comment: "Asking before deleting a shared link from the storage; the bucket's name in quotes")
         }
-    }
-
-    /// The links of before: all of them but the one just shared, shown above.
-    private var earlierLinks: [ShareRecord] {
-        guard case let .finished(shared) = share.state else { return share.records }
-        return share.records.filter { $0.id != shared.id }
     }
 
     // MARK: - What sharing is now
@@ -211,8 +204,27 @@ private struct SharePopover: View {
             HStack {
                 Button("Copy") { share.copy(record) }
                     .keyboardShortcut("c", modifiers: [.command, .shift])
-                Button("Open") { share.open(record) }
+                if ShareRules.webLink(record.url) != nil {
+                    Button("Open") { share.open(record) }
+                }
                 Spacer()
+                // Shared by mistake (the wrong project, something private): it can go at once.
+                if share.deleting.contains(record.id) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel(Text("Deleting from storage…", comment: "A shared link being deleted from the storage"))
+                } else {
+                    Button { confirming = record } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                        .help(Text("Delete from Storage", comment: "Deletes a shared link's video, poster and page from the storage"))
+                        .accessibilityLabel(Text("Delete from Storage", comment: "Deletes a shared link's video, poster and page from the storage"))
+                }
+            }
+            if let problem = share.deleteProblem, problem.id == record.id {
+                Text(verbatim: problem.text)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Text(verbatim: noteText(for: record))
                 .font(.callout)
@@ -264,11 +276,11 @@ private struct SharePopover: View {
         }
     }
 
-    // MARK: - The links of before
+    // MARK: - The project's links
 
     private func history(_ records: [ShareRecord]) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Earlier Links", comment: "Share: the project's links shared before")
+            Text("This Project's Links", comment: "Share: the links shared from this project, the newest first")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
             if let problem = share.historyProblem {
@@ -281,13 +293,18 @@ private struct SharePopover: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ForEach(Array(records.enumerated()), id: \.element.id) { index, record in
                         if index > 0 { Divider() }
-                        ShareRecordRow(share: share, record: record) { confirming = record }
+                        ShareRecordRow(share: share, record: record, isShownAbove: isShared(record)) { confirming = record }
                     }
                 }
             }
             .frame(maxHeight: 236)
             .fixedSize(horizontal: false, vertical: records.count <= 4)
         }
+    }
+
+    /// Whether `record` is the link just shared, shown above with what was said of it.
+    private func isShared(_ record: ShareRecord) -> Bool {
+        if case let .finished(shared) = share.state { shared.id == record.id } else { false }
     }
 
     // MARK: - Words
@@ -305,11 +322,13 @@ private struct SharePopover: View {
     }
 }
 
-/// A link of before: when it was shared, whether it is public, expires or expired, its size; "Copy", "Open" (not once
-/// it expired) and "Delete from Storage", which asks first.
+/// A link of the project: when it was shared, whether it is public, expires or expired, its size; "Copy", "Open" (not
+/// once it expired, nor for what is not a web link) and "Delete from Storage", which asks first.
 private struct ShareRecordRow: View {
     let share: EditorShare
     let record: ShareRecord
+    /// The link just shared, above: what was said of it (copied, a deletion that failed) is said there, not twice.
+    let isShownAbove: Bool
     let confirmDelete: () -> Void
 
     var body: some View {
@@ -324,13 +343,13 @@ private struct ShareRecordRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                if let copied = share.copied, copied.id == record.id {
+                if !isShownAbove, let copied = share.copied, copied.id == record.id {
                     Text(verbatim: ShareTexts.copied(copied.note))
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if let problem = share.deleteProblem, problem.id == record.id {
+                if !isShownAbove, let problem = share.deleteProblem, problem.id == record.id {
                     Text(verbatim: problem.text)
                         .font(.caption)
                         .foregroundStyle(.red)
@@ -347,7 +366,7 @@ private struct ShareRecordRow: View {
                     Button { share.copy(record) } label: { Image(systemName: "doc.on.doc") }
                         .help(Text("Copy"))
                         .accessibilityLabel(Text("Copy"))
-                    if !expired {
+                    if !expired, ShareRules.webLink(record.url) != nil {
                         Button { share.open(record) } label: { Image(systemName: "safari") }
                             .help(Text("Open"))
                             .accessibilityLabel(Text("Open"))

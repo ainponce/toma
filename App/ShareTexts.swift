@@ -65,6 +65,12 @@ enum ShareTexts {
             String(
                 localized: "The link couldn't be recorded in the project, so it was removed from the storage.",
                 comment: "Share: shares.json could not be written after the upload, so the uploaded objects were deleted")
+        case let .notSavedNorRemoved(bucket, folder):
+            String(
+                format: String(
+                    localized: "The link couldn't be recorded in the project, and its files couldn't be removed from the storage: they may still be online. Delete the folder “%1$@” of the bucket “%2$@” in your storage's console.",
+                    comment: "Share: shares.json could not be written after the upload and deleting the uploaded objects failed too; the folder and the bucket's name"),
+                folder, bucket)
         }
     }
 

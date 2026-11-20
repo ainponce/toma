@@ -30,4 +30,7 @@ public enum ShareError: Error, Equatable, Sendable {
     /// disk failed), so its three objects were removed from the storage: nothing stays shared that the project cannot
     /// list and delete.
     case notSaved
+    /// As `notSaved`, but removing the three objects failed too (the network, the storage refusing a delete): they may
+    /// still be online at `folder` (`<prefix><id>/`) of `bucket`, which the person removes by hand.
+    case notSavedNorRemoved(bucket: String, folder: String)
 }

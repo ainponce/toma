@@ -201,6 +201,24 @@ private func shareError(_ body: () async throws -> Void) async -> ShareError? {
         }
     }
 
+    /// `shares.json` cannot record the link and the storage then refuses to remove it: it is never said to be removed,
+    /// but where its objects are, to remove them by hand.
+    @Test func aRemovalThatFailsSaysTheLinkMayStillBeOnline() async throws {
+        let fake = FakeS3()
+        try await withTemporaryDirectory { dir in
+            let project = try Project(in: dir)
+            let garbage = Data("not json".utf8)
+            let shares = project.shares
+            let breaking = FakeExport(clip: project.clip, before: { try garbage.write(to: shares) })
+            fake.script(when: { request, _ in request.method == "DELETE" }, .error(403, code: "AccessDenied"))
+            let error = await shareError { _ = try await run(project, fake, breaking) }
+            #expect(error == .notSavedNorRemoved(bucket: "bucket", folder: "toma/k3m7q2x4za/"))
+            // The page was the first to be removed and the storage refused it: all three are still there.
+            for name in ShareRecord.objectNames { #expect(fake.object(at: "/bucket/toma/k3m7q2x4za/\(name)") != nil) }
+            #expect(try Data(contentsOf: project.shares) == garbage)
+        }
+    }
+
     @Test func deleteRemovesFromStorageThenHistory() async throws {
         let fake = FakeS3()
         try await withTemporaryDirectory { dir in

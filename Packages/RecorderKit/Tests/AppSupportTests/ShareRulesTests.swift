@@ -133,6 +133,21 @@ import Testing
         #expect(ShareRules.changingRegion("eu-west-1", in: minio).endpoint == "http://localhost:9000")
     }
 
+    /// "Open" opens only a web link: a row of a `shares.json` that came with a package from elsewhere can say anything.
+    @Test func onlyWebLinksOpen() {
+        let signed = "https://0123.r2.cloudflarestorage.com/videos/toma/k3m7q2x4za/index.html?X-Amz-Signature=ab%2Bcd&X-Amz-Expires=604800"
+        #expect(ShareRules.webLink(signed)?.absoluteString == signed)
+        #expect(ShareRules.webLink("HTTPS://videos.example.com/toma/k3m7q2x4za/index.html") != nil)
+        #expect(ShareRules.webLink("http://localhost:9000/videos/toma/k3m7q2x4za/index.html") != nil)
+        for other in [
+            "file:///Users/someone/Downloads/run.command", "file://localhost/Applications/Calculator.app",
+            "javascript:alert(1)", "x-apple.systempreferences:com.apple.preference.security", "ssh://host",
+            "https:///no-host", "https://", "", "videos.example.com/toma/index.html", " https://videos.example.com",
+        ] {
+            #expect(ShareRules.webLink(other) == nil, "\(other)")
+        }
+    }
+
     /// Opening Share's little window or Settings ▸ Share asks only whether the secret is there: its data is read only to
     /// share or to test the connection.
     @Test func configuredAsksOnlyWhetherTheSecretIsThere() {
