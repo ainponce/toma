@@ -1604,3 +1604,7 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 
 - Con Quitar el fondo pedido y la máscara todavía analizándose, arrastrar el encuadre Manual (o un rectángulo de privacidad, o Sincronía con el audio) hasta que termine: la vista previa sigue el arrastre sin volver un instante a como estaba.
 - En la Biblioteca, un proyecto con la cámara en Fondo borroso o Quitado muestra en la tarjeta a la persona sin su cuarto (o la tarjeta sin la cámara mientras falta la máscara), y uno con Seguir la cara, la cara encuadrada. Con la Mac en español (Argentina), la transcripción elige siempre el mismo idioma (es-MX) al abrir varias veces.
+
+**Revisión final de la fase 3: aplicación** (final-fix-3, 2.ª ronda)
+
+- Con dos tomas en la secuencia (la segunda regrabada), tocar el volumen o Silenciar del micrófono y después elegir Limpieza "Fuerte": las dos tomas suenan y se exportan limpias (ambas generan su audio limpio), y un solo Deshacer vuelve la limpieza a como estaba.
