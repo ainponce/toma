@@ -8,6 +8,7 @@ import ProjectFormat
 /// in a document that breaks it, and none in a document that keeps them all, of phase 3 or of phases 1 and 2.
 @Suite struct DocumentRulesTests {
     private static let video = "assets/9a8b7c6d5e4f30211203f4e5d6c7b8a9.mov"
+    private static let sound = "assets/1d2c3b4a59687766554433221100ffee.m4a"
 
     /// `DocumentV4Example`, which has every field of phase 3, with `change` made to it.
     private static func example(_ change: (inout EditDocument) -> Void) -> EditDocument {
@@ -62,6 +63,22 @@ import ProjectFormat
             ("a media clip outside assets", Self.example { doc in
                 doc.sequence[media].content = .media(MediaClip(asset: "takes/take-001/display-1/segment-000001.mov", start: 0, end: 5))
             }, [.assetOutsideAssets("takes/take-001/display-1/segment-000001.mov")]),
+            // In `assets/`, but not a clip: no name of its kind.
+            ("a media clip named by no hash", Self.example { doc in
+                doc.sequence[media].content = .media(MediaClip(asset: "assets/x", start: 0, end: 5))
+            }, [.assetOutsideAssets("assets/x")]),
+            ("a media clip that is an image", Self.example { doc in
+                doc.sequence[media].content = .media(MediaClip(asset: DocumentV4Example.image, start: 0, end: 5))
+            }, [.assetOutsideAssets(DocumentV4Example.image)]),
+            ("an image annotation that is a clip", Self.example { doc in
+                guard let k = doc.annotations.items.firstIndex(where: { if case .image = $0.kind { true } else { false } }) else { return }
+                doc.annotations.items[k].kind = .image(ImageAnnotation(asset: Self.video, fit: .fit))
+            }, [.assetOutsideAssets(Self.video)]),
+            ("a clip annotation that is a sound", Self.example { doc in
+                guard let k = doc.annotations.items.firstIndex(where: { if case .clip = $0.kind { true } else { false } }) else { return }
+                doc.annotations.items[k].kind = .clip(ClipAnnotation(asset: Self.sound, start: 0, end: 1))
+            }, [.assetOutsideAssets(Self.sound)]),
+            ("a theme that is a clip", Self.example { $0.music.items[0].source = Self.video }, [.assetOutsideAssets(Self.video)]),
             ("an image annotation outside assets", Self.example { doc in
                 guard let k = doc.annotations.items.firstIndex(where: { if case .image = $0.kind { true } else { false } }) else { return }
                 doc.annotations.items[k].kind = .image(ImageAnnotation(asset: "assets/../edit.json", fit: .fit))
@@ -86,18 +103,35 @@ import ProjectFormat
     }
 
     @Test func assetPathsAndMusicSources() {
-        for path in [
-            "assets/9a8b7c6d5e4f30211203f4e5d6c7b8a9.mov", "assets/0f1e2d3c4b5a69788796a5b4c3d2e1f0.png", "assets/x",
-            "assets/1d2c3b4a59687766554433221100ffee.m4a",
-        ] {
-            #expect(DocumentRules.isAssetPath(path), "\(path)")
-            #expect(DocumentRules.isMusicSource(path), "\(path)")
+        let hash = "9a8b7c6d5e4f30211203f4e5d6c7b8a9"
+        // Each kind its own names, in `assets/` alone.
+        let kinds: [(PackageFileKind, valid: [String], other: [String])] = [
+            (.video, ["mov", "mp4", "m4v"], ["png", "m4a", "cube", "MOV", "avi"]),
+            (.asset, ["png", "jpg", "heic", "tiff"], ["mov", "m4a", "gif", "PNG"]),
+            (.audio, ["m4a", "mp3", "wav", "aiff", "caf"], ["mov", "png", "aif"]),
+            (.lut, ["cube"], ["png", "mov"]),
+        ]
+        for (kind, valid, other) in kinds {
+            for ext in valid { #expect(DocumentRules.isAssetPath("assets/\(hash).\(ext)", as: kind), "\(kind) \(ext)") }
+            for ext in other { #expect(!DocumentRules.isAssetPath("assets/\(hash).\(ext)", as: kind), "\(kind) \(ext)") }
+            for path in [
+                "", "assets/", "assets/x", "assets/.", "assets/..", "assets/a/\(hash).\(valid[0])", "assets//\(hash).\(valid[0])",
+                "/assets/\(hash).\(valid[0])", "./assets/\(hash).\(valid[0])", "Assets/\(hash).\(valid[0])",
+                "assets/\(hash.uppercased()).\(valid[0])", "assets/\(hash)0.\(valid[0])", "assets/\(hash).\(valid[0])\u{0}",
+                "takes/take-001/\(hash).\(valid[0])", "\(hash).\(valid[0])", "edit.json",
+            ] {
+                #expect(!DocumentRules.isAssetPath(path, as: kind), "\(kind) \(path)")
+            }
         }
-        for path in [
-            "", "assets/", "assets/.", "assets/..", "assets/a/b.mov", "assets//a.mov", "/assets/a.mov", "./assets/a.mov", "Assets/a.mov",
-            "assets\u{0}/a", "assets/a\u{0}.mov", "takes/take-001/a.mov", "edit.json",
-        ] {
-            #expect(!DocumentRules.isAssetPath(path), "\(path)")
+        // A kind whose files live elsewhere is never one of `assets/`.
+        for kind in [PackageFileKind.cursorImage, .wallpaper, .script] {
+            #expect(!DocumentRules.isAssetPath("assets/\(hash).png", as: kind))
+            #expect(!DocumentRules.isAssetPath("assets/script.txt", as: kind))
+        }
+        // A theme plays a sound of `assets/`, or one of the library.
+        #expect(DocumentRules.isMusicSource(Self.sound))
+        for path in [Self.video, DocumentV4Example.image, "assets/x", "assets/\(hash).aif"] {
+            #expect(!DocumentRules.isMusicSource(path), "\(path)")
         }
         for source in ["library:music-1/calma", "library:music-1/Lo-Fi-2", "library:music-1/a"] {
             #expect(DocumentRules.isMusicSource(source), "\(source)")

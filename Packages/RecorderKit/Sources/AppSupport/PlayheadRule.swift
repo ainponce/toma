@@ -8,10 +8,18 @@ public enum PlayheadRule {
     /// instant shown there, if `new` keeps it (a change of speed, a trim or a cut elsewhere moves it with its instant);
     /// otherwise the output time of the edit point that took its place, the first instant of its take kept after it (the
     /// join of a cut, the new start of a trimmed clip, the start of the clip after a deleted one), or the end of `new`
-    /// if none is. Unchanged when the sequences are the same; 0 when `old` has no output.
+    /// if none is. In a clip with content (phase 3), which shows no instant of its own, as far into that clip as it was
+    /// (up to its last instant, if it is shorter now) while `new` keeps the clip; otherwise as for its point. Unchanged
+    /// when the sequences are the same; 0 when `old` has no output.
     public static func output(afterChange output: Int64, from old: [Clip], to new: [Clip]) -> Int64 {
         guard old != new else { return output }
         let oldMap = TimeMap(sequence: old), newMap = TimeMap(sequence: new)
+        if let (clip, offset) = oldMap.contentOffset(atOutput: output),
+            let k = new.firstIndex(where: { $0.id == old[clip].id && $0.content != nil })
+        {
+            let length = TimeMap.outputDuration(of: new[k])
+            if length > 0 { return newMap.clipOutputStarts[k] + min(offset, length - 1) }
+        }
         guard let (clip, source) = oldMap.source(atOutput: output) else { return 0 }
         let take = old[clip].take
         return newMap.output(atSource: source, take: take) ?? newMap.firstKeptOutput(atOrAfter: source, take: take)

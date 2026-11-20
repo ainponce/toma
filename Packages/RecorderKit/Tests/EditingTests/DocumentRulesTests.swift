@@ -88,11 +88,14 @@ import ProjectFormat
 
             // Within the rules, the same steps apply.
             #expect(session.perform(try Self.replacing(1, of: document) { $0.audioShift = 500_000_000 }) == .applied)
+            // A clip with content at a speed out of range: nothing reads its speed.
             #expect(session.perform(try Self.replacing(1, of: session.document) { clip in
                 clip.end = clip.start
                 clip.content = .freeze(duration: 2_000_000_000)
                 clip.audioShift = 0
+                clip.speed = 100
             }) == .applied)
+            #expect(session.perform(try Self.replacing(0, of: session.document) { $0.speed = 100 }) == .refused)
             await session.close()
         }
     }

@@ -63,6 +63,9 @@ struct TimelineContent {
         var start: UInt64
         /// `ClipSpeed.clamped`.
         var speed: Double
+        /// A clip with content (phase 3): a point of its take, of which nothing is heard, as the mix makes it silent
+        /// (`EditedMix`), so its waveform is silence.
+        var silent = false
     }
 
     struct Zoom {
@@ -156,7 +159,10 @@ struct TimelineContent {
             guard length > 0 else { return nil }
             return .init(
                 id: clip.id, output: start..<(start + length),
-                info: ClipInfo(start: clip.start.nanoseconds, speed: ClipSpeed.clamped(clip.speed)))
+                // A clip with content plays at no speed of its own: no badge, and silence under it.
+                info: clip.content == nil
+                    ? ClipInfo(start: clip.start.nanoseconds, speed: ClipSpeed.clamped(clip.speed))
+                    : ClipInfo(start: clip.start.nanoseconds, speed: 1, silent: true))
         })
 
         let changes = document.screens.changes.filter { $0.take == takeID }.sorted { $0.t < $1.t }
@@ -1058,7 +1064,7 @@ final class TimelineTracks {
             while t < to, j < clips.count {
                 let clip = clips[j]
                 let end = min(to, clip.output.upperBound)
-                if clip.info.speed <= Self.fastestHeard {
+                if !clip.info.silent, clip.info.speed <= Self.fastestHeard {
                     let start = Double(clip.info.start) - Double(track.origin)
                     let sa = start + Double(t - clip.output.lowerBound) * clip.info.speed
                     let sb = start + Double(end - clip.output.lowerBound) * clip.info.speed

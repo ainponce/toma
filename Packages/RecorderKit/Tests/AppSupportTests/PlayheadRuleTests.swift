@@ -24,6 +24,28 @@ private enum Clips {
 private func output(_ seconds: Double) -> Int64 { TimeMap.outputNanoseconds(seconds: seconds) }
 
 @Suite struct PlayheadRuleTests {
+    /// A title card of 3 s between the two clips: [4 s, 7 s), the second clip from 7 s.
+    private static let card = Clip(
+        id: "c-3", take: Clips.take, start: Clips.at(105), end: Clips.at(105), speed: 1,
+        content: .card(TitleCard(title: "Toma", style: .centered, background: .stage), duration: 3_000_000_000))
+
+    @Test func inAContentClipItStaysAsFarIntoIt() {
+        let withCard = [Clips.first, Self.card, Clips.second]
+        // The first clip trimmed to 2 s: the card at [2 s, 5 s), and the playhead 1 s into it still.
+        let trimmed = [Clips.clip("c-1", 101, 103), Self.card, Clips.second]
+        #expect(PlayheadRule.output(afterChange: output(5), from: withCard, to: trimmed) == output(3))
+        // Deleted the second clip: the card stays where it was.
+        #expect(PlayheadRule.output(afterChange: output(6.5), from: withCard, to: [Clips.first, Self.card]) == output(6.5))
+        // The card made 1 s: its last instant.
+        var shorter = Self.card
+        shorter.content = .card(TitleCard(title: "Toma", style: .centered, background: .stage), duration: 1_000_000_000)
+        #expect(PlayheadRule.output(afterChange: output(6.5), from: withCard, to: [Clips.first, shorter, Clips.second]) == output(5) - 1)
+        // The card deleted: as for its point, the start of the clip of its take after it.
+        #expect(PlayheadRule.output(afterChange: output(5), from: withCard, to: Clips.both) == output(4))
+        // From a stretch of the take into a sequence with a card: the instant shown, past the card.
+        #expect(PlayheadRule.output(afterChange: output(5), from: Clips.both, to: withCard) == output(8))
+    }
+
     @Test func aSpeedChangeKeepsTheInstantAtItsNewTime() {
         // The first clip at 2×: [0 s, 2 s), the second from 2 s.
         let faster = [Clips.clip("c-1", 101, 105, speed: 2), Clips.second]

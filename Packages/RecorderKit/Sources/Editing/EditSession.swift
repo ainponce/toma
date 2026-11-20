@@ -1977,10 +1977,11 @@ extension LoadedProject {
 extension EditDocument {
     /// Whether every value the render reads as a number of frames or a rate is one the design allows: a frame rate of
     /// `EditDocument.frameRates` and clip speeds in `ClipSpeed.range` (Task 5: an absurd frame rate stops
-    /// `TimeMap.frameCount`); and whether it keeps every rule of the document of phase 3 (`DocumentRules.problems(in:)`,
-    /// base plan decision 6), so a step that breaks one is refused.
+    /// `TimeMap.frameCount`), but for a clip with content, whose speed nothing reads (`TimeMap`); and whether it keeps
+    /// every rule of the document of phase 3 (`DocumentRules.problems(in:)`, base plan decision 6), so a step that breaks
+    /// one is refused.
     fileprivate var isDrawable: Bool {
-        Self.frameRates.contains(frameRate) && sequence.allSatisfy { ClipSpeed.range.contains($0.speed) }
+        Self.frameRates.contains(frameRate) && sequence.allSatisfy { $0.content != nil || ClipSpeed.range.contains($0.speed) }
             && DocumentRules.problems(in: self).isEmpty
     }
 
@@ -2010,9 +2011,9 @@ extension EditDocument {
         for (index, shift) in shifts.enumerated() { document.sequence[index].audioShift = shift }
         document.annotations.items.removeAll { annotation in
             switch annotation.kind {
-            case let .image(image): !DocumentRules.isAssetPath(image.asset)
+            case let .image(image): !DocumentRules.isAssetPath(image.asset, as: .asset)
             case let .clip(clip):
-                if case .content = annotation.anchor { true } else { !DocumentRules.isAssetPath(clip.asset) }
+                if case .content = annotation.anchor { true } else { !DocumentRules.isAssetPath(clip.asset, as: .video) }
             case .text, .arrow, .shape, .callout, .step: false
             }
         }
