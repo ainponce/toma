@@ -203,7 +203,7 @@ struct TitleCardScene: Sendable {
     /// no longer does below 1. `frame` as it is (without keys or captions) at `f = 1`.
     ///
     /// Every layer of steps 1 to 6 of phase 3 design §12 a frame can hold fades here: one that gains an opacity (the
-    /// imported clip of the sequence, `RenderFrame.media`, still without one, plan 3a task A9) multiplies it by `f` here,
+    /// imported clip of the sequence, `RenderFrame.media`, with its shadow, plan 3a task A9) multiplies it by `f` here,
     /// and `blurred` drops it, or a card shows it whole until `p = 1` and then not at all.
     static func faded(_ frame: RenderFrame, keeping f: Double) -> RenderFrame {
         var faded = withoutOverlays(frame)
@@ -239,14 +239,14 @@ struct TitleCardScene: Sendable {
             faded.opacity = annotation.opacity * f
             return faded
         }
-        // A9: the imported clip of the sequence (`faded.media`) fades here once its layer has an opacity.
+        faded.media?.opacity *= f
         faded.camera?.opacity *= f
         faded.coveredByCamera = false
         return faded
     }
 
     /// `.blurredFrame`'s frame at `p` over the neighbor's `frame` (see the type's notes); `nil` when it shows no screen
-    /// (an imported clip of the sequence shows none: A9's `media` is never under a blurred frame).
+    /// (an imported clip of the sequence shows none, so its `media` is never under a blurred frame: dropped all the same).
     static func blurred(_ frame: RenderFrame, _ p: Double) -> RenderFrame? {
         guard let screen = frame.screen else { return nil }
         let p = p.isNaN ? 0 : min(max(p, 0), 1)
@@ -258,6 +258,7 @@ struct TitleCardScene: Sendable {
         blurred.calmZoom = nil
         blurred.contentAnnotations = []
         blurred.camera = nil
+        blurred.media = nil
         var over = screen
         over.privacy = [PrivacyRegion(rect: Rect(x: 0, y: 0, width: 1, height: 1), effect: .blur, strength: 1, color: SIMD4(0, 0, 0, 1))]
         over.opacity = screen.opacity * p

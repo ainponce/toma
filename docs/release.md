@@ -1232,6 +1232,11 @@ Con el proyecto de «El menú Tomas y «Regrabar desde acá»».
 - VoiceOver: cada mosaico se lee por su nombre (el elegido, seleccionado) y cada color de la paleta por el suyo («Rojo», «Color del proyecto 1»).
 - El agente no pudo capturar la pantalla (estaba bloqueada): vio el panel dibujado desde sus vistas (`TOMA_SHOWCASE_TAB=8` con `TOMA_SHOWCASE_P3_ANNOTATIONS=inspector`, `inspector-arrow`, `inspector-shape`, `inspector-callout`, `inspector-clip` y `card`, `TOMA_SHOWCASE_P3_NARROW=1` y `TOMA_SHOWCASE_PANEL_PNG`, en claro y oscuro), donde los bordes de los controles de AppKit (casillas, campos, menús, segmentos) no se dibujan; comprobó con `anchor` que cambiar el anclaje deja la caja y la letra en los mismos píxeles, y con `menu` que ⌘D y los cuatro de Ordenar llegan por el menú (enviados al menú principal). No probó clics reales, el selector de colores, los paneles de abrir ni VoiceOver: mirarlos en la app.
 
+**Clips en la secuencia: el dibujo** (A9)
+
+- Un clip vertical grabado con un iPhone (MOV HEVC, de pie) y uno horizontal (MP4 H.264 de una cámara o de otro export), cada uno en la secuencia: se ven derechos y enteros dentro del margen, con las esquinas y la sombra del estilo y sin cursor ni cámara; en pausa, reproduciendo, arrastrando el cursor de reproducción por encima y en el video exportado, igual. A 1,5× se mueven más rápido y terminan donde termina su tramo. Un ProRes 4444 con alfa se ve opaco y nada se traba.
+- Con el proyecto cerrado, sacar el archivo del clip de `assets/` (o cambiarlo por un alias): al abrirlo, en su tramo se ve el fondo solo; reproducir y exportar no se traban ni dan error.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

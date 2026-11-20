@@ -167,9 +167,8 @@ private struct Seam3Drawer: @unchecked Sendable {
     let phase3 = [ShaderSource.mediaClipMetal, ShaderSource.calmZoomMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + (phase2 + phase3).joined())
     // The base adds no shader of its own: phase 3's parts are their milestones' (3a's and 3b's), empty in the base until
-    // each fills its own (3b's calm zoom, Z3; 3a's title card, A8, and annotations, A6).
-    #expect([ShaderSource.mediaClipMetal].allSatisfy { $0.isEmpty })
-    #expect(!ShaderSource.calmZoomMetal.isEmpty && !ShaderSource.titleCardMetal.isEmpty && !ShaderSource.annotationsMetal.isEmpty)
+    // each fills its own (3b's calm zoom, Z3; 3a's title card, A8, annotations, A6, and imported clip, A9).
+    #expect(phase3.allSatisfy { !$0.isEmpty })
 }
 
 /// The scenes of phase 3's layers with a document that has none of them: nothing, and the background as it is.
@@ -264,8 +263,12 @@ private func zoomingDocument() -> (take: TakeRecord, events: [InputEvent], docum
     for seconds in [1.0, 1.5, 1.9999] {
         #expect(scene.frame(at: seconds).titleCard != nil, "\(seconds) s")
     }
+    // The imported clip (3a's Task A9): the background with the clip's layer on it, and nothing else.
     for seconds in [2.0, 2.5, 2.9999] {
-        #expect(scene.frame(at: seconds) == background, "\(seconds) s")
+        var frame = scene.frame(at: seconds)
+        #expect(frame.media?.asset == media.asset, "\(seconds) s")
+        frame.media = nil
+        #expect(frame == background, "\(seconds) s")
     }
     #expect(scene.frame(at: 0.5).screen != nil && scene.frame(at: 4.5).screen != nil)
 }
