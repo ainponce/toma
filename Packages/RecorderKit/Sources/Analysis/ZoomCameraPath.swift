@@ -178,9 +178,9 @@ public struct ZoomCameraPath: Sendable {
     /// The last step simulated: the one of the end of the output.
     var lastStep: Int { simulation.lastStep }
 
-    /// `state(atOutput: τ)` with the centre placed at `depth` (`StageCrop`) rather than at the camera's own.
-    func state(atOutput τ: Int64, placedAt depth: Double) -> ZoomCameraState {
-        ZoomCameraState(simulation.state(atOutput: τ, placedAt: depth))
+    /// `state(atOutput: τ)` with the centre placed (`StageCrop`) at the larger of the camera's own depth and `depth`.
+    func state(atOutput τ: Int64, placedAtLeast depth: Double) -> ZoomCameraState {
+        ZoomCameraState(simulation.state(atOutput: τ, placedAtLeast: depth))
     }
 
     // MARK: - Internal (the state of the simulation, for the tests)
@@ -672,20 +672,21 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
             atOutput: τ)
     }
 
-    /// `state(atOutput: τ)` with the centre placed at `depth` rather than at the camera's own: the calm focus, placed at
-    /// its block's depth while the camera's goes from 1 to it (plan decision 4).
-    func state(atOutput τ: Int64, placedAt depth: Double) -> ZoomPlacement {
+    /// `state(atOutput: τ)` with the centre placed at the larger of the camera's own depth and `depth`: the calm focus,
+    /// placed at its block's depth while the camera's goes from 1 to it (plan decision 4).
+    func state(atOutput τ: Int64, placedAtLeast depth: Double) -> ZoomPlacement {
         let (s, fraction) = StepGrid.position(ofOutput: τ)
         guard fraction > 0, s >= 0, s < lastStep else {
             let step = clamped(s)
             let camera = camera(atStep: step)
             return placed(
-                logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step), placedAt: depth)
+                logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step),
+                placedAtLeast: depth)
         }
         let (a, b) = cameras(atSteps: s)
         return placed(
             logDepth: a.logDepth + (b.logDepth - a.logDepth) * fraction, center: a.center + (b.center - a.center) * fraction,
-            atOutput: τ, placedAt: depth)
+            atOutput: τ, placedAtLeast: depth)
     }
 
     /// The camera on step `s` (held to `0...lastStep`), from the checkpoint before it.
@@ -773,16 +774,16 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         min(max(s, 0), lastStep)
     }
 
-    /// The camera drawn with `logDepth` and `center`, at output time `τ`: the centre placed at `depth`, the camera's own
-    /// when `nil`.
+    /// The camera drawn with `logDepth` and `center`, at output time `τ`: the centre placed at the camera's own depth,
+    /// or at `least` where that is larger.
     private func placed(
-        logDepth: Double, center: SIMD2<Double>, atOutput τ: Int64, placedAt depth: Double? = nil
+        logDepth: Double, center: SIMD2<Double>, atOutput τ: Int64, placedAtLeast least: Double? = nil
     ) -> ZoomPlacement {
         let logDepth = max(logDepth, 0)
         let screen = viewport.screen(at: host(atOutput: τ))
+        let depth = least.map { max(exp(logDepth), $0) } ?? exp(logDepth)
         return ZoomPlacement(
-            logDepth: logDepth,
-            center: StageCrop.clamp(center: center, depth: depth ?? exp(logDepth), stage: viewport.size, screen: screen))
+            logDepth: logDepth, center: StageCrop.clamp(center: center, depth: depth, stage: viewport.size, screen: screen))
     }
 
     /// The source instant of the take shown at output time `τ`; `nil` with no output, or another take's.

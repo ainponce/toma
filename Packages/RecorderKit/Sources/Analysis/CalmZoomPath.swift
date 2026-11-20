@@ -8,16 +8,16 @@ import ProjectFormat
 public struct CalmZoomState: Equatable, Sendable {
     /// The block's, or that of the last one left while it fades.
     public var mode: ZoomMode
-    /// How much of the effect is seen, from 0 to 1 (never 0: there is no state then).
+    /// How much of the effect is seen, from `CalmAmount.unseen` (1/255) to 1: below it there is no state.
     public var amount: Double
     /// The depth of the instant, at least 1: it goes from 1 to `blockDepth` and back with the spring, as the classic
-    /// camera's would. The focus is the stage over it.
+    /// camera's would. The focus is the stage over it, and the loupe magnifies by it.
     public var depth: Double
-    /// The depth of the block, or of the last one left while it fades: the depth the focus is placed at, and the loupe's
-    /// magnification.
+    /// The depth of the block, or of the last one left while it fades.
     public var blockDepth: Double
-    /// The focus's centre, placed with `StageCrop` at `blockDepth` over the screen's rect of the instant: where the
-    /// classic camera's crop would be at that depth.
+    /// The focus's centre, placed with `StageCrop` over the screen's rect of the instant at the larger of `depth` and the
+    /// depth of the block it is placed for (`blockDepth`; across a gap the next block goes on from, that block's): where
+    /// the classic camera's crop would be at that depth once it has settled.
     public var center: SIMD2<Double>
     /// The block's lens (`ZoomRegion.resolvedLoupe`), or that of the last one left while it fades.
     public var loupe: LoupeStyle
@@ -34,7 +34,7 @@ public struct CalmZoomState: Equatable, Sendable {
     }
 
     /// The focus on a stage of `stageSize` (in stage units, `StagePoints.stageSize`): `center ± stageSize / (2 depth)`,
-    /// the whole stage about `center` at depth 1, what the classic crop would show at `blockDepth`.
+    /// the whole stage about `center` at depth 1, what the classic crop would show once settled.
     public func focus(stageSize: SIMD2<Double>) -> Rect {
         let half = stageSize / depth / 2
         return Rect(x: center.x - half.x, y: center.y - half.y, width: 2 * half.x, height: 2 * half.y)
@@ -52,15 +52,20 @@ public struct CalmZoomState: Equatable, Sendable {
 ///   block from outside every one it jumps to its target only when nothing of the blocks before is seen any more
 ///   (`amount` on the step before below `CalmAmount.unseen`, 1/255), and otherwise goes there with the spring from where
 ///   it stayed (the depth goes on with the spring, but into an instant block, where both jump). Its centre is placed with
-///   `StageCrop` at the depth of the block (that of the last one left while it fades); its size is the stage over the
-///   depth of the instant, so Highlight and Dim close on the focus from the whole stage and the loupe magnifies from 1×
-///   to the block's depth, without moving.
+///   `StageCrop` at the larger of the depth of the instant and that of the block (that of the last one left while it
+///   fades, or across a gap that the next block goes on from without a jump, the next one's): the block's while it closes
+///   in, while it is there and while it fades, so the focus does not move, and between two blocks of other depths that
+///   touch or nearly touch, the instant's, which goes from one to the other with the spring, so the focus does not jump.
+///   Its size is the stage over the depth of the instant, so Highlight and Dim close on the focus from the whole stage
+///   and the loupe magnifies from 1× to the block's depth, without moving.
 /// - How much is seen (`amount`): the step response of `zoom.spring` (`stepResponse(of:)`) summed over the edges of each
 ///   run of calm blocks that touch (+1 on entering, −1 on leaving), from the last instant edge, which sets its value at
 ///   once (1 entering, 0 leaving), held from 0 to 1 and mixed linearly between steps. Two calm blocks that touch are one
 ///   run, which does not fade between them; where their modes differ, the mode changes on the step of the border.
 /// - The mode, the lens and the block's depth are those of the block of the step, or of the last one left while it
-///   fades; where `amount` is 0 there is no state.
+///   fades. There is no state where less than `CalmAmount.unseen` (1/255) is seen, nor, after a run, from the first step
+///   it is below that to the next run (`CalmAmount.isSeen(atStep:)`): the effect is drawn only where it can be seen,
+///   and one that fades with an underdamped spring does not come and go.
 ///
 /// Built with `MotionPaths`, off the main thread, after an edit from the path before it (`MotionPaths.calmZoom`), with the
 /// bits of building it from nothing. In a calm block the stage's and the card's cameras are at rest
@@ -112,22 +117,28 @@ public struct CalmZoomPath: Sendable {
     }
 
     /// The calm zoom at output time `τ`: on the grid, its step's; between two steps, the amount and the camera mixed
-    /// linearly, with the block of the later step. Before the output, its first step's; after its end, its last step's.
-    /// `nil` where the amount is 0.
+    /// linearly, with the block of the later step, and none once the step before has faded. Before the output, its
+    /// first step's; after its end, its last step's. `nil` where it is not seen (`CalmAmount.isSeen(atStep:)`).
     public func state(atOutput τ: Int64) -> CalmZoomState? {
         let (s, fraction) = StepGrid.position(ofOutput: τ)
         let amount: Double
         let step: Int
         if fraction > 0, s >= 0, s < camera.lastStep {
+            guard !seen.hasFaded(atStep: s) else { return nil }
             let a = self.amount(atStep: s), b = self.amount(atStep: s + 1)
             amount = a + (b - a) * fraction
             step = s + 1
         } else {
             step = min(max(s, 0), camera.lastStep)
+            guard !seen.hasFaded(atStep: step) else { return nil }
             amount = self.amount(atStep: step)
         }
-        guard amount > 0, let block = block(atStep: step) else { return nil }
-        let placed = camera.state(atOutput: τ, placedAt: block.depth)
+        guard amount >= CalmAmount.unseen, let k = blockIndex(atStep: step) else { return nil }
+        let block = blocks[k]
+        // Across a gap the next block goes on from without a jump, the focus is placed for it already.
+        let placing = step >= block.steps.upperBound && k + 1 < blocks.count && !blocks[k + 1].focusJumpsIn
+            ? blocks[k + 1] : block
+        let placed = camera.state(atOutput: τ, placedAtLeast: placing.depth)
         return CalmZoomState(
             mode: block.mode, amount: amount, depth: placed.depth, blockDepth: block.depth, center: placed.center,
             loupe: block.loupe)
@@ -148,33 +159,36 @@ public struct CalmZoomPath: Sendable {
         seen.amount(atStep: s)
     }
 
-    /// The block of step `s`: the one it is in, or the last one before it; `nil` before the first.
-    private func block(atStep s: Int) -> ZoomBlock? {
+    /// The index of the block of step `s`: the one it is in, or the last one before it; `nil` before the first.
+    private func blockIndex(atStep s: Int) -> Int? {
         var low = 0, high = blocks.count
         while low < high {
             let mid = (low + high) / 2
             if blocks[mid].steps.lowerBound <= s { low = mid + 1 } else { high = mid }
         }
-        return low > 0 ? blocks[low - 1] : nil
+        return low > 0 ? low - 1 : nil
     }
 }
 
 /// How much of the calm zoom is seen on each step (plan 3b decision 5), from the calm blocks on the grid and
 /// `zoom.spring`: the step response of the spring (`stepResponse(of:)`) summed over the edges of each run of calm blocks
 /// that touch (+1 on entering, −1 on leaving), from the last edge settled (instant, which sets its value at once, or
-/// `responseSteps` or more before), held from 0 to 1. What `CalmZoomPath` draws, and what its simulation reads to tell
-/// whether the focus can jump into a block (`marked(_:spring:)`).
+/// `responseSteps` or more before), held from 0 to 1; and where it is seen (`isSeen(atStep:)`). What `CalmZoomPath`
+/// draws, and what its simulation reads to tell whether the focus can jump into a block (`marked(_:spring:)`).
 struct CalmAmount: Sendable {
     /// How many steps the step response is read for before it is 1: 10 s.
     static let responseSteps = 10 * StepGrid.rate
-    /// Below this much, nothing of the calm zoom is seen (less than one level of 8 bits): the focus can jump into a block
-    /// there (plan 3b decision 4, as the controller ruled on Z2).
+    /// Below this much, nothing of the calm zoom is seen (less than one level of 8 bits): there is no state, and the focus
+    /// can jump into a block there (plan 3b decisions 4 and 5, as the controller ruled on Z2).
     static let unseen = 1.0 / 255
 
     /// The edges of the runs, in output order (strictly: runs that do not touch have a step between them).
     private let edges: [Edge]
     /// `stepResponse(of: spring)`.
     private let response: [Double]
+    /// For each edge that leaves a run, the first step from it on which less than `unseen` is seen, when that is before
+    /// the next run; `nil` for the others.
+    private let fades: [Int?]
 
     /// An edge of a run of calm blocks that touch: the first step of its first block, or the step after its last block.
     private struct Edge: Sendable {
@@ -194,8 +208,21 @@ struct CalmAmount: Sendable {
             edges.append(Edge(step: block.steps.lowerBound, entering: true, instant: block.instant))
         }
         if let last = blocks.last { edges.append(Edge(step: last.steps.upperBound, entering: false, instant: last.instant)) }
+        let response = Self.stepResponse(of: spring)
         self.edges = edges
-        response = Self.stepResponse(of: spring)
+        self.response = response
+        // At most `responseSteps` after it leaves, the run's edges have settled to 0.
+        fades = edges.indices.map { i in
+            guard !edges[i].entering else { return nil }
+            let next = i + 1 < edges.count ? edges[i + 1].step : Int.max
+            var s = edges[i].step
+            while s < next, s <= edges[i].step + Self.responseSteps,
+                Self.amount(atStep: s, edges: edges, response: response) >= Self.unseen
+            {
+                s += 1
+            }
+            return s < next ? s : nil
+        }
     }
 
     /// The response of `spring` (through `StepGrid.stable(_:)`) to a step from 0 to 1 on the grid: the value `k` steps
@@ -213,13 +240,33 @@ struct CalmAmount: Sendable {
     /// How much is seen on step `s` (0 to 1): the edges up to it from the last one settled (instant, or `responseSteps`
     /// or more before it), which gives 1 after an entry and 0 after an exit, then each later one's response, in order.
     func amount(atStep s: Int) -> Double {
+        Self.amount(atStep: s, edges: edges, response: response)
+    }
+
+    /// Whether the effect is seen on step `s`: at least `unseen` of it, and not after its run faded (`hasFaded(atStep:)`).
+    func isSeen(atStep s: Int) -> Bool {
+        !hasFaded(atStep: s) && amount(atStep: s) >= Self.unseen
+    }
+
+    /// Whether step `s` is after a run, from the first step on which less than `unseen` of it was seen: from there to the
+    /// next run nothing is drawn, even where an underdamped spring brings some of it back.
+    func hasFaded(atStep s: Int) -> Bool {
+        let last = Self.lastEdge(atOrBefore: s, edges)
+        return last.map { fades[$0].map { $0 <= s } ?? false } ?? false
+    }
+
+    /// The index of the last of `edges` at or before step `s`; `nil` before the first.
+    private static func lastEdge(atOrBefore s: Int, _ edges: [Edge]) -> Int? {
         var low = 0, high = edges.count
         while low < high {
             let mid = (low + high) / 2
             if edges[mid].step <= s { low = mid + 1 } else { high = mid }
         }
-        let last = low - 1
-        guard last >= 0 else { return 0 }
+        return low > 0 ? low - 1 : nil
+    }
+
+    private static func amount(atStep s: Int, edges: [Edge], response: [Double]) -> Double {
+        guard let last = lastEdge(atOrBefore: s, edges) else { return 0 }
         var settled = last
         while settled >= 0, !edges[settled].instant, s - edges[settled].step < response.count { settled -= 1 }
         var value = settled >= 0 && edges[settled].entering ? 1.0 : 0.0
@@ -231,14 +278,14 @@ struct CalmAmount: Sendable {
     }
 
     /// `blocks` (the calm ones, as for `init(blocks:spring:)`) with `ZoomBlock.focusJumpsIn` set: on each that starts a
-    /// run, whether what is seen on the step before it is below `unseen`, so nothing of the blocks before shows the jump;
-    /// on the others, which are entered from the block before, `false`. Read from the blocks before each one alone.
+    /// run, whether nothing is seen on the step before it (`isSeen(atStep:)`), so nothing of the blocks before shows the
+    /// jump; on the others, which are entered from the block before, `false`. Read from the blocks before each one alone.
     static func marked(_ blocks: [ZoomBlock], spring: SpringSpec) -> [ZoomBlock] {
         let seen = CalmAmount(blocks: blocks, spring: spring)
         return blocks.enumerated().map { k, block in
             var block = block
             let startsARun = k == 0 || blocks[k - 1].steps.upperBound != block.steps.lowerBound
-            block.focusJumpsIn = startsARun && seen.amount(atStep: block.steps.lowerBound - 1) < unseen
+            block.focusJumpsIn = startsARun && !seen.isSeen(atStep: block.steps.lowerBound - 1)
             return block
         }
     }

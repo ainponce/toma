@@ -148,9 +148,12 @@ extension ZoomFixtures {
                 let motion = Self.calmPaths(
                     zoomDocument(regions: [calmBlock(1, .loupe, from: 1, to: 4, focus: focus)]), events: events)
                 let path = try #require(motion.calmZoom)
+                // It is seen from its first steps on (once 1/255 of it is), within the first frame.
                 let first = step(1)
-                #expect(path.state(atOutput: StepGrid.outputTime(ofStep: first - 1)) == nil)
-                let entered = try #require(path.state(atOutput: StepGrid.outputTime(ofStep: first)))
+                let shown = try #require((first..<(first + 60)).first { path.state(atOutput: StepGrid.outputTime(ofStep: $0)) != nil })
+                #expect(shown - first < 10 && path.amount(atStep: shown - 1) < CalmAmount.unseen)
+                #expect(((first - 1)..<shown).allSatisfy { path.state(atOutput: StepGrid.outputTime(ofStep: $0)) == nil })
+                let entered = try #require(path.state(atOutput: StepGrid.outputTime(ofStep: shown)))
                 // Where it looks, placed at the block's depth: for a fixed focus, its point of the screen; following, the
                 // cursor's.
                 let point = switch focus {
@@ -164,10 +167,11 @@ extension ZoomFixtures {
                 #expect(near(target, expected, 1e-12), "\(focus): \(target) \(expected)")
                 let classic = Self.calmPaths(zoomDocument(regions: [calmBlock(1, nil, from: 1, to: 4, focus: focus)]), events: events)
                 #expect(target == classic.zoom.camera(atStep: first).target, "\(focus)")
+                #expect(path.camera.camera(atStep: first).center == target, "\(focus)")
                 #expect(entered.center == target, "\(focus)")
                 #expect(entered.depth > 1 && entered.depth < 1.01 && entered.blockDepth == 2, "\(focus)")
                 // The depth reaches 2 with the spring, never past it, and the centre does not move.
-                let steps = Array(stride(from: first, to: step(4), by: 5))
+                let steps = Array(stride(from: shown, to: step(4), by: 5))
                 let depths = steps.map { path.state(atOutput: StepGrid.outputTime(ofStep: $0))!.depth }
                 #expect(zip(depths, depths.dropFirst()).allSatisfy { $0 <= $1 } && depths.last! <= 2)
                 #expect(abs(depths.last! - 2) < 1e-6)
@@ -200,9 +204,8 @@ extension ZoomFixtures {
                 previous = state
             }
             let gone = try #require(faded)
-            #expect(previous.depth < 1 + 1e-9 && previous.amount < 1e-9)
-            #expect(((gone)...(gone + 600)).allSatisfy { path.state(atOutput: StepGrid.outputTime(ofStep: $0)) == nil })
-            #expect(path.state(atOutput: output(19)) == nil)
+            #expect(previous.depth < 1.01 && previous.amount < 0.01)
+            #expect((gone...(20 * 600)).allSatisfy { path.state(atOutput: StepGrid.outputTime(ofStep: $0)) == nil })
         }
 
         @Test func amountIsTheSpringsStepResponse() throws {
@@ -269,8 +272,9 @@ extension ZoomFixtures {
                     (step(1)..<(step(5) - 1)).allSatisfy { path.amount(atStep: $0) <= path.amount(atStep: $0 + 1) }, "\(secondMode)")
                 // The centre goes from one focus to the other without a jump; the mode changes on the border's step.
                 let border = step(3)
-                var previous = try #require(path.state(atOutput: StepGrid.outputTime(ofStep: step(1))))
-                for s in step(1)..<step(5) {
+                let shown = try #require((step(1)..<step(2)).first { path.state(atOutput: StepGrid.outputTime(ofStep: $0)) != nil })
+                var previous = try #require(path.state(atOutput: StepGrid.outputTime(ofStep: shown)))
+                for s in shown..<step(5) {
                     let state = try #require(path.state(atOutput: StepGrid.outputTime(ofStep: s)))
                     #expect(distance(state.center, previous.center) <= 0.01, "step \(s)")
                     #expect(state.mode == (s < border ? .highlight : secondMode), "step \(s)")
@@ -300,10 +304,11 @@ extension ZoomFixtures {
             let entry = step(3.1)
             #expect(soon.amount(atStep: entry - 1) > 0.5)
             #expect(soon.camera.blocks.map(\.focusJumpsIn) == [true, false])
-            var previous = try #require(soon.state(atOutput: StepGrid.outputTime(ofStep: step(1))))
+            let shown = try #require((step(1)..<step(2)).first { soon.state(atOutput: StepGrid.outputTime(ofStep: $0)) != nil })
+            var previous = try #require(soon.state(atOutput: StepGrid.outputTime(ofStep: shown)))
             #expect(previous.center == a)
             var largest = 0.0
-            for s in (step(1) + 1)..<step(6) {
+            for s in (shown + 1)..<step(5.5) {
                 let state = try #require(soon.state(atOutput: StepGrid.outputTime(ofStep: s)), "step \(s)")
                 largest = max(largest, distance(state.center, previous.center))
                 previous = state
@@ -317,8 +322,80 @@ extension ZoomFixtures {
                 let entry = step(3 + gap)
                 #expect(later.amount(atStep: entry - 1) < CalmAmount.unseen, "\(gap)")
                 #expect(later.camera.blocks.map(\.focusJumpsIn) == [true, true], "\(gap)")
-                let entered = try #require(later.state(atOutput: StepGrid.outputTime(ofStep: entry)))
-                #expect(entered.center == b && entered.center == later.camera.camera(atStep: entry).target, "\(gap)")
+                #expect(later.state(atOutput: StepGrid.outputTime(ofStep: entry - 1)) == nil, "\(gap)")
+                #expect(later.camera.camera(atStep: entry).center == b, "\(gap)")
+                let shown = try #require((entry..<(entry + 60)).first { later.state(atOutput: StepGrid.outputTime(ofStep: $0)) != nil })
+                #expect(later.state(atOutput: StepGrid.outputTime(ofStep: shown))?.center == b, "\(gap)")
+            }
+        }
+
+        @Test func oneFadedIsGoneUntilTheNextBlock() throws {
+            // Medium, and underdamped springs whose amount comes back above 1/255 after it fell below it.
+            for spring in [medium, SpringSpec(damping: 0.5, response: 0.5), SpringSpec(damping: 0.3, response: 0.7)] {
+                var document = zoomDocument(regions: [
+                    calmBlock(1, .highlight, from: 1, to: 3, focus: .fixed(x: 0.4, y: 0.5)),
+                    calmBlock(2, .loupe, from: 15, to: 17, focus: .fixed(x: 0.6, y: 0.5)),
+                ])
+                document.zoom.spring = spring
+                let path = try #require(Self.calmPaths(document).calmZoom)
+                let exit = step(3)
+                let states = (exit..<step(15)).map { path.state(atOutput: StepGrid.outputTime(ofStep: $0)) }
+                let gone = try #require(states.firstIndex { $0 == nil })
+                // Seen to there, then never again before the next block: no state comes and goes.
+                #expect(states[..<gone].allSatisfy { $0 != nil && $0!.amount >= CalmAmount.unseen }, "\(spring)")
+                #expect(states[gone...].allSatisfy { $0 == nil }, "\(spring)")
+                #expect(path.amount(atStep: exit + gone) < CalmAmount.unseen, "\(spring)")
+                if spring == medium {
+                    // About 0.87 s after the block, not the 10 s the response takes to be exactly 1.
+                    #expect((500..<560).contains(gone) && path.amount(atStep: exit + gone) > 0, "\(gone)")
+                } else {
+                    #expect((exit + gone..<step(15)).contains { path.amount(atStep: $0) >= CalmAmount.unseen }, "\(spring)")
+                }
+                // Mixed between two steps after it faded, none either.
+                #expect(path.state(atOutput: StepGrid.outputTime(ofStep: exit + gone) + 900_000) == nil, "\(spring)")
+                // The next block is seen again.
+                #expect(path.state(atOutput: output(16)) != nil, "\(spring)")
+            }
+        }
+
+        @Test func blocksOfOtherDepthsNearAnEdgeDoNotJump() throws {
+            let screen = Rect(x: 0, y: 0, width: stageSize.x, height: 1)
+            let point = SIMD2(0.95, 0.5) * stageSize
+            // Placed at 4× and at 2×, the focus is far apart on the edge's axis.
+            let four = StageCrop.clamp(center: point, depth: 4, stage: stageSize, screen: screen)
+            let two = StageCrop.clamp(center: point, depth: 2, stage: stageSize, screen: screen)
+            #expect(four.x - two.x > 0.2)
+            for (first, second) in [(4.0, 2.0), (2.0, 4.0)] {
+                for gap in [0.0, 0.1] {
+                    let regions = [
+                        calmBlock(1, .highlight, from: 1, to: 3, depth: first, focus: .fixed(x: 0.95, y: 0.5)),
+                        calmBlock(2, .loupe, from: 3 + gap, to: 5 + gap, depth: second, focus: .fixed(x: 0.95, y: 0.5)),
+                    ]
+                    let path = try #require(Self.calmPaths(zoomDocument(regions: regions)).calmZoom)
+                    let label = "\(first)× then \(second)×, \(gap) s apart"
+                    var previous: CalmZoomState?
+                    var largest = 0.0, seen = 0
+                    for s in step(1)..<step(7) {
+                        guard let state = path.state(atOutput: StepGrid.outputTime(ofStep: s)) else {
+                            previous = nil
+                            continue
+                        }
+                        seen += 1
+                        if let previous {
+                            let a = state.focus(stageSize: stageSize), b = previous.focus(stageSize: stageSize)
+                            largest = max(
+                                largest, distance(state.center, previous.center), abs(a.x - b.x), abs(a.y - b.y),
+                                abs(a.x + a.width - b.x - b.width), abs(a.y + a.height - b.y - b.height))
+                        }
+                        previous = state
+                    }
+                    #expect(largest <= 0.01, "\(label): \(largest)")
+                    // Seen all through, from its first steps to the second block's fade.
+                    #expect(seen > step(5) - step(1), "\(label)")
+                    // Settled, at each block's own depth.
+                    let settled = try #require(path.state(atOutput: output(2.9))), next = try #require(path.state(atOutput: output(4.9)))
+                    #expect(near(settled.center, first == 4 ? four : two, 1e-6) && near(next.center, second == 4 ? four : two, 1e-6), "\(label)")
+                }
             }
         }
 
@@ -336,7 +413,9 @@ extension ZoomFixtures {
             #expect(path.state(atOutput: StepGrid.outputTime(ofStep: step(3) - 1)) == nil)
             var previous: CalmZoomState?
             for s in step(3)..<(step(5) + 3_000) {
-                guard let state = path.state(atOutput: StepGrid.outputTime(ofStep: s)) else { break }
+                guard let state = path.state(atOutput: StepGrid.outputTime(ofStep: s)) else {
+                    if previous == nil { continue } else { break }
+                }
                 let rect = state.focus(stageSize: stageSize)
                 #expect([state.amount, state.depth, rect.x, rect.y, rect.width, rect.height].allSatisfy { $0.isFinite }, "step \(s)")
                 if let previous {
