@@ -343,9 +343,12 @@ final class EditorModel {
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
     @ObservationIgnored private var mixGeneration = 0
-    /// Whether the project's first mix is being made (`makeMix`): the voice's analysis that arrives meanwhile is read into
-    /// it once it is made, instead of making it again.
+    /// Whether a mix is being made (`makeMix`): the voice's analysis that arrives meanwhile is read into it once it is
+    /// made, instead of making it again (`refreshMix` waits for it).
     @ObservationIgnored private var makingMix = false
+    /// Which call of `makeMix` is the latest: the one that lowers `makingMix` when it ends, whatever else changed
+    /// `mixGeneration` meanwhile.
+    @ObservationIgnored private var makingGeneration = 0
     /// Which revision's mix the player holds and which one is heard.
     @ObservationIgnored private var sound = PlayingMix()
     /// The revision of the session's document shown.
@@ -611,13 +614,16 @@ final class EditorModel {
     private func makeMix(of project: LoadedProject, document: EditDocument, revision: Int) {
         mixGeneration += 1
         makingMix = true
-        let generation = mixGeneration, analysis = analysis
+        makingGeneration = mixGeneration
+        // The imported clips the mix before holds are taken from it, never decoded again (plan 3a decision 15).
+        let generation = mixGeneration, analysis = analysis, previous = baseMix
         Task {
-            defer { if generation == mixGeneration { makingMix = false } }
+            defer { if generation == makingGeneration { makingMix = false } }
             var mix: EditedMix
             do {
                 mix = try await EditedMix.make(
-                    project: project, document: document, framesPerSecond: document.frameRate, analysis: analysis)
+                    project: project, document: document, framesPerSecond: document.frameRate, analysis: analysis,
+                    reusing: previous)
             } catch {
                 Self.logger.error("No preview sound for \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
                 return
@@ -926,11 +932,13 @@ final class EditorModel {
 
     /// The mix read with the analysis as it is now (plan 2a decision 18): the base mix with it (`EditedMix.with(analysis:)`,
     /// which opens only the clean files it names and decodes nothing again), then what is shown is built and heard with
-    /// it. While the first mix is being made, it reads the analysis once it is (`makeMix`); made whole if there is none
-    /// (it could not be made).
+    /// it. While a mix is being made (the first, or one made again for a take or an imported clip), nothing: it reads the
+    /// analysis once it is (`makeMix`); made whole if there is none (it could not be made).
     private func refreshMix(of session: EditSession) {
+        // A mix being made reads the analysis as it is once it is made (`makeMix`): refreshing the one before would drop it.
+        guard !makingMix else { return }
         guard let base = baseMix else {
-            if !makingMix { makeMix(of: currentProject(of: session), document: session.document, revision: session.revision) }
+            makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
             return
         }
         mixGeneration += 1
