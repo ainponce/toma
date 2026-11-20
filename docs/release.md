@@ -1024,6 +1024,7 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-3`. Cada comproba
 **Seguir la voz: el motor en vivo** (T5)
 
 - En Toma.app (macOS 26), con el teleprompter en Seguir la voz, grabar leyendo el guion en español con el micrófono de siempre. No aparece ningún aviso de permiso de macOS (ni de reconocimiento de voz ni de dictado): los agentes no lo pueden comprobar, heredan los permisos de la app que los lanzó. Con el modelo de dictado del español en la Mac (en la Mac de desarrollo ya estaban es-MX y es-ES), el guion avanza menos de un segundo después de cada palabra (el agente midió 0,4 s); sin él, con el de la transcripción, hasta un segundo y medio. Después, la toma suena entera: el micrófono no pierde nada mientras se lo escucha. Si macOS pide un permiso o el guion no se mueve, anotarlo con el idioma.
+- Con el dictado (el modelo de dictado del español en la Mac), leer un guion de cinco minutos o más de corrido, con dos o tres pausas largas en el medio (de 15 a 30 s, como para pensar o tomar agua) y alguna frase que se repite o se improvisa: después de cada pausa el guion sigue con la palabra siguiente, sin quedarse quieto ni saltar; a los cinco minutos sigue tan rápido como al principio. Si deja de seguir después de una pausa o pasado un tiempo, anotar cuánto duró la pausa y en qué minuto.
 
 ## Prueba en seco (ad hoc)
 

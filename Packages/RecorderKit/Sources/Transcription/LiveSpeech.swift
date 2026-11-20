@@ -3,6 +3,7 @@ import AVFoundation
 import CoreMedia
 import Foundation
 import Speech
+import Synchronization
 
 /// What a live engine heard so far of a stretch of speech: `isFinal` false while it may still change (a volatile result,
 /// which the next result replaces), true once it is settled.
@@ -165,9 +166,8 @@ public struct DictationLiveEngine: LiveSpeechEngine {
                 throw TranscriptionError.engine("DictationTranscriber does not transcribe \(language)")
             }
             guard await Self.isInstalled(locale) else { throw TranscriptionError.modelNotInstalled(language) }
-            try await LiveAnalysis.hear(audio, with: Self.module(for: locale), language: language, heard: heard) {
-                String($0.text.characters)
-            }
+            let recognizer = try await ModuleRecognizer(Self.module(for: locale), language: language) { String($0.text.characters) }
+            try await LiveAnalysis.run(audio, with: recognizer, language: language, heard: heard)
         }
     }
 
@@ -205,9 +205,8 @@ public struct SpeechTranscriberLiveEngine: LiveSpeechEngine {
                 throw TranscriptionError.engine("SpeechTranscriber does not transcribe \(language)")
             }
             guard await SpeechLanguages.isInstalled(locale) else { throw TranscriptionError.modelNotInstalled(language) }
-            try await LiveAnalysis.hear(audio, with: Self.module(for: locale), language: language, heard: heard) {
-                String($0.text.characters)
-            }
+            let recognizer = try await ModuleRecognizer(Self.module(for: locale), language: language) { String($0.text.characters) }
+            try await LiveAnalysis.run(audio, with: recognizer, language: language, heard: heard)
         }
     }
 
@@ -217,9 +216,57 @@ public struct SpeechTranscriberLiveEngine: LiveSpeechEngine {
     }
 }
 
-/// What the two live engines share: a `SpeechAnalyzer` with one module, fed each chunk as it comes, converted to the
-/// analyzer's best format with `AVAudioConverter`. Ending the iteration (cancelling its task) ends the analyzer's input
-/// and stops it (`cancelAndFinishNow`).
+/// What `LiveAnalysis.run` drives: a `SpeechAnalyzer` with one module in the engines (`ModuleRecognizer`), a test's
+/// otherwise.
+@available(macOS 26, *)
+protocol LiveRecognizer: Sendable {
+    /// The format it takes its audio in.
+    var format: AVAudioFormat { get }
+    /// Analyzes `input`, reading it whenever it is ready for more, until it ends and everything is final.
+    func analyze(_ input: LiveAnalyzerInput) async throws
+    /// Gives each result to `heard` until the analysis is over.
+    func hear(_ heard: @escaping @Sendable (LiveSpeechResult) -> Void) async throws
+    /// Stops the analysis at once.
+    func stop() async
+}
+
+/// A `SpeechAnalyzer` with `module`, at the analyzer's best format for it.
+@available(macOS 26, *)
+struct ModuleRecognizer<Module: SpeechModule>: LiveRecognizer {
+    let format: AVAudioFormat
+    private let module: Module
+    private let analyzer: SpeechAnalyzer
+    private let text: @Sendable (Module.Result) -> String
+
+    /// `text` reads the text of a result.
+    init(_ module: Module, language: String, text: @escaping @Sendable (Module.Result) -> String) async throws {
+        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
+            throw TranscriptionError.engine("SpeechAnalyzer has no audio format for \(language)")
+        }
+        self.format = format
+        self.module = module
+        self.text = text
+        analyzer = SpeechAnalyzer(modules: [module], options: .init(priority: .userInitiated, modelRetention: .lingering))
+    }
+
+    func analyze(_ input: LiveAnalyzerInput) async throws {
+        try await analyzer.prepareToAnalyze(in: format)
+        try await analyzer.start(inputSequence: input)
+        try await analyzer.finalizeAndFinishThroughEndOfInput()
+    }
+
+    func hear(_ heard: @escaping @Sendable (LiveSpeechResult) -> Void) async throws {
+        for try await result in module.results {
+            heard(LiveSpeechResult(text: text(result), isFinal: result.isFinal))
+        }
+    }
+
+    func stop() async {
+        await analyzer.cancelAndFinishNow()
+    }
+}
+
+/// What the two live engines share. Ending the iteration (cancelling its task) ends the recognizer's input and stops it.
 @available(macOS 26, *)
 enum LiveAnalysis {
     /// The results `run` gives to its argument, in a task of their own that ending the iteration cancels.
@@ -239,53 +286,36 @@ enum LiveAnalysis {
         }
     }
 
-    /// Hears `audio` with `module` until it ends (then every result is final) or the task is cancelled, giving each
-    /// result to `heard`, with its text as `text` reads it.
-    static func hear<Module: SpeechModule>(
-        _ audio: AsyncStream<LiveAudioChunk>, with module: Module, language: String,
-        heard: @escaping @Sendable (LiveSpeechResult) -> Void, text: @escaping @Sendable (Module.Result) -> String
+    /// Hears `audio` with `recognizer` until it ends (then every result is final), the task is cancelled, or either
+    /// the analysis or its results fail, whichever comes first: a failure ends it at once, while the take goes on, and
+    /// is what it throws. Gives each result to `heard`.
+    ///
+    /// The recognizer pulls the audio (`LiveAnalyzerInput`) as it is ready for more: while it does not, the audio waits
+    /// in `audio`'s feed (`LiveMicrophoneFeed`, the newest two seconds) and nowhere else, and it goes on from the newest.
+    static func run(
+        _ audio: AsyncStream<LiveAudioChunk>, with recognizer: some LiveRecognizer, language: String,
+        heard: @escaping @Sendable (LiveSpeechResult) -> Void
     ) async throws {
-        guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
-            throw TranscriptionError.engine("SpeechAnalyzer has no audio format for \(language)")
-        }
-        let analyzer = SpeechAnalyzer(modules: [module], options: .init(priority: .userInitiated, modelRetention: .lingering))
-        let (input, inputs) = AsyncStream<AnalyzerInput>.makeStream()
+        let input = LiveAnalyzerInput(audio, format: recognizer.format)
         try await withThrowingTaskGroup(of: Void.self) { group in
-            // The results end when the analyzer finishes, or when this task is cancelled (the group's child is).
+            // The results, until the analysis is over.
+            group.addTask { try await recognizer.hear(heard) }
             group.addTask {
-                for try await result in module.results {
-                    heard(LiveSpeechResult(text: text(result), isFinal: result.isFinal))
-                }
-            }
-            // The audio, converted as it comes, until it ends or this task is cancelled (then `audio` ends too).
-            group.addTask {
-                defer { inputs.finish() }
-                var converter = try LiveAnalyzerConverter(to: format)
-                for await chunk in audio {
-                    if let buffer = try converter.convert(chunk) { inputs.yield(AnalyzerInput(buffer: buffer)) }
-                }
-                if !Task.isCancelled, let tail = try converter.convert(nil) { inputs.yield(AnalyzerInput(buffer: tail)) }
-            }
-            do {
                 try await withTaskCancellationHandler {
-                    try await analyzer.prepareToAnalyze(in: format)
-                    try await analyzer.start(inputSequence: input)
-                    try await analyzer.finalizeAndFinishThroughEndOfInput()
+                    try await recognizer.analyze(input)
                 } onCancel: {
-                    inputs.finish()
-                    Task { await analyzer.cancelAndFinishNow() }
+                    input.stop()
+                    Task { await recognizer.stop() }
                 }
-                try Task.checkCancellation()
-            } catch {
-                inputs.finish()
-                await analyzer.cancelAndFinishNow()
-                // Leaving the group cancels its children and waits for them.
-                throw Task.isCancelled ? CancellationError() : engineError(error, language: language)
             }
             do {
-                try await group.waitForAll()
+                // The first child to fail ends the run here, at once.
+                while try await group.next() != nil {}
                 try Task.checkCancellation()
             } catch {
+                input.stop()
+                await recognizer.stop()
+                // Leaving the group cancels the other child and waits for it.
                 throw Task.isCancelled ? CancellationError() : engineError(error, language: language)
             }
         }
@@ -301,10 +331,70 @@ enum LiveAnalysis {
     }
 }
 
+/// The recognizer's input: each chunk of `audio` converted to `format` when the recognizer asks for the next one, never
+/// before, so nothing waits between the feed and the recognizer. `stop()` ends it: the next ask gets nothing (and one
+/// that waits for audio gets nothing once the next chunk comes, or once its task is cancelled).
+@available(macOS 26, *)
+final class LiveAnalyzerInput: AsyncSequence, Sendable {
+    typealias Element = AnalyzerInput
+
+    let format: AVAudioFormat
+    private let audio: AsyncStream<LiveAudioChunk>
+    private let stopped = Atomic(false)
+    private let taken = Atomic(0)
+
+    init(_ audio: AsyncStream<LiveAudioChunk>, format: AVAudioFormat) {
+        self.audio = audio
+        self.format = format
+    }
+
+    func stop() {
+        stopped.store(true, ordering: .relaxed)
+    }
+
+    var isStopped: Bool { stopped.load(ordering: .relaxed) }
+
+    /// The frames of `audio` (at 48 kHz) the recognizer has asked for so far.
+    var framesTaken: Int { taken.load(ordering: .relaxed) }
+
+    func makeAsyncIterator() -> Iterator {
+        Iterator(input: self, chunks: audio.makeAsyncIterator(), converter: try? LiveAnalyzerConverter(to: format))
+    }
+
+    struct Iterator: AsyncIteratorProtocol {
+        fileprivate let input: LiveAnalyzerInput
+        fileprivate var chunks: AsyncStream<LiveAudioChunk>.Iterator
+        fileprivate let converter: LiveAnalyzerConverter?
+        /// The audio ended and the converter gave what it held back.
+        private var flushed = false
+
+        fileprivate init(input: LiveAnalyzerInput, chunks: AsyncStream<LiveAudioChunk>.Iterator, converter: LiveAnalyzerConverter?) {
+            self.input = input
+            self.chunks = chunks
+            self.converter = converter
+        }
+
+        mutating func next() async throws -> AnalyzerInput? {
+            guard let converter else { throw TranscriptionError.engine("no converter to \(input.format)") }
+            while !flushed, !input.isStopped {
+                let chunk = await chunks.next()
+                guard !input.isStopped else { return nil }
+                if let chunk {
+                    input.taken.add(chunk.samples.count, ordering: .relaxed)
+                } else {
+                    flushed = true
+                }
+                if let buffer = try converter.convert(chunk) { return AnalyzerInput(buffer: buffer) }
+            }
+            return nil
+        }
+    }
+}
+
 /// Mono Float32 at 48 kHz (`LiveAudioChunk`) to the analyzer's format, one chunk at a time, the resampler carried from
 /// one to the next (`AnalyzerFeed`'s conversion, for chunks that come as they are heard).
 @available(macOS 26, *)
-private struct LiveAnalyzerConverter {
+fileprivate struct LiveAnalyzerConverter {
     private let converter: AVAudioConverter
 
     init(to format: AVAudioFormat) throws {
@@ -315,7 +405,7 @@ private struct LiveAnalyzerConverter {
     }
 
     /// `chunk` in the analyzer's format; `nil` the end: what the converter still holds. `nil` when it gives nothing yet.
-    mutating func convert(_ chunk: LiveAudioChunk?) throws -> AVAudioPCMBuffer? {
+    func convert(_ chunk: LiveAudioChunk?) throws -> AVAudioPCMBuffer? {
         var input: AVAudioPCMBuffer?
         if let chunk {
             guard !chunk.samples.isEmpty else { return nil }

@@ -197,21 +197,78 @@ private func stopsWhenCancelled(_ engine: any LiveSpeechEngine) async throws {
         }
         #expect(cpu < 0.15)
     }
+
+    /// Dictation after a pause of 15 s (the reader stops to think): the words after it are followed as before it.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"), .enabled { await dictationIsInstalled.value })
+    func dictationFollowsAfterALongPause() async throws {
+        let (median, _) = try await latencyAndCPU(
+            try #require(LiveSpeech.engine(.dictation)), name: "dictation, 15 s pause", pause: (afterWord: 4, seconds: 15),
+            allHeard: true)
+        #expect(median < 0.6)
+    }
+
+    /// Dictation for two minutes of speech without a stop: results keep coming to the end, never more than 3 s apart
+    /// while it is spoken, and the last word is heard.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"), .enabled { await dictationIsInstalled.value })
+    func dictationFollowsForMinutes() async throws {
+        let engine = try #require(LiveSpeech.engine(.dictation))
+        var voice: [Float] = []
+        let sentences = [
+            "Esta es una prueba larga del teleprompter que sigue la voz.",
+            "Se lee un guion de corrido, sin parar, durante dos minutos.",
+            "Cada frase cuenta algo distinto para que el modelo no se aburra.",
+            "Después de cada punto viene otra frase, y otra, y otra más.",
+        ]
+        var index = 0
+        while voice.count < 120 * 48_000 {
+            voice += try await speech(sentences[index % sentences.count])
+            index += 1
+        }
+        voice += try await speech("Y con esto se termina la lectura, fin.") + [Float](repeating: 0, count: 48_000)
+        let feed = LiveMicrophoneFeed()
+        let results = engine.results(of: feed.chunks, language: "es-MX")
+        let clock = ContinuousClock()
+        let start = clock.now
+        let spoken = Double(voice.count) / 48_000
+        let feeder = Task {
+            for (block, offset) in stride(from: 0, to: voice.count, by: 480).enumerated() {
+                try await clock.sleep(until: start + .milliseconds(10 * block))
+                feed.append(monoSample(Array(voice[offset..<min(offset + 480, voice.count)]), firstFrame: offset))
+            }
+            feed.finish()
+        }
+        var times: [Double] = []
+        var last = ""
+        for try await result in results {
+            let at = clock.now - start
+            times.append(Double(at.components.seconds) + Double(at.components.attoseconds) / 1e18)
+            last = result.text
+        }
+        try await feeder.value
+        let gaps = zip(times, times.dropFirst()).map { $1 - $0 }
+        let whileSpoken = zip(times, gaps).filter { $0.0 < spoken - 2 }.map(\.1)
+        print("dictationFollowsForMinutes: \(spoken) s spoken, \(times.count) results, the longest gap while spoken \(whileSpoken.max() ?? 0) s, the last at \(times.last ?? 0) s: \(last.suffix(60))")
+        #expect((whileSpoken.max() ?? .infinity) < 3)
+        #expect(normalized(last).contains("fin"))
+    }
 }
 
 /// From the last sample of a word fed to the feed to the first result that has it, and the process's CPU while it
 /// listens (a fraction of a core), through the whole chain: 10 ms blocks to `LiveMicrophoneFeed`, its chunks to `engine`.
 /// Ten words, each said on its own with 400 ms of silence after it. Gives the median latency in seconds.
-private func latencyAndCPU(_ engine: any LiveSpeechEngine, name: String) async throws -> (median: Double, cpu: Double) {
+private func latencyAndCPU(
+    _ engine: any LiveSpeechEngine, name: String, pause: (afterWord: Int, seconds: Double)? = nil, allHeard: Bool = false
+) async throws -> (median: Double, cpu: Double) {
     let words = ["hola", "manzana", "ventana", "guitarra", "montaña", "biblioteca", "elefante", "chocolate", "mariposa", "teleprompter"]
     // Each word said on its own, 400 ms of silence after it: where each one ends is known.
     var voice = [Float](repeating: 0, count: 24_000)
     var ends: [Int] = []
-    for word in words {
+    for (index, word) in words.enumerated() {
         let said = try await speech(word)
         let last = said.lastIndex { abs($0) > 0.01 } ?? said.count - 1
         ends.append(voice.count + last)
         voice += said + [Float](repeating: 0, count: 19_200)
+        if let pause, pause.afterWord == index { voice += [Float](repeating: 0, count: Int(pause.seconds * 48_000)) }
     }
     voice += [Float](repeating: 0, count: 48_000)
 
@@ -258,7 +315,7 @@ private func latencyAndCPU(_ engine: any LiveSpeechEngine, name: String) async t
         (\(latencies.map { String(format: "%.3f", $0) }.joined(separator: ", "))); \
         process CPU \(cpu) s over \(wallSeconds) s = \(100 * cpu / wallSeconds) % of a core; results: \(texts.count)
         """)
-    #expect(latencies.count >= words.count / 2)
+    #expect(latencies.count >= (allHeard ? words.count : words.count / 2))
     return (median, cpu / wallSeconds)
 }
 
