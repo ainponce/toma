@@ -830,6 +830,7 @@ private struct ShortcutRow: View {
         case .pauseResume: Text("Pause or Resume")
         case .marker: Text("Marker")
         case .restartTake: Text("Restart Take")
+        case .saveReplay: Text("Save Replay")
         }
     }
 

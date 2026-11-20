@@ -64,12 +64,15 @@ public enum IslandGeometry {
     /// The hover zone at the top center of a screen without a notch.
     public static let hoverZoneSize = CGSize(width: 60, height: 8)
 
-    public static func shape(_ state: IslandState, on top: ScreenTop) -> IslandShape {
+    /// `replaying`: the Replay records (fases 4 y 5 plan 5c, decision 15). At rest under a notch the island then has the
+    /// wings of a take (a gray dot and «↺ 30 s»); without a notch it is the pill of the rest, which the app shows. Every
+    /// other state is the same either way.
+    public static func shape(_ state: IslandState, on top: ScreenTop, replaying: Bool = false) -> IslandShape {
         // Under a notch.
         let notchWidth = top.notch.map { Double($0.width) } ?? 0
         let (width, height, radius): (Double, Double, Double) =
             switch state {
-            case .rest: (notchWidth, top.menuBarHeight, 13)
+            case .rest: (notchWidth + (replaying ? 2 * wingWidth : 0), top.menuBarHeight, 13)
             // A band of `peekBand` under the notch, wide enough for its row whatever the notch's width.
             case .peek: (max(notchWidth + 64, peekMinWidth), top.menuBarHeight + peekBand, 18)
             case .open: (700, 400, 34)

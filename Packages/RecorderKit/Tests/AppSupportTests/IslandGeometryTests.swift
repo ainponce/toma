@@ -113,4 +113,39 @@ import Testing
         #expect(IslandGeometry.spring(to: .peek) == Spring(damping: 0.90, response: 0.42))
         #expect(IslandGeometry.spring(to: .rest) == Spring(damping: 1.0, response: 0.48))
     }
+
+    // MARK: - The Replay at rest (fases 4 y 5 plan 5c, decision 15)
+
+    @Test func restWithReplayHasWings() {
+        // Under the notch, the wings of a take: a gray dot and «↺ 30 s».
+        let top = Self.notchScreen
+        let wings = IslandGeometry.shape(.rest, on: top, replaying: true)
+        #expect(wings == IslandShape(width: 188 + 2 * 84, height: 32, bottomRadius: 13, roundsTopCorners: false))
+        #expect(wings == IslandGeometry.shape(.recording, on: top))
+        #expect(IslandGeometry.frame(wings, on: top) == CGRect(x: 662 - 84, y: 950, width: 356, height: 32))
+    }
+
+    @Test func restWithReplayWithoutNotchIsThePill() {
+        let top = Self.externalScreen
+        #expect(IslandGeometry.shape(.rest, on: top, replaying: true) == IslandShape(width: 132, height: 34, bottomRadius: 17, roundsTopCorners: true))
+        #expect(IslandGeometry.shape(.rest, on: top, replaying: true) == IslandGeometry.shape(.rest, on: top))
+    }
+
+    @Test func restWithoutReplayIsUnchanged() {
+        let take = SavedTake(
+            projectURL: URL(fileURLWithPath: "/Users/someone/Movies/Toma/Replay.toma", isDirectory: true),
+            duration: .seconds(30), markers: 0, trackKinds: [.display], openedEditor: false, replaySeconds: 30)
+        let states: [IslandState] = [
+            .rest, .peek, .open, .choosing, .countdown(remaining: 3), .recording, .recordingOpen, .notice(.microphoneSilent),
+            .saving, .saved(take),
+        ]
+        for top in [Self.notchScreen, Self.externalScreen] {
+            #expect(IslandGeometry.shape(.rest, on: top, replaying: false) == IslandGeometry.shape(.rest, on: top))
+            #expect(IslandGeometry.shape(.rest, on: top).width == (top.notch == nil ? 132 : 188))
+            // Only the rest has the Replay's wings.
+            for state in states where state != .rest {
+                #expect(IslandGeometry.shape(state, on: top, replaying: true) == IslandGeometry.shape(state, on: top), "\(state)")
+            }
+        }
+    }
 }

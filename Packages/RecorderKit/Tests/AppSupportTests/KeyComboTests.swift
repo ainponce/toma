@@ -26,7 +26,8 @@ import Testing
 
     @Test func onlyTheIslandShortcutIsActiveAtRest() {
         #expect(HotKeyBindings.activeActions(isRecording: false) == [.islandOrStop])
-        #expect(HotKeyBindings.activeActions(isRecording: true) == HotKeyAction.allCases)
+        // The Replay's is never active during a take (fases 4 y 5 plan 5c, decision 14).
+        #expect(HotKeyBindings.activeActions(isRecording: true) == HotKeyAction.allCases.filter { $0 != .saveReplay })
     }
 
     @Test func keyComboNeedsCommandOrControl() {
@@ -37,7 +38,7 @@ import Testing
         #expect(!KeyCombo(keyCode: 35, modifiers: .shift, key: "P").isAllowedAsGlobalHotKey)
         #expect(!KeyCombo(keyCode: 35, modifiers: [], key: "P").isAllowedAsGlobalHotKey)
         #expect(HotKeyBindings.defaults.combos.values.allSatisfy { $0.isAllowedAsGlobalHotKey })
-        #expect(HotKeyBindings.defaults.combos.count == 3)
+        #expect(HotKeyBindings.defaults.combos.count == 4)
     }
 
     @Test func bindingsAreSavedWithTheSettings() throws {
@@ -59,6 +60,10 @@ import Testing
         #expect(old.hotKeys == .defaults && old.countdownSeconds == 5)
         let newer = Data(#"{"hotKeys": {"combos": {"marker": {"keyCode": 46, "modifiers": 5, "key": "M"}, "zoom": {"keyCode": 6, "modifiers": 1, "key": "Z"}}}}"#.utf8)
         let fromNewer = try JSONDecoder().decode(RecorderSettings.self, from: newer)
-        #expect(fromNewer.hotKeys.combos == [.marker: KeyCombo(keyCode: 46, modifiers: [.command, .option], key: "M")])
+        // Without `cleared` the file reads as one of phase 3: the Replay's shortcut, which it did not have, is added.
+        #expect(fromNewer.hotKeys.combos == [
+            .marker: KeyCombo(keyCode: 46, modifiers: [.command, .option], key: "M"),
+            .saveReplay: KeyCombo(keyCode: 15, modifiers: [.control, .option, .command], key: "R"),
+        ])
     }
 }

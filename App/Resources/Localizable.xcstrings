@@ -8926,6 +8926,17 @@
         }
       }
     },
+    "Save Replay" : {
+      "comment" : "Settings: the shortcut that saves the last seconds of the instant replay",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar la repetición"
+          }
+        }
+      }
+    },
     "Save as New Style" : {
       "comment" : "The title of the alert that asks the new style's name",
       "localizations" : {

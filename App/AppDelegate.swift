@@ -407,6 +407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .pauseResume: recording.togglePause()
         case .marker: recording.addMarker()
         case .restartTake: recording.restartTake()
+        case .saveReplay: break
         }
     }
 
