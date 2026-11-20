@@ -543,6 +543,7 @@ private struct SettingsPaneView: View {
                     comment: "Under the setting that transcribes a project as it opens in the editor")
             }
         }
+        SettingsCommandLineSection()
     }
 
     @ViewBuilder

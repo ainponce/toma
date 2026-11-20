@@ -1672,3 +1672,15 @@ Contra la Toma.app de la rama. Para mirar lo grabado, como en «Grabar el foco»
 - Con Accesibilidad negada y el ajuste prendido: la toma graba, y la isla dice «No se grabó el foco: falta el permiso de Accesibilidad.». Ningún aviso del sistema aparece durante la toma.
 - Pausar y escribir: no hay ninguna línea `focus` entre `paused` y `resumed`.
 - Límites conocidos, para anotar si se ven distintos: Chrome y las apps de Electron, sin cursor de texto (solo el campo); una ventana movida sin cambiar el foco deja el rectángulo de antes hasta el próximo cambio.
+
+**La línea de comandos `toma` (A4)**
+
+Contra la Toma.app de la rama, en Terminal, con un proyecto de prueba (nunca uno de `~/Movies/Toma` que importe). `<proyecto>` es la ruta de su `.toma`.
+- Ajustes ▸ General ▸ «Instalar la línea de comandos»: deja `toma` en `/usr/local/bin` si esa carpeta existe y se puede escribir sin contraseña; si no, en `~/.local/bin`, y debajo dice la ruta y «Agregar ~/.local/bin al PATH para usarla.». Ningún aviso pide una contraseña. El botón pasa a decir «Reinstalar la línea de comandos». `ls -l` del enlace muestra que apunta a `Toma.app/Contents/Helpers/toma`.
+- En una Terminal nueva (con la carpeta en el `PATH` si hizo falta): `toma --version` dice `1.0`; `toma --help` lista los subcomandos y los códigos de salida.
+- `toma info <proyecto>` describe el proyecto (duración, tomas, marcadores, capítulos, zoom, cámara, transcripción) y `toma info <proyecto> --json | python3 -m json.tool` es un solo JSON.
+- `toma edit <proyecto> '{"command":"setAspect","aspect":"9:16"}'` dice `setAspect: aspect, output …`; al abrir el proyecto en el editor se ve vertical, y Edición ▸ «Deshacer Cambiar el formato» lo vuelve a 16:9.
+- `toma undo <proyecto>` con el proyecto cerrado deshace el último paso, también uno hecho en la app.
+- `toma export <proyecto> ~/Desktop/prueba` escribe `~/Desktop/prueba.mp4` con `progress: N %` mientras tanto, y el MP4 se reproduce en QuickTime con la duración del editor; ⌃C a mitad del export lo corta sin dejar archivo. `--codec prores4444` da un `.mov` con fondo transparente; `--gif` un GIF animado.
+- Mover Toma.app a otra carpeta: `toma` deja de funcionar (el enlace apunta a la vieja); «Instalar la línea de comandos» desde la app movida arregla el enlace.
+- Un `toma` ajeno en esa carpeta (`echo hola > ~/.local/bin/toma`, sin `/usr/local/bin` escribible): «Instalar la línea de comandos» dice «Ya hay otro toma en ~/.local/bin/toma: se dejó como estaba.» y el archivo queda igual.

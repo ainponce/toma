@@ -50,11 +50,29 @@ targets:
           - $(SRCROOT)/scripts/expand-infoplist-strings.sh
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/en.lproj/InfoPlist.strings
           - $(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/es.lproj/InfoPlist.strings
+      # The toma command line (fases 4 y 5 design §6.2): the package's product, built for this target without being
+      # linked into it, copied to Contents/Helpers/toma and signed before Xcode signs the app.
+      - name: Put toma in Contents/Helpers
+        script: bash "$SRCROOT/scripts/embed-toma.sh"
+        basedOnDependencyAnalysis: false
+        showEnvVars: false
+        inputFiles:
+          - $(SRCROOT)/scripts/embed-toma.sh
+          - $(BUILT_PRODUCTS_DIR)/toma
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/toma
     dependencies:
       - package: RecorderKit
         product: RecorderKit
       - package: RecorderKit
         product: AppSupport
+      # The project API, for the app's control socket (milestone 4b).
+      - package: RecorderKit
+        product: ProjectAPI
+      # Built, never linked: scripts/embed-toma.sh puts it in Contents/Helpers.
+      - package: RecorderKit
+        product: toma
+        link: false
       - package: Sparkle
     info:
       path: App/Info.plist

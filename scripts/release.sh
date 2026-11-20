@@ -94,20 +94,24 @@ ditto "$archive/Products/Applications/$app.app" "$bundle"
 # GPLv3 §4 and §6: the object code goes out with the license and the notice.
 [[ -f $bundle/Contents/Resources/LICENSE ]] || fail "$bundle has no Contents/Resources/LICENSE"
 
-step "Signing Sparkle's helpers and the app with \"$identity\""
+step "Signing Sparkle's helpers, toma and the app with \"$identity\""
 # Signing outside Xcode's export, as Sparkle documents it: every helper with the app's identity, from the
 # inside out, never --deep. Xcode re-signed Sparkle.framework only; its helpers kept Sparkle's ad hoc
 # signatures. The app isn't sandboxed and enables none of Sparkle's XPC services, so they are left out.
+# The toma command line (Contents/Helpers/toma, scripts/embed-toma.sh) is signed again the same way.
 sparkle=$bundle/Contents/Frameworks/Sparkle.framework
 sparkle_version=$sparkle/Versions/$(readlink "$sparkle/Versions/Current")
+toma=$bundle/Contents/Helpers/toma
+[[ -x $toma ]] || fail "$bundle has no Contents/Helpers/toma"
 rm -rf "$sparkle_version/XPCServices" "$sparkle/XPCServices"
-signed=("$sparkle_version/Autoupdate" "$sparkle_version/Updater.app" "$sparkle" "$bundle")
+signed=("$sparkle_version/Autoupdate" "$sparkle_version/Updater.app" "$sparkle" "$toma" "$bundle")
 # No secure timestamp: Apple's timestamp server may refuse identities it didn't issue, and a self-signed
 # certificate gains nothing from one.
 sign() { codesign --force --sign "$identity" --options runtime --timestamp=none "$@"; }
 sign "$sparkle_version/Autoupdate"
 sign "$sparkle_version/Updater.app"
 sign "$sparkle"
+sign --identifier dev.toma.Toma.toma "$toma"
 sign --entitlements App/Toma.entitlements "$bundle"
 
 step "Checking the signatures"
