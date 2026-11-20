@@ -167,9 +167,9 @@ private struct Seam3Drawer: @unchecked Sendable {
     let phase3 = [ShaderSource.mediaClipMetal, ShaderSource.calmZoomMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal]
     #expect(ShaderSource.metal == ShaderSource.coreMetal + (phase2 + phase3).joined())
     // The base adds no shader of its own: phase 3's parts are their milestones' (3a's and 3b's), empty in the base; 3b's
-    // calm zoom has its own (plan 3b Task Z3).
-    #expect([ShaderSource.mediaClipMetal, ShaderSource.annotationsMetal, ShaderSource.titleCardMetal].allSatisfy { $0.isEmpty })
-    #expect(!ShaderSource.calmZoomMetal.isEmpty)
+    // calm zoom has its own (plan 3b Task Z3), and 3a's annotations theirs (plan 3a Task A6).
+    #expect([ShaderSource.mediaClipMetal, ShaderSource.titleCardMetal].allSatisfy { $0.isEmpty })
+    #expect(!ShaderSource.calmZoomMetal.isEmpty && !ShaderSource.annotationsMetal.isEmpty)
 }
 
 /// The scenes of phase 3's layers with a document that has none of them: nothing, and the background as it is.

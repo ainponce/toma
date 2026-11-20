@@ -1072,6 +1072,11 @@ La vara del agente fueron las medidas (sonoridad, pico, costura, mono, graves y 
 
 - Grabar 30 s sin micrófono, Por app con Música (sonando todo el tiempo, con una canción con voz) y Safari con un video de alguien hablando la mitad del tiempo, y transcribir: el texto es lo que dice la persona del video, no la letra de la canción, aunque Música esté primera en el manifiesto. Con el micrófono prendido se transcribe el micrófono, como en la fase 2.
 
+**Las anotaciones dibujadas** (A6)
+
+- Exportar en 4K un proyecto con un texto de cada estilo (Simple, Etiqueta, Tercio inferior y Título), una flecha curva, una forma, un globo y un paso, unos pegados a la grabación con un zoom de 2× que entra y otros de la salida: en el video los textos y los trazos se ven nítidos (sin bordes borrosos ni escalones) en reposo y mientras el zoom entra, los textos se cortan en las mismas palabras que en la vista previa, y la punta de cada flecha pegada sigue sobre el mismo botón durante todo el zoom.
+- En la Mac base (M1), reproducir la vista previa en 1080p con diez anotaciones a la vista (y una flecha y una forma que se trazan al entrar): sigue a 60 fps, sin saltos cuando aparecen todas juntas.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
