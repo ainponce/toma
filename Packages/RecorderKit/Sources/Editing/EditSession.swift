@@ -163,6 +163,10 @@ public final class EditSession {
     public private(set) var notices: [EditNotice]
     /// Called on the main actor after each change of `document`, `access` or `notices`.
     public var onChange: (() -> Void)?
+    /// Whether a step joins the undo group of the one before it with the same label and target, less than 1 s before
+    /// (design §6.4): the editor's bursts of keys and drags. The project API turns it off, so each of its commands is
+    /// one undo (fases 4 y 5, 4b).
+    package var joinsBursts = true
 
     private let context: EditContext
     private let projectCaches: ProjectCaches
@@ -209,7 +213,7 @@ public final class EditSession {
     private var isClosed = false
     private var lastKnownURL: URL
     /// How many times the package was opened again from the disk after another process changed it (Task 12b).
-    private var reopenings = 0
+    package private(set) var reopenings = 0
     /// `document` and its JSON as the last step, undo or redo left them: the next one starts from that JSON instead of
     /// encoding the whole document again (`applied(_:)`), as long as `document` is still that one.
     private var documentJSON: (document: EditDocument, json: JSONValue)?
@@ -410,6 +414,13 @@ public final class EditSession {
 
     public var caches: ProjectCaches { projectCaches }
 
+    /// The `documentVersion` the edit document is written in on disk now; `nil` while there is none there: a version 1
+    /// or 2 package, or one upgraded without a log, before its first edit (or while that edit's upgrade is under way),
+    /// and a project that cannot be edited.
+    package var diskDocumentVersion: Int? {
+        journal != nil && pendingCreate == nil ? diskVersion : nil
+    }
+
     /// The label of the next undo; `nil` without one, while the project cannot be edited, and while a new log starts
     /// (nothing can be undone then: `canUndo` is false).
     public var undoLabel: EditLabel? { isEditable && !restartingLog ? history.undoLabel : nil }
@@ -454,7 +465,7 @@ public final class EditSession {
             history.record(create)
             lines.append(create)
         }
-        let group = history.groupForNext(step, at: at)
+        let group = history.groupForNext(step, at: at, joining: joinsBursts)
         let line = EditLogEntry.do(
             seq: history.nextSeq, group: group, label: step.label.rawValue, changes: step.changes, at: at.roundedToWholeSeconds)
         lines.append(line)
