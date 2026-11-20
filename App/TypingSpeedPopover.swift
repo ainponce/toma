@@ -13,28 +13,34 @@ extension EditorModel {
         isAskingTypingSpeed = true
     }
 
-    /// What `speed` gives on the project as it is now, worked out off the main thread (it reads the events of the take);
-    /// `nil` if the project is not open.
+    /// What `speed` gives on the project as it is now, over every take of the sequence (plan 3d decision 17), worked out
+    /// off the main thread (it reads the events of the takes); `nil` if the project is not open.
     func typingSpeedSummary(speed: Double) async -> TypingSpeed.Summary? {
         guard let document, let project = overlayProject else { return nil }
         return await Task.detached(priority: .userInitiated) {
-            TypingSpeed.summary(document, take: project.take, events: project.events, speed: speed)
+            TypingSpeed.summary(document, takes: Self.typingTakes(project, document), speed: speed)
         }.value
     }
 
-    /// Speeds the stretches of typing up to `speed`, in one step. Worked out off the main thread and applied if the
-    /// document is the one it was worked out on.
+    /// Speeds the stretches of typing of every take of the sequence up to `speed`, in one step. Worked out off the main
+    /// thread and applied if the document is the one it was worked out on.
     func speedUpTyping(speed: Double) {
         guard canEdit, let document, let project = overlayProject else { return }
         Task {
             let step = await Task.detached(priority: .userInitiated) {
-                TypingSpeed.apply(document, take: project.take, events: project.events, speed: speed) { prefix in
+                TypingSpeed.apply(document, takes: Self.typingTakes(project, document), speed: speed) { prefix in
                     prefix + String(format: "%08x", UInt32.random(in: .min ... .max))
                 }
             }.value
             guard let step, self.document == document else { return }
             perform(step)
         }
+    }
+
+    /// Each take `document`'s sequence shows, with its events (`LoadedProject.takesShown(by:)`): reads those of a take
+    /// that has not read them yet, so never on the main thread.
+    private nonisolated static func typingTakes(_ project: LoadedProject, _ document: EditDocument) -> [(TakeRecord, [InputEvent])] {
+        project.takesShown(by: document).map { ($0.take, $0.events) }
     }
 }
 

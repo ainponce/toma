@@ -1097,6 +1097,15 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-3`. Cada comproba
 
 - Con una placa de cada estilo (Centrado, A la izquierda, Grande, Mínimo) y cada fondo (el del proyecto, un color, el cuadro desenfocado), en 16:9 y en 9:16, apenas la pestaña Anotaciones permita agregarlas (A14): se ven como dice `docs/format/README.md` («Las placas»), sin un texto cortado ni una palabra partida; la vista previa reproduciendo y el export a 4K muestran la misma placa, con el fundido de 0,3 s contra el último cuadro del clip de antes y el primero del de después, quietos. Con el cuadro desenfocado sobre un tramo con un bloque de privacidad, nada de lo que el bloque esconde se ve nítido durante la placa ni su fundido.
 
+**La voz y el texto con varias tomas** (T9)
+
+Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcribir automáticamente» prendido, en español.
+- Un proyecto de dos tomas sin transcripción (la segunda agregada desde el menú Tomas), Subtítulos ▸ Transcribir: dice «Transcribiendo 1 de 2…» y después «Transcribiendo 2 de 2…», la barra avanza sobre las dos, el texto de la primera toma aparece apenas termina y el de la segunda debajo, en un párrafo nuevo, sin que se corte ningún texto de la pestaña. Cancelar a mitad de la segunda: la primera queda transcrita y la segunda sin palabras.
+- Corregir una palabra de la primera toma y regrabar una tercera desde el final (Regrabar desde acá, ⇧⌘R): al volver al editor la tercera se transcribe sola («Transcribiendo…»), sin preguntar, y la corrección de la primera sigue. Transcribir otra vez: pregunta solo por las correcciones de las tomas que se vuelven a oír («Transcribir de nuevo reemplaza 1 palabra corregida.») y, con «Conservar la actual», esa toma no cambia.
+- En el texto, borrar con ⌫ unas palabras de la segunda toma y Restaurarlas: vuelven exactas (se oyen y se ven como antes) y un ⌘Z deshace cada paso; lo mismo con una selección que toma el final de la primera y el principio de la segunda.
+- Cámara ▸ Ocultar en los silencios con dos tomas transcritas: bloques Solo pantalla en las pausas de las dos, en un solo ⌘Z. Sin transcripción (o con una toma sin transcribir), los silencios salen del micrófono de cada toma, y una pausa que cruza el corte entre tomas es un solo bloque.
+- Edición ▸ Acelerar el tipeo… con tipeo en las dos tomas: la cuenta de tramos suma los de las dos, y Acelerar los acelera en las dos en un solo ⌘Z; con una toma, lo mismo que en la fase 2.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

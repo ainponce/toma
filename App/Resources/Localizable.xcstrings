@@ -10013,6 +10013,17 @@
         }
       }
     },
+    "Transcribing %lld of %lld…" : {
+      "comment" : "The Captions tab: the transcription of several takes under way, which of them it is on",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Transcribiendo %lld de %lld…"
+          }
+        }
+      }
+    },
     "Transcribing again replaces %lld corrected words." : {
       "comment" : "An alert before a new transcription replaces one whose words were corrected",
       "localizations" : {
