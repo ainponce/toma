@@ -539,5 +539,8 @@ private func onTheLayer(_ rect: Rect, _ layer: ScreenLayer) -> Rect {
         return await group.reduce(into: [[AnnotationLayer]]()) { $0.append($1) }
     }
     #expect(all.count == 16 && all.allSatisfy { $0 == all[0] } && all[0].count == 6)
-    #expect(scene.measureCount == 6 * 2)
+    // Measured outside the lock, two frames that miss at once may both measure; once kept, nobody measures again.
+    let measured = scene.measureCount
+    #expect(measured >= 6 * 2 && measured <= 16 * 6 * 2, "\(measured)")
+    #expect(scene.content(atSource: source, output: ns(1), frame: frame) == all[0] && scene.measureCount == measured)
 }
