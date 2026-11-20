@@ -4489,6 +4489,17 @@
         }
       }
     },
+    "Focus wasn't recorded: Accessibility permission is missing." : {
+      "comment" : "A take's notice: Follow Keyboard Focus is on in Settings, but Accessibility isn't allowed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se grabó el foco: falta el permiso de Accesibilidad."
+          }
+        }
+      }
+    },
     "Follow Face" : {
       "comment" : "Camera tab, Framing",
       "localizations" : {

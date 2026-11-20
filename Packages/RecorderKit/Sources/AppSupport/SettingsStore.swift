@@ -45,6 +45,11 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
     public var share: SharePreferences = .init()
     /// The instant replay (phase 5, milestone 5c): whether it keeps the last seconds on screen, and how many.
     public var replay: ReplayPreferences = .init()
+    /// "Follow Keyboard Focus" (phase 4, milestone 4a): whether a take records where the focused field and the text cursor
+    /// are, as rectangles only (`AccessibilityFocusRecorder`), for the zoom that follows what is typed. Off unless the user
+    /// turns it on in Settings ▸ Recording, which asks for Accessibility; a take never asks for it, and without it records
+    /// all the same, without focus (`TakeNotice.keyboardFocusNotRecorded`).
+    public var recordFocus: Bool = false
 
     /// The countdowns the settings offer.
     public static let countdownOptions = [0, 3, 5, 10]
@@ -56,7 +61,8 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         focusShortcutIdentifier: String? = nil, hideDesktopIcons: Bool = false, noteKeyActivity: Bool = true,
         export: ExportPreferences = .init(), newProjectsStyleID: String? = nil,
         library: LibraryPreferences = .init(), recordKeys: Bool = false,
-        share: SharePreferences = .init(), replay: ReplayPreferences = .init()
+        share: SharePreferences = .init(), replay: ReplayPreferences = .init(),
+        recordFocus: Bool = false
     ) {
         self.selection = selection
         self.quick = quick
@@ -76,6 +82,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         self.recordKeys = recordKeys
         self.share = share
         self.replay = replay
+        self.recordFocus = recordFocus
     }
 
     /// A field missing from what was saved (by a version that did not have it), or that this version
@@ -103,6 +110,7 @@ public struct RecorderSettings: Codable, Equatable, Sendable {
         recordKeys = (try? container.decodeIfPresent(Bool.self, forKey: .recordKeys)) ?? defaults.recordKeys
         share = (try? container.decodeIfPresent(SharePreferences.self, forKey: .share)) ?? defaults.share
         replay = (try? container.decodeIfPresent(ReplayPreferences.self, forKey: .replay)) ?? defaults.replay
+        recordFocus = (try? container.decodeIfPresent(Bool.self, forKey: .recordFocus)) ?? defaults.recordFocus
     }
 
     /// The countdown to count, in whole seconds: what was saved, kept between 0 and 10.

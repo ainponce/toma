@@ -100,6 +100,10 @@ extension TakeNotice {
             String(localized: "The microphone isn't picking up any sound.")
         case .focusShortcutFailed:
             String(localized: "The Do Not Disturb shortcut didn't run. Notifications may sound during the recording.")
+        case .keyboardFocusNotRecorded:
+            String(
+                localized: "Focus wasn't recorded: Accessibility permission is missing.",
+                comment: "A take's notice: Follow Keyboard Focus is on in Settings, but Accessibility isn't allowed")
         case .keysNotRecorded:
             String(
                 localized: "Keys weren't recorded: Input Monitoring permission is missing.",
