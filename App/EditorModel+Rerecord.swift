@@ -6,6 +6,7 @@ import Editing
 import Foundation
 import Observation
 import ProjectFormat
+import Synchronization
 import os
 
 /// What "Re-record from Here" hands the app (`EditorProjectHost.rerecord`, phase 3 design §8.2, 3d plan decisions 9 and
@@ -13,8 +14,11 @@ import os
 struct EditorRerecordRequest {
     /// The editor asking: its window is hidden meanwhile, and it hears how the re-record ended.
     let editor: EditorModel
-    /// The editor's package and the word of its script the teleprompter opens at.
+    /// The editor's package (its `scriptWord` is set by the island, from `scriptWord`).
     var target: RerecordTarget
+    /// The word of the package's script the teleprompter opens at (decision 12), being worked out off the main thread as
+    /// the window hides: the island waits for it before the take is asked for.
+    var scriptWord: Task<Int?, Never>
     /// The take of the clip at the playhead (a clip with content's own take): its screen, camera, microphone and system
     /// audio are recorded again (`RerecordSelection`).
     var take: TakeRecord
@@ -194,8 +198,9 @@ extension EditorModel {
         }
     }
 
-    /// "Re-record from Here" (⇧⌘R, the Takes menu): the playhead and the take under it kept, the script's word worked out
-    /// off the main thread, then the app hides the window and records. Whether it was asked for.
+    /// "Re-record from Here" (⇧⌘R, the Takes menu): the playhead and the take under it kept, and the app asked at once,
+    /// which hides the window (nothing can be edited from then on) while the script's word is worked out off the main
+    /// thread from the document as it was. Whether it was asked for.
     @discardableResult
     func rerecordFromHere() -> Bool {
         // The format as it is now: a first edit's upgrade may have ended since the menu was drawn.
@@ -208,23 +213,19 @@ extension EditorModel {
         // The take shown at the playhead (the last clip's at the end), a clip with content's own take.
         let take = (playheadProject ?? project).take
         let style = TrackCommands.rulingCameraStyle(document, atOutput: τ, timeMap: TimeMap(sequence: document.sequence)).style
-        let url = currentLocation, name = name, package = project.package
+        let package = project.package
+        let word = Task.detached(priority: .userInitiated) { Self.scriptWord(in: package, document: document, before: τ) }
+        let target = RerecordTarget(packageURL: currentLocation)
         Self.rerecordLogger.notice("Re-record from \(τ, privacy: .public) ns, over \(take.id, privacy: .public)")
         takesState.began()
-        Task {
-            let word = await Task.detached(priority: .userInitiated) {
-                Self.scriptWord(in: package, document: document, before: τ)
-            }.value
-            guard !closed, state == .ready, takesState.isRerecording, takesState.pending == nil else {
-                takesState.ended()
-                return
-            }
-            let target = RerecordTarget(packageURL: url, scriptWord: word)
-            takesState.pending = EditorTakes.Pending(output: τ, takeID: take.id, target: target)
-            let request = EditorRerecordRequest(
-                editor: self, target: target, take: take, cameraStyle: style, projectName: name, asked: asked)
+        takesState.pending = EditorTakes.Pending(output: τ, takeID: take.id, target: target)
+        let request = EditorRerecordRequest(
+            editor: self, target: target, scriptWord: word, take: take, cameraStyle: style, projectName: name, asked: asked)
+        guard actions.rerecord(request) else {
             // Refused (a take records, another editor's re-record is under way): nothing was hidden.
-            if !actions.rerecord(request) { rerecordEnded(.nothing) }
+            word.cancel()
+            rerecordEnded(.nothing)
+            return false
         }
         return true
     }
@@ -257,16 +258,16 @@ extension EditorModel {
     /// Once the project shows the new take `takeID` (`load()` is opening it), `take.rerecord` at output instant `output`:
     /// the step worked out off the main thread from the document shown, and made again if the document changed
     /// meanwhile; then the playhead goes to the take's first frame. A project that can't be edited now keeps the take
-    /// unused, in the Takes menu.
+    /// unused, in the Takes menu, and says so (`tellTakeNotApplied`).
     private func applyRerecord(of takeID: String, at output: Int64) async {
         while !closed, state == .opening || state == .recovering {
-            try? await Task.sleep(for: .milliseconds(50))
+            await stateChange()
         }
         for _ in 0..<3 {
             guard !closed, state == .ready, canEdit, let document, let project = overlayProject else { break }
             guard let shown = project.focused(on: takeID) else {
                 Self.rerecordLogger.error("The project opened again has no take \(takeID, privacy: .public)")
-                return
+                break
             }
             let step = await Task.detached(priority: .userInitiated) {
                 // Its events, read here the first time: never on the main thread.
@@ -285,6 +286,43 @@ extension EditorModel {
             return
         }
         Self.rerecordLogger.notice("The take \(takeID, privacy: .public) was not applied: it stays in the package, unused")
+        guard !closed else { return }
+        tellTakeNotApplied()
+    }
+
+    /// The new take is in the project but not in the video: said over the window (the Takes menu lists it, unused).
+    private func tellTakeNotApplied() {
+        NSSound.beep()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = String(
+            localized: "The new take couldn't be put in the video.",
+            comment: "Re-record from Here recorded a take, but the editor could not put it in the video")
+        alert.informativeText = String(
+            localized: "It's in the project: the Takes menu lists it as Unused.",
+            comment: "Re-record from Here: where the take that could not be put in the video is")
+        if let window, window.isVisible {
+            alert.beginSheetModal(for: window)
+        } else {
+            alert.runModal()
+        }
+    }
+
+    /// Returns once `state` changes (observed, `withObservationTracking`), or after a second at most: the caller looks
+    /// again, so a window closed meanwhile, which changes no state, never keeps it waiting.
+    private func stateChange() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let once = ResumeOnce(continuation)
+            withObservationTracking {
+                _ = state
+            } onChange: {
+                once.resume()
+            }
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                once.resume()
+            }
+        }
     }
 
     /// "Use from Here" (`fromHere`) or "Add to End" of the Takes menu: the take `take` put in the sequence from the
@@ -324,6 +362,24 @@ extension EditorModel {
     }
 
     nonisolated static let rerecordLogger = Logger(subsystem: "dev.toma.Toma", category: "Rerecord")
+}
+
+/// Resumes a continuation once, whichever of its wakers comes first.
+private final class ResumeOnce: Sendable {
+    private let continuation: Mutex<CheckedContinuation<Void, Never>?>
+
+    init(_ continuation: CheckedContinuation<Void, Never>) {
+        self.continuation = Mutex(continuation)
+    }
+
+    func resume() {
+        let waiting = continuation.withLock { continuation in
+            let waiting = continuation
+            continuation = nil
+            return waiting
+        }
+        waiting?.resume()
+    }
 }
 
 #if DEBUG

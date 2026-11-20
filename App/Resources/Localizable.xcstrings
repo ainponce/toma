@@ -4784,6 +4784,17 @@
         }
       }
     },
+    "It's in the project: the Takes menu lists it as Unused." : {
+      "comment" : "Re-record from Here: where the take that could not be put in the video is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Está en el proyecto: el menú Tomas la muestra como Sin usar."
+          }
+        }
+      }
+    },
     "It's larger than 16 MB." : {
       "comment" : "Why a .cube was refused",
       "localizations" : {
@@ -9525,6 +9536,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "El nombre es demasiado largo."
+          }
+        }
+      }
+    },
+    "The new take couldn't be put in the video." : {
+      "comment" : "Re-record from Here recorded a take, but the editor could not put it in the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo poner la toma nueva en el video."
           }
         }
       }
