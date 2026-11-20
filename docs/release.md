@@ -1622,3 +1622,16 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: l
 ### 0. Preparación
 
 ### 2. Detalle por área
+
+**Grabar el foco** (F2)
+
+Con «Seguir el foco del teclado» prendido (Ajustes ▸ Grabación) y Accesibilidad dada a Toma. Para mirar lo grabado: «Mostrar contenido del paquete» del proyecto y abrir `takes/take-001/events.jsonl` con TextEdit; las del foco son las líneas con `"type":"focus"`.
+- Grabar 20 s escribiendo en TextEdit, en Notas y en el campo de búsqueda de Finder, pasando de uno a otro con ⌘⇥ y con ⇥: cada línea `focus` tiene solo `height`, `kind`, `t`, `type`, `width`, `x` e `y`, nunca un texto, un rol ni el nombre de una app. Hay un `element` al empezar y uno por cada cambio de campo, y líneas `caret` que avanzan con lo que se escribe, cada una con el mismo `t` que el `element` que la precede si salieron juntas. Los rectángulos caen donde están el campo y el cursor de texto en la pantalla (puntos globales, con el origen arriba a la izquierda de la pantalla principal); con una segunda pantalla a la izquierda o arriba de la principal, ahí salen con `x` o `y` negativos.
+- Mantener una tecla apretada en TextEdit unos segundos: no hay más de 20 líneas `caret` por segundo, y ninguna repite los cuatro números de la anterior. La toma no se traba ni se atrasa.
+- En un campo de contraseña (el de una página de inicio de sesión en Safari, el de Ajustes del Sistema ▸ Usuarios y grupos) y en Terminal con «Entrada de teclado segura» prendida, escribir unos caracteres: hay un `element` del campo y ningún `caret` mientras el foco está ahí.
+- Pausar la toma, cambiar de campo, escribir y reanudar: entre la pausa y la reanudación no hay ninguna línea `focus` (comparar sus `t` con los de los eventos `paused` y `resumed`); al reanudar se escribe otra vez el foco como está, aunque no haya cambiado.
+- Con Toma adelante (el editor, Ajustes) no se escribe ninguna línea `focus`; al volver a otra app, sí.
+- Parar la toma mientras una app no contesta (por ejemplo, una que se está abriendo o Xcode compilando con el foco en su editor): la toma para enseguida, como siempre.
+- Sin Accesibilidad (sacarla en Ajustes del Sistema ▸ Privacidad y seguridad ▸ Accesibilidad): la toma graba igual, sin líneas `focus`, y en Consola, con `subsystem:dev.toma.Toma`, aparece una sola vez «Accessibility is not allowed: this take records no focus». Ningún aviso del sistema pide el permiso durante la toma.
+- En Consola, con `subsystem:dev.toma.Toma`, durante una toma que graba el foco: ningún mensaje tiene un rectángulo, un rol ni el nombre de una app.
+- Límites conocidos (anotar solo si se ve otra cosa): en Chrome y en las apps de Electron puede haber solo `element` y ningún `caret`, porque Toma no les cambia `AXManualAccessibility`; al mover una ventana sin cambiar el foco ni el texto, el rectángulo grabado queda el de antes hasta el próximo cambio.
