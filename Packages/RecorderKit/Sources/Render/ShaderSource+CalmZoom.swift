@@ -85,8 +85,8 @@ extension ShaderSource {
     struct LoupeUniforms {
         float2 center;        // the lens's centre, output pixels
         float2 halfSize;      // (r, r) for a circle, (1.5 r, r) for a rounded rectangle
-        float2 sampleOrigin;  // the copy of what is under it, its top-left corner in output pixels
-        float2 sampleSize;    // and its size
+        float2 sampleOrigin;  // the copy of what is under it: its top-left corner in the target's pixels
+        float2 toTarget;      // the target's pixels for each output pixel
         float corner;         // r for a circle, 0.25 r
         float magnification;  // at least 1
         float band;           // the outer band that bulges, in from the edge: 0.15 r
@@ -99,13 +99,14 @@ extension ShaderSource {
 
     // The loupe over a quad about the lens and its shadow: the shadow (the core's `shadowValue` of its shape moved down),
     // the lens over it reading the copy at c + (p − c) / m, up to `bulge` farther out across its outer band
-    // (`CalmZoomLook.lensSample`), and the ring over the lens, in one drawing. The copy is read clamped to its edge, so
-    // what is past the frame's edge is the edge.
+    // (`CalmZoomLook.lensSample`), and the ring over the lens, in one drawing. The copy is read in the target's pixels,
+    // bilinear and clamped to its edge (`CalmZoomLook.lensBox`), so what is past the frame's edge is the edge, and where
+    // the copy is in the target changes nothing of what is read.
     fragment float4 loupeFragment(QuadOut in [[stage_in]],
                                   constant LoupeUniforms &u [[buffer(1)]],
                                   constant ShadowUniforms &shadow [[buffer(2)]],
-                                  texture2d<float> under [[texture(0)]],
-                                  sampler linearSampler [[sampler(0)]]) {
+                                  texture2d<float> under [[texture(0)]]) {
+        constexpr sampler targetPixels(coord::pixel, address::clamp_to_edge, filter::linear);
         float d = roundedRectDistance(in.p - u.center, u.halfSize, u.corner);
         float coverage = clamp(0.5 - d, 0.0, 1.0);
         float4 color = float4(0.0);
@@ -115,7 +116,7 @@ extension ShaderSource {
         if (coverage > 0.0) {
             float s = clamp((d + u.band) / u.band, 0.0, 1.0);
             float2 q = u.center + (in.p - u.center) / u.magnification * (1.0 + u.bulge * s * s);
-            float3 lens = under.sample(linearSampler, (q - u.sampleOrigin) / u.sampleSize).rgb;
+            float3 lens = under.sample(targetPixels, q * u.toTarget - u.sampleOrigin).rgb;
             color = float4(lens, 1.0) * coverage + color * (1.0 - coverage);
             float ring = (coverage - clamp(0.5 - d - u.ring, 0.0, 1.0)) * u.ringOpacity;
             color = float4(ring) + color * (1.0 - ring);

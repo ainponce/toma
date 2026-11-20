@@ -512,6 +512,75 @@ private func differingBounds(_ a: [UInt8], _ b: [UInt8]) -> (low: SIMD2<Int>, hi
         #expect(try drawer.draw(frame(calm(.highlight))) != drawer.draw(frame(nil)))
     }
 
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func aMovingLensKeepsOneCopy() throws {
+        let drawer = try CalmDrawer()
+        // The largest lens, 2×, following a cursor down the whole output a fraction of a pixel off each time; and one wider
+        // than a portrait output, its copy cut to it.
+        let lenses = [
+            (size, LoupeLayer(radius: 0.4 * 720, shape: .circle, magnification: 2)),
+            (SIMD2(720, 1280), LoupeLayer(radius: 0.4 * 720, shape: .roundedRect, magnification: 2)),
+        ]
+        for (outputSize, lens) in lenses {
+            let before = drawer.textures.count.made
+            let width = Double(outputSize.x), height = Double(outputSize.y)
+            for i in 0..<60 {
+                let c = SIMD2(0.47 * width + 0.37 * Double(i), 13.3 + Double(i) * (height - 26.6) / 59)
+                let layer = CalmZoomLayer(
+                    mode: .loupe, amount: 1, focus: Rect(x: c.x - 100, y: c.y - 50, width: 200, height: 100), loupe: lens)
+                _ = try drawer.draw(frame(layer, outputSize: outputSize))
+                // Once the GPU is done with the frame, its copy is handed back for the next one.
+                let deadline = Date().addingTimeInterval(5)
+                while drawer.textures.count.free < drawer.textures.count.made, Date() < deadline { Thread.sleep(forTimeInterval: 0.005) }
+            }
+            #expect(drawer.textures.count.made == before + 1, "\(outputSize): \(drawer.textures.count)")
+        }
+    }
+
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func aCommandBufferThatTakesNoMorePassesFailsTheFrame() throws {
+        let drawer = try CalmDrawer()
+        let refusals = drawer.compositor.layers.calmZoom.refusals
+        defer { refusals.forTests = nil }
+        var samples = frame(nil)
+        samples.cursorSamples = [CursorLayer(hotspot: [300, 300], height: 30), CursorLayer(hotspot: [312, 306], height: 30)]
+        var card = frame(nil)
+        card.card = CardPlacement(
+            rect: Rect(x: 100, y: 100, width: 600, height: 400), cornerRadius: 12, content: .identity(outputSize: size), mix: 1)
+        card.backgroundTransform = .identity(outputSize: size)
+        // Dim asks for a blit, two blur passes and the pass into the target; the loupe for a blit and that pass. Each refused
+        // in turn, with the pass into the target given again after it or not.
+        for (mode, passes) in [(ZoomMode.dim, 4), (.loupe, 2)] {
+            for after in 0..<passes {
+                for reopens in [false, true] {
+                    refusals.forTests = CalmZoomRefusals.Plan(after: after, reopens: reopens)
+                    for base in [frame(nil), samples, card] {
+                        var drawn = base
+                        drawn.calmZoom = calm(mode)
+                        drawn.camera = cameraLayer
+                        let target = try StageDrawing.target(device: drawer.device, size: size)
+                        let commandBuffer = try #require(drawer.queue.makeCommandBuffer())
+                        var failed = false
+                        do {
+                            try drawer.compositor.encode(
+                                drawn, screen: drawer.smooth, camera: drawer.camera, cursor: drawer.cursor, into: target,
+                                commandBuffer: commandBuffer)
+                        } catch RenderError.metalResourceUnavailable {
+                            failed = true
+                        }
+                        #expect(failed, "\(mode) after \(after), reopens \(reopens)")
+                        // Every pass ended once, none left open: what was encoded completes.
+                        commandBuffer.commit()
+                        commandBuffer.waitUntilCompleted()
+                        #expect(commandBuffer.status == .completed, "\(mode) after \(after), reopens \(reopens)")
+                    }
+                }
+            }
+        }
+        refusals.forTests = nil
+        #expect(try drawer.draw(frame(calm(.dim))) != drawer.draw(frame(nil)))
+    }
+
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
     func loupeCostsAtMostOneAndAHalfMillisecondsAt4K() throws {
         let size4K = SIMD2(3840, 2160)

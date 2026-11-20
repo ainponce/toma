@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
+import Metal
 import ProjectFormat
 
 /// The look of the calm zoom (phase 3 design §6 and §19, plan 3b decision 7), frozen with its ids: `calmZoom-1` the focus,
@@ -118,15 +119,16 @@ enum CalmZoomLook {
     }
 
     /// The uniforms of the lens `lens` centred at `center` (output pixels) at `amount` in an output of `outputSize`,
-    /// reading the copy of what is under it at `sampleOrigin` and `sampleSize` (output pixels).
+    /// reading the copy of what is under it whose top-left corner is at `sampleOrigin` of the target, which has
+    /// `toTarget` pixels for each output pixel.
     static func loupeUniforms(
-        _ lens: LoupeLayer, center: SIMD2<Double>, amount: Double, sampleOrigin: SIMD2<Double>, sampleSize: SIMD2<Double>,
+        _ lens: LoupeLayer, center: SIMD2<Double>, amount: Double, sampleOrigin: SIMD2<Double>, toTarget: SIMD2<Double>,
         outputSize: SIMD2<Int>
     ) -> LoupeUniforms {
         let pt = point(outputSize: outputSize)
         return LoupeUniforms(
             center: SIMD2<Float>(center), halfSize: SIMD2<Float>(lensHalfSize(radius: lens.radius, shape: lens.shape)),
-            sampleOrigin: SIMD2<Float>(sampleOrigin), sampleSize: SIMD2<Float>(sampleSize),
+            sampleOrigin: SIMD2<Float>(sampleOrigin), toTarget: SIMD2<Float>(toTarget),
             corner: Float(lensCorner(radius: lens.radius, shape: lens.shape)), magnification: Float(max(lens.magnification, 1)),
             band: Float(lensBand * lens.radius), bulge: Float(lensBulge), ring: Float(lensRing * pt),
             ringOpacity: Float(lensRingOpacity), amount: Float(amount))
@@ -140,6 +142,25 @@ enum CalmZoomLook {
         return LensShadowUniforms(
             lower: SIMD2<Float>(moved - half), upper: SIMD2<Float>(moved + half), sigma: Float(lensShadowSigma * pt),
             corner: Float(lensCorner(radius: lens.radius, shape: lens.shape)), opacity: Float(lensShadowOpacity))
+    }
+
+    /// The box of a target `targetSize` big that the lens of `halfSize` centred at `center` (output pixels) reads, in the
+    /// target's pixels (`toTarget` of them for each output pixel): the lens's box, its bulge's farthest at 1× and a texel
+    /// for the filter, `reach` on each side, always ⌈2 `reach`⌉ + 1 big (at most the target) and moved inside the target.
+    /// So a lens that moves keeps one size of copy, and what it reads past the target's edge is the edge, clamped to it.
+    /// `nil` when none of it is in the target.
+    static func lensBox(
+        halfSize: SIMD2<Double>, center: SIMD2<Double>, toTarget: SIMD2<Double>, targetSize: SIMD2<Int>
+    ) -> MTLRegion? {
+        let reach = halfSize * (1 + lensBulge) * toTarget + 1
+        let middle = center * toTarget
+        let target = SIMD2<Double>(targetSize)
+        guard reach.x.isFinite, reach.y.isFinite, middle.x.isFinite, middle.y.isFinite, middle.x + reach.x > 0,
+              middle.y + reach.y > 0, middle.x - reach.x < target.x, middle.y - reach.y < target.y
+        else { return nil }
+        let size = pointwiseMin((2 * reach).rounded(.up) + 1, target)
+        let low = pointwiseMax(pointwiseMin((middle - reach).rounded(.down), target - size), .zero)
+        return MTLRegionMake2D(Int(low.x), Int(low.y), Int(size.x), Int(size.y))
     }
 
     /// How far past its shape a lens of `radius` draws, in output pixels: its shadow's offset and three σ, and a pixel.
@@ -175,12 +196,13 @@ struct CalmFocusUniforms: Equatable {
     var transition: Float
 }
 
-/// `LoupeUniforms` in `ShaderSource.calmZoomMetal`: 64 bytes. The lens and the copy of what is under it, in output pixels.
+/// `LoupeUniforms` in `ShaderSource.calmZoomMetal`: 64 bytes. The lens in output pixels, and where the copy of what is
+/// under it is in the target.
 struct LoupeUniforms: Equatable {
     var center: SIMD2<Float>
     var halfSize: SIMD2<Float>
     var sampleOrigin: SIMD2<Float>
-    var sampleSize: SIMD2<Float>
+    var toTarget: SIMD2<Float>
     var corner: Float
     var magnification: Float
     var band: Float
