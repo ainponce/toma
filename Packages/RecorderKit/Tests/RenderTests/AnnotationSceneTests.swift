@@ -522,3 +522,22 @@ private func onTheLayer(_ rect: Rect, _ layer: ScreenLayer) -> Rect {
     #expect(scene.measureCount == 8)
     #expect(close(grown[0].rect.height, AnnotationTypography.box(of: words, width: grown[0].rect.width, unit: grown[0].unit).y))
 }
+
+@Test func measuresAreSharedAcrossThreads() async throws {
+    // Frames asked for at once from many threads (the preview's and the export's queues), sharing the scene's measures:
+    // every one gets the same layers, and the texts are measured once for all of them.
+    let take = fourSecondTake()
+    let words = TextAnnotation(string: "Uno dos tres cuatro", preset: .label, size: 0.05)
+    let doc = document(take, [], (1...6).map { annotation($0, stuck(0, 4), .text(words)) })
+    let frames = FrameEvaluator(take: take, events: [], document: doc, outputSize: [1280, 720])
+    let timeMap = TimeMap(sequence: doc.sequence)
+    let scene = AnnotationScene(document: doc, take: take, events: [], timeMap: timeMap, outputSize: [1280, 720])
+    let frame = frames.frame(at: 1)
+    let source = try #require(timeMap.source(atOutput: ns(1))).source
+    let all = await withTaskGroup(of: [AnnotationLayer].self) { group in
+        for _ in 0..<16 { group.addTask { scene.content(atSource: source, output: ns(1), frame: frame) } }
+        return await group.reduce(into: [[AnnotationLayer]]()) { $0.append($1) }
+    }
+    #expect(all.count == 16 && all.allSatisfy { $0 == all[0] } && all[0].count == 6)
+    #expect(scene.measureCount == 6 * 2)
+}
