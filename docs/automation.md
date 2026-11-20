@@ -75,8 +75,9 @@ como `progress: N %`, y ⌃C corta el export sin dejar archivo.
 
 `toma mcp` habla [MCP](https://modelcontextprotocol.io) (versión del protocolo `2025-06-18`) por la entrada y la salida
 estándar: JSON-RPC 2.0, un mensaje por línea. La salida estándar lleva solo esos mensajes; cualquier otra cosa va a la
-salida de errores. Termina cuando se cierra su entrada (o con SIGTERM), y antes cancela lo que está haciendo: un export a
-medio hacer no deja archivo. No abre ningún puerto ni usa la red.
+salida de errores. Cuando se cierra su entrada, termina lo que está haciendo (responde cada llamada y espera los exports
+en segundo plano) y sale con 0. Con SIGTERM (o ⌃C) sale enseguida: cancela lo que está haciendo, y un export a medio hacer
+no deja archivo. No abre ningún puerto ni usa la red.
 
 ### Conectarlo a Claude Code
 
@@ -109,6 +110,13 @@ y reiniciar Claude Desktop. Claude Desktop no lee el `PATH` de la terminal: `com
 La carpeta de trabajo del servidor no es la de ningún proyecto: las rutas que se le pasan a las herramientas van
 absolutas (o con `~`).
 
+**El límite de 60 segundos.** Claude Desktop da por perdida una llamada que tarda más de 60 s: la cancela
+(`notifications/cancelled`, «Request timed out») y el servidor para lo que estaba haciendo. Un export de más de un minuto
+o dos de video tarda más que eso, así que desde Claude Desktop se exporta en segundo plano: `export_video` con
+`background: true` responde enseguida con un `jobId`, y `export_status {jobId}` dice cómo va (el modelo lo consulta cada
+tanto hasta que diga `done` o `failed`). La descripción de la herramienta ya se lo pide al modelo. Claude Code espera mucho
+más (se cambia con la variable `MCP_TOOL_TIMEOUT`), pero el segundo plano también sirve ahí.
+
 ### Otros clientes
 
 Cualquier cliente MCP por stdio: el comando es `toma` y el argumento `mcp`. El servidor responde `initialize` (siempre con
@@ -123,11 +131,12 @@ con `id: null`.
 |---|---|---|
 | `list_projects` | `folder`? | Los proyectos de la biblioteca (`~/Movies/Toma`) o de esa carpeta, hasta 4 niveles: ruta, nombre, duración, versión del documento, última modificación, o el problema que no lo deja abrir. Solo lee |
 | `project_info` | `project` | Lo que dice `toma info --json`. Solo lee |
-| `get_transcript` | `project` | La transcripción: idioma, texto y cada palabra con sus tiempos en la salida. Sin transcripción, `refused`. Solo lee |
+| `get_transcript` | `project`, `from`?, `to`?, `words`? | La transcripción por partes: idioma, duración de la salida y las frases (o las palabras entre dos pausas) con su comienzo y su fin en segundos de la salida; con `words: true`, cada palabra con sus tiempos. Sin transcripción, `refused`. Solo lee |
 | `get_markers` | `project` | Los marcadores, los capítulos y los capítulos como los lista YouTube. Solo lee |
 | `apply_commands` | `project`, `commands` | Los comandos de la API, en orden, cada uno su paso; para en el primero que falla |
 | `undo`, `redo` | `project` | Deshace o rehace el último paso del proyecto |
-| `export_video` | `project`, `output`, `codec`?, `size`?, `fps`?, `quality`?, `gif`? | Exporta como `toma export` |
+| `export_video` | `project`, `output`, `codec`?, `size`?, `fps`?, `quality`?, `gif`?, `background`? | Exporta como `toma export`; con `background: true`, responde enseguida con un `jobId` y exporta en segundo plano |
+| `export_status` | `jobId`? | Cómo va un export en segundo plano: `running` con `progress` de 0 a 1, `done` con `result` (ruta, duración, tamaño, capítulos) o `failed` con `error`; sin `jobId`, todos los de este servidor. Solo lee |
 | `share` | `project`, `list`? | Sube el video al almacenamiento de Ajustes ▸ Compartir y devuelve el link; con `list: true`, lista los links del proyecto. Nunca borra (ver «Compartir») |
 
 - **Resultados.** Cada resultado trae el JSON en `structuredContent` y el mismo JSON como texto en `content`. Las
@@ -139,17 +148,27 @@ con `id: null`.
   corrieron (`results`), el que falló (`failedIndex`, desde 0) y su `error`; un comando que no es de la API hace que no
   corra ninguno.
 - **Tiempos.** En segundos de la salida tal como se reproduce cuando corre el comando: después de un `cut`, el resto se
-  corre. Para encontrarlos sirven `project_info`, `get_transcript` (cada palabra con su `start` y `end`) y `get_markers`.
+  corre. Para encontrarlos sirven `project_info`, `get_transcript` (cada frase, o cada palabra con `words: true`, con su
+  `start` y `end`) y `get_markers`.
+- **La transcripción, por partes.** Claude Code avisa cuando el resultado de una herramienta pasa los 10.000 tokens y lo
+  corta en 25.000 (se cambia con `MAX_MCP_OUTPUT_TOKENS`); la transcripción de unos minutos con cada palabra lo pasaría.
+  Por eso `get_transcript` da partes de unos 7.000 tokens: `from` y `to` (segundos de la salida) piden una parte, `duration`
+  es lo que dura toda la salida, y si una parte se llena antes de `to`, `nextFrom` dice desde dónde pedir la siguiente.
+  Una frase o una palabra está en la parte si suena en ella. Las palabras que las ediciones cortaron no salen.
 - **Progreso.** Un `export_video` puede tardar minutos. Si la llamada trae `_meta.progressToken`, el servidor manda
   `notifications/progress` con ese token, `progress` de 0 a 1 (sube con cada aviso) y `total: 1`, y ninguno después de la
-  respuesta. `notifications/cancelled` con el `requestId` de la llamada la cancela: el export para, no queda archivo y no
-  hay respuesta.
+  respuesta ni después de cancelarla. `notifications/cancelled` con el `requestId` de la llamada la cancela: el export para,
+  no queda archivo y no hay respuesta. Con `background: true` no hay avisos: el progreso lo da `export_status`.
+- **Exports en segundo plano.** Viven lo que vive el servidor: al cerrarse su entrada, el servidor los espera; con SIGTERM,
+  los cancela (sin dejar archivo). Un `jobId` es de un servidor: otro `toma mcp` no lo conoce.
 - **Rutas.** `project` es un paquete `.toma` con su `manifest.json`; ni el paquete ni el manifiesto pueden ser enlaces, y
   una ruta con `..` se rechaza (`notAProject`). `output` nunca puede caer dentro de un paquete (`refused`). Las rutas
   relativas son desde la carpeta de trabajo del servidor; `~` es la carpeta personal.
 - **Un proyecto a la vez.** Las llamadas corren a la vez, pero las de un mismo paquete (aunque lleguen por rutas
   distintas) esperan su turno, en el orden en que llegaron. Ninguna deja el proyecto abierto entre llamadas: lo abre, hace
-  lo suyo y lo cierra.
+  lo suyo y lo cierra. Un export ocupa el proyecto solo mientras lo lee: después, las llamadas que siguen (leer, editar)
+  corren mientras exporta, y el export es del proyecto como estaba al pedirlo. Dos exports al mismo archivo, aunque sean de
+  proyectos distintos, van de a uno.
 - **La app.** Si Toma tiene el proyecto abierto, tiene su `edit.lock`: `apply_commands`, `undo` y `redo` dan `locked`
   (cerrar el proyecto en Toma, o editarlo ahí). Leer y exportar funcionan igual, con lo que hay en disco.
 
@@ -198,8 +217,8 @@ Lo que pasa por la entrada (→) y la salida (←) de `toma mcp`, una línea por
 ```
 
 Para probarlo a mano:
-`printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | toma mcp` (al cerrarse la entrada, el servidor
-termina).
+`printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}' | toma mcp`
+(al cerrarse la entrada, el servidor responde lo que le pidieron y termina).
 
 ## Variables de entorno
 

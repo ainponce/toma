@@ -67,26 +67,41 @@ struct ProjectInfoTool: MCPTool {
     }
 }
 
-/// `get_transcript{project}`: what `toma transcript --json` says (`ProjectRunner.transcript`); `refused` without one.
+/// `get_transcript{project, from?, to?, words?}`: the transcript (`ProjectRunner.transcript`) in parts an agent's tool
+/// result holds (`TranscriptPage`): segments by default, every word with `words: true`; `refused` without one.
 struct GetTranscriptTool: MCPTool {
     let name = "get_transcript"
     let description = """
-        The project's transcript: its language, the text the output says, and every word of the takes with its start \
-        and end in seconds of the output (none, and "cut": true, for a word the edits leave out). A project without a \
-        transcript is refused: make one with apply_commands and {"command": "transcribe"}.
+        The project's transcript as the output says it: {language, duration, from, to, nextFrom?, segments} where each \
+        segment is a sentence (or the words between two pauses) with its start and end in seconds of the output; with \
+        words: true, {…, words} with every word and its own start and end instead (for exact cuts). Words the edits \
+        cut out are left out. A long transcript comes in parts: from and to (seconds of the output) ask for a part, and \
+        when a part runs out of room before to, nextFrom says where to ask again (duration is the whole output's). A \
+        project without a transcript is refused: make one with apply_commands and {"command": "transcribe"}.
         """
-    var inputSchema: JSONValue { MCPSchema.object(["project": MCPSchema.project], required: ["project"]) }
+    var inputSchema: JSONValue {
+        MCPSchema.object(
+            [
+                "project": MCPSchema.project,
+                "from": MCPSchema.number("Seconds of the output where the part starts: 0 by default.", minimum: 0),
+                "to": MCPSchema.number("Seconds of the output where the part ends: the end by default.", minimum: 0),
+                "words": MCPSchema.boolean("Every word with its times instead of sentences: bigger, for exact cuts."),
+            ], required: ["project"])
+    }
     var annotations: JSONValue? { MCPSchema.annotations("Read a Toma project's transcript", readOnly: true) }
 
     func call(_ arguments: JSONValue, context: MCPContext) async throws -> MCPToolResult {
-        let url = try context.packageURL(try MCPArguments(arguments, tool: name, keys: ["project"]).string("project"))
+        let arguments = try MCPArguments(arguments, tool: name, keys: ["project", "from", "to", "words"])
+        let url = try context.packageURL(try arguments.string("project"))
+        let from = try arguments.optionalNumber("from"), to = try arguments.optionalNumber("to")
+        let words = try arguments.optionalBool("words") ?? false
         let environment = context.environment
         let report = try await context.serialized(url) { try await ProjectRunner.transcript(url, environment: environment) }
         guard let report else {
             throw APIError(
                 .refused, #"the project has no transcript: make one with apply_commands and {"command": "transcribe"}"#)
         }
-        return try .json(report)
+        return try .json(try TranscriptPage.make(report, from: from, to: to, words: words))
     }
 }
 
