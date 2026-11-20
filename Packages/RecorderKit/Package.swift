@@ -58,7 +58,7 @@ let package = Package(
         ),
         .testTarget(name: "ProjectFormatTests", dependencies: ["ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(name: "AnalysisTests", dependencies: ["Analysis", "ProjectFormat", "RecorderKitTestSupport"]),
-        .testTarget(name: "EditingTests", dependencies: ["Editing", "Analysis", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "EditingTests", dependencies: ["Editing", "Analysis", "ProjectFormat", "Recovery", "RecorderKitTestSupport"]),
         .testTarget(name: "RecordingTests", dependencies: ["Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(
             name: "RecoveryTests", dependencies: ["Recovery", "Recording", "SyntheticCapture", "ProjectFormat", "RecorderKitTestSupport"]),
