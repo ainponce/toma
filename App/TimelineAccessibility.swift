@@ -187,6 +187,29 @@ final class TimelineAccessibility {
                     })])
             }
         }
+        // The pieces of music (3c): "Music, Calm, from 0:00 to 2:14", selected and deleted.
+        if let row = geometry.rows.first(where: { $0.track == .music }) {
+            let top = TimelineLayout.rulerHeight + row.top - geometry.verticalOffset + 2
+            let sources = Dictionary(content.document.music.items.map { ($0.id, $0.source) }) { first, _ in first }
+            for piece in MusicCommands.shownItems(content.document, timeMap: content.map) {
+                let id = piece.id
+                let label = String(
+                    format: String(
+                        localized: "Music, %1$@, from %2$@ to %3$@",
+                        comment: "VoiceOver: a piece of music of the Music track, its name, start and end"),
+                    EditorAudio.name(ofSource: sources[id] ?? ""), Self.time(piece.output.lowerBound), Self.time(piece.output.upperBound))
+                addAudio(
+                    "music \(id)", frame: geometry.itemRect(piece.output, top: top, height: row.height - 4, gap: 1), label: label,
+                    selected: view.selected.contains(id),
+                    press: { [weak self] in
+                        self?.model?.selection = .musicItem(id)
+                        return self != nil
+                    },
+                    actions: [(String(localized: "Delete Music", comment: "The menu of a piece of music of the Music track"), { @MainActor @Sendable [weak self] in
+                        self?.model?.deleteMusic(id: id)
+                    })])
+            }
+        }
         elements = kept
         return children
     }
