@@ -58,7 +58,10 @@ struct SynthRecord: AsyncParsableCommand {
             about (320, 180), a click every second from 0.5 s, the arrow and from 1 s the I-beam (their images in \
             the take's cursors/ folder), a scroll at 2 s and key activity from 3 to 4 s. With --keys, it also gets \
             the keys that type the text given, one every 100 ms from 0.1 s, as keyPress events with the codes of a US \
-            keyboard (characters it has no key for are left out): the package goes to version 4 just before the first.
+            keyboard (characters it has no key for are left out): the package goes to version 4 just before the first. \
+            With --focus, it also gets focus events, as Follow Keyboard Focus records them (SyntheticFocusRecorder): \
+            a field at (40, 40) with its text cursor at the start, another at (40, 120) at 2.2 s, and the text cursor \
+            typing in it from 3 s, a line far below from 3.5 s.
 
             With --device <width>x<height>, a synthetic iPhone or iPad replaces the displays: device, of that size in \
             pixels at --fps, turned to <height>x<width> (a new segment) --rotate-at seconds in if given, and its sound, \
@@ -109,6 +112,9 @@ struct SynthRecord: AsyncParsableCommand {
     @Option(help: "Also record the keys that type this text, one every 100 ms (keyPress events; the package goes to version 4).")
     var keys: String?
 
+    @Flag(help: "Also record where a synthetic keyboard focus and text cursor are (focus events), as Follow Keyboard Focus does.")
+    var focus = false
+
     @Option(help: "Record a synthetic iPhone or iPad of <width>x<height> pixels and its sound instead of the displays (version 4).")
     var device: DevicePixelSize?
 
@@ -145,6 +151,7 @@ struct SynthRecord: AsyncParsableCommand {
         if device != nil {
             if window || displays > 1 { throw ValidationError("--device records no display or window: leave out --window and --displays.") }
             if keys != nil { throw ValidationError("--device records no keys, as the iPhone mode: leave out --keys.") }
+            if focus { throw ValidationError("--device records no focus, as the iPhone mode: leave out --focus.") }
             if staticAfter != nil { throw ValidationError("--static-after is for the displays or the window, not --device.") }
         }
     }
@@ -190,6 +197,10 @@ struct SynthRecord: AsyncParsableCommand {
             let typed = KeyPressRecorder(
                 source: ScriptedKeyEvents(text: keys, every: .milliseconds(100), ticks: .live), secureInput: { false })
             input = CompositeInputRecorder([input, typed])
+        }
+        if focus {
+            let others = (input as? CompositeInputRecorder)?.recorders ?? [input]
+            input = CompositeInputRecorder(others + [SyntheticFocusRecorder()])
         }
         try await recordTake(
             in: directory, into: into, prefix: "synth", duration: duration, markers: markers?.seconds ?? [],
