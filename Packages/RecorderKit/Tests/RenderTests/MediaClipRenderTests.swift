@@ -90,21 +90,66 @@ private func backgroundBytes(of frame: RenderFrame, _ renderer: FrameRenderer) a
 /// Draws frames `frames` of `renderer`'s scene along the grid of `rate`, in order, as the export does
 /// (`render(at:into:completion:)`, each decoded ahead through the prefetchers), waiting for each; the bytes of the last.
 private func exportBytes(_ renderer: FrameRenderer, frames: ClosedRange<Int>, rate: Int) async throws -> [UInt8] {
-    var created: CVPixelBuffer?
-    let attributes = [
-        kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary, kCVPixelBufferMetalCompatibilityKey: true,
-    ] as CFDictionary
-    let status = CVPixelBufferCreate(
-        kCFAllocatorDefault, renderer.outputSize.x, renderer.outputSize.y, kCVPixelFormatType_32BGRA, attributes, &created)
-    #expect(status == kCVReturnSuccess)
-    let target = MediaPixelBuffer(try #require(created))
+    try await exportFrames(renderer, frames: frames, keeping: [frames.upperBound], rate: rate)[frames.upperBound] ?? []
+}
+
+/// `exportBytes`, with the bytes of each frame of `keeping`.
+private func exportFrames(
+    _ renderer: FrameRenderer, frames: ClosedRange<Int>, keeping: Set<Int>, rate: Int
+) async throws -> [Int: [UInt8]] {
+    let target = MediaPixelBuffer(try pixelBuffer(of: renderer.outputSize))
+    var kept: [Int: [UInt8]] = [:]
     for n in frames {
         let error: (any Error)? = await withCheckedContinuation { continuation in
             renderer.render(at: seconds(n, rate: rate), into: target.pixelBuffer) { continuation.resume(returning: $0) }
         }
         if let error { throw error }
+        if keeping.contains(n) { kept[n] = packedBytes(of: target.pixelBuffer) }
     }
-    return packedBytes(of: target.pixelBuffer)
+    return kept
+}
+
+/// A BGRA pixel buffer of `size`, IOSurface-backed, as the export draws into.
+private func pixelBuffer(of size: SIMD2<Int>) throws -> CVPixelBuffer {
+    var created: CVPixelBuffer?
+    let attributes = [
+        kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary, kCVPixelBufferMetalCompatibilityKey: true,
+    ] as CFDictionary
+    let status = CVPixelBufferCreate(kCFAllocatorDefault, size.x, size.y, kCVPixelFormatType_32BGRA, attributes, &created)
+    #expect(status == kCVReturnSuccess)
+    return try #require(created)
+}
+
+/// A take of 4 s as `mediaProject` makes it, with `count` clips of the user's own imported into it, each `seconds` long
+/// at 320 × 180 with a pattern of its own (`5 × i`); the paths, in order.
+private func manyClipsProject(in dir: URL, count: Int, seconds: Double) async throws -> (project: LoadedProject, assets: [String]) {
+    let builder = try TakeBuilder(in: dir)
+    try await builder.addVideoTrack(
+        id: trackID, source: displaySource(globalFrame: screenFrame), segments: [VideoSegmentSpec(start: base, seconds: 4)])
+    let project = try builder.write()
+    var assets: [String] = []
+    for i in 0..<count {
+        let clip = try await offThePool { try MediaFixtures.clip(in: dir, seconds: seconds, size: [320, 180], pattern: 5 * i) }
+        assets.append(try await MediaFixtures.imported(clip, into: project, as: .video))
+    }
+    return (project, assets)
+}
+
+/// The legacy document of `project` with `assets`' clips one after the other at 1 s of the take, each the first
+/// `seconds` of its file: `[take 0–1 s] [clip 0] … [clip n − 1] [take 1–4 s]`.
+private func manyClipsDocument(_ project: LoadedProject, _ assets: [String], seconds: Double) -> EditDocument {
+    var document = EditDocument.legacy(for: project)
+    let take = document.sequence[0], point = take.start.adding(seconds: 1)
+    var before = take, after = take
+    (before.id, before.end) = ("c-00000001", point)
+    (after.id, after.start) = ("c-" + String(format: "%08x", assets.count + 2), point)
+    let clips = assets.enumerated().map { i, asset in
+        Clip(
+            id: "c-" + String(format: "%08x", i + 2), take: take.take, start: point, end: point, speed: 1,
+            content: .media(MediaClip(asset: asset, start: 0, end: Int64((seconds * 1e9).rounded()))))
+    }
+    document.sequence = [before] + clips + [after]
+    return document
 }
 
 private final class MediaPixelBuffer: @unchecked Sendable {
@@ -477,6 +522,188 @@ private func brightness(_ pixel: SIMD4<UInt8>) -> Int { Int(pixel.x) + Int(pixel
         #expect(abs((halfDarkening.x + halfDarkening.y + halfDarkening.z) * 2 - (darkening.x + darkening.y + darkening.z)) <= 6)
     }
 
+    /// Eight files, 0.3 s of each one after the other from 1 s: as the export draws on, the readers of the clips that
+    /// neither its frame nor the next second shows are let go (their `AVAssetReader`s closed), so at 2 s only those of
+    /// clips 3 to 6 are kept and none past 3.4 s; each frame still shows its file's. The preview playing over them too.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func readersOutsideTheWindowAreLetGo() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, assets) = try await manyClipsProject(in: dir, count: 8, seconds: 0.3)
+            let document = manyClipsDocument(project, assets, seconds: 0.3)
+            let size = SIMD2(320, 180), rate = 30
+            let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            let ids = assets.map(AssetFrameReader.readerID(of:))
+            let first = try #require(renderer.reader(for: ids[0]))
+            // At 2 s (frame 60), the next second shows clips 3 (1.9–2.2 s) to 6 (2.8–3.1 s).
+            let frames = try await exportFrames(renderer, frames: 0...60, keeping: [42, 60], rate: rate)
+            #expect(Set(ids.filter { renderer.mediaResources.existingReader(for: $0) != nil }) == Set(ids[3...6]))
+            #expect(await eventually { !first.isOpen })
+            // Clip 1 at 1.4 s (its 0.1 s, frame 3), clip 3 at 2 s (its 0.1 s, frame 3).
+            let center = (size.x / 2, size.y / 2)
+            #expect(isFrame(pixel(try #require(frames[42]), width: size.x, x: center.0, y: center.1), 5 * 1 + 3))
+            #expect(isFrame(pixel(try #require(frames[60]), width: size.x, x: center.0, y: center.1), 5 * 3 + 3))
+            // Past 3.4 s none is kept, and none open.
+            let kept = ids.compactMap { renderer.mediaResources.existingReader(for: $0) }
+            _ = try await exportFrames(renderer, frames: 61...105, keeping: [], rate: rate)
+            #expect(renderer.mediaResources.readerCount == 0)
+            #expect(await eventually { kept.allSatisfy { !$0.isOpen } })
+            #expect(renderer.mediaResources.gate.mostAtOnce <= MediaClipResources.decodesAtOnce)
+
+            // Frame by frame: the clips a frame does not show go.
+            let alone = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            _ = try await offThePool { (try alone.renderBytes(at: 1.15), try alone.renderBytes(at: 2.05)) }
+            #expect(alone.mediaResources.readerCount == 1 && alone.mediaResources.existingReader(for: ids[3]) != nil)
+
+            // The preview playing from 0.5 s to 3.67 s, frame after frame: at 2 s, the readers of clips 3 to 6; at the end,
+            // none.
+            let previewed = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            let (playing, played) = engine(previewed)
+            for k in 15...110 {
+                let before = played.count
+                playing.request(.playing(seconds: seconds(k, rate: rate)))
+                #expect(await eventually(timeout: .seconds(30)) { played.count > before }, "frame \(k) drawn")
+                if k == 60 {
+                    #expect(try #require(played.all.last).frame.media?.asset == assets[3])
+                    #expect(Set(ids.filter { previewed.mediaResources.existingReader(for: $0) != nil }).isSubset(of: Set(ids[3...6])))
+                }
+                try await Task.sleep(for: .milliseconds(15))
+            }
+            #expect(played.all.contains { $0.videos[ids[4]] != nil })
+            #expect(previewed.mediaResources.readerCount == 0)
+        }
+    }
+
+    /// Sixteen files of 0.1 s one after the other: the second before them asks for the first frame of each at once, and
+    /// no more than two of the renderer's clips open or decode at a time; every clip still shows its own frames, as the
+    /// export draws them and frame by frame.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func decodingIsBoundedWithManyFiles() async throws {
+        try await withTemporaryDirectory { dir in
+            let count = 16
+            let (project, assets) = try await manyClipsProject(in: dir, count: count, seconds: 0.1)
+            let document = manyClipsDocument(project, assets, seconds: 0.1)
+            #expect(TimeMap(sequence: document.sequence).duration == 5_600_000_000)
+            let size = SIMD2(320, 180), rate = 30
+            let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            // Clip i shows from frame 30 + 3i; its second frame (its 0.0333 s) at frame 31 + 3i.
+            let middles = Set((0..<count).map { 31 + 3 * $0 })
+            let frames = try await exportFrames(renderer, frames: 0...(30 + 3 * count), keeping: middles, rate: rate)
+            let gate = renderer.mediaResources.gate
+            #expect(gate.mostAtOnce >= 1 && gate.mostAtOnce <= MediaClipResources.decodesAtOnce, "\(gate.mostAtOnce)")
+            let center = (size.x / 2, size.y / 2)
+            for i in 0..<count {
+                let bytes = try #require(frames[31 + 3 * i])
+                #expect(isFrame(pixel(bytes, width: size.x, x: center.0, y: center.1), 5 * i + 1), "clip \(i)")
+            }
+            let alone = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            let drawn = try await offThePool { try [0, 7, 15].map { try alone.renderBytes(at: seconds(31 + 3 * $0, rate: rate)) } }
+            #expect(drawn == [0, 7, 15].map { frames[31 + 3 * $0] ?? [] })
+            #expect(alone.mediaResources.gate.mostAtOnce == 1)
+        }
+    }
+
+    /// A file AVFoundation cannot open at first (not a movie), the movie put in its place afterwards: the clip draws the
+    /// background and is listed as missing video while its reader gave no frame; `retryInterval` after, a new reader reads
+    /// the movie, frame by frame, as the export draws and in a pause of the preview.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func aFailedReaderIsTriedAgain() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, asset) = try await mediaProject(in: dir)
+            let file = project.package.fileURL(asset), movie = dir.appending(path: "movie.mov")
+            try FileManager.default.moveItem(at: file, to: movie)
+            try Data(repeating: 7, count: 4096).write(to: file)
+            let document = mediaDocument(project, MediaClip(asset: asset, start: 0, end: 2_000_000_000))
+            let size = SIMD2(640, 360), rate = 30
+            let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            let pausedRenderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+            let (paused, pausedFrames) = engine(pausedRenderer)
+            let frame = try renderer.frame(of: renderer.scene, at: 2.5)
+            let background = try await backgroundBytes(of: frame, renderer)
+            #expect(try await offThePool { try renderer.renderBytes(at: 2.5) } == background)
+            #expect(try await exportBytes(renderer, frames: 70...75, rate: rate) == background)
+            paused.request(.paused(frame: 75))
+            #expect(await eventually(timeout: .seconds(30)) { pausedFrames.count >= 1 })
+            #expect(try await paused.drawnBytes() == background)
+            let id = AssetFrameReader.readerID(of: asset)
+            #expect(renderer.mediaResources.existingReader(for: id)?.unusableSince != nil)
+            let missing = renderer.missingVideo
+            #expect(missing.count == 1 && missing.first?.track == id && missing.first?.file == asset)
+            #expect(missing.first?.start == 2 && missing.first?.end == 4)
+            if case .cannotOpen? = missing.first?.reason {} else { Issue.record("\(String(describing: missing.first?.reason))") }
+
+            // The movie in place: read again once `retryInterval` passes (made 0 here).
+            _ = try FileManager.default.replaceItemAt(file, withItemAt: movie)
+            renderer.mediaResources.retryInterval = 0
+            let shown = (clipPattern + 15) % 64
+            let drawn = try await offThePool { try renderer.renderBytes(at: 2.5) }
+            #expect(isFrame(pixel(drawn, width: size.x, x: size.x / 2, y: size.y / 2), shown))
+            #expect(try await exportBytes(renderer, frames: 70...75, rate: rate) == drawn)
+            #expect(renderer.missingVideo.isEmpty)
+            // The preview's pause asks again for a clip it found no frame of.
+            pausedRenderer.mediaResources.retryInterval = 0
+            let before = pausedFrames.count
+            paused.request(.paused(frame: 75))
+            #expect(await eventually(timeout: .seconds(30)) { pausedFrames.count > before })
+            #expect(try await paused.drawnBytes() == drawn)
+        }
+    }
+
+    /// A clip whose file is gone is missing video, whole, before a frame is drawn; and a frame prepared while it was gone
+    /// draws the background without an error when the file is back by the time it is drawn: no reader is made then.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func aMissingClipIsListedAndNoReaderIsMadeWhileDrawing() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, asset) = try await mediaProject(in: dir)
+            let file = project.package.fileURL(asset), aside = dir.appending(path: "aside.mov")
+            try FileManager.default.moveItem(at: file, to: aside)
+            let document = mediaDocument(project, MediaClip(asset: asset, start: 0, end: 2_000_000_000))
+            let size = SIMD2(640, 360)
+            let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: 30)
+            let id = AssetFrameReader.readerID(of: asset)
+            #expect(renderer.missingVideo == [MissingVideo(track: id, file: asset, start: 2, end: 4, reason: .fileMissing)])
+            let frame = try renderer.frame(of: renderer.scene, at: 2.5)
+            #expect(renderer.reader(for: id) == nil)
+            try FileManager.default.moveItem(at: aside, to: file)
+            let background = try await backgroundBytes(of: frame, renderer)
+            let target = MediaPixelBuffer(try pixelBuffer(of: size))
+            let error: (any Error)? = try await withCheckedThrowingContinuation { continuation in
+                do {
+                    try renderer.draw(frame, decoded: [:], into: target.pixelBuffer) { continuation.resume(returning: $0) }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+            #expect(error == nil)
+            #expect(packedBytes(of: target.pixelBuffer) == background)
+            #expect(renderer.mediaResources.readerCount == 0)
+            #expect(renderer.missingVideo.isEmpty)
+        }
+    }
+
+    /// A style that samples the screens with mipmaps samples the clip from a copy with its mipmaps (a 1280 × 720 clip drawn
+    /// a third its size), the same bytes frame by frame and as the export draws it; bilinear without, no copy made.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func mipmappedClipIsSampledFromItsMipmaps() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, asset) = try await mediaProject(in: dir, clipSize: [1280, 720])
+            var document = mediaDocument(project, MediaClip(asset: asset, start: 0, end: 2_000_000_000))
+            let size = SIMD2(640, 360), rate = 30
+            func draw(_ sampling: ScreenSampling) async throws -> (renderer: FrameRenderer, bytes: [UInt8], exported: [UInt8]) {
+                document.style.screenSampling = sampling
+                let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: rate)
+                #expect(try renderer.frame(of: renderer.scene, at: 2.5).media?.mipmapped == (sampling == .mipmapped))
+                let bytes = try await offThePool { try renderer.renderBytes(at: 2.5) }
+                return (renderer, bytes, try await exportBytes(renderer, frames: 70...75, rate: rate))
+            }
+            let mipmapped = try await draw(.mipmapped), bilinear = try await draw(.bilinear)
+            #expect(mipmapped.bytes == mipmapped.exported && bilinear.bytes == bilinear.exported)
+            #expect(mipmapped.renderer.mediaResources.mipmappedCopies.count.made >= 1)
+            #expect(bilinear.renderer.mediaResources.mipmappedCopies.count.made == 0)
+            #expect(mipmapped.bytes != bilinear.bytes)
+            #expect(isFrame(pixel(mipmapped.bytes, width: size.x, x: size.x / 2, y: size.y / 2), (clipPattern + 15) % 64))
+        }
+    }
+
     /// A phone's clip shot upright, encoded on its side (640 × 360 with a quarter turn): drawn upright, 360 × 640 in the
     /// room (391.5 × 696 at 1080p), with what is along the top of its encoded frame (the moving square, at its frame 18 in
     /// the middle of that row) down its right side.
@@ -498,6 +725,7 @@ private func brightness(_ pixel: SIMD4<UInt8>) -> Int { Int(pixel.x) + Int(pixel
             func at(_ x: Double, _ y: Double, in bytes: [UInt8]? = nil) -> SIMD4<UInt8> {
                 pixel(bytes ?? drawn, width: size.x, x: Int(x.rounded(.down)), y: Int(y.rounded(.down)))
             }
+            #expect(renderer.mediaResources.orientation(of: asset) == MediaOrientation(quarter))
             let shown = (clipPattern + 18) % 64
             #expect(isFrame(at(rect.midX, rect.midY), shown), "\(at(rect.midX, rect.midY))")
             #expect(isFrame(at(rect.x + 30, rect.y + 100), shown) && isFrame(at(rect.midX, rect.y + 6), shown))
