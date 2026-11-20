@@ -31,22 +31,30 @@ enum LiveTakeEnvironment {
                 try ProjectFolder.createPackage(in: folder, prefix: prefix, app: app, now: now)
             },
             prepareTake: { package, request, granted in
-                let projectURL = package.url
-                // Read at every start: a change applies from the next take or restart. The keys only with Input
-                // Monitoring allowed, which the take's check wanted (it never asks for it).
-                let settings = SettingsStore().settings
-                let factory = LiveCaptureSourceFactory(
-                    cameraHost: cameraHost, noteKeyActivity: settings.noteKeyActivity,
-                    recordKeys: settings.recordKeys && granted.contains(.inputMonitoring),
-                    recordFocus: settings.recordFocus && granted.contains(.accessibility)
-                ) { visibility in
-                    Task { @MainActor in windowVisibilityChanged(visibility, projectURL) }
-                }
+                let factory = sourceFactory(
+                    cameraHost: cameraHost, granted: granted, projectURL: package.url, windowVisibilityChanged: windowVisibilityChanged)
                 return try prepareTake(in: package, request, granted: granted, factory: factory, volume: folder)
             },
             termination: ProcessTerminationGuard(),
             now: { Date() },
             sleep: { duration in try await Task.sleep(for: duration) })
+    }
+
+    /// The sources of a take, or of the Replay (`LiveReplayEnvironment`), into the project at `projectURL`. The settings are
+    /// read now, at every start: a change applies from the next take or restart. The keys only with Input Monitoring
+    /// allowed and the focus only with Accessibility, which the start's check wanted (it never asks for them).
+    static func sourceFactory(
+        cameraHost: CameraSessionHost, granted: Set<PermissionKind>, projectURL: URL,
+        windowVisibilityChanged: @escaping @MainActor (WindowVisibility, URL) -> Void
+    ) -> LiveCaptureSourceFactory {
+        let settings = SettingsStore().settings
+        return LiveCaptureSourceFactory(
+            cameraHost: cameraHost, noteKeyActivity: settings.noteKeyActivity,
+            recordKeys: settings.recordKeys && granted.contains(.inputMonitoring),
+            recordFocus: settings.recordFocus && granted.contains(.accessibility)
+        ) { visibility in
+            Task { @MainActor in windowVisibilityChanged(visibility, projectURL) }
+        }
     }
 
     /// The connected displays, from `NSScreen.screens`.

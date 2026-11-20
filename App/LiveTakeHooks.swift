@@ -5,28 +5,34 @@ import os
 
 /// What runs around the app's takes: Do Not Disturb with the shortcut chosen in Settings (`FocusTakeHooks`), the
 /// covers over the desktop's icons while "Hide Desktop Icons" is on (`DesktopCoverController`), both read at every
-/// start, and a picture of the wallpaper of each display a take records (`WallpaperSnapshot`).
+/// start, a picture of the wallpaper of each display a take records (`WallpaperSnapshot`), and the Replay, which never
+/// records with a take (fases 4 y 5 plan 5c, decision 12).
 @MainActor
 final class LiveTakeHooks: TakeHooks {
     private let focus: FocusTakeHooks
     private let store: SettingsStore
+    private let replay: ReplayController
     private let covers = DesktopCoverController()
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Wallpaper")
 
-    init(focus: FocusGuard, store: SettingsStore) {
+    init(focus: FocusGuard, store: SettingsStore, replay: ReplayController) {
         self.focus = FocusTakeHooks(focus: focus) { store.settings.focusShortcutIdentifier }
         self.store = store
+        self.replay = replay
     }
 
     /// The shortcut and the covers at the same time; the take records the covers. An iPhone's take records nothing of
-    /// the Mac's screen: its desktop is left as it is.
+    /// the Mac's screen: its desktop is left as it is. Meanwhile the Replay lets a save in progress finish and deletes its
+    /// ring: it is gone before the countdown's seconds run, so before the take's sources start.
     func takeWillStart(_ request: TakeRequest) async -> TakePreparation {
+        async let replaySuspended: Void = replay.suspendForTake()
         async let focused = focus.takeWillStart(request)
         let coversDesktop = store.settings.hideDesktopIcons && request.selection.mode != .device
         let coverIDs = coversDesktop ? await covers.show() : []
         var preparation = await focused
         preparation.includedWindowIDs += coverIDs
+        await replaySuspended
         return preparation
     }
 
@@ -46,8 +52,10 @@ final class LiveTakeHooks: TakeHooks {
         }
     }
 
+    /// Also after a start that ended without a take: the Replay starts afresh if it is on.
     func takeDidEnd() async {
         covers.hide()
         await focus.takeDidEnd()
+        replay.resumeAfterTake()
     }
 }

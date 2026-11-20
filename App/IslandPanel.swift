@@ -31,6 +31,9 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// Opens the library window, on a section if one is given; set by the app delegate.
     var openLibrary: (LibrarySection?) -> Void = { _ in }
 
+    /// Opens a project in the editor (a saved Replay's «Open»); set by the app delegate.
+    var openProject: (URL) -> Void = { _ in }
+
     /// While a system permission prompt (drawn by another process, at the top center) is up, the island
     /// goes down to `.normal` so it is never over it (Tasks 16a, 16e and 15): the microphone's, which a take's
     /// start waits for, the camera's, which turning the camera on waits for, and system audio's, which turning
@@ -40,6 +43,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     }
 
     private let recording: RecordingController
+    private let replay: ReplayController
     private let countdown: CountdownSetting
     private let afterStop: AfterStopSetting
     private let hideDesktopIcons: HideDesktopIconsSetting
@@ -95,6 +99,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private var notices: [TakeNotice]
     /// The saved take the machine was last told.
     private var saved: SavedTake?
+    /// The Replay records, as the outline and the panel's visibility were last told.
+    private var isReplaying = false
     /// The panel is fading out to rest on a screen without a notch.
     private var isHiding = false
     /// The panel is fading out to another screen, while recording.
@@ -113,13 +119,15 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     private static let pointerInterval = Duration.milliseconds(250)
 
     /// The island starts at rest on the screen with the pointer. `probe` asks for Accessibility, to jump to
-    /// another desktop; the bubble shows the camera of `cameraHost`, the session the take records.
+    /// another desktop; the bubble shows the camera of `cameraHost`, the session the take records. At rest it shows the
+    /// Replay while `replay` records (fases 4 y 5 design §10.4), and the open island turns it on and off and saves it.
     init(
-        recording: RecordingController, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
-        hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, probe: any PermissionProbe,
-        cameraHost: CameraSessionHost
+        recording: RecordingController, replay: ReplayController, hotKeys: HotKeyCenter, countdown: CountdownSetting,
+        afterStop: AfterStopSetting, hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting,
+        probe: any PermissionProbe, cameraHost: CameraSessionHost
     ) {
         self.recording = recording
+        self.replay = replay
         self.countdown = countdown
         self.afterStop = afterStop
         self.hideDesktopIcons = hideDesktopIcons
@@ -140,10 +148,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         systemAudio = SystemAudioSetting(probe: probe)
         bubble = CameraBubblePanel(setting: camera, preview: SharedCameraPreview(host: cameraHost))
         model = IslandModel(
-            recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, desktops: desktops, top: top,
-            reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
+            recording: recording, hotKeys: hotKeys, teleprompter: teleprompterSetting, desktops: desktops, replay: replay,
+            top: top, reduceMotion: workspace.accessibilityDisplayShouldReduceMotion,
             reduceTransparency: workspace.accessibilityDisplayShouldReduceTransparency)
-        let rest = IslandGeometry.shape(.rest, on: top)
+        isReplaying = replay.look.records
+        let rest = IslandGeometry.shape(.rest, on: top, replaying: isReplaying)
         width = SpringValue(value: rest.width, spring: Motion.islandCollapse)
         height = SpringValue(value: rest.height, spring: Motion.islandCollapse)
         radius = SpringValue(value: rest.bottomRadius, spring: Motion.islandCollapse)
@@ -160,6 +169,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         panel.onCancel = { [weak self] in self?.escape() }
         panel.onClose = { [weak self] in self?.close() }
         model.send = { [weak self] event in self?.send(event) }
+        model.saveReplay = { [weak self] in self?.saveReplay() }
+        model.openProject = { [weak self] url in self?.openProject(url) }
         desktops.send = { [weak self] event in self?.send(event) }
         root.onEnter = { [weak self] in
             self?.pointer(entered: .island)
@@ -190,8 +201,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         teleprompter.islandTakesKeyboard = { [weak self] in self?.takeKeyboardBack() ?? false }
         bubble.reduceMotion = model.reduceMotion
         camera.askingChanged = { [weak self] asking in self?.cameraPromptChanged(asking) }
-        // A take in progress follows the bubble: let go, or given another shape or size (notch design §5.6).
-        camera.changed = { [weak recording] style in recording?.setCameraStyle(style) }
+        // A take in progress follows the bubble: let go, or given another shape or size (notch design §5.6); so does the
+        // Replay, but never to a re-record's style, which is not saved.
+        camera.changed = { [weak recording, weak replay, weak camera] style in
+            recording?.setCameraStyle(style)
+            if camera?.isTemporary == false { replay?.setCameraStyle(style) }
+        }
         systemAudio.askingChanged = { [weak self] asking in self?.systemAudioRequested(asking) }
 
         observe(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { $0.screensChanged() }
@@ -205,6 +220,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         bubble.update(island: machine.state)
         bubble.follow { [weak self] in self?.recordedSelection }
         observeRecording()
+        observeReplay()
     }
 
     /// What the bubble shows: the take's selection from its countdown on, otherwise what the open island chooses.
@@ -227,6 +243,25 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if variant == "peek" {
             send(.pointerEntered)
             return
+        }
+        // The Replay recording the last 30 s, made up (fases 4 y 5 design §10.4): `replay`, the wings at rest; `replay-pill`,
+        // the pill of a screen without a notch (this one's notch left out); `replay-open`, the open island with its row;
+        // `replay-saved`, «Saved: Last 30 s».
+        if variant.hasPrefix("replay") {
+            model.showcaseReplay = ReplayLook(isEnabled: true, seconds: 30, phase: .on(since: .now), problem: nil)
+            if variant == "replay-pill" {
+                tops = tops.mapValues { ScreenTop(frame: $0.frame, notch: nil, menuBarHeight: $0.menuBarHeight) }
+                if let top = tops[displayID] { model.top = top }
+                zones.rebuild(tops)
+                updateZones()
+            }
+            if variant == "replay-saved" {
+                let url = URL(filePath: "/tmp/" + ProjectFolder.baseName(prefix: "Repetición", date: .now) + ".toma")
+                replaySaved(SavedTake(
+                    projectURL: url, duration: .seconds(30), markers: 0, trackKinds: [.display, .camera, .microphone],
+                    openedEditor: false, replaySeconds: 30))
+            }
+            if variant != "replay-open" { return }
         }
         guard let panel = model.panel else { return }
         switch variant {
@@ -257,7 +292,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if let path = ProcessInfo.processInfo.environment["TOMA_SHOWCASE_ISLAND_PNG"] {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
                 MainActor.assumeIsolated {
-                    let content = IslandOpenPanel(panel: panel, desktops: self.desktops, topInset: 0, startFailure: nil, send: { _ in })
+                    let content = IslandOpenPanel(
+                        panel: panel, desktops: self.desktops, topInset: 0, startFailure: nil, send: { _ in }, island: self.model)
                         .frame(width: 700, height: 400)
                         .background(Color.black)
                         .environment(\.colorScheme, .dark)
@@ -462,6 +498,64 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             events.append(.saved(lastSaved))
         }
         send(events)
+    }
+
+    // MARK: - The Replay
+
+    /// Hears whether the Replay records: its wings or its pill at rest.
+    private func observeReplay() {
+        withObservationTracking {
+            _ = model.replaying
+        } onChange: { [weak self] in
+            // Called before the change: read it once it is made.
+            Task { @MainActor in self?.replayChanged() }
+        }
+    }
+
+    /// At rest the outline grows to the Replay's wings, or back to the notch; without a notch its pill shows, or leaves.
+    private func replayChanged() {
+        observeReplay()
+        let replaying = model.replaying
+        guard replaying != isReplaying else { return }
+        isReplaying = replaying
+        retargetOutline()
+        showOrHide()
+    }
+
+    /// The Replay's last seconds are saved, off the main thread: the island says so (`replaySaved`), or says why nothing
+    /// was saved in the capsule under it.
+    func saveReplay() {
+        Task {
+            guard await replay.save() == nil, let problem = replay.problem else { return }
+            capsule.show(CapsuleItem(
+                symbol: NoticePresentation.attention.symbol, text: ReplayText.problem(problem),
+                tint: NoticePresentation.attention.tint))
+        }
+    }
+
+    /// A save of the Replay made a project: «Saved: Last 30 s» with Open, as a take saved shows (`.saved`), from rest, a
+    /// peek, the open island or another saved take; while choosing on the screen, the capsule says it (a click opens it).
+    /// A take's states never have it: the Replay finished its save before the take's countdown.
+    func replaySaved(_ take: SavedTake) {
+        switch machine.state {
+        case .open where rerecord == nil:
+            send(.phaseChanged(.stopping), .saved(take))
+        case .rest, .peek, .saved:
+            // The machine shows a take saved after it closed: the Replay's is shown the same way.
+            send(.phaseChanged(.stopping), .saved(take))
+        case .open, .choosing:
+            // Closing the island would cancel a re-record, or what is being chosen.
+            var item = CapsuleItem(
+                symbol: "checkmark",
+                text: String(
+                    localized: "Saved: Last \(ReplayText.length(take.replaySeconds ?? 0))",
+                    comment: "The island once the Replay saved its last seconds: «30 s», «1 min»"),
+                tint: NoticePresentation.confirmation.tint)
+            item.action = { [weak self] in self?.openProject(take.projectURL) }
+            capsule.show(item)
+        case .countdown, .recording, .recordingOpen, .notice, .saving:
+            break
+        }
     }
 
     // MARK: - Events
@@ -712,7 +806,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
     /// screen) and the confirmation capsule that may hang from it.
     private func areaBarTops() -> [UInt32: Double] {
         tops.mapValues { top in
-            let island = IslandGeometry.frame(IslandGeometry.shape(.choosing, on: top), on: top)
+            let island = IslandGeometry.frame(IslandGeometry.shape(.choosing, on: top, replaying: isReplaying), on: top)
             return Double(top.frame.maxY - island.minY) + ConfirmationCapsule.clearance
         }
     }
@@ -736,11 +830,11 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     // MARK: - Showing and hiding
 
-    /// At rest on a screen without a notch nothing is drawn: the island fades out and leaves the screen.
-    /// Everywhere else it is on the screen, and made key if `makingKey` (it just entered a state that wants
-    /// the keyboard).
+    /// At rest on a screen without a notch nothing is drawn, unless the Replay records (its pill): the island fades out
+    /// and leaves the screen. Everywhere else it is on the screen, and made key if `makingKey` (it just entered a state
+    /// that wants the keyboard).
     private func showOrHide(makingKey: Bool = false) {
-        let visible = machine.state != .rest || model.top.notch != nil
+        let visible = machine.state != .rest || model.top.notch != nil || isReplaying
         if visible {
             isHiding = false
             if !panel.isVisible { panel.alphaValue = 0 }
@@ -787,7 +881,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         guard id != displayID, let top = tops[id] else { return }
         displayID = id
         model.top = top
-        let rest = IslandGeometry.shape(.rest, on: top)
+        let rest = IslandGeometry.shape(.rest, on: top, replaying: isReplaying)
         width = SpringValue(value: rest.width, spring: width.spring)
         height = SpringValue(value: rest.height, spring: height.spring)
         radius = SpringValue(value: rest.bottomRadius, spring: radius.spring)
@@ -847,7 +941,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if let top = tops[id] {
             displayID = id
             model.top = top
-            let shape = IslandGeometry.shape(machine.state, on: top)
+            let shape = IslandGeometry.shape(machine.state, on: top, replaying: isReplaying)
             let spring = IslandGeometry.spring(to: machine.state)
             width = SpringValue(value: shape.width, spring: spring)
             height = SpringValue(value: shape.height, spring: spring)
@@ -910,7 +1004,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// Sends the springs to the current state's outline; with "Reduce motion" the outline jumps there.
     private func retargetOutline() {
-        let shape = IslandGeometry.shape(machine.state, on: model.top)
+        let shape = IslandGeometry.shape(machine.state, on: model.top, replaying: isReplaying)
         let spring = IslandGeometry.spring(to: machine.state)
         width.retarget(shape.width, spring: spring)
         height.retarget(shape.height, spring: spring)

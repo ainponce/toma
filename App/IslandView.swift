@@ -23,6 +23,8 @@ final class IslandModel {
     var attention: NoticePresentation?
     /// Why the last take could not start, while the open panel says so (`IslandMachine.hasStartFailure`).
     var startFailure: String?
+    /// The Replay as a showcase makes it up (`-TomaShowcase island replay…`), instead of `replay`'s; nothing is saved.
+    var showcaseReplay: ReplayLook?
 
     /// The take the island shows.
     @ObservationIgnored let recording: RecordingController
@@ -32,25 +34,38 @@ final class IslandModel {
     @ObservationIgnored let teleprompter: TeleprompterSetting
     /// The desktops of the island's display, in the open island and the open recording island.
     @ObservationIgnored let desktops: DesktopsModel
+    /// The Replay, which the island shows at rest, turns on and off and saves (fases 4 y 5 design §10.4).
+    @ObservationIgnored let replay: ReplayController
     /// What the content does to the island.
     @ObservationIgnored var send: (IslandEvent) -> Void = { _ in }
+    /// Saves the Replay's last seconds, and says it if nothing was saved (`IslandPanel.saveReplay`).
+    @ObservationIgnored var saveReplay: () -> Void = {}
+    /// Opens a project in the editor: a saved Replay's «Open».
+    @ObservationIgnored var openProject: (URL) -> Void = { _ in }
 
     init(
         recording: RecordingController, hotKeys: HotKeyCenter, teleprompter: TeleprompterSetting, desktops: DesktopsModel,
-        top: ScreenTop, reduceMotion: Bool, reduceTransparency: Bool
+        replay: ReplayController, top: ScreenTop, reduceMotion: Bool, reduceTransparency: Bool
     ) {
         self.recording = recording
         self.hotKeys = hotKeys
         self.teleprompter = teleprompter
         self.desktops = desktops
+        self.replay = replay
         self.top = top
-        outline = IslandGeometry.shape(.rest, on: top)
+        outline = IslandGeometry.shape(.rest, on: top, replaying: replay.look.records)
         self.reduceMotion = reduceMotion
         self.reduceTransparency = reduceTransparency
     }
 
     /// Under the notch, the band at the top where nothing can be seen.
     var notchBand: Double { top.notch == nil ? 0 : top.menuBarHeight }
+
+    /// The Replay as the island shows it.
+    var replayLook: ReplayLook { showcaseReplay ?? replay.look }
+
+    /// The Replay records: at rest the island has its wings under a notch, and its pill elsewhere.
+    var replaying: Bool { replayLook.records }
 }
 
 /// The island's content, cut to its outline on its surface. Only the outline changes on every frame of
@@ -72,7 +87,8 @@ struct IslandView: View {
             .environment(\.islandReduceMotion, model.reduceMotion)
     }
 
-    /// At rest, peeking and in its recording wings, under the notch the island is all black, like the notch.
+    /// At rest (with the Replay's wings too), peeking and in its recording wings, under the notch the island is all black,
+    /// like the notch.
     private var isBlack: Bool {
         guard model.top.notch != nil else { return false }
         switch model.state {
@@ -87,7 +103,7 @@ private struct IslandContent: View {
     let model: IslandModel
 
     var body: some View {
-        let shape = IslandGeometry.shape(model.state, on: model.top)
+        let shape = IslandGeometry.shape(model.state, on: model.top, replaying: model.replaying)
         ZStack(alignment: .top) {
             content(model.state)
                 .frame(width: shape.width, height: shape.height, alignment: .top)
@@ -119,10 +135,23 @@ private struct IslandContent: View {
     private func content(_ state: IslandState) -> some View {
         switch state {
         case .rest:
-            // Nothing to see: under a notch, a click opens it.
-            Color.clear
-                .contentShape(Rectangle())
-                .onTapGesture { model.send(.clicked) }
+            // Nothing to see but the Replay, while it records: under a notch, a click opens it.
+            ZStack {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { model.send(.clicked) }
+                if model.replaying {
+                    Group {
+                        if let notch = model.top.notch {
+                            ReplayWings(seconds: model.replayLook.seconds, notchWidth: Double(notch.width))
+                        } else {
+                            ReplayPill(seconds: model.replayLook.seconds)
+                        }
+                    }
+                    .allowsHitTesting(false)
+                    .transition(model.reduceMotion ? .islandFade : .islandContent)
+                }
+            }
         case .peek:
             BelowTheNotch(band: model.notchBand) { PeekRow(shortcut: model.hotKeys.bindings.combos[.islandOrStop]) }
                 .contentShape(Rectangle())
@@ -130,7 +159,8 @@ private struct IslandContent: View {
         case .open:
             if let panel = model.panel {
                 IslandOpenPanel(
-                    panel: panel, desktops: model.desktops, topInset: model.notchBand, startFailure: model.startFailure, send: model.send)
+                    panel: panel, desktops: model.desktops, topInset: model.notchBand, startFailure: model.startFailure, send: model.send,
+                    island: model)
             }
         case .choosing:
             BelowTheNotch(band: model.notchBand) { ChoosingRow(panel: model.panel, send: model.send) }
@@ -152,7 +182,8 @@ private struct IslandContent: View {
         case .saving:
             BelowTheNotch(band: model.notchBand) { IslandSavingView() }
         case .saved(let take):
-            IslandSavedView(take: take, recording: model.recording, topInset: model.notchBand, send: model.send)
+            IslandSavedView(
+                take: take, recording: model.recording, topInset: model.notchBand, send: model.send, openProject: model.openProject)
         }
     }
 }

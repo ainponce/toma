@@ -407,6 +407,42 @@ import Testing
         }
     }
 
+    @Test func plannedSelectionIsWhatItRecords() async throws {
+        // The last recording: display 2, the camera (not allowed) and the microphone.
+        var selection = CaptureSelection.mainDisplay(2)
+        selection.camera = .systemDefault
+        try await withReplay(probe: ReplayProbe([.camera: .denied]), selection: selection) { rig in
+            // Off, what Settings lists: what it would record now.
+            let expected = CaptureSelection(mode: .display, displayIDs: [2], camera: .off, microphone: .systemDefault, systemAudio: .off)
+            #expect(rig.controller.plannedSelection == expected)
+            await rig.controller.launch()
+            rig.controller.setEnabled(true)
+            #expect(await eventually { rig.controller.phase == .on(since: ReplayRig.now) })
+            #expect(rig.calls.prepared.map(\.selection) == [expected])
+            #expect(rig.controller.plannedSelection == expected)
+        }
+    }
+
+    @Test func cameraStyleChangeReachesTheRing() async throws {
+        var selection = CaptureSelection.mainDisplay(1)
+        selection.camera = .systemDefault
+        try await withReplay(selection: selection, enabled: true) { rig in
+            // Before it records, nothing to tell.
+            rig.controller.setCameraStyle(CameraStyle(shape: .portrait, size: CameraStyle.large, anchor: .topLeading))
+            await rig.controller.launch()
+            #expect(rig.controller.recordedKinds.contains(.camera))
+            let noted = try rig.scratchCameraStyles()
+            #expect(noted.isEmpty)
+
+            // The bubble given another shape and size while it records: its log notes it, as a take's does.
+            var style = CameraStyle.default
+            style.shape = .roundedSquare
+            style.size = CameraStyle.large
+            rig.controller.setCameraStyle(style)
+            #expect(await eventually { (try? rig.scratchCameraStyles()) == [style] })
+        }
+    }
+
     @Test func shutDownLeavesNoScratch() async throws {
         try await withReplay(enabled: true) { rig in
             await rig.controller.launch()
@@ -541,6 +577,21 @@ import Testing
     /// The working take's segments, of every track.
     func scratchSegments() throws -> [SegmentRecord] {
         try scratchManifest().takes.flatMap(\.tracks).flatMap(\.segments)
+    }
+
+    /// The camera's styles its working log noted, oldest first (the take's initial one is its record's, not an event).
+    func scratchCameraStyles() throws -> [CameraStyle] {
+        let take = package.takeDirectory(ReplayScratch.takeID)
+        let names = try FileManager.default.contentsOfDirectory(atPath: take.path).filter { $0.hasPrefix("events-") }.sorted()
+        var styles: [CameraStyle] = []
+        for name in names {
+            let text = try String(contentsOf: take.appending(path: name), encoding: .utf8)
+            for line in text.split(separator: "\n") {
+                guard let event = try? ProjectJSON.decoder().decode(InputEvent.self, from: Data(line.utf8)) else { continue }
+                if case .cameraStyle(let style) = event.kind { styles.append(style) }
+            }
+        }
+        return styles
     }
 
     /// The projects saved, by name.

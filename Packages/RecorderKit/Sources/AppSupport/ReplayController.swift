@@ -98,6 +98,8 @@ public final class ReplayController {
     @ObservationIgnored private var saving: Task<SavedTake?, Never>?
     /// N given to the ring, each change after the one before.
     @ObservationIgnored private var secondsUpdates: Task<Void, Never>?
+    /// The camera's styles given to the ring, each change after the one before.
+    @ObservationIgnored private var styleUpdates: Task<Void, Never>?
     /// Hears the system's sleep, wake, lock and unlock.
     @ObservationIgnored private var activity: Task<Void, Never>?
     @ObservationIgnored private var launched = false
@@ -160,6 +162,22 @@ public final class ReplayController {
         store.settings = settings
         pushSeconds()
     }
+
+    /// The camera now looks like `style` (the bubble was given another shape or size): a ring that records the camera notes
+    /// it as a take does (`ReplayCoordinator.setCameraStyle`). Nothing without a ring: the next one starts with the style
+    /// the app gives `prepare`.
+    public func setCameraStyle(_ style: CameraStyle) {
+        guard let coordinator = ring?.coordinator else { return }
+        let previous = styleUpdates
+        styleUpdates = Task {
+            await previous?.value
+            await coordinator.setCameraStyle(style)
+        }
+    }
+
+    /// What it records when it starts now (Settings ▸ Replay lists it): the last recording's sources as `ReplaySelection`
+    /// makes them, with the permissions granted now.
+    public var plannedSelection: CaptureSelection { plan().selection }
 
     // MARK: - Saving
 
@@ -285,18 +303,9 @@ public final class ReplayController {
         // Never asked: a system prompt would come by itself, out of the blue.
         guard probe.state(of: .screenRecording) == .granted else { return refuse(.noScreenRecording) }
         let settings = store.settings
-        let last = settings.selection
-        var wanted: Set<PermissionKind> = [.screenRecording]
-        if let last {
-            if last.microphone != .off { wanted.insert(.microphone) }
-            if last.camera != .off { wanted.insert(.camera) }
-            if last.systemAudio != .off { wanted.insert(.systemAudio) }
-        }
-        if settings.recordKeys { wanted.insert(.inputMonitoring) }
-        if settings.recordFocus { wanted.insert(.accessibility) }
-        let granted = RecordingPreflight.evaluate(probe: probe, wanted: wanted).granted
-        var selection = ReplaySelection.make(
-            last: last, displays: environment.displays(), windowDisplay: environment.windowDisplay, granted: granted)
+        let planned = plan()
+        var selection = planned.selection
+        let granted = planned.granted
 
         var outcome = await attempt(selection, settings.quick, granted: granted)
         // A broken camera, microphone or system audio must not keep the screen from being recorded: once more, the screen
@@ -322,6 +331,26 @@ public final class ReplayController {
         case .sourcesFailed:
             refuse(.couldNotStart)
         }
+    }
+
+    /// The selection of the last recording (`ReplaySelection.make`) and the permissions it may use, granted now: the
+    /// microphone, the camera and system audio it chose, Input Monitoring with «Record Keys» and Accessibility with «Follow
+    /// Keyboard Focus».
+    private func plan() -> (selection: CaptureSelection, granted: Set<PermissionKind>) {
+        let settings = store.settings
+        let last = settings.selection
+        var wanted: Set<PermissionKind> = [.screenRecording]
+        if let last {
+            if last.microphone != .off { wanted.insert(.microphone) }
+            if last.camera != .off { wanted.insert(.camera) }
+            if last.systemAudio != .off { wanted.insert(.systemAudio) }
+        }
+        if settings.recordKeys { wanted.insert(.inputMonitoring) }
+        if settings.recordFocus { wanted.insert(.accessibility) }
+        let granted = RecordingPreflight.evaluate(probe: probe, wanted: wanted).granted
+        let selection = ReplaySelection.make(
+            last: last, displays: environment.displays(), windowDisplay: environment.windowDisplay, granted: granted)
+        return (selection, granted)
     }
 
     private func attempt(_ selection: CaptureSelection, _ quick: QuickSettings, granted: Set<PermissionKind>) async -> Attempt {

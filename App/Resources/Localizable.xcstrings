@@ -45,6 +45,17 @@
         }
       }
     },
+    "%@ It tries again after the next recording." : {
+      "comment" : "Settings ▸ Replay: why it is off, then when it tries again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%@ Vuelve a intentarlo después de la próxima grabación."
+          }
+        }
+      }
+    },
     "%@ copy" : {
       "comment" : "The name of a copy",
       "localizations" : {
@@ -196,6 +207,28 @@
         }
       }
     },
+    "%lld min" : {
+      "comment" : "A length of the Replay in minutes: «2 min»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld min"
+          }
+        }
+      }
+    },
+    "%lld min %lld s" : {
+      "comment" : "A length of the Replay in minutes and seconds: «1 min 5 s»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%1$lld min %2$lld s"
+          }
+        }
+      }
+    },
     "%lld parts couldn't be read." : {
       "comment" : "The chapters' sheet: parts of the transcript the model declined or couldn't fit",
       "localizations" : {
@@ -255,6 +288,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "%lld proyectos se movieron a la papelera."
+          }
+        }
+      }
+    },
+    "%lld s" : {
+      "comment" : "A length of the Replay in seconds: «30 s»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld s"
           }
         }
       }
@@ -3485,6 +3529,17 @@
         }
       }
     },
+    "Couldn't save: nothing was saved." : {
+      "comment" : "The Replay's last save failed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo guardar: no se guardó nada."
+          }
+        }
+      }
+    },
     "Couldn't share the video" : {
       "comment" : "Share failed; why follows",
       "localizations" : {
@@ -5482,6 +5537,17 @@
         }
       }
     },
+    "How long the Replay keeps" : {
+      "comment" : "Help of the island's Replay menu",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuánto conserva la Repetición"
+          }
+        }
+      }
+    },
     "Ice" : {
       "localizations" : {
         "es" : {
@@ -5950,6 +6016,17 @@
         }
       }
     },
+    "Its sources couldn't start." : {
+      "comment" : "Why the Replay is off: the screen did not start",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudieron iniciar sus fuentes."
+          }
+        }
+      }
+    },
     "J Cut" : {
       "comment" : "The cut of the sound moved before the picture's: the next clip is heard sooner",
       "localizations" : {
@@ -5979,6 +6056,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Conservar la actual"
+          }
+        }
+      }
+    },
+    "Keep the Last" : {
+      "comment" : "The island's menu of how much the Replay keeps",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conservar los últimos"
+          }
+        }
+      }
+    },
+    "Keeps the last seconds of the screen, to save them as a project with a shortcut." : {
+      "comment" : "Under the switch of the Replay in Settings",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Conserva los últimos segundos de la pantalla para guardarlos como proyecto con un atajo."
           }
         }
       }
@@ -6208,6 +6307,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Izquierda"
+          }
+        }
+      }
+    },
+    "Less than a second was recorded: nothing was saved." : {
+      "comment" : "The Replay's last save: it had less than a second",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se grabó menos de un segundo: no se guardó nada."
           }
         }
       }
@@ -7590,6 +7700,17 @@
         }
       }
     },
+    "Nothing" : {
+      "comment" : "Settings ▸ Replay: it records no source",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Nada"
+          }
+        }
+      }
+    },
     "Nothing is being recorded." : {
       "localizations" : {
         "es" : {
@@ -8789,12 +8910,34 @@
         }
       }
     },
+    "Recording the last %@" : {
+      "comment" : "Settings ▸ Replay: it records: «30 s»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grabando los últimos %@"
+          }
+        }
+      }
+    },
     "Recordings can't be saved to a network or synced folder." : {
       "localizations" : {
         "es" : {
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se puede grabar en una carpeta de red o sincronizada."
+          }
+        }
+      }
+    },
+    "Records" : {
+      "comment" : "Settings ▸ Replay: what it records, before the list of sources",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Graba"
           }
         }
       }
@@ -9163,6 +9306,57 @@
         }
       }
     },
+    "Replay (project name)" : {
+      "comment" : "A saved replay: the start of its project's name, before its date",
+      "extractionState" : "manual",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Replay"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetición"
+          }
+        }
+      }
+    },
+    "Replay on, last %lld minutes" : {
+      "comment" : "VoiceOver, the island's Replay wings: it keeps the last minutes, two or more",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetición prendida, últimos %lld minutos"
+          }
+        }
+      }
+    },
+    "Replay on, last %lld seconds" : {
+      "comment" : "VoiceOver, the island's Replay wings: it keeps the last seconds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetición prendida, últimos %lld segundos"
+          }
+        }
+      }
+    },
+    "Replay on, last minute" : {
+      "comment" : "VoiceOver, the island's Replay wings: it keeps the last minute",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Repetición prendida, último minuto"
+          }
+        }
+      }
+    },
     "Requested" : {
       "comment" : "The state of the system audio permission once it was asked for",
       "localizations" : {
@@ -9390,6 +9584,17 @@
         }
       }
     },
+    "Same as the last recording" : {
+      "comment" : "Settings ▸ Replay: where its sources come from",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo mismo que la última grabación"
+          }
+        }
+      }
+    },
     "Sand" : {
       "localizations" : {
         "es" : {
@@ -9454,6 +9659,28 @@
         }
       }
     },
+    "Save the Last" : {
+      "comment" : "Settings ▸ Replay: how long it keeps, before 15 s, 30 s, 1 min…",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar los últimos"
+          }
+        }
+      }
+    },
+    "Save the Last %@" : {
+      "comment" : "The island's button that saves the Replay's last seconds: «30 s», «1 min»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardar los últimos %@"
+          }
+        }
+      }
+    },
     "Saved Areas" : {
       "localizations" : {
         "es" : {
@@ -9471,6 +9698,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Guardada en el Llavero"
+          }
+        }
+      }
+    },
+    "Saved: Last %@" : {
+      "comment" : "The island once the Replay saved its last seconds: «30 s», «1 min»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardado: últimos %@"
           }
         }
       }
@@ -9562,6 +9800,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Falló el guardado de la ventana. Se sigue en un archivo nuevo."
+          }
+        }
+      }
+    },
+    "Saving…" : {
+      "comment" : "Settings ▸ Replay: it saves its last seconds",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Guardando…"
           }
         }
       }
@@ -10513,6 +10762,17 @@
         }
       }
     },
+    "Starting…" : {
+      "comment" : "Settings ▸ Replay: its sources are starting",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Empezando…"
+          }
+        }
+      }
+    },
     "Status" : {
       "comment" : "The library's list: a column",
       "localizations" : {
@@ -11100,6 +11360,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La pantalla elegida no está disponible."
+          }
+        }
+      }
+    },
+    "The disk is almost full." : {
+      "comment" : "Why the Replay is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El disco está casi lleno."
           }
         }
       }
@@ -12895,6 +13166,17 @@
         }
       }
     },
+    "Toma isn't allowed to record the screen." : {
+      "comment" : "Why the Replay is off",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma no tiene permiso para grabar la pantalla."
+          }
+        }
+      }
+    },
     "Toma needs permission to record the screen. Everything else is optional." : {
       "comment" : "Under the app name in the permissions window",
       "localizations" : {
@@ -13659,6 +13941,17 @@
         }
       }
     },
+    "Waiting: it starts again once the recording ends, or the Mac wakes or is unlocked." : {
+      "comment" : "Settings ▸ Replay: a take, sleep or a locked screen stopped it for now",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En espera: vuelve a empezar al terminar la grabación, o al despertar o desbloquear la Mac."
+          }
+        }
+      }
+    },
     "Waiting…" : {
       "comment" : "The sensitive data search waits for another analysis of the project to end",
       "localizations" : {
@@ -13753,6 +14046,17 @@
         }
       }
     },
+    "What it would record is more than this Mac can encode at once." : {
+      "comment" : "Why the Replay is off: its sources are too much for the encoder",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Lo que grabaría es más de lo que esta Mac puede codificar a la vez."
+          }
+        }
+      }
+    },
     "What the Keychain has for this key isn't text. Enter the secret key again in Settings ▸ Share." : {
       "comment" : "Share: the Keychain item is not UTF-8 text",
       "localizations" : {
@@ -13802,6 +14106,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Al abrir un proyecto en el editor, si su idioma está instalado."
+          }
+        }
+      }
+    },
+    "While it's on, macOS shows that Toma is recording the screen (and the camera or the microphone if it uses them). Nothing leaves the Mac; what isn't saved is deleted." : {
+      "comment" : "Under Settings ▸ Replay: the system's recording indicator stays on",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mientras está prendida, macOS muestra que Toma graba la pantalla (y la cámara o el micrófono si los usa). Nada sale de la Mac; lo que no se guarda se borra."
           }
         }
       }

@@ -11,13 +11,15 @@ import Recording
 import UniformTypeIdentifiers
 import os
 
-/// Owns the recording, the updater, the island, the windows and the app's life: the recovery prompt at
+/// Owns the recording, the Replay, the updater, the island, the windows and the app's life: the recovery prompt at
 /// launch (and Do Not Disturb turned off if a take left it on), the permissions, settings and licenses windows,
 /// the global shortcuts, editors (also for projects opened from Finder), the Dock icon, and what a quit waits for
 /// (`QuitSequencer`).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let recording: RecordingController
+    /// The Replay (fases 4 y 5 design §10): the last seconds, saved with a shortcut; never with a take.
+    let replay: ReplayController
     let updater: UpdaterController
     /// The global shortcuts.
     let hotKeys: HotKeyCenter
@@ -84,7 +86,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// default) before a quit goes ahead. Its time limits run on the suspending clock: they stop counting while the Mac
     /// sleeps, so closing the lid after quitting does not use them up and quit before the take is closed.
     private lazy var quit = QuitSequencer(
-        closeTake: { [recording] in await recording.stop(openingEditor: false) },
+        closeTake: { [recording, replay] in
+            // The Replay first, then the take: neither runs with the other.
+            await Self.shutDown(replay)
+            await recording.stop(openingEditor: false)
+        },
         cancelExports: { [weak self] in
             guard let self else { return }
             for editor in Array(editors.values) { await editor.cancelExportAndWait() }
@@ -102,6 +108,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         sleep: { try await Task.sleep(for: $0, clock: .suspending) })
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "App")
+    /// How long a quit waits for the Replay to be deleted (plan 5c, decision 11).
+    private static let replayQuitTimeLimit = Duration.seconds(3)
+
+    /// Quitting: the Replay's ring is deleted once a save in progress has finished, within `replayQuitTimeLimit` (what is
+    /// left then, the next launch deletes).
+    private static func shutDown(_ replay: ReplayController) async {
+        do {
+            try await withTimeLimit(replayQuitTimeLimit) { await replay.shutDown() }
+        } catch {
+            logger.error("Quitting before the Replay was deleted: \(String(describing: error), privacy: .public)")
+        }
+    }
 
     override init() {
         // The controller hears whether the window it records can be seen; it is made with the environment that tells.
@@ -109,7 +127,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let environment = LiveTakeEnvironment.make(cameraHost: cameraHost) {
             controller?.windowVisibilityChanged($0, inProjectAt: $1)
         }
-        recording = RecordingController(probe: probe, environment: environment, hooks: LiveTakeHooks(focus: focus, store: store))
+        replay = ReplayController(
+            probe: probe, environment: LiveReplayEnvironment.make(cameraHost: cameraHost, store: store), store: store)
+        recording = RecordingController(
+            probe: probe, environment: environment, hooks: LiveTakeHooks(focus: focus, store: store, replay: replay))
         controller = recording
         updater = UpdaterController(recording: recording, exportGate: exportGate)
         hotKeys = HotKeyCenter(bindings: store.settings.hotKeys)
@@ -135,6 +156,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             hotKeys.update(isRecording: recording.isRecording)
         }
         recovery.recovered = { [weak self] urls in self?.showRecovered(urls) }
+        // Save Replay is a shortcut only while it records.
+        replay.phaseChanged = { [weak self] in
+            guard let self else { return }
+            hotKeys.update(replayOn: replay.look.records)
+        }
+        replay.onSaved = { [weak self] take in self?.island?.replaySaved(take) }
     }
 
     // MARK: - Life cycle
@@ -168,10 +195,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // What a crash left half done in the trash and the projects folder (design §6.4): off the main thread, after the
         // library's own work (it is paused while a take is recorded).
         let projectsFolder = recording.projectsFolder, launchState = launchState, records = libraryRecords
+        let replay = replay
         Task.detached(priority: .utility) {
             let operations = LibraryOperations(
                 projectsFolder: projectsFolder, fileSystem: SystemFileSystem(), records: await records.value, app: launchState)
             await operations.finishPendingDeletions()
+            // Then the Replay: what a forced quit left of it is deleted (never recovered), and it starts if it is on.
+            await replay.launch()
         }
         // A take that turned Do Not Disturb on and never ended (the app was killed): turned off now. A take started
         // meanwhile runs its shortcut after this one.
@@ -193,11 +223,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The recording control at the notch.
     private func makeIsland() {
         let island = IslandPanel(
-            recording: recording, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop,
+            recording: recording, replay: replay, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop,
             hideDesktopIcons: hideDesktopIcons, focusShortcut: focusShortcut, probe: probe, cameraHost: cameraHost)
         // Opening or closing the island never activates the app.
         island.selectingChanged = { [weak self] in self?.updateActivationPolicy(activatingIfRegular: false) }
         island.openLibrary = { [weak self] in self?.showLibrary(section: $0) }
+        island.openProject = { [weak self] url in self?.showEditor(for: url, take: nil) }
         recording.onConfirmation = { [weak island] confirmation in island?.showConfirmation(confirmation) }
         self.island = island
     }
@@ -210,8 +241,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Not Disturb goes off.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // An editor whose window is closing counts until it leaves `editors`: its session is closing.
+        // The Replay is closed as a take is, before the quit goes ahead (its ring deleted).
         let decision = TerminationDecision.decide(
-            isRecording: recording.isRecording || recording.isEndingHooks, isExporting: exportGate.isBusy,
+            isRecording: recording.isRecording || recording.isEndingHooks || replay.phase != .off, isExporting: exportGate.isBusy,
             isPoweringOff: quit.isPoweringOff, isCopying: LibraryWork.shared.isCopying,
             hasEditSessions: !editors.isEmpty || !closingEditors.isEmpty,
             hasUnsavedEdits: editors.values.contains { !$0.model.closed && $0.model.losesEditsIfClosed })
@@ -253,7 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Logging out, restarting or shutting down: the take starts closing now, before the system asks the
     /// app to quit.
     private func willPowerOff() {
-        quit.powerOff(isRecording: recording.isRecording || recording.isEndingHooks)
+        quit.powerOff(isRecording: recording.isRecording || recording.isEndingHooks || replay.phase != .off)
     }
 
     /// Projects opened from Finder (or dropped on the app) open in the editor; styles (`.tomastyle`) are imported.
@@ -384,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settings == nil {
             settings = SettingsWindowController(
                 store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
-                focusShortcut: focusShortcut, appearance: appearance, probe: probe
+                focusShortcut: focusShortcut, appearance: appearance, probe: probe, replay: replay
             ) { [weak self] in
                 guard let self, settings?.window?.isVisible != true else { return }  // shown again meanwhile
                 settings = nil
@@ -413,7 +445,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .pauseResume: recording.togglePause()
         case .marker: recording.addMarker()
         case .restartTake: recording.restartTake()
-        case .saveReplay: break
+        case .saveReplay: island?.saveReplay()
         }
     }
 
@@ -500,7 +532,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showcaseWindow = window
         case ("island", let variant):
             makeIsland()
-            if variant != "peek" { island?.invoke() }
+            // `peek` and the Replay's at rest (`replay`, `replay-pill`, `replay-saved`) stay closed.
+            if !["peek", "replay", "replay-pill", "replay-saved"].contains(variant ?? "") { island?.invoke() }
             if let variant { DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { self.island?.showcase(variant) } }
         case ("editor", let path?), ("export", let path?):
             let url = URL(fileURLWithPath: path).standardizedFileURL
