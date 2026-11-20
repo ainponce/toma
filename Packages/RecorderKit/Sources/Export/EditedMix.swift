@@ -235,7 +235,9 @@ public final class EditedMix: Sendable {
     /// The mix of `document` of `project` at `framesPerSecond`, reading `analysis` of the caches: reads every microphone and
     /// system audio track of each take the sequence shows (`LoadedProject.takesShown(by:)`; of `project`'s own take when
     /// it shows none the package has), opening its segments and decoding them once, off Swift's cooperative pool, to find
-    /// where each one's audio ends.
+    /// where each one's audio ends. Each take's events are read first, off that pool too (another take's event log is read
+    /// from the disk the first time, `LoadedProject.events(ofTake:)`); a take whose event log cannot be read
+    /// (`LoadedProject.readEvents()` throws) is silent: none of its tracks is read and none of its clicks sounds.
     /// - Precondition: `framesPerSecond` is positive.
     /// - Throws: `ExportError.cancelled` if the task is cancelled while reading.
     public static func make(
@@ -243,7 +245,10 @@ public final class EditedMix: Sendable {
     ) async throws -> EditedMix {
         let shown = project.takesShown(by: document)
         let takes = shown.isEmpty ? [project] : shown
-        let tracks = takes.map { $0.take.tracks.filter { !$0.kind.isVideo } }
+        var tracks: [[TrackRecord]] = []
+        for take in takes {
+            tracks.append(try await eventsCanBeRead(take) ? take.take.tracks.filter { !$0.kind.isVideo } : [])
+        }
         var channels = 1
         for (take, own) in zip(takes, tracks) {
             for track in own { channels = max(channels, await AudioTrackTimeline.channelCount(of: track, in: take)) }
@@ -261,8 +266,29 @@ public final class EditedMix: Sendable {
             document: document, framesPerSecond: framesPerSecond, prereadSegments: prereadSegments, analysis: analysis)
     }
 
-    /// The source of the take `project` is focused on (`LoadedProject.focused(on:)`): its audio tracks `tracks` read with
-    /// `channels` channels on its timeline, its clicks, what a document can show of it and whether its camera can be read.
+    /// Reads the events of the take `project` is focused on if they were not read yet, off Swift's cooperative pool, and
+    /// whether they could be read; logs why not.
+    /// - Throws: `ExportError.cancelled` if the task is cancelled while it waits to read them.
+    private static func eventsCanBeRead(_ project: LoadedProject) async throws -> Bool {
+        do {
+            return try await offTheCooperativePool {
+                do {
+                    try project.readEvents()
+                    return true
+                } catch {
+                    let take = project.take.id
+                    logger.error("The events of \(take, privacy: .public) cannot be read (\(String(describing: error), privacy: .public)): it is silent")
+                    return false
+                }
+            }
+        } catch is CancellationError {
+            throw ExportError.cancelled
+        }
+    }
+
+    /// The source of the take `project` is focused on (`LoadedProject.focused(on:)`), whose events are read: its audio
+    /// tracks `tracks` read with `channels` channels on its timeline, its clicks (none when its events could not be read),
+    /// what a document can show of it and whether its camera can be read.
     private static func source(of project: LoadedProject, tracks: [TrackRecord], channels: Int) async throws -> Source {
         let origin = TakeTimeline.bounds(take: project.take, events: project.events).start
         var timelines: [AudioTrackTimeline] = []
@@ -404,7 +430,9 @@ public final class EditedMix: Sendable {
         }
         limited = document.audio.limiter || document.audio.normalize
         var missing: [MissingAudio] = []
-        for source in sources { missing += Self.missing(of: source, timeMap: timeMap, totalFrames: totalFrames) }
+        for source in sources {
+            missing += Self.missing(of: source, in: document.sequence, timeMap: timeMap, totalFrames: totalFrames)
+        }
         self.missing = missing
         // Nothing of the clean voice is made for a track mixed dry.
         let mixedClean = cleanLines.indices.map { cleanup[$0] > 0 ? cleanLines[$0] : nil }
@@ -501,7 +529,7 @@ public final class EditedMix: Sendable {
         // At most an hour, so the frames always fit; not a number, none.
         let prerollFrames = preroll > 0 ? Int64((min(preroll, 3_600) * AudioTrackTimeline.sampleRate).rounded()) : 0
         state.withLock { state in
-            turnDryWhereTheCleanVoiceIsGone(&state)
+            turnDryWhereTheCleanVoiceIsGone(&state, near: outputFrames)
             if limited {
                 // The limiter gives each frame `lookaheadFrames` after it took it: it takes the frames that far ahead.
                 let lookahead = Int64(PeakLimiter.lookaheadFrames)
@@ -527,16 +555,37 @@ public final class EditedMix: Sendable {
     }
 
     /// Marks the tracks mixed clean whose clean files are no longer there (macOS emptied the caches) as dry from now on:
-    /// a reader of the clean voice opened before could read on, one opened after would give silence.
-    private func turnDryWhereTheCleanVoiceIsGone(_ state: inout State) {
-        for t in cleanFiles.indices where !cleanFiles[t].isEmpty && !state.turnedDry[t] {
-            guard let gone = cleanFiles[t].first(where: { !FileManager.default.fileExists(atPath: $0) }) else { continue }
-            let file = (gone as NSString).lastPathComponent, key = keys[t]
-            Self.logger.error("Clean voice \(file, privacy: .public) is gone: track \(key, privacy: .public) mixes dry from here")
-            state.turnedDry[t] = true
-            state.cleanReaders[t] = nil
-            state.cleanStretches[t] = nil
+    /// a reader of the clean voice opened before could read on, one opened after would give silence. Only those of the
+    /// takes that mixing output frames `frames` can read (`takes(near:)`); another take's are looked at when a range
+    /// comes to read them.
+    private func turnDryWhereTheCleanVoiceIsGone(_ state: inout State, near frames: Range<Int64>) {
+        for take in takes(near: frames) {
+            for t in trackRanges[take] where !cleanFiles[t].isEmpty && !state.turnedDry[t] {
+                guard let gone = cleanFiles[t].first(where: { !FileManager.default.fileExists(atPath: $0) }) else { continue }
+                let file = (gone as NSString).lastPathComponent, key = keys[t]
+                Self.logger.error("Clean voice \(file, privacy: .public) is gone: track \(key, privacy: .public) mixes dry from here")
+                state.turnedDry[t] = true
+                state.cleanReaders[t] = nil
+                state.cleanStretches[t] = nil
+            }
         }
+    }
+
+    /// The sources whose tracks mixing output frames `frames` can read, in order: those of the pieces from
+    /// `PeakLimiter.settleFrames` before it (where a new limiter settles) to `PeakLimiter.lookaheadFrames` after it (its
+    /// lookahead). With one take, that one, wherever `frames` is.
+    private func takes(near frames: Range<Int64>) -> [Int] {
+        guard sources.count > 1 else { return [0] }
+        let (before, under) = frames.lowerBound.subtractingReportingOverflow(Int64(PeakLimiter.settleFrames))
+        let (after, over) = frames.upperBound.addingReportingOverflow(Int64(PeakLimiter.lookaheadFrames))
+        let from = under ? Int64.min : before, to = over ? Int64.max : after
+        var near = [Bool](repeating: false, count: sources.count)
+        var k = Self.first(in: pieces.count) { pieces[$0].end <= from }
+        while k < pieces.count, pieces[k].start < to {
+            if let take = pieces[k].sound.take { near[take] = true }
+            k += 1
+        }
+        return near.indices.filter { near[$0] }
     }
 
     /// The sum of the tracks (each piece's, those of its take, at the volume of their ranges), the click sounds, the
@@ -728,24 +777,50 @@ public final class EditedMix: Sendable {
         return frames
     }
 
-    /// The silent spans of `source`'s tracks in output seconds, clamped to the mix: from the first instant kept in each to
-    /// the end of the last (the cuts in it closed), to the end of the mix for one open to the end; none for a span all cut.
-    private static func missing(of source: Source, timeMap: TimeMap, totalFrames: Int64) -> [MissingAudio] {
+    /// The silent spans of `source`'s tracks in output seconds, clamped to the mix, where its take is heard: in each run of
+    /// clips of its take that follow one another in `sequence` (a clip of another take, or one with content, ends a run),
+    /// one span from the first instant of it the run keeps to the end of the last (the cuts in the run closed), and for a
+    /// span open to the end, to the end of the run (the end of the mix, for a run that ends the output); none in a run
+    /// that keeps nothing of it, so a span never covers another take's clips. A span of no length is one point, the first
+    /// instant of the take kept at or after it. With one take and no content, the one run is the whole sequence: the
+    /// spans of phase 2.
+    private static func missing(of source: Source, in sequence: [Clip], timeMap: TimeMap, totalFrames: Int64) -> [MissingAudio] {
         let duration = Double(totalFrames) / AudioTrackTimeline.sampleRate
+        // Each run's own time map (its outputs are the sequence's less where it starts), where it starts and ends in the
+        // output, and whether it ends the output (only clips that last nothing after it).
+        var runs: [(map: TimeMap, start: Int64, end: Int64, endsOutput: Bool)] = []
+        var k = 0
+        while k < sequence.count {
+            guard sequence[k].take == source.takeID, sequence[k].content == nil else {
+                k += 1
+                continue
+            }
+            let first = k
+            while k < sequence.count, sequence[k].take == source.takeID, sequence[k].content == nil { k += 1 }
+            let end = k < sequence.count ? timeMap.clipOutputStarts[k] : timeMap.duration
+            runs.append((
+                TimeMap(sequence: Array(sequence[first..<k])), timeMap.clipOutputStarts[first], end, end >= timeMap.duration))
+        }
         return source.tracks.flatMap { track in
-            track.missing.compactMap { span -> MissingAudio? in
-                let start: Int64, end: Double
-                if let spanEnd = span.end, span.start < spanEnd {
-                    guard let range = timeMap.outputRange(ofSource: span.start..<spanEnd, take: source.takeID) else { return nil }
-                    start = range.lowerBound
-                    end = Double(range.upperBound) / 1e9
-                } else {
-                    guard let first = timeMap.firstKeptOutput(atOrAfter: span.start, take: source.takeID) else { return nil }
-                    start = first
-                    end = span.end == nil ? duration : Double(first) / 1e9
+            track.missing.flatMap { span -> [MissingAudio] in
+                func entry(_ start: Int64, _ end: Double) -> MissingAudio? {
+                    AudioTrackTimeline.missingEntry(
+                        track: track.track, file: span.file, start: Double(start) / 1e9, end: end, duration: duration, reason: span.reason)
                 }
-                return AudioTrackTimeline.missingEntry(
-                    track: track.track, file: span.file, start: Double(start) / 1e9, end: end, duration: duration, reason: span.reason)
+                if let spanEnd = span.end, span.start < spanEnd {
+                    return runs.compactMap { run in
+                        guard let range = run.map.outputRange(ofSource: span.start..<spanEnd, take: source.takeID) else { return nil }
+                        return entry(run.start + range.lowerBound, Double(run.start + range.upperBound) / 1e9)
+                    }
+                }
+                if span.end == nil {
+                    return runs.compactMap { run in
+                        guard let first = run.map.firstKeptOutput(atOrAfter: span.start, take: source.takeID) else { return nil }
+                        return entry(run.start + first, run.endsOutput ? duration : Double(run.end) / 1e9)
+                    }
+                }
+                guard let first = timeMap.firstKeptOutput(atOrAfter: span.start, take: source.takeID) else { return [] }
+                return entry(first, Double(first) / 1e9).map { [$0] } ?? []
             }
         }
     }
