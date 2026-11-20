@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
-import Export
+@testable import Export
 import ProjectFormat
 import Testing
 
@@ -114,4 +114,59 @@ import Testing
         #expect(!codec.hasAlpha && !ExportSettings(codec: codec).transparent, "\(codec)")
     }
     #expect(ExportCodec(rawValue: "hevcAlpha") == .hevcAlpha && ExportCodec(rawValue: "proRes4444") == .proRes4444)
+}
+
+// Milestone 4c (plan 4c decisions 6 and 8): which codecs have a bitrate, and the files for editors, which are not in the
+// estimate.
+
+/// The codecs with a bitrate, the ones the export sheet offers Quality for, are those the encoder is given one: H.264,
+/// HEVC and HEVC with alpha; ProRes has none.
+@Test func hasBitRateIsTheCodecsWithABitrate() {
+    #expect(ExportCodec.allCases.filter(\.hasBitRate) == [.h264, .hevc, .hevcAlpha])
+    for codec in ExportCodec.allCases {
+        let settings = ExportSettings(outputSize: [1920, 1080], framesPerSecond: 60, codec: codec)
+        #expect(codec.hasBitRate == (settings.videoBitRate != nil), "\(codec)")
+        #expect(codec.hasBitRate == (MP4Exporter.videoSettings(settings)[AVVideoCompressionPropertiesKey] != nil), "\(codec)")
+    }
+}
+
+/// `editorMetadata` is off unless asked, by either initializer, and changes neither the estimate nor anything else.
+@Test func editorMetadataIsAnOptionOfTheExport() {
+    #expect(!ExportSettings().editorMetadata)
+    let asked = ExportSettings(outputSize: [1280, 720], framesPerSecond: 30, codec: .hevcAlpha, editorMetadata: true)
+    #expect(asked.editorMetadata && asked.codec == .hevcAlpha && asked.outputSize == [1280, 720])
+    let sheet = ExportSettings(
+        aspect: .landscape, resolution: .p1080, framesPerSecond: 60, quality: .high, codec: .proRes4444, editorMetadata: true)
+    #expect(sheet.editorMetadata && sheet.outputSize == [1920, 1080] && sheet.codec == .proRes4444)
+    var without = sheet
+    without.editorMetadata = false
+    #expect(without != sheet)
+    #expect(without.estimatedBytes(durationSeconds: 60) == sheet.estimatedBytes(durationSeconds: 60))
+    #expect(MP4Exporter.videoSettings(without).count == MP4Exporter.videoSettings(sheet).count)
+}
+
+/// The estimates of the codecs with alpha use the rates measured for them (plan 4c decision 6, `docs/performance.md`):
+/// HEVC with alpha 0.62 × H.264's bitrate (HEVC's 0.6 for its colour and its alpha over it) with the AAC; ProRes 4444
+/// 5.3 bits per pixel with the 24-bit stereo LPCM. Each above its opaque sibling, below H.264 and above ProRes 422 HQ.
+@Test func alphaEstimatesUseTheMeasuredRates() {
+    func settings(_ codec: ExportCodec, _ quality: ExportQuality = .standard) -> ExportSettings {
+        ExportSettings(aspect: .landscape, resolution: .p1080, framesPerSecond: 60, quality: quality, codec: codec)
+    }
+    #expect(ExportSettings.hevcAlphaShareOfH264 == 0.62 && ExportSettings.proRes4444BitsPerPixel == 5.3)
+    // 0.62 × 9 953 280 and × 17 418 240, rounded; (6 171 034 + 160 000) b/s × 10 s / 8.
+    #expect(settings(.hevcAlpha).videoBitRate == 6_171_034)
+    #expect(settings(.hevcAlpha, .high).videoBitRate == 10_799_309)
+    #expect(settings(.hevcAlpha).estimatedBytes(durationSeconds: 10) == 7_913_793)
+    // 1920 × 1080 × 60 × 5.3 bits plus 2 304 000 b/s, over 10 s; no quality to choose.
+    #expect(settings(.proRes4444).videoBitRate == nil)
+    #expect(settings(.proRes4444).estimatedBytes(durationSeconds: 10) == 827_136_000)
+    #expect(settings(.proRes4444, .high).estimatedBytes(durationSeconds: 10) == 827_136_000)
+    for quality in ExportQuality.allCases {
+        let bytes = { (codec: ExportCodec) in settings(codec, quality).estimatedBytes(durationSeconds: 60) }
+        #expect(bytes(.hevc) < bytes(.hevcAlpha) && bytes(.hevcAlpha) < bytes(.h264), "\(quality)")
+        #expect(bytes(.proRes422HQ) < bytes(.proRes4444), "\(quality)")
+    }
+    // The encoder still asks HEVC's bitrate for the colour.
+    let asked = MP4Exporter.videoSettings(settings(.hevcAlpha))[AVVideoCompressionPropertiesKey] as? [String: Any]
+    #expect(asked?[AVVideoAverageBitRateKey] as? Int == settings(.hevc).videoBitRate)
 }

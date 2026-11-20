@@ -1622,3 +1622,12 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: l
 ### 0. Preparación
 
 ### 2. Detalle por área
+
+**El export con alfa y los archivos para editores** (X3)
+
+Con un proyecto con un fondo de color, esquinas redondeadas y sombra, exportado entero con cada códec con alfa (HEVC con alfa y ProRes 4444) y con «Metadatos para editores (FCPXML)» encendido.
+- Abrir el `.mov` de HEVC con alfa en QuickTime Player y en la vista rápida del Finder (barra espaciadora): donde estaba el fondo se ve transparente (el damero o lo que hay detrás de la ventana), la pantalla opaca y la sombra semitransparente. Lo mismo con el de ProRes 4444 en QuickTime.
+- Importar el ProRes 4444 y el HEVC con alfa en Final Cut Pro (o DaVinci Resolve) sobre un generador de color liso, blanco y después negro: la sombra y los bordes redondeados de la pantalla se funden sin halo oscuro ni claro, y el fondo no aparece. Si el ProRes 4444 muestra un halo y el HEVC no, anotarlo (el cierre lo cambiaría a alfa recto).
+- Importar el `.fcpxml` en Final Cut Pro (Archivo ▸ Importar ▸ XML): abre sin avisos, crea el evento con el nombre del proyecto y un proyecto con el nombre del video, el video enlazado (no fuera de línea), los marcadores de capítulo, un marcador «Clic» en cada clic («Click» con la app en inglés) y un marcador de rango en cada bloque de zoom («Zoom 2,0×», «Atenuar 2,0×»…), en su lugar al reproducir.
+- Leer el `.toma-metadata.json` desde un script (o una expresión de After Effects): `video.frames` es la cantidad de cuadros del video, `frames` tiene uno por cuadro, y el cursor de un cuadro cae donde el video lo dibuja.
+- Exportar entre las marcas con el mismo pedido: no aparece ningún `.fcpxml` ni `.toma-metadata.json` nuevo junto al video.
