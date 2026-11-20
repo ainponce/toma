@@ -18,7 +18,10 @@ extension TimelineInteraction {
             let geometry = view.geometry()
         else { return nil }
         let flags = content.markers.map { (id: $0.id, x: geometry.snapped(geometry.x($0.output)) + TimelineRuler.flagWidth / 2) }
-        guard let id = MarkerRulerRules.hit(x: point.x - TimelineLayout.headerWidth, flags: flags) else { return nil }
+        // The playhead's head wins over a flag under it (a click on the flag leaves the playhead on its marker).
+        let playheadX = geometry.snapped(geometry.x(view.drawnPlayhead))
+        guard let id = MarkerRulerRules.hit(x: point.x - TimelineLayout.headerWidth, flags: flags, playheadX: playheadX)
+        else { return nil }
         return content.markers.first { $0.id == id }
     }
 

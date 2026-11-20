@@ -17,6 +17,18 @@ public enum MarkerRulerRules {
     /// The flag `x` points at: of `flags` (their ids and the `x` the mouse is measured from), the nearest within
     /// `hitTolerance`; of two as near, the first. `nil` if none is that near.
     public static func hit(x: Double, flags: [(id: String, x: Double)]) -> String? {
+        hit(x: x, flags: flags, playheadX: nil)
+    }
+
+    /// Half the width of the playhead's head, in points: a press this near its mast scrubs, whatever flag is under it
+    /// (the playhead sits on a marker after a jump to it, and its head is then the whole of the flag's reach).
+    public static let playheadHeadRadius = 5.5
+
+    /// As `hit(x:flags:)`, but a press within `playheadHeadRadius` of the playhead's mast (`playheadX`, on the same
+    /// scale as `x`) grabs the playhead, not a flag. A flag is still grabbed right of the head, and wherever the
+    /// playhead is elsewhere.
+    public static func hit(x: Double, flags: [(id: String, x: Double)], playheadX: Double?) -> String? {
+        if let playheadX, abs(x - playheadX) <= playheadHeadRadius { return nil }
         var best: (id: String, distance: Double)?
         for flag in flags {
             let distance = abs(flag.x - x)

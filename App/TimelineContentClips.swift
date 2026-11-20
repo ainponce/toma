@@ -697,7 +697,7 @@ extension EditorModel {
     /// "Freeze Frame" of a clip's menu, at output instant `τ` (`ContentClipCommands.freeze`): the frozen frame is the one
     /// selected.
     func freezeFrame(atOutput τ: Int64) {
-        guard canEdit, let document,
+        guard canEdit, !isGesturing, let document,
             let step = ContentClipCommands.freeze(document, atOutput: τ, makeID: Self.newID), perform(step) != .refused
         else { return }
         selection = .clips([step.target])
@@ -706,7 +706,7 @@ extension EditorModel {
     /// "Add Title Card" of a clip's menu, at output instant `τ` (inside a clip with content, at its nearer edge), titled
     /// "Title": the card is the one selected.
     func addTitleCard(atOutput τ: Int64) {
-        guard canEdit, let document,
+        guard canEdit, !isGesturing, let document,
             let step = ContentClipCommands.addCard(
                 document, at: .output(τ), title: String(localized: "Title"), makeID: Self.newID),
             perform(step) != .refused

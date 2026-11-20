@@ -21,6 +21,19 @@ import Testing
         #expect(MarkerRulerRules.hit(x: 108, flags: near) == "b")
     }
 
+    @Test func theHeadOfThePlayheadWinsOverAFlag() {
+        // The playhead on the marker whose pole is at 100 (its flag is centered at 104): the head spans 94.5 to 105.5.
+        let flags: [(id: String, x: Double)] = [("a", 104)]
+        #expect(MarkerRulerRules.hit(x: 100, flags: flags, playheadX: 100) == nil)
+        #expect(MarkerRulerRules.hit(x: 105.5, flags: flags, playheadX: 100) == nil)
+        // Right of the head, the flag is still grabbed.
+        #expect(MarkerRulerRules.hit(x: 106, flags: flags, playheadX: 100) == "a")
+        #expect(MarkerRulerRules.hit(x: 108.5, flags: flags, playheadX: 100) == "a")
+        // The playhead elsewhere, or none: as before.
+        #expect(MarkerRulerRules.hit(x: 104, flags: flags, playheadX: 300) == "a")
+        #expect(MarkerRulerRules.hit(x: 104, flags: flags, playheadX: nil) == "a")
+    }
+
     @Test func aSmallMoveIsAClick() {
         #expect(!MarkerRulerRules.isDrag(from: 100, to: 102))
         #expect(!MarkerRulerRules.isDrag(from: 100, to: 98))

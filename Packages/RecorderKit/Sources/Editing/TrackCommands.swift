@@ -257,7 +257,7 @@ public enum TrackCommands {
     /// key there, a `set` of each, aimed at the first; so with one take, the step the Audio tab made in phase 2.
     /// `nil` without takes, if nothing changes or a value is not a number.
     public static func setTrackGain(
-        _ doc: EditDocument, track: String, takes: [String], _ edit: (inout TrackGain) -> Void
+        _ doc: EditDocument, track: String, takes: [String], label: EditLabel = .volume, _ edit: (inout TrackGain) -> Void
     ) -> EditStep? {
         var order: [String] = []
         for take in takes where !order.contains(take) { order.append(take) }
@@ -273,12 +273,21 @@ public enum TrackCommands {
         var changes = DocumentChanges()
         guard keys.allSatisfy({ doc.audio.tracks[$0] != nil }) else {
             changes.set(["audio", "tracks"], from: doc.audio.tracks, to: tracks)
-            return changes.step(label: .volume, target: "/audio/tracks")
+            return changes.step(label: label, target: "/audio/tracks")
         }
         for key in keys {
             if let old = doc.audio.tracks[key], let new = tracks[key] { changes.set(["audio", "tracks", key], from: old, to: new) }
         }
-        return changes.step(label: .volume, target: JSONPointer(components: ["audio", "tracks", first]).string)
+        return changes.step(label: label, target: JSONPointer(components: ["audio", "tracks", first]).string)
+    }
+
+    /// "Noise Cleanup" of a row, in every take that recorded the track (as `setTrackGain` writes the volume): one
+    /// `.audioCleanup` step. `nil` for Off when no take has a key yet (there is nothing to turn off).
+    public static func setTrackCleanup(
+        _ doc: EditDocument, track: String, takes: [String], _ level: CleanupLevel
+    ) -> EditStep? {
+        if level == .off, !takes.contains(where: { doc.audio.tracks[AudioPlan.key(take: $0, track: track)] != nil }) { return nil }
+        return setTrackGain(doc, track: track, takes: takes, label: .audioCleanup) { $0.cleanup = level.rawValue }
     }
 
     // MARK: - Private

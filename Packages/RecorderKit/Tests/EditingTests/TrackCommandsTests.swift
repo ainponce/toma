@@ -360,3 +360,27 @@ private enum TrackFixture {
         document, "/audio/tracks/take-001~1mic", TrackGain(gain: 0.5, muted: true, cleanup: 0.4), label: .volume))
     #expect(kept != nil)
 }
+
+/// "Noise Cleanup" of a row writes every take's key (not only the first), after a volume touch made per-take entries, and
+/// it is one undo step with the `.audioCleanup` label.
+@Test func rowCleanupWritesEveryTake() throws {
+    var document = TrackFixture.document()
+    document.audio.tracks = [:]
+    let takes = ["take-001", "take-002"]
+    let gain = try #require(TrackCommands.setTrackGain(document, track: "mic", takes: takes) { $0.muted = true })
+    let touched = try TrackFixture.applying(gain, to: document)
+    #expect(touched.audio.tracks["take-002/mic"]?.cleanup == 0)
+
+    let step = try #require(TrackCommands.setTrackCleanup(touched, track: "mic", takes: takes, .strong))
+    #expect(step.label == .audioCleanup)
+    let edited = try TrackFixture.applying(step, to: touched)
+    #expect(edited.audio.tracks["take-001/mic"]?.cleanup == CleanupLevel.strong.rawValue)
+    #expect(edited.audio.tracks["take-002/mic"]?.cleanup == CleanupLevel.strong.rawValue)
+    #expect(edited.audio.tracks["take-002/mic"]?.muted == true)
+
+    // Off with no key anywhere is nothing; from nothing, Gentle adds every key.
+    #expect(TrackCommands.setTrackCleanup(document, track: "mic", takes: takes, .off) == nil)
+    let fresh = try TrackFixture.applying(
+        try #require(TrackCommands.setTrackCleanup(document, track: "mic", takes: takes, .gentle)), to: document)
+    #expect(fresh.audio.tracks["take-002/mic"]?.cleanup == CleanupLevel.gentle.rawValue)
+}
