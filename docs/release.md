@@ -1141,6 +1141,16 @@ En un proyecto de dos tomas con cámara y micrófono en las dos (la segunda agre
 - Con una sola toma, todo lo de arriba se comporta como en la fase 2.
 - El agente no pudo capturar la pantalla (estaba bloqueada): vio la línea de tiempo y la burbuja dibujadas desde sus capas (`TOMA_SHOWCASE_P3_TAKES=use` con `TOMA_SHOWCASE_P3_TIMELINE_PNG`, `TOMA_SHOWCASE_PANEL_PNG` y `TOMA_SHOWCASE_PLAYHEAD` en la segunda toma); la imagen de la cámara de la pestaña Cámara no sale en esa captura: mirarla en la app.
 
+**La pestaña y la pista Zoom: Resaltar, Atenuar y Lupa** (Z5)
+
+- Con una grabación real y los zooms automáticos en Lupa (panel ▸ Zoom, «Modo» en la sección del zoom automático): la lente sigue al cursor sin marear y su borde de vidrio (el anillo y la sombra) se ve bien sobre fondos claros y oscuros.
+- Resaltar y Atenuar en un video 4K se ven igual en la vista previa y en el archivo exportado: el mismo recuadro alrededor del foco, el mismo oscurecido (y en Atenuar el mismo desenfoque), sin un destello al entrar ni al salir.
+- Recortar un zoom automático en Lupa (arrastrar un borde) lo deja en Lupa: pasa a ser del usuario (pierde el tinte claro) y conserva el ícono de la lupa. Lo mismo al moverlo o cambiarle la profundidad.
+- Cambiar el «Modo» de los automáticos y deshacer (⌘Z) vuelve al de antes en un solo paso, y Edición ▸ Deshacer lo nombra. Cambiarlo justo después de mover «Profundidad» (mientras se vuelven a planear) no se pierde cuando el plan termina.
+- VoiceOver lee el modo de cada bloque de la pista: «Zoom de 2×, Lupa, de 0:07 a 0:09» y «Zoom automático de 2×, Resaltar, de 0:10 a 0:12»; uno Clásico se lee como en la fase 2.
+- La pestaña, en español, en oscuro y en claro: en «Zoom seleccionado», «Modo» es un menú con los cuatro (Clásico, Resaltar, Atenuar, Lupa), cada uno con su ícono; en Lupa aparecen «Tamaño de la lupa» (de 6 % a 40 %, 16 % por defecto) y «Forma» (Círculo o Rectángulo redondeado) con un fundido que sube un poco (con Reducir movimiento, solo el fundido), y se van al elegir otro modo. Con el zoom automático apagado, su «Modo» está atenuado. Ningún texto cortado. El agente no pudo capturar la pantalla (estaba bloqueada): vio la pestaña dibujada desde sus vistas (`TOMA_SHOWCASE_P3_CALMZOOM=loupe-rect` con `TOMA_SHOWCASE_PANEL_PNG`), sin el aspecto real de los menús ni sus íconos.
+- La pista con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_CALMZOOM=track scripts/ui-shots.sh build/shots/z5 editor <proyecto>`, en oscuro y en claro): un bloque Clásico sin ícono, uno con el resaltador (Resaltar), uno con el sol chico (Atenuar), uno con la lupa (elegido) y, al final, el automático más claro con la lupa. El agente la vio dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
