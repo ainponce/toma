@@ -346,7 +346,7 @@ import Testing
                               shifts: [1: -300_000_000])
             next.music.ducking = Ducking(enabled: true, amount: -20, attack: 0.1, release: 0.4)
             let timeMap = TimeMap(sequence: next.sequence)
-            let again = made.with(document: next, timeMap: timeMap, cuts: AudioCuts(document: next, timeMap: timeMap))
+            let again = made.with(document: next, timeMap: timeMap, cuts: AudioCuts(document: next, timeMap: timeMap, takeBounds: [:]))
             let fresh = await musicMix(project, next, analysis: first)
             #expect(again.openedFiles == 0)
             #expect(again.played == fresh.played && again.envelope.runs == fresh.envelope.runs && !again.envelope.isUnity)
@@ -355,7 +355,7 @@ import Testing
             var added = next
             added.music.items.append(item(focus, 3, 5, id: 2))
             let addedMap = TimeMap(sequence: added.sequence)
-            #expect(made.with(document: added, timeMap: addedMap, cuts: AudioCuts(document: added, timeMap: addedMap)).played.map(\.source) == [calm])
+            #expect(made.with(document: added, timeMap: addedMap, cuts: AudioCuts(document: added, timeMap: addedMap, takeBounds: [:])).played.map(\.source) == [calm])
             let mix = try await EditedMix.make(project: project, document: edited(project, [(0, 6)], items: [item(calm, 0, 3)]),
                                                framesPerSecond: 60, analysis: first)
             #expect(mix.with(document: added, framesPerSecond: 60).music.played.map(\.source) == [calm])

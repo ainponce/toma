@@ -254,7 +254,7 @@ struct MusicMix: Sendable {
             self.ramps = ramps
             return
         }
-        let cuts = cuts ?? AudioCuts(document: document, timeMap: timeMap)
+        let cuts = cuts ?? AudioCuts(document: document, timeMap: timeMap, takeBounds: [:])
         envelope = DuckingEnvelope(
             voiced: Self.voicedOutput(of: document, timeMap: timeMap, cuts: cuts, voiceTracks: voiceTracks, voice: voice),
             ducking: ducking)
