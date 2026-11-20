@@ -71,9 +71,12 @@ extension EditorModel {
         let now = playheadNanoseconds
         let space = annotationSpace(for: kind, atOutput: now, in: document)
         let rect = AnnotationDefaults.rect(for: kind, aspect: nil, spaceAspect: space.map { $0.width / $0.height } ?? 16.0 / 9)
-        guard let step = AnnotationCommands.add(document, kind, atOutput: now, rect: rect, makeID: Self.newID),
-            perform(step) != .refused
-        else { return }
+        guard let step = AnnotationCommands.add(document, kind, atOutput: now, rect: rect, makeID: Self.newID) else {
+            // Less than 0.3 s of output left at the playhead.
+            NSSound.beep()
+            return
+        }
+        guard perform(step) != .refused else { return }
         selection = .annotations([step.target])
     }
 
@@ -162,13 +165,135 @@ extension EditorModel {
         let frame = scene.frame(at: Double(now) / 1e9) { _ in true }
         let output = AnnotationGeometry.outputSpace(outputSize: SIMD2(Double(frame.outputSize.x), Double(frame.outputSize.y)))
         if case .clip = kind { return output }
+        return contentSpace(of: frame, atOutput: now, in: document) ?? output
+    }
+
+    /// Where `frame` (the scene shown's, at output instant `now`) would draw the whole content of its screen, in its
+    /// output pixels (`AnnotationGeometry.contentSpace`): the space of an annotation stuck to the recording there. `nil`
+    /// over anything but a stretch of a take, or without a screen in that frame.
+    private func contentSpace(of frame: RenderFrame, atOutput now: Int64, in document: EditDocument) -> Rect? {
         let map = TimeMap(sequence: document.sequence)
         guard let (clip, source) = map.source(atOutput: now), document.sequence.indices.contains(clip),
             document.sequence[clip].content == nil, !frame.coveredByCamera, let drawn = frame.drawnScreen,
             let project = playheadProject, let screens = screensByTake[project.take.id]
-        else { return output }
+        else { return nil }
         let points = StagePoints(take: project.take, document: document, screens: screens, contentRatio: .some(contentRatio(of: document)))
         let content = points.shownScreen(at: source).flatMap { $0.track == drawn.trackID ? $0.view.crop : nil } ?? drawn.crop
-        return AnnotationGeometry.contentSpace(contentCrop: content, layerCrop: drawn.crop, drawnRect: drawn.rect) ?? output
+        return AnnotationGeometry.contentSpace(contentCrop: content, layerCrop: drawn.crop, drawnRect: drawn.rect)
+    }
+
+    // MARK: - From the Annotations tab (Task A14)
+
+    /// The annotations selected, by id; none when something else is.
+    var selectedAnnotationIDs: Set<String> {
+        if case let .annotations(ids)? = selection { ids } else { [] }
+    }
+
+    /// The moves of the layers' order (Bring Forward, Send Backward, Bring to Front, Send to Back) that change something
+    /// for the one annotation selected; none with none or several, or while the project cannot be edited.
+    var possibleLayerMoves: Set<AnnotationCommands.LayerMove> {
+        let ids = selectedAnnotationIDs
+        guard canEdit, ids.count == 1, let id = ids.first, let document else { return [] }
+        let moves: [AnnotationCommands.LayerMove] = [.forward, .backward, .front, .back]
+        return Set(moves.filter { AnnotationCommands.reorder(document, id: id, $0) != nil })
+    }
+
+    /// Annotation `id` changed by `edit` (`AnnotationCommands.change`, held to what the document allows): a step of the
+    /// gesture while one lasts (a slider of the inspector being dragged; one that brings it back to how it was shows the
+    /// document as it is), otherwise one of its own.
+    func changeAnnotation(_ id: String, _ edit: (inout Annotation) -> Void) {
+        guard canEdit, let document else { return }
+        let step = AnnotationCommands.change(document, id: id, edit)
+        if isGesturing {
+            updateGesture(step)
+        } else if let step {
+            perform(step)
+        }
+    }
+
+    /// The inspector's Stick to the Recording and Whole Video (phase 3 design §5.1, plan 3a decision 2): annotation `id`
+    /// anchored as `choice` says (`AnnotationCommands.setAnchor`), where it is seen, in one step: carried from the space a
+    /// frame that shows it draws it in to the space of its new anchor in that same frame, its sizes with it
+    /// (`AnnotationInspectorRules.reanchored`), so it does not jump. That frame is the one at the playhead when it shows
+    /// the annotation; otherwise the first of the grid once it is all in. Without a screen to stick to in that frame, it
+    /// keeps its numbers. The system beeps if it cannot be anchored so (a clip to the recording, a range over two takes or a
+    /// clip with content).
+    func setAnnotationAnchor(_ id: String, to choice: AnnotationCommands.AnchorChoice) {
+        guard canEdit, !isGesturing, let document, let annotation = document.annotations.items.first(where: { $0.id == id }) else { return }
+        var moved = annotation
+        if let scene = shownScene, let instant = shownInstant(of: annotation, in: document) {
+            let frame = scene.frame(at: Double(instant) / 1e9) { _ in true }
+            if let drawn = DrawnAnnotation.all(in: frame).first(where: { $0.layer.id == id }) {
+                let space: Rect? =
+                    switch choice {
+                    case .output, .whole:
+                        AnnotationGeometry.outputSpace(outputSize: SIMD2(Double(frame.outputSize.x), Double(frame.outputSize.y)))
+                    case .recording:
+                        contentSpace(of: frame, atOutput: instant, in: document)
+                    }
+                if let space { moved = AnnotationInspectorRules.reanchored(annotation, from: drawn.space, to: space) }
+            }
+        }
+        var ends: (from: NormalizedPoint, to: NormalizedPoint)?
+        var target: NormalizedPoint?
+        switch moved.kind {
+        case let .arrow(arrow): ends = (arrow.from, arrow.to)
+        case let .callout(callout): target = callout.target
+        default: break
+        }
+        guard
+            let anchored = AnnotationCommands.setAnchor(
+                document, id: id, to: choice, rect: moved.rect, from: ends?.from, to: ends?.to, target: target)
+        else {
+            NSSound.beep()
+            return
+        }
+        var changes = anchored.changes
+        // Its sizes in the new space, in the same step: one undo takes both back.
+        if moved.kind != annotation.kind, let after = try? document.applying(anchored.changes),
+            let sized = AnnotationCommands.change(after, id: id, { $0.kind = moved.kind })
+        {
+            changes += sized.changes
+        }
+        perform(EditStep(label: anchored.label, target: anchored.target, changes: changes))
+    }
+
+    /// An output instant the output shows annotation `id` at: the playhead's if it does, otherwise the first frame of the
+    /// grid once it is all in (its entrance over), inside its range. `nil` if the output never shows it.
+    private func shownInstant(of annotation: Annotation, in document: EditDocument) -> Int64? {
+        let map = TimeMap(sequence: document.sequence)
+        let playhead = playheadNanoseconds
+        if AnnotationTiming.state(of: annotation, atOutput: playhead, document: document, timeMap: map) != nil { return playhead }
+        guard let output = TimelineAnnotationItems.range(of: annotation.id, in: document) else { return nil }
+        let rate = document.frameRate
+        let shown = output.lowerBound + min(AnnotationTiming.transition, (output.upperBound - output.lowerBound) / 2)
+        var frame = Int((Double(shown) * Double(rate) / 1e9).rounded(.up))
+        while Int64(TimeMap.frameTime(frame, frameRate: rate)) < shown { frame += 1 }
+        let τ = Int64(TimeMap.frameTime(frame, frameRate: rate))
+        return τ < output.upperBound ? τ : output.lowerBound
+    }
+
+    /// Image… and Clip… of the tab (design §5.4): the file chosen goes over the video at the playhead, centred
+    /// (`addOverlay(from:at:)`); `importing` says its name while it is copied, and `nil` once done. One that cannot be
+    /// added says so.
+    func chooseOverlay(_ kind: ImportedFile, importing: @escaping @MainActor (String?) -> Void) {
+        chooseFile(kind) { [weak self] url in
+            guard let self else { return }
+            importing(url.lastPathComponent)
+            Task {
+                let added = await self.addOverlay(from: url, at: nil)
+                importing(nil)
+                if !added {
+                    let alert = NSAlert()
+                    alert.alertStyle = .warning
+                    alert.messageText = String(localized: "Couldn't add the file.")
+                    if let window = self.window, window.isVisible {
+                        alert.beginSheetModal(for: window, completionHandler: nil)
+                    } else {
+                        alert.runModal()
+                    }
+                }
+            }
+        }
     }
 }
