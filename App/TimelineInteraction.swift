@@ -165,7 +165,7 @@ final class TimelineInteraction {
         case .camera: return isLayoutBlock(id) ? .layoutBlock(id) : .cameraChange(id)
         case .screen: return id == "initial" ? nil : .screenChange(id)
         case .privacy: return .privacyBlocks(ids)
-        case .ruler, .audio, .captions: return nil
+        case .ruler, .audio, .captions, .annotations, .importedAudio, .music: return nil
         }
     }
 

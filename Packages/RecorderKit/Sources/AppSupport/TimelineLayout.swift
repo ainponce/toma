@@ -17,8 +17,15 @@ public enum TimelineTrack: Equatable, Sendable {
     case privacy
     /// The camera's changes.
     case camera
-    /// The waveform of audio track `id` of the take (`TrackRecord.id`).
+    /// The waveform of audio track `id` (`TrackRecord.id`), of every take the sequence shows that recorded it.
     case audio(id: String)
+    /// The annotations, with any (phase 3 design §5.6; empty until the annotations feature draws in it).
+    case annotations
+    /// The sound of the imported clips, with a clip of the sequence or an annotation that shows one (phase 3 design §7.2;
+    /// empty until the audio feature draws in it).
+    case importedAudio
+    /// The music, with any (phase 3 design §7.2 and §7.4; empty until the audio feature draws in it).
+    case music
 }
 
 /// One row of the timeline, top to bottom: its track and how tall it is, in points.
@@ -53,26 +60,54 @@ public struct TimelineLayout: Equatable, Sendable {
     static let privacyHeight = 28.0
     static let cameraHeight = 32.0
     static let audioHeight = 36.0
+    /// The rows of phase 3 (plan decision 14).
+    public static let annotationsHeight = 28.0
+    public static let importedAudioHeight = 36.0
+    public static let musicHeight = 36.0
 
-    /// Top to bottom: the ruler, Video, Captions (with a transcript), Screen (with two or more screen tracks that recorded
-    /// something), Zoom, Privacy (with privacy blocks), Camera (with a camera that recorded something) and one row for each audio track that recorded something, the
-    /// microphones before the system audio and the system audio before an iPhone's or iPad's sound, each in the take's order.
+    /// Top to bottom: the ruler, Video, Captions (with a transcript), Annotations (with annotations), Screen (with a take
+    /// of two or more screen tracks that recorded something), Zoom, Privacy (with privacy blocks), Camera (with a camera
+    /// that recorded something), one row for each audio track that recorded something, the microphones before the system
+    /// audio and the system audio before an iPhone's or iPad's sound, each in the takes' order, then Imported Clips (with a
+    /// clip of the sequence or an annotation that shows an imported video) and Music (with music).
     public var tracks: [TimelineRow]
 
-    /// The tracks of `take`, the take of `document`'s sequence. In 1b they depend on the take alone: what the document
-    /// does with them is drawn in them.
+    /// The tracks of `take`, the take of `document`'s sequence: `init(takes: [take], document:)`.
     public init(take: TakeRecord, document: EditDocument) {
-        let recorded = take.tracks.filter { !$0.segments.isEmpty }
+        self.init(takes: [take], document: document)
+    }
+
+    /// The tracks of `takes`, those `document`'s sequence shows (phase 3 design §9), in the order it first shows them.
+    /// The audio rows are their tracks' union by id: a track of one id is one row, whichever takes recorded it, where its
+    /// kind and the first take that has it put it. They depend on the takes and on what the document has: what the
+    /// document does with them is drawn in them. With one take and nothing of phase 3, the rows of phase 2.
+    public init(takes: [TakeRecord], document: EditDocument) {
+        var recorded: [TrackRecord] = []
+        var ids: Set<String> = []
+        for take in takes {
+            for track in take.tracks where !track.segments.isEmpty && ids.insert(track.id).inserted { recorded.append(track) }
+        }
+        let twoScreens = takes.contains { $0.tracks.filter { !$0.segments.isEmpty && $0.kind.isScreen }.count >= 2 }
         var tracks = [TimelineRow(track: .ruler, height: Self.rulerHeight), TimelineRow(track: .video, height: Self.videoHeight)]
         if document.transcript != nil { tracks.append(TimelineRow(track: .captions, height: Self.captionsHeight)) }
-        if recorded.filter(\.kind.isScreen).count >= 2 { tracks.append(TimelineRow(track: .screen, height: Self.screenHeight)) }
+        if !document.annotations.items.isEmpty { tracks.append(TimelineRow(track: .annotations, height: Self.annotationsHeight)) }
+        if twoScreens { tracks.append(TimelineRow(track: .screen, height: Self.screenHeight)) }
         tracks.append(TimelineRow(track: .zoom, height: Self.zoomHeight))
         if !document.privacy.blocks.isEmpty { tracks.append(TimelineRow(track: .privacy, height: Self.privacyHeight)) }
         if recorded.contains(where: { $0.kind == .camera }) { tracks.append(TimelineRow(track: .camera, height: Self.cameraHeight)) }
         for kind in [TrackKind.microphone, .systemAudio, .deviceAudio] {
             tracks += recorded.filter { $0.kind == kind }.map { TimelineRow(track: .audio(id: $0.id), height: Self.audioHeight) }
         }
+        if Self.hasImportedSound(document) { tracks.append(TimelineRow(track: .importedAudio, height: Self.importedAudioHeight)) }
+        if !document.music.items.isEmpty { tracks.append(TimelineRow(track: .music, height: Self.musicHeight)) }
         self.tracks = tracks
+    }
+
+    /// Whether `document` shows an imported video, whose sound the Imported Clips row holds: a clip of the sequence
+    /// (`ClipContent.media`) or an annotation (`AnnotationKind.clip`).
+    private static func hasImportedSound(_ document: EditDocument) -> Bool {
+        document.sequence.contains { if case .media? = $0.content { true } else { false } }
+            || document.annotations.items.contains { if case .clip = $0.kind { true } else { false } }
     }
 
     /// The scale that shows `duration` seconds of output in `width` points (the tracks' width, without the headers),

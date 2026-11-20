@@ -162,6 +162,7 @@ extension EditorPanelTab {
         case .audio: "audio"
         case .captions: "captions"
         case .privacy: "privacy"
+        case .annotations: "annotations"
         }
     }
 

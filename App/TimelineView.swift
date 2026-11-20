@@ -52,7 +52,7 @@ struct TimelineGeometry {
             let x = snapped(self.x(item.output.lowerBound))
             guard x > -8, x < areaWidth + 8 else { return nil }
             return CGRect(x: x - 6, y: top + row.height / 2 - 6, width: 12, height: 12)
-        case .ruler, .audio: return nil
+        case .ruler, .audio, .annotations, .importedAudio, .music: return nil
         }
     }
 
@@ -274,6 +274,8 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private(set) var content: TimelineContent?
     /// What `content` was made from.
     private var shown: (take: TakeRecord, document: EditDocument, missing: [ClosedRange<Double>])?
+    /// The takes the shown document's sequence shows (`LoadedProject.takeRecords(shownBy:)`), whose audio tracks have rows.
+    private var shownTakes: [TakeRecord] = []
     /// The take's marker times (`TimelineContent.markerTimes(in:)`).
     private var shownMarkers: [HostTime] = []
     /// What "Like the Recording" follows, of the take shown.
@@ -407,18 +409,22 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         accessibility.children() + (super.accessibilityChildren() ?? [])
     }
 
-    /// Shows `document` of `take` (with its `markers`, `TimelineContent.markerTimes(in:)`), the spans in `missing` hatched;
-    /// `nil`, nothing (the project is opening or cannot be shown).
+    /// Shows `document` of `take` (with its `markers`, `TimelineContent.markerTimes(in:)`), the spans in `missing` hatched,
+    /// with a row for each audio track of `takes`, those its sequence shows (`take` alone when empty); `nil`, nothing (the
+    /// project is opening or cannot be shown).
     func show(
-        take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>], contentRatio: Double? = nil
+        take: TakeRecord, takes: [TakeRecord] = [], markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>],
+        contentRatio: Double? = nil
     ) {
+        let takes = takes.isEmpty ? [take] : takes
         if let shown, shown.take == take, shown.document == document, shown.missing == missing, shownMarkers == markers,
-            preview == nil
+            shownTakes == takes, preview == nil
         { return }
         // A document that is not the one on screen moves the items to their places, unless a drag showed it already.
         settleNext = content != nil && preview == nil && shown?.document != document
         preview = nil
         shown = (take, document, missing)
+        shownTakes = takes
         shownMarkers = markers
         shownContentRatio = contentRatio
         rebuildContent()
@@ -437,7 +443,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         guard let shown else { return }
         let rows = content?.layout.tracks
         let content = TimelineContent(take: shown.take, markers: shownMarkers, document: preview ?? shown.document, missing: shown.missing,
-            contentRatio: shownContentRatio)
+            contentRatio: shownContentRatio, takes: shownTakes)
         self.content = content
         itemsCache = nil
         if content.layout.tracks != rows { makeHeaders() } else { updateHeaders() }
@@ -898,7 +904,7 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
     private func makeHeaders() {
         for header in headers { header.removeFromSuperview() }
         headers = (content?.layout.tracks.dropFirst() ?? []).map { row in
-            let header = TrackHeaderView(track: row.track, take: shown?.take)
+            let header = TrackHeaderView(track: row.track, take: headerTake(row.track))
             header.onMute = { [weak self] muted in
                 guard case let .audio(id) = row.track else { return }
                 self?.onMute(id, muted)
@@ -908,6 +914,14 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
             return header
         }
         updateHeaders()
+    }
+
+    /// The take an audio row's header names its track by: the first shown that recorded it; for any other row, the take
+    /// shown.
+    private func headerTake(_ track: TimelineTrack) -> TakeRecord? {
+        guard case let .audio(id) = track else { return shown?.take }
+        if shown?.take.track(id) != nil { return shown?.take }
+        return shownTakes.first { $0.track(id) != nil } ?? shown?.take
     }
 
     private func updateHeaders() {

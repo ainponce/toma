@@ -1033,6 +1033,12 @@ Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que s
 - Con el proyecto de la preparación: abrirlo en la app de la fase 3, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 2. Abrirlo otra vez con `build/fase2/Toma.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
 - Abrirlo en la app de la fase 3 y deshacer (⌘Z) hasta el principio: cada paso de la fase 2 se deshace en orden (el volumen, el margen, el corte) y Edición ▸ Deshacer nombra cada uno. Rehacer los devuelve. Con un paso nuevo (otro margen), cerrar y abrirlo con la app de la fase 2: dice que es de una versión más nueva y no lo cambia.
 
+**El editor de la fase 3, vacío** (B11)
+
+- Con el proyecto de la preparación abierto, en español, con la ventana del tamaño de siempre: la barra del editor muestra, antes del botón del panel, los menús Tomas (una pila) y Marcadores (un marcador), los dos atenuados y sin abrirse; con el puntero encima dicen «Tomas» y «Marcadores». La barra no corta el nombre del proyecto ni Exportar. Lo mismo en macOS 15.
+- El panel tiene nueve pestañas; la última (⌘9, un garabato, «Anotaciones») está vacía. ⌘1 a ⌘8 siguen mostrando las de antes, y al cerrar y abrir el proyecto en Anotaciones vuelve a ella.
+- La línea de tiempo tiene las mismas filas, en el mismo orden y con los mismos nombres que en la fase 2: ninguna fila de Anotaciones, Clips importados ni Música. El volumen y Silenciar de cada pista, en el panel y en la cabecera de la fila, hacen lo mismo que en la fase 2 y son un solo ⌘Z.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

@@ -151,28 +151,20 @@ extension EditorModel {
 
     // MARK: - Audio
 
-    /// A track's volume (0 to 200 %): a drag is a gesture. A track the document has no entry for yet gets one with its
-    /// parent's `set` (a `set` cannot add a key).
+    /// A track's volume (0 to 200 %), in every take that recorded it (`TrackCommands.setTrackGain`): a drag is a gesture.
+    /// A take the document has no entry for yet gets one with its parent's `set`.
     func setTrackVolume(_ track: AudioTrackRow, percent: Int) {
         setTrackGain(track) { $0.gain = PanelValues.trackGain(percent: percent) }
     }
 
-    /// "Mute".
+    /// "Mute", in every take that recorded the track.
     func setTrackMuted(_ track: AudioTrackRow, _ muted: Bool) {
         setTrackGain(track) { $0.muted = muted }
     }
 
     private func setTrackGain(_ track: AudioTrackRow, _ edit: (inout TrackGain) -> Void) {
-        guard let document else { return }
-        var gain = document.audio.tracks[track.id] ?? TrackGain(gain: 1, muted: false)
-        edit(&gain)
-        if document.audio.tracks[track.id] != nil {
-            setStyle(JSONPointer(components: ["audio", "tracks", track.id]).string, gain, label: .volume)
-        } else {
-            var tracks = document.audio.tracks
-            tracks[track.id] = gain
-            setStyle("/audio/tracks", tracks, label: .volume)
-        }
+        guard let document, let step = TrackCommands.setTrackGain(document, track: track.track, takes: track.takes, edit) else { return }
+        if isGesturing { updateGesture(step) } else { perform(step) }
     }
 
     /// "Avoid Clipping".

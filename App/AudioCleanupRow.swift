@@ -9,7 +9,7 @@ import SwiftUI
 extension EditorModel {
     /// "Noise Cleanup": Off, Gentle or Strong, for one microphone.
     func setCleanup(_ track: AudioTrackRow, _ level: CleanupLevel) {
-        guard let document, let step = VoiceCommands.setCleanup(document, track: track.id, level) else { return }
+        guard let document, let step = VoiceCommands.setCleanup(document, track: track.key, level) else { return }
         perform(step)
     }
 
@@ -34,7 +34,7 @@ struct AudioCleanupRow: View {
     var body: some View {
         let voice = model.voice
         let available = voice.isolationAvailable
-        let progress = level == .off ? nil : voice.cleanupProgress[track.id]
+        let progress = level == .off ? nil : voice.cleanupProgress[track.key]
         VStack(alignment: .leading, spacing: 6) {
             Text("Noise Cleanup")
                 .padding(.top, 6)

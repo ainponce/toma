@@ -171,7 +171,7 @@ final class TimelineAccessibility {
             }
         case .privacy: model.selection = .privacyBlocks([id])
         case .captions: return showInCaptions(id)
-        case .ruler, .screen, .audio: return false
+        case .ruler, .screen, .audio, .annotations, .importedAudio, .music: return false
         }
         return true
     }
