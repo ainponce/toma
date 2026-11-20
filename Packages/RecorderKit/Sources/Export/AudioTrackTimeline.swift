@@ -8,7 +8,8 @@ import os
 
 /// One audio track of a take, a microphone or system audio, as one continuous stream of 48 kHz Float32 PCM on the take's
 /// timeline, whose frame 0 is host time `origin` (`TakeTimeline.bounds`, where the legacy document starts). A `Reader`
-/// reads any range of it (`EditedMix` reads the ranges its clips keep).
+/// reads any range of it (`EditedMix` reads the ranges its clips keep). A file of audio of its own (an imported clip or
+/// sound, a theme of the music library) is such a stream too, of one segment from frame 0 (`load(file:id:channels:)`).
 ///
 /// Each segment is placed by host time: its frames go to timeline frame `(host − origin) × 48 kHz`, where a frame's host
 /// time comes from its segment's clock map (`ClockMap`), made from the track's own `audioClock` anchors. Segments that
@@ -220,6 +221,61 @@ final class AudioTrackTimeline: Sendable {
         return AudioTrackTimeline(track: track.id, channels: channels, placed: placed, missing: missing + unread)
     }
 
+    /// A file of audio, `url`, as a line of its own with `channels` channels (1 or 2) and the ID `id` (for `MissingAudio`):
+    /// one segment from timeline frame 0 on, its decoded frame `n` at frame `n` (resampled to 48 kHz as a segment of a
+    /// take is, and to `channels` the same way), decoded to its end once, off Swift's cooperative pool, so it can then be
+    /// read from anywhere. For a clip or a sound of `assets/` (phase 3 design §5.4 and §7.7, once
+    /// `ProjectPackage.mediaAsset(_:as:)` gave its URL) and for a theme of the music library in its cache (§7.6).
+    ///
+    /// The file is looked at before `AVURLAsset` is given it, without following a link (`lstat`): one that is not there,
+    /// is a link, is not a regular file, has 0 bytes or has no audio track AVFoundation can open is silence, nothing
+    /// placed, with the reason in `missing` (from frame 0 to its end); the same, from where it stops, for one whose
+    /// reading stops partway.
+    /// - Throws: `ExportError.cancelled` if the task is cancelled while loading.
+    static func load(file url: URL, id: String, channels: Int) async throws -> AudioTrackTimeline {
+        precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
+        guard !Task.isCancelled else { throw ExportError.cancelled }
+        let origin = HostTime(nanoseconds: 0)
+        let file = url.lastPathComponent
+        let audio: SegmentAudio
+        var info = stat()
+        if lstat(url.path, &info) != 0 {
+            let code = errno
+            audio = code == ENOENT ? .unusable(.fileMissing) : .unusable(.cannotOpen(String(cString: strerror(code))))
+        } else if info.st_mode & S_IFMT != S_IFREG {
+            audio = .unusable(.cannotOpen("a link or not a regular file"))
+        } else if info.st_size == 0 {
+            audio = .unusable(.empty)
+        } else {
+            audio = await openAudio(at: url)
+        }
+        let segment: Segment
+        switch audio {
+        case let .audio(asset, audioTrack, sourceRate, sourceChannels, frames):
+            // Decoded frame 0 at timeline frame 0, one for one (the decoder gives the file at 48 kHz).
+            let map = ClockMap(start: origin, anchors: [], sourceRate: sampleRate, timelineStart: origin, outputRate: sampleRate)
+            segment = Segment(
+                file: file, asset: asset, track: audioTrack, map: map, channels: sourceChannels, sourceRate: sourceRate, frames: frames,
+                start: origin, end: nil)
+        case .unusable(let reason):
+            logger.info("Audio file \(file, privacy: .public): \(String(describing: reason), privacy: .public); silence")
+            return AudioTrackTimeline(
+                track: id, channels: channels, placed: [], missing: [MissingSpan(file: file, start: origin, end: nil, reason: reason)])
+        }
+        let cancelled = CancellationFlag()
+        let placed: [Placed], unread: [MissingSpan]
+        do {
+            (placed, unread) = try await withTaskCancellationHandler {
+                try await offTheCooperativePool { [segment] in try place([segment], origin: origin, channels: channels, cancelled: cancelled) }
+            } onCancel: {
+                cancelled.cancel()
+            }
+        } catch is CancellationError {
+            throw ExportError.cancelled  // while it waited for a decoding slot
+        }
+        return AudioTrackTimeline(track: id, channels: channels, placed: placed, missing: unread)
+    }
+
     /// Where the audio of each of `segments` (in time order) is heard, as reading the track in order from frame 0 finds
     /// it: each segment from where the one before ended (frame 0 for the first), shifted to follow on from there over a
     /// closed gap, skipped if its audio ends before that frame, decoded to find where its audio ends. Also the spans of
@@ -296,7 +352,12 @@ final class AudioTrackTimeline: Sendable {
         case .empty: return .unusable(.empty)
         case .unreadable: return .unusable(.unreadable)
         }
-        let asset = AVURLAsset(url: package.fileURL(record.file))
+        return await openAudio(at: package.fileURL(record.file))
+    }
+
+    /// Opens the file at `url`: its first audio track, the track's format and its length.
+    private static func openAudio(at url: URL) async -> SegmentAudio {
+        let asset = AVURLAsset(url: url)
         do {
             guard let track = try await asset.loadTracks(withMediaType: .audio).first,
                   let format = try await track.load(.formatDescriptions).first,
