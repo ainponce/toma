@@ -328,3 +328,123 @@ private enum TwoTakes {
         #expect(inputs.personMasks.isEmpty)
     }
 }
+
+// MARK: - The output's stage
+
+/// Takes of screens of other proportions in "Like the Recording" (phase 3 design §9): what is planned for a take that is
+/// not the first clip's is planned on the output's stage, the first clip's take's, where it is drawn.
+private enum Proportions {
+    /// A take of one display (or one window) of `width` × 900 pt from the take's start, as `TwoTakes` records them.
+    static func take(_ id: String, width: Double, window: Bool = false) -> TakeRecord {
+        let track = window ? "window-1" : "display-1"
+        return TwoTakes.take(id, tracks: [TrackRecord(
+            id: track, kind: window ? .window : .display,
+            source: window
+                ? TrackSource(name: "Window", globalFrame: Rect(x: 100, y: 80, width: width, height: 900), pixelScale: 2, windowID: 7)
+                : TrackSource(name: "Display", displayID: 1, globalFrame: Rect(x: 0, y: 0, width: width, height: 900), pixelScale: 2),
+            segments: [TwoTakes.segment(id, track)])])
+    }
+
+    /// Two clicks 800 pt apart across the screen, 0.6 s apart, from `seconds` of the take: a wide box, whose zoom fits
+    /// the stage it is planned on.
+    static func clicks(_ take: String, _ seconds: Double, left: Double, y: Double) -> [InputEvent] {
+        TwoTakes.click(take, seconds, x: left, y: y) + TwoTakes.click(take, seconds + 0.6, x: left + 800, y: y)
+    }
+
+    /// The document of `take` alone over `[0–20]`, in `aspect`.
+    static func alone(_ take: TakeRecord, aspect: Aspect) -> EditDocument {
+        var document = TwoTakes.document([take], sequence: [TwoTakes.clip(1, take.id, 0, 20)])
+        document.aspect = aspect
+        return document
+    }
+
+    /// `c-00000010`, `c-00000011`… as it is asked.
+    final class IDs {
+        private var next = 0x10
+
+        func make(_ prefix: String) -> String {
+            defer { next += 1 }
+            return prefix + String(format: "%08x", next)
+        }
+    }
+}
+
+/// "Regenerate Zooms" over a 16:9 take and a 4:3 one, in both orders: the blocks of the take that is not the first are
+/// those of that take alone in a document of the first's shape, never those of its own shape; the first's are its own.
+@Test func autoZoomOfEveryTakeFitsTheOutputsStage() throws {
+    let wide = Proportions.take(TwoTakes.first, width: 1600), narrow = Proportions.take(TwoTakes.second, width: 1200)
+    let events = [
+        TwoTakes.first: Proportions.clicks(TwoTakes.first, 5, left: 400, y: 450),
+        TwoTakes.second: Proportions.clicks(TwoTakes.second, 10, left: 200, y: 450),
+    ]
+    let shapes: [String: Aspect] = [TwoTakes.first: .landscape, TwoTakes.second: .fourByThree]
+    for (first, second) in [(wide, narrow), (narrow, wide)] {
+        var document = TwoTakes.document(
+            [first, second], sequence: [TwoTakes.clip(1, first.id, 0, 20), TwoTakes.clip(2, second.id, 0, 20)])
+        document.aspect = .auto
+        let takes = [first, second].map { ($0, events[$0.id] ?? []) }
+        let edited = try TwoTakes.applying(ZoomCommands.regenerate(document, takes: takes, settings: document.zoom.auto), to: document)
+
+        let output = try #require(shapes[first.id]), own = try #require(shapes[second.id])
+        let reference = AutoZoomPlanner.plan(take: second, events: takes[1].1, document: Proportions.alone(second, aspect: output))
+        #expect(!reference.isEmpty)
+        #expect(edited.zoom.regions.filter { $0.take == second.id } == reference, "\(first.id) first")
+        // On its own shape, the blocks would be others: the depth that fits the box is not the same.
+        #expect(AutoZoomPlanner.plan(take: second, events: takes[1].1, document: Proportions.alone(second, aspect: own)) != reference)
+        // The first take's, on its own stage.
+        #expect(edited.zoom.regions.filter { $0.take == first.id }
+            == AutoZoomPlanner.plan(take: first, events: takes[0].1, document: Proportions.alone(first, aspect: output)))
+        // Applying a style plans them the same way.
+        let styled = try TwoTakes.applying(try #require(StyleCommands.applyDefaultStyle(document, .toma, takes: takes)), to: document)
+        var unplanned = styled
+        unplanned.zoom.regions = []
+        unplanned.sequence = [TwoTakes.clip(2, second.id, 0, 20)]
+        unplanned.aspect = output
+        #expect(styled.zoom.regions.filter { $0.take == second.id }
+            == AutoZoomPlanner.plan(take: second, events: takes[1].1, document: unplanned), "\(first.id) first")
+    }
+}
+
+/// A 4:3 window take added to the end of a 16:9 one in "Like the Recording" (`TakeCommands`): its automatic blocks are
+/// planned on the 16:9 stage, and its corners cover 26 pt of the window as the 16:9 output draws it, not as a 4:3 one
+/// would.
+@Test func aNewTakeIsPlannedOnTheOutputsStage() throws {
+    try withTemporaryDirectory { directory in
+        let wide = Proportions.take(TwoTakes.first, width: 1600)
+        let window = Proportions.take(TwoTakes.second, width: 1200, window: true)
+        let events = [
+            TwoTakes.first: TwoTakes.click(TwoTakes.first, 5, x: 800, y: 450),
+            TwoTakes.second: Proportions.clicks(TwoTakes.second, 10, left: 300, y: 500),
+        ]
+        let projects = try TwoTakes.projects(in: directory, [wide, window], events: events)
+        var document = TwoTakes.document([wide], sequence: [TwoTakes.clip(1, TwoTakes.first, 0, 20)])
+        document.aspect = .auto
+        document.style.cornerRadius = 0.001
+
+        let step = try #require(TakeCommands.appendToEnd(document, take: projects[1], makeID: Proportions.IDs().make))
+        let edited = try TwoTakes.applying(step, to: document)
+        #expect(edited.sequence.map(\.take) == [TwoTakes.first, TwoTakes.second])
+        // Alone in a 16:9 document of its clips.
+        var alone = edited
+        alone.sequence = edited.sequence.filter { $0.take == TwoTakes.second }
+        alone.aspect = .landscape
+        alone.zoom.regions = []
+        let reference = AutoZoomPlanner.plan(take: window, events: events[TwoTakes.second] ?? [], document: alone)
+        #expect(!reference.isEmpty)
+        #expect(edited.zoom.regions.filter { $0.take == TwoTakes.second } == reference)
+        var square = alone
+        square.aspect = .fourByThree
+        #expect(AutoZoomPlanner.plan(take: window, events: events[TwoTakes.second] ?? [], document: square) != reference)
+
+        // The corners: 26 of the window's 1200 pt, in the rect the 16:9 stage gives it.
+        let start = TwoTakes.at(TwoTakes.second, 0)
+        func cover(_ document: EditDocument) throws -> Double {
+            let stage = StagePoints(take: window, events: [], document: document)
+            let rect = try #require(stage.screenRect(at: start))
+            return WindowCornerCover.cornerRadius(
+                windowWidthPoints: 1200, screenRectWidth: rect.width, outputWidth: stage.stageSize.x)
+        }
+        #expect(abs(edited.style.cornerRadius - (try cover(alone))) <= 1e-12)
+        #expect(try cover(square) > (try cover(alone)) + 1e-4)
+    }
+}
