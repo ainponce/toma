@@ -68,6 +68,9 @@ final class TimelineInteraction {
         /// A privacy block (phase 2): trimmed by an edge, or moved by its body; neither stops at another block.
         case trimPrivacy(Base, id: String, edge: ClipEdge, range: Range<Int64>)
         case movePrivacy(Base, id: String, range: Range<Int64>, grab: Int64)
+        /// An annotation (phase 3): trimmed by an edge, or moved by its body, in one step; one of the take through the cuts.
+        case trimAnnotation(Base, id: String, edge: ClipEdge, range: Range<Int64>)
+        case moveAnnotation(Base, id: String, range: Range<Int64>, grab: Int64)
     }
 
     init(view: EditorTimelineView) {
@@ -99,7 +102,13 @@ final class TimelineInteraction {
         let scrolled = CGPoint(
             x: point.x, y: point.y < TimelineLayout.rulerHeight ? point.y : point.y + view.verticalOffset)
         let hit = TimelineHitTest.hit(at: scrolled, items: view.hitItems, layout: content.layout, scale: view.scale, offset: view.offset)
-        return normalized(hit)
+        // The Annotations row has lanes: what is under the point is its lane's (plan 3a decision 17).
+        switch hit {
+        case .empty(.annotations, _), .item(.annotations, _), .edge(.annotations, _, _):
+            return content.annotations.hit(at: scrolled, layout: content.layout, scale: view.scale, offset: view.offset) ?? hit
+        default:
+            return normalized(hit)
+        }
     }
 
     /// The edge of a screen's stretch is the limit between two: the start of the first stretch, and the end of the last, are
@@ -134,6 +143,7 @@ final class TimelineInteraction {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
         case let .privacyBlocks(ids)?: ids
+        case let .annotations(ids)?: ids
         case nil: []
         }
     }
@@ -165,7 +175,8 @@ final class TimelineInteraction {
         case .camera: return isLayoutBlock(id) ? .layoutBlock(id) : .cameraChange(id)
         case .screen: return id == "initial" ? nil : .screenChange(id)
         case .privacy: return .privacyBlocks(ids)
-        case .ruler, .audio, .captions, .annotations, .importedAudio, .music: return nil
+        case .annotations: return .annotations(ids)
+        case .ruler, .audio, .captions, .importedAudio, .music: return nil
         }
     }
 
@@ -196,6 +207,12 @@ final class TimelineInteraction {
         // A double click on a privacy block selects it and takes the playhead into it: the preview shows its rect.
         if event.clickCount >= 2, case let .item(.privacy, id) = hit {
             model?.selectPrivacyBlock(id, showingIt: true)
+            drag = .none
+            return
+        }
+        // A double click on an annotation selects it and takes the playhead into it: the preview shows it.
+        if event.clickCount >= 2, case let .item(.annotations, id) = hit {
+            model?.selectAnnotation(id, showingIt: true)
             drag = .none
             return
         }
@@ -262,6 +279,8 @@ final class TimelineInteraction {
             updateDrag(event)
         case .trimPrivacy, .movePrivacy:
             updateDrag(event)
+        case .trimAnnotation, .moveAnnotation:
+            updateDrag(event)
         }
     }
 
@@ -283,6 +302,8 @@ final class TimelineInteraction {
         case .trimClip, .trimZoom, .moveZoom, .createZoom, .moveCamera, .trimLayout, .moveLayout, .createLayout, .moveBoundary:
             finish()
         case .trimPrivacy, .movePrivacy:
+            finish()
+        case .trimAnnotation, .moveAnnotation:
             finish()
         }
     }
@@ -447,6 +468,16 @@ final class TimelineInteraction {
         case let .item(.privacy, id):
             guard let base = begin(), let range = TimelinePrivacyItems.range(of: id, in: base.document) else { return }
             drag = .movePrivacy(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
+        case let .item(.annotations, id) where TimelineAnnotationItems.isWhole(id, in: document),
+            let .edge(.annotations, id, _) where TimelineAnnotationItems.isWhole(id, in: document):
+            // The whole video neither moves nor trims: no gesture for it.
+            drag = .none
+        case let .edge(.annotations, id, edge):
+            guard let range = TimelineAnnotationItems.range(of: id, in: document), let base = begin() else { return }
+            drag = .trimAnnotation(base, id: id, edge: edge, range: range)
+        case let .item(.annotations, id):
+            guard let range = TimelineAnnotationItems.range(of: id, in: document), let base = begin() else { return }
+            drag = .moveAnnotation(base, id: id, range: range, grab: output(at: point) - range.lowerBound)
         default:
             drag = .none
         }
@@ -489,6 +520,7 @@ final class TimelineInteraction {
         var trimmedZoom: (id: String, edge: ClipEdge, output: Int64)?
         var trimmedLayout: (id: String, edge: ClipEdge, output: Int64)?
         var trimmedPrivacy: (id: String, edge: ClipEdge, output: Int64)?
+        var trimmedAnnotation: (id: String, edge: ClipEdge, output: Int64)?
         let base: Base
         switch drag {
         case let .trimClip(trimBase, clip, edge, outputStart, limits):
@@ -564,11 +596,24 @@ final class TimelineInteraction {
                 of: range, by: proposed, points: base.points, extra: snapTargets(),
                 tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
             step = PrivacyCommands.move(base.document, id: id, toOutputStart: range.lowerBound + shift)
+        case let .trimAnnotation(trimBase, id, edge, range):
+            base = trimBase
+            let τ = snapped(output(at: point), event: event, base: base)
+            step = AnnotationCommands.trim(base.document, id: id, edge: edge, toOutput: τ)
+            trimmedAnnotation = (id, edge, edge == .start ? range.lowerBound : range.upperBound)
+        case let .moveAnnotation(moveBase, id, range, grab):
+            base = moveBase
+            let proposed = output(at: point) - grab - range.lowerBound
+            let active = TimelineDragRules.snapActive(enabled: view.snapping, commandHeld: event.modifierFlags.contains(.command))
+            let shift = TimelineDragRules.snapShift(
+                of: range, by: proposed, points: base.points, extra: snapTargets(),
+                tolerance: TimelineHitTest.snapTolerance(scale: view.scale), active: active)
+            step = AnnotationCommands.move(base.document, id: id, toOutputStart: range.lowerBound + shift)
         default:
             return
         }
         switch drag {
-        case .trimPrivacy: NSCursor.resizeLeftRight.set()
+        case .trimPrivacy, .trimAnnotation: NSCursor.resizeLeftRight.set()
         case .trimClip, .trimZoom, .trimLayout: NSCursor.resizeLeftRight.set()
         default: break
         }
@@ -587,6 +632,11 @@ final class TimelineInteraction {
         }
         if let trimmed = trimmedPrivacy {
             let moved = preview.flatMap { TimelinePrivacyItems.range(of: trimmed.id, in: $0) }
+            let now = moved.map { trimmed.edge == .start ? $0.lowerBound : $0.upperBound } ?? trimmed.output
+            label = (now - trimmed.output, now)
+        }
+        if let trimmed = trimmedAnnotation {
+            let moved = preview.flatMap { TimelineAnnotationItems.range(of: trimmed.id, in: $0) }
             let now = moved.map { trimmed.edge == .start ? $0.lowerBound : $0.upperBound } ?? trimmed.output
             label = (now - trimmed.output, now)
         }
@@ -617,6 +667,10 @@ final class TimelineInteraction {
             lastStep = nil
             model?.cancelGesture()
             view.setPreview(nil)
+        case .trimAnnotation, .moveAnnotation:
+            lastStep = nil
+            model?.cancelGesture()
+            view.setPreview(nil)
         }
         drag = .none
         hideLabel()
@@ -642,6 +696,7 @@ final class TimelineInteraction {
             model.rememberBlockLayout(newBlockKind)
         case .moveLayout, .trimLayout: model.selection = .layoutBlock(step.target)
         case .movePrivacy, .trimPrivacy: model.selection = .privacyBlocks([step.target])
+        case .moveAnnotation, .trimAnnotation: model.selection = .annotations([step.target])
         default: break
         }
     }
@@ -730,6 +785,9 @@ final class TimelineInteraction {
         case let .item(.privacy, id), let .edge(.privacy, id, _):
             if !selectedIDs.contains(id) { select(hit, shift: false) }
             addPrivacyItems(to: menu, id: id)
+        case let .item(.annotations, id), let .edge(.annotations, id, _):
+            if !selectedIDs.contains(id) { select(hit, shift: false) }
+            addAnnotationItems(to: menu, id: id)
         case let .item(.camera, id), let .edge(.camera, id, _):
             select(hit, shift: false)
             let delete = MenuAction(String(localized: "Delete Change")) { model.deleteCameraChange(id) }
@@ -1013,6 +1071,8 @@ extension EditorModel {
             step = LayoutCommands.delete(document, ids: [id])
         case let .privacyBlocks(ids)?:
             step = PrivacyCommands.delete(document, ids: ids)
+        case let .annotations(ids)?:
+            step = AnnotationCommands.delete(document, ids: ids)
         case .screenChange?, nil:
             step = nil
         }

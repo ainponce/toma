@@ -22,6 +22,8 @@ enum EditorSelection: Equatable {
     case layoutBlock(String)
     /// Privacy blocks (phase 2 design §7.1), all of the Privacy track.
     case privacyBlocks(Set<String>)
+    /// Annotations (phase 3 design §5.6), by id.
+    case annotations(Set<String>)
 }
 
 /// A track of sound, as a row of the Audio tab and of the timeline: a track by its id in every take the sequence shows
@@ -985,6 +987,9 @@ final class EditorModel {
         case let .privacyBlocks(ids)?:
             let kept = ids.intersection(document.privacy.blocks.map(\.id))
             selection = kept.isEmpty ? nil : .privacyBlocks(kept)
+        case let .annotations(ids)?:
+            let kept = ids.intersection(document.annotations.items.map(\.id))
+            selection = kept.isEmpty ? nil : .annotations(kept)
         case nil:
             break
         }

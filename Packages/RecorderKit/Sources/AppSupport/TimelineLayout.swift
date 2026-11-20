@@ -60,7 +60,8 @@ public struct TimelineLayout: Equatable, Sendable {
     static let privacyHeight = 28.0
     static let cameraHeight = 32.0
     static let audioHeight = 36.0
-    /// The rows of phase 3 (plan decision 14).
+    /// The rows of phase 3 (plan decision 14). The Annotations row is this tall at least, and grows with its lanes
+    /// (`AnnotationTrackRules.rowHeight`, plan 3a decision 17).
     public static let annotationsHeight = 28.0
     public static let importedAudioHeight = 36.0
     public static let musicHeight = 36.0
@@ -90,7 +91,9 @@ public struct TimelineLayout: Equatable, Sendable {
         let twoScreens = takes.contains { $0.tracks.filter { !$0.segments.isEmpty && $0.kind.isScreen }.count >= 2 }
         var tracks = [TimelineRow(track: .ruler, height: Self.rulerHeight), TimelineRow(track: .video, height: Self.videoHeight)]
         if document.transcript != nil { tracks.append(TimelineRow(track: .captions, height: Self.captionsHeight)) }
-        if !document.annotations.items.isEmpty { tracks.append(TimelineRow(track: .annotations, height: Self.annotationsHeight)) }
+        if !document.annotations.items.isEmpty {
+            tracks.append(TimelineRow(track: .annotations, height: AnnotationTrackRules.rowHeight(document)))
+        }
         if twoScreens { tracks.append(TimelineRow(track: .screen, height: Self.screenHeight)) }
         tracks.append(TimelineRow(track: .zoom, height: Self.zoomHeight))
         if !document.privacy.blocks.isEmpty { tracks.append(TimelineRow(track: .privacy, height: Self.privacyHeight)) }

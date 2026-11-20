@@ -1052,6 +1052,12 @@ Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y 
 - Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
 - Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
 
+**La pista Anotaciones** (A12)
+
+- Anotaciones: en la pista, mover y recortar una pegada a la grabación a través de un corte y una de la salida; dos que se pisan van en sublíneas; borrar con ⌫ y desde el menú; VoiceOver lee cada bloque.
+- Con el proyecto de la vitrina (`TOMA_SHOWCASE_P3_ANNOTATIONS=track scripts/ui-shots.sh build/shots/a12 editor <proyecto>`, en oscuro y en claro, Ajustes ▸ Apariencia): debajo de Video, la fila Anotaciones con la barra naranja fina arriba (Todo el video), «Hola» y «Flecha» en dos sublíneas, «Paso 1» y «Forma»; la flecha elegida con el borde violeta y el cursor de reproducción adentro; un alfiler en las pegadas a la grabación (no en «Forma»); ningún texto cortado en español. El agente no pudo capturar la pantalla (estaba bloqueada): vio la fila dibujada desde sus capas (`TOMA_SHOWCASE_P3_TIMELINE_PNG`).
+- Con el puntero en el borde de un bloque, el cursor de cambiar el ancho; en la barra de Todo el video, nunca (no se mueve ni se recorta). Doble clic en un bloque lo elige y lleva el cursor de reproducción adonde se ve entero. El menú de un bloque: Traer adelante, Enviar atrás, Traer al frente y Enviar al fondo (apagados donde no cambian nada o con varias elegidas), Duplicar y Borrar la anotación; cada uno es un solo ⌘Z con su nombre.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

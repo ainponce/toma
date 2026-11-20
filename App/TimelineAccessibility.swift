@@ -8,7 +8,8 @@ import ProjectFormat
 /// playhead and each clip, zoom block and camera change in sight, where they are drawn.
 ///
 /// - A clip: "Part from 0:12 to 0:31, speed 2×"; a block: "Automatic zoom of 2×, from 0:40 to 0:44" (or "Zoom of…" for
-///   one of the user's); a change: "Camera change at 0:42". Each one is selected with AXPress, as a click selects it, and
+///   one of the user's); a change: "Camera change at 0:42"; an annotation: "Text “Hola”, from 0:12 to 0:15" (phase 3),
+///   with Duplicate and Delete. Each one is selected with AXPress, as a click selects it, and
 ///   reads as selected while it is. While the document can be edited, a clip has the actions Split, Delete and Trim
 ///   Start and Trim End to Playhead (those that need the playhead on the clip do nothing without it), and a block and a
 ///   change, Delete.
@@ -84,6 +85,10 @@ final class TimelineAccessibility {
             let label = TimelinePrivacyItems.accessibilityLabel(block.info, output: block.output)
             add(block.id, .privacy, block.output, label: label, actions: [Action(.delete)])
         }
+        for annotation in content.annotations.items.items {
+            let label = TimelineAnnotationItems.accessibilityLabel(annotation.info, output: annotation.output)
+            add(annotation.id, .annotations, annotation.output, label: label, actions: [Action(.duplicate), Action(.delete)])
+        }
         let showInCaptions = [Action(.showInCaptions)]
         content.captions.forEach(from: geometry.visibleOutput.lower, to: geometry.visibleOutput.upper) { caption in
             add(caption.id, .captions, caption.output, label: TimelineCaptionItems.accessibilityLabel(caption.info, output: caption.output), actions: showInCaptions)
@@ -139,7 +144,7 @@ final class TimelineAccessibility {
     // MARK: - Actions
 
     private struct Action {
-        enum Kind { case split, delete, trimStart, trimEnd, changeLayout, showInCaptions }
+        enum Kind { case split, delete, trimStart, trimEnd, changeLayout, showInCaptions, duplicate }
         let kind: Kind
         init(_ kind: Kind) { self.kind = kind }
 
@@ -151,6 +156,7 @@ final class TimelineAccessibility {
             case .trimEnd: String(localized: "Trim End to Playhead", comment: "VoiceOver: an action of a clip: its end trimmed up to the playhead")
             case .changeLayout: String(localized: "Change Layout")
             case .showInCaptions: String(localized: "Show in Captions", comment: "VoiceOver: an action of a caption of the timeline: its first word is shown in the Captions tab")
+            case .duplicate: String(localized: "Duplicate")
             }
         }
     }
@@ -171,7 +177,8 @@ final class TimelineAccessibility {
             }
         case .privacy: model.selection = .privacyBlocks([id])
         case .captions: return showInCaptions(id)
-        case .ruler, .screen, .audio, .annotations, .importedAudio, .music: return false
+        case .annotations: model.selection = .annotations([id])
+        case .ruler, .screen, .audio, .importedAudio, .music: return false
         }
         return true
     }
@@ -208,6 +215,10 @@ final class TimelineAccessibility {
         case .delete:
             guard select(id, on: track) else { return false }
             view.interaction.deleteSelected()
+            return true
+        case .duplicate:
+            guard select(id, on: track) else { return false }
+            model.duplicateSelectedAnnotations()
             return true
         }
     }

@@ -174,6 +174,7 @@ final class TimelineViewController: NSViewController {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
         case let .privacyBlocks(ids)?: ids
+        case let .annotations(ids)?: ids
         case nil: []
         }
     }
