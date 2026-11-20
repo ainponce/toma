@@ -10,10 +10,10 @@ import Synchronization
 // The editor's helpers that work off the main thread for `EditorModel`: the scene and the mix of each revision, the
 // spans of video that could not be read, and the export's progress.
 
-/// Builds the scene (`MotionPaths` and `FrameRenderer.makeScene`) and the mix of each revision of the document off the
+/// Builds the scene (`SequencePaths` and `FrameRenderer.makeScene`) and the mix of each revision of the document off the
 /// main thread (design §7.8), one at a time: a revision asked for while one is being built waits, and only the latest
-/// waiting one is built. The motion paths of the last revision are kept for the next one when it changes nothing they
-/// read (`MotionPaths.areThePaths(of:)`: a background, a shadow, the corners), which then costs no rebuild.
+/// waiting one is built. The motion paths of each take of the last revision are kept for the next one when it changes
+/// nothing they read (`MotionPaths.areThePaths(of:)`: a background, a shadow, the corners), which then costs no rebuild.
 final class RevisionBuilder: Sendable {
     struct Built: Sendable {
         var ticket: PreviewBuilds.Ticket
@@ -33,8 +33,8 @@ final class RevisionBuilder: Sendable {
     }
 
     private let renderer: FrameRenderer
-    private let take: TakeRecord
-    private let events: [InputEvent]
+    /// The project the renderer draws: the takes the paths are of.
+    private let project: LoadedProject
     private let built: @MainActor @Sendable (Built) -> Void
     private let queue = DispatchQueue(label: "dev.toma.Editor.revisions", qos: .userInitiated)
     private let state = Mutex(State())
@@ -43,17 +43,17 @@ final class RevisionBuilder: Sendable {
         var pending: Request?
         var building = false
         /// The paths last built; used on `queue` only.
-        var paths: MotionPaths?
+        var paths: SequencePaths?
     }
 
-    /// `paths`: those of the revision shown. `built` is called on the main actor with each revision built.
+    /// `paths`: those of the revision shown (`FrameEvaluator.sequencePaths`). `built` is called on the main actor with
+    /// each revision built.
     init(
-        renderer: FrameRenderer, take: TakeRecord, events: [InputEvent], paths: MotionPaths,
+        renderer: FrameRenderer, project: LoadedProject, paths: SequencePaths,
         built: @escaping @MainActor @Sendable (Built) -> Void
     ) {
         self.renderer = renderer
-        self.take = take
-        self.events = events
+        self.project = project
         self.built = built
         state.withLock { $0.paths = paths }
     }
@@ -72,10 +72,12 @@ final class RevisionBuilder: Sendable {
         if start { queue.async { self.drain() } }
     }
 
-    /// The paths of `document`: those last built if they are its, otherwise new ones. On `queue`.
-    private func paths(of document: EditDocument) -> MotionPaths {
-        if let last = state.withLock({ $0.paths }), last.areThePaths(of: document) { return last }
-        let paths = MotionPaths(take: take, events: events, document: document, cameraReadable: renderer.cameraReadable)
+    /// The paths of `document`: of each take, those last built if they are its, otherwise new ones. On `queue`.
+    private func paths(of document: EditDocument) -> SequencePaths {
+        let last = state.withLock { $0.paths }
+        if let last, last.areThePaths(of: document) { return last }
+        let paths = SequencePaths(
+            project: project, document: document, cameraReadable: renderer.cameraReadableByTake, reusing: last)
         state.withLock { $0.paths = paths }
         return paths
     }

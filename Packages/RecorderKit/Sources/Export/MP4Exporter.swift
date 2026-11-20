@@ -219,12 +219,14 @@ public final class MP4Exporter: Sendable {
     }
 
     /// Why `document` of `project` cannot be exported, or `nil` when it can: `nothingToExport` when its clips last no
-    /// time (a take that recorded nothing at all falls back to an empty span); otherwise, when the screen the take shows
-    /// (`ScreenChoice`) recorded a segment, and without one for any document but the legacy one, which refuses it as phase
-    /// 0 and 1a do (`noDisplayTrack`).
+    /// time (a take that recorded nothing at all falls back to an empty span); otherwise, when the screen of some take the
+    /// document shows (`LoadedProject.takesShown(by:)`, `ScreenChoice`) recorded a segment, and without one for any
+    /// document but the legacy one, which refuses it as phase 0 and 1a do (`noDisplayTrack`).
     private static func refusal(of document: EditDocument, of project: LoadedProject) -> ExportError? {
         guard TimeMap(sequence: document.sequence).duration > 0 else { return .nothingToExport }
-        let screenRecorded = ScreenChoice.screenTrack(in: project.take, events: project.events)?.segments.isEmpty == false
+        let screenRecorded = project.takesShown(by: document).contains { shown in
+            ScreenChoice.screenTrack(in: shown.take, events: shown.events)?.segments.isEmpty == false
+        }
         return screenRecorded || document != .legacy(for: project) ? nil : .noDisplayTrack
     }
 

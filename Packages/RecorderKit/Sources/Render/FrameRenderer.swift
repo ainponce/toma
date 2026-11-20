@@ -41,6 +41,11 @@ public enum RenderError: Error, Equatable {
 /// decoder position per track it reads, so two consumers reading different times would keep sending
 /// them back and forth, reopening a reader for nearly every frame.
 ///
+/// A scene can show several takes of the package (phase 3 design §9, `FrameEvaluator.init(project:document:…)`): the
+/// project's own and each other one its sequence shows, whose frames say which (`RenderFrame.take`). Every take's tracks
+/// are read apart from the others', however alike their ids: the readers, the prefetchers that decode ahead, what a
+/// frame was drawn with and the cursor images are by take and track (`TrackKey`), and the missing video is every take's.
+///
 /// What it draws is a scene (`FrameEvaluator`), which carries its output size: the renderer's own (`setScene(_:)`, the
 /// one `init` makes, at the size given) for `encode(at:into:commandBuffer:)`, `render(at:into:)`, `renderBytes(at:)` and
 /// `render(at:into:completion:)`, or any other one `encode(scene:at:into:commandBuffer:)` is given. Scenes of the same
@@ -80,8 +85,11 @@ public final class FrameRenderer: @unchecked Sendable {
     private let current: Mutex<FrameEvaluator>
     /// Internal for phase 3's layers (`FrameRenderer+<Layer>.swift`), which read the package's assets.
     let package: ProjectPackage
-    private let take: TakeRecord
-    private let events: [InputEvent]
+    /// The project the scenes draw: its own take, and the package's other takes a scene's sequence shows.
+    private let project: LoadedProject
+    private var take: TakeRecord { project.take }
+    /// Every take of the manifest, by id, with the project's own.
+    private let takeRecords: [String: TakeRecord]
     /// The frames per second scenes are drawn at; the document's when `nil`.
     private let frameRateOverride: Int?
     /// Some camera track of the take has a segment that can be read (plan decision 40: one that is not empty nor
@@ -89,19 +97,24 @@ public final class FrameRenderer: @unchecked Sendable {
     /// builds the paths of a scene (`MotionPaths(take:events:document:cameraReadable:)`) and draws over the preview reads
     /// it here, so they see the layouts the render draws.
     public let cameraReadable: Bool
+    /// `cameraReadable` of every take of the package (the project's own's is `cameraReadable`), by id, as the scenes are
+    /// given it: what builds the paths of a scene of several takes (`SequencePaths`) reads it here.
+    public let cameraReadableByTake: [String: Bool]
     /// What every scene of the renderer reads of the project's analysis caches unless it is given its own
     /// (`makeScene(document:paths:outputSize:analysis:)`, phase 2 design §10): `.none` in phase 1.
     public let analysis: AnalysisInputs
-    /// The reader of each track read so far, by track ID, made the first time a frame (or `missingVideo`) needs it.
-    private let readers = Mutex<[String: TrackFrameReader]>([:])
+    /// The reader of each track read so far, by take and track, made the first time a frame (or `missingVideo`) needs it.
+    private let readers = Mutex<[TrackKey: TrackFrameReader]>([:])
     private let compositor: Compositor
     /// The textures of the frames' background images; used with `lock` held.
     let backgroundImages: BackgroundImages
     /// The textures of the frames' window titles, one store for each of the last two sizes drawn, the latest last; used
     /// with `lock` held.
     private var titleTextures: [(size: SIMD2<Int>, titles: TitleTexture)] = []
-    /// The textures of the frames' cursors; used with `lock` held.
+    /// The textures of the frames' cursors of the project's own take; used with `lock` held.
     private let cursorImages: CursorImages
+    /// Those of each other take a frame showed, by id, made the first time (`cursorImages(of:)`); used with `lock` held.
+    private var otherCursorImages: [String: CursorImages] = [:]
     /// What the camera's colour and background are drawn with: the LUTs, and the readers of the person's masks, which
     /// `videos(of:)` and `reader(for:)` add to the take's (phase 2 design §6.1 and §6.3).
     let cameraLook: CameraLookResources
@@ -123,7 +136,7 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// The frames `render(at:into:completion:)` evaluated and scheduled ahead, and the prefetchers decoding theirs.
     private struct Ahead {
-        var prefetchers: [String: FramePrefetcher] = [:]
+        var prefetchers: [TrackKey: FramePrefetcher] = [:]
         /// Evaluated, in order, by their index on the grid: the one expected next first, up to
         /// `FramePrefetcher.borderLookahead` after it.
         var frames: [(index: Int, frame: RenderFrame)] = []
@@ -152,27 +165,29 @@ public final class FrameRenderer: @unchecked Sendable {
     /// change of screen crossfades: `FrameEvaluator.screenRanges`), one span for each stretch of it. The tracks are those
     /// the document shows (its screens, and the camera unless it is hidden), so the segments that cannot be used at all
     /// are listed before a frame is drawn. After drawing every frame of the timeline in order (an export), it lists every
-    /// such span of the output.
+    /// such span of the output. A scene of several takes lists those of each take's tracks in that take's clips.
     public var missingVideo: [MissingVideo] {
-        let scene = self.scene
-        let timeMap = scene.timeMap, takeID = take.id, shown = scene.screenRanges
-        return scene.videoTrackIDs
-            .compactMap(reader(for:))
-            .flatMap { reader in reader.gaps.map { (reader.trackID, $0) } }
-            .flatMap { track, gap -> [MissingVideo] in
-                // A span of no source (a read that timed out at one instant) is listed where that instant is shown.
-                let output = gap.start < gap.end
-                    ? timeMap.outputRange(ofSource: gap.start..<gap.end, take: takeID)
-                    : timeMap.output(atSource: gap.start, take: takeID).map { $0..<$0 }
-                guard let output else { return [] }
-                let parts = shown[track].map { Self.parts(of: output, shownIn: $0, duration: timeMap.duration) } ?? [output]
-                return parts.map { part in
-                    MissingVideo(
-                        track: track, file: gap.file, start: Double(part.lowerBound) / 1e9, end: Double(part.upperBound) / 1e9,
-                        reason: gap.reason)
+        let timeMap = scene.timeMap
+        return scene.takeScenesInOrder.flatMap { take, scene -> [MissingVideo] in
+            let takeID = scene.takeID, shown = scene.screenRanges
+            return scene.videoTrackIDs
+                .compactMap { reader(for: TrackKey(take: take, track: $0)) }
+                .flatMap { reader in reader.gaps.map { (reader.trackID, $0) } }
+                .flatMap { track, gap -> [MissingVideo] in
+                    // A span of no source (a read that timed out at one instant) is listed where that instant is shown.
+                    let output = gap.start < gap.end
+                        ? timeMap.outputRange(ofSource: gap.start..<gap.end, take: takeID)
+                        : timeMap.output(atSource: gap.start, take: takeID).map { $0..<$0 }
+                    guard let output else { return [] }
+                    let parts = shown[track].map { Self.parts(of: output, shownIn: $0, duration: timeMap.duration) } ?? [output]
+                    return parts.map { part in
+                        MissingVideo(
+                            track: track, file: gap.file, start: Double(part.lowerBound) / 1e9,
+                            end: Double(part.upperBound) / 1e9, reason: gap.reason)
+                    }
                 }
-            }
-            .sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
+        }
+        .sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
     }
 
     /// The parts of output range `range` inside `shown` (ranges in order and apart) of an output `duration` long: an
@@ -194,7 +209,7 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// Opens nothing yet: segments are read as frames need them, and unreadable ones are gaps. Its scene is `document`
-    /// at `outputSize`.
+    /// at `outputSize`, of every take its sequence shows (`FrameEvaluator.init(project:document:…)`).
     /// - Parameters:
     ///   - device: the system default device when `nil`.
     ///   - frameRate: the frames per second the output is drawn at, whose frame the motion blur's shutters are
@@ -229,36 +244,57 @@ public final class FrameRenderer: @unchecked Sendable {
         cameraLook = CameraLookResources(device: device, package: project.package)
         mediaResources = MediaClipResources(device: device, package: project.package)
         annotationResources = AnnotationResources(device: device, package: project.package)
-        let cameraReadable = LayoutTimeline.cameraReadable(take: project.take) {
-            SegmentAvailability.classify($0, in: project.package)
+        var records = Dictionary(project.takes.map { ($0.id, $0) }) { first, _ in first }
+        records[project.take.id] = project.take
+        let readable = records.mapValues { take in
+            LayoutTimeline.cameraReadable(take: take) { SegmentAvailability.classify($0, in: project.package) }
         }
+        let cameraReadable = readable[project.take.id] ?? true
         current = Mutex(FrameEvaluator(
-            take: project.take, events: project.events, document: document, outputSize: outputSize, frameRate: frameRate,
-            cameraReadable: cameraReadable, analysis: analysis))
+            project: project, document: document, outputSize: outputSize, frameRate: frameRate, cameraReadable: readable,
+            analysis: analysis))
         frameRateOverride = frameRate
         self.cameraReadable = cameraReadable
+        cameraReadableByTake = readable
         self.analysis = analysis
         package = project.package
-        take = project.take
-        events = project.events
+        self.project = project
+        takeRecords = records
     }
 
-    /// A scene of this renderer's take: `document` at `outputSize`, with `paths`
-    /// (`MotionPaths(take:events:document:cameraReadable:)` of `document` with `cameraReadable`, built off the main thread),
-    /// at the renderer's frames per second (the document's unless the renderer was given some), with the camera readable
-    /// as the renderer found it, reading the renderer's own `analysis`. Cheap: the paths are what costs.
-    public func makeScene(document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
+    /// A scene of this renderer's project: `document` at `outputSize`, of every take its sequence shows
+    /// (`FrameEvaluator.init(project:document:…)`), with `paths` (`SequencePaths(project:document:cameraReadable:reusing:)`
+    /// of `document` with `cameraReadableByTake`, built off the main thread), at the renderer's frames per second (the
+    /// document's unless the renderer was given some), with each take's camera readable as the renderer found it, reading
+    /// the renderer's own `analysis`. Cheap: the paths are what costs.
+    public func makeScene(document: EditDocument, paths: SequencePaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
         makeScene(document: document, paths: paths, outputSize: outputSize, analysis: analysis)
     }
 
     /// Like `makeScene(document:paths:outputSize:)`, reading `analysis` of the caches instead of the renderer's
     /// (`AnalysisInputs.none` is no analysis).
     public func makeScene(
-        document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>, analysis: AnalysisInputs
+        document: EditDocument, paths: SequencePaths, outputSize: SIMD2<Int>, analysis: AnalysisInputs
     ) -> FrameEvaluator {
         FrameEvaluator(
-            take: take, events: events, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride,
-            cameraReadable: cameraReadable, analysis: analysis)
+            project: project, document: document, outputSize: outputSize, paths: paths, frameRate: frameRateOverride,
+            cameraReadable: cameraReadableByTake, analysis: analysis)
+    }
+
+    /// `makeScene(document:paths:outputSize:)` with `paths` the project's own take's
+    /// (`MotionPaths(take:events:document:cameraReadable:)` of `document` with `cameraReadable`): those of any other take
+    /// the sequence shows are built here, which costs what they cost. With one take, the same scene.
+    public func makeScene(document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>) -> FrameEvaluator {
+        makeScene(document: document, paths: paths, outputSize: outputSize, analysis: analysis)
+    }
+
+    /// Like `makeScene(document:paths:outputSize:)` with the own take's paths, reading `analysis` of the caches instead of
+    /// the renderer's.
+    public func makeScene(
+        document: EditDocument, paths: MotionPaths, outputSize: SIMD2<Int>, analysis: AnalysisInputs
+    ) -> FrameEvaluator {
+        let own = SequencePaths(byTake: [take.id: paths], cameraReadable: [take.id: cameraReadable])
+        return makeScene(document: document, paths: own, outputSize: outputSize, analysis: analysis)
     }
 
     /// Makes `scene` the renderer's scene, and its size the one `encode(at:into:commandBuffer:)` checks: what was decoded
@@ -289,9 +325,9 @@ public final class FrameRenderer: @unchecked Sendable {
         try check(target, size: scene.outputSize)
         try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
-            let frame = try scene.frame(at: outputTime) { try cursorImages.isReadable($0) }
-            try draw(frame, into: target, commandBuffer: commandBuffer) { trackID, time in
-                try reader(for: trackID)?.pixelBuffer(at: time).map(metalTexture(for:))
+            let frame = try evaluate(scene, at: outputTime)
+            try draw(frame, into: target, commandBuffer: commandBuffer) { key, time in
+                try reader(for: key)?.pixelBuffer(at: time).map(metalTexture(for:))
             }
         }
     }
@@ -299,15 +335,32 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The frame at `outputTime` of `scene`, with the cursor images the renderer can read: what
     /// `encode(scene:at:into:commandBuffer:)` draws.
     func frame(of scene: FrameEvaluator, at outputTime: Double) throws -> RenderFrame {
-        try lock.withLock { try scene.frame(at: outputTime) { try cursorImages.isReadable($0) } }
+        try lock.withLock { try evaluate(scene, at: outputTime) }
+    }
+
+    /// The frame at `outputTime` of `scene`, with the cursor images of each take the renderer can read. Call with `lock`
+    /// held.
+    private func evaluate(_ scene: FrameEvaluator, at outputTime: Double) throws -> RenderFrame {
+        try scene.frame(at: outputTime, cursorImageOfTakeIsReadable: { take, hash in try cursorImages(of: take).isReadable(hash) })
+    }
+
+    /// The cursor images of the take `take` names as `RenderFrame.take` does (`nil`, the project's own), made the first
+    /// time. Call with `lock` held.
+    /// - Throws: `RenderError.metalResourceUnavailable` if Metal cannot make the arrow's texture.
+    private func cursorImages(of take: String?) throws -> CursorImages {
+        guard let take, take != self.take.id else { return cursorImages }
+        if let images = otherCursorImages[take] { return images }
+        let images = try CursorImages(device: device, package: package, take: take)
+        otherCursorImages[take] = images
+        return images
     }
 
     /// Encodes `frame` (of a scene of this renderer) into `target`, `.bgra8Unorm` and `frame.outputSize` big, with the
-    /// screen and camera frames `decoded` gives for each (track, source instant) it shows. The caller commits
-    /// `commandBuffer`.
+    /// frames `decoded` gives for each video (by take and track, `TrackKey`, at a source instant) it shows. The caller
+    /// commits `commandBuffer`.
     func encode(
         _ frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
-        decoded: (_ trackID: String, _ time: HostTime) throws -> CachedTexture?
+        decoded: (_ track: TrackKey, _ time: HostTime) throws -> CachedTexture?
     ) throws {
         try check(target, size: frame.outputSize)
         try lock.withLock { try draw(frame, into: target, commandBuffer: commandBuffer, decoded: decoded) }
@@ -334,18 +387,20 @@ public final class FrameRenderer: @unchecked Sendable {
         return titles
     }
 
-    /// Encodes `frame` into `target` with the screen and camera frames `decoded` gives for each (track, source instant)
-    /// it shows, asked for in this order: the screen, the screen being left, the camera; then what the camera's colour and
-    /// background are drawn with (`CameraLookResources`), its mask among them, whose absence draws the camera's original
-    /// and is never an error; then what phase 3's imported clip and annotations are drawn with (`mediaTextures`,
-    /// `annotationTextures`). Every way to draw ends here. Call with `lock` held.
+    /// Encodes `frame` into `target` with the frames `decoded` gives for each video (by take and track, `TrackKey`, as
+    /// `videos(of:)` names it) at a source instant it shows, asked for in this order: the screen, the screen being left,
+    /// the camera; then what the camera's colour and background are drawn with (`CameraLookResources`), its mask among
+    /// them, whose absence draws the camera's original and is never an error; then what phase 3's imported clip and
+    /// annotations are drawn with (`mediaTextures`, `annotationTextures`). Every way to draw ends here. Call with `lock`
+    /// held.
     private func draw(
         _ frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
-        decoded: (_ trackID: String, _ time: HostTime) throws -> CachedTexture?
+        decoded: (_ track: TrackKey, _ time: HostTime) throws -> CachedTexture?
     ) throws {
-        /// The texture of a decoded frame, kept alive until `commandBuffer` completes.
+        let take = takeKey(of: frame)
+        /// The texture of a decoded frame of a track of the frame's take, kept alive until `commandBuffer` completes.
         func texture(_ trackID: String, _ time: HostTime) throws -> (any MTLTexture)? {
-            guard let cached = try decoded(trackID, time) else { return nil }
+            guard let cached = try decoded(TrackKey(take: take, track: trackID), time) else { return nil }
             commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
             return cached.texture
         }
@@ -353,19 +408,14 @@ public final class FrameRenderer: @unchecked Sendable {
         let screen = try frame.screen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let previousScreen = try frame.previousScreen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let camera = try frame.camera.flatMap { try texture($0.trackID, $0.sourceTime) }
-        let look = try cameraLook.textures(
-            for: frame,
-            decoded: { id, time in
-                guard let cached = try decoded(id, time) else { return nil }
-                commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
-                return cached
-            }, commandBuffer: commandBuffer)
-        /// What `decoded` gives for a video of phase 3's layers, kept alive until `commandBuffer` completes.
+        /// What `decoded` gives for a video of the camera's look or of phase 3's layers (by a reader id no take's track
+        /// has: `TrackKey.take` `nil`), kept alive until `commandBuffer` completes.
         func kept(_ id: String, _ time: HostTime) throws -> CachedTexture? {
-            guard let cached = try decoded(id, time) else { return nil }
+            guard let cached = try decoded(TrackKey(take: nil, track: id), time) else { return nil }
             commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
             return cached
         }
+        let look = try cameraLook.textures(for: frame, decoded: kept, commandBuffer: commandBuffer)
         let layerTextures = LayerTextures(
             media: try mediaTextures(for: frame, decoded: kept, commandBuffer: commandBuffer),
             annotations: try annotationTextures(for: frame, decoded: kept, commandBuffer: commandBuffer))
@@ -376,7 +426,7 @@ public final class FrameRenderer: @unchecked Sendable {
         }
         // Every cursor of the frame, blurred or not, is drawn with the image of its time.
         let image = frame.cursor?.image ?? frame.subframes.lazy.compactMap(\.cursor).first?.image ?? frame.cursorSamples.first?.image
-        let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))
+        let cursor = try cursorImages(of: take).texture(for: image ?? .toma(.arrow))
         try compositor.encode(
             frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
             windowTitle: windowTitle, cameraLook: look, into: target, commandBuffer: commandBuffer, layerTextures: layerTextures)
@@ -472,7 +522,7 @@ public final class FrameRenderer: @unchecked Sendable {
                 }
                 ahead.plan = plan
                 ahead.frames += evaluated
-                for key in keys { try prefetcher(for: key.trackID, in: &ahead)?.schedule(key.time) }
+                for key in keys { try prefetcher(for: key.track, in: &ahead)?.schedule(key.time) }
                 let first = ahead.frames.removeFirst()
                 return PreparedFrame(frame: first.frame, sources: try sources(of: first.frame, in: &ahead))
             }
@@ -490,37 +540,48 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The (track, source instant) of each frame `frame` shows (`draw`'s order), with the prefetcher of its track, made the
     /// first time; none for a video without a reader (`reader(for:)`).
     private func sources(of frame: RenderFrame, in ahead: inout Ahead) throws -> [(DecodedKey, FramePrefetcher)] {
-        try videos(of: frame).compactMap { key in try prefetcher(for: key.trackID, in: &ahead).map { (key, $0) } }
+        try videos(of: frame).compactMap { key in try prefetcher(for: key.track, in: &ahead).map { (key, $0) } }
     }
 
     /// The (track, source instant) of each video `frame` shows, in `draw`'s order: the screen, the screen being left, the
-    /// camera, then what the camera is drawn with (`CameraLookResources.videos(of:)`: its person's mask, by a reader id that
-    /// is no track of the take), then phase 3's imported clip and annotation clips (`mediaVideos(of:)`,
-    /// `annotationVideos(of:)`, by reader ids that are no track either). A part a layout hides is not in the frame (1c
-    /// design §14.4), so it is not decoded.
+    /// camera, of the frame's take (`DecodedKey.take`, as `RenderFrame.take` names it); then what the camera is drawn with
+    /// (`CameraLookResources.videos(of:)`: its person's mask, by a reader id that is no track of a take), then phase 3's
+    /// imported clip and annotation clips (`mediaVideos(of:)`, `annotationVideos(of:)`, by reader ids that are no track
+    /// either), all without a take. A part a layout hides is not in the frame (1c design §14.4), so it is not decoded.
     func videos(of frame: RenderFrame) -> [DecodedKey] {
-        [
-            frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-            frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-            frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
+        let take = takeKey(of: frame)
+        return [
+            frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime, take: take) },
+            frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime, take: take) },
+            frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime, take: take) },
         ].compactMap { $0 } + cameraLook.videos(of: frame) + mediaVideos(of: frame) + annotationVideos(of: frame)
     }
 
-    /// The prefetcher of track `trackID` (or of a person's mask, by its reader id), made the first time; `nil` for a video
-    /// without a reader (`reader(for:)`).
-    private func prefetcher(for trackID: String, in ahead: inout Ahead) throws -> FramePrefetcher? {
-        if let prefetcher = ahead.prefetchers[trackID] { return prefetcher }
-        guard let reader = reader(for: trackID) else { return nil }
+    /// The take of `frame`'s tracks as `TrackKey` names it: `nil` for the project's own (`RenderFrame.take`'s `nil`, or its
+    /// id), the id of any other.
+    private func takeKey(of frame: RenderFrame) -> String? {
+        frame.take == take.id ? nil : frame.take
+    }
+
+    /// The prefetcher of `track` (a take's track, or a person's mask or a file of `assets/` by its reader id), made the
+    /// first time; `nil` for a video without a reader (`reader(for:)`).
+    private func prefetcher(for track: TrackKey, in ahead: inout Ahead) throws -> FramePrefetcher? {
+        if let prefetcher = ahead.prefetchers[track] { return prefetcher }
+        guard let reader = reader(for: track) else { return nil }
         let prefetcher = try FramePrefetcher(reader: reader, device: device)
-        ahead.prefetchers[trackID] = prefetcher
+        ahead.prefetchers[track] = prefetcher
         return prefetcher
     }
 
-    /// The prefetcher that decodes ahead the frames of track `trackID` or of a person's mask (made the first time; `nil` for
-    /// a video without a reader, `reader(for:)`), shared with `render(at:into:completion:)`: one consumer of the renderer
-    /// uses them.
+    /// The prefetcher that decodes ahead the frames of `track` (made the first time; `nil` for a video without a reader,
+    /// `reader(for:)`), shared with `render(at:into:completion:)`: one consumer of the renderer uses them.
+    func prefetcher(for track: TrackKey) throws -> FramePrefetcher? {
+        try ahead.withLock { try prefetcher(for: track, in: &$0) }
+    }
+
+    /// `prefetcher(for:)` of the track `trackID` of the project's own take (or of a person's mask or a file of `assets/`).
     func prefetcher(for trackID: String) throws -> FramePrefetcher? {
-        try ahead.withLock { try prefetcher(for: trackID, in: &$0) }
+        try prefetcher(for: TrackKey(take: nil, track: trackID))
     }
 
     /// Drops what every prefetcher scheduled and decoded ahead, as after a jump.
@@ -543,8 +604,9 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// Draws `frame` with the frames `decoded` holds into `pixelBuffer`, commits it and calls `completion` on `renderQueue`
     /// once the GPU is done; throws, having committed nothing, what kept it from being drawn: `RenderError.frameNotDecoded`
-    /// for a frame of a track of the take that `decoded` lacks (never for a person's mask, which no track of the take is:
-    /// without it, the camera's original). Runs on `renderQueue` (and in tests).
+    /// for a frame `decoded` lacks of a video with a reader (`reader(for:)`: a track of the take, a person's mask, an
+    /// imported clip or an annotation's clip), the preview's own rule, so the export never leaves out silently what the
+    /// preview draws. Runs on `renderQueue` (and in tests).
     func draw(
         _ frame: RenderFrame, decoded: [DecodedKey: CachedTexture?], into pixelBuffer: CVPixelBuffer,
         completion: @escaping @Sendable ((any Error)?) -> Void
@@ -554,12 +616,12 @@ public final class FrameRenderer: @unchecked Sendable {
         let target = try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
             let target = try metalTexture(for: pixelBuffer)
-            try draw(frame, into: target.texture, commandBuffer: commandBuffer) { trackID, time in
-                if let texture = decoded[DecodedKey(trackID: trackID, time: time)] { return texture }
-                // A track the take does not have shows nothing, as drawing it frame by frame does, and a video that is no
-                // track of the take (a person's mask) is drawn without; any track of the take was decoded.
-                guard take.track(trackID) != nil else { return nil }
-                throw RenderError.frameNotDecoded(track: trackID, sourceTime: time)
+            try draw(frame, into: target.texture, commandBuffer: commandBuffer) { key, time in
+                if let texture = decoded[DecodedKey(key, time: time)] { return texture }
+                // A video without a reader shows nothing, as drawing it frame by frame does; any video with one (a track
+                // of a take, a person's mask, an imported clip or an annotation's clip) was decoded.
+                guard reader(for: key) != nil else { return nil }
+                throw RenderError.frameNotDecoded(track: key.track, sourceTime: time)
             }
             return target
         }
@@ -644,23 +706,34 @@ public final class FrameRenderer: @unchecked Sendable {
         .gpuFailed(commandBuffer.error.map { String(describing: $0) } ?? "status \(commandBuffer.status.rawValue)")
     }
 
-    /// The earliest and the latest source instants a frame was asked of track `trackID` so far (`nil` before the first,
-    /// and for a track without a reader yet), for tests.
+    /// The earliest and the latest source instants a frame was asked of track `trackID` of the project's own take so far
+    /// (`nil` before the first, and for a track without a reader yet), for tests.
     func askedFor(track trackID: String) -> ClosedRange<HostTime>? {
-        readers.withLock { $0[trackID] }?.askedFor
+        readers.withLock { $0[TrackKey(take: nil, track: trackID)] }?.askedFor
     }
 
-    /// The reader of track `trackID` of the take, made the first time it is asked for; for an id that is no track of the
+    /// The reader of `track`, a track of a take of the package (`TrackKey.take`: `nil` for the project's own), made the
+    /// first time it is asked for, apart from every other take's track of the same id; for an id that is no track of that
     /// take, `CameraLookResources.reader(for:)`'s (a person's mask), or else `mediaReader(for:)`'s (a file of `assets/`),
     /// `nil` for any other. Every scene of the renderer reads with it.
-    func reader(for trackID: String) -> TrackFrameReader? {
-        guard let track = take.track(trackID) else { return cameraLook.reader(for: trackID) ?? mediaReader(for: trackID) }
+    func reader(for track: TrackKey) -> TrackFrameReader? {
+        let take = track.take == self.take.id ? nil : track.take
+        let owner: TakeRecord? = if let take { takeRecords[take] } else { self.take }
+        guard let record = owner?.track(track.track) else {
+            return cameraLook.reader(for: track.track) ?? mediaReader(for: track.track)
+        }
+        let key = TrackKey(take: take, track: track.track)
         return readers.withLock { readers in
-            if let reader = readers[trackID] { return reader }
-            let reader = TrackFrameReader(package: package, track: track)
-            readers[trackID] = reader
+            if let reader = readers[key] { return reader }
+            let reader = TrackFrameReader(package: package, track: record)
+            readers[key] = reader
             return reader
         }
+    }
+
+    /// `reader(for:)` of the track `trackID` of the project's own take (or of a person's mask or a file of `assets/`).
+    func reader(for trackID: String) -> TrackFrameReader? {
+        reader(for: TrackKey(take: nil, track: trackID))
     }
 
     /// `pixelBuffer` as a `.bgra8Unorm` texture sharing its memory, through the texture cache. The
@@ -670,10 +743,34 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 }
 
-/// The screen or camera frame a frame shows: its track and its source instant.
+/// A video a frame shows, as the renderer reads it (phase 3 design §9): a track of a take (`take`, as `RenderFrame.take`
+/// names it: `nil` for the project's own), apart from any other take's track of the same id; or, with `take` `nil`, a
+/// person's mask or a file of `assets/` by its reader id, which no take's track has.
+struct TrackKey: Hashable, Sendable {
+    var take: String?
+    var track: String
+}
+
+/// The screen or camera frame a frame shows: its track, its source instant and its take (`TrackKey`).
 struct DecodedKey: Hashable, Sendable {
     var trackID: String
     var time: HostTime
+    /// `nil` for the project's own take, and for a video that is no take's track.
+    var take: String? = nil
+
+    /// The frame of `track` at source instant `time`.
+    init(_ track: TrackKey, time: HostTime) {
+        self.init(trackID: track.track, time: time, take: track.take)
+    }
+
+    init(trackID: String, time: HostTime, take: String? = nil) {
+        self.trackID = trackID
+        self.time = time
+        self.take = take
+    }
+
+    /// Its take and track.
+    var track: TrackKey { TrackKey(take: take, track: trackID) }
 }
 
 /// A frame `render(at:into:completion:)` draws: evaluated, with the prefetchers of the frames it shows.

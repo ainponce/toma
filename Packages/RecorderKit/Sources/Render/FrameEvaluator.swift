@@ -142,6 +142,13 @@ import simd
 ///   `MediaClipScene`). The calm zoom and the annotations stuck to the recording go onto a frame of the take after phase
 ///   2's layers (`finishLayers`); the output's annotations of the output time onto every frame, after its clip's
 ///   (`frame(at:cursorImageIsReadable:)`). With the legacy values each is `nil` or empty and changes nothing of the frame.
+/// - Several takes (phase 3 design §9, base plan decision 10): a scene of a project (`init(project:document:…)`) is the
+///   scene of its take, `project.take`, made as one of that take alone, with the scene of each other take its sequence
+///   shows, made the same way with that take, its events and its motion paths (`SequencePaths`). A clip of another take is
+///   that take's scene's frame, marked with its take (`RenderFrame.take`), so each clip draws its own take's screens,
+///   cursor, zoom (whose path cuts at the border), camera, privacy, captions and keys as that take alone does; the output's
+///   annotations and a `.desktop` background (the take of the first clip's) are the project's. A clip of a take the
+///   scene does not draw shows the background alone. With one take, phase 2's scene, untouched.
 ///
 /// The motion paths (`MotionPaths`: the screens, the cursor's path) are the document's revision's, given or built.
 public struct FrameEvaluator: Sendable {
@@ -159,16 +166,25 @@ public struct FrameEvaluator: Sendable {
     /// What the frames read of the project's analysis caches (phase 2 design §10): `.none` in phase 1.
     public let analysis: AnalysisInputs
 
-    private let take: TakeRecord
+    /// The take this scene draws; internal for the renderer, which reads each take's tracks apart.
+    let take: TakeRecord
     private let events: [InputEvent]
-    private var takeID: String { take.id }
+    var takeID: String { take.id }
+    /// Some camera track of the take can be read, as the scene was given it.
+    private let cameraReadable: Bool
+    /// The take whose display's desktop picture a `.desktop` background shows: this scene's own for one of one take; for
+    /// one of a project (`init(project:document:…)`), the take of the sequence's first clip for the whole video (base plan
+    /// decision 10: the style is the project's), `nil` when the manifest does not have it.
+    private var desktopTake: TakeRecord?
     private var background: BackgroundLayer
     /// The gradient of a `.gradient` background; the classic one with any other.
     private var gradient: Gradient
-    /// Which screen is shown, and the drawn cursor's path: the motion paths of the document's revision, which a scene of
-    /// a later revision that keeps them (`MotionPaths.areThePaths(of:)`) can be made with.
+    /// Which screen is shown, and the drawn cursor's path: the motion paths of the document's revision for the scene's own
+    /// take, which a scene of a later revision that keeps them (`MotionPaths.areThePaths(of:)`) can be made with; every
+    /// take's, `sequencePaths`.
     public let paths: MotionPaths
-    /// The video tracks a frame can show: the screens of `paths.stage`, then the camera when it is shown.
+    /// The video tracks a frame of the scene's own take can show: the screens of `paths.stage`, then the camera when it is
+    /// shown (each other take's, its scene's: `takeScenesInOrder`).
     let videoTrackIDs: [String]
     /// The output ranges in which each of `paths.stage`'s screens is shown (`ScreenTransitions.shownRanges`): the plan's
     /// screen, and the one being left while a change of screen crossfades. In order and apart.
@@ -205,6 +221,12 @@ public struct FrameEvaluator: Sendable {
     private var titleCard: TitleCardScene
     private let calmZoom: CalmZoomScene
     private var annotations: AnnotationScene
+    /// The scene of each other take of the package the sequence shows (phase 3 design §9, base plan decision 10), by its
+    /// id, made as this one with the same document and arguments: a clip of one of them is its scene's frame
+    /// (`clipFrame(atOutput:cursorImageIsReadable:)`). Empty for a scene of one take and for a sequence of this take alone.
+    private var takeScenes: [String: FrameEvaluator] = [:]
+    /// The ids of `takeScenes`, in the order the sequence first shows them.
+    private var otherTakes: [String] = []
 
     /// The two ways a frame is drawn (plan decision 13).
     enum Path {
@@ -235,7 +257,9 @@ public struct FrameEvaluator: Sendable {
         duration = timeMap.durationSeconds
         self.take = take
         self.events = events
+        self.cameraReadable = cameraReadable
         self.outputSize = outputSize
+        desktopTake = take
         (background, gradient) = Self.background(of: document.style, take: take, outputSize: outputSize, screens: document.screens)
         let paths = paths ?? MotionPaths(take: take, events: events, document: document, cameraReadable: cameraReadable)
         self.paths = paths
@@ -273,14 +297,14 @@ public struct FrameEvaluator: Sendable {
 
     /// The same document, motion paths, frames per second and analysis drawn at `outputSize`: only what depends on the
     /// size (the background's blur, where the screens go and how a change moves them, the device frame, the keys, the
-    /// captions, the imported clips, the title cards and the annotations) is worked out again, so it is cheap; the paths,
-    /// which are in output time and stage units, are shared.
+    /// captions, the imported clips, the title cards and the annotations) is worked out again, for every take's scene, so
+    /// it is cheap; the paths, which are in output time and stage units, are shared.
     public func resized(to outputSize: SIMD2<Int>) -> FrameEvaluator {
         guard outputSize != self.outputSize else { return self }
         var resized = self
         resized.outputSize = outputSize
         (resized.background, resized.gradient) = Self.background(
-            of: document.style, take: take, outputSize: outputSize, screens: document.screens)
+            of: document.style, take: desktopTake, outputSize: outputSize, screens: document.screens)
         resized.transitions = Self.transitions(
             take: take, events: events, document: document, timeMap: timeMap, paths: paths, outputSize: outputSize)
         resized.deviceFrame = DeviceFrameScene(document: document, outputSize: outputSize)
@@ -290,6 +314,7 @@ public struct FrameEvaluator: Sendable {
         resized.titleCard = TitleCardScene(document: document, timeMap: timeMap, outputSize: outputSize)
         resized.annotations = AnnotationScene(
             document: document, take: take, events: events, timeMap: timeMap, outputSize: outputSize)
+        resized.takeScenes = takeScenes.mapValues { $0.resized(to: outputSize) }
         return resized
     }
 
@@ -302,6 +327,67 @@ public struct FrameEvaluator: Sendable {
         return ScreenTransitions(take: take, events: events, document: document, timeMap: timeMap, stage: paths.stage) {
             Self.placement(of: $0, style: style, outputSize: stageSize, stage: paths.stage)
         }
+    }
+
+    /// The scene of `document` for every take of `project`'s package its sequence shows (phase 3 design §9, base plan
+    /// decision 10): of `project.take` as `init(take:events:document:outputSize:paths:frameRate:cameraReadable:analysis:)`
+    /// makes it with its events, its paths in `paths` and its camera as `cameraReadable` says (`true` for a take it does not
+    /// name), and of each other take of `LoadedProject.takesShown(by:)` the same way, all with the same document, output
+    /// size, frames per second and analysis: each clip draws its own take's screens, cursor, zoom, camera, privacy,
+    /// captions and keys as that take alone draws them, and the frame of another take says which (`RenderFrame.take`).
+    /// The one difference: a `.desktop` background is in every frame the desktop of the take of the sequence's first clip
+    /// (the style is the project's), so the classic gradient when the manifest does not have that take. A take without
+    /// paths in `paths` (or every take, without `paths`) has them built here, which costs what `MotionPaths` costs, and
+    /// each other take's events are read (the disk, the first time): never on the main thread. With one take, exactly the
+    /// scene of that take.
+    public init(
+        project: LoadedProject, document: EditDocument, outputSize: SIMD2<Int>, paths: SequencePaths? = nil,
+        frameRate: Int? = nil, cameraReadable: [String: Bool] = [:], analysis: AnalysisInputs = .none
+    ) {
+        let desktop: TakeRecord?
+        if let first = document.sequence.first, first.take != project.take.id {
+            desktop = project.takes.first { $0.id == first.take }
+        } else {
+            desktop = project.take
+        }
+        func scene(_ shown: LoadedProject) -> FrameEvaluator {
+            let id = shown.take.id
+            var scene = FrameEvaluator(
+                take: shown.take, events: shown.events, document: document, outputSize: outputSize, paths: paths?.byTake[id],
+                frameRate: frameRate, cameraReadable: cameraReadable[id] ?? true, analysis: analysis)
+            if desktop?.id != id {
+                scene.desktopTake = desktop
+                (scene.background, scene.gradient) = Self.background(
+                    of: document.style, take: desktop, outputSize: outputSize, screens: document.screens)
+            }
+            return scene
+        }
+        self = scene(project)
+        for shown in project.takesShown(by: document) where shown.take.id != takeID && takeScenes[shown.take.id] == nil {
+            takeScenes[shown.take.id] = scene(shown)
+            otherTakes.append(shown.take.id)
+        }
+    }
+
+    /// The takes whose clips this scene draws: its own (`project.take` for a scene of a project), then each other take of
+    /// the package the sequence shows, in the order it first shows them.
+    public var takes: [String] { [takeID] + otherTakes }
+
+    /// The motion paths of every take the scene draws (`takes`), which a scene of a later revision that keeps them
+    /// (`SequencePaths.areThePaths(of:)`) can be made with, or reuse a take's of (`SequencePaths.init(project:document:cameraReadable:reusing:)`).
+    public var sequencePaths: SequencePaths {
+        var byTake = [takeID: paths], readable = [takeID: cameraReadable]
+        for (id, scene) in takeScenes {
+            byTake[id] = scene.paths
+            readable[id] = scene.cameraReadable
+        }
+        return SequencePaths(byTake: byTake, cameraReadable: readable)
+    }
+
+    /// The scene of each take the scene draws, in the order of `takes`, with the take as `RenderFrame.take` names it
+    /// (`nil` for its own): for the renderer, which reads each take's videos apart.
+    var takeScenesInOrder: [(take: String?, scene: FrameEvaluator)] {
+        [(nil, self)] + otherTakes.compactMap { id in takeScenes[id].map { (id, $0) } }
     }
 
     /// The legacy document of the take (`EditDocument.legacy(take:events:)`) with the gradient, the padding and the
@@ -329,8 +415,17 @@ public struct FrameEvaluator: Sendable {
     /// (`clipFrame(atOutput:cursorImageIsReadable:)`), then the output's annotations of that output time over it (phase 3
     /// design §12, step 7): over a frozen frame, a title card and an imported clip too (plan 3a decision 21).
     public func frame(at outputTime: Double, cursorImageIsReadable: (_ hash: String) throws -> Bool) rethrows -> RenderFrame {
+        try frame(at: outputTime, cursorImageOfTakeIsReadable: { _, hash in try cursorImageIsReadable(hash) })
+    }
+
+    /// `frame(at:cursorImageIsReadable:)` with the recorded cursor images of each take `cursorImageOfTakeIsReadable` says
+    /// can be read, by the take as `RenderFrame.take` names it (`nil` for the scene's own) and hash: each take's images
+    /// are its own files (`takes/<take>/cursors/`), however alike their hashes.
+    func frame(
+        at outputTime: Double, cursorImageOfTakeIsReadable: (_ take: String?, _ hash: String) throws -> Bool
+    ) rethrows -> RenderFrame {
         let τ = TimeMap.outputNanoseconds(seconds: outputTime)
-        var frame = try clipFrame(atOutput: τ, cursorImageIsReadable: cursorImageIsReadable)
+        var frame = try clipFrame(atOutput: τ, cursorImageIsReadable: cursorImageOfTakeIsReadable)
         if timeMap.duration > 0 {
             frame.outputAnnotations = annotations.output(atOutput: min(max(τ, 0), timeMap.duration - 1))
         }
@@ -338,12 +433,39 @@ public struct FrameEvaluator: Sendable {
     }
 
     /// The frame at output time `τ` (clamped to the output, as `TimeMap.source(atOutput:)` clamps it) before the output's
-    /// annotations, as its clip shows it: the background alone for an output of 0 s and a clip of another take; for a clip
-    /// with content (phase 3 base plan decision 8), a frozen frame's instant drawn at the clip's start without the motion
-    /// blur, or the scene of a title card or of an imported clip over the background alone; the take's frame of the
-    /// instant shown otherwise, as in phase 2.
-    func clipFrame(atOutput τ: Int64, cursorImageIsReadable: (_ hash: String) throws -> Bool) rethrows -> RenderFrame {
-        guard let shown = timeMap.source(atOutput: τ), document.sequence[shown.clip].take == takeID else { return backgroundFrame }
+    /// annotations, as its clip shows it, with the recorded cursor images `cursorImageIsReadable` says can be read (by take,
+    /// as `RenderFrame.take` names it, and hash): the background alone for an output of 0 s and a clip of a take the
+    /// scene does not draw (one the manifest does not have, or any other in a scene of one take); a clip of another take
+    /// of `takes` is its scene's frame (`clipFrame(of:atOutput:cursorImageIsReadable:neighbor:)`), marked with its take
+    /// (`RenderFrame.take`) and its person's mask read apart (`keptApart(_:take:)`); a clip of the scene's own take, as
+    /// that function says.
+    func clipFrame(
+        atOutput τ: Int64, cursorImageIsReadable: (_ take: String?, _ hash: String) throws -> Bool
+    ) rethrows -> RenderFrame {
+        guard let shown = timeMap.source(atOutput: τ) else { return backgroundFrame }
+        let take = document.sequence[shown.clip].take
+        guard take != takeID else {
+            return try clipFrame(
+                of: shown, atOutput: τ, cursorImageIsReadable: { try cursorImageIsReadable(nil, $0) },
+                neighbor: { try clipFrame(atOutput: $0, cursorImageIsReadable: cursorImageIsReadable) })
+        }
+        guard let scene = takeScenes[take] else { return backgroundFrame }
+        let frame = try scene.clipFrame(
+            of: shown, atOutput: τ, cursorImageIsReadable: { try cursorImageIsReadable(take, $0) },
+            neighbor: { try clipFrame(atOutput: $0, cursorImageIsReadable: cursorImageIsReadable) })
+        return Self.keptApart(frame, take: take)
+    }
+
+    /// The frame at output time `τ` of the clip `shown` names, one of this scene's take, showing its source instant, with
+    /// the take's recorded cursor images `cursorImageIsReadable` says can be read: for a clip with content (phase 3 base
+    /// plan decision 8), a frozen frame's instant drawn at the clip's start without the motion blur, or the scene of a
+    /// title card or of an imported clip over the background alone, a title card fading against `neighbor`, the frame
+    /// the output shows at an output time (of whichever take); the take's frame of the instant shown otherwise, as in
+    /// phase 2.
+    private func clipFrame(
+        of shown: (clip: Int, source: HostTime), atOutput τ: Int64, cursorImageIsReadable: (_ hash: String) throws -> Bool,
+        neighbor: (_ output: Int64) throws -> RenderFrame
+    ) rethrows -> RenderFrame {
         if let (k, offset) = timeMap.contentOffset(atOutput: τ), let content = document.sequence[k].content {
             switch content {
             case .freeze:
@@ -351,9 +473,7 @@ public struct FrameEvaluator: Sendable {
                     atOutput: timeMap.clipOutputStarts[k], source: shown.source, blurs: false,
                     cursorImageIsReadable: cursorImageIsReadable)
             case .card:
-                return try titleCard.frame(clip: k, offset: offset, background: backgroundFrame) { output in
-                    try clipFrame(atOutput: output, cursorImageIsReadable: cursorImageIsReadable)
-                }
+                return try titleCard.frame(clip: k, offset: offset, background: backgroundFrame, neighbor: neighbor)
             case .media:
                 return mediaClip.frame(clip: k, offset: offset, background: backgroundFrame)
             }
@@ -363,8 +483,26 @@ public struct FrameEvaluator: Sendable {
         return try takeFrame(atOutput: output, source: shown.source, blurs: true, cursorImageIsReadable: cursorImageIsReadable)
     }
 
-    /// A frame of this output's size with the background alone: what an output of 0 s, a clip of another take, and in the
-    /// base a title card and an imported clip, show.
+    /// `frame`, of a clip of another take `take` than the scene's own, as the renderer reads it apart from the scene's
+    /// take: marked with it (`RenderFrame.take`), and its camera's person's mask (`PersonMaskSource.readerID`, named after
+    /// its file, `<segment>-personMask-1.mov` in every take) by a reader id of that take, `personMask:<take>/<file>`.
+    /// Internal for tests.
+    static func keptApart(_ frame: RenderFrame, take: String) -> RenderFrame {
+        var frame = frame
+        frame.take = take
+        if var camera = frame.camera, var background = camera.background {
+            let prefix = "personMask:"
+            let name = background.mask.readerID.hasPrefix(prefix)
+                ? String(background.mask.readerID.dropFirst(prefix.count)) : background.mask.readerID
+            background.mask.readerID = prefix + take + "/" + name
+            camera.background = background
+            frame.camera = camera
+        }
+        return frame
+    }
+
+    /// A frame of this output's size with the background alone: what an output of 0 s, a clip of a take the scene does
+    /// not draw, and in the base a title card and an imported clip, show.
     private var backgroundFrame: RenderFrame {
         RenderFrame(
             outputSize: outputSize, gradientStart: gradient.start, gradientEnd: gradient.end, gradientAngleDegrees: gradient.angle,
@@ -926,9 +1064,9 @@ public struct FrameEvaluator: Sendable {
 
     /// What the compositor draws for the background of `style`, and the gradient it draws with `.gradient` (or for an
     /// image it cannot read): that of a gradient, the classic one otherwise. An unknown wallpaper, and the desktop when
-    /// the first screen of `screens` is not a display of `take`, are the classic gradient.
+    /// the first screen of `screens` is not a display of `take` (or without `take`), are the classic gradient.
     private static func background(
-        of style: StageStyle, take: TakeRecord, outputSize: SIMD2<Int>, screens: ScreenPlan
+        of style: StageStyle, take: TakeRecord?, outputSize: SIMD2<Int>, screens: ScreenPlan
     ) -> (layer: BackgroundLayer, gradient: Gradient) {
         func floats(_ color: RGBA) -> SIMD4<Float> { SIMD4(Float(color.r), Float(color.g), Float(color.b), Float(color.a)) }
         func classic() -> Gradient {
@@ -948,6 +1086,7 @@ public struct FrameEvaluator: Sendable {
         case let .image(file):
             return (image(.asset(file)), classic())
         case .desktop:
+            guard let take else { return (.gradient, classic()) }
             let display = screens.initial[take.id].flatMap(take.track).flatMap { $0.kind.isScreen ? $0.source.displayID : nil }
             return (display.map { image(.desktop(take: take.id, displayID: $0)) } ?? .gradient, classic())
         }

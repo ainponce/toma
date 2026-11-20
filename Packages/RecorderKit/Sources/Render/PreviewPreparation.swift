@@ -38,8 +38,9 @@ public enum PreviewPreparation {
 
     /// Reads take `take` of the package at `url` (the last one when `nil`) and prepares its preview at
     /// `outputSize`, on `queue`.
-    /// - Throws: `PreviewPreparationError.unfinished` for a take marked `recording`, `cannotDraw` if its
-    ///   first frame cannot be drawn, and the errors of `LoadedProject.load` and `FrameRenderer.init`.
+    /// - Throws: `PreviewPreparationError.unfinished` for a take the preview shows (every take its document's sequence
+    ///   shows, `LoadedProject.takesShown(by:)`) marked `recording`, `cannotDraw` if its first frame cannot be drawn, and
+    ///   the errors of `LoadedProject.load` and `FrameRenderer.init`.
     public static func prepare(url: URL, take: String?, outputSize: SIMD2<Int>) async throws -> PreparedPreview {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
@@ -51,7 +52,9 @@ public enum PreviewPreparation {
     /// `prepare`, on the caller's thread. Blocks: never call it from a Swift concurrency thread.
     static func prepareBlocking(url: URL, take: String?, outputSize: SIMD2<Int>) throws -> PreparedPreview {
         let project = try LoadedProject.load(url, take: take)
-        guard project.take.status != .recording else { throw PreviewPreparationError.unfinished(takeID: project.take.id) }
+        for shown in project.takesShown(by: .legacy(for: project)) where shown.take.status == .recording {
+            throw PreviewPreparationError.unfinished(takeID: shown.take.id)
+        }
         // Its own renderer: an export makes another one.
         let renderer = try FrameRenderer(project: project, outputSize: outputSize)
         let preview = PreviewRenderer(renderer: renderer)

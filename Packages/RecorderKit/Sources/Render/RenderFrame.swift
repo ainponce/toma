@@ -102,6 +102,11 @@ public struct RenderFrame: Equatable, Sendable {
     /// The title card (phase 3 design §5.2 and §12), which takes the place of steps 1 to 6, under the output's annotations
     /// (base plan decision 9); `nil` without one, as every document of phases 1 and 2.
     public var titleCard: TitleCardLayer?
+    /// The take whose videos and cursor images the frame shows (phase 3 design §9, base plan decision 10): `nil` for the
+    /// project's own take (`LoadedProject.take`), as every frame of phases 1 and 2, and a frame of the background alone;
+    /// the id of another take for a frame of a clip of it, whose tracks the renderer reads apart from the take's own
+    /// (`FrameRenderer`'s `TrackKey`), however alike their ids.
+    public var take: String?
 
     /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
     var isCardMode: Bool { card != nil || backgroundTransform != nil }
@@ -135,7 +140,8 @@ public struct RenderFrame: Equatable, Sendable {
         calmZoom: CalmZoomLayer? = nil,
         contentAnnotations: [AnnotationLayer] = [],
         outputAnnotations: [AnnotationLayer] = [],
-        titleCard: TitleCardLayer? = nil
+        titleCard: TitleCardLayer? = nil,
+        take: String? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -166,6 +172,7 @@ public struct RenderFrame: Equatable, Sendable {
         self.contentAnnotations = contentAnnotations
         self.outputAnnotations = outputAnnotations
         self.titleCard = titleCard
+        self.take = take
     }
 }
 

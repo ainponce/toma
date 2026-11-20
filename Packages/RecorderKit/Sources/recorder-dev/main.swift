@@ -1189,11 +1189,10 @@ struct BenchPreview: AsyncParsableCommand {
         let size = SIMD2(width, height)
         let renderer = try FrameRenderer(project: project, document: document, outputSize: size, frameRate: fps)
 
-        // The motion paths: of the take, and of an hour.
+        // The motion paths: of every take the sequence shows, and of an hour.
         let clock = ContinuousClock()
         var started = clock.now
-        let paths = MotionPaths(
-            take: project.take, events: project.events, document: document, cameraReadable: renderer.cameraReadable)
+        let paths = SequencePaths(project: project, document: document, cameraReadable: renderer.cameraReadableByTake)
         let takePaths = clock.now - started
         let takeSeconds = TimeMap(sequence: document.sequence).durationSeconds
         print("paths: \(milliseconds(takePaths)) ms for \(String(format: "%.1f", takeSeconds)) s of take")

@@ -108,8 +108,9 @@ public final class PreviewEngine: @unchecked Sendable {
         var target: (any MTLTexture)?
         var downsample: (any MTLRenderPipelineState)?
         var downsampleFailed = false
-        /// The frame of each track last drawn: what stays on screen while a newer one is not decoded.
-        var shown: [String: CachedTexture?] = [:]
+        /// The frame of each track last drawn, by take and track: what stays on screen while a newer one is not decoded
+        /// (never another take's of the same id).
+        var shown: [TrackKey: CachedTexture?] = [:]
         /// The frames the last pause decoded exactly, by (track, source instant).
         var exact: [DecodedKey: CachedTexture?] = [:]
         var quality: PreviewQuality
@@ -254,11 +255,11 @@ public final class PreviewEngine: @unchecked Sendable {
             let frame = try renderer.frame(of: scene, at: seconds)
             var keyFrames: [DecodedKey: CachedTexture?] = [:]
             for key in videos(of: frame) {
-                if let keyFrame = try renderer.prefetcher(for: key.trackID)?.keyFrame(atSource: key.time) {
+                if let keyFrame = try renderer.prefetcher(for: key.track)?.keyFrame(atSource: key.time) {
                     keyFrames[key] = keyFrame
                 } else {
                     // None there (before the track's first key frame, or unreadable): the frame shown stays.
-                    keyFrames[key] = drawing.shown[key.trackID] ?? nil
+                    keyFrames[key] = drawing.shown[key.track] ?? nil
                 }
             }
             try present(frame, request: request, seconds: seconds, late: false, started: started, hooks: hooks) {
@@ -310,12 +311,12 @@ public final class PreviewEngine: @unchecked Sendable {
                 videos[key] = exact
                 continue
             }
-            switch try renderer.prefetcher(for: key.trackID)?.latestFrame(atSource: key.time) {
+            switch try renderer.prefetcher(for: key.track)?.latestFrame(atSource: key.time) {
             case let .onTime(texture)?:
                 videos[key] = texture
             case let .late(previous)?:
                 late = true
-                videos[key] = previous.map(\.frame) ?? drawing.shown[key.trackID] ?? nil
+                videos[key] = previous.map(\.frame) ?? drawing.shown[key.track] ?? nil
             case nil:
                 videos[key] = .some(nil)
             }
@@ -329,7 +330,7 @@ public final class PreviewEngine: @unchecked Sendable {
         }
         drawing.ahead = ahead
         for key in keys where drawing.exact[key] == nil {
-            try renderer.prefetcher(for: key.trackID)?.schedule(key.time)
+            try renderer.prefetcher(for: key.track)?.schedule(key.time)
         }
         drawing.playing = (n, number, size, max(ahead.scheduledThrough ?? n, n))
         // The first frame of a playback is not late: nothing was decoded ahead for it.
@@ -345,7 +346,7 @@ public final class PreviewEngine: @unchecked Sendable {
         let decoded = DecodedFrames()
         let group = DispatchGroup()
         for key in keys {
-            guard let prefetcher = try renderer.prefetcher(for: key.trackID) else {
+            guard let prefetcher = try renderer.prefetcher(for: key.track) else {
                 decoded.set(key, .success(nil))
                 continue
             }
@@ -378,7 +379,7 @@ public final class PreviewEngine: @unchecked Sendable {
         for n in frames {
             let frame = try renderer.frame(of: scene, at: Double(TimeMap.frameTime(n, frameRate: scene.frameRate)) / 1e9)
             for key in videos(of: frame) where drawing.exact[key] == nil {
-                try renderer.prefetcher(for: key.trackID)?.schedule(key.time)
+                try renderer.prefetcher(for: key.track)?.schedule(key.time)
             }
         }
     }
@@ -420,10 +421,10 @@ public final class PreviewEngine: @unchecked Sendable {
             throw RenderError.metalResourceUnavailable("preview command buffer")
         }
         commandBuffer.label = "PreviewEngine"
-        var shown: [String: CachedTexture?] = [:]
-        try renderer.encode(frame, into: target, commandBuffer: commandBuffer) { trackID, time in
-            let texture = video(DecodedKey(trackID: trackID, time: time))
-            shown[trackID] = texture
+        var shown: [TrackKey: CachedTexture?] = [:]
+        try renderer.encode(frame, into: target, commandBuffer: commandBuffer) { track, time in
+            let texture = video(DecodedKey(track, time: time))
+            shown[track] = texture
             return texture
         }
         if let drawable = layer.nextDrawable() {
@@ -435,7 +436,9 @@ public final class PreviewEngine: @unchecked Sendable {
             shared.drawnSize = frame.outputSize
             return shared.onPresented
         }
-        let videos = shown.compactMapValues { $0?.pixelBuffer }
+        // By track: a frame shows the tracks of one take.
+        var videos: [String: CVPixelBuffer] = [:]
+        for case let (key, texture?) in shown { videos[key.track] = texture.pixelBuffer }
         let drawn = DrawnFrame(request: request, frame: frame, duration: 0, late: late, videos: videos)
         commandBuffer.addCompletedHandler { [inFlight, weak self] commandBuffer in
             inFlight.signal()

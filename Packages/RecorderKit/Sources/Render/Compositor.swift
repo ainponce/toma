@@ -205,9 +205,11 @@ public final class Compositor: @unchecked Sendable {
     /// blurred with `frame.subframes` or `frame.cursorSamples` (see the type's notes). The camera's colour and background
     /// (`CameraLayer.look`, `background`) are drawn with `cameraLook`, the renderer's (`CameraLookResources`): `nil`, or
     /// none of its textures, draws the camera as in phase 1, and a background without its mask is Original's, its shape,
-    /// border and shadow too (`RenderFrame.droppingCameraBackground()`). Throws `RenderError.metalResourceUnavailable`, having
-    /// encoded nothing, when Metal cannot make the screen's copy or the blur's tile memory: a frame is never drawn some
-    /// other way. Phase 3's layers are drawn with `layerTextures` (the renderer's): `.none` draws none of what they read.
+    /// border and shadow too (`RenderFrame.droppingCameraBackground()`). Throws `RenderError.metalResourceUnavailable` when
+    /// Metal cannot make the screen's copy or the blur's tile memory, having encoded nothing, or a texture phase 3's calm
+    /// zoom needs (`drawCalmZoom`), having encoded passes into `commandBuffer` already, every one ended: the caller does not
+    /// commit it, and a frame is never drawn some other way. Phase 3's layers are drawn with `layerTextures` (the
+    /// renderer's): `.none` draws none of what they read.
     /// `screen`, `previousScreen`, `camera`, `cursor`, `backgroundImage`, `windowTitle`, `cameraLook`'s and
     /// `layerTextures`' textures must stay alive until `commandBuffer` completes.
     public func encode(
