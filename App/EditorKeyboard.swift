@@ -47,10 +47,21 @@ final class EditorKeyboard {
                 keyCode: event.keyCode)
         else { return false }
         commands.shuttle = model.playbackSpeed
-        guard let command = commands.command(for: key, focus: Self.focus(of: window.firstResponder, in: window)) else { return false }
+        let focus = Self.focus(of: window.firstResponder, in: window)
+        guard let command = commands.command(for: key, focus: focus) else { return false }
         // Held down: once, unless it steps.
         if event.isARepeat, !command.repeats { return true }
+        if focus == .preview, let moved = nudgeAnnotations(command, model) { return moved }
         return perform(command, model, timeline)
+    }
+
+    /// ← → ↑ ↓ (⇧: 10 points) and ⇧↑ ⇧↓ with the focus on the preview and annotations selected (3a, decision 16): they
+    /// move those the frame at the playhead shows, and the playhead stays (nothing moves during a drag). `nil` when the
+    /// key does what it did in 1b: no annotation selected, or none of them shown there.
+    private func nudgeAnnotations(_ command: EditorCommand, _ model: EditorModel) -> Bool? {
+        guard case .annotations? = model.selection, let points = AnnotationKeys.nudge(for: command) else { return nil }
+        if model.isGesturing { return true }
+        return model.nudgeSelectedAnnotations(points: points) ? true : nil
     }
 
     private static func modifiers(_ flags: NSEvent.ModifierFlags) -> KeyModifiers {
@@ -175,7 +186,7 @@ final class EditorKeyboard {
         case .selectAll:
             return model.selectAllOfTrack()
         case .nudgeVertically:
-            // ⇧↑ ⇧↓ with annotations chosen (3a, Task A13); nothing is chosen to move until then.
+            // ⇧↑ ⇧↓ move the annotations selected over the preview (`nudgeAnnotations`); nothing otherwise.
             return false
         case .addMarker:
             return model.addMarkerAtPlayhead()
