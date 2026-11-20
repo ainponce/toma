@@ -13,8 +13,10 @@ final class TimelineViewController: NSViewController {
     /// The timeline itself, for the window's keys.
     var timelineView: EditorTimelineView { timeline }
     private let bar = TimelineBar()
-    /// The package and the take the caches read, and the work of the waveforms.
+    /// The package and the take the caches read, the takes whose thumbnails and waveforms are made (each the sequence
+    /// came to show, 3d), and the work of the waveforms.
     private var cachesFor: (url: URL, take: TakeRecord)?
+    private var cachedTakes: Set<String> = []
     private var waveformWork: [Task<Void, Never>] = []
     private var cameraCheck: Task<Void, Never>?
     private var stopped = false
@@ -132,11 +134,18 @@ final class TimelineViewController: NSViewController {
             timeline.showNothing()
             return
         }
-        if cachesFor?.url != project.package.url || cachesFor?.take != project.take, let caches = model.panelSession?.caches {
-            cachesFor = (project.package.url, project.take)
-            makeCaches(project, caches)
+        let takes = project.takeRecords(shownBy: document)
+        if let caches = model.panelSession?.caches {
+            if cachesFor?.url != project.package.url || cachesFor?.take != project.take {
+                cachesFor = (project.package.url, project.take)
+                makeCaches(project, caches)
+            }
+            // Each take the sequence shows has its own thumbnails and waveforms, made the first time it shows it.
+            for take in takes where !cachedTakes.contains(take.id) {
+                if let shown = project.focused(on: take.id) { addCaches(of: shown, caches) }
+            }
         }
-        timeline.show(take: project.take, takes: project.takeRecords(shownBy: document), markers: model.markerTimes,
+        timeline.show(take: project.take, takes: takes, markers: model.markerTimes,
             document: document, missing: missing, contentRatio: model.contentRatio(of: document))
         // What the cut of the sound is held to in each take the sequence shows (3c), read before a drag needs it.
         model.warmAudioTakeBounds()
@@ -159,17 +168,28 @@ final class TimelineViewController: NSViewController {
             self?.model.cameraUnreadable = unreadable
         }
         timeline.tracks.forgetThumbnails()
-        timeline.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
+        timeline.tracks.thumbnailCaches = [:]
         timeline.tracks.contentClips.frames = MediaClipFrames(package: project.package)
         for work in waveformWork { work.cancel() }
+        waveformWork = []
         timeline.tracks.waveformLevels = [:]
+        cachedTakes = []
+        addCaches(of: project, caches)
+    }
+
+    /// The thumbnails' cache of `project`'s take, and the waveform of each of its audio tracks, worked out as
+    /// `makeCaches` says, by take (`AudioPlan.key(take:track:)`).
+    private func addCaches(of project: LoadedProject, _ caches: ProjectCaches) {
+        let take = project.take.id
+        cachedTakes.insert(take)
+        timeline.tracks.thumbnailCaches[take] = ThumbnailCache(project: project, caches: caches)
         let waveforms = WaveformCache(project: project, caches: caches)
-        waveformWork = project.take.tracks.filter { !$0.kind.isVideo && !$0.segments.isEmpty }.map { track in
+        waveformWork += project.take.tracks.filter { !$0.kind.isVideo && !$0.segments.isEmpty }.map { track in
             Task { [weak self] in
                 let waveform = await waveforms.waveform(track: track.id)
                 let levels = await Task.detached(priority: .utility) { WaveformLevels(waveform) }.value
                 guard !Task.isCancelled else { return }
-                self?.timeline.setWaveform(levels, for: track.id)
+                self?.timeline.setWaveform(levels, take: take, track: track.id)
             }
         }
     }

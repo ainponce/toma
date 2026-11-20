@@ -281,10 +281,10 @@ extension EditorModel {
         }
     }
 
-    /// ⌥[ and ⌥]: the start or the end of the clip under the playhead, up to it.
+    /// ⌥[ and ⌥]: the start or the end of the clip under the playhead, up to it, within the bounds of that clip's take.
     @discardableResult
     func trimToPlayhead(_ edge: ClipEdge) -> Bool {
-        guard canEdit, let document, let project = overlayProject,
+        guard canEdit, let document, let project = playheadProject,
             let step = SequenceCommands.trimToPlayhead(
                 document, edge: edge, atOutput: playheadNanoseconds, take: project.take, events: project.events)
         else { return false }
