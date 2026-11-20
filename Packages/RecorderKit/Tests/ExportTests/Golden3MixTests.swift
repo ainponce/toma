@@ -104,7 +104,8 @@ private struct RecordedVersion: Decodable {
 /// without `ProjectJobs` and the caches: with Normalize, the loudness of every audio track of the take with segments (the
 /// tracks `VoiceJobs` measures), each segment heard measured whole by `Loudness.measure` (`loudness-1`, the pure function
 /// the caches are filled with) without a clean voice, their blocks one after the other; without it, nothing (`.none`).
-private func golden3Analysis(of project: LoadedProject, document: EditDocument) async throws -> AnalysisInputs {
+/// Golden 4's mix (`golden4MixMatches`) reads it too.
+func golden3Analysis(of project: LoadedProject, document: EditDocument) async throws -> AnalysisInputs {
     var analysis = AnalysisInputs()
     guard document.audio.normalize else { return analysis }
     for track in project.take.tracks where !track.kind.isVideo && !track.segments.isEmpty {

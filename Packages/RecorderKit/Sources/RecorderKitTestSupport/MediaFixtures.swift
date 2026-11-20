@@ -15,18 +15,21 @@ public enum MediaFixtures {
     /// The frame rate of a clip `clip(in:…)` writes.
     public static let framesPerSecond = 30
 
-    /// Writes `MediaClip-<pattern>.mov` into `dir` (replacing one there) and returns it: `seconds` of H.264 video of
+    /// Writes `MediaClip-<pattern>.mov` into `dir` (replacing one there) and returns it: `seconds` of video (`codec`) of
     /// `size`, at `framesPerSecond`, frame `i` presented at `i / framesPerSecond` s and painted as `SampleFactory`'s frame
     /// `pattern + i` (its palette's colour, which `SampleFactory.frameIndex(nearestTo:)` tells after encoding, and a white
     /// square that moves every frame), so every frame differs from the one before and clips of other patterns differ.
     /// With `tone`, also an AAC track of that many Hz of sine at 1/4 of full scale on each of `channels`, at
     /// `sampleRate`, for the same `seconds`. `transform` is its video track's `preferredTransform`, how a player turns it
-    /// upright (a phone's clip shot upright is encoded on its side, with a quarter turn).
+    /// upright (a phone's clip shot upright is encoded on its side, with a quarter turn). `codec` is its video's codec,
+    /// H.264 unless given: `.proRes422Proxy` for a clip whose frames must decode to the same pixels on every run (a
+    /// golden project's), as the H.264 and HEVC encoders `AVAssetWriter` picks write other bitstreams of the same frames
+    /// from one run to the next, which decode to other pixels, and ProRes does not.
     ///
     /// It blocks the calling thread while AVFoundation encodes, on its own queues.
     public static func clip(
         in dir: URL, seconds: Double, size: SIMD2<Int>, pattern: Int, tone: Double? = nil, sampleRate: Double = 48_000,
-        channels: Int = 2, transform: CGAffineTransform = .identity
+        channels: Int = 2, transform: CGAffineTransform = .identity, codec: AVVideoCodecType = .h264
     ) throws -> URL {
         guard seconds > 0, size.x > 0, size.y > 0, sampleRate > 0, channels > 0 else {
             throw TestSupportError.failed("MediaFixtures.clip: nothing to write")
@@ -36,7 +39,7 @@ public enum MediaFixtures {
         let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
         let video = AVAssetWriterInput(
             mediaType: .video,
-            outputSettings: [AVVideoCodecKey: AVVideoCodecType.h264, AVVideoWidthKey: size.x, AVVideoHeightKey: size.y])
+            outputSettings: [AVVideoCodecKey: codec, AVVideoWidthKey: size.x, AVVideoHeightKey: size.y])
         video.expectsMediaDataInRealTime = false
         video.transform = transform
         writer.add(video)
