@@ -72,10 +72,11 @@ public struct UndoHistory: Equatable, Sendable {
     /// The group for the `do` that records `step`, done at `at` (the exact moment, not the one the line keeps in whole
     /// seconds): the group on top of `done` if the last entry recorded is a `do` of it with the same label and target,
     /// less than 1.0 s before `at` (design §6.4); otherwise a new group, numbered `nextSeq`, the `seq` its first `do`
-    /// takes. The key is kept for the `do` that `record` gets next.
-    public mutating func groupForNext(_ step: EditStep, at: Date) -> Int {
+    /// takes. The key is kept for the `do` that `record` gets next. With `joining` false, always a new group: the project
+    /// API makes each of its commands one undo of its own (fases 4 y 5, 4b).
+    public mutating func groupForNext(_ step: EditStep, at: Date, joining: Bool = true) -> Int {
         let group: Int
-        if let lastDo, lastDo.group == done.last, lastDo.label == step.label, lastDo.target == step.target,
+        if joining, let lastDo, lastDo.group == done.last, lastDo.label == step.label, lastDo.target == step.target,
             (0..<Self.burstGap).contains(at.timeIntervalSince(lastDo.at))
         {
             group = lastDo.group
