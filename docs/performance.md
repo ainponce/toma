@@ -410,3 +410,4 @@ Las medidas del agente para las metas de la fase 3 (diseño de la fase 3, §15).
 
 | Tarea | Qué | Comando | Medida | Meta | Carga |
 |---|---|---|---|---|---|
+| U2 (3c) | Sintetizar Calma, Piano y Brisa (`music-1`, diseño §7.6): `MusicSynth.render` de cada tema entero (5 760 000 cuadros y su cola), lo que hace la caché de la app la primera vez que se usa un tema; tres veces cada uno, un tema a la vez (`.serialized`: un render ya usa todos los núcleos) | `TOMA_BENCH=1 swift test --package-path Packages/RecorderKit -c release -Xswiftc -enable-testing --filter isFortyTimesRealTime` | Dos corridas: **Calma 0,82 a 0,96 s** (la mejor de tres, 0,82), **Piano 0,41 a 0,48 s**, **Brisa 0,46 a 0,57 s**: de 146 a 290 veces el tiempo real. Con los tres temas a la vez (una primera corrida sin `.serialized`), Calma tardó de 2,6 a 3,4 s | ≥ 40 veces el tiempo real, menos de 3 s por tema (plan 3c, U2): **se cumple** | 42 a 71 (otros agentes), sobre `8ad9624` con los temas de U2 |

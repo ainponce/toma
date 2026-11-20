@@ -1052,6 +1052,14 @@ Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y 
 - Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
 - Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
 
+**Escuchar Calma, Piano y Brisa** (U2)
+
+La vara del agente fueron las medidas (sonoridad, pico, costura, mono, graves y agudos, la escala y las frases de cada tema); el oído es del dueño. Calma es ambiental en re lidio (pads anchos que cambian cada 2 compases, un bajo suave, una campana al empezar cada frase de 8 compases, reverb larga); Piano, un piano de fieltro solo en la menor y do mayor (acordes partidos en la izquierda, una melodía simple en frases de 8 compases); Brisa, una guitarra de nylon en arpegios en sol mayor con un bajo cálido, un shaker suave en las frases del medio y una melodía pulsada.
+- En la app, en un proyecto de más de 4 min con voz, Audio ▸ Agregar música… y cada uno de los tres, entero y dos vueltas seguidas, con auriculares y con los parlantes de la Mac: suena musical y en su estilo, no cansa en la segunda vuelta, la vuelta no se oye (ni un clic, ni la reverb que se corta, ni un salto de volumen; en Brisa la vuelta cae dentro del rasguido que abre la estrofa y el bajo entra un poco antes), nada satura ni zumba (tampoco los graves de Calma en los parlantes).
+- Debajo de la voz, a −14 dB y con «Bajar la música cuando se habla» prendido, ninguno tapa la voz.
+- Anotar el que no convence y por qué (un instrumento, el tempo, una parte que cansa, la campana de Calma, el ataque de la guitarra de Brisa): se cambia antes del merge a `main` (decisión 4 del plan 3c); después del merge, otro sonido es `music-2`.
+- Sin la app: `swift run -c release --package-path Packages/RecorderKit recorder-dev music --out /tmp/toma-music --theme piano` y `afplay /tmp/toma-music/piano.caf` (`docs/music.md`, «Escucharlos»); `afplay` toca una vuelta sola.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
