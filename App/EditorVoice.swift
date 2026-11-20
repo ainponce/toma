@@ -451,7 +451,7 @@ final class EditorVoice {
     /// and the loudness its document lacks (`prepareExport(_:onto:progress:)`) and hands them to it, with "Exported
     /// without noise cleanup: …" when this Mac cannot clean. `false`, which stops the export, when it was cancelled
     /// meanwhile (saying nothing) or a job failed (with "Couldn't prepare the audio: …").
-    func prepareExport(_ model: EditorModel, _ export: ExportPreparation) async -> Bool {
+    func prepareExport(_ model: EditorModel, _ export: PendingExport) async -> Bool {
         guard export.hasSound, !closed, voiceJobs != nil else { return true }
         do {
             let (inputs, notice) = try await prepareExport(export.document, onto: export.analysis) { fraction in
@@ -472,14 +472,16 @@ final class EditorVoice {
     }
 
     /// `inputs` with the clean voice and the loudness `document` needs, once every job it needs is done (first in the
-    /// queue), reporting their progress from 0 to 1; and the sentence the export says when this Mac cannot clean what
-    /// `document` cleans. The other fields of `inputs` as they are.
+    /// queue): the voice's stage of the export's preparation (`ExportPreparation.voice`, which the API's export runs too),
+    /// reporting their progress from 0 to 1; and the sentence the export says when this Mac cannot clean what `document`
+    /// cleans. The other fields of `inputs` as they are.
     /// - Throws: the `JobError` of a job that failed; `CancellationError` if the task is cancelled (the jobs go on).
     func prepareExport(
         _ document: EditDocument, onto inputs: AnalysisInputs, progress: @escaping @Sendable (Double) -> Void
     ) async throws -> (AnalysisInputs, notice: String?) {
         guard let voiceJobs, let jobs = model?.jobs else { return (inputs, nil) }
-        let (prepared, skipped) = try await voiceJobs.prepareExport(document, onto: inputs, jobs: jobs, progress: progress)
+        let (prepared, skipped) = try await ExportPreparation.voice(
+            inputs, document: document, needs: .video, voice: voiceJobs, jobs: jobs, progress: progress)
         let notice = skipped
             ? String(
                 localized: "Exported without noise cleanup: this Mac doesn't have the system's voice isolation.",

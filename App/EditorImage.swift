@@ -146,27 +146,26 @@ final class EditorImage {
         return nil
     }
 
-    /// What an export does first (`EditorModel.exportPreparations`): waits for the masks and the faces the exported
-    /// document lacks, first in the queue (`CameraAnalysis.prepareForExport`), reporting how far the jobs that were not
-    /// done yet are (`CameraAnalysis.progress`), and hands them to the export and the preview (`updateAnalysis`).
-    /// `false`, which stops the export, when the export was cancelled meanwhile (saying nothing) or a job failed or was
-    /// cancelled (with "Couldn't prepare the camera: …").
-    func prepareExport(_ model: EditorModel, _ export: ExportPreparation) async -> Bool {
+    /// What an export does first (`EditorModel.exportPreparations`): the camera's stage of the export's preparation
+    /// (`ExportPreparation.camera`, which the API's export runs too): waits for the masks and the faces the exported
+    /// document lacks, first in the queue, reporting how far the jobs that were not done yet are, and hands them to the
+    /// export and the preview (`updateAnalysis`). `false`, which stops the export, when the export was cancelled meanwhile
+    /// (saying nothing) or a job failed or was cancelled (with "Couldn't prepare the camera: …").
+    func prepareExport(_ model: EditorModel, _ export: PendingExport) async -> Bool {
         guard !closed, let caches else { return true }
         let document = export.document, project = export.project
-        var inputs = export.analysis
-        let pending = (kinds(document, .faces) + kinds(document, .masks)).filter { states[$0] != .done }
-        let takes = SequenceAnalyses.takes(shownBy: document, in: project)
-        let watcher = pending.isEmpty ? nil : Task { [jobs = model.jobs] in
-            for await all in await jobs.updates() {
-                if let fraction = CameraAnalysis.progress(all, of: pending, takes: takes) { export.report(fraction) }
-            }
-        }
-        defer { watcher?.cancel() }
+        // From the stage's first report, 0 included; nothing once it is over.
+        let report = RisingReport(export, from: -1)
+        let inputs: AnalysisInputs
         do {
-            try await CameraAnalysis.prepareForExport(
-                &inputs, document: document, project: project, caches: caches, jobs: model.jobs)
+            inputs = try await ExportPreparation.camera(
+                export.analysis, project: project, document: document, caches: caches, jobs: model.jobs
+            ) { fraction in
+                Task { @MainActor in report.send(fraction) }
+            }
+            report.finish()
         } catch {
+            report.finish()
             // "Cancel Export", or the window closing: the export ends without a word.
             guard !Task.isCancelled, !closed else { return false }
             Self.logger.error("The camera's analysis for the export failed: \(String(describing: error), privacy: .public)")

@@ -46,7 +46,8 @@ import ProjectFormat
     /// The session being opened, which every call waiting for it shares.
     private var opening: Task<EditSession, any Error>?
     private var recorded: MarkerList.Recorded?
-    private var closed = false
+    /// Whether `close()` was called: nothing is done after it (the export checks it too).
+    private(set) var closed = false
 
     private init(
         url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?, diskHistory: DiskHistory
@@ -308,7 +309,7 @@ import ProjectFormat
     // MARK: - Private
 
     /// `perform` of `step`, waited for on the disk.
-    private func perform(_ step: EditStep, command: String, created: String?, in session: EditSession) async throws -> CommandResult {
+    func perform(_ step: EditStep, command: String, created: String?, in session: EditSession) async throws -> CommandResult {
         let reopened = session.reopenings
         guard session.perform(step) != .refused else {
             try checkEditable(session)
@@ -490,7 +491,7 @@ import ProjectFormat
         return read
     }
 
-    private func result(_ command: String, changed: Bool, label: String?, created: String?) -> CommandResult {
+    func result(_ command: String, changed: Bool, label: String?, created: String?) -> CommandResult {
         let undo: String? = switch storage {
         case let .edit(session): session.undoLabel?.rawValue
         case .editing: diskHistory.undo?.rawValue

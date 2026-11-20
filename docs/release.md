@@ -1654,3 +1654,8 @@ Con un proyecto con un fondo de color, esquinas redondeadas y sombra, exportado 
 - Importar el `.fcpxml` en Final Cut Pro (Archivo ▸ Importar ▸ XML): abre sin avisos, crea el evento con el nombre del proyecto y un proyecto con el nombre del video, el video enlazado (no fuera de línea), los marcadores de capítulo, un marcador «Clic» en cada clic («Click» con la app en inglés) y un marcador de rango en cada bloque de zoom («Zoom 2,0×», «Atenuar 2,0×»…), en su lugar al reproducir.
 - Leer el `.toma-metadata.json` desde un script (o una expresión de After Effects): `video.frames` es la cantidad de cuadros del video, `frames` tiene uno por cuadro, y el cursor de un cuadro cae donde el video lo dibuja.
 - Exportar entre las marcas con el mismo pedido: no aparece ningún `.fcpxml` ni `.toma-metadata.json` nuevo junto al video.
+
+**La preparación de export compartida con la API (A2)**
+
+- Un proyecto con Limpieza de la voz, Normalizar, música con Bajar la música bajo la voz y el fondo de la cámara Quitado (o Borroso) exporta desde la app con todo eso, igual que antes de esta versión: la voz limpia y pareja, la música más baja donde se habla y la persona sin su cuarto. El anillo de la barra avanza primero por la preparación (si algo faltaba) y después por el export.
+- «Cancelar export» durante la preparación (con la máscara o la música todavía haciéndose) termina sin ningún aviso y sin dejar el archivo; un segundo export del mismo proyecto empieza y termina bien.
