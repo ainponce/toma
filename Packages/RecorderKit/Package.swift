@@ -32,8 +32,8 @@ let package = Package(
         .target(name: "Transcription", dependencies: ["ProjectFormat", "Export"]),
         .target(name: "ImageAnalysis", dependencies: ["ProjectFormat", "Analysis", "Render"]),
         .target(name: "ProjectJobs", dependencies: ["ProjectFormat", "Editing", "Export", "Transcription", "ImageAnalysis"]),
-        // Shared by every test target; not a product.
-        .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture"]),
+        // Shared by every test target; not a product. `Editing` for `MediaFixtures.imported`, which imports as the editor does.
+        .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture", "Editing"]),
         .executableTarget(
             name: "recorder-dev",
             dependencies: [
