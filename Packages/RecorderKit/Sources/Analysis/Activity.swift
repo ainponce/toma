@@ -20,6 +20,8 @@ import ProjectFormat
 /// - Typing: `keyActivity` events at most 1.0 s apart, from the first to 0.25 s after the last (the 250 ms each one
 ///   stands for). `keyPress` events (version 4) never count: typing is the same with or without the keys recorded.
 /// - Scroll: `scroll` events at most 0.5 s apart, from the first to the last.
+/// - The keyboard's focus (`focusZoom-1`, `FocusZoom`): the spans of typing with the text cursors in them
+///   (`caretRuns`), and the changes of the focused element (`focusChanges`). Empty for a take without `focus` events.
 ///
 /// The clips of a take are in source order (as `TimeMap` reads them in 1b), so source order is output order.
 public struct Activity: Equatable, Sendable {
@@ -58,13 +60,22 @@ public struct Activity: Equatable, Sendable {
     public var pauses: [Click]
     public var typing: [Range<Int64>]
     public var scrolls: [Range<Int64>]
+    /// `focusZoom-1`: the spans of `typing` with text cursors in them, in output order.
+    public var caretRuns: [CaretRun]
+    /// `focusZoom-1`: the changes of the focused element, in output order.
+    public var focusChanges: [FocusChange]
 
-    public init(clicks: [Click], drags: [Drag], pauses: [Click], typing: [Range<Int64>], scrolls: [Range<Int64>]) {
+    public init(
+        clicks: [Click], drags: [Drag], pauses: [Click], typing: [Range<Int64>], scrolls: [Range<Int64>],
+        caretRuns: [CaretRun] = [], focusChanges: [FocusChange] = []
+    ) {
         self.clicks = clicks
         self.drags = drags
         self.pauses = pauses
         self.typing = typing
         self.scrolls = scrolls
+        self.caretRuns = caretRuns
+        self.focusChanges = focusChanges
     }
 
     /// The activity of `take` in the output of `timeMap` (the one of `document.sequence`), placed on `document`'s stage.
@@ -151,11 +162,15 @@ struct ActivityExtraction: Sendable {
             clickPoints.append(sample.point)
         }
 
+        let typing = Self.spans(of: keys, gap: Activity.typingGap, tail: Activity.typingTail)
+        // `focusZoom-1`: the text cursors of the typing and the changes of the element.
+        let focus = FocusExtraction.extract(ordered, typing: typing, kept: kept, stage: stage)
         activity = Activity(
             clicks: clicks, drags: drags,
             pauses: Self.pauses(in: samples, downs: downs.sorted(), duration: timeMap.duration, stage: stage),
-            typing: Self.spans(of: keys, gap: Activity.typingGap, tail: Activity.typingTail),
-            scrolls: Self.spans(of: scrolls, gap: Activity.scrollGap, tail: 0))
+            typing: typing,
+            scrolls: Self.spans(of: scrolls, gap: Activity.scrollGap, tail: 0),
+            caretRuns: focus.caretRuns, focusChanges: focus.focusChanges)
         self.samples = samples
         self.clickPoints = clickPoints
     }

@@ -17,7 +17,9 @@ public enum NewDocument {
     /// the look `cameraLook` gives (mirrored, with a shadow and measured against the output's short side for a new project,
     /// design §13.3), and every audio track at gain 1, as in the legacy document, but through the limiter. 16:9 at 60 frames per second;
     /// `logSequence` 0. A take of an iPhone or iPad starts with its device's frame and without the cursor
-    /// (`DeviceTakeDefaults`), before its corners and its zooms are worked out.
+    /// (`DeviceTakeDefaults`), before its corners and its zooms are worked out. The automatic zoom follows the keyboard's
+    /// focus (`followsFocus`, `focusZoom-1`) only if the take recorded it, with any `focus` event, whatever the default
+    /// style says: it is the take's, as its cursor's images are.
     public static func make(
         project: LoadedProject, defaultStyle: DefaultStyle, makeID: (String) -> String, cameraLook: CameraLook = .newProjects
     ) -> EditDocument {
@@ -58,6 +60,7 @@ public enum NewDocument {
                 motionBlur: defaultStyle.zoomMotionBlur, regions: [], suppressed: []),
             camera: cameraLook.applied(to: legacy.camera),
             audio: AudioPlan(limiter: true, tracks: legacy.audio.tracks))
+        document.zoom.auto.followsFocus = events.contains { if case .focus = $0.kind { true } else { false } }
         document = DeviceTakeDefaults.applied(to: document, take: take)
         document.style.cornerRadius = max(style.cornerRadius, windowCornerCover(of: document, take: take, events: events))
         document.zoom.regions = AutoZoomPlanner.plan(take: take, events: events, document: document)
