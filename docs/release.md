@@ -1038,6 +1038,13 @@ Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que s
 - Con el proyecto de la preparación abierto, en español, con la ventana del tamaño de siempre: la barra del editor muestra, antes del botón del panel, los menús Tomas (una pila) y Marcadores (un marcador), los dos atenuados y sin abrirse; con el puntero encima dicen «Tomas» y «Marcadores». La barra no corta el nombre del proyecto ni Exportar. Lo mismo en macOS 15.
 - El panel tiene nueve pestañas; la última (⌘9, un garabato, «Anotaciones») está vacía. ⌘1 a ⌘8 siguen mostrando las de antes, y al cerrar y abrir el proyecto en Anotaciones vuelve a ella.
 - La línea de tiempo tiene las mismas filas, en el mismo orden y con los mismos nombres que en la fase 2: ninguna fila de Anotaciones, Clips importados ni Música. El volumen y Silenciar de cada pista, en el panel y en la cabecera de la fila, hacen lo mismo que en la fase 2 y son un solo ⌘Z.
+**Una pista por app** (U9)
+
+- En la isla, Audio del sistema ▸ Por app ▸ «Elegir apps…»: el menú se titula «Una pista por app». Con 8 apps elegidas, arriba dice «Hasta 8 apps» y las demás están apagadas (las elegidas se pueden sacar). Con el panel en español, ningún texto se corta.
+- Elegir Safari y Música en Por app y grabar 20 s con las dos sonando: en `manifest.json` de la toma hay dos pistas, `system-audio-com-apple-Safari` y `system-audio-com-apple-Music`, cada una con su `appBundleID` y su `appName` («Safari», «Música» o «Music» según el idioma del sistema), y cada una tiene solo lo suyo: en el editor, silenciar una calla solo esa app.
+- Con Música cerrada al empezar y abierta a los 10 s: su pista está en el manifiesto desde el principio y suena en silencio hasta que Música abre; después graba su sonido.
+- Ese proyecto lo abre la app de la fase 2 (`build/fase2/Toma.app`) sin aviso y mezcla las dos apps.
+- «Todo» sigue en una sola pista `system-audio`; Por app sin apps elegidas graba una pista `system-audio` en silencio, como en la fase 2.
 
 ## Prueba en seco (ad hoc)
 

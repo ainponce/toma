@@ -39,12 +39,16 @@ public enum TapTargets: Equatable, Sendable {
 /// Which processes a system audio tap takes, and what the track says it records.
 public enum SystemAudioSelection {
     /// `all` excludes this process (`ownObjectID`, or the listed process whose PID is `ownPID`) and every exclusion.
-    /// `applications` takes the chosen apps and their helpers (bundle ID equal to a chosen one, or a chosen one
-    /// followed by `.`), never an exclusion nor this process. While none of them runs, the tap needs a process
-    /// that exists, so it names this one as a placeholder (`.only([ownObjectID])`, or `.only([])` without one),
-    /// which `ProcessTapSource` records as silence (`isPlaceholder`): Toma's own sound is never recorded.
+    /// `applications` takes the chosen apps and their helpers, never an exclusion nor this process: each process goes
+    /// to its app (`owner(of:among:)`) among the chosen ones and `otherApplications`, the apps the take records in its
+    /// other tracks (phase 3, one track per app), and is taken only if that app is a chosen one. So with Chrome and
+    /// Chrome Canary in two tracks, `com.google.Chrome.helper` is Chrome's and `com.google.Chrome.canary.helper` only
+    /// Canary's, never both. While none of them runs, the tap needs a process that exists, so it names this one as a
+    /// placeholder (`.only([ownObjectID])`, or `.only([])` without one), which `ProcessTapSource` records as silence
+    /// (`isPlaceholder`): Toma's own sound is never recorded.
     public static func targets(
-        scope: SystemAudioScope, processes: [AudioProcessInfo], ownPID: pid_t, ownObjectID: AudioObjectID?
+        scope: SystemAudioScope, processes: [AudioProcessInfo], ownPID: pid_t, ownObjectID: AudioObjectID?,
+        otherApplications: [String] = []
     ) -> TapTargets {
         switch scope {
         case .all:
@@ -52,14 +56,22 @@ public enum SystemAudioSelection {
             let excluded = processes.filter { $0.pid != ownPID && $0.objectID != own && SystemAudioExclusions.matches($0) }
             return .allExcept((own.map { [$0] } ?? []) + excluded.map(\.objectID))
         case .applications(let chosen):
+            let apps = chosen + otherApplications.filter { !chosen.contains($0) }
             let taken = processes.filter { process in
                 guard process.pid != ownPID, process.objectID != ownObjectID, !SystemAudioExclusions.matches(process),
-                      let bundle = process.bundleIdentifier
+                      let bundle = process.bundleIdentifier, let app = owner(of: bundle, among: apps)
                 else { return false }
-                return chosen.contains { bundle == $0 || bundle.hasPrefix($0 + ".") }
+                return chosen.contains(app)
             }
             return taken.isEmpty ? placeholder(ownObjectID: ownObjectID) : .only(taken.map(\.objectID))
         }
+    }
+
+    /// The app among `apps` a process of bundle ID `bundle` belongs to: the longest that is `bundle`, or of which it is
+    /// a helper (`bundle` starts with the app's and a `.`: `com.google.Chrome.helper` is `com.google.Chrome`'s).
+    /// `nil` if none.
+    public static func owner(of bundle: String, among apps: [String]) -> String? {
+        apps.filter { bundle == $0 || bundle.hasPrefix($0 + ".") }.max { $0.count < $1.count }
     }
 
     /// Whether `a` and `b` name the same processes, in any order: only then does a running tap need no update.
@@ -73,8 +85,9 @@ public enum SystemAudioSelection {
     /// The bundle IDs a tap names on macOS 26 (`CATapDescription.bundleIDs`), so a process that starts mid-take,
     /// such as `systemsoundserverd`, is left out or taken from its first buffer. In `all` mode, the ones
     /// `trackSource` excludes. In `applications` mode, the chosen ones `trackSource` includes, followed by those of
-    /// the processes `targets` takes that are not among them (a chosen app's helpers), in case `bundleIDs` replaces
-    /// the process list instead of adding to it. The placeholder adds nothing: this process is never named.
+    /// the processes `targets` takes that are not among them (a chosen app's helpers, never those of an app of another
+    /// track, which `targets` leaves out), in case `bundleIDs` replaces the process list instead of adding to it. The
+    /// placeholder adds nothing: this process is never named.
     public static func tapBundleIDs(
         scope: SystemAudioScope, targets: TapTargets, processes: [AudioProcessInfo], ownPID: pid_t, ownBundleIdentifier: String?
     ) -> [String] {

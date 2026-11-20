@@ -156,13 +156,18 @@ public final class SyntheticAudioSource: CaptureSource {
     public let kind: TrackKind
     public let media = TrackMedia.audio
 
-    /// A microphone or an iPhone's audio with its `deviceUniqueID`, or system audio of every app but Toma.
+    /// A microphone or an iPhone's audio with its `deviceUniqueID`, or system audio of every app but Toma, or of only the
+    /// app it was made with (`app`), by that app's name.
     public var sourceInfo: TrackSource {
         switch kind {
         case .microphone:
             TrackSource(name: "Synthetic Microphone", deviceUniqueID: deviceUniqueID)
         case .systemAudio:
-            TrackSource(name: "Synthetic System Audio", excludedBundleIDs: ["dev.toma.Toma"])
+            if let app {
+                TrackSource(name: app.name, includedBundleIDs: [app.bundleID])
+            } else {
+                TrackSource(name: "Synthetic System Audio", excludedBundleIDs: ["dev.toma.Toma"])
+            }
         case .deviceAudio:
             TrackSource(name: "Synthetic iPhone Audio", deviceUniqueID: deviceUniqueID)
         case .display, .window, .camera, .device:
@@ -197,6 +202,8 @@ public final class SyntheticAudioSource: CaptureSource {
 
     private let clockSkewPPM: Double
     private let clock: @Sendable () -> HostTime
+    /// The one app a track of system audio records, as a track of one app (phase 3).
+    private let app: (bundleID: String, name: String)?
     private let runner = SyntheticRunner()
     private let audio: Mutex<Audio>
 
@@ -235,14 +242,17 @@ public final class SyntheticAudioSource: CaptureSource {
         sampleRate: Double = 48_000,
         channels: Int = 1,
         clockSkewPPM: Double = 0,
-        clock: @escaping @Sendable () -> HostTime = HostTime.now
+        clock: @escaping @Sendable () -> HostTime = HostTime.now,
+        app: (bundleID: String, name: String)? = nil
     ) {
         precondition(!kind.isVideo, "SyntheticAudioSource: \(kind) is not an audio kind")
+        precondition(app == nil || kind == .systemAudio, "SyntheticAudioSource: only system audio records an app")
         Self.checkFormat(sampleRate: sampleRate, channels: channels)
         self.trackID = trackID
         self.kind = kind
         self.clockSkewPPM = clockSkewPPM
         self.clock = clock
+        self.app = app
         self.audio = Mutex(Audio(sampleRate: sampleRate, channels: channels))
     }
 

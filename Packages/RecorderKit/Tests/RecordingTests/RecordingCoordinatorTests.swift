@@ -1119,6 +1119,88 @@ extension RealTimeRecordingTests {
             }
         }
 
+        // Phase 3 (plan 3c, Task U9, decision 1): every app's track is in the manifest, with its app, before anything is
+        // recorded; none is added mid-take.
+        @Test func appTracksAreInTheManifestBeforeRecording() async throws {
+            try await withTemporaryDirectory { directory in
+                var taken: Set<String> = []
+                let apps = [("com.apple.Safari", "Safari"), ("com.spotify.client", "Spotify")].map { bundle, name in
+                    let id = TrackRecord.systemAudioTrackID(bundleID: bundle, taken: taken)
+                    taken.insert(id)
+                    return ManifestPeekingSource(inner: SyntheticAudioSource(
+                        trackID: id, kind: .systemAudio, channels: 2, app: (bundleID: bundle, name: name)))
+                }
+                let display = SyntheticVideoSource(width: 320, height: 180, framesPerSecond: 30)
+                let rig = try Rig(in: directory, sources: [display, SyntheticAudioSource()] + apps)
+                for app in apps { app.peek = { [rig] in try? rig.manifestOnDisk() } }
+                let id = try await rig.coordinator.start()
+                try await Task.sleep(for: .seconds(1))
+                let record = try await rig.coordinator.stop()
+
+                let expected: [(id: String, bundle: String, name: String)] = [
+                    ("system-audio-com-apple-Safari", "com.apple.Safari", "Safari"),
+                    ("system-audio-com-spotify-client", "com.spotify.client", "Spotify"),
+                ]
+                // As each app's source started, before its first sample: both tracks, each with its app.
+                for app in apps {
+                    let before = try #require(app.peeked)
+                    #expect(before.formatVersion == 3)
+                    let take = try #require(before.takes.first { $0.id == id })
+                    #expect(take.status == .recording)
+                    let tracks = take.tracks.filter { $0.kind == .systemAudio }
+                    #expect(tracks.map(\.id) == expected.map(\.id))
+                    #expect(tracks.map(\.appBundleID) == expected.map(\.bundle))
+                    #expect(tracks.map(\.appName) == expected.map(\.name))
+                    #expect(tracks.map(\.source) == expected.map { TrackSource(name: $0.name, includedBundleIDs: [$0.bundle]) })
+                }
+                // Stopped: the same tracks, each with its segments; the microphone and the display have no app.
+                let manifest = try rig.manifestOnDisk()
+                #expect(manifest.formatVersion == 3)
+                let take = try rig.takeOnDisk(id)
+                #expect(record == take && take.status == .complete)
+                #expect(take.tracks.map(\.id) == ["display-1", "mic"] + expected.map(\.id))
+                #expect(take.tracks.map(\.appBundleID) == [nil, nil] + expected.map(\.bundle))
+                #expect(take.tracks.map(\.appName) == [nil, nil] + expected.map(\.name))
+                for track in take.tracks {
+                    try #require(track.segments.count == 1, "\(track.id)")
+                    #expect(track.segments[0].file == "takes/\(id)/\(track.id)/seg-0001.mov")
+                    #expect(track.segments[0].endReason == .stopped, "\(track.id)")
+                }
+                await rig.warningsDone.value
+                #expect(rig.warnings.all.isEmpty)
+            }
+        }
+
+        /// Reads the manifest (`peek`) as it starts, before its source delivers anything, then starts it.
+        final class ManifestPeekingSource: CaptureSource, @unchecked Sendable {
+            let inner: SyntheticAudioSource
+            /// Set before the take starts; read on its first `start`.
+            var peek: @Sendable () -> Manifest? = { nil }
+            private let first = Mutex<Manifest??>(nil)
+
+            init(inner: SyntheticAudioSource) {
+                self.inner = inner
+            }
+
+            var trackID: String { inner.trackID }
+            var kind: TrackKind { inner.kind }
+            var media: TrackMedia { inner.media }
+            var sourceInfo: TrackSource { inner.sourceInfo }
+            var activeDeviceUniqueID: String? { inner.activeDeviceUniqueID }
+            /// The manifest as the first `start` found it.
+            var peeked: Manifest? { first.withLock { $0 ?? nil } }
+
+            func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
+                let now = peek()
+                first.withLock { if $0 == nil { $0 = .some(now) } }
+                try await inner.start(on: queue, sink: sink)
+            }
+
+            func stop() async {
+                await inner.stop()
+            }
+        }
+
         @Test func cameraLossFallsBackAndLogsDeviceChanged() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = try Rig(

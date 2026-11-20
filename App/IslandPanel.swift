@@ -211,7 +211,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     #if DEBUG
     /// `-TomaShowcase island <variant>`: the open island in a mode (`display`, `window`, `area`, `device…`), with its settings
-    /// (`settings`) or with the camera on if it is allowed (`camera`), for screenshots; nothing is saved.
+    /// (`settings`), with the camera on if it is allowed (`camera`) or with system audio By App (`byApp`), for
+    /// screenshots; nothing is saved.
     func showcase(_ variant: String) {
         guard let panel = model.panel else { return }
         switch variant {
@@ -222,6 +223,8 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         }
         if variant == "settings" { panel.showsSettings = true }
         if variant == "camera", panel.camera.permission == .granted { panel.setCamera(on: true) }
+        // System audio By App with two apps (`byApp`, phase 3), set as is: nothing asks for its permission.
+        if variant == "byApp" { panel.selection.systemAudio = .applications(["com.apple.Safari", "com.apple.Music"]) }
         // iPhone mode with nothing connected (`device`), with one iPhone (`device-connected`), and with it while the
         // camera permission is not given (`device-camera`).
         if variant.hasPrefix("device") {

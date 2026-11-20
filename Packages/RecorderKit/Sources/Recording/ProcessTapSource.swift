@@ -28,12 +28,14 @@ import Synchronization
 ///
 /// No permission can be read: if the user refused it, the tap delivers silence without an error.
 public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
-    public let trackID = "system-audio"
+    public let trackID: String
     public let kind = TrackKind.systemAudio
     public let media = TrackMedia.audio
     public let sourceInfo: TrackSource
 
     private let scope: SystemAudioScope
+    /// The apps the take records in its other tracks: their processes are theirs, not this track's.
+    private let otherApplications: [String]
     private let ownPID = getpid()
     private let ownBundleIdentifier = Bundle.main.bundleIdentifier
     /// Every Core Audio call that builds, updates or destroys a run happens here, one at a time. Never on a queue the
@@ -42,11 +44,22 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     private let controlQueue = DispatchSerialQueue(label: "dev.toma.ProcessTapSource.control")
     /// Where the IOProc runs (it is dispatched here synchronously from the audio thread). Only copies run here.
     private let ioQueue = DispatchSerialQueue(label: "dev.toma.ProcessTapSource.io")
-    private let runs = CaptureRunLifecycle<Tap>(trackID: "system-audio")
+    private let runs: CaptureRunLifecycle<Tap>
 
-    public init(scope: SystemAudioScope) {
+    /// `trackID` is `system-audio`, or an app's (`SystemAudioTracks.plan`, phase 3); with `appName`, the track records that
+    /// one app and `sourceInfo.name` is its name (`SystemAudioTracks.trackRecord(of:)`), otherwise "System Audio".
+    /// `otherApplications` are the apps of the take's other tracks (`SystemAudioTrackPlan.otherApplications`): a process
+    /// that is one of theirs is left to them (`SystemAudioSelection.targets`).
+    public init(
+        scope: SystemAudioScope, trackID: String = "system-audio", appName: String? = nil, otherApplications: [String] = []
+    ) {
         self.scope = scope
-        sourceInfo = SystemAudioSelection.trackSource(scope: scope, ownBundleIdentifier: Bundle.main.bundleIdentifier)
+        self.otherApplications = otherApplications
+        self.trackID = trackID
+        runs = CaptureRunLifecycle<Tap>(trackID: trackID)
+        var info = SystemAudioSelection.trackSource(scope: scope, ownBundleIdentifier: Bundle.main.bundleIdentifier)
+        if let appName { info.name = appName }
+        sourceInfo = info
     }
 
     /// System audio has no device.
@@ -80,7 +93,8 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
     private func begin(id: Int, queue: DispatchSerialQueue, sink: any CaptureSink) throws {
         let processes = try AudioProcessCatalog.processes()
         let ownObjectID = try AudioProcessCatalog.objectID(forPID: ownPID)
-        let targets = SystemAudioSelection.targets(scope: scope, processes: processes, ownPID: ownPID, ownObjectID: ownObjectID)
+        let targets = SystemAudioSelection.targets(
+            scope: scope, processes: processes, ownPID: ownPID, ownObjectID: ownObjectID, otherApplications: otherApplications)
         let tap = Tap(controlQueue: controlQueue, targets: targets)
         do {
             try tap.build(
@@ -138,7 +152,8 @@ public final class ProcessTapSource: CaptureSource, @unchecked Sendable {
         do {
             let ownObjectID = try AudioProcessCatalog.objectID(forPID: ownPID)
             processes = try AudioProcessCatalog.processes()
-            next = SystemAudioSelection.targets(scope: scope, processes: processes, ownPID: ownPID, ownObjectID: ownObjectID)
+            next = SystemAudioSelection.targets(
+                scope: scope, processes: processes, ownPID: ownPID, ownObjectID: ownObjectID, otherApplications: otherApplications)
             silent = SystemAudioSelection.isPlaceholder(next, ownObjectID: ownObjectID)
         } catch {
             runs.fail(runID: runID, error: error)

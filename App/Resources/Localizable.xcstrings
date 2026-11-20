@@ -5750,6 +5750,17 @@
         }
       }
     },
+    "One Track per App" : {
+      "comment" : "System audio By App: the title of the menu of apps; each chosen app is recorded in a track of its own",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una pista por app"
+          }
+        }
+      }
+    },
     "One stretch sped up: %@ → %@" : {
       "comment" : "Speed Up Typing result with a single stretch (1:23 → 0:28)",
       "localizations" : {
@@ -10082,6 +10093,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Mientras tanto, la cámara queda centrada."
+          }
+        }
+      }
+    },
+    "Up to %lld apps" : {
+      "comment" : "System audio By App: in the menu of apps once the most apps are chosen (8, one track each); no other can be chosen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hasta %lld apps"
           }
         }
       }

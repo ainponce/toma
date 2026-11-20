@@ -48,7 +48,10 @@ struct SynthRecord: AsyncParsableCommand {
             The tracks, in this order: display-1 at the origin of the global space (or, with --window, \
             window-4242 at (100, 80)), display-2 and further ones each to the left of the one before (--displays), camera \
             at 30 fps, 1280×720 unless --camera-width and --camera-height say otherwise (--camera), mic, and system-audio \
-            in stereo at 48 kHz with a clock that runs 1500 ppm slow (--system-audio).
+            in stereo at 48 kHz with a clock that runs 1500 ppm slow (--system-audio), or instead one such track per app \
+            of --app-audio, as By App records them (phase 3): system-audio-<bundle ID with every character that is not \
+            a letter or a digit as a dash>, with the app's bundle ID and name (the installed app's, or the bundle ID) in \
+            the manifest.
 
             The take's events.jsonl gets synthetic input, the same in every take: the cursor going round a circle \
             about (320, 180), a click every second from 0.5 s, the arrow and from 1 s the I-beam (their images in \
@@ -99,6 +102,9 @@ struct SynthRecord: AsyncParsableCommand {
     @Flag(help: "Also record synthetic system audio, stereo at 48 kHz, with a clock 1500 ppm slow.")
     var systemAudio = false
 
+    @Option(help: "Also record synthetic system audio of these apps, by bundle ID separated by commas: a track each (up to 8).")
+    var appAudio: String?
+
     @Option(help: "Also record the keys that type this text, one every 100 ms (keyPress events; the package goes to version 4).")
     var keys: String?
 
@@ -118,6 +124,13 @@ struct SynthRecord: AsyncParsableCommand {
         guard displays > 0 else { throw ValidationError("--displays must be positive.") }
         if window, displays > 1 { throw ValidationError("--window records no display: leave out --displays.") }
         guard cameraWidth > 0, cameraHeight > 0 else { throw ValidationError("--camera-width and --camera-height must be positive.") }
+        if let appAudio {
+            guard !systemAudio else { throw ValidationError("--app-audio records system audio by app: leave out --system-audio.") }
+            let apps = Self.apps(appAudio)
+            guard !apps.isEmpty, apps.count <= SystemAudioTracks.maximumTracks else {
+                throw ValidationError("--app-audio takes 1 to 8 bundle IDs separated by commas.")
+            }
+        }
         if let rotateAt {
             guard device != nil else { throw ValidationError("--rotate-at needs --device.") }
             guard rotateAt >= 0, rotateAt.isFinite else { throw ValidationError("--rotate-at cannot be negative.") }
@@ -140,9 +153,7 @@ struct SynthRecord: AsyncParsableCommand {
                     trackID: "camera", kind: .camera, width: cameraWidth, height: cameraHeight, framesPerSecond: 30))
             }
             sources.append(SyntheticAudioSource())
-            if systemAudio {
-                sources.append(SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500))
-            }
+            sources += systemAudioSources()
             // No cursor, clicks or keys: the iPhone mode records none.
             try await recordTake(
                 in: directory, into: into, prefix: "synth", duration: duration, sources: sources, input: NoInputRecorder(),
@@ -164,9 +175,7 @@ struct SynthRecord: AsyncParsableCommand {
                 trackID: "camera", kind: .camera, width: cameraWidth, height: cameraHeight, framesPerSecond: 30))
         }
         sources.append(SyntheticAudioSource())
-        if systemAudio {
-            sources.append(SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500))
-        }
+        sources += systemAudioSources()
         let staticAfter = staticAfter
         var input: any InputRecorder = SyntheticInputRecorder()
         if let keys {
@@ -188,6 +197,25 @@ struct SynthRecord: AsyncParsableCommand {
                 }
                 for screen in screens { screen.pauseFrames(true) }
             })
+    }
+
+    /// The bundle IDs of a comma-separated list.
+    static func apps(_ argument: String) -> [String] {
+        argument.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    /// system-audio (--system-audio), or a track per app of --app-audio (`SystemAudioTracks.plan`), each stereo at 48 kHz
+    /// with a clock 1500 ppm slow; or none.
+    private func systemAudioSources() -> [any CaptureSource] {
+        if systemAudio {
+            return [SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2, clockSkewPPM: -1500)]
+        }
+        guard let appAudio else { return [] }
+        return SystemAudioTracks.plan(.applications(Self.apps(appAudio)), ownBundleIdentifier: nil).map { track in
+            SyntheticAudioSource(
+                trackID: track.trackID, kind: .systemAudio, channels: 2, clockSkewPPM: -1500,
+                app: track.appBundleID.map { (bundleID: $0, name: SystemAudioTracks.installedAppName(bundleID: $0)) })
+        }
     }
 }
 
@@ -280,7 +308,7 @@ struct Record: AsyncParsableCommand {
     @Option(help: "The camera's quality: p720 (1280×720), p1080 (1920×1080, when left out) or p2160 (3840×2160).")
     var cameraPreset: CameraPreset?
 
-    @Option(help: "Also record system audio: all, or the bundle IDs of the apps to record, separated by commas.")
+    @Option(help: "Also record system audio: all, or the bundle IDs of the apps to record, separated by commas, each in a track of its own.")
     var systemAudio: String?
 
     @Flag(help: "Do not note when keys are typed.")
@@ -351,8 +379,14 @@ struct Record: AsyncParsableCommand {
                 preset: cameraPreset ?? .p1080))
         }
         sources.append(MicrophoneCaptureSource(preferredDeviceUniqueID: nil))
+        // A tap per track: all of the system, or each app (`SystemAudioTracks.plan`), as the app records them.
         if let scope = systemAudio.flatMap(Self.scope) {
-            sources.append(ProcessTapSource(scope: scope))
+            for track in SystemAudioTracks.plan(scope, ownBundleIdentifier: Bundle.main.bundleIdentifier) {
+                sources.append(ProcessTapSource(
+                    scope: track.scope, trackID: track.trackID,
+                    appName: track.appBundleID.map(SystemAudioTracks.installedAppName(bundleID:)),
+                    otherApplications: track.otherApplications))
+            }
         }
         try await recordTake(
             in: directory, prefix: "record", duration: duration,

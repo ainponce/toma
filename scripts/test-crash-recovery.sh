@@ -689,6 +689,78 @@ second_take_case() {
   echo "second take crash case passed"
 }
 
+# One track per app (phase 3, plan 3c, Task U9; design §7.1): synth-record --app-audio with two apps, killed with SIGKILL
+# while it records. Every app's track is in the manifest, with its app, as soon as the take starts; after the recovery
+# both are closed, keep their appBundleID and appName and pass verify, and the package is still at version 3 (a reader
+# of phase 2 mixes the tracks as they are).
+app_tracks_case() {
+  local TMP PID PKG
+  TMP=$(mktemp -d)
+  echo "== one track per app: synth-record --app-audio com.apple.Safari,com.spotify.client, kill -9 at 6 s (in $TMP)"
+  "$BIN" synth-record "$TMP" --duration 20 --app-audio com.apple.Safari,com.spotify.client > "$TMP/out" &
+  PID=$!
+  until [ -s "$TMP/out" ]; do
+    if ! kill -0 "$PID" 2>/dev/null; then
+      echo "FAIL: synth-record --app-audio exited before it started recording"
+      wait "$PID" || true
+      exit 1
+    fi
+    sleep 0.1
+  done
+  PKG=$(head -1 "$TMP/out")
+  # $1 = the take's status; with $2 = "closed", every segment of the two tracks must be closed.
+  app_tracks_check() {
+    python3 -I - "$PKG/manifest.json" "$1" "${2:-}" <<'PY'
+import json, sys
+path, status, closed = sys.argv[1], sys.argv[2], sys.argv[3] == "closed"
+manifest = json.load(open(path))
+if manifest["formatVersion"] != 3:
+    sys.exit(f"the package is at version {manifest['formatVersion']}, not 3")
+take = manifest["takes"][0]
+if take["status"] != status:
+    sys.exit(f"the take is {take['status']}, not {status}")
+apps = {t["id"]: t for t in take["tracks"] if t["kind"] == "systemAudio"}
+expected = {"system-audio-com-apple-Safari": "com.apple.Safari", "system-audio-com-spotify-client": "com.spotify.client"}
+if list(apps) != list(expected):
+    sys.exit(f"the tracks of system audio are {list(apps)}, not {list(expected)}")
+for track_id, bundle in expected.items():
+    track = apps[track_id]
+    if track.get("appBundleID") != bundle or not track.get("appName") or track["source"].get("includedBundleIDs") != [bundle]:
+        sys.exit(f"{track_id} does not say its app: {json.dumps(track)}")
+    if track["source"]["name"] != track["appName"]:
+        sys.exit(f"{track_id} is named {track['source']['name']!r}, not after its app {track['appName']!r}")
+    if closed and (not track["segments"] or any(s.get("endHostTime") is None for s in track["segments"])):
+        sys.exit(f"{track_id} has a segment left open, or none")
+for track in take["tracks"]:
+    if track["kind"] != "systemAudio" and ("appBundleID" in track or "appName" in track):
+        sys.exit(f"{track['id']} says an app")
+print(", ".join(f'{i} ({apps[i]["appName"]})' for i in expected) + ": each with its app")
+PY
+  }
+  if ! app_tracks_check recording; then
+    echo "FAIL: as the take started, the manifest did not list every app's track with its app"
+    kill -9 "$PID" 2>/dev/null || true
+    exit 1
+  fi
+  sleep 6
+  kill -9 "$PID"
+  wait "$PID" 2>/dev/null || true
+  "$BIN" recover "$TMP"
+  if ! app_tracks_check recovered closed; then
+    echo "FAIL: the recovery did not close every app's track, or lost its app"
+    exit 1
+  fi
+  "$BIN" verify "$PKG" --min-duration 4 --max-drop-ratio 0.01 | tee "$TMP/verify.out"
+  for TRACK in display-1 mic system-audio-com-apple-Safari system-audio-com-spotify-client; do
+    if ! grep -q "^OK: $TRACK " "$TMP/verify.out"; then
+      echo "FAIL: verify did not pass $TRACK"
+      exit 1
+    fi
+  done
+  rm -rf "$TMP"
+  echo "app tracks crash case passed"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
@@ -698,4 +770,5 @@ library_case
 gif_case
 keys_case
 second_take_case
+app_tracks_case
 echo "crash test passed"
