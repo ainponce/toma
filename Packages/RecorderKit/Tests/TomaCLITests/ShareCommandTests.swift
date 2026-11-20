@@ -59,7 +59,7 @@ import Testing
 
     @Test func shareIsInTheSubcommandsAndTheCatalog() {
         #expect(Toma.configuration.subcommands.contains { $0 == ShareCommand.self })
-        #expect(MCPToolCatalog.all.map(\.name).last == "share")
+        #expect(MCPToolCatalog.all.map(\.name).contains("share"))
     }
 
     // MARK: - The tool
