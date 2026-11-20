@@ -8,15 +8,18 @@ import ProjectFormat
 public enum MarkerCommands {
     public static let maximumNameLength = 100
 
-    /// A marker with a name at the output time `τ` of the clip shown there (the point of the take of a clip with content),
-    /// as `added`. `nil` if the output has no clip, or another marker is on the same frame (a marker is not added in
-    /// the middle of another's frame).
+    /// A marker without a name at the output time `τ` of the clip shown there (the point of the take of a clip with content),
+    /// as `added`; it shows where `MarkerList.output(take:t:sequence:timeMap:)` places it: at `τ`, or where the clip with
+    /// content starts. `nil` if the output has no clip, or another marker is on the frame it would show on (a marker is
+    /// not added in the middle of another's frame, nor a second one on a title card).
     public static func add(
         _ doc: EditDocument, atOutput τ: Int64, timeMap: TimeMap, recorded: MarkerList.Recorded, makeID: (String) -> String
     ) -> EditStep? {
-        guard let place = place(atOutput: τ, doc: doc, timeMap: timeMap) else { return nil }
+        guard let place = place(atOutput: τ, doc: doc, timeMap: timeMap),
+            let output = MarkerList.output(take: place.take, t: place.t, sequence: doc.sequence, timeMap: timeMap)
+        else { return nil }
         let frameRate = doc.frameRate, frameCount = timeMap.frameCount(frameRate: frameRate)
-        let frame = frameOf(τ, frameRate: frameRate, frameCount: frameCount)
+        let frame = frameOf(output, frameRate: frameRate, frameCount: frameCount)
         let shown = MarkerList.visible(document: doc, recorded: recorded, timeMap: timeMap)
         guard MarkerList.at(frame: frame, in: shown, frameRate: frameRate, frameCount: frameCount) == nil else { return nil }
         var ids = Set(doc.markers.items.map(\.id))

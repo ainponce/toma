@@ -226,3 +226,40 @@ func accentsAndEmojiAreKept(codec: ExportCodec) async throws {
     #expect(throws: ExportError.self) { try ChapterTrack.formatDescription(for: .m4a) }
 }
 
+
+/// A named marker on a title card or a frozen frame (M on it stores the point of its take) starts its chapter's sample
+/// where that clip starts: a card at the start of the output, one splitting a stretch, one at the end, and a frozen frame
+/// at a stretch's end with a cut after it.
+@Test func aMarkerOnACardOrAFreezeStartsItsSampleThere() throws {
+    let base = HostTime(nanoseconds: 100_000_000_000)
+    func at(_ s: Int64) -> HostTime { HostTime(nanoseconds: base.nanoseconds + UInt64(s) * UInt64(second)) }
+    let card = ClipContent.card(TitleCard(title: "Capítulo 2", style: .centered, background: .stage), duration: 3 * second)
+    func point(_ id: String, _ s: Int64, _ content: ClipContent = card) -> Clip {
+        Clip(id: id, take: "take-001", start: at(s), end: at(s), speed: 1, content: content)
+    }
+    func stretch(_ id: String, _ start: Int64, _ end: Int64) -> Clip {
+        Clip(id: id, take: "take-001", start: at(start), end: at(end), speed: 1)
+    }
+    // (the sequence, the point, where its clip starts in the output, in ms)
+    let cases: [([Clip], Int64, Int64)] = [
+        ([point("c-00000001", 0), stretch("c-00000002", 0, 4)], 0, 0),
+        ([stretch("c-00000001", 0, 2), point("c-00000002", 2), stretch("c-00000003", 2, 4)], 2, 2000),
+        ([stretch("c-00000001", 0, 2), point("c-00000002", 2)], 2, 2000),
+        ([stretch("c-00000001", 0, 2), point("c-00000002", 2, .freeze(duration: 2 * second)), stretch("c-00000003", 3, 5)], 2, 2000),
+    ]
+    let format = try ChapterTrack.formatDescription(for: .mp4)
+    for (sequence, t, start) in cases {
+        let document = EditDocument(
+            documentVersion: 4, logSequence: 0, aspect: .landscape, frameRate: 30, sequence: sequence,
+            screens: ScreenPlan(initial: [:], changes: []), style: DefaultStyle.toma.style, cursor: DefaultStyle.toma.cursor,
+            zoom: ZoomPlan(show: true, auto: DefaultStyle.toma.zoomAuto, spring: DefaultStyle.toma.zoomSpring, motionBlur: 0, regions: [], suppressed: []),
+            camera: CameraPlan(show: true, initial: [:], changes: []), audio: AudioPlan(limiter: false, tracks: [:]),
+            markers: MarkerPlan(items: [Marker(id: "m-00000001", take: "take-001", t: at(t), name: "Capítulo 2", origin: .added)]))
+        let map = TimeMap(sequence: sequence)
+        let shown = MarkerList.visible(document: document, recorded: [:], timeMap: map)
+        let chapters = Chapters.list(shown, duration: map.duration, introTitle: "Intro")
+        let samples = try ChapterTrack.samples(chapters, duration: map.duration, format: format)
+        #expect(samples.last?.presentationTimeStamp == CMTime(value: start, timescale: ChapterTrack.timescale))
+        #expect(samples.count == (start == 0 ? 1 : 2))
+    }
+}

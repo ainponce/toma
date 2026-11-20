@@ -160,6 +160,39 @@ private enum Fixture {
     let step = try #require(MarkerCommands.add(doc, atOutput: Fixture.ns(2), timeMap: map, recorded: [:], makeID: ids.make))
     let added = try Fixture.apply(step, to: doc)
     #expect(added.markers.items[0].t == Fixture.at(1))
+    // It shows where the frozen frame starts, not where the stretch after it does.
+    #expect(MarkerList.visible(document: added, recorded: [:], timeMap: map).map(\.output) == [Fixture.ns(1)])
+}
+
+/// M on a title card, or on a frozen frame, shows the marker where that clip starts, wherever the clip is: at the start of
+/// the output, splitting a stretch, at the end of the output, a frozen frame at a stretch's end with a cut after it.
+@Test func addingOnACardOrAFreezeShowsAtItsStart() throws {
+    let card = ClipContent.card(TitleCard(title: "Capítulo 2", style: .centered, background: .stage), duration: Fixture.ns(3))
+    func point(_ id: String, _ s: Double, _ content: ClipContent = card) -> Clip {
+        Clip(id: id, take: "take-001", start: Fixture.at(s), end: Fixture.at(s), speed: 1, content: content)
+    }
+    func stretch(_ id: String, _ start: Double, _ end: Double) -> Clip {
+        Clip(id: id, take: "take-001", start: Fixture.at(start), end: Fixture.at(end), speed: 1)
+    }
+    // (the sequence, an output time on the card or the frozen frame, where it starts)
+    let cases: [([Clip], Double, Double)] = [
+        ([point("c-00000001", 0), stretch("c-00000002", 0, 4)], 1.5, 0),
+        ([stretch("c-00000001", 0, 2), point("c-00000002", 2), stretch("c-00000003", 2, 4)], 3.5, 2),
+        ([stretch("c-00000001", 0, 2), point("c-00000002", 2)], 3.5, 2),
+        ([stretch("c-00000001", 0, 2), point("c-00000002", 2, .freeze(duration: Fixture.ns(2))), stretch("c-00000003", 3, 5)], 3, 2),
+    ]
+    for (sequence, τ, start) in cases {
+        let ids = Fixture.Counter()
+        var doc = Fixture.document()
+        doc.sequence = sequence
+        let map = TimeMap(sequence: sequence)
+        let step = try #require(MarkerCommands.add(doc, atOutput: Fixture.ns(τ), timeMap: map, recorded: [:], makeID: ids.make))
+        let added = try Fixture.apply(step, to: doc)
+        let shown = MarkerList.visible(document: added, recorded: [:], timeMap: map)
+        #expect(shown.map(\.output) == [Fixture.ns(start)])
+        // M again elsewhere on the same clip would put a second one on that frame: nothing.
+        #expect(MarkerCommands.add(added, atOutput: Fixture.ns(τ + 0.25), timeMap: map, recorded: [:], makeID: ids.make) == nil)
+    }
 }
 
 @Test func addingTwiceOnOneFrameIsNothing() throws {
