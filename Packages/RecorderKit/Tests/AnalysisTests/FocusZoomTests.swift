@@ -198,6 +198,98 @@ extension ActivityFixtures {
             #expect(regions.last.map { isFixed($0.focus, at: 1100.0 / 1440, 709.0 / 900) } == true)
         }
 
+        /// Filling a form: typing from 5 to 13 s with the text cursor on three lines (y 200, 240 and 280, all in the view),
+        /// and a click on each next field, at 7.5 and 10.5 s, while typing goes on.
+        private var form: [InputEvent] {
+            keys(from: 5, to: 13)
+                + carets(from: 5.05, count: 26) { SIMD2(300 + 9 * Double($0 % 10), 200) }
+                + carets(from: 7.6, count: 30) { SIMD2(300 + 9 * Double($0 % 10), 240) }
+                + carets(from: 10.6, count: 25) { SIMD2(300 + 9 * Double($0 % 10), 280) }
+                + click(7.5, x: 320, y: 240) + click(10.5, x: 320, y: 280)
+        }
+
+        @Test func whatThePointerDoesWhileTypingMakesNoBlockOfItsOwn() {
+            // A click that moves the text cursor in the view, while typing from 5 to 20 s: the cursor's block lasts
+            // the whole typing, and the click makes none.
+            let moved = keys(from: 5, to: 20) + carets(from: 5.05, count: 150) { SIMD2(300 + 9 * Double($0 % 10), 200) }
+                + click(8, x: 400, y: 200)
+            let regions = plan(state + moved)
+            #expect(spans(regions) == [4.55...21.25])
+            #expect(regions.first.map { isFixed($0.focus, at: 300.0 / 1440, 209.0 / 900) } == true)
+            // A drag and a pause of the cursor there neither.
+            let dragged = moved + drag(12, 12.5, from: SIMD2(300, 200), to: SIMD2(380, 200))
+            #expect(spans(plan(state + dragged)) == [4.55...21.25])
+            let paused = moved + (0...25).map { pointer(14 + 0.5 * Double($0) / 25, x: 500 + 4 * Double($0), y: 400) }
+                + [pointer(16, x: 650, y: 400)]
+            #expect(spans(plan(state + paused, auto: settings { $0.triggers = .clicksAndPauses })) == [4.55...21.25])
+            // Filling a form: one block to 1.0 s after the typing, never two over each other.
+            #expect(spans(plan(state + form)) == [4.55...14.25])
+            // A click that takes the text cursor out of the view still cuts the line, at the first cursor out of it.
+            let far = keys(from: 5, to: 9) + carets(from: 5.05, count: 30) { SIMD2(300 + 9 * Double($0 % 10), 200) }
+                + click(8, x: 400, y: 700) + carets(from: 8.05, count: 10) { SIMD2(400 + 9 * Double($0), 700) }
+            let jumped = plan(state + far)
+            #expect(spans(jumped) == [4.55...8.05, 8.05...10.25])
+            #expect(jumped.last.map { isFixed($0.focus, at: 400.0 / 1440, 709.0 / 900) } == true)
+            // A click before the typing still has its block, which meets the cursor's halfway.
+            #expect(spans(plan(state + click(3, x: 300, y: 200) + keys(from: 3.5, to: 5) + [caret(3.55, 300, 200)])) == [2.5...3.275, 3.275...6.25])
+            // Without `followsFocus`, the clicks are as always.
+            #expect(plan(state + form, auto: settings { $0.followsFocus = false }) == plan(form, auto: settings { $0.followsFocus = false }))
+        }
+
+        /// No two of `autos` overlap, in the source or in output time.
+        private func expectApart(_ autos: [ZoomRegion], timeMap: TimeMap, _ comment: Comment) {
+            #expect(zip(autos, autos.dropFirst()).allSatisfy { $0.end <= $1.start }, comment)
+            let outputs = autos.compactMap { timeMap.outputRange(ofSource: $0.start..<$0.end, take: takeID) }
+            #expect(outputs.count == autos.count, comment)
+            #expect(zip(outputs, outputs.dropFirst()).allSatisfy { $0.upperBound <= $1.lowerBound }, comment)
+        }
+
+        /// The sequences the focus is planned over: the take at several speeds, and cut inside the typing of `form`.
+        enum Timeline: String, CaseIterable, CustomTestStringConvertible, Sendable {
+            case half, normal, double, quadruple, cutWhileTyping, cutWhileTypingAtDouble
+
+            var testDescription: String { rawValue }
+
+            var clips: [Clip] {
+                switch self {
+                case .half: [clip(1, from: 0, to: 60, speed: 0.5)]
+                case .normal: [clip(1, from: 0, to: 60)]
+                case .double: [clip(1, from: 0, to: 60, speed: 2)]
+                case .quadruple: [clip(1, from: 0, to: 60, speed: 4)]
+                case .cutWhileTyping: [clip(1, from: 0, to: 7.3), clip(2, from: 9.2, to: 60)]
+                case .cutWhileTypingAtDouble: [clip(1, from: 0, to: 7.3, speed: 2), clip(2, from: 9.2, to: 60, speed: 2)]
+                }
+            }
+        }
+
+        @Test(arguments: Timeline.allCases)
+        func blocksNeverOverlapWithTheFocus(_ sequence: Timeline) {
+            let timeMap = TimeMap(sequence: sequence.clips)
+            // The form, and everything else of `AutoZoomPlannerTests` with the focus all along and clicks while typing.
+            let everything = scripts.last ?? []
+            let busy = everything + focusAllAlong + click(12.5, x: 320, y: 220) + click(28.4, x: 900, y: 600)
+                + drag(13, 13.4, from: SIMD2(300, 300), to: SIMD2(500, 320)) + form
+            for (name, events) in [("form", state + form), ("busy", busy)] {
+                for auto in [settings(), settings { $0.triggers = .clicksAndPauses }, settings { $0.follow = false; $0.groupGap = 1 }] {
+                    let autos = plan(events, document: makeDocument(sequence: sequence.clips, auto: auto))
+                    let comment: Comment = "\(name) over \(sequence)"
+                    #expect(!autos.isEmpty, comment)
+                    expectApart(autos, timeMap: timeMap, comment)
+                    // With the user's blocks too.
+                    let users = [
+                        ZoomRegion(
+                            id: "z-00000001", take: takeID, start: at(6), end: at(6.5), origin: .user, depth: 1.6, focus: .follow,
+                            instant: false),
+                        ZoomRegion(
+                            id: "z-00000002", take: takeID, start: at(11), end: at(12), origin: .user, depth: 1.6, focus: .follow,
+                            instant: false),
+                    ]
+                    let beside = plan(events, document: makeDocument(sequence: sequence.clips, auto: auto, regions: users))
+                    expectApart((beside + users).sorted { $0.start < $1.start }, timeMap: timeMap, comment)
+                }
+            }
+        }
+
         // MARK: - Changes of the focused element
 
         @Test func aStableElementReachedByKeyboardZooms() throws {

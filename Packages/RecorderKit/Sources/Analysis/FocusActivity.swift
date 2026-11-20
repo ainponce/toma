@@ -148,7 +148,7 @@ enum FocusExtraction {
     }
 
     /// The index of the one of `spans` (in order and apart) that contains `t`; `nil` outside them.
-    private static func span(containing t: Int64, in spans: [Range<Int64>]) -> Int? {
+    static func span(containing t: Int64, in spans: [Range<Int64>]) -> Int? {
         var (low, high) = (0, spans.count)
         while low < high {
             let middle = low + (high - low) / 2
@@ -200,6 +200,15 @@ extension Planner {
     /// The changes of the element, as the planner's elements: each zooms as a click with its box.
     func focusElements(_ activity: Activity) -> [Element] {
         activity.focusChanges.map { Element(start: $0.output, end: $0.output, box: $0.box, host: $0.host, isFocus: true) }
+    }
+
+    /// `elements` without those that start in a span with text cursors (`Activity.caretRuns`): the span is the cursor's,
+    /// so a click, a drag or a pause in it makes no block (a click that takes the text cursor out of the view cuts the
+    /// line anyway), and no block starts inside a line of the cursor, which step 5 needs to keep blocks apart.
+    func outsideCaretRuns(_ elements: [Element], _ activity: Activity) -> [Element] {
+        let runs = activity.caretRuns.map(\.span)
+        guard !runs.isEmpty else { return elements }
+        return elements.filter { FocusExtraction.span(containing: $0.start, in: runs) == nil }
     }
 
     /// The spans of typing with no text cursor in them: those that hold groups (step 2) and make one alone (step 3).
