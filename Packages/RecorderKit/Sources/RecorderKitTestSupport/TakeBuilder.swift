@@ -182,8 +182,9 @@ public final class TakeBuilder {
     }
 
     /// Writes the take `take` into `package`, which has a manifest (of the takes written before, which it never
-    /// touches): `write(status:)` appends it to the manifest's takes, in the version the package has (raising the
-    /// version for a second take is the recorder's rule, not the builder's). Throws for a take the manifest already has.
+    /// touches): `write(status:)` appends it to the manifest's takes and, as the recorder does, raises a package below
+    /// version 5 to 5 in the same write (phase 3 design §11: a package with two takes or more is version 5). Throws for
+    /// a take the manifest already has.
     public init(appendingTo package: ProjectPackage, take: String) throws {
         let manifest = try ManifestStore(package: package).manifest
         guard !manifest.takes.contains(where: { $0.id == take }) else {
@@ -362,7 +363,12 @@ public final class TakeBuilder {
         for i in tracks.indices { tracks[i].segments.sort { $0.index < $1.index } }
         let take = TakeRecord(
             id: takeID, status: status, startedAt: Date(timeIntervalSince1970: 1_800_000_000), tracks: tracks, cameraStyle: cameraStyle)
-        try ManifestStore(package: package).update { $0.takes.append(take) }
+        let store = try ManifestStore(package: package)
+        if !store.manifest.takes.isEmpty, store.manifest.formatVersion < 5 {
+            try store.update(raisingTo: 5) { $0.takes.append(take) }
+        } else {
+            try store.update { $0.takes.append(take) }
+        }
         let log = try EventLogWriter(url: package.eventsURL(take: takeID))
         let ordered = events.enumerated().sorted { ($0.element.t, $0.offset) < ($1.element.t, $1.offset) }
         for (_, event) in ordered { log.append(event) }

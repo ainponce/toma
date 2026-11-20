@@ -37,8 +37,8 @@ private final class CountingReader: Sendable {
             #expect(project.take.id == "take-002")
             #expect(project.takes == project.manifest.takes)
             #expect(project.takes.map(\.id) == ["take-001", "take-002"])
-            // The second take is appended to the package as it is: its version, and the first take as it was written.
-            #expect(project.manifest.formatVersion == Manifest.currentFormatVersion)
+            // The second take raises the package to 5 (phase 3 design §11) and leaves the first take as it was written.
+            #expect(project.manifest.formatVersion == 5)
             #expect(project.takes[0].tracks.map(\.id) == ["display-1", "mic"])
             #expect(project.takes[1].tracks.map(\.id) == ["display-1", "mic"])
             let first = try Self.logged("take-001", of: project)
