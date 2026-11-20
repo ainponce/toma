@@ -6,7 +6,8 @@ import ProjectFormat
 
 /// What `EditSession.importAsset` copies into a package's `assets/`.
 public enum AssetKind: Sendable {
-    /// An image for a background (design §6.1, `PackageFileKind.asset`): a PNG, a JPEG or a HEIC.
+    /// An image for a background (design §6.1, `PackageFileKind.asset`): a PNG, a JPEG or a HEIC, or a TIFF, a GIF or a
+    /// PDF converted to PNG as it is imported (phase 3 design §5.4).
     case image
     /// A 3D LUT for the camera's colors (phase 2 design §6.3, `PackageFileKind.lut`): a `.cube`.
     case lut
@@ -18,7 +19,7 @@ public enum AssetKind: Sendable {
     /// The extensions a file of this kind is taken with, lowercased (`jpeg` as `jpg`, `aif` as `aiff`).
     var extensions: [String] {
         switch self {
-        case .image: AssetImport.allowedExtensions
+        case .image: AssetImport.importableImageExtensions
         case .lut: ["cube"]
         case .video: ["mov", "mp4", "m4v"]
         case .audio: ["m4a", "mp3", "wav", "aiff", "caf"]
@@ -47,8 +48,8 @@ public enum AssetKind: Sendable {
 /// Why an image or a `.cube` could not be copied into a package, besides the `POSIXError` of a file and, for a `.cube`,
 /// the `CubeLUTError` of its content.
 public enum AssetImportError: Error, Equatable, Sendable {
-    /// The file's extension, lowercased, is not one of `AssetImport.allowedExtensions` (with `jpeg` as `jpg`), or not
-    /// `cube` for `AssetImport.copyLUT`.
+    /// The file's extension, lowercased, is not one of `AssetImport.importableImageExtensions` (with `jpeg` as `jpg`), or
+    /// not `cube` for `AssetImport.copyLUT`.
     case unsupportedExtension(String)
     /// The file changed while it was copied: what was copied is not what was named.
     case changedWhileCopying
@@ -83,14 +84,20 @@ public enum AssetImportOutcome: Equatable, Sendable {
 /// Copies an image of the user's into a package's `assets/` for a background (design §6.1): named by its content, so the
 /// same image is there once, and never through a link inside the package.
 public enum AssetImport {
-    /// The images an asset is decoded as (`PackageFileKind.asset.imageTypes`): PNG, JPEG and HEIC. No TIFF: a package's
-    /// asset is never decoded as one.
+    /// The images an asset is decoded as (`PackageFileKind.asset.imageTypes`): PNG, JPEG and HEIC, copied as they are.
+    /// No TIFF: a package's asset is never decoded as one; a TIFF, a GIF or a PDF is converted to PNG as it is imported
+    /// (`convertedExtensions`).
     public static let allowedExtensions = ["png", "jpg", "heic"]
 
     /// Copies the file at `url` (a PNG, JPEG or HEIC by its extension, at most `PackageFileKind.asset.maxBytes`) to
     /// `assets/<sha>.<ext>` of `package` and gives that path, as the document names it: `<sha>` the first 32 hex digits of
     /// the SHA-256 of its bytes, `<ext>` its extension lowercased, with `jpeg` as `jpg`. A regular file of that name and
     /// size there already is the same image: nothing is copied again.
+    ///
+    /// A TIFF, a GIF or a PDF (`convertedExtensions`, of at most the same size) is read whole and converted first
+    /// (`convertedPNG(of:extension:)`): what is placed is that PNG, as `assets/<sha>.png` with `<sha>` of the PNG's bytes,
+    /// written from memory (never cloned) by the same rules; one that does not convert throws `EFTYPE`, with nothing
+    /// written.
     ///
     /// Inside the package nothing is followed: `assets/` is made with `mkdirat` and opened with `openat(O_DIRECTORY |
     /// O_NOFOLLOW)` from the package folder's descriptor (a link there throws `ELOOP`); the image goes to
@@ -139,15 +146,23 @@ public enum AssetImport {
 
     /// What `EditSession.importAsset` says at once for the file at `url` as `kind`, read as `place` reads it, before
     /// anything is written (or a legacy package upgraded) for it: `nil` if it can be copied, `.notAnImage` for an image
-    /// that does not decode (`decodes`) or a `.cube` that cannot be read, `.notALUT` for one whose content is not a 3D
-    /// LUT.
+    /// that does not decode (`decodes`) or, a TIFF, a GIF or a PDF, does not convert (`convertedPNG(of:extension:)`, as
+    /// `place` converts it), or a `.cube` that cannot be read, `.notALUT` for one whose content is not a 3D LUT.
     static func refusal(of url: URL, as kind: AssetKind) -> AssetImportOutcome? {
         switch kind {
         case .video, .audio:
             // Judged by `mediaRefusal`, which waits for AVFoundation.
             return nil
         case .image:
-            return decodes(url) ? nil : .notAnImage
+            guard convertedExtensions.contains(Self.extension(of: url)) else { return decodes(url) ? nil : .notAnImage }
+            do {
+                let source = try openSource(url, as: kind)
+                defer { close(source.fd) }
+                _ = try convertedPNG(of: source)
+                return nil
+            } catch {
+                return .notAnImage
+            }
         case .lut:
             do {
                 let source = try openSource(url, as: .lut)
@@ -192,7 +207,13 @@ public enum AssetImport {
         let source = try openSource(url, as: kind)
         defer { close(source.fd) }
         let name: String
+        // A TIFF, a GIF or a PDF: the PNG placed in its stead, converted before anything is made in the package.
+        var converted: Data?
         switch kind {
+        case .image where convertedExtensions.contains(source.ext):
+            let png = try convertedPNG(of: source)
+            converted = png
+            name = hash(png) + ".png"
         case .image, .video, .audio:
             do {
                 name = try hash(source.fd) + "." + source.ext
@@ -205,7 +226,8 @@ public enum AssetImport {
             name = hash(data) + "." + source.ext
         }
         guard kind.fileKind.isValidName(name) else { throw .source(POSIXError(.EINVAL)) }
-        let ext = source.ext
+        let ext = converted == nil ? source.ext : "png"
+        let size = converted.map { off_t($0.count) } ?? source.size
 
         let folder = open(package.url.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard folder >= 0 else { throw .destination(posixError()) }
@@ -230,7 +252,7 @@ public enum AssetImport {
         }
 
         var info = stat()
-        if fstatat(assets, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size == source.size {
+        if fstatat(assets, name, &info, AT_SYMLINK_NOFOLLOW) == 0, info.st_mode & S_IFMT == S_IFREG, info.st_size == size {
             // An earlier try may have moved it in and failed to sync the folder: its entry is made durable now.
             do {
                 try syncFolder(assets)
@@ -242,7 +264,12 @@ public enum AssetImport {
         let temporary = name + ".tmp"
         guard unlinkat(assets, temporary, 0) == 0 || errno == ENOENT else { throw .destination(posixError()) }
         do {
-            let placed = try clone(source.fd, in: assets, as: temporary)
+            let placed: Int32
+            if let converted {
+                placed = try write(converted, in: assets, as: temporary)
+            } else {
+                placed = try clone(source.fd, in: assets, as: temporary)
+            }
             defer { close(placed) }
             // The bytes there are the ones named, or the file changed between its hash and its copy.
             guard try hash(placed) + "." + ext == name else { throw Failure.changed }
@@ -344,18 +371,44 @@ public enum AssetImport {
             let copy = openat(assets, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
             guard copy >= 0 else { throw posixError() }
             defer { close(copy) }
-            try forEachChunk(of: source) { (chunk) throws(POSIXError) in
-                var written = 0
-                while written < chunk.count {
-                    let count = write(copy, chunk.baseAddress! + written, chunk.count - written)
-                    if count < 0 {
-                        if errno == EINTR { continue }
-                        throw posixError()
-                    }
-                    written += count
-                }
+            try forEachChunk(of: source) { (chunk) throws(POSIXError) in try writeAll(chunk, to: copy) }
+        }
+        return try openSynced(name, in: assets)
+    }
+
+    /// `data` as the new file `name` in the folder `assets` (never through a link there), full-synced and open for
+    /// reading.
+    private static func write(_ data: Data, in assets: Int32, as name: String) throws(POSIXError) -> Int32 {
+        let file = openat(assets, name, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        guard file >= 0 else { throw posixError() }
+        defer { close(file) }
+        var failure: POSIXError?
+        data.withUnsafeBytes { bytes in
+            do throws(POSIXError) {
+                try writeAll(bytes, to: file)
+            } catch {
+                failure = error
             }
         }
+        if let failure { throw failure }
+        return try openSynced(name, in: assets)
+    }
+
+    /// Writes all of `bytes` to `fd`, however many calls it takes.
+    private static func writeAll(_ bytes: UnsafeRawBufferPointer, to fd: Int32) throws(POSIXError) {
+        var written = 0
+        while written < bytes.count {
+            let count = Darwin.write(fd, bytes.baseAddress! + written, bytes.count - written)
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw posixError()
+            }
+            written += count
+        }
+    }
+
+    /// The file `name` in the folder `assets` opened for reading (never through a link), full-synced.
+    private static func openSynced(_ name: String, in assets: Int32) throws(POSIXError) -> Int32 {
         let placed = openat(assets, name, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
         guard placed >= 0 else { throw posixError() }
         do {
@@ -388,7 +441,7 @@ public enum AssetImport {
     }
 
     /// The whole file `fd`, which `fstat` said is `size` bytes, or its first `limit` bytes.
-    private static func readAll(_ fd: Int32, size: Int, atMost limit: Int = .max) throws(POSIXError) -> Data {
+    static func readAll(_ fd: Int32, size: Int, atMost limit: Int = .max) throws(POSIXError) -> Data {
         var data = Data(capacity: size)
         try forEachChunk(of: fd, upTo: limit) { data.append(contentsOf: $0) }
         return data
