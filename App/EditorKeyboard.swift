@@ -174,6 +174,9 @@ final class EditorKeyboard {
             return model.applyLayoutShortcut(kind)
         case .selectAll:
             return model.selectAllOfTrack()
+        case .nudgeVertically:
+            // ⇧↑ ⇧↓ with annotations chosen (3a, Task A13); nothing is chosen to move until then.
+            return false
         }
     }
 
