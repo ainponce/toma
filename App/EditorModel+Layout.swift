@@ -131,9 +131,10 @@ extension EditorModel {
         apply(CameraLookCommands.deleteAllChanges(document))
     }
 
-    /// The layouts' timeline of the document, for what the list of changes says of the blocks (`hiddenBy`).
+    /// The layouts' timeline of the document, for what the list of changes says of the blocks (`hiddenBy`): of the take
+    /// of the clip at the playhead (3d plan decision 17).
     var layoutTimeline: LayoutTimeline? {
-        guard let document, let map = panelTimeMap, let take = panelSession?.project.take else { return nil }
+        guard let document, let map = panelTimeMap, let take = playheadProject?.take else { return nil }
         return LayoutTimeline(document: document, take: take, timeMap: map, cameraReadable: !cameraUnreadable)
     }
 }

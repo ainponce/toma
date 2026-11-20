@@ -48,8 +48,8 @@ final class PrivacyRectEditorView: NSView {
     /// The part under the pointer: its handle is larger.
     private var hovered: PrivacyRectHandles.Part?
     private var guides: (x: Double?, y: Double?) = (nil, nil)
-    /// The stage's points of the document shown, kept while it is the same document.
-    private var stagePoints: (document: EditDocument, points: StagePoints)?
+    /// The stage's points of the document shown, kept while it is the same document and take.
+    private var stagePoints: (document: EditDocument, take: String, points: StagePoints)?
     private var trackingArea: NSTrackingArea?
 
     private let container = CALayer()
@@ -142,11 +142,14 @@ final class PrivacyRectEditorView: NSView {
     }
 
     private func points(of document: EditDocument) -> StagePoints? {
-        if stagePoints?.document != document, let take = model.overlayProject?.take, let screens = model.takeScreens {
+        // Of the take of the clip at the playhead, the block's (`makeShown`).
+        guard let take = model.playheadProject?.take else { return nil }
+        if stagePoints?.document != document || stagePoints?.take != take.id, let screens = model.screensByTake[take.id] {
             let ratio = model.contentRatio(of: document)
-            stagePoints = (document, StagePoints(take: take, document: document, screens: screens, contentRatio: .some(ratio)))
+            stagePoints = (
+                document, take.id, StagePoints(take: take, document: document, screens: screens, contentRatio: .some(ratio)))
         }
-        return stagePoints?.points
+        return stagePoints?.take == take.id ? stagePoints?.points : nil
     }
 
     // MARK: - Geometry

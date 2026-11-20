@@ -195,11 +195,12 @@ final class TimelineAudioRows {
 
     var layerCount: Int { regions.shownCount + bands.shownCount + notches.shownCount + waveforms.count + lines.count }
 
-    /// Audio row `id` of `content` at `geometry`, with its waveform's `levels` (none yet: no waveform), the ids in
-    /// `selected` outlined, and settling into place after an edit with `Motion.trackItem`.
+    /// Audio row `id` of `content` at `geometry`, with its waveform's `levels` in each take, by take id (none yet: no
+    /// waveform of that take), the ids in `selected` outlined, and settling into place after an edit with
+    /// `Motion.trackItem`.
     func layOut(
         _ id: String, _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry,
-        _ palette: TimelinePalette, levels: WaveformLevels?, selected: Set<String>, settling: Bool
+        _ palette: TimelinePalette, levels: (String) -> WaveformLevels?, selected: Set<String>, settling: Bool
     ) {
         layer.frame = CGRect(x: 0, y: 0, width: geometry.areaWidth, height: geometry.rowsHeight)
         under.frame = layer.bounds
@@ -341,13 +342,22 @@ final class TimelineAudioRows {
 
     /// The waveform across what is in sight: for each point of width, the lowest and highest sample of the source the
     /// sound plays there (`TimeMap.audioSource(ofClip:atOutput:)` in the clip's window: a J or L cut reads outside the
-    /// clip), times the volume there (the track's gain, and a stretch's), and flat where nothing is heard (a muted track,
-    /// a clip with content or faster than 4×).
+    /// clip), in the waveform of the clip's own take (3d), times the volume there (the track's gain, and a stretch's), and
+    /// flat where nothing is heard (a muted track, a clip with content or faster than 4×, a take without the track or
+    /// whose waveform is not there yet). None while no take that recorded the track has its waveform.
     private func waveformPath(
-        _ track: TimelineContent.AudioTrack?, levels: WaveformLevels?, content: TimelineContent, geometry: TimelineGeometry,
-        height: Double, ranges: [AudioRangeCommands.ShownRange]
+        _ track: TimelineContent.AudioTrack?, levels: (String) -> WaveformLevels?, content: TimelineContent,
+        geometry: TimelineGeometry, height: Double, ranges: [AudioRangeCommands.ShownRange]
     ) -> CGPath? {
-        guard let track, let levels else { return nil }
+        guard let track else { return nil }
+        // Each take's waveform and the host time of its pair 0.
+        var waves: [String: (levels: WaveformLevels, origin: Double)] = [:]
+        for (take, origin) in track.origins {
+            if let found = levels(take) { waves[take] = (found, Double(origin)) }
+        }
+        guard !waves.isEmpty else { return nil }
+        var lastClip = -1
+        var wave: (levels: WaveformLevels, origin: Double)?
         let rowGain = track.muted ? 0 : min(max(track.gain, 0), 2)
         // Inside the regions, clear of their borders.
         let middle = height / 2, half = height / 2 - 3
@@ -360,7 +370,6 @@ final class TimelineAudioRows {
         bottoms.reserveCapacity(columns + 1)
         var k = 0, r = 0
         let duration = map.duration
-        let origin = Double(track.origin)
         for column in 0...columns {
             let x = Double(column)
             let a = geometry.output(atX: x), b = geometry.output(atX: x + 1)
@@ -372,10 +381,14 @@ final class TimelineAudioRows {
             while j < windows.count, windows[j].output.lowerBound < to {
                 let window = windows[j]
                 let start = max(from, window.output.lowerBound), end = min(to, window.output.upperBound)
-                if !window.info.silent, start < end {
-                    let sa = Double(map.audioSource(ofClip: window.info.clip, atOutput: start)) - origin
-                    let sb = Double(map.audioSource(ofClip: window.info.clip, atOutput: end)) - origin
-                    if let range = levels.range(fromPair: sa / 1e7, toPair: sb / 1e7) {
+                if window.info.clip != lastClip {
+                    lastClip = window.info.clip
+                    wave = content.sequence.indices.contains(lastClip) ? waves[content.sequence[lastClip].take] : nil
+                }
+                if !window.info.silent, start < end, let wave {
+                    let sa = Double(map.audioSource(ofClip: window.info.clip, atOutput: start)) - wave.origin
+                    let sb = Double(map.audioSource(ofClip: window.info.clip, atOutput: end)) - wave.origin
+                    if let range = wave.levels.range(fromPair: sa / 1e7, toPair: sb / 1e7) {
                         low = min(low, range.x)
                         high = max(high, range.y)
                     }

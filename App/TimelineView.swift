@@ -499,9 +499,9 @@ final class EditorTimelineView: NSView, NSViewToolTipOwner {
         needsLayout = true
     }
 
-    /// A waveform worked out for audio track `track`.
-    func setWaveform(_ levels: WaveformLevels, for track: String) {
-        tracks.waveformLevels[track] = levels
+    /// A waveform worked out for audio track `track` of take `take`.
+    func setWaveform(_ levels: WaveformLevels, take: String, track: String) {
+        tracks.waveformLevels[AudioPlan.key(take: take, track: track)] = levels
         needsLayout = true
     }
 
