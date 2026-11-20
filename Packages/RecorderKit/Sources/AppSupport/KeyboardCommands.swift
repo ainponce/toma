@@ -104,6 +104,8 @@ public enum EditorCommand: Equatable, Sendable {
     case addMarker
     /// ⌥← and ⌥→: the marker before and after the playhead.
     case previousMarker, nextMarker
+    /// ⇧⌘R (phase 3 plan 3d, decision 18): "Re-record from Here", from the playhead, with the focus anywhere.
+    case rerecordFromHere
 
     /// Whether holding the key does it again with each repeat: only what moves the playhead, the selection or the scale
     /// by a step. The rest happens once a press (held L does not run up to 8×).
@@ -121,6 +123,8 @@ public enum EditorCommand: Equatable, Sendable {
         switch self {
         case .split, .delete, .trimStartToPlayhead, .trimEndToPlayhead, .nudge, .nudgeVertically, .addZoom, .layout: true
         case .addMarker: true
+        // Its end applies the new take as an edit (`take.rerecord`).
+        case .rerecordFromHere: true
         default: false
         }
     }
@@ -186,6 +190,7 @@ public struct KeyboardCommands {
         case ("o", [.command]): .open
         case let (digit, [.command]):
             Int(digit).flatMap { (1...9).contains($0) ? .tab($0) : nil }
+        case ("r", [.command, .shift]): .rerecordFromHere
         default: nil
         }
     }

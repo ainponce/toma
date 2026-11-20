@@ -183,6 +183,8 @@ final class EditorKeyboard {
             return model.goToMarker(forward: false)
         case .nextMarker:
             return model.goToMarker(forward: true)
+        case .rerecordFromHere:
+            return model.rerecordFromHere()
         }
     }
 

@@ -11,6 +11,7 @@ extension EditorModel {
     func showcaseTakes(_ environment: [String: String]) async {
         showcaseMarkers(environment)
         await showcaseTwoTakes(environment)
+        await showcaseRerecord(environment)
     }
 
     /// `TOMA_SHOWCASE_P3_TAKES=use` (T10): each take of the package the sequence does not show added at its end ("Add

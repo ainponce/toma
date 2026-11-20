@@ -344,4 +344,22 @@ import Testing
         #expect(!EditorCommand.previousMarker.edits)
         #expect(!EditorCommand.nextMarker.edits)
     }
+
+    /// ⇧⌘R re-records from the playhead (3d plan decision 18): with the focus anywhere, a field's too, as the keys with ⌘
+    /// are; ⌘R alone, or with ⌥, is no command of the editor. Never during a drag, and once a press.
+    @Test func rerecordShortcut() {
+        for focus in Self.focuses { #expect(command("r", [.command, .shift], focus: focus) == .rerecordFromHere) }
+        #expect(command("r", [.command, .shift], focus: .textField) == .rerecordFromHere)
+        for focus in Self.focuses {
+            #expect(command("r", [.command], focus: focus) == nil)
+            #expect(command("r", [.command, .option], focus: focus) == nil)
+            #expect(command("r", [.command, .shift, .option], focus: focus) == nil)
+        }
+        #expect(command("r", [.shift]) == nil)
+        #expect(command("r") == nil)
+        // The key an event of ⇧⌘R gives: "R" ignoring the modifiers but ⇧, "r" without any.
+        #expect(EditorKey(characters: "R", unmodified: "r", modifiers: [.command, .shift]) == EditorKey(key: "r", modifiers: [.command, .shift]))
+        #expect(!EditorCommand.rerecordFromHere.repeats)
+        #expect(EditorCommand.rerecordFromHere.edits)
+    }
 }
