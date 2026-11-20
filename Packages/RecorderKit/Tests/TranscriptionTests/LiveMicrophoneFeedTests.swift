@@ -2,6 +2,8 @@
 import AudioToolbox
 import CoreMedia
 import Foundation
+import RecorderKitTestSupport
+import Synchronization
 import Testing
 import Transcription
 
@@ -84,6 +86,90 @@ import Transcription
         #expect(await cancelled.value == 0)
         waiting.append(pcmSample(frames: 480, channels: [0.25], sampleRate: 48_000, int16: false, firstFrame: 0))
         waiting.finish()
+    }
+}
+
+extension LiveMicrophoneFeedTests {
+    /// The feed copies a block's bytes: once `append` returns, the capture's memory is free again, whatever the feed's
+    /// queue is doing (a capture source's blocks come from a pool, and one held can make it drop samples).
+    @Test func appendKeepsNothingOfTheCapturesMemory() async throws {
+        let feed = LiveMicrophoneFeed()
+        let freed = FreedBlocks()
+        for block in 0..<50 {
+            // The block's only owners: this scope and whatever `append` keeps.
+            withCaptureMemory(value: Float(block) / 100, frames: 480, freed: freed) { feed.append($0) }
+            #expect(freed.count == block + 1, "block \(block) still held after append")
+        }
+        feed.finish()
+        // And what was heard is the blocks', in order.
+        let heard = await allSamples(of: feed)
+        #expect(heard == (0..<50).flatMap { Array(repeating: Float($0) / 100, count: 480) })
+    }
+
+    /// A feed let go without `finish()` ends its chunks: its reader never waits forever.
+    @Test func aFeedLetGoEndsItsChunks() async throws {
+        var feed: LiveMicrophoneFeed? = LiveMicrophoneFeed()
+        let chunks = try #require(feed?.chunks)
+        feed?.append(pcmSample(frames: 480, channels: [0.25], sampleRate: 48_000, int16: false, firstFrame: 0))
+        let ended = Atomic(false)
+        let reader = Task {
+            var count = 0
+            for await chunk in chunks { count += chunk.samples.count }
+            ended.store(true, ordering: .relaxed)
+            return count
+        }
+        try await Task.sleep(for: .milliseconds(20))
+        feed = nil
+        // Without ending, the reader would wait forever: it is cancelled after the expectation, so the test never hangs.
+        #expect(await eventually { ended.load(ordering: .relaxed) })
+        reader.cancel()
+        #expect(await reader.value == 480)
+    }
+}
+
+/// Calls `body` with a block of `frames` frames of mono Float32 at 48 kHz, every sample `value`, whose memory belongs
+/// to its sample buffer alone, as a capture source's does: `freed` goes up by one when that memory is freed.
+private func withCaptureMemory(value: Float, frames: Int, freed: FreedBlocks, _ body: (CMSampleBuffer) -> Void) {
+    let length = frames * 4
+    let memory = UnsafeMutableRawPointer.allocate(byteCount: length, alignment: 16)
+    memory.initializeMemory(as: Float.self, repeating: value, count: frames)
+    var source = CMBlockBufferCustomBlockSource(
+        version: kCMBlockBufferCustomBlockSourceVersion, AllocateBlock: nil,
+        FreeBlock: { refCon, block, _ in
+            block.deallocate()
+            Unmanaged<FreedBlocks>.fromOpaque(refCon!).takeRetainedValue().add()
+        },
+        refCon: Unmanaged.passRetained(freed).toOpaque())
+    var data: CMBlockBuffer?
+    var status = CMBlockBufferCreateWithMemoryBlock(
+        allocator: kCFAllocatorDefault, memoryBlock: memory, blockLength: length, blockAllocator: kCFAllocatorNull,
+        customBlockSource: &source, offsetToData: 0, dataLength: length, flags: 0, blockBufferOut: &data)
+    precondition(status == noErr && data != nil, "withCaptureMemory: block \(status)")
+    var asbd = AudioStreamBasicDescription(
+        mSampleRate: 48_000, mFormatID: kAudioFormatLinearPCM, mFormatFlags: kAudioFormatFlagsNativeFloatPacked,
+        mBytesPerPacket: 4, mFramesPerPacket: 1, mBytesPerFrame: 4, mChannelsPerFrame: 1, mBitsPerChannel: 32, mReserved: 0)
+    var format: CMAudioFormatDescription?
+    status = CMAudioFormatDescriptionCreate(
+        allocator: kCFAllocatorDefault, asbd: &asbd, layoutSize: 0, layout: nil, magicCookieSize: 0, magicCookie: nil,
+        extensions: nil, formatDescriptionOut: &format)
+    precondition(status == noErr, "withCaptureMemory: format \(status)")
+    var sample: CMSampleBuffer?
+    status = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
+        allocator: kCFAllocatorDefault, dataBuffer: data!, formatDescription: format!, sampleCount: frames,
+        presentationTimeStamp: .zero, packetDescriptions: nil, sampleBufferOut: &sample)
+    precondition(status == noErr && sample != nil, "withCaptureMemory: sample \(status)")
+    data = nil
+    body(sample!)
+}
+
+/// Counts the blocks freed, from their block buffers' free callback.
+private final class FreedBlocks: Sendable {
+    private let freed = Atomic(0)
+
+    var count: Int { freed.load(ordering: .relaxed) }
+
+    func add() {
+        freed.add(1, ordering: .relaxed)
     }
 }
 

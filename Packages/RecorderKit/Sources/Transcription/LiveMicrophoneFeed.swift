@@ -15,7 +15,9 @@ public struct LiveAudioChunk: Equatable, Sendable {
 }
 
 /// The microphone heard live, for Follow the Voice (plan 3d, decision 15). `append` is what a capture listener calls
-/// (`MeteredSource.listen`): it only keeps the block and returns, from any thread. The blocks are converted on the
+/// (`MeteredSource.listen`): it copies the block's bytes and returns, from any thread, so the capture's own memory is
+/// never held (`AVCaptureAudioDataOutput` gives its blocks out of a pool: holding one can make it drop samples, the
+/// recording's). The blocks are converted on the
 /// feed's own queue to mono Float32 at 48 kHz with `AVAudioConverter`, their channels averaged, and wait in `chunks`
 /// for its reader, who gets everything that came since it last read in one chunk: at most the newest `keptSeconds`,
 /// the rest dropped. A reader that is behind, or none, never makes the feed hold more than two seconds of audio, and
@@ -39,8 +41,13 @@ public final class LiveMicrophoneFeed: Sendable {
         chunks = AsyncStream(unfolding: { await core.heard.next() }, onCancel: { core.readerLeft() })
     }
 
-    /// Keeps `sample`, a block of linear PCM in any format (another kind of block is dropped), to be converted on the
-    /// feed's queue, and returns: it never waits for the conversion nor for the reader.
+    /// A feed let go without `finish()` finishes: its reader gets the rest and its chunks end, never waiting forever.
+    deinit {
+        core.finish()
+    }
+
+    /// Copies the audio of `sample`, a block of linear PCM in any format (another kind of block is dropped), to be
+    /// converted on the feed's queue, and returns: it never keeps `sample`, nor waits for the conversion or the reader.
     public func append(_ sample: CMSampleBuffer) {
         core.append(sample)
     }
@@ -78,7 +85,7 @@ private final class Core: Sendable {
     }
 
     func append(_ sample: CMSampleBuffer) {
-        let block = HeldBlock(sample: sample)
+        guard let block = HeldBlock(sample: sample) else { return }
         let schedules = blocks.withLock { blocks -> Bool in
             guard !blocks.closed else { return false }
             blocks.pending.append(block)
@@ -138,24 +145,45 @@ private final class Core: Sendable {
             }
             guard !batch.isEmpty else { return }
             for block in batch {
-                let samples = converter.withLock { $0.convert(block.sample) }
+                let samples = converter.withLock { $0.convert(block) }
                 if !samples.isEmpty { heard.push(samples) }
             }
         }
     }
 }
 
-/// A captured block on its way to the feed's queue, with its length. `@unchecked Sendable`: a capture source's block
-/// is never written once delivered; the feed only reads it.
-private struct HeldBlock: @unchecked Sendable {
-    let sample: CMSampleBuffer
-    /// How long it lasts; 0 for a block that is not audio.
+/// A captured block's audio on its way to the feed's queue: its bytes, copied when it is appended, never the block.
+struct HeldBlock: Sendable {
+    let format: CMAudioFormatDescription
+    /// The bytes of each of the block's `AudioBuffer`s: one if it is interleaved, one per channel otherwise.
+    let buffers: [[UInt8]]
+    let frames: Int
+    /// How long it lasts.
     let seconds: Double
 
-    init(sample: CMSampleBuffer) {
-        self.sample = sample
-        let rate = sample.formatDescription?.audioStreamBasicDescription?.mSampleRate ?? 0
-        seconds = rate > 0 ? Double(sample.numSamples) / rate : 0
+    /// `nil` for a block that is not linear PCM, or empty.
+    init?(sample: CMSampleBuffer) {
+        guard let format = sample.formatDescription, let asbd = format.audioStreamBasicDescription,
+              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0, sample.numSamples > 0
+        else { return nil }
+        var buffers: [[UInt8]] = []
+        do {
+            try sample.withAudioBufferList { list, _ in
+                for buffer in list {
+                    guard let data = buffer.mData else {
+                        buffers.append([])
+                        continue
+                    }
+                    buffers.append(Array(UnsafeRawBufferPointer(start: data, count: Int(buffer.mDataByteSize))))
+                }
+            }
+        } catch {
+            return nil
+        }
+        self.format = format
+        self.buffers = buffers
+        frames = sample.numSamples
+        seconds = Double(frames) / asbd.mSampleRate
     }
 }
 
@@ -285,24 +313,25 @@ struct MonoConverter {
     private var input: AVAudioFormat?
     private var path = Path.none
 
-    /// The mono samples of `sample` at 48 kHz, after what the converter held back of the format before if it changed;
-    /// empty for a block that is not linear PCM.
-    mutating func convert(_ sample: CMSampleBuffer) -> [Float] {
-        guard let description = sample.formatDescription, let asbd = description.audioStreamBasicDescription,
-              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mSampleRate > 0, asbd.mChannelsPerFrame > 0, sample.numSamples > 0
-        else { return [] }
-        let format = AVAudioFormat(cmAudioFormatDescription: description)
+    /// The mono samples of `block` at 48 kHz, after what the converter held back of the format before if it changed.
+    mutating func convert(_ block: HeldBlock) -> [Float] {
+        let format = AVAudioFormat(cmAudioFormatDescription: block.format)
         var samples: [Float] = []
         if input.map({ !$0.isEqual(format) }) ?? true {
             samples = flush()
             begin(format)
         }
-        let frames = AVAudioFrameCount(sample.numSamples)
+        let frames = AVAudioFrameCount(block.frames)
         guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return samples }
         buffer.frameLength = frames
-        let status = CMSampleBufferCopyPCMDataIntoAudioBufferList(
-            sample, at: 0, frameCount: Int32(frames), into: buffer.mutableAudioBufferList)
-        guard status == noErr else { return samples }
+        let list = UnsafeMutableAudioBufferListPointer(buffer.mutableAudioBufferList)
+        guard list.count == block.buffers.count else { return samples }
+        for (index, bytes) in block.buffers.enumerated() {
+            guard let data = list[index].mData else { return samples }
+            let count = min(bytes.count, Int(list[index].mDataByteSize))
+            guard count > 0 else { continue }
+            bytes.withUnsafeBytes { data.copyMemory(from: $0.baseAddress!, byteCount: count) }
+        }
         return samples + convert(buffer)
     }
 
