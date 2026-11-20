@@ -100,6 +100,17 @@
         }
       }
     },
+    "%lld Annotations Selected" : {
+      "comment" : "The Annotations tab with several annotations selected: how many",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld anotaciones elegidas"
+          }
+        }
+      }
+    },
     "%lld blocks added." : {
       "comment" : "Result of Hide During Silences",
       "localizations" : {
@@ -347,6 +358,17 @@
         }
       }
     },
+    "A clip always goes over the video, above the zoom." : {
+      "comment" : "The inspector of a clip over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un clip va siempre sobre el video, por encima del zoom."
+          }
+        }
+      }
+    },
     "A file isn't inside the project." : {
       "localizations" : {
         "es" : {
@@ -502,6 +524,17 @@
         }
       }
     },
+    "Add" : {
+      "comment" : "The Annotations tab: the section with a button for each kind of annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar"
+          }
+        }
+      }
+    },
     "Add Annotation" : {
       "comment" : "Undo label (Edit ▸ Undo «…»): an annotation was added over the video",
       "localizations" : {
@@ -634,6 +667,28 @@
         }
       }
     },
+    "Add a title card at the end of the video" : {
+      "comment" : "The Annotations tab: what At the End does (help and VoiceOver)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar una placa al final del video"
+          }
+        }
+      }
+    },
+    "Add a title card at the start of the video" : {
+      "comment" : "The Annotations tab: what At the Start does (help and VoiceOver)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar una placa al principio del video"
+          }
+        }
+      }
+    },
     "Add to End" : {
       "comment" : "Takes menu: this take goes after the end of the video",
       "localizations" : {
@@ -695,6 +750,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Margen después del clic"
+          }
+        }
+      }
+    },
+    "Alignment" : {
+      "comment" : "The inspector of a text annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Alineación"
           }
         }
       }
@@ -978,6 +1044,17 @@
         }
       }
     },
+    "Arrange" : {
+      "comment" : "The order of an annotation's layer: the inspector's section and the Edit menu's submenu",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ordenar"
+          }
+        }
+      }
+    },
     "Arrow" : {
       "comment" : "An annotation: an arrow",
       "localizations" : {
@@ -996,6 +1073,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Orden ascendente"
+          }
+        }
+      }
+    },
+    "At the End" : {
+      "comment" : "The Annotations tab: a title card at the end of the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al final"
+          }
+        }
+      }
+    },
+    "At the Start" : {
+      "comment" : "The Annotations tab: a title card at the start of the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Al principio"
           }
         }
       }
@@ -1141,6 +1240,17 @@
         }
       }
     },
+    "Background Color" : {
+      "comment" : "The inspector of a title card with a colour background",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color del fondo"
+          }
+        }
+      }
+    },
     "Balanced" : {
       "comment" : "The export sheet: a GIF of up to 256 colours per frame (Spanish: feminine, la calidad)",
       "localizations" : {
@@ -1217,6 +1327,17 @@
         }
       }
     },
+    "Blue" : {
+      "comment" : "A colour of the annotation palette",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Azul"
+          }
+        }
+      }
+    },
     "Blur" : {
       "localizations" : {
         "es" : {
@@ -1260,6 +1381,17 @@
         }
       }
     },
+    "Blurred Frame" : {
+      "comment" : "A title card's background: the frame of the take there, blurred",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadro desenfocado"
+          }
+        }
+      }
+    },
     "Blurs" : {
       "comment" : "The Privacy tab: the list of the privacy blocks",
       "localizations" : {
@@ -1267,6 +1399,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Desenfoques"
+          }
+        }
+      }
+    },
+    "Bold" : {
+      "comment" : "A text annotation's weight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Negrita"
           }
         }
       }
@@ -2377,6 +2520,28 @@
         }
       }
     },
+    "Clip in the Sequence…" : {
+      "comment" : "The Annotations tab: a video file put into the sequence",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip en la secuencia…"
+          }
+        }
+      }
+    },
+    "Clip…" : {
+      "comment" : "The Annotations tab: a video file over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip…"
+          }
+        }
+      }
+    },
     "Close" : {
       "localizations" : {
         "es" : {
@@ -2954,6 +3119,17 @@
         }
       }
     },
+    "Curve" : {
+      "comment" : "The inspector of an arrow: how much it bends",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Curva"
+          }
+        }
+      }
+    },
     "Custom" : {
       "localizations" : {
         "es" : {
@@ -3399,6 +3575,17 @@
         }
       }
     },
+    "Draw" : {
+      "comment" : "An arrow's or a shape's entrance: its stroke is drawn",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Trazarse"
+          }
+        }
+      }
+    },
     "Draw on Screen" : {
       "localizations" : {
         "es" : {
@@ -3583,6 +3770,17 @@
         }
       }
     },
+    "Ellipse" : {
+      "comment" : "A shape annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elipse"
+          }
+        }
+      }
+    },
     "Email" : {
       "comment" : "What a privacy block made by the sensitive data search hides: an email address",
       "localizations" : {
@@ -3681,6 +3879,17 @@
         }
       }
     },
+    "Entrance" : {
+      "comment" : "The inspector of an annotation: how it comes in",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Entrada"
+          }
+        }
+      }
+    },
     "Esc to cancel" : {
       "localizations" : {
         "es" : {
@@ -3697,6 +3906,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esc para volver"
+          }
+        }
+      }
+    },
+    "Exit" : {
+      "comment" : "The inspector of an annotation: how it goes away",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Salida"
           }
         }
       }
@@ -3837,6 +4057,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Caras"
+          }
+        }
+      }
+    },
+    "Fade" : {
+      "comment" : "An annotation's entrance or exit: a fade",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fundido"
           }
         }
       }
@@ -4016,6 +4247,17 @@
         }
       }
     },
+    "Font" : {
+      "comment" : "The inspector of a text annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fuente"
+          }
+        }
+      }
+    },
     "For the camera bubble over the recording." : {
       "comment" : "Under the camera in the permissions window",
       "localizations" : {
@@ -4158,6 +4400,17 @@
         }
       }
     },
+    "From %@ to %@ of the file" : {
+      "comment" : "An imported clip in the sequence: the stretch of its file it plays",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De %1$@ a %2$@ del archivo"
+          }
+        }
+      }
+    },
     "From 0.1 to 60 s." : {
       "comment" : "Duration… of a frozen frame or a title card: the lengths it takes",
       "localizations" : {
@@ -4197,6 +4450,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "De los marcadores con nombre."
+          }
+        }
+      }
+    },
+    "Frozen Frame" : {
+      "comment" : "A clip of the sequence that shows a frame of the take, still",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cuadro congelado"
           }
         }
       }
@@ -4347,6 +4611,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agrupar clics separados hasta"
+          }
+        }
+      }
+    },
+    "Head" : {
+      "comment" : "The inspector of an arrow: its point",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Punta"
+          }
+        }
+      }
+    },
+    "Heavy" : {
+      "comment" : "A text annotation's weight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Extranegrita"
           }
         }
       }
@@ -4565,6 +4851,28 @@
         }
       }
     },
+    "Image Fit" : {
+      "comment" : "The inspector of an image (VoiceOver): fit inside its box or fill it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ajuste de la imagen"
+          }
+        }
+      }
+    },
+    "Image…" : {
+      "comment" : "The Annotations tab: an image file over the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Imagen…"
+          }
+        }
+      }
+    },
     "Import Audio…" : {
       "comment" : "Adds a sound file of the user's (M4A, MP3, WAV, AIFF or CAF) as music",
       "localizations" : {
@@ -4583,6 +4891,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Audio importado"
+          }
+        }
+      }
+    },
+    "Imported Clip" : {
+      "comment" : "A clip of the sequence that plays an imported video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Clip importado"
           }
         }
       }
@@ -4751,6 +5070,17 @@
         }
       }
     },
+    "It goes with the zoom, and away when its stretch is cut." : {
+      "comment" : "The inspector of an annotation stuck to the recording",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sigue al zoom y desaparece si se corta su tramo."
+          }
+        }
+      }
+    },
     "It has %1$@ rows; its size needs %2$@." : {
       "comment" : "The rows of a .cube's table",
       "localizations" : {
@@ -4762,6 +5092,17 @@
         }
       }
     },
+    "It isn't shown: its stretch was cut." : {
+      "comment" : "The inspector of an annotation stuck to a stretch of the recording that was cut out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se ve: su tramo está cortado."
+          }
+        }
+      }
+    },
     "It isn't text: it may be an image or another kind of file." : {
       "comment" : "Why a .cube was refused",
       "localizations" : {
@@ -4769,6 +5110,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No es texto: puede ser una imagen u otro tipo de archivo."
+          }
+        }
+      }
+    },
+    "It shows the take still at that instant, with everything it has there." : {
+      "comment" : "The inspector of a frozen frame",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Muestra la toma quieta en ese instante, con todo lo que tiene ahí."
+          }
+        }
+      }
+    },
+    "It stays put over the video, above the zoom." : {
+      "comment" : "The inspector of an annotation fixed on the output",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Queda fija sobre el video, por encima del zoom."
           }
         }
       }
@@ -4813,6 +5176,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se está grabando."
+          }
+        }
+      }
+    },
+    "It's shown over the whole video." : {
+      "comment" : "The inspector of an annotation of the whole video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se ve durante todo el video."
           }
         }
       }
@@ -4934,6 +5308,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Corte L"
+          }
+        }
+      }
+    },
+    "Label" : {
+      "comment" : "A text annotation's style: text on a pill",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Etiqueta"
           }
         }
       }
@@ -5064,6 +5449,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Disposición, %1$@, %2$d de %3$d"
+          }
+        }
+      }
+    },
+    "Leading" : {
+      "comment" : "A title card's style: its texts to the left",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "A la izquierda"
           }
         }
       }
@@ -5299,6 +5695,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Bajar la música cuando se habla"
+          }
+        }
+      }
+    },
+    "Lower Third" : {
+      "comment" : "A text annotation's style: a box with a bar, low on the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Tercio inferior"
           }
         }
       }
@@ -5662,6 +6069,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Modo: %@"
+          }
+        }
+      }
+    },
+    "Mono" : {
+      "comment" : "A text annotation's font: SF Mono",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Mono"
           }
         }
       }
@@ -6825,6 +7243,17 @@
         }
       }
     },
+    "Plain" : {
+      "comment" : "A text annotation's style: plain text with a shadow",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Simple"
+          }
+        }
+      }
+    },
     "Play" : {
       "localizations" : {
         "es" : {
@@ -6897,6 +7326,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Puntos"
+          }
+        }
+      }
+    },
+    "Pop" : {
+      "comment" : "An annotation's entrance: it grows a little with a spring",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Aparecer"
           }
         }
       }
@@ -7031,6 +7471,17 @@
         }
       }
     },
+    "Project Color %lld" : {
+      "comment" : "A colour of the annotation palette the project uses: its place",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color del proyecto %lld"
+          }
+        }
+      }
+    },
     "Projects" : {
       "comment" : "The library: what VoiceOver calls its grid and its list",
       "localizations" : {
@@ -7060,6 +7511,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Pulso"
+          }
+        }
+      }
+    },
+    "Purple" : {
+      "comment" : "A colour of the annotation palette",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Violeta"
           }
         }
       }
@@ -7427,6 +7889,28 @@
         }
       }
     },
+    "Rectangle" : {
+      "comment" : "A shape annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rectángulo"
+          }
+        }
+      }
+    },
+    "Red" : {
+      "comment" : "A colour of the annotation palette",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rojo"
+          }
+        }
+      }
+    },
     "Redo" : {
       "comment" : "Edit menu: redoes the last undone edit",
       "localizations" : {
@@ -7478,6 +7962,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Regenerar los zooms"
+          }
+        }
+      }
+    },
+    "Regular" : {
+      "comment" : "A text annotation's weight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Normal"
           }
         }
       }
@@ -7795,6 +8290,28 @@
         }
       }
     },
+    "Rotation" : {
+      "comment" : "The inspector of an annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Rotación"
+          }
+        }
+      }
+    },
+    "Rounded" : {
+      "comment" : "A text annotation's font: SF Pro Rounded",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Redondeada"
+          }
+        }
+      }
+    },
     "Rounded Rectangle" : {
       "comment" : "The Zoom tab: a shape of the loupe lens",
       "localizations" : {
@@ -8099,6 +8616,17 @@
         }
       }
     },
+    "Select an annotation on the preview or the timeline to change it." : {
+      "comment" : "The Annotations tab with nothing of it selected",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Elegir una anotación en la vista previa o en la línea de tiempo para cambiarla."
+          }
+        }
+      }
+    },
     "Select words and press Delete to cut them from the video." : {
       "comment" : "The Captions tab, under its text: how to cut words",
       "localizations" : {
@@ -8143,6 +8671,17 @@
         }
       }
     },
+    "Semibold" : {
+      "comment" : "A text annotation's weight",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Seminegrita"
+          }
+        }
+      }
+    },
     "Send Backward" : {
       "comment" : "The menu of an annotation: one layer down, under the previous one it overlaps",
       "localizations" : {
@@ -8172,6 +8711,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Datos sensibles encontrados"
+          }
+        }
+      }
+    },
+    "Serif" : {
+      "comment" : "A text annotation's font: New York",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Serif"
           }
         }
       }
@@ -8754,6 +9304,17 @@
         }
       }
     },
+    "Stage" : {
+      "comment" : "A title card's background: the project's",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escenario"
+          }
+        }
+      }
+    },
     "Standard" : {
       "comment" : "The export sheet: the quality of 0.08 bits per pixel",
       "localizations" : {
@@ -8828,6 +9389,17 @@
         }
       }
     },
+    "Step" : {
+      "comment" : "An annotation: a number in a circle that numbers itself (the Annotations tab's button)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Paso"
+          }
+        }
+      }
+    },
     "Step %lld" : {
       "comment" : "A step annotation and its number: a number in a circle",
       "localizations" : {
@@ -8835,6 +9407,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Paso %lld"
+          }
+        }
+      }
+    },
+    "Steps are numbered by themselves, in the order of the video." : {
+      "comment" : "The inspector of a step annotation",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Los pasos se numeran solos, en el orden del video."
+          }
+        }
+      }
+    },
+    "Stick to the Recording" : {
+      "comment" : "The inspector of an annotation: anchored to the recording, it follows the zoom",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Pegada a la grabación"
           }
         }
       }
@@ -8899,6 +9493,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "SubRip (.srt)"
+          }
+        }
+      }
+    },
+    "Subtitle" : {
+      "comment" : "A title card's second line",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Subtítulo"
           }
         }
       }
@@ -9064,6 +9669,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Texto"
+          }
+        }
+      }
+    },
+    "Text Color" : {
+      "comment" : "The inspector of a title card",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Color del texto"
           }
         }
       }
@@ -10231,6 +10847,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se puede deshacer."
+          }
+        }
+      }
+    },
+    "This clip has no sound." : {
+      "comment" : "The inspector of an imported clip whose file has no audio",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este clip no tiene sonido."
           }
         }
       }
@@ -11465,6 +12092,17 @@
         }
       }
     },
+    "Weight" : {
+      "comment" : "The inspector of a text annotation: how bold its font is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Peso"
+          }
+        }
+      }
+    },
     "What to Record" : {
       "localizations" : {
         "es" : {
@@ -11525,6 +12163,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Amplio espectro"
+          }
+        }
+      }
+    },
+    "Width" : {
+      "comment" : "The inspector of an arrow or a shape: how thick its stroke is",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Grosor"
           }
         }
       }
@@ -11912,6 +12561,40 @@
         }
       }
     },
+    "fit.fill" : {
+      "comment" : "An image or a clip over the video: covering its box",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fill"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Llenar"
+          }
+        }
+      }
+    },
+    "fit.fit" : {
+      "comment" : "An image or a clip over the video: whole inside its box",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fit"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Encajar"
+          }
+        }
+      }
+    },
     "frame.none" : {
       "comment" : "The panel's frame selector: no frame (not the generic \"None\")",
       "localizations" : {
@@ -11925,6 +12608,57 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ninguno"
+          }
+        }
+      }
+    },
+    "head.filled" : {
+      "comment" : "An arrow's head: a filled triangle",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Filled"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Llena"
+          }
+        }
+      }
+    },
+    "head.none" : {
+      "comment" : "An arrow's head: none",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguna"
+          }
+        }
+      }
+    },
+    "head.open" : {
+      "comment" : "An arrow's head: two strokes",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Open"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Abierta"
           }
         }
       }
@@ -12257,6 +12991,23 @@
         }
       }
     },
+    "motion.none" : {
+      "comment" : "An annotation's entrance or exit: none",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "None"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ninguna"
+          }
+        }
+      }
+    },
     "music.stop" : {
       "comment" : "The music library's list: stops the theme being heard (Stop)",
       "localizations" : {
@@ -12387,6 +13138,23 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "cuadrado"
+          }
+        }
+      }
+    },
+    "text.center" : {
+      "comment" : "A text annotation's alignment: centred (VoiceOver)",
+      "localizations" : {
+        "en" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Center"
+          }
+        },
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Centro"
           }
         }
       }

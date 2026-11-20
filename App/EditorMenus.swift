@@ -253,6 +253,10 @@ final class KeyEditor: ObservableObject {
         var speed: Double?
         /// Whether File ▸ Export Captions… has captions to export (phase 2 design §5.2).
         var canExportCaptions = false
+        /// How many annotations are selected (Edit ▸ Duplicate), and the moves of Edit ▸ Arrange that change the one
+        /// selected (phase 3 design §5.5).
+        var selectedAnnotations = 0
+        var layerMoves: Set<AnnotationCommands.LayerMove> = []
     }
 
     /// What the File menu offers for the key editor's project as a whole (design §6.7).
@@ -320,6 +324,27 @@ final class KeyEditor: ObservableObject {
         model?.exportCaptions()
     }
 
+    /// Edit ▸ Freeze Frame, at the playhead (phase 3 design §5.3).
+    func freezeFrame() {
+        model?.freezeFrame()
+    }
+
+    /// Edit ▸ Add Title Card, at the playhead (phase 3 design §5.2).
+    func addTitleCard() {
+        guard let model else { return }
+        model.addTitleCard(at: .output(model.playheadNanoseconds))
+    }
+
+    /// Edit ▸ Duplicate (⌘D): the annotations selected.
+    func duplicateAnnotations() {
+        model?.duplicateSelectedAnnotations()
+    }
+
+    /// Edit ▸ Arrange ▸ … (⌘] ⌘[ ⌥⌘] ⌥⌘[): the one annotation selected.
+    func reorderAnnotation(_ move: AnnotationCommands.LayerMove) {
+        model?.reorderSelectedAnnotation(move)
+    }
+
     /// View ▸ Show Safe Zones.
     func toggleSafeZones() {
         model?.showsSafeZones.toggle()
@@ -358,7 +383,8 @@ final class KeyEditor: ObservableObject {
                     model.document.map {
                         Project(
                             aspect: $0.aspect, frameRate: $0.frameRate, canEdit: model.canEdit, speed: model.speedOfTargets,
-                            canExportCaptions: model.canExportCaptions)
+                            canExportCaptions: model.canExportCaptions, selectedAnnotations: model.selectedAnnotationIDs.count,
+                            layerMoves: model.possibleLayerMoves)
                     }
                 },
                 model?.projectActions.map { actions in
@@ -501,6 +527,35 @@ struct ProjectCommands: Commands {
                 .disabled(editor.project?.canEdit != true)
             Button("Speed Up Typing…") { editor.askTypingSpeed() }
                 .disabled(editor.project?.canEdit != true)
+        }
+        // Edit ▸ Freeze Frame and Add Title Card at the playhead (phase 3 design §5.2, §5.3); Duplicate (⌘D) and Arrange
+        // (⌘] ⌘[ ⌥⌘] ⌥⌘[) of the annotations selected (§5.1, §5.5). Shortcuts of the menu: macOS places them on other
+        // keyboard layouts. ⌘D is the library's Duplicate while the library is the key window (its own key, first).
+        CommandGroup(after: .pasteboard) {
+            Divider()
+            Button("Freeze Frame") { editor.freezeFrame() }
+                .disabled(editor.project?.canEdit != true)
+            Button("Add Title Card") { editor.addTitleCard() }
+                .disabled(editor.project?.canEdit != true)
+            Divider()
+            Button("Duplicate") { editor.duplicateAnnotations() }
+                .keyboardShortcut("d", modifiers: .command)
+                .disabled(editor.project?.canEdit != true || (editor.project?.selectedAnnotations ?? 0) == 0)
+            Menu("Arrange") {
+                let moves = editor.project?.layerMoves ?? []
+                Button("Bring Forward") { editor.reorderAnnotation(.forward) }
+                    .keyboardShortcut("]", modifiers: .command)
+                    .disabled(!moves.contains(.forward))
+                Button("Send Backward") { editor.reorderAnnotation(.backward) }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!moves.contains(.backward))
+                Button("Bring to Front") { editor.reorderAnnotation(.front) }
+                    .keyboardShortcut("]", modifiers: [.command, .option])
+                    .disabled(!moves.contains(.front))
+                Button("Send to Back") { editor.reorderAnnotation(.back) }
+                    .keyboardShortcut("[", modifiers: [.command, .option])
+                    .disabled(!moves.contains(.back))
+            }
         }
     }
 }
