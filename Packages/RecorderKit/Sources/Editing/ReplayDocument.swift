@@ -8,7 +8,7 @@ public enum ReplayDocument {
     /// `NewDocument.make` of the saved take, with the sequence from `cut`: the clips that end at or before it are left
     /// out, and the one across it starts there (`Clip.start`; its segment starts before, so stretching the clip back
     /// shows what the files hold); then the blocks of `autoZoom-1` are planned again over that sequence, so none is
-    /// before the cut. Everything else is `NewDocument.make`'s, the corners that cover a window's included (worked out
+    /// before the cut (a block of another origin is kept if it ends after the cut). Everything else is `NewDocument.make`'s, the corners that cover a window's included (worked out
     /// over the whole take: at least as round as the part from the cut needs). A sequence the cut would leave empty is
     /// kept as it was, so there is always a clip.
     public static func make(
@@ -23,8 +23,12 @@ public enum ReplayDocument {
         }
         guard !sequence.isEmpty else { return document }
         document.sequence = sequence
-        document.zoom.regions = []
-        document.zoom.regions = AutoZoomPlanner.plan(take: project.take, events: project.events, document: document)
+        // `autoZoom-1`'s own blocks are planned again; any other (a new document has none today) stays if it ends after
+        // the cut, and the planner makes room for it.
+        let others = document.zoom.regions.filter { $0.origin != .auto && $0.end > cut }
+        document.zoom.regions = others
+        let planned = AutoZoomPlanner.plan(take: project.take, events: project.events, document: document)
+        document.zoom.regions = (others + planned).sorted { ($0.start, $0.end) < ($1.start, $1.end) }
         return document
     }
 }
