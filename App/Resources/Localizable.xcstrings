@@ -111,6 +111,17 @@
         }
       }
     },
+    "%lld already had a marker." : {
+      "comment" : "VoiceOver, after «Add Chapters»: chapters that fell on a marker with a name and were left out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld ya tenían un marcador."
+          }
+        }
+      }
+    },
     "%lld blocks added." : {
       "comment" : "Result of Hide During Silences",
       "localizations" : {
@@ -118,6 +129,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se agregaron %lld bloques."
+          }
+        }
+      }
+    },
+    "%lld chapters added." : {
+      "comment" : "VoiceOver, after «Add Chapters» of the chapters' sheet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agregaron %lld capítulos."
           }
         }
       }
@@ -159,6 +181,17 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "%lld parts couldn't be read." : {
+      "comment" : "The chapters' sheet: parts of the transcript the model declined or couldn't fit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "%lld partes no se pudieron leer."
           }
         }
       }
@@ -222,6 +255,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se aceleran %lld tramos: %@ → %@"
+          }
+        }
+      }
+    },
+    "1 already had a marker." : {
+      "comment" : "VoiceOver, after «Add Chapters»: a chapter fell on a marker with a name and was left out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "1 ya tenía un marcador."
+          }
+        }
+      }
+    },
+    "1 chapter added." : {
+      "comment" : "VoiceOver, after «Add Chapters» of the chapters' sheet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Se agregó 1 capítulo."
           }
         }
       }
@@ -421,6 +476,17 @@
         }
       }
     },
+    "A title for the video" : {
+      "comment" : "The Info tab: the title field's placeholder",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Un título para el video"
+          }
+        }
+      }
+    },
     "About %1$@ · %2$@ · %3$d frames" : {
       "comment" : "The export sheet: the GIF's estimated size, how long it lasts and its frames",
       "localizations" : {
@@ -531,6 +597,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Agregar"
+          }
+        }
+      }
+    },
+    "Add %lld Chapters" : {
+      "comment" : "The chapters' sheet: the button that adds the chapters checked",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar %lld capítulos"
+          }
+        }
+      }
+    },
+    "Add 1 Chapter" : {
+      "comment" : "The chapters' sheet: the button that adds the one chapter checked",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar 1 capítulo"
           }
         }
       }
@@ -1008,6 +1096,105 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Apariencia"
+          }
+        }
+      }
+    },
+    "Apple Intelligence couldn't answer: %@" : {
+      "comment" : "The model failed; the system's description follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence no pudo responder: %@"
+          }
+        }
+      }
+    },
+    "Apple Intelligence doesn't write in %@." : {
+      "comment" : "Why the AI features are dimmed: the model doesn't write the transcript's language; the language's name, lowercase in Spanish (“español (México)”)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence no escribe en %@."
+          }
+        }
+      }
+    },
+    "Apple Intelligence is busy. Try again in a moment." : {
+      "comment" : "The AI failed: the model is answering another request",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence está ocupado. Probar de nuevo en un momento."
+          }
+        }
+      }
+    },
+    "Apple Intelligence is still getting ready." : {
+      "comment" : "Why the AI features are dimmed: its model is still downloading",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence todavía se está preparando."
+          }
+        }
+      }
+    },
+    "Apple Intelligence isn't available." : {
+      "comment" : "Why the AI features are dimmed, for a reason Toma doesn't know",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence no está disponible."
+          }
+        }
+      }
+    },
+    "Apple Intelligence isn't turned on." : {
+      "comment" : "Why the AI features are dimmed: it is off in System Settings",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence no está activado."
+          }
+        }
+      }
+    },
+    "Apple Intelligence proposes them from the transcript, to review before they are added." : {
+      "comment" : "The Info tab: under «Propose Chapters…»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence los propone a partir de la transcripción, para revisarlos antes de agregarlos."
+          }
+        }
+      }
+    },
+    "Apple Intelligence reads it on this Mac. It can take half a minute." : {
+      "comment" : "The chapters' review sheet while the model reads",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence la lee en esta Mac. Puede tardar medio minuto."
+          }
+        }
+      }
+    },
+    "Apple Intelligence wouldn't write it for this video." : {
+      "comment" : "The model or its guardrails declined to write a title or a summary",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Apple Intelligence no quiso escribirlo para este video."
           }
         }
       }
@@ -2296,6 +2483,28 @@
         }
       }
     },
+    "Chapter Title" : {
+      "comment" : "The chapters' sheet: a chapter's title field (placeholder and VoiceOver)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Título del capítulo"
+          }
+        }
+      }
+    },
+    "Chapters" : {
+      "comment" : "The Info tab: the section of «Propose Chapters…»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capítulos"
+          }
+        }
+      }
+    },
     "Chapters copied." : {
       "comment" : "VoiceOver: Copy Chapters put YouTube's text on the clipboard",
       "localizations" : {
@@ -2711,6 +2920,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Copiar capítulos"
+          }
+        }
+      }
+    },
+    "Copy Description" : {
+      "comment" : "The Info tab: puts the summary and the chapters on the clipboard, for YouTube",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar descripción"
+          }
+        }
+      }
+    },
+    "Copy Description for YouTube" : {
+      "comment" : "The Markers menu and the Info tab: the summary and the chapters on the clipboard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Copiar descripción para YouTube"
           }
         }
       }
@@ -3469,6 +3700,17 @@
         }
       }
     },
+    "Description copied." : {
+      "comment" : "VoiceOver: «Copy Description for YouTube» put the text on the clipboard",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Descripción copiada."
+          }
+        }
+      }
+    },
     "Desktop" : {
       "comment" : "A display's only desktop (Space), and the open island's section of desktops",
       "localizations" : {
@@ -3733,6 +3975,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Editar el texto"
+          }
+        }
+      }
+    },
+    "Edit a title, or uncheck a chapter to leave it out." : {
+      "comment" : "The chapters' review sheet, under its title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar un título o desmarcar un capítulo para dejarlo afuera."
           }
         }
       }
@@ -4574,6 +4827,17 @@
         }
       }
     },
+    "Go to %@" : {
+      "comment" : "The chapters' sheet: a chapter's time, which takes the playhead there (help and VoiceOver)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ir a %@"
+          }
+        }
+      }
+    },
     "Go to the Beginning" : {
       "comment" : "The editor's transport: moves the playhead to the start",
       "localizations" : {
@@ -5023,6 +5287,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "En la papelera desde el %@"
+          }
+        }
+      }
+    },
+    "Info" : {
+      "comment" : "The panel's tab and section of the project's title and summary (AI suggestions)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Información"
           }
         }
       }
@@ -6507,6 +6782,28 @@
         }
       }
     },
+    "No chapters were added." : {
+      "comment" : "VoiceOver, after «Add Chapters» when every chapter was left out",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se agregó ningún capítulo."
+          }
+        }
+      }
+    },
+    "No chapters were proposed." : {
+      "comment" : "The chapters' review sheet: the model proposed none",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se propusieron capítulos."
+          }
+        }
+      }
+    },
     "No display is chosen to record." : {
       "localizations" : {
         "es" : {
@@ -6619,6 +6916,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Sin miniatura en esta ubicación"
+          }
+        }
+      }
+    },
+    "No transcript." : {
+      "comment" : "The Info tab: the project has no transcript to suggest from",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin transcripción."
           }
         }
       }
@@ -6808,6 +7116,17 @@
         }
       }
     },
+    "Nothing said is left in the video." : {
+      "comment" : "The AI can't write: every word of the transcript is cut",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No queda nada dicho en el video."
+          }
+        }
+      }
+    },
     "OK" : {
       "localizations" : {
         "es" : {
@@ -6868,6 +7187,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Una pista por app"
+          }
+        }
+      }
+    },
+    "One part couldn't be read." : {
+      "comment" : "The chapters' sheet: a part of the transcript the model declined or couldn't fit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Una parte no se pudo leer."
           }
         }
       }
@@ -7548,6 +7878,39 @@
         }
       }
     },
+    "Propose Chapters" : {
+      "comment" : "The title of the chapters sheet before anything was proposed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proponer capítulos"
+          }
+        }
+      }
+    },
+    "Propose Chapters…" : {
+      "comment" : "The Markers menu and the Info tab: asks Apple Intelligence for chapters, to review in a sheet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Proponer capítulos…"
+          }
+        }
+      }
+    },
+    "Proposed Chapters" : {
+      "comment" : "The title of the chapters' review sheet",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Capítulos propuestos"
+          }
+        }
+      }
+    },
     "Pulse" : {
       "comment" : "A theme of the music library (electronic)",
       "localizations" : {
@@ -7674,6 +8037,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Solo lectura"
+          }
+        }
+      }
+    },
+    "Reading the transcript…" : {
+      "comment" : "The chapters' review sheet while the model reads",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leyendo la transcripción…"
+          }
+        }
+      }
+    },
+    "Reading the transcript… part %lld of %lld" : {
+      "comment" : "The chapters' review sheet while the model reads a long transcript in parts",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Leyendo la transcripción… parte %lld de %lld"
           }
         }
       }
@@ -8213,6 +8598,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hace falta para grabar la pantalla o una ventana."
+          }
+        }
+      }
+    },
+    "Requires macOS 26." : {
+      "comment" : "Why the AI features are dimmed: Apple Intelligence's model needs macOS 26",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Requiere macOS 26."
           }
         }
       }
@@ -9574,6 +9970,50 @@
         }
       }
     },
+    "Suggest" : {
+      "comment" : "The Info tab: asks Apple Intelligence for a title or a summary",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sugerir"
+          }
+        }
+      }
+    },
+    "Suggest Summary" : {
+      "comment" : "The Info tab, VoiceOver and help: «Suggest» of the summary",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sugerir resumen"
+          }
+        }
+      }
+    },
+    "Suggest Title" : {
+      "comment" : "The Info tab, VoiceOver and help: «Suggest» of the title",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sugerir título"
+          }
+        }
+      }
+    },
+    "Summary" : {
+      "comment" : "The Info tab: the project's summary",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Resumen"
+          }
+        }
+      }
+    },
     "Sunset" : {
       "localizations" : {
         "es" : {
@@ -10456,6 +10896,17 @@
         }
       }
     },
+    "The summary and the chapters, ready to paste in YouTube." : {
+      "comment" : "The Info tab: under «Copy Description for YouTube»",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El resumen y los capítulos, listos para pegar en YouTube."
+          }
+        }
+      }
+    },
     "The take couldn't be moved to the trash. It stays in your projects folder." : {
       "localizations" : {
         "es" : {
@@ -10484,6 +10935,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "La toma quedó en la papelera."
+          }
+        }
+      }
+    },
+    "The transcript is too long for Apple Intelligence." : {
+      "comment" : "The AI failed: the transcript doesn't fit the model",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La transcripción es demasiado larga para Apple Intelligence."
           }
         }
       }
@@ -10546,6 +11008,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No se pudo escribir el archivo de video: el disco está lleno."
+          }
+        }
+      }
+    },
+    "The video is too short for chapters." : {
+      "comment" : "The chapters' sheet: the video lasts less than a minute",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El video es muy corto para capítulos."
           }
         }
       }
@@ -10886,6 +11359,17 @@
         }
       }
     },
+    "This Mac doesn't support Apple Intelligence." : {
+      "comment" : "Why the AI features are dimmed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta Mac no admite Apple Intelligence."
+          }
+        }
+      }
+    },
     "This Mac has no graphics device to draw the video." : {
       "localizations" : {
         "es" : {
@@ -10966,6 +11450,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Este proyecto no tiene grabaciones."
+          }
+        }
+      }
+    },
+    "This project has no transcript." : {
+      "comment" : "The AI can't propose anything: the project has no transcript",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Este proyecto no tiene transcripción."
           }
         }
       }
@@ -12180,6 +12675,17 @@
         }
       }
     },
+    "What the video is about, in 2 to 4 sentences." : {
+      "comment" : "The Info tab: the summary field's placeholder",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "De qué trata el video, en 2 a 4 oraciones."
+          }
+        }
+      }
+    },
     "What to Record" : {
       "localizations" : {
         "es" : {
@@ -12367,6 +12873,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Ayer"
+          }
+        }
+      }
+    },
+    "YouTube" : {
+      "comment" : "The Info tab: the section of «Copy Description» (the name of the site, the same in every language)",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "YouTube"
           }
         }
       }

@@ -336,6 +336,8 @@ final class EditorModel {
     /// The voice (plan 2a, Task A10): the transcription, the clean voice and the loudness asked for, followed and handed
     /// to the preview's mix, and waited for by the export.
     @ObservationIgnored private(set) lazy var voice = EditorVoice(model: self)
+    /// The local AI (plan 5b, Task I3): chapters, title and summary suggested by Apple Intelligence on this Mac.
+    @ObservationIgnored private(set) lazy var ai = EditorAI(model: self)
     /// The music (plan 3c, Task U12): its themes and imported sounds made into the caches and handed to the preview's mix,
     /// waited for by the export, and the library's themes heard before one is chosen.
     @ObservationIgnored private(set) lazy var audio = EditorAudio(model: self)
@@ -1694,6 +1696,7 @@ final class EditorModel {
         tearDownPreview()
         image.close()
         voice.close()
+        ai.close()
         audio.close()
         Task { [jobs] in await jobs.cancelAll() }
         session?.onChange = nil

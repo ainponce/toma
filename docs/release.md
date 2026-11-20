@@ -1622,3 +1622,13 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: l
 ### 0. Preparación
 
 ### 2. Detalle por área
+
+**IA local: «Información», la hoja de capítulos y el menú Marcadores** (I3)
+
+- Con Apple Intelligence activado, en una grabación real en español de 10 min o más (transcripta): Marcadores ▸ «Proponer capítulos…» abre la hoja, dice «Leyendo la transcripción…» (con «parte N de M» si es larga) y en menos de un minuto propone capítulos con sentido, en español, de 30 s a 5 min, con títulos cortos. Hacer clic en el tiempo de uno lleva la cabeza ahí; editar un título, desmarcar otro, «Agregar N capítulos»: aparecen como banderas con nombre en la regla y un solo ⌘Z (Deshacer «Agregar capítulos») los saca a todos. «Cancelar» mientras lee la cierra y no agrega nada.
+- En la pestaña «Información» (la última del panel, ícono ⓘ, sin atajo): «Sugerir» del título y del resumen escriben cada uno en su campo, en un paso que se deshace; un segundo «Sugerir» da otro texto. Escribir un título a mano y apretar Return, o escribir el resumen y salir del campo, también se deshace con ⌘Z. Cerrar y abrir el proyecto: el título y el resumen siguen ahí.
+- «Copiar descripción para YouTube» (en el menú Marcadores y en la pestaña) pegado en YouTube Studio: el resumen, una línea vacía y los capítulos desde 00:00; YouTube reconoce los capítulos.
+- Con Apple Intelligence desactivado en Ajustes del Sistema y Toma abierta: al volver a Toma, «Proponer capítulos…» se ve atenuado con «Apple Intelligence no está activado.» como segunda línea, y la pestaña «Información» muestra el mismo motivo con «Sugerir» y «Proponer capítulos…» atenuados. Al activarlo de nuevo y volver, todo se habilita sin reabrir el proyecto.
+- En un proyecto sin transcripción, la pestaña dice «Sin transcripción.» con «Transcribir», y la hoja «Este proyecto no tiene transcripción.» con «Transcribir», que la cierra y empieza a transcribir en la pestaña Subtítulos.
+- Si hay una Mac con macOS 15 a mano: Toma abre y «Información» dice «Requiere macOS 26.».
+- VoiceOver recorre la hoja (cada capítulo como «1:05, título», su casilla, «Ir a 1:05» y el campo «Título del capítulo») y la pestaña («Título», «Sugerir título», «Resumen», «Sugerir resumen»); después de «Agregar» anuncia «Se agregaron N capítulos.».
