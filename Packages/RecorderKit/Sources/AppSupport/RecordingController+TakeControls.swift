@@ -85,7 +85,8 @@ extension RecordingController {
     /// restart could not do is said in the notices: a take that closed with an error is kept
     /// (`closedWithError`), and so is one that could not be moved (`couldNotMoveToTrash`); the new take
     /// starts either way. A take the disk stopped is kept and saved as the disk's stop would, and nothing
-    /// new starts; so does a stop that comes while the take closes, as that stop would.
+    /// new starts; so does a stop that comes while the take closes, as that stop would. A re-record's take stays in
+    /// its package, unused (a package with takes is never trashed), and the new take is the package's next.
     public func restartTake() {
         guard case .recording = phase, stopTask == nil, let take, let request = currentRequest else { return }
         isRestarting = true
@@ -116,6 +117,10 @@ extension RecordingController {
             // Closed in part: kept where it is.
             lastCloseError = error
             carried.append(.closedWithError)
+            lastProjectURL = take.package.url
+        } else if closed.opened, take.target != nil {
+            // The editor's package keeps every take: this one stays there, unused (plan 3d, decision 10).
+            Self.logger.notice("Kept the restarted take in \(take.package.url.path, privacy: .public), unused")
             lastProjectURL = take.package.url
         } else if closed.opened {
             do {

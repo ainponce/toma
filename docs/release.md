@@ -1033,6 +1033,13 @@ Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que s
 - Con el proyecto de la preparación: abrirlo en la app de la fase 3, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 2. Abrirlo otra vez con `build/fase2/Toma.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
 - Abrirlo en la app de la fase 3 y deshacer (⌘Z) hasta el principio: cada paso de la fase 2 se deshace en orden (el volumen, el margen, el corte) y Edición ▸ Deshacer nombra cada uno. Rehacer los devuelve. Con un paso nuevo (otro margen), cerrar y abrirlo con la app de la fase 2: dice que es de una versión más nueva y no lo cambia.
 
+**Regrabar en el mismo paquete** (T6, con «Regrabar desde acá» de T12)
+
+Antes de cada caso, en Finder, «Mostrar contenido del paquete» del proyecto y anotar las carpetas de `takes/`. Después de cada uno, siguen todas, y la toma nueva (si la hay) es la carpeta siguiente; nunca aparece un proyecto nuevo en la carpeta de Toma ni en su `Trash/`.
+- Con cámara y micrófono reales, regrabar, hablar unos segundos y parar con «Al parar» en «Quedarse acá»: el editor vuelve igual (no se abre otra ventana) con la toma nueva desde el cursor; se oye la voz nueva.
+- Regrabar y, en la cuenta regresiva, cancelarla: el editor vuelve sin cambios y `takes/` no cambió. Regrabar, grabar unos segundos y «Reiniciar»: graba otra vez en el mismo proyecto; al parar quedan las dos tomas nuevas en `takes/`, la del reinicio sin usar en el menú Tomas.
+- Desenchufar la cámara elegida justo antes de que termine la cuenta regresiva (o elegir una que falle): graba sin cámara, con el aviso, en el mismo proyecto. Con una toma regrabándose, salir de la app (⌘Q): al abrirla otra vez el proyecto tiene la toma, y nada se perdió.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
