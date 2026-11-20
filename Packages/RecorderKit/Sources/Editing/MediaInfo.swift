@@ -35,7 +35,8 @@ public struct MediaInfo: Equatable, Sendable {
         guard !Task.isCancelled,
             let url = package.mediaAsset(asset, as: .video) ?? package.mediaAsset(asset, as: .audio)
         else { return nil }
-        let file = AVURLAsset(url: url)
+        // Precise: a sound of variable bit rate (an MP3) is measured by its frames, not estimated from its bit rate.
+        let file = AVURLAsset(url: url, options: [AVURLAssetPreferPreciseDurationAndTimingKey: true])
         do {
             let (length, readable) = try await file.load(.duration, .isReadable)
             guard readable, length.isNumeric, length > .zero else { return nil }
@@ -74,9 +75,10 @@ public struct MediaInfo: Equatable, Sendable {
     /// larger than `PackageFileKind.asset.maxPixelSide`. A file whose pixels are cut short still gives the size its header
     /// says: nothing of it is decoded here.
     ///
-    /// It reads the whole file (up to `PackageFileKind.asset.maxBytes`, as the reader does), so it is called where a read
-    /// of the disk can wait, never on the main thread for a file the user just picked.
-    public static func imageSize(_ asset: String, in package: ProjectPackage) -> SIMD2<Int>? {
+    /// Off the main thread and the caller's actor: it reads the whole file meanwhile (up to
+    /// `PackageFileKind.asset.maxBytes`, as the reader does). `nil` if the caller's task is cancelled first.
+    @concurrent public static func imageSize(_ asset: String, in package: ProjectPackage) async -> SIMD2<Int>? {
+        guard !Task.isCancelled else { return nil }
         let kind = PackageFileKind.asset
         guard let data = SafePackageFile.read(asset, in: package, as: kind),
             let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),

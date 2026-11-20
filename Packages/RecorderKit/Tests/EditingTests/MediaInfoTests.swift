@@ -108,11 +108,11 @@ import ProjectFormat
             // A JPEG turned a quarter by its EXIF orientation: upright, it is as the package's reader decodes it.
             let jpeg = "assets/" + String(repeating: "2", count: 32) + ".jpg"
             try Self.place(try Self.image(width: 300, height: 200, type: .jpeg, orientation: 6), at: jpeg, in: package)
-            #expect(MediaInfo.imageSize(png, in: package) == SIMD2(300, 200))
-            #expect(MediaInfo.imageSize(jpeg, in: package) == SIMD2(200, 300))
+            #expect(await MediaInfo.imageSize(png, in: package) == SIMD2(300, 200))
+            #expect(await MediaInfo.imageSize(jpeg, in: package) == SIMD2(200, 300))
             for path in [png, jpeg] {
                 let decoded = try #require(package.asset(path))
-                #expect(MediaInfo.imageSize(path, in: package) == SIMD2(decoded.width, decoded.height))
+                #expect(await MediaInfo.imageSize(path, in: package) == SIMD2(decoded.width, decoded.height))
             }
 
             // A PNG cut short in its pixels: its header says its size, though the package's reader decodes nothing of it.
@@ -120,7 +120,7 @@ import ProjectFormat
             let cut = "assets/" + String(repeating: "3", count: 32) + ".png"
             try Self.place(whole.prefix(whole.count - 40), at: cut, in: package)
             #expect(package.asset(cut) == nil)
-            #expect(MediaInfo.imageSize(cut, in: package) == SIMD2(640, 480))
+            #expect(await MediaInfo.imageSize(cut, in: package) == SIMD2(640, 480))
 
             // A TIFF (whose decoder is never reached from a package), a link, garbage, a missing file and a path out of
             // `assets/`: no size.
@@ -133,7 +133,7 @@ import ProjectFormat
             try Self.place(Data(repeating: 7, count: 512), at: garbage, in: package)
             let missing = "assets/" + String(repeating: "7", count: 32) + ".png"
             for path in [tiff, link, garbage, missing, "../x.png", "assets/x.png"] {
-                #expect(MediaInfo.imageSize(path, in: package) == nil, "\(path)")
+                #expect(await MediaInfo.imageSize(path, in: package) == nil, "\(path)")
             }
         }
     }
