@@ -85,4 +85,14 @@ public protocol TrackWriting: AnyObject {
     /// Runs on the caller's actor (`nonisolated(nonsending)`), so the pipeline actor that owns the
     /// non-Sendable writer can await it without sending the writer to another executor.
     nonisolated(nonsending) func finish(at stopTime: HostTime) async throws -> SegmentResult
+    /// The last video frame taken (written, or dropped because the encoder had no room), in the file's time; `nil` for
+    /// audio and before the first frame. Only the Replay's rotation reads it, to start a still screen's next segment with
+    /// the same image (`TrackPipeline.rotate()`).
+    var lastVideoFrame: CMSampleBuffer? { get }
+}
+
+extension TrackWriting {
+    /// A writer that does not keep its last frame: a still screen's rotation then closes the segment without seeding the
+    /// next one.
+    public var lastVideoFrame: CMSampleBuffer? { nil }
 }
