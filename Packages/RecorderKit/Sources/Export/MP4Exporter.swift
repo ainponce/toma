@@ -7,6 +7,7 @@ import Darwin
 import Foundation
 import ProjectFormat
 import Render
+import Accelerate
 import Synchronization
 import VideoToolbox
 import os
@@ -15,6 +16,22 @@ import os
 /// audio, in an MP4; or, by `ExportSettings.codec` (phase 2 design §6.8), HEVC Main 8-bit (`hvc1`) with that AAC in an
 /// MP4, or ProRes 422 or 422 HQ with the mix as 24-bit integer LPCM at 48 kHz in a QuickTime movie. The codec changes how
 /// the frames and the mix are encoded, never what they are: every codec is given the same pixels and the same samples.
+///
+/// The codecs with alpha (`ExportCodec.hasAlpha`, phases 4 and 5 design §7.1, plan 4c decision 5), HEVC with alpha with
+/// that AAC and ProRes 4444 with that LPCM, both in a QuickTime movie, are given the transparent render instead
+/// (`FrameRenderer(…, transparentBackground: true)`, the preview's with its checkerboard): nothing where the stage's
+/// background was, everything else as drawn, with the alpha premultiplied as the compositor draws it, unconverted, and the
+/// buffers and the encoder told so (`kCVImageBufferAlphaChannelModeKey`, `kVTCompressionPropertyKey_AlphaChannelMode`).
+/// ProRes 4444 is given each frame widened to 16-bit RGBA, exactly (`widen(_:into:)`), so what is opaque in the frame is
+/// opaque in the file. Any other codec gets the frames, the buffers' attachments and the writer's settings it got before
+/// 4c.
+///
+/// With `ExportSettings.editorMetadata`, the export of the whole video also writes the files for external editors next to
+/// it (`ExternalEditorExport.sidecarURLs(of:)`, design §7.2, plan 4c decision 8): the bytes `ExternalEditorExport.write`
+/// makes of the finished video, worked out from what the export knows of it (its size, frame rate, frames, audio and
+/// alpha, and its URL as given) once it is encoded and before it is moved into place, and written, each atomically, once
+/// it is there. Their places are checked as the destination's before anything is written. The export of a range ignores
+/// it.
 ///
 /// Frame `i` is the frame `FrameRenderer` draws of the edit document at output time `TimeMap.frameTime(i, frameRate:)`,
 /// the same drawing the preview shows (the renderer's motion blur in frames of the export's rate); the video lasts the
@@ -50,13 +67,15 @@ import os
 ///
 /// The export never writes into a project and never touches the destination until it is complete: it
 /// writes `<destination>.partial.<ext>` next to it, with the codec's extension (`ExportCodec.fileExtension`: `mp4`, or
-/// `mov` for ProRes), and moves that into place at the end, replacing an existing file in one step. If it fails or is
-/// cancelled, the partial file is removed and the destination is as it was.
+/// `mov` for ProRes and the codecs with alpha), and moves that into place at the end, replacing an existing file in one
+/// step. If it fails or is cancelled, the partial file is removed and the destination is as it was.
 public final class MP4Exporter: Sendable {
     /// AAC bitrate, in bits per second.
     static let audioBitRate = 160_000
     /// The label of the export's queue: it queues the frames to be drawn and feeds the writer.
     static let queueLabel = "dev.toma.MP4Exporter"
+    /// The label of the queue that samples the frames for the files for editors.
+    static let sidecarQueueLabel = "dev.toma.MP4Exporter.editorFiles"
     /// An export whose writer takes no data for this long fails instead of waiting forever.
     static let stallTimeout = 30.0
 
@@ -75,6 +94,9 @@ public final class MP4Exporter: Sendable {
     public let remakeMusic: MusicRemaking?
     /// For tests: sees each frame's pixel buffer on the export's queue, in frame order, right before it is appended.
     let frameSink: FrameSink?
+    /// For tests: called on the thread that samples the frames for the files for editors, each time it looks at whether
+    /// the export was cancelled (`EditorTimeline.cancelCheckEvery`), right before it looks.
+    let whileSampling: (@Sendable () -> Void)?
 
     /// What a test's `frameSink` is given: the frame's index and the pixel buffer drawn for it.
     typealias FrameSink = @Sendable (_ frame: Int, _ pixelBuffer: CVPixelBuffer) -> Void
@@ -95,7 +117,7 @@ public final class MP4Exporter: Sendable {
 
     init(
         project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil, frameSink: FrameSink?,
-        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil, whileSampling: (@Sendable () -> Void)? = nil
     ) {
         self.project = project
         self.document = document
@@ -104,6 +126,7 @@ public final class MP4Exporter: Sendable {
         self.frameSink = frameSink
         self.analysis = analysis
         self.remakeMusic = remakeMusic
+        self.whileSampling = whileSampling
     }
 
     /// The export of the legacy document (`EditDocument.legacy(for:)`): what phase 0 and 1a export.
@@ -122,19 +145,25 @@ public final class MP4Exporter: Sendable {
     /// go down and stay below 1, then once more with exactly 1 from the task running the export, once the
     /// file is in place. Cancel that task to stop: the export ends between two frames and throws
     /// `ExportError.cancelled`. One export at a time per destination: they would share the partial file.
-    /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, `unsupportedCodec` for a codec with alpha until 4c, `nothingToExport` for a document
+    ///
+    /// With the files for editors (`ExportSettings.editorMetadata`, the whole video), the frames are sampled for them once
+    /// the video is encoded (progress stays below 1 meanwhile; cancelling stops it between two frames, leaving nothing),
+    /// and they are written once the video is in place: a failure writing them (a full disk) throws with the video
+    /// already there, and neither file.
+    /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, also for files for editors that
+    ///   could not go next to the video, `nothingToExport` for a document
     ///   that lasts no time or a range that lasts less than a frame of the video, `noDisplayTrack` for the legacy
-    ///   document of a take without screen segments; then `writerFailed`, `cancelled`), or the `RenderError` of a frame
-    ///   that could not be drawn.
+    ///   document of a take without screen segments; then `writerFailed`, `cancelled`, `diskFull`), or the `RenderError` of
+    ///   a frame that could not be drawn.
     @concurrent @discardableResult
     public func export(to destination: URL, progress: @escaping @Sendable (Double) -> Void) async throws -> ExportSummary {
         guard !Task.isCancelled else { throw ExportError.cancelled }
+        // The files for editors name the video as the caller does, as `ExternalEditorExport.write` does.
+        let video = destination
         // From here on only the canonical URL is used, so what is written is what was checked.
         guard let destination = Self.canonicalDestination(destination, project: project.package) else {
             throw ExportError.destinationNotAllowed
         }
-        // The transparent codecs wait for milestone 4c: nothing is written.
-        guard !settings.codec.hasAlpha else { throw ExportError.unsupportedCodec }
         if let refusal = Self.refusal(of: document, of: project) { throw refusal }
         let fps = settings.framesPerSecond
         guard fps > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(fps)") }
@@ -143,8 +172,16 @@ public final class MP4Exporter: Sendable {
         let part = try Self.part(of: range, in: timeMap, framesPerSecond: fps)
         let frameCount = part?.frameCount(fps: fps) ?? timeMap.frameCount(frameRate: fps)
 
+        // The files for editors describe the whole video alone (plan 4c decision 8).
+        var sidecars: (fcpxml: URL, metadata: URL)?
+        if settings.editorMetadata, part == nil {
+            guard let places = Self.sidecars(of: destination, project: project.package) else { throw ExportError.destinationNotAllowed }
+            sidecars = places
+        }
+
         let renderer = try FrameRenderer(
-            project: project, document: document, outputSize: settings.outputSize, frameRate: fps, analysis: analysis)
+            project: project, document: document, outputSize: settings.outputSize, frameRate: fps, analysis: analysis,
+            transparentBackground: settings.transparent)
         let mix = try await Self.remadeMusic(
             of: try await EditedMix.make(project: project, document: document, framesPerSecond: fps, analysis: analysis),
             analysis: analysis, remake: remakeMusic)
@@ -157,6 +194,7 @@ public final class MP4Exporter: Sendable {
         let partial = URL(fileURLWithPath: destination.path + ".partial." + settings.codec.fileExtension)
         try Self.removeStalePartial(partial)
         let summary: ExportSummary
+        var editorFiles: (fcpxml: Data, metadata: Data)?
         do {
             let session = try ExportSession(
                 url: partial, settings: settings, renderer: renderer, start: part?.start ?? 0, frameCount: frameCount, audio: audio,
@@ -168,6 +206,13 @@ public final class MP4Exporter: Sendable {
             }
             try Self.fullSync(partial)
             guard !Task.isCancelled else { throw ExportError.cancelled }
+            if sidecars != nil {
+                // Before the video is in place: what costs time and can fail is done while it can still be undone.
+                editorFiles = try await self.editorFiles(of: VideoFacts(
+                    url: video, size: settings.outputSize, frameRate: fps, frameCount: frameCount,
+                    audioChannels: audio?.channels, hasAlpha: settings.codec.hasAlpha))
+                guard !Task.isCancelled else { throw ExportError.cancelled }
+            }
             try Self.move(partial, to: destination)
             var missingAudio = session.missingAudio, missingVideo = renderer.missingVideo
             if let part {
@@ -194,8 +239,47 @@ public final class MP4Exporter: Sendable {
             // The export is in place; only its durability across a power loss right now is in doubt.
             Self.logger.error("Cannot sync the folder of \(destination.path, privacy: .public): \(String(describing: error), privacy: .public)")
         }
+        if let sidecars, let editorFiles {
+            try ExternalEditorExport.store(editorFiles, fcpxml: sidecars.fcpxml, metadata: sidecars.metadata)
+        }
         progress(1)
         return summary
+    }
+
+    /// Where the files for external editors of the video at `destination` (canonical) go
+    /// (`ExternalEditorExport.sidecarURLs(of:)`), each checked as the destination is (`canonicalDestination`); `nil`,
+    /// refused, for one that could not be written there or that is the video itself (compared without case, as APFS
+    /// usually does).
+    private static func sidecars(of destination: URL, project: ProjectPackage) -> (fcpxml: URL, metadata: URL)? {
+        let named = ExternalEditorExport.sidecarURLs(of: destination)
+        guard let fcpxml = canonicalDestination(named.fcpxml, project: project),
+              let metadata = canonicalDestination(named.metadata, project: project)
+        else { return nil }
+        let paths = [destination, fcpxml, metadata].map { $0.path.lowercased() }
+        return Set(paths).count == paths.count ? (fcpxml, metadata) : nil
+    }
+
+    /// The bytes of the files for external editors of the video `video` describes (`ExternalEditorExport.files`), made
+    /// on a queue of their own: they sample every frame, which never holds the caller's thread nor one of Swift's
+    /// cooperative pool. Cancelling the task stops the sampling between two frames.
+    /// - Throws: `ExportError.cancelled` once cancelled, or what `ExternalEditorExport.files` throws.
+    private func editorFiles(of video: VideoFacts) async throws -> (fcpxml: Data, metadata: Data) {
+        let cancellation = CancellationFlag()
+        let (project, document, settings, whileSampling) = (project, document, settings, whileSampling)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                DispatchQueue(label: Self.sidecarQueueLabel, qos: .userInitiated).async {
+                    continuation.resume(with: Result {
+                        try ExternalEditorExport.files(project: project, document: document, video: video, settings: settings) {
+                            whileSampling?()
+                            return cancellation.isCancelled
+                        }
+                    })
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
     }
 
     /// The samples the AAC encoder gets when the legacy document of `project` is exported at `framesPerSecond`: what
@@ -312,7 +396,11 @@ public final class MP4Exporter: Sendable {
     /// is not required, so every size of the export sheet encodes):
     /// - H.264: High profile, CABAC, at `averageBitRate`, as phase 1 exported;
     /// - HEVC: Main profile (8-bit) at the level the encoder picks, at `videoBitRate` (0.6 × H.264's);
-    /// - ProRes 422 and 422 HQ: without a bitrate, which ProRes does not have.
+    /// - ProRes 422 and 422 HQ: without a bitrate, which ProRes does not have;
+    /// - HEVC with alpha: its colour at HEVC's bitrate (`hevcBitRate`), its alpha premultiplied, as the compositor draws it,
+    ///   and nearly lossless (`TargetQualityForAlpha` 1, so its edges have no steps; plan 4c decision 5);
+    /// - ProRes 4444: as ProRes 422, its alpha kept (`PreserveAlphaChannel`, on by default) and premultiplied, as the
+    ///   buffers say (`makePixelBuffer`), which are given to it in 16 bits (`sourcePixelFormat(of:)`).
     static func videoSettings(_ settings: ExportSettings) -> [String: Any] {
         let colors: [String: Any] = [
             AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
@@ -348,6 +436,8 @@ public final class MP4Exporter: Sendable {
             compression = [
                 AVVideoAverageBitRateKey: settings.hevcBitRate,
                 AVVideoExpectedSourceFrameRateKey: settings.framesPerSecond,
+                kVTCompressionPropertyKey_AlphaChannelMode as String: kVTAlphaChannelMode_PremultipliedAlpha as String,
+                kVTCompressionPropertyKey_TargetQualityForAlpha as String: 1.0,
             ]
         case .proRes4444:
             codecType = .proRes4444
@@ -363,9 +453,43 @@ public final class MP4Exporter: Sendable {
         return video
     }
 
+    /// The pixel format the writer of `codec` is given: the BGRA every frame is drawn in, but for ProRes 4444, which is
+    /// given it widened to 16-bit RGBA (`widen(_:into:)`): its encoder widens an 8-bit alpha by × 256, so 255 would be
+    /// 65 280 in the file, never quite opaque.
+    static func sourcePixelFormat(of codec: ExportCodec) -> OSType {
+        codec == .proRes4444 ? kCVPixelFormatType_64RGBALE : kCVPixelFormatType_32BGRA
+    }
+
+    /// Copies `drawn`, BGRA, into `wide`, 16-bit RGBA of the same size (`kCVPixelFormatType_64RGBALE`), each value
+    /// × 257 (65 535 / 255, exactly), with `drawn`'s attachments: the same pixels, 0 still 0 and 255 now 65 535.
+    /// - Throws: `ExportError.writerFailed` for buffers of other formats or sizes, or one vImage cannot convert.
+    static func widen(_ drawn: CVPixelBuffer, into wide: CVPixelBuffer) throws {
+        let width = CVPixelBufferGetWidth(drawn), height = CVPixelBufferGetHeight(drawn)
+        guard CVPixelBufferGetPixelFormatType(drawn) == kCVPixelFormatType_32BGRA,
+              CVPixelBufferGetPixelFormatType(wide) == kCVPixelFormatType_64RGBALE,
+              CVPixelBufferGetWidth(wide) == width, CVPixelBufferGetHeight(wide) == height
+        else { throw ExportError.writerFailed("cannot widen a frame of another format or size to 16 bits") }
+        CVPixelBufferLockBaseAddress(drawn, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(drawn, .readOnly) }
+        CVPixelBufferLockBaseAddress(wide, [])
+        defer { CVPixelBufferUnlockBaseAddress(wide, []) }
+        var source = vImage_Buffer(
+            data: CVPixelBufferGetBaseAddress(drawn), height: vImagePixelCount(height), width: vImagePixelCount(width),
+            rowBytes: CVPixelBufferGetBytesPerRow(drawn))
+        var destination = vImage_Buffer(
+            data: CVPixelBufferGetBaseAddress(wide), height: vImagePixelCount(height), width: vImagePixelCount(width),
+            rowBytes: CVPixelBufferGetBytesPerRow(wide))
+        // Each value v becomes (v × 65 535 + 127) / 255 = v × 257; destination channel i is source channel map[i]:
+        // RGBA from BGRA.
+        let map: [UInt8] = [2, 1, 0, 3], background: [UInt16] = [0, 0, 0, 0]
+        let error = vImageConvert_ARGB8888ToARGB16U(&source, &destination, map, 0, background, vImage_Flags(kvImageNoFlags))
+        guard error == kvImageNoError else { throw ExportError.writerFailed("cannot widen a frame to 16 bits (vImage \(error))") }
+        CVBufferPropagateAttachments(drawn, wide)
+    }
+
     /// The audio settings of `settings`'s codec for a mix of `channels` channels (1 or 2) at 48 kHz: AAC at 160 kbps,
-    /// constant, for H.264 and HEVC, as phase 1 exported; for ProRes, 24-bit integer LPCM, little-endian and interleaved
-    /// (phase 2 design §6.8).
+    /// constant, for H.264, HEVC and HEVC with alpha, as phase 1 exported; for ProRes (422, 422 HQ and 4444), 24-bit
+    /// integer LPCM, little-endian and interleaved (phase 2 design §6.8).
     static func audioSettings(_ settings: ExportSettings, channels: Int) -> [String: Any] {
         var audio: [String: Any] = [
             AVSampleRateKey: AudioTrackTimeline.sampleRate,
@@ -498,6 +622,10 @@ private final class ExportSession: @unchecked Sendable {
     private let writer: AVAssetWriter
     private let videoInput: AVAssetWriterInput
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
+    /// The BGRA buffers the frames are drawn into when the writer is given another format (ProRes 4444,
+    /// `MP4Exporter.sourcePixelFormat(of:)`), each widened into one of the adaptor's before it is appended; `nil` when the
+    /// frames are drawn into the adaptor's own, as every other codec's are.
+    private let drawingPool: CVPixelBufferPool?
     private let audioInput: AVAssetWriterInput?
     private let audio: AudioMix?
     /// The chapter track's input and its samples, in order: `nil` and none without chapters.
@@ -536,13 +664,31 @@ private final class ExportSession: @unchecked Sendable {
         videoInput.expectsMediaDataInRealTime = false
         guard writer.canAdd(videoInput) else { throw ExportError.writerFailed("the \(codec.name) writer takes no video input") }
         writer.add(videoInput)
-        adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: [
+        let drawnBuffers: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             kCVPixelBufferWidthKey as String: settings.outputSize.x,
             kCVPixelBufferHeightKey as String: settings.outputSize.y,
             kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
             kCVPixelBufferMetalCompatibilityKey as String: true,
-        ])
+        ]
+        let source = MP4Exporter.sourcePixelFormat(of: codec)
+        if source == kCVPixelFormatType_32BGRA {
+            adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: drawnBuffers)
+            drawingPool = nil
+        } else {
+            adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoInput, sourcePixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: source,
+                kCVPixelBufferWidthKey as String: settings.outputSize.x,
+                kCVPixelBufferHeightKey as String: settings.outputSize.y,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
+            ])
+            var pool: CVPixelBufferPool?
+            let status = CVPixelBufferPoolCreate(kCFAllocatorDefault, nil, drawnBuffers as CFDictionary, &pool)
+            guard status == kCVReturnSuccess, let pool else {
+                throw ExportError.writerFailed("cannot make the buffers the \(codec.name) frames are drawn into (CVReturn \(status))")
+            }
+            drawingPool = pool
+        }
 
         if let audio {
             let encoded = MP4Exporter.audioSettings(settings, channels: audio.channels)
@@ -642,7 +788,8 @@ private final class ExportSession: @unchecked Sendable {
     private func encode(progress: @Sendable (Double) -> Void) throws {
         guard writer.startWriting() else { throw failure() }
         writer.startSession(atSourceTime: .zero)
-        guard let pool = adaptor.pixelBufferPool else { throw ExportError.writerFailed("the writer has no pixel buffer pool") }
+        guard let writerPool = adaptor.pixelBufferPool else { throw ExportError.writerFailed("the writer has no pixel buffer pool") }
+        let pool = drawingPool ?? writerPool
         var queued = 0  // frames queued to be drawn
         var appended = 0
         var drawing: [DrawnFrame] = []  // queued and not appended yet, in frame order
@@ -737,7 +884,9 @@ private final class ExportSession: @unchecked Sendable {
     }
 
     /// A buffer of the writer's pool for a frame, tagged as what the file says: the frame's values are encoded as they
-    /// are, nothing converts them.
+    /// are, nothing converts them. With a codec with alpha, its alpha is premultiplied, as the compositor draws it and the
+    /// encoder is told (`MP4Exporter.videoSettings`): VideoToolbox fails on a buffer that says otherwise. Any other codec's
+    /// buffers are tagged as before 4c: the three Rec. 709 tags, no alpha mode.
     private func makePixelBuffer(from pool: CVPixelBufferPool) throws -> CVPixelBuffer {
         var created: CVPixelBuffer?
         let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &created)
@@ -747,6 +896,10 @@ private final class ExportSession: @unchecked Sendable {
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferColorPrimariesKey, kCVImageBufferColorPrimaries_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferTransferFunctionKey, kCVImageBufferTransferFunction_ITU_R_709_2, .shouldPropagate)
         CVBufferSetAttachment(pixelBuffer, kCVImageBufferYCbCrMatrixKey, kCVImageBufferYCbCrMatrix_ITU_R_709_2, .shouldPropagate)
+        if settings.codec.hasAlpha {
+            CVBufferSetAttachment(
+                pixelBuffer, kCVImageBufferAlphaChannelModeKey, kCVImageBufferAlphaChannelMode_PremultipliedAlpha, .shouldPropagate)
+        }
         return pixelBuffer
     }
 
@@ -757,12 +910,24 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// Appends `pixelBuffer`, drawn, as frame `frame` at `frame / fps`, once the writer takes it.
+    /// Appends `pixelBuffer`, drawn, as frame `frame` at `frame / fps`, once the writer takes it: as it is, or widened
+    /// into a buffer of the writer's pool when the frames are drawn into buffers of their own (`drawingPool`).
     private func append(_ pixelBuffer: CVPixelBuffer, frame: Int) throws {
         try waitUntilReady(videoInput)  // drawing took time: the writer may have failed meanwhile
         frameSink?(frame, pixelBuffer)
+        var encoded = pixelBuffer
+        if drawingPool != nil {
+            guard let pool = adaptor.pixelBufferPool else { throw ExportError.writerFailed("the writer has no pixel buffer pool") }
+            var created: CVPixelBuffer?
+            let status = CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &created)
+            guard status == kCVReturnSuccess, let wide = created else {
+                throw ExportError.writerFailed("no pixel buffer from the pool (CVReturn \(status))")
+            }
+            try MP4Exporter.widen(pixelBuffer, into: wide)
+            encoded = wide
+        }
         let time = CMTime(value: CMTimeValue(frame), timescale: CMTimeScale(settings.framesPerSecond))
-        guard adaptor.append(pixelBuffer, withPresentationTime: time) else { throw failure() }
+        guard adaptor.append(encoded, withPresentationTime: time) else { throw failure() }
     }
 
     /// Returns once `input` takes data, checked right before an append: appending to an input that is not

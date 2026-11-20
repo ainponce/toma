@@ -29,8 +29,9 @@ public enum ExportQuality: CaseIterable, Sendable {
 /// the export sheet remembers (`ExportPreferences.codec`).
 public enum ExportCodec: String, CaseIterable, Sendable {
     case h264, hevc, proRes422, proRes422HQ
-    /// The transparent codecs (phases 4 and 5, milestone 4c): HEVC with alpha and ProRes 4444, both in a QuickTime movie.
-    /// Until 4c the export sheet does not offer them and the exporter refuses them (`ExportError.unsupportedCodec`).
+    /// The transparent codecs (phases 4 and 5 design §7.1, milestone 4c): HEVC with alpha with AAC audio, and ProRes 4444
+    /// with 24-bit LPCM, both in a QuickTime movie, with nothing where the stage's background was and the alpha
+    /// premultiplied (`MP4Exporter`).
     case hevcAlpha, proRes4444
 
     /// The extension of the file it writes: `mp4` for H.264 and HEVC, `mov` for ProRes and the transparent codecs.
@@ -66,6 +67,15 @@ public enum ExportCodec: String, CaseIterable, Sendable {
         case .proRes422HQ: "ProRes 422 HQ"
         case .hevcAlpha: "HEVC with Alpha"
         case .proRes4444: "ProRes 4444"
+        }
+    }
+
+    /// Whether the encoder is given a bitrate, which the export sheet's Quality sets: `true` for H.264, HEVC and HEVC with
+    /// alpha; ProRes has none.
+    public var hasBitRate: Bool {
+        switch self {
+        case .h264, .hevc, .hevcAlpha: true
+        case .proRes422, .proRes422HQ, .proRes4444: false
         }
     }
 
@@ -106,6 +116,11 @@ public struct ExportSettings: Sendable, Equatable {
     /// carries so a player that looks for chapters in its viewer's languages finds them; `nil`, the track's language is
     /// undetermined (`und`).
     public var chapterLanguage: String? = nil
+    /// Whether the export of the whole video also writes the files for external editors next to it
+    /// (`ExternalEditorExport.sidecarURLs(of:)`: `<name>.fcpxml` and `<name>.toma-metadata.json`, design §7.2, plan 4c
+    /// decision 8). Ignored for the export of a range, which they would not describe; not in the size estimate, nor
+    /// remembered by the export sheet.
+    public var editorMetadata: Bool = false
 
     /// Whether the export keeps the stage's transparency: the codec has alpha (`ExportCodec.hasAlpha`).
     public var transparent: Bool { codec.hasAlpha }
@@ -114,8 +129,15 @@ public struct ExportSettings: Sendable, Equatable {
     static let hevcShareOfH264 = 0.6
     /// ProRes 422's and 422 HQ's bits per pixel per frame, for their size estimate (phase 2 design §6.8).
     static let proRes422BitsPerPixel = 2.37, proRes422HQBitsPerPixel = 3.54
-    /// ProRes 4444's, for its size estimate until 4c measures it.
-    static let proRes4444BitsPerPixel = 5.0
+    /// What HEVC with alpha spends of H.264's bitrate for the same quality (plan 4c decision 6, measured in
+    /// `docs/performance.md`): its colour is asked for HEVC's (`hevcShareOfH264`, 0.6) and its alpha, nearly lossless,
+    /// adds what it measured over HEVC, 0.006 and 0.036 of H.264's bitrate at 1080p60 (the median, 0.02, rounded).
+    static let hevcAlphaShareOfH264 = 0.62
+    /// ProRes 4444's bits per pixel per frame with its alpha, for its size estimate (plan 4c decision 6, measured in
+    /// `docs/performance.md`): 422 HQ's (`proRes422HQBitsPerPixel`) × what ProRes 4444 measured over 422 HQ of the same
+    /// projects, 0.88 and 2.10 (the median, 1.49), as Apple's rates of the two (660 and 440 Mb/s at 1080p60) say. The rates
+    /// measured themselves, 0.97 and 1.52 bits, are far below Apple's for flat screens and voids, as 422's and 422 HQ's are.
+    static let proRes4444BitsPerPixel = 5.3
     /// The bitrate of the 24-bit stereo LPCM at 48 kHz that ProRes carries, for its size estimate: 2 304 000 bits per
     /// second (plan 2b decision 13).
     static let proResAudioBitRate = 48_000 * 24 * 2
@@ -125,22 +147,28 @@ public struct ExportSettings: Sendable, Equatable {
         Int((Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond) * quality.bitsPerPixel).rounded())
     }
 
-    /// The video bitrate the encoder is asked for, in bits per second: `averageBitRate` for H.264, 0.6 × it (rounded) for
-    /// HEVC; `nil` for ProRes, which has none.
+    /// The video's bitrate, in bits per second: what the encoder is asked for, `averageBitRate` for H.264 and 0.6 × it
+    /// (rounded) for HEVC; for HEVC with alpha, what its colour, asked for HEVC's, and its alpha spend together
+    /// (`hevcAlphaShareOfH264` × `averageBitRate`, rounded); `nil` for ProRes, which has none (`ExportCodec.hasBitRate`).
     public var videoBitRate: Int? {
         switch codec {
         case .h264: averageBitRate
-        case .hevc, .hevcAlpha: hevcBitRate
+        case .hevc: hevcBitRate
+        case .hevcAlpha: hevcAlphaBitRate
         case .proRes422, .proRes422HQ, .proRes4444: nil
         }
     }
 
-    /// HEVC's bitrate for the same quality as H.264's `averageBitRate`: 0.6 × it, rounded.
+    /// HEVC's bitrate for the same quality as H.264's `averageBitRate`: 0.6 × it, rounded. HEVC with alpha asks it for its
+    /// colour.
     var hevcBitRate: Int { Int((Double(averageBitRate) * Self.hevcShareOfH264).rounded()) }
+
+    /// What HEVC with alpha spends for the same quality as H.264's `averageBitRate`: `hevcAlphaShareOfH264` × it, rounded.
+    var hevcAlphaBitRate: Int { Int((Double(averageBitRate) * Self.hevcAlphaShareOfH264).rounded()) }
 
     public init(
         outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60, quality: ExportQuality = .standard,
-        codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil
+        codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil, editorMetadata: Bool = false
     ) {
         self.outputSize = outputSize
         self.framesPerSecond = framesPerSecond
@@ -148,27 +176,33 @@ public struct ExportSettings: Sendable, Equatable {
         self.codec = codec
         self.chapters = chapters
         self.chapterLanguage = chapterLanguage
+        self.editorMetadata = editorMetadata
     }
 
     /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even); `auto` from
     /// `contentRatio`, the ratio of the recording's screen (16:9 without it).
     public init(
         aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality,
-        contentRatio: Double? = nil, codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil
+        contentRatio: Double? = nil, codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil,
+        editorMetadata: Bool = false
     ) {
         self.init(
             outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue, contentRatio: contentRatio),
-            framesPerSecond: framesPerSecond, quality: quality, codec: codec, chapters: chapters, chapterLanguage: chapterLanguage)
+            framesPerSecond: framesPerSecond, quality: quality, codec: codec, chapters: chapters, chapterLanguage: chapterLanguage,
+            editorMetadata: editorMetadata)
     }
 
     /// About how many bytes an export of `durationSeconds` takes (the export sheet's estimate, design §5.6, plan 2b
-    /// decision 13): for H.264 and HEVC, the video's bitrate (`videoBitRate`) and the AAC's over that time; for ProRes,
-    /// width × height × fps × 2.37 bits (422) or 3.54 (422 HQ) and the 24-bit stereo LPCM's 2 304 000 bits per second.
+    /// decision 13, plan 4c decision 6): for H.264, HEVC and HEVC with alpha, the video's bitrate (`videoBitRate`) and the
+    /// AAC's over that time; for ProRes, width × height × fps × 2.37 bits (422), 3.54 (422 HQ) or
+    /// `proRes4444BitsPerPixel` (4444) and the 24-bit stereo LPCM's 2 304 000 bits per second. The files for editors
+    /// (`editorMetadata`) are not in it.
     public func estimatedBytes(durationSeconds: Double) -> Int64 {
         let pixelsPerSecond = Double(outputSize.x) * Double(outputSize.y) * Double(framesPerSecond)
         let bitsPerSecond = switch codec {
         case .h264: Double(averageBitRate + MP4Exporter.audioBitRate)
-        case .hevc, .hevcAlpha: Double(hevcBitRate + MP4Exporter.audioBitRate)
+        case .hevc: Double(hevcBitRate + MP4Exporter.audioBitRate)
+        case .hevcAlpha: Double(hevcAlphaBitRate + MP4Exporter.audioBitRate)
         case .proRes422: pixelsPerSecond * Self.proRes422BitsPerPixel + Double(Self.proResAudioBitRate)
         case .proRes422HQ: pixelsPerSecond * Self.proRes422HQBitsPerPixel + Double(Self.proResAudioBitRate)
         case .proRes4444: pixelsPerSecond * Self.proRes4444BitsPerPixel + Double(Self.proResAudioBitRate)
@@ -202,7 +236,8 @@ public enum ExportError: Error, Equatable {
     /// track or the camera) do, or the range asked for (`MP4Exporter.range`) lasts less than a frame of the video:
     /// there is nothing to export, and nothing is written.
     case nothingToExport
-    /// The codec is one the exporter does not write yet (the transparent ones, until milestone 4c): nothing is written.
+    /// The codec is one the exporter does not write: nothing is written. Nothing throws it since milestone 4c, which writes
+    /// every `ExportCodec` (plan 4c decision 7); it stays so the `switch`es over these errors keep compiling.
     case unsupportedCodec
 }
 

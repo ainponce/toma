@@ -50,13 +50,15 @@ import ProjectFormat
 /// - A change of the focused element is one more element of step 1, as a click with its box: it groups with clicks and
 ///   its block merges with theirs (5). A group with one zooms `FocusZoom.maximumDepth` at most (6), and a group of only
 ///   changes of the element is fixed at the centre of its box even with `follow` (7).
-/// - A span of typing with text cursors in it (`Activity.caretRuns`) holds no group and makes none alone (2 and 3): it
-///   is split into lines, each a group of its own on its anchor, the first cursor of the line, from it to the next
-///   line's anchor (or the span's end), held to there. The next line starts at the first cursor whose box leaves the
-///   view of the line's anchor: the crop of `min(depth, the depth that fits the anchor's box)` placed on the anchor's
-///   centre (`StageCrop`), less 12 % of it on each side but at the screen's edge. Nothing joins such a group and it joins
-///   nothing (1 and 5): next to another block it meets it at the midpoint, between two lines their cut. It is fixed at
-///   its anchor's centre (7), as typing should not chase the pointer, unless the screen follows the cursor.
+/// - A span of typing with text cursors in it (`Activity.caretRuns`) holds no group and makes none alone (2 and 3), and
+///   a click, drag or pause that starts in it is no element (1): the span is the cursor's. It is split into lines, each
+///   a group of its own on its anchor, the first cursor of the line, from it to the next line's anchor (or the span's
+///   end), held to there. The next line starts at the first cursor whose box leaves the view of the line's anchor: the
+///   crop of `min(depth, the depth that fits the anchor's box)` placed on the anchor's centre (`StageCrop`), less 12 % of
+///   it on each side but at the screen's edge (a click that takes the text cursor out of the view cuts the line there
+///   too). Nothing joins such a group and it joins nothing (1 and 5): next to another block it meets it at the midpoint,
+///   between two lines their cut, and as nothing starts inside a line no block ends up over another. It is fixed at its
+///   anchor's centre (7), as typing should not chase the pointer, unless the screen follows the cursor.
 /// The other steps are the same for the blocks of the focus: the user's blocks win, a deletion stays, and their ids are
 /// `regionID`.
 public enum AutoZoomPlanner {
@@ -224,7 +226,10 @@ struct Planner {
         if settings.triggers == .clicksAndPauses {
             elements += activity.pauses.map { Element(start: $0.output, end: $0.output, box: Self.box(at: $0.point), host: $0.host) }
         }
-        if settings.followsFocus { elements += focusElements(activity) }
+        if settings.followsFocus {
+            // `focusZoom-1`: a span with text cursors is the cursor's; what the pointer does in it zooms nothing.
+            elements = outsideCaretRuns(elements, activity) + focusElements(activity)
+        }
         elements = elements.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map(\.element)
 
         var groups: [Group] = []

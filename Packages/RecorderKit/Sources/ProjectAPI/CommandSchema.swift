@@ -71,10 +71,13 @@ public enum CommandSchema {
         return object
     }
 
-    private static func string(_ description: String, maxLength: Int? = nil) -> [String: Any] {
-        var object: [String: Any] = ["type": "string", "description": description]
-        if let maxLength { object["maxLength"] = maxLength }
-        return object
+    /// A string; with `limit`, one the command holds to that many characters as a person counts them (grapheme
+    /// clusters, `String.count`), cutting a longer one. The limit goes in the description, never as `maxLength`, which
+    /// counts code points: the format promises characters (`docs/format/README.md`, "Estabilidad").
+    private static func string(_ description: String, limit: Int? = nil) -> [String: Any] {
+        var text = description
+        if let limit { text += " Up to \(limit) characters (grapheme clusters); a longer one is cut." }
+        return ["type": "string", "description": text]
     }
 
     private static func choice(_ description: String, _ values: [String]) -> [String: Any] {
@@ -91,7 +94,7 @@ public enum CommandSchema {
     private static var rgba: [String: Any] {
         [
             "type": "array", "description": "A colour, sRGB values from 0 to 1: [r, g, b, a].",
-            "items": ["type": "number", "minimum": 0.0, "maximum": 1.0] as [String: Any],
+            "items": ["type": "number", "minimum": 0.0, "maximum": 1.0] as [String: Any], "minItems": 4, "maxItems": 4,
         ]
     }
 
@@ -157,11 +160,11 @@ public enum CommandSchema {
                 required: ["enabled"], examples: [["enabled": true, "followsFocus": true]]),
             command(
                 "addMarker", "A marker at `at`; one with a name is a chapter.",
-                ["at": seconds, "name": string("Its name; \"\" for none.", maxLength: MarkerCommands.maximumNameLength)],
+                ["at": seconds, "name": string("Its name; \"\" for none.", limit: MarkerCommands.maximumNameLength)],
                 required: ["at", "name"], examples: [["at": 42.0, "name": "Setup"]]),
             command(
                 "renameMarker", "Names a marker, by the id the project report gives.",
-                ["id": string("The marker's id."), "name": string("Its name; \"\" for none.", maxLength: MarkerCommands.maximumNameLength)],
+                ["id": string("The marker's id."), "name": string("Its name; \"\" for none.", limit: MarkerCommands.maximumNameLength)],
                 required: ["id", "name"], examples: [["id": "m-1a2b3c4d", "name": "Demo"]]),
             command(
                 "removeMarker", "Deletes a marker (a recorded one is hidden).", ["id": string("The marker's id.")],
@@ -204,11 +207,11 @@ public enum CommandSchema {
                 ], required: ["theme"], examples: [["theme": "calm", "volume": -18.0]]),
             command("removeMusic", "Takes out all the music.", examples: [[:]]),
             command(
-                "setTitle", "The project's title.", ["title": string("\"\" takes it away.", maxLength: ProjectInfo.titleLimit)],
+                "setTitle", "The project's title.", ["title": string("\"\" takes it away.", limit: ProjectInfo.titleLimit)],
                 required: ["title"], examples: [["title": "Release notes, November"]]),
             command(
                 "setSummary", "The project's summary.",
-                ["summary": string("\"\" takes it away.", maxLength: ProjectInfo.summaryLimit)], required: ["summary"],
+                ["summary": string("\"\" takes it away.", limit: ProjectInfo.summaryLimit)], required: ["summary"],
                 examples: [["summary": "What changed in the export sheet."]]),
             command(
                 "transcribe", "Transcribes the takes on this Mac (never downloads a model).",

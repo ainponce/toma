@@ -21,7 +21,7 @@ extension TakeNotice {
         case .noMicrophone, .microphoneAccessOff, .optionalSourceFailedToStart, .cameraAccessOff, .systemAudioNotRequested,
             .windowHidden, .streamInterrupted, .trackLost, .screenPaused, .trackPaused, .writerFailed, .samplesDropped,
             .manifestWriteFailed, .diskLow, .diskSpaceUnknown, .couldNotMoveToTrash, .microphoneSilent, .focusShortcutFailed,
-            .keysNotRecorded:
+            .keysNotRecorded, .keyboardFocusNotRecorded:
             .attention
         }
     }

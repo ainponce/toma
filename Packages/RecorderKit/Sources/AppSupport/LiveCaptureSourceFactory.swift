@@ -14,6 +14,8 @@ public final class LiveCaptureSourceFactory: CaptureSourceFactory {
     private let noteKeyActivity: Bool
     /// Whether `input` records which keys go down: `RecorderSettings.recordKeys`, with Input Monitoring allowed.
     private let recordKeys: Bool
+    /// Whether `input` records where the keyboard focus and the text cursor are: `RecorderSettings.recordFocus`, with Accessibility allowed.
+    private let recordFocus: Bool
     private let onWindowVisibilityChange: @Sendable (WindowVisibility) -> Void
     /// The windows `window` made, by window ID.
     private var windows: [UInt32: WindowCaptureSource] = [:]
@@ -22,15 +24,16 @@ public final class LiveCaptureSourceFactory: CaptureSourceFactory {
 
     /// `cameraHost` is the app's one camera session, also the bubble's (plan decision 28); `noteKeyActivity` is
     /// `RecorderSettings.noteKeyActivity`; `recordKeys` is `RecorderSettings.recordKeys` once Input Monitoring is allowed
-    /// (off otherwise); `onWindowVisibilityChange` hears, from any thread, each change of whether a recorded window can
+    /// (off otherwise); `recordFocus` is `RecorderSettings.recordFocus` once Accessibility is allowed (off otherwise); `onWindowVisibilityChange` hears, from any thread, each change of whether a recorded window can
     /// be seen (`WindowGeometryRecorder`).
     public init(
         cameraHost: CameraSessionHost, noteKeyActivity: Bool, recordKeys: Bool = false,
-        onWindowVisibilityChange: @escaping @Sendable (WindowVisibility) -> Void
+        recordFocus: Bool = false, onWindowVisibilityChange: @escaping @Sendable (WindowVisibility) -> Void
     ) {
         self.cameraHost = cameraHost
         self.noteKeyActivity = noteKeyActivity
         self.recordKeys = recordKeys
+        self.recordFocus = recordFocus
         self.onWindowVisibilityChange = onWindowVisibilityChange
     }
 
@@ -90,6 +93,7 @@ public final class LiveCaptureSourceFactory: CaptureSourceFactory {
         var recorders: [any InputRecorder] = [CursorRecorder(), CursorImageRecorder(), ScrollRecorder()]
         if noteKeyActivity { recorders.append(KeyActivityRecorder()) }
         if recordKeys { recorders.append(KeyPressRecorder()) }
+        if recordFocus { recorders.append(AccessibilityFocusRecorder()) }
         if !displayIDs.isEmpty {
             let scales = displayScales
             recorders.append(DisplayGeometryRecorder(displayIDs: displayIDs, query: { displayID in

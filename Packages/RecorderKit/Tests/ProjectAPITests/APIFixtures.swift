@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Analysis
+import Darwin
 import Editing
 import Export
 import Foundation
@@ -72,14 +73,16 @@ enum APIFixtures {
         }
     }
 
-    /// An environment of folders inside `dir`, none of the user's.
-    static func environment(in dir: URL, journalIO: EditJournalIO = .system) -> APIEnvironment {
+    /// An environment of folders inside `dir`, none of the user's. With `stoppedClock`, every step is at the same instant,
+    /// as the editor's burst of keys is.
+    static func environment(in dir: URL, journalIO: EditJournalIO = .system, stoppedClock: Bool = false) -> APIEnvironment {
         let clock = Clock(), ids = IDs()
+        let stopped = Date(timeIntervalSince1970: 1_794_780_000)
         var environment = APIEnvironment(
             app: app, cachesRoot: dir.appending(path: "Caches"), musicRoot: dir.appending(path: "Music"),
             stylesFolder: dir.appending(path: "Styles"), projectsFolder: dir.appending(path: "Projects"),
-            controlSocket: dir.appending(path: "control.sock"), now: { clock.now() }, makeID: { ids.make($0) }, speech: nil,
-            isolator: NoIsolation())
+            controlSocket: dir.appending(path: "control.sock"), now: { stoppedClock ? stopped : clock.now() },
+            makeID: { ids.make($0) }, speech: nil, isolator: NoIsolation())
         environment.journalIO = journalIO
         return environment
     }
@@ -161,6 +164,18 @@ enum APIFixtures {
         } catch {
             return error as? APIError
         }
+    }
+
+    /// Fills the volume of `folder` with a file `filler` until a write fails: a full disk.
+    @concurrent static func fill(_ folder: URL) async throws {
+        let fd = open(folder.appending(path: "filler").path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        for size in [1 << 20, 1 << 12, 1 << 9] {
+            let chunk = [UInt8](repeating: 0x2A, count: size)
+            while chunk.withUnsafeBytes({ write(fd, $0.baseAddress, $0.count) }) == size {}
+        }
+        fsync(fd)
     }
 
     /// The entries of the package's edit log.

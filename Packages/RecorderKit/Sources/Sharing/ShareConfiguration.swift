@@ -23,6 +23,10 @@ public enum ShareConfigurationProblem: Error, Equatable, Sendable {
     case invalidPublicURL
     /// `http://` to a host other than `localhost`, `127.0.0.1` or `::1`.
     case insecurePublicURL
+    /// Not lower-case letters, digits and `-`: it would break the signature's scope.
+    case invalidRegion
+    /// A space, `/`, `,`, `=`, `;` or a character outside printable ASCII: it would break the `Credential=` field.
+    case invalidAccessKey
 }
 
 /// What the S3 client needs, checked and normalized from Settings ▸ Share and the secret from the Keychain. Printing it
@@ -32,7 +36,8 @@ public struct ShareConfiguration: Sendable {
     public let endpoint: URL
     public let region: String
     public let credentials: S3Credentials
-    /// The addressing used: the service's, but path style for an S3 bucket with a dot (a TLS wildcard covers one label).
+    /// The addressing used: the service's, but path style for an S3 bucket that is not one DNS label of `a–z 0–9 -` (a
+    /// dot breaks the TLS wildcard; capitals and `_` are no host name).
     public let addressing: S3Addressing
     /// Not empty, without `/`, spaces or `..`.
     public let bucket: String
@@ -54,7 +59,7 @@ public struct ShareConfiguration: Sendable {
         self.region = region.isEmpty ? preferences.provider.defaultRegion : region
         self.credentials = S3Credentials(
             accessKeyID: preferences.accessKeyID.trimmingCharacters(in: .whitespacesAndNewlines), secretAccessKey: secret)
-        self.addressing = bucket.contains(".") ? .path : preferences.provider.addressing
+        self.addressing = Self.isLowerLabel(bucket) ? preferences.provider.addressing : .path
         self.bucket = bucket
         self.prefix = prefix
         self.publicBaseURL = checked.publicBaseURL
@@ -104,6 +109,8 @@ public struct ShareConfiguration: Sendable {
         case .success(let url): checked.endpoint = url
         case .failure(let problem): checked.problems.append(problem)
         }
+        let region = preferences.region.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !isLowerLabel(region) { checked.problems.append(.invalidRegion) }
         switch bucket(preferences.bucket) {
         case .success(let bucket): checked.bucket = bucket
         case .failure(let problem): checked.problems.append(problem)
@@ -112,8 +119,11 @@ public struct ShareConfiguration: Sendable {
         case .success(let prefix): checked.prefix = prefix
         case .failure(let problem): checked.problems.append(problem)
         }
-        if preferences.accessKeyID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        let accessKeyID = preferences.accessKeyID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if accessKeyID.isEmpty {
             checked.problems.append(.missingAccessKey)
+        } else if !accessKeyID.unicodeScalars.allSatisfy({ (0x21..<0x7F).contains($0.value) && !"/,=;".unicodeScalars.contains($0) }) {
+            checked.problems.append(.invalidAccessKey)
         }
         if !hasSecret { checked.problems.append(.missingSecret) }
         switch publicBase(preferences.publicBaseURL) {
@@ -135,9 +145,20 @@ public struct ShareConfiguration: Sendable {
             components.percentEncodedUser == nil, components.percentEncodedPassword == nil
         else { return .failure(.invalidEndpoint) }
         if scheme == "http" && !localHosts.contains(host) { return .failure(.insecureEndpoint) }
-        let port = components.port.map { ":\($0)" } ?? ""
+        let port = defaultPortDropped(components.port, scheme: scheme)
         guard let url = URL(string: "\(scheme)://\(host)\(port)") else { return .failure(.invalidEndpoint) }
         return .success(url)
+    }
+
+    /// Only `a–z`, `0–9` and `-` (an empty text too): a region, or a bucket that can be a host name's label.
+    private static func isLowerLabel(_ text: String) -> Bool {
+        text.unicodeScalars.allSatisfy { ("a"..."z").contains($0) || ("0"..."9").contains($0) || $0 == "-" }
+    }
+
+    /// `:<port>`, or nothing when there is no port or it is the scheme's own (`URLSession` sends `Host` without it).
+    private static func defaultPortDropped(_ port: Int?, scheme: String) -> String {
+        guard let port, !(scheme == "https" && port == 443), !(scheme == "http" && port == 80) else { return "" }
+        return ":\(port)"
     }
 
     /// A bucket name as S3-compatible services allow it: letters, digits, `.`, `-` and `_`, never `..`.
@@ -173,7 +194,7 @@ public struct ShareConfiguration: Sendable {
         if scheme == "http" && !localHosts.contains(host) { return .failure(.insecurePublicURL) }
         var path = components.percentEncodedPath
         while path.hasSuffix("/") { path.removeLast() }
-        let port = components.port.map { ":\($0)" } ?? ""
+        let port = defaultPortDropped(components.port, scheme: scheme)
         guard let url = URL(string: "\(scheme)://\(host)\(port)\(path)") else { return .failure(.invalidPublicURL) }
         return .success(url)
     }

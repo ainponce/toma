@@ -29,6 +29,11 @@ public enum ZoomPanelRules {
         events.contains { $0.kind == .keyActivity }
     }
 
+    /// Whether the take recorded the keyboard focus (a `focus` event): "Follow Keyboard Focus" has something to follow.
+    public static func hasFocus(events: [InputEvent]) -> Bool {
+        events.contains { if case .focus = $0.kind { true } else { false } }
+    }
+
     /// Whether the take has clicks (a `mouseDown`) to make zooms from.
     public static func hasClicks(events: [InputEvent]) -> Bool {
         events.contains { if case .mouseDown = $0.kind { true } else { false } }

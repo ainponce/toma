@@ -1,0 +1,194 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Toma input event",
+  "description": "One line of takes/<take>/events.jsonl (format 1.0): a compact JSON object, keys in alphabetical order, that ends in \"\\n\". Every event has t and type; the other fields depend on type and are at the same level. A reader skips a line whose type it does not know (a later version can add types without raising the manifest's version) or that lacks a field its type needs. Coordinates are global points, the origin at the top left of the main display, y down. See docs/format/README.md, \"events.jsonl\".",
+  "type": "object",
+  "properties": {
+    "t": {
+      "description": "When it happened: a HostTime, nanoseconds of the Mac's CLOCK_UPTIME_RAW.",
+      "type": "integer",
+      "minimum": 0
+    },
+    "type": {
+      "description": "What happened. This version writes: cursor, mouseDown, mouseUp, displayGeometry, segmentStarted, streamInterrupted, paused, resumed, deviceChanged, marker, droppedSamples, audioClock, windowGeometry, cameraStyle, cursorImage, scroll, keyActivity, keyPress, focus.",
+      "type": "string",
+      "examples": ["cursor", "focus"]
+    },
+    "x": {"description": "cursor, mouseDown, mouseUp, scroll: the pointer; focus: the left edge.", "type": "number"},
+    "y": {"description": "cursor, mouseDown, mouseUp, scroll: the pointer; focus: the top edge.", "type": "number"},
+    "button": {
+      "description": "mouseDown, mouseUp: left, right, or other for any other button.",
+      "type": "string",
+      "enum": ["left", "right", "other"]
+    },
+    "displayID": {
+      "description": "displayGeometry: the display's CGDirectDisplayID.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "frame": {
+      "description": "displayGeometry, windowGeometry: a rectangle in global points; audioClock: the number of a sample of the segment's file, from 0.",
+      "type": ["object", "integer"],
+      "properties": {
+        "x": {"type": "number"},
+        "y": {"type": "number"},
+        "width": {"type": "number"},
+        "height": {"type": "number"}
+      },
+      "required": ["x", "y", "width", "height"]
+    },
+    "scale": {"description": "displayGeometry: pixels per point recorded.", "type": "number"},
+    "track": {"description": "The id of a track of the manifest.", "type": "string"},
+    "index": {"description": "segmentStarted: the number of the segment the track opened.", "type": "integer"},
+    "domain": {"description": "streamInterrupted: the NSError's domain.", "type": "string"},
+    "code": {
+      "description": "streamInterrupted: the NSError's code; keyPress: the key's virtual code, 0 to 65535.",
+      "type": "integer"
+    },
+    "reason": {
+      "description": "paused: willSleep, screenLocked or user; a reader takes one it does not know.",
+      "type": "string"
+    },
+    "deviceUniqueID": {
+      "description": "deviceChanged: the uniqueID of the device the track records from now.",
+      "type": "string"
+    },
+    "count": {
+      "description": "droppedSamples: the samples the track lost so far in its current segment.",
+      "type": "integer"
+    },
+    "onScreen": {"description": "windowGeometry: whether macOS has the window on screen.", "type": "boolean"},
+    "style": {"description": "cameraStyle: how the camera looks from t.", "$ref": "#/$defs/cameraStyle"},
+    "hash": {
+      "description": "cursorImage: the name of its image, takes/<take>/cursors/<hash>.png.",
+      "type": "string"
+    },
+    "hotspot": {
+      "description": "cursorImage: where the pointer is in the image, fractions of its width and height from the top left.",
+      "type": "object",
+      "properties": {"x": {"type": "number"}, "y": {"type": "number"}},
+      "required": ["x", "y"]
+    },
+    "size": {
+      "description": "cursorImage: the cursor's size in points.",
+      "type": "object",
+      "properties": {"width": {"type": "number"}, "height": {"type": "number"}},
+      "required": ["width", "height"]
+    },
+    "kind": {
+      "description": "cursorImage: the system cursor it looks like (arrow, iBeam, pointingHand, openHand, closedHand, crosshair, resizeLeftRight, resizeUpDown, notAllowed; another one is read as none); focus: element or caret.",
+      "type": "string"
+    },
+    "dx": {"description": "scroll: the horizontal points scrolled in 1/30 s.", "type": "number"},
+    "dy": {"description": "scroll: the vertical points scrolled in 1/30 s.", "type": "number"},
+    "chars": {
+      "description": "keyPress: what the key types with only Shift of its modifiers; missing if it types nothing.",
+      "type": "string"
+    },
+    "mods": {
+      "description": "keyPress: the modifiers, the low 32 bits of CGEventFlags.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4294967295
+    },
+    "repeat": {"description": "keyPress: whether it is the key's automatic repeat.", "type": "boolean"},
+    "key": {
+      "description": "keyPress: what the key types without modifiers; missing where chars is.",
+      "type": "string"
+    },
+    "width": {"description": "focus: the rectangle's width.", "type": "number"},
+    "height": {"description": "focus: the rectangle's height.", "type": "number"}
+  },
+  "required": ["t", "type"],
+  "allOf": [
+    {
+      "if": {"properties": {"type": {"const": "cursor"}}, "required": ["type"]},
+      "then": {"required": ["x", "y"]}
+    },
+    {
+      "if": {"properties": {"type": {"enum": ["mouseDown", "mouseUp"]}}, "required": ["type"]},
+      "then": {"required": ["button", "x", "y"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "displayGeometry"}}, "required": ["type"]},
+      "then": {"required": ["displayID", "frame", "scale"], "properties": {"frame": {"type": "object"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "segmentStarted"}}, "required": ["type"]},
+      "then": {"required": ["track", "index"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "streamInterrupted"}}, "required": ["type"]},
+      "then": {"required": ["track", "domain", "code"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "paused"}}, "required": ["type"]},
+      "then": {"required": ["reason"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "deviceChanged"}}, "required": ["type"]},
+      "then": {"required": ["track", "deviceUniqueID"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "droppedSamples"}}, "required": ["type"]},
+      "then": {"required": ["track", "count"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "audioClock"}}, "required": ["type"]},
+      "then": {"required": ["track", "frame"], "properties": {"frame": {"type": "integer"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "windowGeometry"}}, "required": ["type"]},
+      "then": {"required": ["track", "frame", "onScreen"], "properties": {"frame": {"type": "object"}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "cameraStyle"}}, "required": ["type"]},
+      "then": {"required": ["style"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "cursorImage"}}, "required": ["type"]},
+      "then": {"required": ["hash", "hotspot", "size"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "scroll"}}, "required": ["type"]},
+      "then": {"required": ["dx", "dy", "x", "y"]}
+    },
+    {
+      "if": {"properties": {"type": {"const": "keyPress"}}, "required": ["type"]},
+      "then": {"required": ["code", "mods", "repeat"], "properties": {"code": {"minimum": 0, "maximum": 65535}}}
+    },
+    {
+      "if": {"properties": {"type": {"const": "focus"}}, "required": ["type"]},
+      "then": {
+        "required": ["x", "y", "width", "height", "kind"],
+        "properties": {"kind": {"enum": ["element", "caret"]}}
+      }
+    }
+  ],
+  "$defs": {
+    "cameraStyle": {
+      "description": "How the camera looks: its shape, its size and where it is anchored.",
+      "type": "object",
+      "properties": {
+        "shape": {
+          "description": "circle, roundedSquare, portrait (3:4) or landscape (16:9).",
+          "type": "string",
+          "enum": ["circle", "roundedSquare", "portrait", "landscape"]
+        },
+        "size": {
+          "description": "The camera's side as a fraction of the output's height: 0.17 small, 0.24 medium, 0.33 large.",
+          "type": "number"
+        },
+        "anchor": {
+          "description": "One of the 8 places at the corners and the middle of the edges; leading is always the left.",
+          "type": "string",
+          "enum": [
+            "topLeading", "top", "topTrailing", "leading", "trailing", "bottomLeading", "bottom", "bottomTrailing"
+          ]
+        }
+      },
+      "required": ["shape", "size", "anchor"]
+    }
+  }
+}

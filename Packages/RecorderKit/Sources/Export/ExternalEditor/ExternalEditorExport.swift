@@ -55,6 +55,14 @@ public enum ExternalEditorExport {
         guard TimeMap(sequence: document.sequence).duration > 0 else { throw ExportError.nothingToExport }
         let facts = try VideoFacts.read(video)
         let written = try files(project: project, document: document, video: facts, settings: settings) { Task.isCancelled }
+        try store(written, fcpxml: fcpxml, metadata: metadata)
+    }
+
+    /// Replaces `fcpxml` and `metadata` (canonical paths) with `written`'s bytes, each atomically, the FCPXML first; if the
+    /// metadata cannot be written, the FCPXML just written is removed, so it is both files or neither. `write` and
+    /// `MP4Exporter` (with `ExportSettings.editorMetadata`) store them this way.
+    /// - Throws: `ExportError.diskFull` when the disk is full, `writerFailed` for any other failure.
+    static func store(_ written: (fcpxml: Data, metadata: Data), fcpxml: URL, metadata: URL) throws {
         try store(written.fcpxml, at: fcpxml)
         do {
             try store(written.metadata, at: metadata)

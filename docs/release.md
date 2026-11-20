@@ -1622,3 +1622,35 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: l
 ### 0. Preparación
 
 ### 2. Detalle por área
+
+**IA local: «Información», la hoja de capítulos y el menú Marcadores** (I3)
+
+- Con Apple Intelligence activado, en una grabación real en español de 10 min o más (transcripta): Marcadores ▸ «Proponer capítulos…» abre la hoja, dice «Leyendo la transcripción…» (con «parte N de M» si es larga) y en menos de un minuto propone capítulos con sentido, en español, de 30 s a 5 min, con títulos cortos. Hacer clic en el tiempo de uno lleva la cabeza ahí; editar un título, desmarcar otro, «Agregar N capítulos»: aparecen como banderas con nombre en la regla y un solo ⌘Z (Deshacer «Agregar capítulos») los saca a todos. «Cancelar» mientras lee la cierra y no agrega nada.
+- En la pestaña «Información» (la última del panel, ícono ⓘ, sin atajo): «Sugerir» del título y del resumen escriben cada uno en su campo, en un paso que se deshace; un segundo «Sugerir» da otro texto. Escribir un título a mano y apretar Return, o escribir el resumen y salir del campo, también se deshace con ⌘Z. Cerrar y abrir el proyecto: el título y el resumen siguen ahí.
+- «Copiar descripción para YouTube» (en el menú Marcadores y en la pestaña) pegado en YouTube Studio: el resumen, una línea vacía y los capítulos desde 00:00; YouTube reconoce los capítulos.
+- Con Apple Intelligence desactivado en Ajustes del Sistema y Toma abierta: al volver a Toma, «Proponer capítulos…» se ve atenuado con «Apple Intelligence no está activado.» como segunda línea, y la pestaña «Información» muestra el mismo motivo con «Sugerir» y «Proponer capítulos…» atenuados. Al activarlo de nuevo y volver, todo se habilita sin reabrir el proyecto.
+- En un proyecto sin transcripción, la pestaña dice «Sin transcripción.» con «Transcribir», y la hoja «Este proyecto no tiene transcripción.» con «Transcribir», que la cierra y empieza a transcribir en la pestaña Subtítulos.
+- Si hay una Mac con macOS 15 a mano: Toma abre y «Información» dice «Requiere macOS 26.».
+- VoiceOver recorre la hoja (cada capítulo como «1:05, título», su casilla, «Ir a 1:05» y el campo «Título del capítulo») y la pestaña («Título», «Sugerir título», «Resumen», «Sugerir resumen»); después de «Agregar» anuncia «Se agregaron N capítulos.».
+
+**Grabar el foco** (F2)
+
+Con «Seguir el foco del teclado» prendido (Ajustes ▸ Grabación) y Accesibilidad dada a Toma. Para mirar lo grabado: «Mostrar contenido del paquete» del proyecto y abrir `takes/take-001/events.jsonl` con TextEdit; las del foco son las líneas con `"type":"focus"`.
+- Grabar 20 s escribiendo en TextEdit, en Notas y en el campo de búsqueda de Finder, pasando de uno a otro con ⌘⇥ y con ⇥: cada línea `focus` tiene solo `height`, `kind`, `t`, `type`, `width`, `x` e `y`, nunca un texto, un rol ni el nombre de una app. Hay un `element` al empezar y uno por cada cambio de campo, y líneas `caret` que avanzan con lo que se escribe, cada una con el mismo `t` que el `element` que la precede si salieron juntas. Los rectángulos caen donde están el campo y el cursor de texto en la pantalla (puntos globales, con el origen arriba a la izquierda de la pantalla principal); con una segunda pantalla a la izquierda o arriba de la principal, ahí salen con `x` o `y` negativos.
+- Mantener una tecla apretada en TextEdit unos segundos: no hay más de 20 líneas `caret` por segundo, y ninguna repite los cuatro números de la anterior. La toma no se traba ni se atrasa.
+- En un campo de contraseña (el de una página de inicio de sesión en Safari, el de Ajustes del Sistema ▸ Usuarios y grupos) y en Terminal con «Entrada de teclado segura» prendida, escribir unos caracteres: hay un `element` del campo y ningún `caret` mientras el foco está ahí.
+- Pausar la toma, cambiar de campo, escribir y reanudar: entre la pausa y la reanudación no hay ninguna línea `focus` (comparar sus `t` con los de los eventos `paused` y `resumed`); al reanudar se escribe otra vez el foco como está, aunque no haya cambiado.
+- Con Toma adelante (el editor, Ajustes) no se escribe ninguna línea `focus`; al volver a otra app, sí.
+- Parar la toma mientras una app no contesta (por ejemplo, una que se está abriendo o Xcode compilando con el foco en su editor): la toma para enseguida, como siempre. Pasar a esa app con ⌘⇥ durante la toma y volver a otra: la toma sigue sin trabarse, y el foco de la otra app se graba otra vez en un momento (anotar cuánto tarda si pasa de un segundo).
+- Sin Accesibilidad (sacarla en Ajustes del Sistema ▸ Privacidad y seguridad ▸ Accesibilidad): la toma graba igual, sin líneas `focus`, y en Consola, con `subsystem:dev.toma.Toma`, aparece una sola vez «Accessibility is not allowed: this take records no focus». Ningún aviso del sistema pide el permiso durante la toma.
+- En Consola, con `subsystem:dev.toma.Toma`, durante una toma que graba el foco: ningún mensaje tiene un rectángulo, un rol ni el nombre de una app.
+- Límites conocidos (anotar solo si se ve otra cosa): en Chrome y en las apps de Electron puede haber solo `element` y ningún `caret`, porque Toma no les cambia `AXManualAccessibility`; al mover una ventana o desplazar un texto sin cambiar el foco ni el texto, el rectángulo grabado (el del campo o el del cursor de texto) queda el de antes hasta el próximo cambio.
+
+**El export con alfa y los archivos para editores** (X3)
+
+Con un proyecto con un fondo de color, esquinas redondeadas y sombra, exportado entero con cada códec con alfa (HEVC con alfa y ProRes 4444) y con «Metadatos para editores (FCPXML)» encendido.
+- Abrir el `.mov` de HEVC con alfa en QuickTime Player y en la vista rápida del Finder (barra espaciadora): donde estaba el fondo se ve transparente (el damero o lo que hay detrás de la ventana), la pantalla opaca y la sombra semitransparente. Lo mismo con el de ProRes 4444 en QuickTime.
+- Importar el ProRes 4444 y el HEVC con alfa en Final Cut Pro (o DaVinci Resolve) sobre un generador de color liso, blanco y después negro: la sombra y los bordes redondeados de la pantalla se funden sin halo oscuro ni claro, y el fondo no aparece. Si el ProRes 4444 muestra un halo y el HEVC no, anotarlo (el cierre lo cambiaría a alfa recto).
+- Importar el `.fcpxml` en Final Cut Pro (Archivo ▸ Importar ▸ XML): abre sin avisos, crea el evento con el nombre del proyecto y un proyecto con el nombre del video, el video enlazado (no fuera de línea), los marcadores de capítulo, un marcador «Clic» en cada clic («Click» con la app en inglés) y un marcador de rango en cada bloque de zoom («Zoom 2,0×», «Atenuar 2,0×»…), en su lugar al reproducir.
+- Leer el `.toma-metadata.json` desde un script (o una expresión de After Effects): `video.frames` es la cantidad de cuadros del video, `frames` tiene uno por cuadro, y el cursor de un cuadro cae donde el video lo dibuja.
+- Exportar entre las marcas con el mismo pedido: no aparece ningún `.fcpxml` ni `.toma-metadata.json` nuevo junto al video.

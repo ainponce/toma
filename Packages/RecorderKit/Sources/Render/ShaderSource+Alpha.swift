@@ -7,8 +7,10 @@ extension ShaderSource {
     /// where it is drawn (`[[color(0)]]` into the target, `[[color(2)]]` into the motion blur's) and blended "over" it in
     /// the shader (`calmHighlightAlphaFragment`, `calmHighlightAlphaTargetFragment`); its ring and its glow, drawn, as they
     /// are. Dim's blurred copy darker with its own alpha (`calmDimAlphaFragment`), blended "over" as Dim's: the void stays
-    /// void, and the blurred edge of the stage keeps its alpha. Neither is ever drawn over an opaque frame, whose calm zoom
-    /// is the calm zoom's own (`calmZoomMetal`).
+    /// void, and the blurred edge of the stage keeps its alpha. The loupe's lens magnifies what is under it with its alpha,
+    /// and covers what is drawn there by its coverage alone, in the shader (`loupeAlphaFragment`): over nothing it shows
+    /// nothing; its shadow and its ring as they are drawn. None is ever drawn over an opaque frame, whose calm zoom is the
+    /// calm zoom's own (`calmZoomMetal`).
     static let alphaMetal = #"""
 
     // Highlight at p over `under`, what is drawn there: the calm zoom's `calmHighlight` with its veil times `under`'s
@@ -65,6 +67,37 @@ extension ShaderSource {
         }
         float4 b = blurred.sample(linearSampler, in.uv);
         return float4(b.rgb * (1.0 - u.darken), b.a) * shown;
+    }
+
+    // The loupe over a transparent frame: `loupeFragment` with the copy of what is under the lens premultiplied, its alpha
+    // too, over `drawn`, what is drawn there, in the shader. What the lens covers of `drawn` is worked out apart, as
+    // `loupeFragment`'s alpha with an opaque copy: the shadow's, the lens's coverage, the ring's, times the amount. So the
+    // lens shows the magnified frame, nothing where it is nothing, and over an opaque copy this is `loupeFragment` "over".
+    fragment float4 loupeAlphaFragment(QuadOut in [[stage_in]],
+                                       float4 drawn [[color(0)]],
+                                       constant LoupeUniforms &u [[buffer(1)]],
+                                       constant ShadowUniforms &shadow [[buffer(2)]],
+                                       texture2d<float> under [[texture(0)]]) {
+        constexpr sampler targetPixels(coord::pixel, address::clamp_to_edge, filter::linear);
+        float d = roundedRectDistance(in.p - u.center, u.halfSize, u.corner);
+        float coverage = clamp(0.5 - d, 0.0, 1.0);
+        float4 color = float4(0.0);
+        float covered = 0.0;
+        if (coverage < 1.0) {
+            color = float4(0.0, 0.0, 0.0, shadow.opacity * shadowValue(in.p, shadow));
+            covered = color.a;
+        }
+        if (coverage > 0.0) {
+            float s = clamp((d + u.band) / u.band, 0.0, 1.0);
+            float2 q = u.center + (in.p - u.center) / u.magnification * (1.0 + u.bulge * s * s);
+            float4 lens = under.sample(targetPixels, q * u.toTarget - u.sampleOrigin);
+            color = lens * coverage + color * (1.0 - coverage);
+            covered = coverage + covered * (1.0 - coverage);
+            float ring = (coverage - clamp(0.5 - d - u.ring, 0.0, 1.0)) * u.ringOpacity;
+            color = float4(ring) + color * (1.0 - ring);
+            covered = ring + covered * (1.0 - ring);
+        }
+        return color * u.amount + drawn * (1.0 - covered * u.amount);
     }
     """#
 }

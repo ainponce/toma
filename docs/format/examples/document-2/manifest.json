@@ -1,0 +1,67 @@
+{
+  "app" : {
+    "name" : "Toma",
+    "version" : "0.2.0"
+  },
+  "createdAt" : "2026-11-15T20:00:00Z",
+  "formatVersion" : 3,
+  "projectID" : "9d4f3b2a7c1e48d6b05a2f9e3c7d1a84",
+  "takes" : [
+    {
+      "id" : "take-001",
+      "startedAt" : "2026-11-15T20:00:01Z",
+      "status" : "complete",
+      "tracks" : [
+        {
+          "id" : "display-1",
+          "kind" : "display",
+          "segments" : [
+            {
+              "droppedFrames" : 0,
+              "endHostTime" : 81246567000000,
+              "endReason" : {
+                "type" : "stopped"
+              },
+              "file" : "takes/take-001/display-1/seg-0001.mov",
+              "heartbeatFrames" : 0,
+              "index" : 1,
+              "startHostTime" : 81234567000000
+            }
+          ],
+          "source" : {
+            "displayID" : 1,
+            "globalFrame" : {
+              "height" : 982,
+              "width" : 1512,
+              "x" : 0,
+              "y" : 0
+            },
+            "name" : "Built-in Retina Display",
+            "pixelScale" : 2
+          }
+        },
+        {
+          "id" : "mic",
+          "kind" : "microphone",
+          "segments" : [
+            {
+              "droppedFrames" : 0,
+              "endHostTime" : 81246567000000,
+              "endReason" : {
+                "type" : "stopped"
+              },
+              "file" : "takes/take-001/mic/seg-0001.mov",
+              "heartbeatFrames" : 0,
+              "index" : 1,
+              "startHostTime" : 81234569000000
+            }
+          ],
+          "source" : {
+            "deviceUniqueID" : "BuiltInMicrophoneDevice",
+            "name" : "MacBook Pro Microphone"
+          }
+        }
+      ]
+    }
+  ]
+}

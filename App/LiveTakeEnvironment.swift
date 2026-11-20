@@ -37,7 +37,8 @@ enum LiveTakeEnvironment {
                 let settings = SettingsStore().settings
                 let factory = LiveCaptureSourceFactory(
                     cameraHost: cameraHost, noteKeyActivity: settings.noteKeyActivity,
-                    recordKeys: settings.recordKeys && granted.contains(.inputMonitoring)
+                    recordKeys: settings.recordKeys && granted.contains(.inputMonitoring),
+                    recordFocus: settings.recordFocus && granted.contains(.accessibility)
                 ) { visibility in
                     Task { @MainActor in windowVisibilityChanged(visibility, projectURL) }
                 }

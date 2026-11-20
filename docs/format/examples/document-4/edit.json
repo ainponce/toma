@@ -1,0 +1,240 @@
+{
+  "annotations" : {
+    "items" : [
+
+    ]
+  },
+  "aspect" : "16:9",
+  "audio" : {
+    "limiter" : false,
+    "normalize" : false,
+    "tracks" : {
+      "take-001/mic" : {
+        "cleanup" : 0,
+        "gain" : 1,
+        "muted" : false,
+        "ranges" : [
+
+        ]
+      }
+    }
+  },
+  "camera" : {
+    "background" : "original",
+    "border" : {
+      "color" : [
+        1,
+        1,
+        1,
+        1
+      ],
+      "width" : 0
+    },
+    "changes" : [
+
+    ],
+    "framing" : {
+      "center" : {
+        "x" : 0.5,
+        "y" : 0.5
+      },
+      "mode" : "center",
+      "zoom" : 1
+    },
+    "initial" : {
+      "take-001" : {
+        "anchor" : "bottomTrailing",
+        "shape" : "circle",
+        "size" : 0.24
+      }
+    },
+    "layout" : {
+      "kind" : "bubble"
+    },
+    "layoutRules" : "cameraLayout-1",
+    "layouts" : [
+
+    ],
+    "look" : {
+      "intensity" : 1,
+      "preset" : "natural"
+    },
+    "mirror" : false,
+    "shadow" : 0,
+    "show" : true,
+    "sizeReference" : "height",
+    "spring" : {
+      "damping" : 0.95,
+      "response" : 0.5
+    },
+    "syncOffset" : 0
+  },
+  "captions" : {
+    "show" : true,
+    "style" : {
+      "highlight" : true,
+      "highlightColor" : [
+        1,
+        0.8392156862745098,
+        0.0392156862745098,
+        1
+      ],
+      "position" : "bottom",
+      "preset" : "bold",
+      "size" : "medium",
+      "uppercase" : false
+    }
+  },
+  "cursor" : {
+    "clickEffect" : "none",
+    "clickSound" : "none",
+    "clickSoundGain" : 0.5,
+    "hideWhenIdle" : false,
+    "idleDelay" : 2,
+    "motionBlur" : 0,
+    "scale" : 1,
+    "show" : true,
+    "smoothing" : "off",
+    "style" : "toma"
+  },
+  "documentVersion" : 4,
+  "frameRate" : 60,
+  "keys" : {
+    "mode" : "off",
+    "position" : "bottomCenter",
+    "size" : "medium"
+  },
+  "logSequence" : 1,
+  "markers" : {
+    "items" : [
+      {
+        "hidden" : false,
+        "id" : "m-00000001",
+        "name" : "Demo",
+        "origin" : "recorded",
+        "t" : 81240567000000,
+        "take" : "take-001"
+      }
+    ]
+  },
+  "music" : {
+    "ducking" : {
+      "amount" : -12,
+      "attack" : 0.3,
+      "enabled" : true,
+      "release" : 0.8
+    },
+    "items" : [
+
+    ]
+  },
+  "privacy" : {
+    "blocks" : [
+
+    ]
+  },
+  "screens" : {
+    "changes" : [
+
+    ],
+    "initial" : {
+      "take-001" : "display-1"
+    }
+  },
+  "sequence" : [
+    {
+      "audioShift" : 0,
+      "end" : 81246567000000,
+      "id" : "c-00000001",
+      "speed" : 1,
+      "start" : 81234567000000,
+      "take" : "take-001"
+    }
+  ],
+  "style" : {
+    "background" : {
+      "angle" : 135,
+      "end" : [
+        0.17254901960784313,
+        0.6941176470588235,
+        0.7372549019607844,
+        1
+      ],
+      "start" : [
+        0.4980392156862745,
+        0.35294117647058826,
+        0.9411764705882353,
+        1
+      ],
+      "type" : "gradient"
+    },
+    "backgroundBlur" : 0,
+    "cornerRadius" : 0.012,
+    "frame" : {
+      "type" : "none"
+    },
+    "geometryTransition" : "none",
+    "padding" : 0.08,
+    "reframe" : "fit",
+    "screenSampling" : "bilinear",
+    "shadow" : 0
+  },
+  "transcript" : {
+    "engine" : "speechTranscriber-1",
+    "language" : "es-AR",
+    "takes" : [
+      {
+        "take" : "take-001",
+        "track" : "mic",
+        "words" : [
+          {
+            "end" : 81235967000000,
+            "start" : 81235567000000,
+            "text" : "Hola,"
+          },
+          {
+            "end" : 81236367000000,
+            "start" : 81236067000000,
+            "text" : "esto"
+          },
+          {
+            "end" : 81236517000000,
+            "start" : 81236367000000,
+            "text" : "es"
+          },
+          {
+            "end" : 81237067000000,
+            "start" : 81236567000000,
+            "text" : "Toma."
+          }
+        ]
+      }
+    ]
+  },
+  "zoom" : {
+    "auto" : {
+      "depth" : 2,
+      "enabled" : false,
+      "follow" : true,
+      "groupGap" : 2.5,
+      "holdWhileTyping" : true,
+      "leadIn" : 0.5,
+      "leadOut" : 1,
+      "mode" : "classic",
+      "planner" : "autoZoom-1",
+      "triggers" : "clicks"
+    },
+    "motionBlur" : 0,
+    "regions" : [
+
+    ],
+    "show" : true,
+    "spring" : {
+      "damping" : 1,
+      "response" : 0.7
+    },
+    "suppressed" : [
+
+    ]
+  }
+}

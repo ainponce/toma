@@ -9,6 +9,7 @@ import ProjectFormat
 import RecorderKitTestSupport
 // @testable for `FrameEvaluator.frame(at:)`, `DrawCounts` and the compositor's counting `encode`.
 @testable import Render
+import simd
 import SyntheticCapture
 import Testing
 
@@ -104,14 +105,16 @@ private func frame(
     return scene.frame(at: seconds)
 }
 
-/// The calm zoom `mode` about the middle of `frame`'s screen, a fifth of it across; the loupe's lens, 60 px, about
-/// (30, 180), in the padding left of the screen.
-private func calm(_ mode: ZoomMode, over frame: RenderFrame) -> RenderFrame {
+/// The calm zoom `mode` about the middle of `frame`'s screen, a fifth of it across; the loupe's lens, 2×, of `lens` px
+/// about `center`: 60 px about (30, 180), in the padding left of the screen, unless said otherwise.
+private func calm(
+    _ mode: ZoomMode, over frame: RenderFrame, lens: Double = 60, center: SIMD2<Double> = [30, 180]
+) -> RenderFrame {
     var calm = frame
     if mode == .loupe {
         calm.calmZoom = CalmZoomLayer(
-            mode: .loupe, amount: 1, focus: Rect(x: 20, y: 170, width: 20, height: 20),
-            loupe: LoupeLayer(radius: 60, shape: .circle, magnification: 2))
+            mode: .loupe, amount: 1, focus: Rect(x: center.x - 10, y: center.y - 10, width: 20, height: 20),
+            loupe: LoupeLayer(radius: lens, shape: .circle, magnification: 2))
     } else if let screen = frame.screen?.rect {
         calm.calmZoom = CalmZoomLayer(
             mode: mode, amount: 1,
@@ -424,10 +427,52 @@ struct AlphaRenderTests {
                 #expect(a != pixel(plain.opaque, width: size.x, x: x, y: y), "\(mode) darkens (\(x), \(y))")
             }
         }
-        // The loupe as it is: over the void, its lens and its ring are drawn.
+        // The loupe: over the void, its ring is drawn (what is inside it, `loupeOverTheVoidStaysClear`).
         let loupe = try pair("loupe")
-        #expect(alpha(plain.clear, 30, 180) == 0)
-        #expect(alpha(loupe.clear, 30, 180) > 0 && alpha(loupe.clear, 30, 121) > 0)
+        #expect(alpha(plain.clear, 30, 120) == 0 && alpha(loupe.clear, 30, 120) > 0)
+    }
+
+    @Test func loupeOverTheVoidStaysClear() throws {
+        let drawer = try AlphaDrawer()
+        let still = try #require(frames(transparent: true).first { $0.name == "plain" }?.frame)
+        let opaqueStill = try #require(frames(transparent: false).first { $0.name == "plain" }?.frame)
+        // A lens of 100 px about (100, 180): over the padding and the window's left edge (the screen from x = 107).
+        let center = SIMD2(100.0, 180.0)
+        #expect(still.screen.map { $0.rect.x > 100 && $0.rect.x < 115 } == true)
+        let clear = try drawer.draw(calm(.loupe, over: still, lens: 100, center: center))
+        let opaque = try drawer.draw(calm(.loupe, over: opaqueStill, lens: 100, center: center))
+        let under = try drawer.draw(still)
+        // Inside the lens, short of its bulging band (15 px), each pixel shows the frame at c + (p − c) / 2: where all
+        // the texels it reads hold nothing, it holds nothing, exactly.
+        var void = 0
+        for y in 0..<size.y {
+            for x in 0..<size.x {
+                let p = SIMD2(Double(x) + 0.5, Double(y) + 0.5)
+                guard simd_distance(p, center) < 100 - 15 - 2 else { continue }
+                let q = center + (p - center) / 2
+                let reads = [(-1, -1), (0, -1), (-1, 0), (0, 0), (1, 0), (0, 1), (1, 1), (-1, 1), (1, -1)].map {
+                    (Int(q.x.rounded(.down)) + $0.0, Int(q.y.rounded(.down)) + $0.1)
+                }
+                guard reads.allSatisfy({ $0.0 >= 0 && $0.1 >= 0 && pixel(under, width: size.x, x: $0.0, y: $0.1) == .zero })
+                else { continue }
+                void += 1
+                let shown = pixel(clear, width: size.x, x: x, y: y)
+                guard shown == .zero else {
+                    Issue.record("the lens at (\(x), \(y)) over nothing: \(shown)")
+                    return
+                }
+            }
+        }
+        #expect(void > 1000, "\(void)")
+        // Where it shows the screen (at (130, 180)), magnified, opaque: as over the opaque frame.
+        let screen = pixel(clear, width: size.x, x: 160, y: 180), overOpaque = pixel(opaque, width: size.x, x: 160, y: 180)
+        #expect(screen.w == 255 && near(screen, overOpaque, 1), "\(screen), over the opaque frame \(overOpaque)")
+        // Its ring at its left edge, white, and its shadow under it, black, over nothing, as they are drawn.
+        #expect(pixel(under, width: size.x, x: 0, y: 180) == .zero && pixel(under, width: size.x, x: 28, y: 253) == .zero)
+        let ring = pixel(clear, width: size.x, x: 0, y: 180)
+        #expect(ring.w > 0 && ring.x == ring.w && ring.y == ring.w && ring.z == ring.w, "\(ring)")
+        let shadow = pixel(clear, width: size.x, x: 28, y: 253)
+        #expect(shadow.w > 0 && shadow.x == 0 && shadow.y == 0 && shadow.z == 0, "\(shadow)")
     }
 
     @Test func opaqueFramesDrawTheSameCalls() async throws {
