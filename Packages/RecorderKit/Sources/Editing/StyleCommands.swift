@@ -58,10 +58,11 @@ public enum StyleCommands {
 
     /// "Apply Default Style" (design §5.4 and §5.9), one step, as a new document of `take` would have it (`NewDocument`):
     /// the stage of `style`, with mipmapped sampling and the spring between shapes; its whole cursor, drawn from the
-    /// recorded images if `events` has a `cursorImage` and as Toma's arrow if not; the zoom's settings (`show`, `auto`,
-    /// `spring` and `motionBlur`); and, as with any change of the automatic zoom's settings (design §5.4), the automatic
-    /// blocks of `take` that were not touched planned again for the document so styled (`ZoomCommands.replanned`). Never
-    /// the sequence, the screens, the user's blocks, the camera, the sound, the aspect nor the frame rate.
+    /// recorded images if `events` has a `cursorImage` and as Toma's arrow if not; the zoom's settings (`show`, `auto`
+    /// but the document's own `followsFocus`, `spring` and `motionBlur`); and, as with any change of the automatic zoom's
+    /// settings (design §5.4), the automatic blocks of `take` that were not touched planned again for the document so
+    /// styled (`ZoomCommands.replanned`). Never the sequence, the screens, the user's blocks, the camera, the sound, the
+    /// aspect nor the frame rate.
     ///
     /// The background is `style`'s as it is: an image one must be in the package already (`EditSession.applyDefaultStyle`
     /// brings it from the style's folder, or falls back to the classic gradient). `nil` if the document has all of it
@@ -88,8 +89,8 @@ public enum StyleCommands {
 
     /// The style whose values the project has exactly (1c design §8: the row Style of the panel): the first of `styles`
     /// that "Apply" would change nothing of, then Toma's style (`NamedStyle.toma`), or else `.custom`. What depends on the
-    /// take and not on the style is not compared: the zoom's blocks and whether the cursor is drawn from its recorded
-    /// images or as Toma's arrow.
+    /// take and not on the style is not compared: the zoom's blocks, whether the cursor is drawn from its recorded
+    /// images or as Toma's arrow, and whether the automatic zoom follows the keyboard's focus (`followsFocus`).
     public static func matchingStyle(_ doc: EditDocument, among styles: [NamedStyle]) -> StyleMatch {
         func matches(_ look: DefaultStyle, _ camera: CameraLook) -> Bool {
             styled(doc, look: look, camera: camera, cursor: doc.cursor.style) == doc
@@ -142,8 +143,9 @@ public enum StyleCommands {
     }
 
     /// `doc` with `look` and `camera` as "Apply" puts them, its zoom's blocks as they are: the stage of `look` with
-    /// mipmapped sampling and the spring between shapes, its cursor drawn as `cursor`, its zoom's settings, and the look of
-    /// `camera` (`CameraLook.applied(to:)`), if any.
+    /// mipmapped sampling and the spring between shapes, its cursor drawn as `cursor`, its zoom's settings but `doc`'s
+    /// `followsFocus` (whether the take's focus is followed is the take's, as its cursor's images are: a style saved with
+    /// one never brings it, fases 4 y 5 plan 4a decision 11), and the look of `camera` (`CameraLook.applied(to:)`), if any.
     private static func styled(_ doc: EditDocument, look: DefaultStyle, camera: CameraLook?, cursor: CursorLook) -> EditDocument {
         var styled = doc
         styled.style = look.style
@@ -153,6 +155,7 @@ public enum StyleCommands {
         styled.cursor.style = cursor
         styled.zoom.show = look.zoomShow
         styled.zoom.auto = look.zoomAuto
+        styled.zoom.auto.followsFocus = doc.zoom.auto.followsFocus
         styled.zoom.spring = look.zoomSpring
         styled.zoom.motionBlur = look.zoomMotionBlur
         if let camera { styled.camera = camera.applied(to: doc.camera) }
