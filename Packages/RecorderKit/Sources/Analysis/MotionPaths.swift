@@ -4,7 +4,8 @@ import ProjectFormat
 
 /// The motion of one revision of the document (design §8.6): its time map, where things are on the stage, the drawn
 /// cursor's path, the window of the screen that follows it (`reframe-1`, phase 2 design §6.5) and the zoom camera's,
-/// which follows that cursor in that window, and, with a split, the zoom inside the screen's card (1c design §5.4).
+/// which follows that cursor in that window, and, with a split, the zoom inside the screen's card (1c design §5.4); with
+/// calm zoom blocks, the focus they point at (`calmZoom-1`, phase 3 design §6).
 /// Built once per revision (from those of the revision before it after an edit, `init(take:events:document:after:)`),
 /// off the main thread, and shared by the preview and the export at any size they draw: everything is in output time
 /// and stage units (the card's zoom, in fractions of the screen; the window, in fractions of the screen's region).
@@ -17,6 +18,8 @@ public struct MotionPaths: Sendable {
     public let zoom: ZoomCameraPath
     /// `nil` when the document has no split (`CardZoomPath`).
     public let cardZoom: CardZoomPath?
+    /// `nil` without a calm zoom block of the take (`CalmZoomPath`): then the zoom is that of phase 2.
+    public let calmZoom: CalmZoomPath?
     /// What of the document they were built from.
     private let inputs: Inputs
 
@@ -32,6 +35,9 @@ public struct MotionPaths: Sendable {
             document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, cameraReadable: cameraReadable,
             reframe: reframe)
         cardZoom = CardZoomPath(document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, reframe: reframe)
+        calmZoom = CalmZoomPath(
+            document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, cameraReadable: cameraReadable,
+            reframe: reframe)
         inputs = Inputs(document, cameraReadable: cameraReadable)
     }
 
@@ -59,9 +65,11 @@ public struct MotionPaths: Sendable {
     /// - For the card's camera, the layouts only decide whether there is one: one that was not there is simulated from
     ///   output 0.
     ///
-    /// After an edit of zoom blocks alone, each camera also takes the old one's tail from the first checkpoint after the
-    /// blocks it changed on which it is the old camera again, bit for bit (`ZoomSimulation`). The stage's camera and the
-    /// card's are built at once, on two threads: they read the same cursor and stage and nothing of each other.
+    /// The calm zoom's camera (`CalmZoomPath`) is the stage's over the calm blocks alone: it reads what the stage's does,
+    /// from the same step on. After an edit of zoom blocks alone, each camera also takes the old one's tail from the first
+    /// checkpoint after the blocks it changed on which it is the old camera again, bit for bit (`ZoomSimulation`). The
+    /// stage's camera is built on one thread and the card's, then the calm zoom's, on another: they read the same cursor
+    /// and stage and nothing of each other.
     ///
     /// Built off the main thread, like `init(take:events:document:cameraReadable:)`, with the camera readable as there.
     public init(
@@ -91,16 +99,20 @@ public struct MotionPaths: Sendable {
             old.zoom.layouts, layouts, sameSpring: old.inputs.camera.spring == document.camera.spring
         ).map(StepGrid.firstStep(atOrAfter:))
         let zoomChanged = [changed, bubbleChanged, layoutsChanged].compactMap { $0 }.min()
-        (zoom, cardZoom) = Self.atOnce(
+        (zoom, (cardZoom, calmZoom)) = Self.atOnce(
             {
                 ZoomCameraPath(
                     document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.zoom,
                     changedFrom: zoomChanged, layouts: layouts, reframe: reframe)
             },
             {
-                CardZoomPath(
+                let card = CardZoomPath(
                     document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.cardZoom,
                     changedFrom: changed, reframe: reframe)
+                let calm = CalmZoomPath(
+                    document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, after: old.calmZoom,
+                    changedFrom: zoomChanged, layouts: layouts, reframe: reframe)
+                return (card, calm)
             })
         self.timeMap = timeMap
         self.stage = stage

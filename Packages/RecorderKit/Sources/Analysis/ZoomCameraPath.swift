@@ -27,7 +27,10 @@ public struct ZoomCameraState: Equatable, Sendable {
 ///   closed); none with `zoom.show` off, so the camera is always at rest. A block reads the steps whose output time is
 ///   in its range. Blocks do not overlap (the track does not let them); in a document edited by hand, one that starts
 ///   inside the one before it starts where that one ends. Two blocks at most 1 ns apart touch: an automatic block's
-///   end mapped back to the output can be 1 ns short of the next one's start (plan decision 16).
+///   end mapped back to the output can be 1 ns short of the next one's start (plan decision 16). Of those, the camera
+///   reads the `classic` ones alone (phase 3 design §6, `ZoomRegion.resolvedMode(auto:)`): in a calm block (highlight,
+///   dim or loupe) it is at rest, as outside every block, and `CalmZoomPath` simulates the same camera over the calm
+///   ones alone.
 /// - The target, read on each step: outside every block, rest (`u` 0, the stage's centre); in a block, `u = ln` of its
 ///   depth (the block's, or `zoom.auto.depth`; read from 1 to 16, 1 if not a number) and a centre placed with
 ///   `StageCrop` at that depth over the screen's rect at the step's source instant (`StagePoints.screenRect(at:)`; the
@@ -105,9 +108,12 @@ public struct ZoomCameraPath: Sendable {
     /// spring (the time map, the stage, the cursor, the camera's bubble, the layouts and the window that follows the
     /// cursor) can differ; `nil`, none of them does. `layouts`: `layouts(of:take:timeMap:cameraReadable:)` of the
     /// document; with the camera readable when `nil`.
+    /// `selection`: the blocks the camera reads, the classic ones (the stage's camera) or the calm ones alone
+    /// (`CalmZoomPath`'s, with the rules of the calm focus, `ZoomSimulation`); `old` was built with the same.
     init(
         document: EditDocument, timeMap: TimeMap, stage: StagePoints, cursor: CursorPath, take: TakeRecord,
-        after old: ZoomCameraPath?, changedFrom changed: Int?, layouts: LayoutTimeline? = nil, reframe: ReframePath? = nil
+        after old: ZoomCameraPath?, changedFrom changed: Int?, layouts: LayoutTimeline? = nil, reframe: ReframePath? = nil,
+        selecting selection: ZoomSelection = .classic
     ) {
         let layouts = layouts ?? Self.layouts(of: document, take: take, timeMap: timeMap, cameraReadable: true)
         self.layouts = layouts
@@ -118,7 +124,7 @@ public struct ZoomCameraPath: Sendable {
                 reference: document.camera.sizeReference,
                 layouts: layouts.isTrivial ? nil : StageViewport.Layouts(layouts, document: document, size: stage.stageSize),
                 reframe: reframe),
-            after: old?.simulation, changedFrom: changed)
+            after: old?.simulation, changedFrom: changed, selecting: selection)
     }
 
     /// The layouts the camera's bubble is read from, as the render reads them (`FrameEvaluator`): with the camera readable
@@ -162,6 +168,19 @@ public struct ZoomCameraPath: Sendable {
     /// once from the checkpoint before them, every step kept: for spans of a few frames.
     public func span(from start: Int64, through end: Int64) -> Span {
         Span(simulation.span(from: start, through: end))
+    }
+
+    // MARK: - Internal (for `CalmZoomPath`)
+
+    /// The blocks the camera reads, in output order.
+    var blocks: [ZoomBlock] { simulation.blocks }
+
+    /// The last step simulated: the one of the end of the output.
+    var lastStep: Int { simulation.lastStep }
+
+    /// `state(atOutput: τ)` with the centre placed at `depth` (`StageCrop`) rather than at the camera's own.
+    func state(atOutput τ: Int64, placedAt depth: Double) -> ZoomCameraState {
+        ZoomCameraState(simulation.state(atOutput: τ, placedAt: depth))
     }
 
     // MARK: - Internal (the state of the simulation, for the tests)
@@ -398,8 +417,8 @@ struct ZoomCamera: Equatable, Sendable {
     /// Not placed: the spring's.
     var center: SIMD2<Double>
     var centerVelocity: SIMD2<Double>
-    /// Where the centre heads, placed: the viewport's centre at rest, the focus in a fixed block, where the dead zone
-    /// left it in a following one.
+    /// Where the centre heads, placed: the viewport's centre at rest (where the centre is, outside every block of a
+    /// simulation of the calm blocks), the focus in a fixed block, where the dead zone left it in a following one.
     var target: SIMD2<Double>
     /// The block of the step, as an index of the blocks in output order; `nil` outside them.
     var block: Int?
@@ -422,7 +441,7 @@ struct ZoomPlacement: Equatable, Sendable {
 }
 
 /// A zoom block of the take, on the grid.
-private struct ZoomBlock: Equatable, Sendable {
+struct ZoomBlock: Equatable, Sendable {
     /// The steps whose output time is in its output range.
     var steps: Range<Int>
     /// From 1 to 16.
@@ -431,6 +450,11 @@ private struct ZoomBlock: Equatable, Sendable {
     /// Fractions of the screen's rect; `nil`, it follows the cursor.
     var focus: SIMD2<Double>?
     var instant: Bool
+    /// How it shows its focus (`ZoomRegion.resolvedMode(auto:)`): which of the two simulations reads it
+    /// (`ZoomSelection`).
+    var mode: ZoomMode
+    /// Its lens in `loupe` mode (`ZoomRegion.resolvedLoupe`).
+    var loupe: LoupeStyle
 
     /// Two blocks at most this far apart in output time touch.
     private static let touching: Int64 = 1
@@ -468,7 +492,9 @@ private struct ZoomBlock: Equatable, Sendable {
             case .follow: nil
             case let .fixed(x, y): SIMD2(unit(x), unit(y))
             }
-            return ZoomBlock(steps: steps, depth: depth, logDepth: log(depth), focus: focus, instant: block.region.instant)
+            return ZoomBlock(
+                steps: steps, depth: depth, logDepth: log(depth), focus: focus, instant: block.region.instant,
+                mode: block.region.resolvedMode(auto: zoom.auto), loupe: block.region.resolvedLoupe)
         }
     }
 
@@ -511,10 +537,24 @@ private struct ZoomBlock: Equatable, Sendable {
     }
 }
 
+/// Which of the take's zoom blocks a simulation of the zoom camera reads (phase 3 plan 3b, decision 3), from the list
+/// `ZoomBlock.blocks(of:take:timeMap:)` makes, its overlaps already settled: the `classic` ones (the camera that moves
+/// the picture, the stage's and the card's: with every block classic, the list of phase 2) or the calm ones
+/// (`ZoomMode.isCalm`, `CalmZoomPath`'s focus).
+enum ZoomSelection: Sendable {
+    case classic, calm
+
+    /// Whether a simulation of this selection reads `block`.
+    func selects(_ block: ZoomBlock) -> Bool {
+        block.mode.isCalm == (self == .calm)
+    }
+}
+
 /// A zoom camera simulated on `StepGrid` from output 0 over `Viewport` (design §8.3 and §8.6, 1c design §5.4), what
-/// `ZoomCameraPath` and `CardZoomPath` share; `ZoomCameraPath`'s notes say it in the stage's units.
+/// `ZoomCameraPath`, `CardZoomPath` and `CalmZoomPath` share; `ZoomCameraPath`'s notes say it in the stage's units.
 ///
-/// - The blocks are the take's `zoom.regions` on the grid (none with `zoom.show` off: always at rest).
+/// - The blocks are the take's `zoom.regions` on the grid (none with `zoom.show` off: always at rest), those of its
+///   selection alone (`ZoomSelection`).
 /// - The target, read on each step: outside every block, rest (`u` 0, the viewport's centre); in a block, `u = ln` of
 ///   its depth and a centre placed with `StageCrop` at that depth over the viewport's screen at the step's source
 ///   instant: a fixed focus is its point of that screen; a following one is, on entering the block, the cursor's point
@@ -523,6 +563,10 @@ private struct ZoomBlock: Equatable, Sendable {
 ///   heads to, steps of `followStep` of it) and what the viewport clears (`ZoomViewport.cleared`).
 /// - The motion: `zoom.spring` (`StepGrid.spring`, through `StepGrid.stable(_:)`) for `u` and each axis of the centre;
 ///   on entering or leaving an `instant` block, a jump to the target with velocity 0.
+/// - Of the calm blocks (`ZoomSelection.calm`, plan decision 4), so the focus never appears at the centre and travels:
+///   outside every block the centre stays where it is (its target, with velocity 0) while `u` heads to 0; on entering a
+///   block from outside every one, the centre jumps to its target with velocity 0 and `u` goes on with the spring (both
+///   jump into an `instant` one, as above). From one block into the next one touching it, as the classic camera.
 /// - Drawn: `u` at least 0 and the centre placed with `StageCrop` over the viewport's screen of the instant.
 ///
 /// The whole state is kept every `StepGrid.checkpointEvery` steps, and every query reads a step from its checkpoint (or
@@ -536,8 +580,9 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     let lastStep: Int
     let viewport: Viewport
     private let spring: SpringSpec
-    /// In output order, never overlapping.
-    private let blocks: [ZoomBlock]
+    /// In output order, never overlapping: those of `selection`.
+    let blocks: [ZoomBlock]
+    private let selection: ZoomSelection
     /// Where the camera jumps (`ZoomBlock.jumps(of:lastStep:)`): read from the blocks and the end alone, so an edit's
     /// rebuild has them as building from nothing does.
     let jumps: [ClosedRange<Int64>]
@@ -565,14 +610,18 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     /// for bit the old one there, with the index of its block moved as the blocks after the edit moved, every later
     /// step reads the same as the old one did, so every later checkpoint is the old one, moved alike (`Tail`). Without
     /// such a checkpoint, the rest is simulated.
+    ///
+    /// `selection`: the blocks it reads (`ZoomSelection`); `old` was simulated over the same.
     init(
         document: EditDocument, timeMap: TimeMap, cursor: CursorPath, take: TakeRecord, viewport: Viewport,
-        after old: ZoomSimulation?, changedFrom changed: Int?
+        after old: ZoomSimulation?, changedFrom changed: Int?, selecting selection: ZoomSelection = .classic
     ) {
         lastStep = StepGrid.firstStep(atOrAfter: timeMap.duration)
         self.viewport = viewport
         spring = StepGrid.stable(document.zoom.spring)
-        blocks = document.zoom.show ? ZoomBlock.blocks(of: document.zoom, take: take.id, timeMap: timeMap) : []
+        blocks = document.zoom.show
+            ? ZoomBlock.blocks(of: document.zoom, take: take.id, timeMap: timeMap).filter(selection.selects) : []
+        self.selection = selection
         jumps = ZoomBlock.jumps(of: blocks, lastStep: lastStep)
         takeID = take.id
         clipTakes = document.sequence.map(\.take)
@@ -614,6 +663,22 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         return placed(
             logDepth: a.logDepth + (b.logDepth - a.logDepth) * fraction, center: a.center + (b.center - a.center) * fraction,
             atOutput: τ)
+    }
+
+    /// `state(atOutput: τ)` with the centre placed at `depth` rather than at the camera's own: the calm focus, placed at
+    /// its block's depth while the camera's goes from 1 to it (plan decision 4).
+    func state(atOutput τ: Int64, placedAt depth: Double) -> ZoomPlacement {
+        let (s, fraction) = StepGrid.position(ofOutput: τ)
+        guard fraction > 0, s >= 0, s < lastStep else {
+            let step = clamped(s)
+            let camera = camera(atStep: step)
+            return placed(
+                logDepth: camera.logDepth, center: camera.center, atOutput: StepGrid.outputTime(ofStep: step), placedAt: depth)
+        }
+        let (a, b) = cameras(atSteps: s)
+        return placed(
+            logDepth: a.logDepth + (b.logDepth - a.logDepth) * fraction, center: a.center + (b.center - a.center) * fraction,
+            atOutput: τ, placedAt: depth)
     }
 
     /// The camera on step `s` (held to `0...lastStep`), from the checkpoint before it.
@@ -701,13 +766,16 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         min(max(s, 0), lastStep)
     }
 
-    /// The camera drawn with `logDepth` and `center`, at output time `τ`.
-    private func placed(logDepth: Double, center: SIMD2<Double>, atOutput τ: Int64) -> ZoomPlacement {
+    /// The camera drawn with `logDepth` and `center`, at output time `τ`: the centre placed at `depth`, the camera's own
+    /// when `nil`.
+    private func placed(
+        logDepth: Double, center: SIMD2<Double>, atOutput τ: Int64, placedAt depth: Double? = nil
+    ) -> ZoomPlacement {
         let logDepth = max(logDepth, 0)
         let screen = viewport.screen(at: host(atOutput: τ))
         return ZoomPlacement(
             logDepth: logDepth,
-            center: StageCrop.clamp(center: center, depth: exp(logDepth), stage: viewport.size, screen: screen))
+            center: StageCrop.clamp(center: center, depth: depth ?? exp(logDepth), stage: viewport.size, screen: screen))
     }
 
     /// The source instant of the take shown at output time `τ`; `nil` with no output, or another take's.
@@ -803,7 +871,8 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
     }
 
     /// Takes `run` to the next step: reads the block and, in a following one, the cursor, places the target, and moves
-    /// the camera one step of 1/600 s toward it (or jumps, at an instant block's edge).
+    /// the camera one step of 1/600 s toward it (or jumps, at an instant block's edge; of the calm blocks, with the
+    /// centre held outside every block and jumping into one from there).
     private func advance(_ run: inout Run) {
         run.step += 1
         let step = run.step
@@ -815,6 +884,7 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         let entering = index != camera.block
         var logTarget = 0.0
         var target = viewport.size / 2
+        if selection == .calm, index == nil { target = camera.center }
         if let index {
             let block = blocks[index]
             let τ = StepGrid.outputTime(ofStep: step)
@@ -842,6 +912,11 @@ struct ZoomSimulation<Viewport: ZoomViewport>: Sendable {
         if entering && instant {
             camera.logDepth = logTarget
             camera.logDepthVelocity = 0
+            camera.center = target
+            camera.centerVelocity = .zero
+        } else if selection == .calm, index == nil || camera.block == nil {
+            // The calm focus: outside every block the centre stays; into a block from there, it is at its target at once.
+            StepGrid.spring(&camera.logDepth, &camera.logDepthVelocity, target: logTarget, spring)
             camera.center = target
             camera.centerVelocity = .zero
         } else {
