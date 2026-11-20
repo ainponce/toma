@@ -6312,6 +6312,17 @@
         }
       }
     },
+    "Metadata for Editors writes them next to the video, replacing what they hold. Cancel keeps them and exports nothing." : {
+      "comment" : "The export: the alert about files for editors already next to the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Metadatos para editores los escribe junto al video y reemplaza su contenido. Con Cancelar quedan como están y no se exporta nada."
+          }
+        }
+      }
+    },
     "Microphone" : {
       "localizations" : {
         "es" : {
@@ -11322,6 +11333,17 @@
         }
       }
     },
+    "The video wasn't exported: that folder already has files for editors with its name (%@)." : {
+      "comment" : "An export with Metadata for Editors that would have replaced files the user did not agree to replace; the argument lists their names",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El video no se exportó: esa carpeta ya tiene archivos para editores con su nombre (%@)."
+          }
+        }
+      }
+    },
     "The whole display is recorded: what's outside the area is saved too. The area can be changed later." : {
       "localizations" : {
         "es" : {
@@ -14226,6 +14248,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Lenta"
+          }
+        }
+      }
+    },
+    "“%@” already exists. Replace it?" : {
+      "comment" : "The export: a file for editors (Metadata for Editors) already next to the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» ya existe. ¿Reemplazarlo?"
+          }
+        }
+      }
+    },
+    "“%@” and “%@” already exist. Replace them?" : {
+      "comment" : "The export: both files for editors (Metadata for Editors) already next to the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "«%@» y «%@» ya existen. ¿Reemplazarlos?"
           }
         }
       }

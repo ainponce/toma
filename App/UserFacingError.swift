@@ -156,6 +156,12 @@ private func description(of error: ExportError) -> String {
         String(localized: "This recording has nothing to export.")
     case .unsupportedCodec:
         String(localized: "This video format isn't available yet.", comment: "An export with a codec that is not written yet")
+    case let .editorFilesExist(files):
+        String(
+            format: String(
+                localized: "The video wasn't exported: that folder already has files for editors with its name (%@).",
+                comment: "An export with Metadata for Editors that would have replaced files the user did not agree to replace; the argument lists their names"),
+            files.map(\.lastPathComponent).formatted(.list(type: .and)))
     }
 }
 

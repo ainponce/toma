@@ -1678,3 +1678,8 @@ Contra la Toma.app de la rama. Para mirar lo grabado, como en «Grabar el foco»
 - En un proyecto con un fondo de color: abrir ⌘E y elegir «HEVC con alfa» (o ProRes 4444) en Códec: la vista previa del editor muestra un damero gris detrás del escenario (la ventana, la sombra y la cámara por encima) y la hoja dice «La vista previa muestra la transparencia como un damero.». Volver a H.264 o cerrar la hoja (Cancelar, Exportar…, Esc) saca el damero. Con «GIF animado» elegido, tampoco hay damero.
 - Con un zoom en modo Atenuar bajo la cabeza y HEVC con alfa elegido: el damero se ve oscurecido solo detrás del escenario, no donde no hay nada que atenuar.
 - Con «Entre las marcas» elegido el interruptor «Metadatos para editores (FCPXML)» queda desactivado y dice «Solo con el video entero.»; con «Todo el video» se puede encender, y siempre arranca apagado al abrir la hoja. Exportar con él encendido deja el `.fcpxml` y el `.toma-metadata.json` junto al video.
+
+**No pisar los archivos para editores que ya están** (X3, arreglo)
+
+- En una carpeta con `Entrevista.fcpxml` (por ejemplo, exportado desde Final Cut), exportar el proyecto como `Entrevista.mov` con «Metadatos para editores (FCPXML)» encendido: después del panel de guardar aparece el aviso «Entrevista.fcpxml» ya existe. ¿Reemplazarlo?. Cancelar no exporta nada y el FCPXML queda igual; Reemplazar exporta y deja el video, el `.fcpxml` y el `.toma-metadata.json` nuevos. Con los dos archivos ya en la carpeta, el aviso nombra a los dos.
+- Con el interruptor apagado, el mismo export no pregunta nada y no toca esos archivos.

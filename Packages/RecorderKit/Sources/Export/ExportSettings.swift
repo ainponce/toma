@@ -121,6 +121,10 @@ public struct ExportSettings: Sendable, Equatable {
     /// decision 8). Ignored for the export of a range, which they would not describe; not in the size estimate, nor
     /// remembered by the export sheet.
     public var editorMetadata: Bool = false
+    /// Whether the files for editors (`editorMetadata`) may replace files of their names already next to the video. Off,
+    /// as it is unless asked, an export that would replace one throws `ExportError.editorFilesExist` and writes nothing:
+    /// the export sheet asks the user first, and turns it on with their Replace.
+    public var replacesEditorFiles: Bool = false
 
     /// Whether the export keeps the stage's transparency: the codec has alpha (`ExportCodec.hasAlpha`).
     public var transparent: Bool { codec.hasAlpha }
@@ -168,7 +172,8 @@ public struct ExportSettings: Sendable, Equatable {
 
     public init(
         outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60, quality: ExportQuality = .standard,
-        codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil, editorMetadata: Bool = false
+        codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil, editorMetadata: Bool = false,
+        replacesEditorFiles: Bool = false
     ) {
         self.outputSize = outputSize
         self.framesPerSecond = framesPerSecond
@@ -177,6 +182,7 @@ public struct ExportSettings: Sendable, Equatable {
         self.chapters = chapters
         self.chapterLanguage = chapterLanguage
         self.editorMetadata = editorMetadata
+        self.replacesEditorFiles = replacesEditorFiles
     }
 
     /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even); `auto` from
@@ -184,12 +190,12 @@ public struct ExportSettings: Sendable, Equatable {
     public init(
         aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality,
         contentRatio: Double? = nil, codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil,
-        editorMetadata: Bool = false
+        editorMetadata: Bool = false, replacesEditorFiles: Bool = false
     ) {
         self.init(
             outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue, contentRatio: contentRatio),
             framesPerSecond: framesPerSecond, quality: quality, codec: codec, chapters: chapters, chapterLanguage: chapterLanguage,
-            editorMetadata: editorMetadata)
+            editorMetadata: editorMetadata, replacesEditorFiles: replacesEditorFiles)
     }
 
     /// About how many bytes an export of `durationSeconds` takes (the export sheet's estimate, design §5.6, plan 2b
@@ -239,6 +245,10 @@ public enum ExportError: Error, Equatable {
     /// The codec is one the exporter does not write: nothing is written. Nothing throws it since milestone 4c, which writes
     /// every `ExportCodec` (plan 4c decision 7); it stays so the `switch`es over these errors keep compiling.
     case unsupportedCodec
+    /// The files for external editors (`ExportSettings.editorMetadata`) would replace these files of their names next to
+    /// the video, and the export was not told it may (`ExportSettings.replacesEditorFiles`): they are as they were, and
+    /// nothing was written.
+    case editorFilesExist([URL])
 }
 
 /// What a finished export left out, for the app to tell the user.

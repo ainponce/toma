@@ -35,8 +35,9 @@ public enum ExternalEditorExport {
     /// removed, so it is both files or neither (one already there before is gone then).
     ///
     /// Samples every frame of the video (`EditorTimeline`) and waits for AVFoundation to load the video: never on the main
-    /// thread, nor on a Swift concurrency thread (hop off it, as `MP4Exporter` does with its own queue). The task it runs
-    /// in, if any, cancels it between two frames.
+    /// thread, nor on a Swift concurrency thread (from async code, `await` the asynchronous `write`, which hops off it and
+    /// is cancelled with its task). The task it runs in, if any, cancels it between two frames; on a thread of its own,
+    /// outside a task, nothing does. It writes the two files it is given, whatever is there: the caller names them.
     /// - Throws: `ExportError`, before anything is written: `destinationNotAllowed` for a destination inside a `.toma`
     ///   package, a folder, or one of the other two files (the video included); `nothingToExport` for a document that lasts
     ///   no time; `writerFailed` for a video AVFoundation cannot read, or that is not this export's (another size or frame
@@ -44,6 +45,43 @@ public enum ExternalEditorExport {
     ///   `cancelled`. Then `diskFull` or `writerFailed` from writing a file.
     public static func write(
         project: LoadedProject, document: EditDocument, video: URL, settings: ExportSettings, fcpxml: URL, metadata: URL
+    ) throws {
+        try write(
+            project: project, document: document, video: video, settings: settings, fcpxml: fcpxml, metadata: metadata
+        ) { Task.isCancelled }
+    }
+
+    /// `write(project:document:video:settings:fcpxml:metadata:)` from async code: it runs on a queue of its own (never a
+    /// thread of Swift's cooperative pool, which loading the video waits on, nor the caller's), and the calling task
+    /// cancels it, between two frames, with `ExportError.cancelled` and nothing written.
+    /// - Throws: what the synchronous `write` throws.
+    public static func write(
+        project: LoadedProject, document: EditDocument, video: URL, settings: ExportSettings, fcpxml: URL, metadata: URL
+    ) async throws {
+        let cancellation = CancellationFlag()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, any Error>) in
+                DispatchQueue(label: queueLabel, qos: .userInitiated).async {
+                    continuation.resume(with: Result {
+                        try write(
+                            project: project, document: document, video: video, settings: settings, fcpxml: fcpxml,
+                            metadata: metadata
+                        ) { cancellation.isCancelled }
+                    })
+                }
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
+    /// The label of the queue the asynchronous `write` runs on.
+    static let queueLabel = "dev.toma.ExternalEditorExport"
+
+    /// `write`, cancelled once `isCancelled` says so (looked at between frames).
+    static func write(
+        project: LoadedProject, document: EditDocument, video: URL, settings: ExportSettings, fcpxml: URL, metadata: URL,
+        isCancelled: () -> Bool
     ) throws {
         guard let fcpxml = MP4Exporter.canonicalDestination(fcpxml, project: project.package),
               let metadata = MP4Exporter.canonicalDestination(metadata, project: project.package)
@@ -54,7 +92,7 @@ public enum ExternalEditorExport {
         guard Set(paths).count == paths.count else { throw ExportError.destinationNotAllowed }
         guard TimeMap(sequence: document.sequence).duration > 0 else { throw ExportError.nothingToExport }
         let facts = try VideoFacts.read(video)
-        let written = try files(project: project, document: document, video: facts, settings: settings) { Task.isCancelled }
+        let written = try files(project: project, document: document, video: facts, settings: settings, isCancelled: isCancelled)
         try store(written, fcpxml: fcpxml, metadata: metadata)
     }
 

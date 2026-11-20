@@ -759,10 +759,43 @@ extension EditorModel {
         panel.directoryURL = current.deletingLastPathComponent()
         Task {
             guard await panel.beginSheetModal(for: window) == .OK, let destination = panel.url,
+                let job = await confirmingEditorFiles(of: job, next: destination, in: window),
                 startExport(document, job, to: destination)
             else { return }
             Self.remember(kind, chosen: chosen)
         }
+    }
+
+    /// `job`, or `nil` to export nothing: with "Metadata for Editors (FCPXML)", when `<name>.fcpxml` or
+    /// `<name>.toma-metadata.json` is already next to `destination` (the save panel asked only about the video), an alert
+    /// over `window` names them; Replace exports and lets the export replace them (`ExportSettings.replacesEditorFiles`),
+    /// Cancel keeps them and exports nothing. Without the switch, or with neither file there, `job` as it is.
+    private func confirmingEditorFiles(of job: ExportJob, next destination: URL, in window: NSWindow) async -> ExportJob? {
+        guard case let .mp4(settings, range) = job, settings.editorMetadata else { return job }
+        let sidecars = ExternalEditorExport.sidecarURLs(of: destination)
+        // Anything there by those names, a link too (`attributesOfItem` does not follow it).
+        let there = [sidecars.fcpxml, sidecars.metadata]
+            .filter { (try? FileManager.default.attributesOfItem(atPath: $0.path)) != nil }
+            .map(\.lastPathComponent)
+        guard !there.isEmpty else { return job }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = there.count == 1
+            ? String(
+                format: String(localized: "“%@” already exists. Replace it?", comment: "The export: a file for editors (Metadata for Editors) already next to the video"),
+                there[0])
+            : String(
+                format: String(localized: "“%@” and “%@” already exist. Replace them?", comment: "The export: both files for editors (Metadata for Editors) already next to the video"),
+                there[0], there[1])
+        alert.informativeText = String(
+            localized: "Metadata for Editors writes them next to the video, replacing what they hold. Cancel keeps them and exports nothing.",
+            comment: "The export: the alert about files for editors already next to the video")
+        alert.addButton(withTitle: String(localized: "Replace")).hasDestructiveAction = true
+        alert.addButton(withTitle: String(localized: "Cancel"))
+        guard await alert.beginSheetModal(for: window) == .alertFirstButtonReturn else { return nil }
+        var replacing = settings
+        replacing.replacesEditorFiles = true
+        return .mp4(replacing, range: range)
     }
 
     /// Keeps what an export of `kind` with the options `chosen` leaves remembered in the app's settings, and tells every
