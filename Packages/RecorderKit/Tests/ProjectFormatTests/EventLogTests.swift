@@ -47,6 +47,10 @@ extension InputEvent {
          #"{"chars":"a","code":0,"mods":256,"repeat":false,"t":5,"type":"keyPress"}"#),
         (InputEvent(t: HostTime(nanoseconds: 6), kind: .keyPress(code: 21, chars: "$", mods: 131072, isRepeat: false, key: "4")),
          #"{"chars":"$","code":21,"key":"4","mods":131072,"repeat":false,"t":6,"type":"keyPress"}"#),
+        (InputEvent(t: HostTime(nanoseconds: 5), kind: .focus(x: 100, y: 80, width: 320.25, height: 24, kind: .element)),
+         #"{"height":24,"kind":"element","t":5,"type":"focus","width":320.25,"x":100,"y":80}"#),
+        (InputEvent(t: HostTime(nanoseconds: 6), kind: .focus(x: 640.5, y: -40, width: 2, height: 18, kind: .caret)),
+         #"{"height":18,"kind":"caret","t":6,"type":"focus","width":2,"x":640.5,"y":-40}"#),
     ]
 }
 
@@ -74,7 +78,7 @@ func lineFormatIsExact(event: InputEvent, line: String) throws {
     #expect(Set(types) == [
         "cursor", "mouseDown", "mouseUp", "displayGeometry", "segmentStarted",
         "streamInterrupted", "paused", "resumed", "deviceChanged", "marker", "droppedSamples", "audioClock",
-        "windowGeometry", "cameraStyle", "cursorImage", "scroll", "keyActivity", "keyPress",
+        "windowGeometry", "cameraStyle", "cursorImage", "scroll", "keyActivity", "keyPress", "focus",
     ])
 }
 

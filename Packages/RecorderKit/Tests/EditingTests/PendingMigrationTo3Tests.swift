@@ -10,7 +10,8 @@ import ProjectFormat
 
 /// What the tests of this file share: a project of 1c (its edit document in `documentVersion` 2) or of 1b (in 1,
 /// `DocumentV1Fixture`) opened, looked at and edited in phase 2, whose document is of version 3 (phase 2 design §8). Since
-/// phase 3 the document is of version 4 (`PendingMigrationTo4Tests`): the first edit migrates it on to 4 too.
+/// phase 3 the document is of version 4 (`PendingMigrationTo4Tests`), and since phases 4 and 5 of version 5
+/// (`InfoCommandsTests`): the first edit migrates it on to 4 and to 5 too.
 private enum To3 {
     static let app = AppInfo(name: "Toma", version: "0.4.0")
     /// The `at` of every step of the fixtures: 2026-11-15T20:12:03Z.
@@ -388,7 +389,7 @@ private enum To3 {
         #expect(To3.state(session.document) == To3.state(created))
         #expect(session.document.documentVersion == EditDocument.currentVersion)
         #expect(session.undo() == .refused)
-        #expect(await session.flushed() == 7)
+        #expect(await session.flushed() == 8)
         let undone = session.document
         await session.close()
 
@@ -499,11 +500,13 @@ private enum To3 {
         #expect(try treeHash(url) == unchanged)
         let session = try await To3.open(url, To3.context(caches: caches))
         #expect(session.perform(try To3.padding(session.document, 0.1)) == .applied)
-        #expect(await session.flushed() == 4)
+        #expect(await session.flushed() == 5)
         let entries = try To3.read(url).entries
-        #expect(Array(entries[1...2]) == [.migrate(seq: 2, from: 2, to: 3), .migrate(seq: 3, from: 3, to: 4)])
-        if case let .do(seq, _, label, _, _) = entries[3] {
-            #expect((seq, label) == (4, "style.padding"))
+        #expect(
+            Array(entries[1...3])
+                == [.migrate(seq: 2, from: 2, to: 3), .migrate(seq: 3, from: 3, to: 4), .migrate(seq: 4, from: 4, to: 5)])
+        if case let .do(seq, _, label, _, _) = entries[4] {
+            #expect((seq, label) == (5, "style.padding"))
         } else {
             Issue.record("no do line: \(entries)")
         }
@@ -558,7 +561,7 @@ private enum To3 {
         #expect(session.redo() == .applied)
         #expect(session.document.transcript == transcript)
         #expect(session.undo() == .applied)
-        #expect(await session.flushed() == 7)
+        #expect(await session.flushed() == 8)
         await session.close()
         let lines = try To3.lines(url)
         #expect(lines.contains { $0.contains(#""before":null"#) && $0.contains(#""path":"/transcript""#) })
@@ -570,7 +573,7 @@ private enum To3 {
         let compacting = To3.context(caches: caches, compaction: (maxBytes: .max, maxEntries: 3))
         let again = try await To3.open(url, compacting)
         let compacted = try To3.read(url)
-        #expect(compacted.entries.count < 6)
+        #expect(compacted.entries.count < 7)
         #expect(compacted.createVersion == 2)
         #expect(again.document.transcript == nil)
         #expect(again.redoLabel == .transcriptCreate)
@@ -930,7 +933,7 @@ extension JSONValue {
         // A redo and its undo, which the compaction drops.
         #expect(session.redo() == .applied)
         #expect(session.undo() == .applied)
-        #expect(await session.flushed() == 11)
+        #expect(await session.flushed() == 12)
         await session.close()
         #expect(To3.state(try To3.replay(url).document) == To3.state(document))
 
@@ -940,7 +943,7 @@ extension JSONValue {
         #expect(again.notices.isEmpty)
         let read = try To3.read(url)
         #expect(read.createVersion == 2)
-        #expect(read.entries.count < 10)
+        #expect(read.entries.count < 11)
         if read.entries.count > 1, case .migrate(_, 2, 3) = read.entries[1] {} else { Issue.record("the migrate after the create: \(read.entries)") }
         #expect(To3.state(again.document) == To3.state(document))
         #expect(again.redoLabel == .volume)
@@ -1030,7 +1033,8 @@ extension JSONValue {
         #expect(label.rawValue == raw)
         #expect(EditLabel(rawValue: raw) == label)
     }
-    #expect(EditLabel.allCases.count == 33 + 25 + 25)
+    // And after them, the 25 of phase 3 and the 2 of phases 4 and 5.
+    #expect(EditLabel.allCases.count == 33 + 25 + 25 + 2)
     #expect(Array(EditLabel.allCases[33..<(33 + 25)]) == labels.map(\.0))
     #expect(EditCollection.privacyBlocks.rawValue == "/privacy/blocks")
     #expect(EditCollection.transcriptTakes.rawValue == "/transcript/takes")

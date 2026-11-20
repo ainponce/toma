@@ -21,7 +21,7 @@ private enum Fixture {
 
     static func document(_ items: [Marker] = []) -> EditDocument {
         EditDocument(
-            documentVersion: 4, logSequence: 0, aspect: .landscape, frameRate: 60, sequence: sequence,
+            documentVersion: EditDocument.currentVersion, logSequence: 0, aspect: .landscape, frameRate: 60, sequence: sequence,
             screens: ScreenPlan(initial: [:], changes: []), style: DefaultStyle.toma.style, cursor: DefaultStyle.toma.cursor,
             zoom: ZoomPlan(show: true, auto: DefaultStyle.toma.zoomAuto, spring: DefaultStyle.toma.zoomSpring, motionBlur: 0, regions: [], suppressed: []),
             camera: CameraPlan(show: true, initial: [:], changes: []), audio: AudioPlan(limiter: false, tracks: [:]),

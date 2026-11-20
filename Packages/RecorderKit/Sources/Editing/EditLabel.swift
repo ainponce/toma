@@ -2,8 +2,9 @@
 import ProjectFormat
 
 /// The action an undo step is, for the Edit menu's "Undo «action»" (the 21 undo labels of design §5.11, the 12 of the
-/// 1c design §13.1 after them, the 25 of phase 2 design §8 after those, and the 25 of phase 3 design §10 last). Its raw
-/// value is the `label` of a `do` line of `edit-log.jsonl`, so the names never change; the app localizes them.
+/// 1c design §13.1 after them, the 25 of phase 2 design §8 after those, the 25 of phase 3 design §10 after those, and
+/// those of phases 4 and 5 last). Its raw value is the `label` of a `do` line of `edit-log.jsonl`, so the names never
+/// change; the app localizes them.
 public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case split, delete, trim, speed
     case zoomAdd = "zoom.add", zoomMove = "zoom.move", zoomChange = "zoom.change", zoomDelete = "zoom.delete"
@@ -46,6 +47,8 @@ public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case musicDelete = "music.delete", musicDucking = "music.ducking"
     case takeRerecord = "take.rerecord", takeUse = "take.use"
     case markerAdd = "marker.add", markerRename = "marker.rename", markerMove = "marker.move", markerDelete = "marker.delete"
+    // Phases 4 and 5 (fases 4 y 5 design §4.1), each added at the end: the project's title and summary.
+    case projectTitle = "project.title", projectSummary = "project.summary"
 }
 
 /// What one command changes, before it is a line of the log: its changes, and the grouping key of design §6.4.

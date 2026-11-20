@@ -1,15 +1,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 /// The migrations of the edit document from one `documentVersion` to the next, on its JSON (1c design §13.2, phase 2
-/// design §8, phase 3 design §10): pure functions, so the same document always migrates the same, wherever it is read.
+/// design §8, phase 3 design §10, fases 4 y 5 design §4.1): pure functions, so the same document always migrates the
+/// same, wherever it is read.
 ///
 /// Each one is a row of a table (plan decision 3): the places it adds, as JSON pointers (`*` standing for each member of
 /// the object it is in, or each element of the array), each with its value, frozen. From 1 to 2 it adds the camera's
 /// layouts and look; from 2 to 3 the captions, the privacy blocks, the keys on screen and the new fields of the stage, the
 /// camera and the sound, all with the values that draw and sound exactly what phase 1 did; from 3 to 4 the annotations,
 /// the music, the markers, each clip's `audioShift`, the automatic zoom's `mode` and each track's `ranges`, with the
-/// values that draw and sound exactly what phase 2 did. None changes anything else. One algorithm migrates (`migrate`),
-/// goes back (`reverted`) and tells what commutes with a migration (`touchesAddedFields`) for every row.
+/// values that draw and sound exactly what phase 2 did; from 4 to 5 the automatic zoom's `followsFocus`, off, which
+/// draws exactly what phase 3 did, leaving the project's `info` out. None changes anything else. One algorithm migrates
+/// (`migrate`), goes back (`reverted`) and tells what commutes with a migration (`touchesAddedFields`) for every row.
 ///
 /// All are *additive*: every place the older version writes still exists, with the same meaning, so a change of the
 /// older version commutes with the migration once it is carried through it (`carried(_:from:)`): one that writes a place
@@ -43,8 +45,8 @@ public enum DocumentMigration {
         let newValues: [(place: [String], value: JSONValue)]
     }
 
-    /// The migrations, by the version they migrate from: 1c design §13.2, phase 2 design §8 and phase 3 design §10 (plan
-    /// decision 4 of phase 3).
+    /// The migrations, by the version they migrate from: 1c design §13.2, phase 2 design §8, phase 3 design §10 (plan
+    /// decision 4 of phase 3) and fases 4 y 5 design §4.1.
     private static let migrations: [Int: Migration] = [
         1: Migration(
             added: [
@@ -114,6 +116,10 @@ public enum DocumentMigration {
             ],
             absent: [["sequence", "*", "content"], ["zoom", "regions", "*", "mode"], ["zoom", "regions", "*", "loupe"]],
             newValues: []),
+        4: Migration(
+            added: [(["zoom", "auto", "followsFocus"], .bool(false))],
+            absent: [["info"]],
+            newValues: []),
     ]
 
     /// `json`, a document of `version`, in the next version: the places of `addedPlaces[version]` at their frozen values
@@ -121,9 +127,10 @@ public enum DocumentMigration {
     /// from a version that has no migration or for a document that is not of `version`, at the pointer of an object it
     /// writes in that is missing or is not an object (`/camera` from 1; `/style`, `/camera`, `/audio`, `/audio/tracks` or
     /// one of its members from 2; `/sequence` or one of its clips, `/zoom`, `/zoom/auto`, `/audio`, `/audio/tracks` or one
-    /// of its members from 3), and at what only the next version can hold, which a document of `version` never has (from
-    /// 2: a `/transcript`, or a `device` at `/style/frame/type`; from 3: a clip's `content`, a region's `mode` or `loupe`,
-    /// at the first one, as `/sequence/2/content`): the same places `reverted` refuses.
+    /// of its members from 3; `/zoom` or `/zoom/auto` from 4), and at what only the next version can hold, which a document
+    /// of `version` never has (from 2: a `/transcript`, or a `device` at `/style/frame/type`; from 3: a clip's `content`, a
+    /// region's `mode` or `loupe`, at the first one, as `/sequence/2/content`; from 4: an `/info`): the same places
+    /// `reverted` refuses.
     public static func migrate(_ json: JSONValue, from version: Int) throws(EditChangeError) -> JSONValue {
         guard let migration = migrations[version], case .object(let document) = json,
             document["documentVersion"] == .integer(Int64(version))
@@ -141,7 +148,7 @@ public enum DocumentMigration {
         return migrated
     }
 
-    /// Whether the migration from `version` only adds places, at values that change nothing: from 1, 2 and 3.
+    /// Whether the migration from `version` only adds places, at values that change nothing: from 1, 2, 3 and 4.
     public static func isAdditive(from version: Int) -> Bool {
         migrations[version] != nil
     }
@@ -160,11 +167,11 @@ public enum DocumentMigration {
     /// through it (`carried(_:from:)` is `nil`): it writes the whole document, `documentVersion`, a place the migration
     /// adds or one under it (from 1: one of `addedCameraFields` of `/camera`; from 2: `/captions`, `/style/reframe`,
     /// `/audio/tracks/<track>/cleanup`…; from 3: `/markers`, `/music/ducking/amount`, `/sequence/<i>/audioShift`,
-    /// `/zoom/auto/mode`, `/audio/tracks/<track>/ranges`…), or a value that holds a place it adds where that place
-    /// cannot be written (not an object on the way, or there already with another value). Then the `migrate` cuts the
-    /// history before it, as in 1b. A change of a place that holds one the migration adds (`/camera`, `/style`,
-    /// `/audio/tracks/<track>`, a clip of `/sequence`, `/zoom/auto`) commutes, carried. Always `true` for a migration
-    /// that is not additive, with which nothing is known to commute.
+    /// `/zoom/auto/mode`, `/audio/tracks/<track>/ranges`…; from 4: `/zoom/auto/followsFocus`), or a value that holds a
+    /// place it adds where that place cannot be written (not an object on the way, or there already with another value).
+    /// Then the `migrate` cuts the history before it, as in 1b. A change of a place that holds one the migration adds
+    /// (`/camera`, `/style`, `/audio/tracks/<track>`, a clip of `/sequence`, `/zoom/auto`) commutes, carried. Always
+    /// `true` for a migration that is not additive, with which nothing is known to commute.
     public static func touchesAddedFields(_ change: EditChange, from version: Int) -> Bool {
         carried(change, from: version) == nil
     }

@@ -125,7 +125,7 @@ private let addedFrom2: [String: JSONValue] = [
         "/camera/syncOffset", "/audio/normalize", "/audio/tracks/*/cleanup",
     ])
     #expect(DocumentMigration.addedPlaces[1] == DocumentMigration.addedCameraFields.map { "/camera/" + $0 })
-    #expect(DocumentMigration.addedPlaces.keys.sorted() == [1, 2, 3])
+    #expect(DocumentMigration.addedPlaces.keys.sorted() == [1, 2, 3, 4])
     var rest = migrated
     rest["documentVersion"] = .integer(2)
     for (place, value) in addedFrom2 {
@@ -181,9 +181,10 @@ private let addedFrom2: [String: JSONValue] = [
 
     #expect(DocumentMigration.isAdditive(from: 1))
     #expect(DocumentMigration.isAdditive(from: 2))
-    // From 3 too, since phase 3 (`DocumentV4Tests`).
+    // From 3 too, since phase 3 (`DocumentV4Tests`), and from 4 since phases 4 and 5 (`Document5Tests`).
     #expect(DocumentMigration.isAdditive(from: 3))
-    #expect(!DocumentMigration.isAdditive(from: 4))
+    #expect(DocumentMigration.isAdditive(from: 4))
+    #expect(!DocumentMigration.isAdditive(from: 5))
     #expect(!DocumentMigration.isAdditive(from: 0))
     // No migration from another version, nor of a document of another version.
     for (document, version) in [(v2, 1), (v2, 3), (migrated, 2), (migrated, 4)] {

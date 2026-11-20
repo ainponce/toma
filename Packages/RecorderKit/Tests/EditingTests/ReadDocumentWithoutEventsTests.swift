@@ -161,8 +161,8 @@ private enum Fixture {
             try await edit(url, padding: 0.2, in: dir)
             try FileManager.default.removeItem(at: files.editURL)
             var lines = try lines(files.editLogURL)
-            // After the `create`, the two `migrate`s of the first edit and its step.
-            lines.insert("{ not a line", at: 4)
+            // After the `create`, the three `migrate`s of the first edit and its step.
+            lines.insert("{ not a line", at: 5)
             try write(lines, to: files.editLogURL)
         case .damagedLogWithSnapshot, .damagedLogAlone:
             if kind == .damagedLogAlone { try FileManager.default.removeItem(at: files.editURL) }

@@ -10,7 +10,8 @@ import ProjectFormat
 
 /// What the tests of this file share: a project of phase 2 (its edit document in `documentVersion` 3), of 1c (in 2) or
 /// of 1b (in 1, `DocumentV1Fixture`) opened, looked at and edited in phase 3, whose document is of version 4 (phase 3
-/// design §10).
+/// design §10). Since phases 4 and 5 the document is of version 5 (`InfoCommandsTests`): the first edit migrates it on to
+/// 5 too.
 private enum To4 {
     static let app = AppInfo(name: "Toma", version: "0.5.0")
     /// The `at` of every step of the fixtures: 2026-11-15T20:12:03Z.
@@ -248,7 +249,7 @@ private enum To4 {
         let looked = try await To4.open(current, context)
         #expect(looked.access == .editable)
         #expect(looked.notices.isEmpty)
-        #expect(looked.document.documentVersion == 4)
+        #expect(looked.document.documentVersion == EditDocument.currentVersion)
         #expect(looked.document.markers == .legacy && looked.document.annotations == .legacy && looked.document.music == .legacy)
         #expect(looked.document == (try To4.replay(current)).document)
         #expect(looked.undoLabel == .padding)
@@ -327,7 +328,7 @@ private enum To4 {
                 let session = try await To4.open(url, context)
                 #expect(session.access == .editable)
                 #expect(session.notices.isEmpty)
-                #expect(session.document.documentVersion == 4)
+                #expect(session.document.documentVersion == EditDocument.currentVersion)
                 #expect(session.document == replayed.document)
                 #expect(!session.documentIsCurrentOnDisk)
                 let (_, exported, diskVersion) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
@@ -372,9 +373,9 @@ private enum To4 {
             #expect(io.writes.isEmpty)
             #expect(session.perform(To4.markers(session.document)) == .applied)
             #expect(session.document.markers.items == [To4.marker])
-            // The migrates, one for each version up to 4, and the step.
+            // The migrates, one for each version up to the current one, and the step.
             let migrates = To4.migrates(from: version, seq: 5)
-            #expect(migrates.count == 4 - version)
+            #expect(migrates.count == EditDocument.currentVersion - version)
             let last = 5 + migrates.count
             #expect(await session.flushed() == last, "\(version)")
 
@@ -392,16 +393,16 @@ private enum To4 {
             #expect(io.writes.count == 1, "\(version)")
             #expect(io.writes.first == Array(lines.dropFirst(4).map { $0 + "\n" }.joined().utf8), "\(version)")
             #expect(try To4.read(url).createVersion == version, "\(version)")
-            #expect(try To4.replay(url).version == 4, "\(version)")
+            #expect(try To4.replay(url).version == EditDocument.currentVersion, "\(version)")
             #expect(try To4.replay(url).document.markers.items == [To4.marker], "\(version)")
 
             // The snapshot after it is of version 4.
             await session.close()
-            #expect(try To4.snapshotVersion(url) == 4, "\(version)")
+            #expect(try To4.snapshotVersion(url) == EditDocument.currentVersion, "\(version)")
             #expect(try EditDocument.decode(Data(contentsOf: To4.snapshot(url))) == session.document, "\(version)")
             #expect(try To4.lines(url) == lines, "\(version)")
             let context = To4.context(caches: dir)
-            #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == 4, "\(version)")
+            #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == EditDocument.currentVersion, "\(version)")
             let again = try await To4.open(url, To4.context(caches: dir.appending(path: "Caches")))
             #expect(again.documentIsCurrentOnDisk, "\(version)")
             #expect(again.document.markers.items == [To4.marker], "\(version)")
@@ -428,16 +429,16 @@ private enum To4 {
             #expect(To4.state(session.document) == padded)
             #expect(session.undo() == .applied)
             #expect(To4.state(session.document) == To4.state(created))
-            #expect(session.document.documentVersion == 4)
+            #expect(session.document.documentVersion == EditDocument.currentVersion)
             #expect(session.undo() == .refused)
-            let last = 3 + (4 - version) + 2
+            let last = 3 + (EditDocument.currentVersion - version) + 2
             #expect(await session.flushed() == last, "\(version)")
             let undone = session.document
             await session.close()
 
             // The replay gives the same, and both come back.
             #expect(To4.state(try To4.replay(url).document) == To4.state(undone), "\(version)")
-            #expect(try To4.replay(url).version == 4, "\(version)")
+            #expect(try To4.replay(url).version == EditDocument.currentVersion, "\(version)")
             let again = try await To4.open(url, To4.context(caches: caches))
             #expect(To4.state(again.document) == To4.state(undone), "\(version)")
             #expect(again.redoLabel == .padding, "\(version)")
@@ -461,7 +462,7 @@ private enum To4 {
             let original = session.document
             let migrates = try To4.migrates(from: version, seq: 5).map { try $0.jsonLine() }
             let migrateBytes = migrates.map { $0 + "\n" }.joined().utf8.count
-            // The disk fills up in the middle of the buffer: right after the migrate of 3→4, or inside it.
+            // The disk fills up in the middle of the buffer: right after the last migrate, or inside it.
             io.cut(after: version == 3 ? migrateBytes : migrateBytes - 3, then: .ENOSPC)
             #expect(session.perform(To4.markers(session.document)) == .applied)
             #expect(await session.flushed() == 4)
@@ -497,7 +498,7 @@ private enum To4 {
             #expect(Array(lines.dropFirst(4).prefix(migrates.count)) == migrates)
             #expect(try To4.read(url).entries.map(\.seq) == Array(1...last))
             await session.close()
-            #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == 4)
+            #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == EditDocument.currentVersion)
         }
     }
 }
@@ -515,18 +516,18 @@ private enum To4 {
         let url = try builder.write().package.url
         let caches = dir.appending(path: "Caches")
         let looked = try await To4.open(url, To4.context(caches: caches))
-        #expect(looked.document.documentVersion == 4)
+        #expect(looked.document.documentVersion == EditDocument.currentVersion)
         await looked.close()
         #expect(try To4.read(url).createVersion == 2)
         #expect(try To4.snapshotVersion(url) == 2)
         #expect(!To4.hasVersion4(String(decoding: try Data(contentsOf: To4.snapshot(url)), as: UTF8.self)))
         let session = try await To4.open(url, To4.context(caches: caches))
         #expect(session.perform(To4.markers(session.document)) == .applied)
-        #expect(await session.flushed() == 4)
+        #expect(await session.flushed() == 5)
         let entries = try To4.read(url).entries
-        #expect(Array(entries[1...2]) == To4.migrates(from: 2, seq: 2))
+        #expect(Array(entries[1...3]) == To4.migrates(from: 2, seq: 2))
         await session.close()
-        #expect(try To4.snapshotVersion(url) == 4)
+        #expect(try To4.snapshotVersion(url) == EditDocument.currentVersion)
         #expect(try To4.read(url).createVersion == 2)
 
         // A new document that version 3 cannot hold (a default style whose automatic zooms dim) starts in version 4.
@@ -557,7 +558,7 @@ private enum To4 {
         let replay = try #require(EditReplay.replay(snapshot: nil, entries: entries, createVersion: version))
         #expect(replay.mismatchSeq == nil)
         #expect(replay.version == version)
-        #expect(replay.document.documentVersion == 4)
+        #expect(replay.document.documentVersion == EditDocument.currentVersion)
         #expect(replay.document.style.padding == 0.1)
         #expect(DocumentMigration.reverted(try JSONValue(encoding: replay.document), to: version) == replay.json)
         #expect(try replay.json.decoded(as: EditDocument.self) == replay.document)
@@ -583,7 +584,7 @@ private enum To4 {
             let before = try #require(EditReplay.replay(snapshot: nil, entries: [create, padding], createVersion: version))
             let after = try #require(EditReplay.replay(snapshot: nil, entries: [create, padding] + firstEdit, createVersion: version))
             #expect(before.version == version)
-            #expect(after.version == 4)
+            #expect(after.version == EditDocument.currentVersion)
             #expect(after.mismatchSeq == nil)
             #expect(after.document.markers.items == [To4.marker])
 
@@ -598,7 +599,7 @@ private enum To4 {
                 #expect(read.entries.count == (whole ? 2 + firstEdit.count : 2), "\(version) cut at \(length)")
                 let replayed = try #require(EditReplay.replay(snapshot: nil, entries: read.entries, createVersion: version))
                 #expect(replayed.mismatchSeq == nil, "\(version) cut at \(length)")
-                #expect(replayed.version == (whole ? 4 : version), "\(version) cut at \(length)")
+                #expect(replayed.version == (whole ? EditDocument.currentVersion : version), "\(version) cut at \(length)")
                 #expect(replayed.document == (whole ? after.document : before.document), "\(version) cut at \(length)")
                 #expect(replayed.json == (whole ? after.json : before.json), "\(version) cut at \(length)")
 
@@ -743,6 +744,7 @@ private enum WholeObjects {
             throw TestSupportError.missing("the zoom's settings")
         }
         members["mode"] = nil
+        members["followsFocus"] = nil
         return .do(
             seq: seq, group: seq, label: EditLabel.styleApply.rawValue,
             changes: [.set(path: try JSONPointer("/zoom/auto"), before: before, after: .object(members))], at: To4.date)
@@ -780,13 +782,14 @@ private enum WholeObjects {
     #expect(replayed.document.audio.tracks["take-001/mic"] == TrackGain(gain: 0.5, muted: false))
     #expect(replayed.document.zoom.auto == DefaultStyle.toma.zoomAuto)
     #expect(replayed.document.markers.items == [To4.marker])
-    #expect(replayed.json == (try JSONValue(encoding: replayed.document)))
+    // In version 4: the log has no migrate to 5.
+    #expect(replayed.json == DocumentMigration.reverted(try JSONValue(encoding: replayed.document), to: 4))
     // Every one undone, in order, back to the create's document; and every one redone.
     let undos: [EditLogEntry] = [.undo(seq: 7, group: 6), .undo(seq: 8, group: 4), .undo(seq: 9, group: 3), .undo(seq: 10, group: 2)]
     let undone = try WholeObjects.replay(log + undos)
     #expect(undone.mismatchSeq == nil)
     #expect(WholeObjects.state(undone.document) == WholeObjects.state(WholeObjects.document))
-    #expect(undone.json == (try JSONValue(encoding: undone.document)))
+    #expect(undone.json == DocumentMigration.reverted(try JSONValue(encoding: undone.document), to: 4))
     let redos: [EditLogEntry] = [.redo(seq: 11, group: 2), .redo(seq: 12, group: 3), .redo(seq: 13, group: 4), .redo(seq: 14, group: 6)]
     let redone = try WholeObjects.replay(log + undos + redos)
     #expect(redone.mismatchSeq == nil)
@@ -868,7 +871,7 @@ private enum WholeObjects {
         // A redo and its undo, which the compaction drops.
         #expect(session.redo() == .applied)
         #expect(session.undo() == .applied)
-        #expect(await session.flushed() == 10)
+        #expect(await session.flushed() == 11)
         await session.close()
         #expect(To4.state(try To4.replay(url).document) == To4.state(document))
 
@@ -911,8 +914,9 @@ private enum WholeObjects {
         #expect(label.rawValue == raw)
         #expect(EditLabel(rawValue: raw) == label)
     }
-    #expect(EditLabel.allCases.count == 33 + 25 + 25)
-    #expect(Array(EditLabel.allCases.suffix(25)) == labels.map(\.0))
+    // And after them, the 2 of phases 4 and 5 (`InfoCommandsTests`).
+    #expect(EditLabel.allCases.count == 33 + 25 + 25 + 2)
+    #expect(Array(EditLabel.allCases[(33 + 25)..<(33 + 25 + 25)]) == labels.map(\.0))
     // The labels of before, the same.
     #expect(EditLabel.allCases.first == .split)
     #expect(EditLabel.allCases[33 + 24] == .speedTyping)
@@ -952,7 +956,7 @@ private enum WholeObjects {
             #expect(session.perform(try To4.padding(session.document, 0.1)) == .applied)
             #expect(session.documentIsCurrentOnDisk, "\(version)")
             await session.close()
-            #expect(try To4.snapshotVersion(url) == 4, "\(version)")
+            #expect(try To4.snapshotVersion(url) == EditDocument.currentVersion, "\(version)")
             let again = try await To4.open(url, To4.context(caches: caches))
             #expect(again.documentIsCurrentOnDisk, "\(version)")
             await again.close()

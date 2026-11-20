@@ -281,6 +281,9 @@ public enum SegmentEndReason: Codable, Equatable, Sendable {
     case empty
     /// Recovery could not read a non-empty file; it stays on disk untouched.
     case unreadable(bytes: Int64)
+    /// The track went on in a new segment after a fixed time (fases 4 y 5 design §10.2): only in the working package of
+    /// the Replay, never in a take of the library, whose manifest an older reader must still decode.
+    case rotated
 
     private enum CodingKeys: String, CodingKey {
         case type, domain, code, bytes
@@ -288,6 +291,7 @@ public enum SegmentEndReason: Codable, Equatable, Sendable {
 
     private enum Kind: String, Codable {
         case stopped, paused, streamError, writerError, formatChanged, diskFull, recoveredAfterCrash, empty, unreadable
+        case rotated
     }
 
     public init(from decoder: any Decoder) throws {
@@ -310,6 +314,7 @@ public enum SegmentEndReason: Codable, Equatable, Sendable {
         case .recoveredAfterCrash: self = .recoveredAfterCrash
         case .empty: self = .empty
         case .unreadable: self = .unreadable(bytes: try container.decode(Int64.self, forKey: .bytes))
+        case .rotated: self = .rotated
         }
     }
 
@@ -339,6 +344,8 @@ public enum SegmentEndReason: Codable, Equatable, Sendable {
         case let .unreadable(bytes):
             try container.encode(Kind.unreadable, forKey: .type)
             try container.encode(bytes, forKey: .bytes)
+        case .rotated:
+            try container.encode(Kind.rotated, forKey: .type)
         }
     }
 }

@@ -482,10 +482,12 @@ enum CameraSectionExample {
     #expect(try DocumentMigration.migrate(handWritten, from: 1) == migrated)
 
     #expect(DocumentMigration.isAdditive(from: 1))
-    // From 2 too, since phase 2 (`MigrationTo3Tests`), and from 3 since phase 3 (`DocumentV4Tests`).
+    // From 2 too, since phase 2 (`MigrationTo3Tests`), from 3 since phase 3 (`DocumentV4Tests`) and from 4 since phases 4
+    // and 5 (`Document5Tests`).
     #expect(DocumentMigration.isAdditive(from: 2))
     #expect(DocumentMigration.isAdditive(from: 3))
-    #expect(!DocumentMigration.isAdditive(from: 4))
+    #expect(DocumentMigration.isAdditive(from: 4))
+    #expect(!DocumentMigration.isAdditive(from: 5))
     #expect(!DocumentMigration.isAdditive(from: 0))
     // No migration from another version, nor of a document of another version.
     for (document, version) in [(v1, 2), (v1, 0), (migrated, 1), (migrated, 3)] {

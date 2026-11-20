@@ -2208,6 +2208,28 @@
         }
       }
     },
+    "Change Summary" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the project's summary was written or changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el resumen"
+          }
+        }
+      }
+    },
+    "Change Title" : {
+      "comment" : "Undo label (Edit ▸ Undo «…»): the project's title was written or changed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Cambiar el título"
+          }
+        }
+      }
+    },
     "Change Volume" : {
       "comment" : "An undo step: a track's volume or mute",
       "localizations" : {

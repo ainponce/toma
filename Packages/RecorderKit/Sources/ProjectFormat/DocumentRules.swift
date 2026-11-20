@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-/// A rule of the document of phase 3 that a document breaks (phase 3 design §10, base plan decision 6). The editor
-/// refuses a step that leaves one, and a document with one, edited by hand, opens read-only, shown as it can be drawn.
+/// A rule of the document of phase 3 that a document breaks (phase 3 design §10, base plan decision 6), and of phases 4
+/// and 5 (fases 4 y 5 design §4.1). The editor refuses a step that leaves one, and a document with one, edited by hand,
+/// opens read-only, shown as it can be drawn.
 public enum DocumentProblem: Equatable, Sendable {
     /// A clip with content whose `end` is not its `start`: a clip with content is a point of its take.
     case contentNotAPoint(clip: String)
@@ -19,15 +20,17 @@ public enum DocumentProblem: Equatable, Sendable {
     case assetOutsideAssets(String)
     /// A clip annotation anchored to the take (`AnnotationAnchor.content`): it plays in the output only.
     case clipAnnotationAnchoredToContent(annotation: String)
+    /// The project's `title` or `summary` (`field`) longer than `ProjectInfo.titleLimit` or `summaryLimit` characters.
+    case infoTooLong(field: String)
 }
 
-/// The rules of the document of phase 3 beyond its decoding (phase 3 design §10, base plan decision 6): what the
-/// editor's `isDrawable` refuses.
+/// The rules of the document of phases 3, 4 and 5 beyond its decoding (phase 3 design §10, base plan decision 6; fases 4
+/// y 5 design §4.1): what the editor's `isDrawable` refuses.
 public enum DocumentRules {
     /// What `document` breaks, in this order: for each clip of the sequence, a clip with content that is not a point, its
     /// content's duration and its asset, and its cut of the sound; the clips out of order; each annotation's asset and a
-    /// clip annotation anchored to the take; each theme's source. Empty for every document of phases 1 and 2 whose
-    /// sequence is in order.
+    /// clip annotation anchored to the take; each theme's source; the project's title and its summary. Empty for every
+    /// document of phases 1 and 2 whose sequence is in order.
     public static func problems(in document: EditDocument) -> [DocumentProblem] {
         var problems: [DocumentProblem] = []
         let sequence = document.sequence
@@ -60,6 +63,10 @@ public enum DocumentRules {
         }
         for item in document.music.items where !isMusicSource(item.source) {
             problems.append(.assetOutsideAssets(item.source))
+        }
+        if let info = document.info {
+            if info.title.count > ProjectInfo.titleLimit { problems.append(.infoTooLong(field: "title")) }
+            if info.summary.count > ProjectInfo.summaryLimit { problems.append(.infoTooLong(field: "summary")) }
         }
         return problems
     }
