@@ -11,6 +11,14 @@ import ProjectFormat
 /// the same bytes of every screen segment of the take (`segmentNames`) and the same frames of them (the document picks
 /// which screen is shown when: `SensitiveScan.fingerprint`). Its texts are masked; the found text is never written.
 public enum SensitiveScanJob {
+    /// The take of each job of a search of `document` (phase 3 design §8.1): `project` focused on each take its sequence
+    /// shows (`LoadedProject.takesShown(by:)`), each once, in the order the sequence first shows them; none for an empty
+    /// sequence. Each is scanned on its own (`work`, `cached`), as the take it is.
+    public static func projects(of project: LoadedProject, shownBy document: EditDocument) -> [LoadedProject] {
+        guard !document.sequence.isEmpty else { return [] }
+        return project.takesShown(by: document)
+    }
+
     /// The cached result for `project`'s take as `document` shows it, if it holds (see above); `nil` otherwise, and when
     /// there is none or it cannot be read. Reads the cache file, the segments' identities and the take's events: never on
     /// the main thread.

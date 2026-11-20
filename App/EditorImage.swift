@@ -11,8 +11,10 @@ import os
 /// `exportPreparations`).
 ///
 /// - **Asked for.** With each document whose needs change (the camera shown, a background that is not Original, Follow
-///   the Face) it enqueues `CameraAnalysis.neededJobs` that the queue has no state for, off the main thread: a job that
-///   is done, failed or unavailable is not run again for an edit (the export asks again for what it lacks).
+///   the Face, the takes its sequence shows) it enqueues `CameraAnalysis.neededJobs` of each take the sequence shows
+///   that the queue has no state for, off the main thread: a job that is done, failed or unavailable is not run again
+///   for an edit (the export asks again for what it lacks). A take new in the sequence puts its jobs in the queue
+///   (phase 3 design §8.1).
 /// - **Shown.** The jobs' states arrive by `ProjectJobs.updates()`, never by waiting on a job; each camera job that is
 ///   done, and each change of the needs, has `CameraAnalysis.fill` read the caches off the main thread and hands the
 ///   masks and the faces to the preview with `updateAnalysis` (the latest read wins; an older one that ends late is
@@ -36,24 +38,27 @@ final class EditorImage {
     private struct Needs: Equatable {
         var masks: Bool
         var faces: Bool
+        /// The takes the sequence shows, in its order (`SequenceAnalyses.takes(shownBy:in:)`).
+        var takes: [String]
 
-        init(_ document: EditDocument) {
+        init(_ document: EditDocument, project: LoadedProject) {
             masks = document.camera.show && document.camera.background != .original
             faces = document.camera.show && document.camera.framing.mode == .face
+            takes = SequenceAnalyses.takes(shownBy: document, in: project).map(\.id)
         }
     }
 
-    /// The camera jobs of the take's segments that can be analysed, in the order `neededJobs` gives them; found off the
+    /// The camera jobs of a take's segments that can be analysed, in the order `neededJobs` gives them; found off the
     /// main thread when the project opens.
     private struct Possible: Equatable {
         var masks: [AnalysisJobKind] = []
         var faces: [AnalysisJobKind] = []
     }
 
-    /// The states of the take's camera jobs, as `ProjectJobs.updates()` last said.
+    /// The states of the takes' camera jobs, as `ProjectJobs.updates()` last said.
     private(set) var states: [AnalysisJobKind: JobState] = [:]
-    /// Every camera job a document of this take could need; empty until it is found.
-    private var possible = Possible()
+    /// Every camera job a document could need of each take of the package, by its id; empty until it is found.
+    private var possible: [String: Possible] = [:]
 
     @ObservationIgnored private weak var model: EditorModel?
     @ObservationIgnored private var project: LoadedProject?
@@ -83,16 +88,16 @@ final class EditorImage {
 
     // MARK: - What the editor tells it
 
-    /// The session opened `project` (its take), with its analysis caches `caches` and `document`: what was there before is
-    /// forgotten, the jobs' states are followed, and what `document` needs is asked for and read once the take's
-    /// segments are found (off the main thread).
+    /// The session opened `project` (its take, and the package's others), with its analysis caches `caches` and
+    /// `document`: what was there before is forgotten, the jobs' states are followed, and what `document` needs is asked
+    /// for and read once the takes' segments are found (off the main thread).
     func opened(project: LoadedProject, caches: ProjectCaches, document: EditDocument) {
         guard !closed else { return }
         self.project = project
         self.caches = caches
         self.document = document
         needs = nil
-        possible = Possible()
+        possible = [:]
         askedAgain = []
         listen()
         opening += 1
@@ -100,7 +105,11 @@ final class EditorImage {
         openTask?.cancel()
         openTask = Task { [weak self] in
             let possible = await Task.detached(priority: .utility) {
-                Self.possibleJobs(take: project.take, package: project.package, document: document)
+                var possible: [String: Possible] = [:]
+                for take in project.takes {
+                    possible[take.id] = Self.possibleJobs(take: take, package: project.package, document: document)
+                }
+                return possible
             }.value
             guard let self, !self.closed, current == self.opening else { return }
             self.possible = possible
@@ -112,7 +121,7 @@ final class EditorImage {
     func documentChanged(_ document: EditDocument) {
         guard !closed, project != nil else { return }
         self.document = document
-        // Until the take's segments are found, the opening follows the latest document.
+        // Until the takes' segments are found, the opening follows the latest document.
         guard needs != nil else { return }
         follow(document)
     }
@@ -120,12 +129,13 @@ final class EditorImage {
     /// How far the camera's `kind` analysis that `document` needs is, 0 to 1 (`CameraAnalysis.progress`: a job done,
     /// failed or unavailable counts whole); `nil` when `document` needs none.
     func cameraProgress(_ document: EditDocument, _ kind: CameraJob) -> Double? {
-        guard let take = project?.take else { return nil }
-        return CameraAnalysis.progress(states, of: kinds(document, kind), take: take)
+        guard let project else { return nil }
+        return CameraAnalysis.progress(
+            states, of: kinds(document, kind), takes: SequenceAnalyses.takes(shownBy: document, in: project))
     }
 
     /// Why a job of the camera's `kind` analysis that `document` needs made nothing (the first that failed or is
-    /// unavailable, in the segments' order); `nil` while none did.
+    /// unavailable, take by take in the segments' order); `nil` while none did.
     func problem(_ document: EditDocument, _ kind: CameraJob) -> JobProblem? {
         for job in kinds(document, kind) {
             switch states[job] {
@@ -146,9 +156,10 @@ final class EditorImage {
         let document = export.document, project = export.project
         var inputs = export.analysis
         let pending = (kinds(document, .faces) + kinds(document, .masks)).filter { states[$0] != .done }
-        let watcher = pending.isEmpty ? nil : Task { [jobs = model.jobs, take = project.take] in
+        let takes = SequenceAnalyses.takes(shownBy: document, in: project)
+        let watcher = pending.isEmpty ? nil : Task { [jobs = model.jobs] in
             for await all in await jobs.updates() {
-                if let fraction = CameraAnalysis.progress(all, of: pending, take: take) { export.report(fraction) }
+                if let fraction = CameraAnalysis.progress(all, of: pending, takes: takes) { export.report(fraction) }
             }
         }
         defer { watcher?.cancel() }
@@ -165,7 +176,7 @@ final class EditorImage {
         guard !Task.isCancelled, !closed else { return false }
         export.analysis.personMasks = inputs.personMasks
         export.analysis.faceTracks = inputs.faceTracks
-        if Needs(document) == needs {
+        if Needs(document, project: project) == needs {
             // What the export waited for is newer than any reading under way.
             reading += 1
             readTask?.cancel()
@@ -235,25 +246,27 @@ final class EditorImage {
 
     /// `document` is the latest: when its needs change, what it needs is asked for and the caches are read for it.
     private func follow(_ document: EditDocument) {
-        let next = Needs(document)
+        guard let project else { return }
+        let next = Needs(document, project: project)
         guard next != needs else { return }
         needs = next
         enqueue(document)
         read()
     }
 
-    /// Enqueues, off the main thread and after what was enqueued before, the jobs `document` needs that the queue has
-    /// no state for.
+    /// Enqueues, off the main thread and after what was enqueued before, the jobs `document` needs of each take its
+    /// sequence shows that the queue has no state for.
     private func enqueue(_ document: EditDocument) {
         guard let jobs = model?.jobs, let project, let caches else { return }
         let previous = enqueueTask
         previous?.cancel()
         enqueueTask = Task.detached(priority: .utility) {
             await previous?.value
-            for kind in CameraAnalysis.neededJobs(document: document, take: project.take, package: project.package) {
+            let takes = SequenceAnalyses.takes(shownBy: document, in: project)
+            for kind in CameraAnalysis.neededJobs(document: document, takes: takes, package: project.package) {
                 guard !Task.isCancelled else { return }
-                guard await jobs.state(of: kind) == nil,
-                    let work = CameraAnalysis.work(for: kind, project: project, caches: caches)
+                guard await jobs.state(of: kind) == nil, let focused = Self.project(project, of: kind),
+                    let work = CameraAnalysis.work(for: kind, project: focused, caches: caches)
                 else { continue }
                 // Closed (or followed by another document) while it asked.
                 guard !Task.isCancelled else { return }
@@ -272,7 +285,9 @@ final class EditorImage {
         readTask = Task { [weak self] in
             let inputs = await Task.detached(priority: .utility) {
                 var inputs = AnalysisInputs()
-                CameraAnalysis.fill(&inputs, document: document, take: project.take, package: project.package, caches: caches)
+                CameraAnalysis.fill(
+                    &inputs, document: document, takes: SequenceAnalyses.takes(shownBy: document, in: project),
+                    package: project.package, caches: caches)
                 return inputs
             }.value
             guard let self, !self.closed, current == self.reading else { return }
@@ -308,8 +323,8 @@ final class EditorImage {
             }
             if found {
                 askedAgain.remove(kind)
-            } else if states[kind] == .done, !askedAgain.contains(kind),
-                let work = CameraAnalysis.work(for: kind, project: project, caches: caches) {
+            } else if states[kind] == .done, !askedAgain.contains(kind), let focused = Self.project(project, of: kind),
+                let work = CameraAnalysis.work(for: kind, project: focused, caches: caches) {
                 askedAgain.insert(kind)
                 missing.append((kind, work))
             }
@@ -320,12 +335,25 @@ final class EditorImage {
         }
     }
 
-    /// The jobs of the camera's `kind` analysis `document` needs, as `CameraAnalysis.neededJobs` gives them.
+    /// The jobs of the camera's `kind` analysis `document` needs, as `CameraAnalysis.neededJobs` gives them: take by
+    /// take, in the order its sequence first shows each.
     private func kinds(_ document: EditDocument, _ kind: CameraJob) -> [AnalysisJobKind] {
-        let needs = Needs(document)
+        guard let project else { return [] }
+        let needs = Needs(document, project: project)
+        return needs.takes.flatMap { take -> [AnalysisJobKind] in
+            switch kind {
+            case .masks: needs.masks ? possible[take]?.masks ?? [] : []
+            case .faces: needs.faces ? possible[take]?.faces ?? [] : []
+            }
+        }
+    }
+
+    /// `project` focused on the take of the camera job `kind` (`LoadedProject.focused(on:)`), whose work is that take's;
+    /// `nil` for a take the manifest does not have and any other job.
+    private nonisolated static func project(_ project: LoadedProject, of kind: AnalysisJobKind) -> LoadedProject? {
         switch kind {
-        case .masks: return needs.masks ? possible.masks : []
-        case .faces: return needs.faces ? possible.faces : []
+        case let .personMask(take, _, _), let .faceTrack(take, _, _): project.focused(on: take)
+        case .transcription, .soundIsolation, .loudness, .sensitiveScan: nil
         }
     }
 

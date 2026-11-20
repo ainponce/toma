@@ -24,13 +24,15 @@ import os
 ///   the project cannot be edited by then, it is dropped. Transcribing again asks first when corrections would be lost
 ///   ("Transcribing again replaces %lld corrected words.").
 /// - **The clean voice and the loudness.** With each document whose needs change (a microphone's cleanup above 0 or
-///   not, Normalize), the jobs `VoiceJobs.needed` lists are enqueued, off the main thread: those the queue has no state
-///   for, and a job done whose cache is missing again (macOS emptied the caches) once. Each of them that is done, and
-///   each change of the needs, has `VoiceJobs.applied` read the caches off the main thread and hands the clean voice and
-///   the loudness to the preview's mix with `updateAnalysis` (the latest read wins).
-/// - **The export.** `prepareExport` waits for what the exported document lacks (`VoiceJobs.prepareExport`), reporting
-///   its progress, and hands it to the export; a project cleaned on a Mac with the voice isolation exports dry here, and
-///   says so once it is done.
+///   not, Normalize, the takes its sequence shows), the jobs `SequenceVoiceJobs.needed` lists are enqueued, off the main
+///   thread: those the queue has no state for, and a job done whose cache is missing again (macOS emptied the caches)
+///   once. Each take the sequence shows has its own (phase 3 design §8.1): a take new in it puts its jobs in the queue.
+///   Each of them that is done, and each change of the needs, has `SequenceVoiceJobs.applied` read the caches off the
+///   main thread and hands the clean voice and the loudness to the preview's mix with `updateAnalysis` (the latest read
+///   wins).
+/// - **The export.** `prepareExport` waits for what the exported document lacks (`SequenceVoiceJobs.prepareExport`),
+///   reporting its progress, and hands it to the export; a project cleaned on a Mac with the voice isolation exports dry
+///   here, and says so once it is done.
 @MainActor @Observable
 final class EditorVoice {
     /// Where the transcription of the take is, as the Captions tab shows it.
@@ -99,7 +101,7 @@ final class EditorVoice {
 
     @ObservationIgnored private weak var model: EditorModel?
     @ObservationIgnored private var project: LoadedProject?
-    @ObservationIgnored private var voiceJobs: VoiceJobs?
+    @ObservationIgnored private var voiceJobs: SequenceVoiceJobs?
     /// The session's document, as last told.
     @ObservationIgnored private var document: EditDocument?
     /// The job of the take's transcription; `nil` when it has nothing to transcribe.
@@ -127,15 +129,18 @@ final class EditorVoice {
 
     private nonisolated static let logger = Logger(subsystem: "dev.toma.Toma", category: "EditorVoice")
 
-    /// What a document needs of the voice's jobs: what `VoiceJobs.needed` and `applied` read of it.
+    /// What a document needs of the voice's jobs: what `SequenceVoiceJobs.needed` and `applied` read of it.
     private struct Needs: Equatable {
         /// The tracks with a cleanup above 0, by `AudioPlan.key(take:track:)`.
         var cleaned: Set<String>
         var normalize: Bool
+        /// The takes the sequence shows, in its order (`SequenceAnalyses.takes(shownBy:in:)`).
+        var takes: [String]
 
-        init(_ document: EditDocument) {
+        init(_ document: EditDocument, project: LoadedProject) {
             cleaned = Set(document.audio.tracks.filter { $0.value.cleanup > 0 }.keys)
             normalize = document.audio.normalize
+            takes = SequenceAnalyses.takes(shownBy: document, in: project).map(\.id)
         }
     }
 
@@ -158,7 +163,7 @@ final class EditorVoice {
         loudnessBatch = []
         askedAgain = []
         transcriptionFailure = nil
-        let voiceJobs = VoiceJobs(project: project, caches: caches, engine: Self.engine(), isolator: SystemVoiceIsolation())
+        let voiceJobs = SequenceVoiceJobs(project: project, caches: caches, engine: Self.engine(), isolator: SystemVoiceIsolation())
         self.voiceJobs = voiceJobs
         transcriptionKind = Transcriber.track(for: project.take).map { .transcription(take: project.take.id, track: $0.id) }
         listen()
@@ -231,10 +236,10 @@ final class EditorVoice {
 
     /// Transcribes the take in `language`, first in the queue: what it hears replaces the transcript in one step (after
     /// asking, if corrections would be lost). Nothing if it cannot be edited, there is nothing to transcribe or one is
-    /// under way.
+    /// under way. The session's take (`project.take`): the words of every take in the sequence's order are 3d's.
     func transcribe() {
-        guard !closed, transcriptionTask == nil, let voiceJobs, let jobs = model?.jobs, model?.canEdit == true,
-              !chosenLanguage.isEmpty, let job = voiceJobs.transcription(language: chosenLanguage)
+        guard !closed, transcriptionTask == nil, let voiceJobs, let project, let jobs = model?.jobs, model?.canEdit == true,
+              !chosenLanguage.isEmpty, let job = voiceJobs.jobs(ofTake: project.take.id)?.transcription(language: chosenLanguage)
         else { return }
         transcriptionFailure = nil
         transcriptionTask = Task { [weak self] in
@@ -584,7 +589,8 @@ final class EditorVoice {
 
     /// `document` is the latest: when its needs change, what it needs is asked for and the caches are read for it.
     private func follow(_ document: EditDocument) {
-        let next = Needs(document)
+        guard let project else { return }
+        let next = Needs(document, project: project)
         guard next != needs else { return }
         needs = next
         enqueue(document)
