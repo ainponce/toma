@@ -30,8 +30,9 @@ import os
 /// it (`ExternalEditorExport.sidecarURLs(of:)`, design §7.2, plan 4c decision 8): the bytes `ExternalEditorExport.write`
 /// makes of the finished video, worked out from what the export knows of it (its size, frame rate, frames, audio and
 /// alpha, and its URL as given) once it is encoded and before it is moved into place, and written, each atomically, once
-/// it is there. Their places are checked as the destination's before anything is written. The export of a range ignores
-/// it.
+/// it is there. Their places are checked as the destination's before anything is written, and files of their names
+/// already there are never replaced unless `ExportSettings.replacesEditorFiles` says so (`ExportError.editorFilesExist`).
+/// The export of a range ignores it.
 ///
 /// Frame `i` is the frame `FrameRenderer` draws of the edit document at output time `TimeMap.frameTime(i, frameRate:)`,
 /// the same drawing the preview shows (the renderer's motion blur in frames of the export's rate); the video lasts the
@@ -149,9 +150,11 @@ public final class MP4Exporter: Sendable {
     /// With the files for editors (`ExportSettings.editorMetadata`, the whole video), the frames are sampled for them once
     /// the video is encoded (progress stays below 1 meanwhile; cancelling stops it between two frames, leaving nothing),
     /// and they are written once the video is in place: a failure writing them (a full disk) throws with the video
-    /// already there, and neither file.
+    /// already there, and neither file. Files of their names already there are replaced only with
+    /// `ExportSettings.replacesEditorFiles`; otherwise the export throws `editorFilesExist`, before it writes anything and
+    /// again, should one appear meanwhile, right before the video is moved into place.
     /// - Throws: `ExportError` (before anything is written: `destinationNotAllowed`, also for files for editors that
-    ///   could not go next to the video, `nothingToExport` for a document
+    ///   could not go next to the video, `editorFilesExist`, `nothingToExport` for a document
     ///   that lasts no time or a range that lasts less than a frame of the video, `noDisplayTrack` for the legacy
     ///   document of a take without screen segments; then `writerFailed`, `cancelled`, `diskFull`), or the `RenderError` of
     ///   a frame that could not be drawn.
@@ -176,6 +179,7 @@ public final class MP4Exporter: Sendable {
         var sidecars: (fcpxml: URL, metadata: URL)?
         if settings.editorMetadata, part == nil {
             guard let places = Self.sidecars(of: destination, project: project.package) else { throw ExportError.destinationNotAllowed }
+            try Self.refuseToReplace(places, unless: settings.replacesEditorFiles)
             sidecars = places
         }
 
@@ -213,6 +217,8 @@ public final class MP4Exporter: Sendable {
                     audioChannels: audio?.channels, hasAlpha: settings.codec.hasAlpha))
                 guard !Task.isCancelled else { throw ExportError.cancelled }
             }
+            // Again, right before anything is in place: one may have appeared while the video was encoded.
+            if let sidecars { try Self.refuseToReplace(sidecars, unless: settings.replacesEditorFiles) }
             try Self.move(partial, to: destination)
             var missingAudio = session.missingAudio, missingVideo = renderer.missingVideo
             if let part {
@@ -257,6 +263,16 @@ public final class MP4Exporter: Sendable {
         else { return nil }
         let paths = [destination, fcpxml, metadata].map { $0.path.lowercased() }
         return Set(paths).count == paths.count ? (fcpxml, metadata) : nil
+    }
+
+    /// Throws `ExportError.editorFilesExist` naming those of `sidecars` already there, unless `replacing`.
+    private static func refuseToReplace(_ sidecars: (fcpxml: URL, metadata: URL), unless replacing: Bool) throws {
+        guard !replacing else { return }
+        let there = [sidecars.fcpxml, sidecars.metadata].filter { url in
+            var info = stat()
+            return lstat(url.path, &info) == 0
+        }
+        if !there.isEmpty { throw ExportError.editorFilesExist(there) }
     }
 
     /// The bytes of the files for external editors of the video `video` describes (`ExternalEditorExport.files`), made

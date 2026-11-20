@@ -38,6 +38,12 @@ private func settings(_ codec: ExportCodec = .h264, editorMetadata: Bool = true)
 
 private func exists(_ url: URL) -> Bool { FileManager.default.fileExists(atPath: url.path) }
 
+/// The names `ExportError.editorFilesExist` gives, if `error` is it.
+private func namesThere(_ error: ExportError?) -> [String]? {
+    guard case let .editorFilesExist(urls)? = error else { return nil }
+    return urls.map(\.lastPathComponent)
+}
+
 /// The names in `dir`, without the project's package.
 private func files(in dir: URL) throws -> Set<String> {
     Set(try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { !$0.hasSuffix(".toma") })
@@ -136,6 +142,103 @@ struct EditorSidecarTests {
             try await MP4Exporter(project: project, document: .legacy(for: project), settings: settings(editorMetadata: false))
                 .export(to: dir.appending(path: "out.mp4")) { _ in }
             #expect(try files(in: dir) == ["out.fcpxml", "out.mp4"])
+        }
+    }
+
+    /// Files of the names of the files for editors already next to the video are never replaced unless the export is told
+    /// it may (`replacesEditorFiles`, the sheet's Replace): otherwise it throws `editorFilesExist` naming them, before it
+    /// writes anything. Told, it replaces them; without `editorMetadata`, they are not touched.
+    @Test func existingEditorFilesAreNotReplacedUnlessAsked() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await sidecarTake(in: dir)
+            let destination = dir.appending(path: "out.mp4")
+            let sidecars = ExternalEditorExport.sidecarURLs(of: destination)
+            let mine = Data("<fcpxml version=\"1.10\"/> from Final Cut".utf8)
+            try mine.write(to: sidecars.fcpxml)
+            let refused = await #expect(throws: ExportError.self) {
+                try await MP4Exporter(project: project, document: .legacy(for: project), settings: settings())
+                    .export(to: destination) { _ in }
+            }
+            #expect(namesThere(refused) == ["out.fcpxml"], "\(String(describing: refused))")
+            #expect(try files(in: dir) == ["out.fcpxml"])
+            #expect(try Data(contentsOf: sidecars.fcpxml) == mine)
+            // Only the JSON there: it alone is named.
+            try FileManager.default.removeItem(at: sidecars.fcpxml)
+            try Data("{}".utf8).write(to: sidecars.metadata)
+            let json = await #expect(throws: ExportError.self) {
+                try await MP4Exporter(project: project, document: .legacy(for: project), settings: settings())
+                    .export(to: destination) { _ in }
+            }
+            #expect(namesThere(json) == ["out.toma-metadata.json"], "\(String(describing: json))")
+            #expect(try files(in: dir) == ["out.toma-metadata.json"])
+            try mine.write(to: sidecars.fcpxml)
+
+            // Without the files for editors, the video alone, and they stay as they are.
+            try await MP4Exporter(project: project, document: .legacy(for: project), settings: settings(editorMetadata: false))
+                .export(to: destination) { _ in }
+            #expect(try Data(contentsOf: sidecars.fcpxml) == mine && Data(contentsOf: sidecars.metadata) == Data("{}".utf8))
+
+            // Told it may, it replaces both.
+            var replacing = settings()
+            replacing.replacesEditorFiles = true
+            try await MP4Exporter(project: project, document: .legacy(for: project), settings: replacing).export(to: destination) { _ in }
+            #expect(try Data(contentsOf: sidecars.fcpxml) != mine)
+            #expect(String(decoding: try Data(contentsOf: sidecars.fcpxml), as: UTF8.self).contains("<fcpxml version=\"1.11\">"))
+            #expect(String(decoding: try Data(contentsOf: sidecars.metadata), as: UTF8.self).contains("\"format\":\"metadata-1\""))
+            #expect(try files(in: dir) == ["out.mp4", "out.fcpxml", "out.toma-metadata.json"])
+            #expect(!ExportSettings().replacesEditorFiles)
+            #expect(!ExportSettings(aspect: .landscape, resolution: .p720, framesPerSecond: 30, quality: .standard).replacesEditorFiles)
+        }
+    }
+
+    /// A file of their names that appears while the video is encoded is not replaced either: the export looks again right
+    /// before the video goes into place, throws `editorFilesExist`, and leaves the destination as it was.
+    @Test func editorFilesThatAppearMeanwhileAreNotReplaced() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await sidecarTake(in: dir)
+            let destination = dir.appending(path: "out.mp4")
+            try Data("before".utf8).write(to: destination)
+            let sidecars = ExternalEditorExport.sidecarURLs(of: destination)
+            let mine = Data("made meanwhile".utf8)
+            let exporter = MP4Exporter(
+                project: project, document: .legacy(for: project), settings: settings(), frameSink: nil,
+                whileSampling: { try? mine.write(to: sidecars.metadata) })
+            let appeared = await #expect(throws: ExportError.self) { try await exporter.export(to: destination) { _ in } }
+            #expect(namesThere(appeared) == ["out.toma-metadata.json"], "\(String(describing: appeared))")
+            #expect(try Data(contentsOf: destination) == Data("before".utf8))
+            #expect(try Data(contentsOf: sidecars.metadata) == mine)
+            #expect(try files(in: dir) == ["out.mp4", "out.toma-metadata.json"])
+        }
+    }
+
+    /// `ExternalEditorExport.write` from async code runs off the cooperative pool and is cancelled with its task: nothing
+    /// is written; not cancelled, it writes what the synchronous `write` does.
+    @Test func asyncWriteIsCancelledWithItsTask() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await sidecarTake(in: dir)
+            let document = EditDocument.legacy(for: project)
+            let video = dir.appending(path: "out.mp4")
+            try await MP4Exporter(project: project, document: document, settings: settings(editorMetadata: false))
+                .export(to: video) { _ in }
+            let (fcpxml, metadata) = ExternalEditorExport.sidecarURLs(of: video)
+            let task = Task {
+                withUnsafeCurrentTask { $0?.cancel() }
+                try await ExternalEditorExport.write(
+                    project: project, document: document, video: video, settings: settings(), fcpxml: fcpxml, metadata: metadata)
+            }
+            await #expect(throws: ExportError.cancelled) { try await task.value }
+            #expect(try files(in: dir) == ["out.mp4"])
+
+            try await ExternalEditorExport.write(
+                project: project, document: document, video: video, settings: settings(), fcpxml: fcpxml, metadata: metadata)
+            let again = (fcpxml: dir.appending(path: "again.fcpxml"), metadata: dir.appending(path: "again.json"))
+            try await offThePool {
+                try ExternalEditorExport.write(
+                    project: project, document: document, video: video, settings: settings(), fcpxml: again.fcpxml,
+                    metadata: again.metadata)
+            }
+            #expect(try Data(contentsOf: fcpxml) == Data(contentsOf: again.fcpxml))
+            #expect(try Data(contentsOf: metadata) == Data(contentsOf: again.metadata))
         }
     }
 
