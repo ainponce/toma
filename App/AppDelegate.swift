@@ -400,6 +400,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         settings?.showRecordingPane()
     }
 
+    /// Settings, on the Share pane (the editor's Share, before it is set up).
+    func showShareSettings() {
+        showSettings()
+        settings?.showSharePane()
+    }
+
     /// A global shortcut was pressed.
     private func perform(_ action: HotKeyAction) {
         switch action {
@@ -510,6 +516,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || environment["TOMA_SHOWCASE_PLAYHEAD"] != nil
                 || environment.keys.contains(where: { $0.hasPrefix("TOMA_SHOWCASE_P3_") })
                 || environment["TOMA_SHOWCASE_AI"] != nil
+                || environment["TOMA_SHOWCASE_SHARE"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -583,6 +590,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     await model.showcasePhase3(environment)
                     // TOMA_SHOWCASE_AI=<info|info-working|sheet|sheet-working|unavailable|no-transcript>: the local AI (5b).
                     await model.showcaseAI(environment)
+                    // TOMA_SHOWCASE_SHARE=<unconfigured|ready|running|finished|failed|list>: Share's little window (5a).
+                    model.showcaseShare(environment)
                     // TOMA_SHOWCASE_PANEL_PNG on the Zoom tab (its "Follow the Focus", 4a): the window and the panel drawn
                     // into PNGs, unless a showcase above drew them already.
                     if model.panelTab == .zoom { CaptionsShowcase.snapshotLater(model.window) }
