@@ -9,7 +9,7 @@ let package = Package(
         .library(
             name: "RecorderKit", targets: [
                 "ProjectFormat", "Analysis", "Editing", "Recording", "SyntheticCapture", "Recovery", "Render", "Export",
-                "Library", "Transcription", "ImageAnalysis", "ProjectJobs",
+                "Library", "Transcription", "ImageAnalysis", "ProjectJobs", "LocalAI",
             ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
@@ -39,6 +39,9 @@ let package = Package(
             name: "ProjectAPI",
             dependencies: ["ProjectFormat", "Analysis", "Editing", "Render", "Export", "ProjectJobs", "Transcription"]),
         .executableTarget(name: "toma", dependencies: ["ProjectAPI", .product(name: "ArgumentParser", package: "swift-argument-parser")]),
+        // Phase 5's local AI (milestone 5b): chapters, title and summary from the transcript. FoundationModels is imported
+        // only in `SystemTextModel.swift`, behind macOS 26, so it links weakly and Toma still opens on macOS 15. No AppKit.
+        .target(name: "LocalAI", dependencies: ["ProjectFormat", "Analysis"]),
         // Shared by every test target; not a product. `Editing` for `MediaFixtures.imported`, which imports as the editor does.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture", "Editing"]),
         .executableTarget(
@@ -79,6 +82,7 @@ let package = Package(
         .testTarget(name: "ImageAnalysisTests", dependencies: ["ImageAnalysis", "ProjectFormat", "RecorderKitTestSupport"]),
         .testTarget(name: "ProjectJobsTests", dependencies: ["ProjectJobs", "Editing", "ProjectFormat", "Export", "Transcription", "RecorderKitTestSupport"]),
         .testTarget(name: "ProjectAPITests", dependencies: ["ProjectAPI", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "LocalAITests", dependencies: ["LocalAI", "ProjectFormat", "Analysis", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )
