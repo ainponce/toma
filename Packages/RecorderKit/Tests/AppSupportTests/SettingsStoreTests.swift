@@ -4,6 +4,7 @@ import Foundation
 import ProjectFormat
 import RecorderKitTestSupport
 import Recording
+import Sharing
 import Testing
 
 @MainActor @Suite struct SettingsStoreTests {
