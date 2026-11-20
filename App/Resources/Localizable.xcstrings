@@ -2416,6 +2416,17 @@
         }
       }
     },
+    "Couldn't add the file." : {
+      "comment" : "Over the preview: an image or a clip dropped on it could not be added",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo agregar el archivo."
+          }
+        }
+      }
+    },
     "Couldn't apply the style." : {
       "comment" : "The row Style of the editor's panel: applying a style failed on the disk; nothing was applied",
       "localizations" : {
@@ -3315,6 +3326,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Editar"
+          }
+        }
+      }
+    },
+    "Edit Text" : {
+      "comment" : "VoiceOver: the text of an annotation, edited over the preview",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar el texto"
           }
         }
       }
