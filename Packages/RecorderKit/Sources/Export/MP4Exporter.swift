@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import Analysis
 import CoreMedia
 import CoreVideo
 import Darwin
@@ -28,6 +29,11 @@ import os
 /// refuses it as phase 0 and 1a do (`ExportError.noDisplayTrack`).
 ///
 /// It exports the document it was given, a copy: what is edited while it runs changes nothing in it (design §5.6).
+///
+/// With chapters (`ExportSettings.chapters`, phase 3 plan 3d decision 5), the file also has a chapter track
+/// (`ChapterTrack`), after the video and the audio, tied to the video as its chapter list and disabled; the export of a
+/// range has the chapters of that range (`Chapters.within`). It changes no frame and no sample. Without chapters, the file
+/// has the tracks it had before phase 3.
 ///
 /// Given a range of the output (`ExportRange`, 1c design §7.1), it exports that part alone: frame `n` is the one drawn
 /// at `range.frameTime(n, fps:)`, for the frames `range.frameCount(fps:)` counts before its end (the range cut to the
@@ -63,23 +69,33 @@ public final class MP4Exporter: Sendable {
     public let range: ExportRange?
     /// What the frames and the mix read of the project's analysis caches (phase 2 design §10): `.none` in phase 1.
     public let analysis: AnalysisInputs
+    /// Makes again the files of the music the mix could not open (`EditedMix.unopenedMusic`: macOS emptied a cache
+    /// between the export's preparation and the export), which the export waits for once before it writes anything, and
+    /// makes the music again with (plan 3c; `MusicAnalysis.remaking(for:)`). Without, such music is silent.
+    public let remakeMusic: MusicRemaking?
     /// For tests: sees each frame's pixel buffer on the export's queue, in frame order, right before it is appended.
     let frameSink: FrameSink?
 
     /// What a test's `frameSink` is given: the frame's index and the pixel buffer drawn for it.
     typealias FrameSink = @Sendable (_ frame: Int, _ pixelBuffer: CVPixelBuffer) -> Void
 
-    /// The export of `range` of `document`'s output, of all of it when `nil`, reading `analysis` of the caches.
+    /// Makes the files of the music of `sources` again and gives each one's, by source (one it cannot read left out).
+    public typealias MusicRemaking = @Sendable (_ sources: [String]) async throws -> [String: URL]
+
+    /// The export of `range` of `document`'s output, of all of it when `nil`, reading `analysis` of the caches, with the
+    /// music `remakeMusic` makes again if the mix finds its file gone.
     public convenience init(
         project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil,
-        analysis: AnalysisInputs = .none
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
     ) {
-        self.init(project: project, document: document, settings: settings, range: range, frameSink: nil, analysis: analysis)
+        self.init(
+            project: project, document: document, settings: settings, range: range, frameSink: nil, analysis: analysis,
+            remakeMusic: remakeMusic)
     }
 
     init(
         project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil, frameSink: FrameSink?,
-        analysis: AnalysisInputs = .none
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
     ) {
         self.project = project
         self.document = document
@@ -87,6 +103,7 @@ public final class MP4Exporter: Sendable {
         self.range = range
         self.frameSink = frameSink
         self.analysis = analysis
+        self.remakeMusic = remakeMusic
     }
 
     /// The export of the legacy document (`EditDocument.legacy(for:)`): what phase 0 and 1a export.
@@ -126,10 +143,14 @@ public final class MP4Exporter: Sendable {
 
         let renderer = try FrameRenderer(
             project: project, document: document, outputSize: settings.outputSize, frameRate: fps, analysis: analysis)
-        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps, analysis: analysis)
+        let mix = try await Self.remadeMusic(
+            of: try await EditedMix.make(project: project, document: document, framesPerSecond: fps, analysis: analysis),
+            analysis: analysis, remake: remakeMusic)
         let audioFrames = Self.audioFrames(of: part, frameCount: frameCount, framesPerSecond: fps, mix: mix)
         let audio = mix.hasSound ? try AudioMix(mix: mix, frames: audioFrames) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
+
+        let chapters = part.map { Chapters.within(settings.chapters, range: $0.start..<$0.end) } ?? settings.chapters
 
         let partial = URL(fileURLWithPath: destination.path + ".partial." + settings.codec.fileExtension)
         try Self.removeStalePartial(partial)
@@ -137,7 +158,7 @@ public final class MP4Exporter: Sendable {
         do {
             let session = try ExportSession(
                 url: partial, settings: settings, renderer: renderer, start: part?.start ?? 0, frameCount: frameCount, audio: audio,
-                frameSink: frameSink)
+                chapters: chapters, frameSink: frameSink)
             try await withTaskCancellationHandler {
                 try await session.run(progress: progress)
             } onCancel: {
@@ -188,15 +209,16 @@ public final class MP4Exporter: Sendable {
     ///   for a frame rate that is not positive), or what reading or mixing the audio throws.
     static func mixSamples(
         of project: LoadedProject, document: EditDocument, framesPerSecond: Int, range: ExportRange? = nil,
-        analysis: AnalysisInputs = .none
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
     ) async throws -> [Float] {
         if let refusal = refusal(of: document, of: project) { throw refusal }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
         let timeMap = TimeMap(sequence: document.sequence)
         let part = try part(of: range, in: timeMap, framesPerSecond: framesPerSecond)
         let frameCount = part?.frameCount(fps: framesPerSecond) ?? timeMap.frameCount(frameRate: framesPerSecond)
-        let mix = try await EditedMix.make(
-            project: project, document: document, framesPerSecond: framesPerSecond, analysis: analysis)
+        let mix = try await remadeMusic(
+            of: try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond, analysis: analysis),
+            analysis: analysis, remake: remakeMusic)
         guard mix.hasSound else { return [] }
         let frames = audioFrames(of: part, frameCount: frameCount, framesPerSecond: framesPerSecond, mix: mix)
         // Mixing decodes: off the cooperative pool, as the export's own queue does it.
@@ -216,6 +238,26 @@ public final class MP4Exporter: Sendable {
             }
             return samples
         }
+    }
+
+    /// `mix`, made with `analysis`, with its music made again once if it could not open the file of a source
+    /// (`EditedMix.unopenedMusic`, a cache macOS emptied since the export's preparation): `remake` makes those files
+    /// again and the mix plays them (`EditedMix.with(analysis:)`); still gone, or without `remake`, that music is silent.
+    /// - Throws: what `remake` throws (a file that could not be written); `ExportError.cancelled` if it was cancelled.
+    static func remadeMusic(of mix: EditedMix, analysis: AnalysisInputs, remake: MusicRemaking?) async throws -> EditedMix {
+        let unopened = mix.unopenedMusic
+        guard !unopened.isEmpty, let remake else { return mix }
+        logger.info("The music of \(unopened.joined(separator: ", "), privacy: .public) was gone: made again before the export")
+        let files: [String: URL]
+        do {
+            files = try await remake(unopened)
+        } catch is CancellationError {
+            throw ExportError.cancelled
+        }
+        guard !Task.isCancelled else { throw ExportError.cancelled }
+        var remade = analysis
+        remade.musicFiles.merge(files) { _, new in new }
+        return await mix.with(analysis: remade)
     }
 
     /// Why `document` of `project` cannot be exported, or `nil` when it can: `nothingToExport` when its clips last no
@@ -447,6 +489,9 @@ private final class ExportSession: @unchecked Sendable {
     private let adaptor: AVAssetWriterInputPixelBufferAdaptor
     private let audioInput: AVAssetWriterInput?
     private let audio: AudioMix?
+    /// The chapter track's input and its samples, in order: `nil` and none without chapters.
+    private let chapterInput: AVAssetWriterInput?
+    private let chapterSamples: [CMSampleBuffer]
     private let renderer: FrameRenderer
     private let settings: ExportSettings
     /// The output time of frame 0, in nanoseconds: the start of the range exported, 0 for the whole video.
@@ -458,10 +503,11 @@ private final class ExportSession: @unchecked Sendable {
     /// Signalled each time a frame drawn ahead is done, to wake the loop.
     private let frameDrawn = DispatchSemaphore(value: 0)
 
-    /// Creates the writer of `url` (the file appears when writing starts) and its inputs.
+    /// Creates the writer of `url` (the file appears when writing starts) and its inputs: the video, the audio when there
+    /// is `audio`, and the chapter track when `chapters` (starts in ns from frame 0) give it a sample.
     init(
         url: URL, settings: ExportSettings, renderer: FrameRenderer, start: Int64, frameCount: Int, audio: AudioMix?,
-        frameSink: MP4Exporter.FrameSink?
+        chapters: [Chapter], frameSink: MP4Exporter.FrameSink?
     ) throws {
         let codec = settings.codec
         let writer: AVAssetWriter
@@ -500,6 +546,31 @@ private final class ExportSession: @unchecked Sendable {
             audioInput = input
         } else {
             audioInput = nil
+        }
+
+        let duration = TimeMap.frameTime(frameCount, frameRate: settings.framesPerSecond)
+        let format = chapters.isEmpty ? nil : try ChapterTrack.formatDescription(for: codec.fileType)
+        let samples = try format.map { try ChapterTrack.samples(chapters, duration: duration, format: $0) } ?? []
+        if let format, !samples.isEmpty {
+            let input = AVAssetWriterInput(mediaType: .text, outputSettings: nil, sourceFormatHint: format)
+            input.expectsMediaDataInRealTime = false
+            input.marksOutputTrackAsEnabled = false
+            input.mediaTimeScale = ChapterTrack.timescale
+            if let tag = settings.chapterLanguage, let language = Locale.Language(identifier: tag).languageCode?.identifier(.alpha3) {
+                input.languageCode = language
+            }
+            guard writer.canAdd(input) else { throw ExportError.writerFailed("the \(codec.name) writer takes no chapter track") }
+            writer.add(input)
+            let chapterList = AVAssetTrack.AssociationType.chapterList.rawValue
+            guard videoInput.canAddTrackAssociation(withTrackOf: input, type: chapterList) else {
+                throw ExportError.writerFailed("the \(codec.name) writer cannot tie the chapter track to the video")
+            }
+            videoInput.addTrackAssociation(withTrackOf: input, type: chapterList)
+            chapterInput = input
+            chapterSamples = samples
+        } else {
+            chapterInput = nil
+            chapterSamples = []
         }
         self.writer = writer
         self.videoInput = videoInput
@@ -549,9 +620,10 @@ private final class ExportSession: @unchecked Sendable {
         }
     }
 
-    /// The loop: feeds whichever input takes data, polling while neither does (woken early when a frame is drawn). The
-    /// writer interleaves the two tracks by holding back the input that is ahead (`isReadyForMoreMediaData`), so an input
-    /// that takes data is always fed: holding one back here too could leave both waiting for each other.
+    /// The loop: feeds whichever input takes data, polling while none does (woken early when a frame is drawn). The
+    /// writer interleaves the tracks by holding back the input that is ahead (`isReadyForMoreMediaData`), so an input
+    /// that takes data is always fed: holding one back here too could leave them waiting for each other. The chapter
+    /// track, when there is one, is fed as the audio is, a sample at a time, and marked finished with its last.
     ///
     /// Video: up to `framesInFlight` frames are queued to be drawn (`FrameRenderer.render(at:into:completion:)`), and the
     /// oldest goes to the writer once it is drawn; drawing one fails the export. With `framesInFlight` 1, each frame is
@@ -565,8 +637,10 @@ private final class ExportSession: @unchecked Sendable {
         var drawing: [DrawnFrame] = []  // queued and not appended yet, in frame order
         var videoDone = false
         var audioDone = audioInput == nil
+        var chaptersAppended = 0
+        var chaptersDone = chapterInput == nil
         var idleSince: HostTime?
-        while !(videoDone && audioDone) {
+        while !(videoDone && audioDone && chaptersDone) {
             if cancelled.load(ordering: .relaxed) { throw ExportError.cancelled }
             var fed = false
             let appendedBefore = appended
@@ -616,6 +690,16 @@ private final class ExportSession: @unchecked Sendable {
                 } else {
                     audioInput.markAsFinished()
                     audioDone = true
+                }
+                fed = true
+            }
+            if !chaptersDone, let chapterInput, chapterInput.isReadyForMoreMediaData {
+                try waitUntilReady(chapterInput)
+                guard chapterInput.append(chapterSamples[chaptersAppended]) else { throw failure() }
+                chaptersAppended += 1
+                if chaptersAppended == chapterSamples.count {
+                    chapterInput.markAsFinished()
+                    chaptersDone = true
                 }
                 fed = true
             }

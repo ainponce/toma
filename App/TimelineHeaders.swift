@@ -7,9 +7,13 @@ import ProjectFormat
 /// The header of a track (design §5.5): its icon and name, and on an audio track the Mute button under the name, both
 /// lines centered in the row as one block. A name wider than its line (Spanish's "Anotaciones", "Clips importados") goes
 /// to two lines in a row tall enough for them when it has two words, and to the condensed width of the font otherwise.
+/// Phase 3: Solo after Mute, and on Imported Clips and Music alone, under the icon when the name takes two lines (design
+/// §7.2); a track of one app has the app's name and icon (design §7.1).
 final class TrackHeaderView: NSView {
     let track: TimelineTrack
     var onMute: (Bool) -> Void = { _ in }
+    /// Solo pressed (the preview's alone: it changes nothing of the document).
+    var onSolo: () -> Void = {}
     /// A click on the header (the Camera's: the project's layout is selected).
     var onPress: () -> Void = {}
     /// The second line of the Camera's header: the project's layout.
@@ -17,6 +21,7 @@ final class TrackHeaderView: NSView {
     private let icon = NSImageView()
     private let name = NSTextField(labelWithString: "")
     private var mute: NSButton?
+    private var solo: NSButton?
     private let separator = CALayer()
     /// The lines the name takes: 1, or 2 for a name of two words wider than its line, in a row that wraps.
     private var nameLines = 1
@@ -29,6 +34,13 @@ final class TrackHeaderView: NSView {
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
         icon.contentTintColor = .secondaryLabelColor
+        if case let .audio(id) = track, let record = take?.track(id), record.appName != nil,
+            let image = record.appBundleID.flatMap(Self.appIcon)
+        {
+            icon.image = image
+            icon.imageScaling = .scaleProportionallyUpOrDown
+            name.toolTip = title
+        }
         // VoiceOver reads the name.
         icon.setAccessibilityElement(false)
         name.stringValue = title
@@ -57,6 +69,22 @@ final class TrackHeaderView: NSView {
             button.setAccessibilityLabel(String(localized: "Mute"))
             addSubview(button)
             mute = button
+        }
+        if Self.soloRow(track) != nil {
+            let button = NSButton(
+                image: NSImage(systemSymbolName: "s.circle", accessibilityDescription: nil)!, target: self,
+                action: #selector(soloClicked(_:)))
+            button.setButtonType(.pushOnPushOff)
+            button.alternateImage = NSImage(systemSymbolName: "s.circle.fill", accessibilityDescription: nil)
+            button.isBordered = false
+            button.imagePosition = .imageOnly
+            button.symbolConfiguration = NSImage.SymbolConfiguration(pointSize: 11, weight: .regular)
+            button.contentTintColor = .secondaryLabelColor
+            let help = String(localized: "Solo", comment: "An audio row's button of the timeline: only the rows with it are heard in the preview")
+            button.toolTip = help
+            button.setAccessibilityLabel(help)
+            addSubview(button)
+            solo = button
         }
         if case .camera = track {
             subtitle.font = .systemFont(ofSize: 10)
@@ -108,19 +136,49 @@ final class TrackHeaderView: NSView {
         onMute(sender.state == .on)
     }
 
+    /// Solo of the row shown on or off, in the accent color while on.
+    func setSolo(_ on: Bool) {
+        solo?.state = on ? .on : .off
+        solo?.contentTintColor = on ? .controlAccentColor : .secondaryLabelColor
+    }
+
+    @objc private func soloClicked(_ sender: NSButton) {
+        onSolo()
+    }
+
+    /// The row of Solo a track's header is (phase 3 design §7.2): an audio track, Imported Clips or Music.
+    static func soloRow(_ track: TimelineTrack) -> AudioRowID? {
+        switch track {
+        case let .audio(id): .track(id)
+        case .importedAudio: .importedClips
+        case .music: .music
+        default: nil
+        }
+    }
+
+    /// The icon of the app of bundle id `bundleID`, if it is on this Mac.
+    private static func appIcon(_ bundleID: String) -> NSImage? {
+        NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID).map { NSWorkspace.shared.icon(forFile: $0.path) }
+    }
+
     override func layout() {
         super.layout()
         let height = bounds.height
         // An audio track has its name on top and Mute under it; the others, the name in the middle.
         let two = track == .camera && !subtitle.stringValue.isEmpty
         let wrapped = nameLines > 1
-        let line = (mute != nil ? (height - 31) / 2 : two ? (height - 27) / 2 : wrapped ? (height - 28) / 2 : (height - 14) / 2).rounded()
+        // Buttons under the name: Mute (and Solo) on an audio track, Solo under a name of one line.
+        let buttons = mute != nil || (solo != nil && !wrapped)
+        let line = (buttons ? (height - 31) / 2 : two ? (height - 27) / 2 : wrapped ? (height - 28) / 2 : (height - 14) / 2).rounded()
         icon.frame = CGRect(x: 8, y: line, width: 14, height: 14)
         // To 1 pt from the separator: "Privacidad" fits whole.
         name.frame = CGRect(x: 26, y: line, width: bounds.width - 27, height: wrapped ? 28 : 14)
         subtitle.frame = CGRect(x: 26, y: line + 14, width: bounds.width - 30, height: 13)
         // Its symbol's left edge under the name's first letter.
         mute?.frame = CGRect(x: 25, y: line + 16, width: 18, height: 15)
+        solo?.frame = mute != nil
+            ? CGRect(x: 45, y: line + 16, width: 18, height: 15)
+            : wrapped ? CGRect(x: 6, y: line + 15, width: 18, height: 15) : CGRect(x: 25, y: line + 16, width: 18, height: 15)
         separator.frame = CGRect(x: 0, y: height - 1, width: bounds.width, height: 1)
     }
 
@@ -165,7 +223,8 @@ final class TrackHeaderView: NSView {
         case .music: (String(localized: "Music"), "music.note")
         case let .audio(id):
             switch take?.track(id)?.kind {
-            case .systemAudio: (String(localized: "System"), "speaker.wave.2")
+            // A track of one app is named as the app (phase 3 design §7.1).
+            case .systemAudio: (take?.track(id)?.appName ?? String(localized: "System"), "speaker.wave.2")
             // The sound of the iPhone or iPad the take recorded, named as its frame draws it.
             case .deviceAudio:
                 take.flatMap(DeviceTakeDefaults.model(of:)) == .iPad

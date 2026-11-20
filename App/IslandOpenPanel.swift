@@ -21,11 +21,30 @@ struct DisplayChoice: Identifiable {
     }
 }
 
+/// A "Re-record from Here" the island records (phase 3 design §8.2, 3d plan decisions 9 and 10): into the package of
+/// `target` (with the script's word the teleprompter starts at), the camera starting as `cameraStyle`, from the moment the
+/// editor asked for it.
+struct IslandRerecord {
+    var target: RerecordTarget
+    /// The style that rules under the editor's playhead.
+    var cameraStyle: CameraStyle
+    /// The project's name: "Re-record into «Demo»".
+    var projectName: String
+    /// When the editor asked for it (⇧⌘R or the Takes menu), for the time to the countdown (design §15: < 1 s).
+    var asked: ContinuousClock.Instant
+}
+
 /// What the open panel chooses: what to record and the quick settings. It starts from what was saved,
-/// and Record saves it.
+/// and Record saves it. For a re-record (`rerecord`) it starts from the sources of the take re-recorded instead, and Record
+/// records into the editor's package, saving nothing.
 @MainActor @Observable
 final class OpenPanelModel {
     var selection: CaptureSelection
+    /// The re-record the panel is open for: the island asks for a source of the take that is not there (3d plan decision
+    /// 9). Its title says so, and Esc, ✕ or closing the island cancels it (`IslandPanel`).
+    var rerecord: IslandRerecord?
+    /// The package a re-record records into (`rerecord`); `nil`, a take in a new project.
+    var rerecordTarget: RerecordTarget? { rerecord?.target }
     var quick: QuickSettings
     private(set) var displays: [DisplayChoice]
     /// The settings card over the columns.
@@ -195,11 +214,27 @@ final class OpenPanelModel {
     func record() {
         guard recordProblem == nil else { return }
         let quick = recordedQuick
+        if let rerecord {
+            // The take's sources, not a choice of the user's: nothing is saved for the next take, also when Record tries a
+            // re-record again after its start failed. The camera starts as the bubble shows it: the style under the
+            // editor's playhead (`CameraSetting.useTemporarily`), with what the user changed of it here.
+            let style = camera.isTemporary ? camera.style : rerecord.cameraStyle
+            recording.startRerecord(into: rerecord.target, selection: selection, settings: quick, cameraStyle: style)
+            return
+        }
         var settings = store.settings
         settings.selection = selection
         settings.quick = quick
         store.settings = settings
         recording.startRecording(selection: selection, settings: quick)
+    }
+
+    /// Opens the panel for `rerecord` on `selection`, the sources of the take re-recorded that are still there
+    /// (`RerecordSelection.choice`): what is missing is left for the user to choose.
+    func prepare(_ rerecord: IslandRerecord, selection: CaptureSelection) {
+        self.rerecord = rerecord
+        self.selection = selection
+        chosenWindow = selection.windowID.flatMap(WindowList.window)
     }
 
     /// Area mode's saved areas and proportion, changed and saved at once, whatever else Record saves.
@@ -548,6 +583,19 @@ struct IslandOpenPanel: View {
             }
             .buttonStyle(GlassButtonStyle(isOn: false))
             Spacer(minLength: 8)
+            if let rerecord = panel.rerecord {
+                // What Record records into: the editor's project (3d plan decision 9). A long name gives way first, cut in
+                // its middle, so the buttons keep their words.
+                Label {
+                    Text("Re-record into “\(rerecord.projectName)”", comment: "The open island's title while it records a take into the editor's project")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                } icon: {
+                    Image(systemName: "arrow.counterclockwise.circle")
+                }
+                .font(.system(size: 12.5, weight: .semibold))
+                .layoutPriority(-1)
+            }
             LoadIndicator(verdict: panel.load) { panel.showsSettings = true }
             let problem = panel.recordProblem
             // The reason is on a container: a disabled button shows no help.

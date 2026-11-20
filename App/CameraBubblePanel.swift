@@ -9,10 +9,14 @@ import os
 
 /// The camera's look (`RecorderSettings.cameraStyle`) and its permission: the one place they are read and
 /// saved, for the bubble and the open island's camera column. Every change of style is saved at once, so the
-/// next take starts with it (notch design §5.6).
+/// next take starts with it (notch design §5.6). During a "Re-record from Here" the style is the editor's under its
+/// playhead instead (`useTemporarily`, 3d plan decision 9): drawn, changed and sent to the take as usual, never saved,
+/// and the saved one is back once the re-record ends (`endTemporaryStyle`).
 @MainActor @Observable
 final class CameraSetting {
     private(set) var style: CameraStyle
+    /// The style is a re-record's (`useTemporarily`): nothing of it is saved.
+    private(set) var isTemporary = false
     /// The camera permission, as it was last read.
     private(set) var permission: PermissionState
     /// The system's camera prompt is up.
@@ -37,10 +41,27 @@ final class CameraSetting {
         change(&changed)
         guard changed != style else { return }
         style = changed
-        var settings = store.settings
-        settings.cameraStyle = changed
-        store.settings = settings
+        if !isTemporary {
+            var settings = store.settings
+            settings.cameraStyle = changed
+            store.settings = settings
+        }
         self.changed(changed)
+    }
+
+    /// A re-record's style (the one that rules under the editor's playhead), until `endTemporaryStyle`: the bubble draws
+    /// it, and the take starts with it.
+    func useTemporarily(_ style: CameraStyle) {
+        isTemporary = true
+        if self.style != style { self.style = style }
+    }
+
+    /// The re-record ended: the saved style is back, for the next take. Nothing is sent: no take records it.
+    func endTemporaryStyle() {
+        guard isTemporary else { return }
+        isTemporary = false
+        let saved = store.settings.cameraStyle
+        if style != saved { style = saved }
     }
 
     /// Reads the permission again: it can change in System Settings.

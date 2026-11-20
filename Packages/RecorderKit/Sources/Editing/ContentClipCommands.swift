@@ -184,7 +184,8 @@ public enum ContentClipCommands {
     ) -> EditStep? {
         guard let at = insertion(in: doc, at: place, shown: shown) else { return nil }
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges(doc.sequence)
+        // A clip with content next to a cut keeps it at its picture; the pieces of a split keep their takes' cuts.
+        var changes = SequenceChanges(doc.sequence, takeBounds: nil)
         let clip = Clip(
             id: SequenceCommands.newID(makeID, avoiding: &ids), take: at.take, start: at.point, end: at.point, speed: 1,
             content: content)
@@ -310,7 +311,8 @@ public enum ContentClipCommands {
         guard content != original.content else { return nil }
         var clip = original
         clip.content = content
-        var changes = SequenceChanges(doc.sequence)
+        // Only a clip with content changes, whose edges keep the sound at the picture.
+        var changes = SequenceChanges(doc.sequence, takeBounds: nil)
         changes.replace(original, with: clip)
         return EditStep(label: .clipContent, target: clipID, changes: changes.changes)
     }

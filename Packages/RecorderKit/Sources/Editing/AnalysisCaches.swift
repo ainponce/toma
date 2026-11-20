@@ -17,6 +17,12 @@ public enum AnalysisCacheFolder: String, Sendable, CaseIterable {
     case loudness
     /// The sensitive data found on the screen of a take (`sensitiveScan-1`), one JSON per take.
     case scan
+    /// Where each voice track of a take has a voice, for the ducking (`ducking-1`, plan 3c decision 18), one JSON per
+    /// track: `<take>/<track>-ducking-1.json`.
+    case ducking
+    /// The music's imported audio, decoded (`importedAudio-1`, plan 3c decision 6), one CAF per asset:
+    /// `<asset's name>-importedAudio-1.caf`.
+    case music
 }
 
 /// Which bytes a segment file holds, as far as a cache cares: the root of its name (`seg-0001` for `seg-0001.mov`), its

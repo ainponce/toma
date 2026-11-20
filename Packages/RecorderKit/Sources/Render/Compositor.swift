@@ -619,7 +619,7 @@ public final class Compositor: @unchecked Sendable {
     /// steps 5 and 6). Every frame with a stage reaches step 4 once (`DrawCounts.stageOverlaySteps`). When the calm zoom
     /// ends `encoder`'s pass (`drawCalmZoom`), it leaves in `encoder` the pass into `target` it opened, and what follows
     /// is drawn into it with `directCamera`'s pipelines: the caller ends that one. Throws what `drawCalmZoom` throws,
-    /// having ended `encoder`'s pass, so the frame is not drawn.
+    /// having ended `encoder`'s pass (or with none left open: `CalmZoomPassEnded`), so the frame is not drawn.
     func drawOverTheStage(
         _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, device: StageTransform?,
         camera: (any MTLTexture)?, cameraLook: CameraLookTextures?, layerTextures: LayerTextures,
@@ -645,6 +645,9 @@ public final class Compositor: @unchecked Sendable {
             movedToTheTarget = try drawCalmZoom(
                 frame.calmZoom, frame: frame, through: stage, card: card, pass: cameraPipelines.pass, encoder: &encoder,
                 target: target, commandBuffer: commandBuffer, counts: &counts)
+        } catch let ended as CalmZoomPassEnded {
+            // The calm zoom ended the pass and the command buffer took no other: none is left to end.
+            throw ended.error
         } catch {
             encoder.endEncoding()
             throw error
@@ -1153,6 +1156,9 @@ struct DrawCounts: Equatable, Sendable {
     /// How many times the step over the stage was reached (phase 3 design §12, step 4: `Compositor.drawOverTheStage`, the
     /// calm zoom's): once a frame with a stage, on every path but the camera over every pixel, drawn or not.
     var stageOverlaySteps = 0
+    /// Milestone 3b's: the calm zoom's drawings that read the frame as drawn (Dim and the loupe, `drawCalmZoom`), each in
+    /// a pass of its own into the target, counted in `renderPasses` too.
+    var calmZoomSamples = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1

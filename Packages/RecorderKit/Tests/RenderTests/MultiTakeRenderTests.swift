@@ -1,11 +1,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Analysis
+import CoreGraphics
 import CoreVideo
 import Foundation
+import ImageIO
 import ProjectFormat
+import QuartzCore
 import RecorderKitTestSupport
-// @testable for `FrameEvaluator.frame(at:)` and `FrameRenderer.render(at:into:completion:)`'s pixel buffers.
+// @testable for `FrameEvaluator.frame(at:)`, `FrameRenderer.render(at:into:completion:)`'s pixel buffers and
+// `frame(of:at:)`, `PreviewEngine`'s hooks and `PreviewPreparation.prepare`'s document.
 @testable import Render
+import Synchronization
 import Testing
 
 /// Each clip of a sequence drawn from its own take (phase 3 design §9, base plan task B7): with one take, the scene of a
@@ -254,6 +259,95 @@ private func zoomBlock(
         #expect(same == frame)
     }
 
+    /// A take the edited document shows that is still marked `recording` is refused, whichever take the project is focused
+    /// on: the legacy document of take-001, and a document of take-001 alone, are prepared; one that shows take-002 too
+    /// is not.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func previewPreparationRefusesEveryTakeShownRecording() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await twoTakes(in: dir)
+            var manifest = project.manifest
+            let index = try #require(manifest.takes.firstIndex { $0.id == "take-002" })
+            manifest.takes[index].status = .recording
+            try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(manifest), to: project.package.manifestURL)
+            let url = project.package.url
+            let both = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-002", 0.5, 2.5)])
+            await #expect(throws: PreviewPreparationError.unfinished(takeID: "take-002")) {
+                try await PreviewPreparation.prepare(url: url, take: "take-001", outputSize: [320, 180], document: both)
+            }
+            let legacy = try await PreviewPreparation.prepare(url: url, take: "take-001", outputSize: [320, 180])
+            #expect(abs(legacy.duration - 4) < 0.05)
+            let first = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2)])
+            let alone = try await PreviewPreparation.prepare(url: url, take: "take-001", outputSize: [320, 180], document: first)
+            #expect(abs(alone.duration - 2) < 0.05)
+        }
+    }
+
+    /// Only take-002 recorded a cursor image: a frame of its clip draws it (`CursorImageRef.recorded`), read from its own
+    /// folder (`takes/take-002/cursors/`), as take-002 alone draws it; take-001's clip draws Toma's arrow.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func cursorImagesAreEachTakes() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, hash) = try await twoTakesWithACursorImage(in: dir)
+            let size = SIMD2(320, 180)
+            func systemCursor(_ document: EditDocument) -> EditDocument {
+                var document = document
+                document.cursor.style = .system
+                return document
+            }
+            let renderer = try FrameRenderer(
+                project: project,
+                document: systemCursor(MultiTakeFixtures.sequence(of: project, [("take-001", 0, 1.5), ("take-002", 0, 1.5)])),
+                outputSize: size)
+            let own = try #require(project.focused(on: "take-002"))
+            let alone = try FrameRenderer(
+                project: own, document: systemCursor(MultiTakeFixtures.sequence(of: own, [("take-002", 0, 1.5)])), outputSize: size)
+            let first = try renderer.frame(of: renderer.scene, at: 0.5)
+            let second = try renderer.frame(of: renderer.scene, at: 2.0)
+            #expect(first.take == nil && first.cursor?.image == .toma(.arrow))
+            #expect(second.take == "take-002" && second.cursor?.image == .recorded(hash: hash))
+            let (drawn, ownDrawn) = try await offThePool { (try renderer.renderBytes(at: 2.0), try alone.renderBytes(at: 0.5)) }
+            #expect(drawn == ownDrawn)
+        }
+    }
+
+    /// The preview engine, playing over the border between the takes, scrubbing and pausing on either side: every frame of
+    /// a take shows that take's video, never the other's of the same track id (the engine's frames last shown and the
+    /// prefetchers are by take and track). With take-002's video gone, a frame of it shows none, not the frame of
+    /// take-001 shown before it.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func previewEngineShowsEachTakesOwnVideo() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await twoTakes(in: dir)
+            let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-002", 0.5, 2.5)])
+            let requests: [PreviewRequest] = [.scrubbing(seconds: 1.5), .scrubbing(seconds: 2.6), .scrubbing(seconds: 1.0)]
+                + (100...140).map { .playing(seconds: seconds($0)) } + [.paused(frame: 150), .paused(frame: 60), .scrubbing(seconds: 3.2)]
+
+            let watched = EngineFrames(try FrameRenderer(project: project, document: document, outputSize: [640, 360]))
+            try await watched.draw(requests)
+            var shownOfTake2 = 0
+            for drawn in watched.drawn {
+                let take = drawn.frame.take, at = "\(drawn.request), take \(take ?? "take-001")"
+                guard let video = drawn.videos["display-1"] else { continue }
+                // take-001's frames are blue (200), take-002's inverted (55).
+                #expect((centreBlue(of: video) > 128) == (take == nil), "\(at)")
+                if take == "take-002" { shownOfTake2 += 1 }
+            }
+            #expect(shownOfTake2 >= 10, "frames of take-002 with its video: \(shownOfTake2)")
+
+            // take-002's video gone: its frames show none.
+            let segment = try #require(project.focused(on: "take-002")?.take.track("display-1")?.segments.first)
+            try FileManager.default.removeItem(at: project.package.fileURL(segment.file))
+            let gone = EngineFrames(try FrameRenderer(project: project, document: document, outputSize: [640, 360]))
+            try await gone.draw(requests)
+            #expect(gone.drawn.contains { $0.frame.take == nil && $0.videos["display-1"] != nil })
+            for drawn in gone.drawn where drawn.frame.take == "take-002" {
+                #expect(drawn.videos["display-1"] == nil, "\(drawn.request)")
+            }
+            #expect(gone.drawn.filter { $0.frame.take == "take-002" }.count >= 20)
+        }
+    }
+
     /// The paths of a scene of both takes, given again: kept for a revision that changes nothing they read, each take's
     /// built again for one that does, and the scene made with them the scene made without.
     @Test func sequencePathsKeepEachTakesPaths() async throws {
@@ -278,6 +372,110 @@ private func zoomBlock(
             }
         }
     }
+
+    /// A title card next to a clip of another take (A8, plan 3a decision 10): `[A][B][card of B][A]`,
+    /// `[B][A][card of A][B]` and, with a third take, `[A][card of B][C]`. The frames it fades against, and the one a blurred
+    /// frame holds in each half, keep the take of the clip they are of (`RenderFrame.take`) and its camera's person's mask
+    /// read by that take's id (`personMask:<take>/<file>`, phase 2's id for the project's own), never the card's take or
+    /// two takes' ids; and each is that clip's frame drawn still.
+    @Test func aCardNextToAnotherTakeKeepsTheNeighborsTake() throws {
+        let (project, analysis) = threeTakesWithCameras()
+        let (a, b, c) = ("take-001", "take-002", "take-003")
+        func mask(of take: String) -> String {
+            take == a ? "personMask:seg-0001-personMask-1.mov" : "personMask:\(take)/seg-0001-personMask-1.mov"
+        }
+        /// `(take, from, to)` seconds of each take from its start, with a card of `(take, at)` where `nil`.
+        typealias Piece = (take: String, from: Double, to: Double, card: Bool)
+        func document(_ pieces: [Piece], background: TitleCardBackground) -> EditDocument {
+            var document = EditDocument.legacy(take: project.take, events: [])
+            for other in [b, c] {
+                guard let focused = project.focused(on: other) else { continue }
+                let legacy = EditDocument.legacy(take: focused.take, events: [])
+                document.screens.initial.merge(legacy.screens.initial) { own, _ in own }
+                document.camera.initial.merge(legacy.camera.initial) { own, _ in own }
+            }
+            document.camera.background = .blurred
+            let card = TitleCard(title: "Toma", subtitle: "Dos", style: .centered, background: background)
+            document.sequence = pieces.enumerated().map { index, piece in
+                let start = takeStart(piece.take).adding(seconds: piece.from)
+                return Clip(
+                    id: "c-" + String(format: "%08x", index + 1), take: piece.take, start: start,
+                    end: piece.card ? start : takeStart(piece.take).adding(seconds: piece.to), speed: 1,
+                    content: piece.card ? .card(card, duration: 3_000_000_000) : nil)
+            }
+            return document
+        }
+        let cases: [(name: String, pieces: [Piece], before: String, after: String)] = [
+            ("card of B next to A", [(a, 0, 2, false), (b, 0, 2, false), (b, 2, 2, true), (a, 2, 4, false)], b, a),
+            ("card of A next to B", [(b, 0, 2, false), (a, 0, 2, false), (a, 2, 2, true), (b, 2, 4, false)], a, b),
+            ("a third take", [(a, 0, 2, false), (b, 1, 1, true), (c, 0, 2, false)], a, c),
+        ]
+        for (name, pieces, before, after) in cases {
+            for background in [TitleCardBackground.stage, .blurredFrame] {
+                let doc = document(pieces, background: background)
+                let scene = FrameEvaluator(project: project, document: doc, outputSize: [640, 360], frameRate: rate, analysis: analysis)
+                let k = try #require(doc.sequence.firstIndex { $0.content != nil })
+                let start = scene.timeMap.clipOutputStarts[k], end = start + 3_000_000_000
+                let at = "\(name), \(background)"
+                // The clips next to the card, as the output shows them still.
+                for (output, take) in [(start - 1, before), (end, after)] {
+                    let neighbor = scene.clipFrame(atOutput: output, cursorImageIsReadable: { _, _ in true }, blurs: false)
+                    #expect(neighbor.take == (take == a ? nil : take), "\(at): \(take)'s own frame")
+                    #expect(neighbor.camera?.background?.mask.readerID == mask(of: take), "\(at): \(take)'s own mask")
+                }
+                // Stage fades the camera with its mask; the blurred frame holds the screen of the clip of its half.
+                for (seconds, take) in [(Double(start) / 1e9 + 0.15, before), (Double(end) / 1e9 - 0.15, after)] {
+                    let frame = scene.frame(at: seconds)
+                    #expect(frame.titleCard?.opacity == 0.5, "\(at) at \(seconds) s")
+                    #expect(frame.take == (take == a ? nil : take), "\(at) at \(seconds) s: \(frame.take ?? "own")")
+                    if background == .stage {
+                        #expect(frame.camera?.background?.mask.readerID == mask(of: take), "\(at) at \(seconds) s")
+                        #expect(frame.camera?.opacity == 0.5, "\(at) at \(seconds) s")
+                    } else {
+                        #expect(frame.camera == nil && frame.previousScreen?.trackID == "display-1", "\(at) at \(seconds) s")
+                        #expect(frame.previousScreen?.sourceTime == frame.screen?.sourceTime, "\(at) at \(seconds) s")
+                    }
+                }
+                if background == .blurredFrame {
+                    // Each half of a blurred card is its own side's take.
+                    #expect(scene.frame(at: Double(start) / 1e9 + 1).take == (before == a ? nil : before), "\(at)")
+                    #expect(scene.frame(at: Double(start) / 1e9 + 2).take == (after == a ? nil : after), "\(at)")
+                }
+            }
+        }
+    }
+}
+
+/// Three takes of 4 s, 60 s apart, each with the display `display-1` and the camera `camera` (records without files: the
+/// scene works them out, nothing reads them), and the person's mask of each one's camera, its first segment, named alike
+/// in the caches as every take's is; focused on take-001.
+private func threeTakesWithCameras() -> (project: LoadedProject, analysis: AnalysisInputs) {
+    var analysis = AnalysisInputs()
+    let takes = ["take-001", "take-002", "take-003"].enumerated().map { k, id in
+        let start = takeStart(id)
+        analysis.personMasks[CameraSegment(take: id, track: cameraID, segment: 1)] =
+            URL(fileURLWithPath: "/caches/masks/\(id)/\(cameraID)/seg-0001-personMask-1.mov")
+        return TakeRecord(
+            id: id, status: .complete, startedAt: Date(timeIntervalSince1970: 1_800_000_000 + 60 * Double(k)), tracks: [
+                displayTrack(globalFrame: Rect(x: 0, y: 0, width: 640, height: 360), segments: [segment(start: start, end: start.adding(seconds: 4))]),
+                displayTrack(
+                    id: cameraID, kind: .camera, globalFrame: nil,
+                    segments: [segment(track: cameraID, start: start, end: start.adding(seconds: 4))]),
+            ])
+    }
+    let manifest = Manifest(
+        formatVersion: Manifest.currentFormatVersion, app: AppInfo(name: "Tests", version: "0"),
+        createdAt: Date(timeIntervalSince1970: 1_800_000_000), takes: takes)
+    let project = LoadedProject(
+        package: ProjectPackage(url: URL(fileURLWithPath: "/nowhere/Cards.toma", isDirectory: true)), manifest: manifest, take: takes[0],
+        events: [])
+    return (project, analysis)
+}
+
+/// Where take `take` of `threeTakesWithCameras()` starts: take-001 at `base`, the next ones 60 s apart.
+private func takeStart(_ take: String) -> HostTime {
+    let k = ["take-001", "take-002", "take-003"].firstIndex(of: take) ?? 0
+    return base.adding(seconds: 60 * Double(k))
 }
 
 /// Draws frames `0..<count` of `renderer`'s scene as the export does (`render(at:into:completion:)`: queued one after the
@@ -306,4 +504,89 @@ private func exportBytes(_ renderer: FrameRenderer, frames: Set<Int>, through co
 private final class MultiTakePixelBuffer: @unchecked Sendable {
     let pixelBuffer: CVPixelBuffer
     init(_ pixelBuffer: CVPixelBuffer) { self.pixelBuffer = pixelBuffer }
+}
+
+/// Two takes of `display-1` (4 s and 3 s of `SampleFactory`'s pattern, 60 s apart) with the cursor moving over it, the
+/// project focused on take-001; only take-002 recorded a cursor image (a red one of 24 × 32 pt, as it starts), whose hash
+/// is returned.
+private func twoTakesWithACursorImage(in dir: URL) async throws -> (LoadedProject, String) {
+    let screen = Rect(x: 0, y: 0, width: 640, height: 360)
+    let start = HostTime(nanoseconds: 5_000_000_000_000)
+    func record(into builder: TakeBuilder, from start: HostTime, seconds: Double) async throws {
+        try await builder.addVideoTrack(
+            id: "display-1", source: displaySource(globalFrame: screen), segments: [VideoSegmentSpec(start: start, seconds: seconds)])
+        try builder.addEvents([
+            InputEvent(t: start.adding(seconds: -0.01), kind: .displayGeometry(displayID: 1, frame: screen, scale: 1))
+        ])
+        try builder.addEvents(cursorEvents(from: start, seconds: seconds, across: screen))
+    }
+    let first = try TakeBuilder(in: dir, name: "Cursors")
+    try await record(into: first, from: start, seconds: 4)
+    _ = try first.write()
+    let second = try TakeBuilder(appendingTo: first.package, take: "take-002")
+    let secondStart = start.adding(seconds: 60)
+    try await record(into: second, from: secondStart, seconds: 3)
+    let hash = try second.addCursorImage(try solidPNG(width: 48, height: 64), hotspot: [0.5, 0.5], size: [24, 32], at: secondStart)
+    _ = try second.write()
+    return (try LoadedProject.load(first.package.url, take: "take-001"), hash)
+}
+
+/// A PNG of `width` × `height` opaque red pixels.
+private func solidPNG(width: Int, height: Int) throws -> Data {
+    let space = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+    let context = try #require(CGContext(
+        data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4, space: space,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(CGColor(srgbRed: 1, green: 0, blue: 0, alpha: 1))
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    let image = try #require(context.makeImage())
+    let data = NSMutableData()
+    let destination = try #require(CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil))
+    CGImageDestinationAddImage(destination, image, nil)
+    try #require(CGImageDestinationFinalize(destination))
+    return data as Data
+}
+
+/// The blue of the pixel at the centre of `pixelBuffer` (32BGRA): away from the white square of `SampleFactory`'s
+/// pattern, which runs along the top row.
+private func centreBlue(of pixelBuffer: CVPixelBuffer) -> UInt8 {
+    CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+    defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+    guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return 0 }
+    let x = CVPixelBufferGetWidth(pixelBuffer) / 2, y = CVPixelBufferGetHeight(pixelBuffer) / 2
+    return base.advanced(by: y * CVPixelBufferGetBytesPerRow(pixelBuffer) + x * 4).assumingMemoryBound(to: UInt8.self).pointee
+}
+
+/// What the engine's callbacks take first, so ThreadSanitizer sees them ordered after the engine was made (as
+/// `PreviewEngineTests`' `Watched` does).
+private let engineFramesPublished = Mutex(())
+
+/// A preview engine of `renderer`, drawing into a layer of 320 × 180, and the frames it drew.
+private final class EngineFrames: @unchecked Sendable {
+    let engine: PreviewEngine
+    let layer = CAMetalLayer()
+    private let lock = NSLock()
+    private var frames: [PreviewEngine.DrawnFrame] = []
+
+    init(_ renderer: FrameRenderer) {
+        CATransaction.begin()
+        layer.drawableSize = CGSize(width: 320, height: 180)
+        CATransaction.commit()
+        engine = PreviewEngine(renderer: renderer, layer: layer)
+        engine.hooks.onDrawn = { [self] frame in
+            engineFramesPublished.withLock { _ in }
+            lock.withLock { frames.append(frame) }
+        }
+        engineFramesPublished.withLock { _ in }
+    }
+
+    var drawn: [PreviewEngine.DrawnFrame] { lock.withLock { frames } }
+
+    /// Asks for each of `requests` in order, once the one before it is drawn.
+    func draw(_ requests: [PreviewRequest]) async throws {
+        for (k, request) in requests.enumerated() {
+            engine.request(request)
+            try #require(await eventually(timeout: .seconds(30)) { self.drawn.count > k }, "\(request) drawn")
+        }
+    }
 }

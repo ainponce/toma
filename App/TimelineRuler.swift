@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppKit
 import AppSupport
 import QuartzCore
 
-/// The timeline's ruler (design §5.5): the output's time, the take's markers (⚑, its `marker` events) and the in and out
-/// marks. A label every step that leaves 80 pt between them, from a tenth of a second to two hours, and a tick between
-/// labels where they are 6 pt apart or more; one layer for the ticks, and one per label, marker and mark in sight.
+/// The timeline's ruler (design §5.5): the output's time, the markers (⚑, the recorded ones and the ones added in the
+/// editor, phase 3 design §8.3) and the in and out marks. A label every step that leaves 80 pt between them, from a
+/// tenth of a second to two hours, and a tick between labels where they are 6 pt apart or more; one layer for the ticks,
+/// and one per label, marker and mark in sight. A marker's name is beside its flag, under the labels, where it fits
+/// (`MarkerRulerRules.nameRoom`), cut with "…" when it needs more.
 @MainActor
 final class TimelineRuler {
     /// The ruler, as wide as the tracks' area.
@@ -13,6 +16,9 @@ final class TimelineRuler {
     private let ticks = CAShapeLayer()
     private let labels: LayerPool<CATextLayer>
     private let markers: LayerPool<CAShapeLayer>
+    private let markerNames: LayerPool<CATextLayer>
+    /// The width each name was found to need, by name.
+    private var nameWidths: [String: Double] = [:]
     private let band = CALayer()
     private let inMark = CAShapeLayer()
     private let outMark = CAShapeLayer()
@@ -27,6 +33,9 @@ final class TimelineRuler {
     /// The least space between two labels, and between two ticks.
     private static let labelSpacing = 80.0
     private static let tickSpacing = 6.0
+    /// A marker's flag: as wide as this right of its pole (where the mouse finds it, `TimelineMarkers`).
+    static let flagWidth = 8.0
+    private static let nameFont = NSFont.systemFont(ofSize: 9, weight: .medium)
 
     init() {
         labels = LayerPool(parent: layer) {
@@ -35,6 +44,11 @@ final class TimelineRuler {
             return label
         }
         markers = LayerPool(parent: layer) { CAShapeLayer() }
+        markerNames = LayerPool(parent: layer) {
+            let name = CATextLayer()
+            TimelineText.setUp(name, size: 9, weight: .medium)
+            return name
+        }
         for part in [band, ticks, inMark, outMark, separator] { layer.addSublayer(part) }
         ticks.lineWidth = 1
         ticks.fillColor = nil
@@ -55,9 +69,11 @@ final class TimelineRuler {
         ticks.strokeColor = palette.tick
         labels.begin()
         markers.begin()
+        markerNames.begin()
         defer {
             labels.end()
             markers.end()
+            markerNames.end()
         }
         // The ticks and labels in sight, up to the end of the output.
         let step = Self.steps.first { Double($0.milliseconds) / 1000 * geometry.scale >= Self.labelSpacing } ?? Self.steps[Self.steps.count - 1]
@@ -87,12 +103,14 @@ final class TimelineRuler {
         }
         ticks.path = path
 
-        // Markers: a flag in the bottom half of the ruler, under the labels.
-        let flag = 8.0
+        // Markers: a flag in the bottom half of the ruler, under the labels, and its name beside it where it fits.
+        let flag = Self.flagWidth
+        let poles = content.markers.map { geometry.snapped(geometry.x($0.output)) }
         for (i, marker) in content.markers.enumerated() {
-            let x = geometry.snapped(geometry.x(marker))
+            let x = poles[i]
             guard x > -flag, x < width + flag else { continue }
-            let (shape, isNew) = markers.layer(String(i))
+            if !marker.name.isEmpty { showName(marker, x: x, nextX: poles[(i + 1)...].first { $0 > x }, geometry, palette) }
+            let (shape, isNew) = markers.layer(marker.id)
             if isNew {
                 shape.fillColor = palette.marker
                 let flagPath = CGMutablePath()
@@ -144,12 +162,37 @@ final class TimelineRuler {
         labels.end()
         markers.begin()
         markers.end()
+        markerNames.begin()
+        markerNames.end()
     }
 
     /// Forgets the labels and markers, so the next update makes them again with new colors.
     func reset() {
         labels.removeAll()
         markers.removeAll()
+        markerNames.removeAll()
+    }
+
+    /// The name of `marker`, whose pole is at `x` (the next flag's at `nextX`), right of its flag on the ruler's lower
+    /// line, over the ticks: as wide as it needs, or cut to the room there is; none without room.
+    private func showName(
+        _ marker: VisibleMarker, x: Double, nextX: Double?, _ geometry: TimelineGeometry, _ palette: TimelinePalette
+    ) {
+        guard let room = MarkerRulerRules.nameRoom(x: x, nextX: nextX, areaWidth: geometry.areaWidth) else { return }
+        let needed = nameWidths[marker.name] ?? {
+            let width = (marker.name as NSString).size(withAttributes: [.font: Self.nameFont]).width.rounded(.up) + 4
+            nameWidths[marker.name] = width
+            return width
+        }()
+        let (name, isNew) = markerNames.layer(marker.id)
+        if isNew {
+            name.contentsScale = geometry.backingScale
+            name.foregroundColor = palette.label
+            name.backgroundColor = palette.rulerBackground
+            name.alignmentMode = .left
+        }
+        if name.string as? String != marker.name { name.string = marker.name }
+        name.frame = CGRect(x: x + MarkerRulerRules.nameOffset, y: 11, width: min(needed, room), height: 12)
     }
 
     /// A label: `0:10`, `1:02:00` from an hour on, and with tenths when labels are less than a second apart (`0:12,5`,

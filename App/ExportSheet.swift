@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppKit
+import Analysis
 import AppSupport
 import Editing
 import Export
@@ -51,7 +52,8 @@ final class ExportChoices {
     let durationSeconds: Double
     /// The range between the marks, cut to the video (`ExportRangeRules.markedRange`); `nil` without both marks.
     let marked: Range<Int64>?
-    /// The shorter side of what was recorded of the screen, in pixels; `nil` when unknown.
+    /// The shorter side of what was recorded of the screen, in pixels, the largest of the takes the sequence shows; `nil`
+    /// when unknown.
     let recordedShortSide: Int?
 
     var kind: ExportKind {
@@ -71,6 +73,10 @@ final class ExportChoices {
     var gifQuality: GIFQuality
     var dither: Bool
     var loops: Bool
+    /// The chapters of the whole output (`EditorModel.chapters`: the markers with a name), as the sheet opened.
+    let chapters: [Chapter]
+    /// "Chapters in the File" (3d plan decision 4): on each time the sheet opens, never remembered.
+    var chaptersInFile = true
 
     /// The GIF's preview, once made; `nil` until then or when there is none to make.
     private(set) var preview: GIFPreviewImage?
@@ -100,7 +106,7 @@ final class ExportChoices {
 
     init(
         document: EditDocument, project: LoadedProject, marks: TimelineMarks, playhead: Int64, remembered: ExportPreferences,
-        contentRatio: Double? = nil, analysis: AnalysisInputs = .none
+        contentRatio: Double? = nil, analysis: AnalysisInputs = .none, chapters: [Chapter] = []
     ) {
         self.document = document
         self.project = project
@@ -112,7 +118,8 @@ final class ExportChoices {
         duration = timeMap.duration
         durationSeconds = timeMap.durationSeconds
         marked = ExportRangeRules.markedRange(marks, duration: duration)
-        recordedShortSide = ExportPreferences.recordedShortSide(of: project.take)
+        // The largest of the takes the sequence shows (3d plan decision 17).
+        recordedShortSide = project.takeRecords(shownBy: document).compactMap(ExportPreferences.recordedShortSide(of:)).max()
         kind = remembered.kind
         rangeChoice = Self.defaultChoice(remembered.kind, marked: marked, duration: duration)
         resolution = ExportResolution(rawValue: remembered.shortSide) ?? .p1080
@@ -125,6 +132,7 @@ final class ExportChoices {
         gifQuality = GIFQuality(rawValue: gif.quality) ?? .balanced
         dither = gif.dither
         loops = gif.loops
+        self.chapters = chapters
     }
 
     /// The Range menu: `choice`, which stays when Export As changes.
@@ -165,11 +173,17 @@ final class ExportChoices {
     /// Whether Quality applies: H.264 and HEVC have a bitrate to choose, ProRes has none.
     var hasQuality: Bool { codec == .h264 || codec == .hevc }
 
-    /// The MP4 these choices make of the document.
+    /// Whether the sheet offers "Chapters in the File": a video (MP4 or MOV) with markers with a name.
+    var offersChapters: Bool { MarkerRulerRules.offersChaptersInFile(kind: kind, chapters: chapters) }
+
+    /// The MP4 these choices make of the document: with "Chapters in the File", its chapters, in the app's language
+    /// (`MarkerRulerRules.fileChapters`; the export of a range shifts them to it).
     var settings: ExportSettings {
-        ExportSettings(
+        let file = MarkerRulerRules.fileChapters(
+            chapters, kind: kind, isOn: chaptersInFile, localizations: Bundle.main.preferredLocalizations)
+        return ExportSettings(
             aspect: aspect, resolution: resolution, framesPerSecond: framesPerSecond, quality: quality, contentRatio: contentRatio,
-            codec: codec)
+            codec: codec, chapters: file.chapters, chapterLanguage: file.language)
     }
 
     /// The GIF these choices make of the document.
@@ -438,6 +452,13 @@ struct ExportSheet: View {
                 }
                 .pickerStyle(.segmented)
             }
+            // The named markers as the file's chapters (3d plan decision 4).
+            if choices.offersChapters {
+                Toggle(isOn: $choices.chaptersInFile) {
+                    Text("Chapters in the File")
+                    Text("From the markers with a name.", comment: "The export sheet: under Chapters in the File")
+                }
+            }
         } footer: {
             Text(Self.help(choices.codec))
         }
@@ -595,7 +616,8 @@ extension EditorModel {
         guard canExport, let window, window.attachedSheet == nil, let session = panelSession, let project = exportProject else { return }
         let choices = ExportChoices(
             document: session.document, project: project, marks: timelineMarks, playhead: playheadNanoseconds,
-            remembered: SettingsStore().settings.export, contentRatio: contentRatio(of: session.document), analysis: analysis)
+            remembered: SettingsStore().settings.export, contentRatio: contentRatio(of: session.document), analysis: analysis,
+            chapters: chapters)
         let host = NSHostingController(
             rootView: ExportSheet(choices: choices, model: self) { [weak self, weak window] export in
                 // The sheet is the window's only one: the save panel comes after it.

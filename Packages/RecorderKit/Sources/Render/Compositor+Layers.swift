@@ -113,7 +113,9 @@ extension Compositor {
     /// textures of its captions ahead drawn in the background (`CaptionTextures.prepare`), which draws nothing into the
     /// frame. Every frame reaches it once (`DrawCounts.overlaySteps`), whatever its path; with neither, nothing is drawn.
     /// Before them, phase 3's (phase 3 design §12, base plan decision 9): the title card, then the output's annotations,
-    /// with `annotations`.
+    /// with `annotations`; and after them the textures of the title cards ahead drawn in the background
+    /// (`TitleCardTextures.prepare`), which draws nothing into the frame either, and the annotations' bitmaps ahead
+    /// (`AnnotationRasters.prepare`, which ends the frame for what the annotations keep).
     func drawOverlays(
         _ frame: RenderFrame, annotations: AnnotationTextures?, pass: LayerPass, encoder: any MTLRenderCommandEncoder,
         counts: inout DrawCounts
@@ -125,5 +127,7 @@ extension Compositor {
         drawKeys(frame.keys, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
         drawCaptions(frame.captions, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
         layers.captions.textures.prepare(frame.captionsAhead, device: device)
+        layers.titleCard.textures.prepare(frame.titleCardsAhead, outputSize: frame.outputSize, device: device)
+        layers.annotations.rasters.prepare(frame.annotationsAhead, device: device)
     }
 }

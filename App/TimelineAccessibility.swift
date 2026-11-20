@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import Analysis
 import AppKit
 import AppSupport
 import Editing
@@ -8,7 +9,8 @@ import ProjectFormat
 /// playhead and each clip, zoom block and camera change in sight, where they are drawn.
 ///
 /// - A clip: "Part from 0:12 to 0:31, speed 2×"; a block: "Automatic zoom of 2×, from 0:40 to 0:44" (or "Zoom of…" for
-///   one of the user's); a change: "Camera change at 0:42". Each one is selected with AXPress, as a click selects it, and
+///   one of the user's; a calm one says its mode, "Zoom of 2×, Loupe, from…"); a change: "Camera change at 0:42"; an annotation: "Text “Hola”, from 0:12 to 0:15" (phase 3),
+///   with Duplicate and Delete. Each one is selected with AXPress, as a click selects it, and
 ///   reads as selected while it is. While the document can be edited, a clip has the actions Split, Delete and Trim
 ///   Start and Trim End to Playhead (those that need the playhead on the clip do nothing without it), and a block and a
 ///   change, Delete.
@@ -63,6 +65,11 @@ final class TimelineAccessibility {
         }
         let trim = [Action(.split), Action(.delete), Action(.trimStart), Action(.trimEnd)]
         for clip in content.clips.items {
+            // A frozen frame, a title card or an imported clip (phase 3): "Placa «Intro», 3 s", and Delete.
+            if let info = content.contentClips.info(clip.id) {
+                add(clip.id, .video, clip.output, label: TimelineContentClipItems.accessibilityLabel(info), actions: [Action(.delete)])
+                continue
+            }
             let label = String(
                 format: String(localized: "Part from %1$@ to %2$@, speed %3$@", comment: "VoiceOver: a clip of the timeline, its start, end and speed"),
                 Self.time(clip.output.lowerBound), Self.time(clip.output.upperBound), TimelineFormat.multiplier(clip.info.speed))
@@ -71,18 +78,39 @@ final class TimelineAccessibility {
         for zoom in content.zooms.items {
             let depth = TimelineFormat.multiplier(zoom.info.depth)
             let (start, end) = (Self.time(zoom.output.lowerBound), Self.time(zoom.output.upperBound))
-            let label = zoom.info.automatic
-                ? String(
-                    format: String(localized: "Automatic zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: an automatic zoom block, its depth, start and end"),
-                    depth, start, end)
-                : String(
-                    format: String(localized: "Zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: a zoom block of the user's, its depth, start and end"),
-                    depth, start, end)
+            let label: String
+            if zoom.info.mode.isCalm {
+                // A calm block says its mode (phase 3 design §6); a Classic one reads as in phase 2.
+                let mode = ZoomModeNames.text(zoom.info.mode)
+                label = zoom.info.automatic
+                    ? String(
+                        format: String(
+                            localized: "Automatic zoom of %1$@, %2$@, from %3$@ to %4$@",
+                            comment: "VoiceOver: an automatic zoom block, its depth, its mode (Highlight, Dim, Loupe), start and end"),
+                        depth, mode, start, end)
+                    : String(
+                        format: String(
+                            localized: "Zoom of %1$@, %2$@, from %3$@ to %4$@",
+                            comment: "VoiceOver: a zoom block of the user's, its depth, its mode (Highlight, Dim, Loupe), start and end"),
+                        depth, mode, start, end)
+            } else {
+                label = zoom.info.automatic
+                    ? String(
+                        format: String(localized: "Automatic zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: an automatic zoom block, its depth, start and end"),
+                        depth, start, end)
+                    : String(
+                        format: String(localized: "Zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: a zoom block of the user's, its depth, start and end"),
+                        depth, start, end)
+            }
             add(zoom.id, .zoom, zoom.output, label: label, actions: [Action(.delete)])
         }
         for block in content.privacy.items.items {
             let label = TimelinePrivacyItems.accessibilityLabel(block.info, output: block.output)
             add(block.id, .privacy, block.output, label: label, actions: [Action(.delete)])
+        }
+        for annotation in content.annotations.items.items {
+            let label = TimelineAnnotationItems.accessibilityLabel(annotation.info, output: annotation.output)
+            add(annotation.id, .annotations, annotation.output, label: label, actions: [Action(.duplicate), Action(.delete)])
         }
         let showInCaptions = [Action(.showInCaptions)]
         content.captions.forEach(from: geometry.visibleOutput.lower, to: geometry.visibleOutput.upper) { caption in
@@ -100,8 +128,152 @@ final class TimelineAccessibility {
                 Self.time(change.output.lowerBound))
             add(change.id, .camera, change.output, label: label, actions: [Action(.delete)])
         }
+        // The stretches at another volume of each audio row and the cuts of the sound moved off the picture's (3c): a
+        // stretch reads its volume and its times, and is selected and deleted; a cut says where the sound went, on the
+        // first audio row, and is put back.
+        func addAudio(
+            _ key: String, frame drawn: CGRect?, label: String, selected: Bool, press: @escaping @MainActor @Sendable () -> Bool,
+            actions: [(name: String, run: @MainActor @Sendable () -> Void)]
+        ) {
+            guard let drawn else { return }
+            let frame = drawn.offsetBy(dx: TimelineLayout.headerWidth, dy: 0).intersection(area)
+            guard !frame.isNull, !frame.isEmpty else { return }
+            let element = elements[key] ?? TimelineItemElement(parent: view)
+            element.setAccessibilityFrameInParentSpace(frame)
+            element.setAccessibilityLabel(label)
+            element.setAccessibilitySelected(selected)
+            element.press = press
+            element.setAccessibilityCustomActions(model?.canEdit == true ? actions.map { action in
+                NSAccessibilityCustomAction(name: action.name) {
+                    MainActor.assumeIsolated { action.run() }
+                    return true
+                }
+            } : [])
+            kept[key] = element
+            children.append(element)
+        }
+        let audioRows = geometry.rows.filter { if case .audio = $0.track { true } else { false } }
+        for row in audioRows {
+            guard case let .audio(track) = row.track else { continue }
+            let top = TimelineLayout.rulerHeight + row.top - geometry.verticalOffset + 2
+            for range in content.audioRanges[track] ?? [] {
+                let label = String(
+                    format: String(
+                        localized: "Range Volume, %1$@, from %2$@ to %3$@",
+                        comment: "VoiceOver: a stretch at another volume of an audio row of the timeline, its volume, start and end"),
+                    TimelineAudioItems.gainText(range.gain), Self.time(range.output.lowerBound), Self.time(range.output.upperBound))
+                let id = range.id
+                addAudio(
+                    "range \(track) \(id) \(range.output.lowerBound)", frame: geometry.itemRect(range.output, top: top, height: row.height - 4, gap: 0),
+                    label: label, selected: view.selected.contains(id),
+                    press: { [weak self] in
+                        self?.model?.selection = .gainRange(id)
+                        return self != nil
+                    },
+                    actions: [(String(localized: "Delete Range", comment: "The menu of a stretch at another volume of an audio row"), { @MainActor @Sendable [weak self] in
+                        self?.model?.deleteGainRange(track: track, id: id)
+                    })])
+            }
+        }
+        if let row = audioRows.first {
+            let top = TimelineLayout.rulerHeight + row.top - geometry.verticalOffset + 2
+            for cut in content.audioCuts {
+                guard let label = Self.cutLabel(cut.audio - cut.picture) else { continue }
+                let x = geometry.x(cut.audio), clip = cut.clip
+                addAudio(
+                    "cut \(clip)", frame: CGRect(x: x - 6, y: top, width: 12, height: row.height - 4), label: label, selected: false,
+                    press: { false },
+                    actions: [(String(localized: "Reset Audio Cut", comment: "The menu of an audio row: the cut of the sound back to the picture's"), { @MainActor @Sendable [weak self] in
+                        self?.model?.setAudioShift(clip: clip, to: 0)
+                    })])
+            }
+        }
+        // The pieces of music (3c): "Music, Calm, from 0:00 to 2:14", selected and deleted.
+        if let row = geometry.rows.first(where: { $0.track == .music }) {
+            let top = TimelineLayout.rulerHeight + row.top - geometry.verticalOffset + 2
+            let sources = Dictionary(content.document.music.items.map { ($0.id, $0.source) }) { first, _ in first }
+            for piece in MusicCommands.shownItems(content.document, timeMap: content.map) {
+                let id = piece.id
+                let label = String(
+                    format: String(
+                        localized: "Music, %1$@, from %2$@ to %3$@",
+                        comment: "VoiceOver: a piece of music of the Music track, its name, start and end"),
+                    EditorAudio.name(ofSource: sources[id] ?? ""), Self.time(piece.output.lowerBound), Self.time(piece.output.upperBound))
+                addAudio(
+                    "music \(id)", frame: geometry.itemRect(piece.output, top: top, height: row.height - 4, gap: 1), label: label,
+                    selected: view.selected.contains(id),
+                    press: { [weak self] in
+                        self?.model?.selection = .musicItem(id)
+                        return self != nil
+                    },
+                    actions: [(String(localized: "Delete Music", comment: "The menu of a piece of music of the Music track"), { @MainActor @Sendable [weak self] in
+                        self?.model?.deleteMusic(id: id)
+                    })])
+            }
+        }
+        addMarkers(content, geometry, kept: &kept, children: &children)
         elements = kept
         return children
+    }
+
+    /// The markers' flags on the ruler (phase 3, 3d plan decision 3), after everything else: "Marker “Intro” at 0:12"
+    /// (or "Unnamed marker at 0:40"); pressing one takes the playhead to it, and while the document can be edited it has
+    /// Rename… and Delete, as its menu.
+    private func addMarkers(
+        _ content: TimelineContent, _ geometry: TimelineGeometry, kept: inout [String: TimelineItemElement], children: inout [Any]
+    ) {
+        let ruler = CGRect(x: TimelineLayout.headerWidth, y: 0, width: geometry.areaWidth, height: TimelineLayout.rulerHeight)
+        for marker in content.markers {
+            let x = TimelineLayout.headerWidth + geometry.snapped(geometry.x(marker.output))
+            let frame = CGRect(x: x - 3, y: 0, width: TimelineRuler.flagWidth + 6, height: TimelineLayout.rulerHeight).intersection(ruler)
+            guard !frame.isNull, !frame.isEmpty else { continue }
+            let key = "marker \(marker.id)"
+            let element = elements[key] ?? TimelineItemElement(parent: view)
+            element.setAccessibilityFrameInParentSpace(frame)
+            let time = Self.time(marker.output)
+            element.setAccessibilityLabel(marker.name.isEmpty
+                ? String(format: String(localized: "Unnamed marker at %@", comment: "VoiceOver: a marker without a name on the timeline's ruler, its time"), time)
+                : String(
+                    format: String(localized: "Marker “%1$@” at %2$@", comment: "VoiceOver: a marker on the timeline's ruler, its name and its time"),
+                    marker.name, time))
+            element.setAccessibilitySelected(false)
+            element.press = { [weak self] in
+                guard let model = self?.model else { return false }
+                model.goTo(marker)
+                return true
+            }
+            element.setAccessibilityCustomActions(model?.canEdit == true ? [
+                NSAccessibilityCustomAction(name: String(localized: "Rename…", comment: "The menu of a marker's flag on the timeline's ruler")) {
+                    [weak self] in
+                    MainActor.assumeIsolated { self?.view.interaction.askMarkerName(marker) }
+                    return true
+                },
+                NSAccessibilityCustomAction(name: String(localized: "Delete")) { [weak self] in
+                    MainActor.assumeIsolated { self?.model?.deleteMarker(marker) }
+                    return true
+                },
+            ] : [])
+            kept[key] = element
+            children.append(element)
+        }
+    }
+
+    /// What VoiceOver says of a cut of the sound moved `shift` ns of output off the picture's: "Audio cut moved 0,30 s
+    /// earlier" (a J cut) or "… later" (an L cut); `nil` at the picture's.
+    static func cutLabel(_ shift: Int64) -> String? {
+        let amount = AudioRowText.shift(shift, locale: .current)
+        switch AudioRowText.cut(shift) {
+        case .j?:
+            return String(
+                format: String(localized: "Audio cut moved %@ earlier", comment: "VoiceOver: a J cut of the timeline, how much sooner the next clip is heard"),
+                amount)
+        case .l?:
+            return String(
+                format: String(localized: "Audio cut moved %@ later", comment: "VoiceOver: an L cut of the timeline, how much longer the clip before is heard"),
+                amount)
+        case nil:
+            return nil
+        }
     }
 
     /// An output time as VoiceOver reads it: whole seconds, `0:42`.
@@ -139,7 +311,7 @@ final class TimelineAccessibility {
     // MARK: - Actions
 
     private struct Action {
-        enum Kind { case split, delete, trimStart, trimEnd, changeLayout, showInCaptions }
+        enum Kind { case split, delete, trimStart, trimEnd, changeLayout, showInCaptions, duplicate }
         let kind: Kind
         init(_ kind: Kind) { self.kind = kind }
 
@@ -151,6 +323,7 @@ final class TimelineAccessibility {
             case .trimEnd: String(localized: "Trim End to Playhead", comment: "VoiceOver: an action of a clip: its end trimmed up to the playhead")
             case .changeLayout: String(localized: "Change Layout")
             case .showInCaptions: String(localized: "Show in Captions", comment: "VoiceOver: an action of a caption of the timeline: its first word is shown in the Captions tab")
+            case .duplicate: String(localized: "Duplicate")
             }
         }
     }
@@ -171,7 +344,8 @@ final class TimelineAccessibility {
             }
         case .privacy: model.selection = .privacyBlocks([id])
         case .captions: return showInCaptions(id)
-        case .ruler, .screen, .audio, .annotations, .importedAudio, .music: return false
+        case .annotations: model.selection = .annotations([id])
+        case .ruler, .screen, .audio, .importedAudio, .music: return false
         }
         return true
     }
@@ -208,6 +382,10 @@ final class TimelineAccessibility {
         case .delete:
             guard select(id, on: track) else { return false }
             view.interaction.deleteSelected()
+            return true
+        case .duplicate:
+            guard select(id, on: track) else { return false }
+            model.duplicateSelectedAnnotations()
             return true
         }
     }

@@ -13,8 +13,10 @@ final class TimelineViewController: NSViewController {
     /// The timeline itself, for the window's keys.
     var timelineView: EditorTimelineView { timeline }
     private let bar = TimelineBar()
-    /// The package and the take the caches read, and the work of the waveforms.
+    /// The package and the take the caches read, the takes whose thumbnails and waveforms are made (each the sequence
+    /// came to show, 3d), and the work of the waveforms.
     private var cachesFor: (url: URL, take: TakeRecord)?
+    private var cachedTakes: Set<String> = []
     private var waveformWork: [Task<Void, Never>] = []
     private var cameraCheck: Task<Void, Never>?
     private var stopped = false
@@ -48,12 +50,15 @@ final class TimelineViewController: NSViewController {
         timeline.onScrub = { [weak model] τ in model?.scrub(toSeconds: Double(τ) / 1e9) }
         timeline.onScrubEnd = { [weak model] in model?.endScrub() }
         timeline.onMute = { [weak self] track, muted in self?.setMuted(track, muted) }
+        timeline.onSolo = { [weak model] row in model?.toggleSolo(row) }
         timeline.restoredScaleAndScroll = { [weak model] in (model?.timelineScale, model?.timelineOffset ?? 0) }
         timeline.onScaleAndScrollChange = { [weak model] scale, offset in
             model?.timelineScale = scale
             model?.timelineOffset = offset
         }
         timeline.interaction.model = model
+        // "Rename Marker…" of the Markers menu: the popover over the marker's flag.
+        model.askMarkerName = { [weak timeline] marker in timeline?.interaction.askMarkerName(marker) }
         // The Camera header: the panel edits the project's layout, on the Camera tab.
         timeline.onCameraHeader = { [weak model] in
             guard let model else { return }
@@ -126,16 +131,28 @@ final class TimelineViewController: NSViewController {
         timeline.canEdit = model.canEdit
         timeline.marks = model.timelineMarks
         timeline.selected = Self.selectedIDs(model.selection)
+        timeline.audioSolo = model.audioSolo
+        // The music's lengths, waveforms and what is being made (3c), as `EditorAudio` has them.
+        timeline.musicInfo = TimelineMusicInfo(shown: model.audio.shown, waveforms: model.audio.waveforms)
         guard model.state == .ready, let document = model.document, let project = model.overlayProject else {
             timeline.showNothing()
             return
         }
-        if cachesFor?.url != project.package.url || cachesFor?.take != project.take, let caches = model.panelSession?.caches {
-            cachesFor = (project.package.url, project.take)
-            makeCaches(project, caches)
+        let takes = project.takeRecords(shownBy: document)
+        if let caches = model.panelSession?.caches {
+            if cachesFor?.url != project.package.url || cachesFor?.take != project.take {
+                cachesFor = (project.package.url, project.take)
+                makeCaches(project, caches)
+            }
+            // Each take the sequence shows has its own thumbnails and waveforms, made the first time it shows it.
+            for take in takes where !cachedTakes.contains(take.id) {
+                if let shown = project.focused(on: take.id) { addCaches(of: shown, caches) }
+            }
         }
-        timeline.show(take: project.take, takes: project.takeRecords(shownBy: document), markers: model.markerTimes,
+        timeline.show(take: project.take, takes: takes, recorded: model.recordedMarkers,
             document: document, missing: missing, contentRatio: model.contentRatio(of: document))
+        // What the cut of the sound is held to in each take the sequence shows (3c), read before a drag needs it.
+        model.warmAudioTakeBounds()
     }
 
     /// The thumbnails' cache, and the waveform of each audio track worked out off the main thread (decoded by the cache on
@@ -155,16 +172,28 @@ final class TimelineViewController: NSViewController {
             self?.model.cameraUnreadable = unreadable
         }
         timeline.tracks.forgetThumbnails()
-        timeline.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
+        timeline.tracks.thumbnailCaches = [:]
+        timeline.tracks.contentClips.frames = MediaClipFrames(package: project.package)
         for work in waveformWork { work.cancel() }
+        waveformWork = []
         timeline.tracks.waveformLevels = [:]
+        cachedTakes = []
+        addCaches(of: project, caches)
+    }
+
+    /// The thumbnails' cache of `project`'s take, and the waveform of each of its audio tracks, worked out as
+    /// `makeCaches` says, by take (`AudioPlan.key(take:track:)`).
+    private func addCaches(of project: LoadedProject, _ caches: ProjectCaches) {
+        let take = project.take.id
+        cachedTakes.insert(take)
+        timeline.tracks.thumbnailCaches[take] = ThumbnailCache(project: project, caches: caches)
         let waveforms = WaveformCache(project: project, caches: caches)
-        waveformWork = project.take.tracks.filter { !$0.kind.isVideo && !$0.segments.isEmpty }.map { track in
+        waveformWork += project.take.tracks.filter { !$0.kind.isVideo && !$0.segments.isEmpty }.map { track in
             Task { [weak self] in
                 let waveform = await waveforms.waveform(track: track.id)
                 let levels = await Task.detached(priority: .utility) { WaveformLevels(waveform) }.value
                 guard !Task.isCancelled else { return }
-                self?.timeline.setWaveform(levels, for: track.id)
+                self?.timeline.setWaveform(levels, take: take, track: track.id)
             }
         }
     }
@@ -174,6 +203,9 @@ final class TimelineViewController: NSViewController {
         case let .clips(ids)?, let .zooms(ids)?: ids
         case let .cameraChange(id)?, let .screenChange(id)?, let .layoutBlock(id)?: [id]
         case let .privacyBlocks(ids)?: ids
+        case let .annotations(ids)?: ids
+        case let .gainRange(id)?: [id]
+        case let .musicItem(id)?: [id]
         case nil: []
         }
     }

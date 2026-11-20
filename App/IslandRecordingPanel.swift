@@ -149,8 +149,17 @@ struct IslandRecordingPanel: View {
 
     private var confirmation: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Restart the take? This one goes to the trash.")
-                .font(.system(size: 12.5))
+            Group {
+                if recording.currentRequest?.target != nil {
+                    // A re-record's take stays in the editor's project, unused (3d plan decision 10).
+                    Text(
+                        "Restart the take? This one stays in the project, unused.",
+                        comment: "The open recording island, restarting a take recorded into the editor's project")
+                } else {
+                    Text("Restart the take? This one goes to the trash.")
+                }
+            }
+            .font(.system(size: 12.5))
             HStack(spacing: 8) {
                 Button {
                     confirm(false)

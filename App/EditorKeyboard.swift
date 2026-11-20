@@ -47,10 +47,21 @@ final class EditorKeyboard {
                 keyCode: event.keyCode)
         else { return false }
         commands.shuttle = model.playbackSpeed
-        guard let command = commands.command(for: key, focus: Self.focus(of: window.firstResponder, in: window)) else { return false }
+        let focus = Self.focus(of: window.firstResponder, in: window)
+        guard let command = commands.command(for: key, focus: focus) else { return false }
         // Held down: once, unless it steps.
         if event.isARepeat, !command.repeats { return true }
+        if focus == .preview, let moved = nudgeAnnotations(command, model) { return moved }
         return perform(command, model, timeline)
+    }
+
+    /// ← → ↑ ↓ (⇧: 10 points) and ⇧↑ ⇧↓ with the focus on the preview and annotations selected (3a, decision 16): they
+    /// move those the frame at the playhead shows, and the playhead stays (nothing moves during a drag). `nil` when the
+    /// key does what it did in 1b: no annotation selected, or none of them shown there.
+    private func nudgeAnnotations(_ command: EditorCommand, _ model: EditorModel) -> Bool? {
+        guard case .annotations? = model.selection, let points = AnnotationKeys.nudge(for: command) else { return nil }
+        if model.isGesturing { return true }
+        return model.nudgeSelectedAnnotations(points: points) ? true : nil
     }
 
     private static func modifiers(_ flags: NSEvent.ModifierFlags) -> KeyModifiers {
@@ -175,8 +186,16 @@ final class EditorKeyboard {
         case .selectAll:
             return model.selectAllOfTrack()
         case .nudgeVertically:
-            // ⇧↑ ⇧↓ with annotations chosen (3a, Task A13); nothing is chosen to move until then.
+            // ⇧↑ ⇧↓ move the annotations selected over the preview (`nudgeAnnotations`); nothing otherwise.
             return false
+        case .addMarker:
+            return model.addMarkerAtPlayhead()
+        case .previousMarker:
+            return model.goToMarker(forward: false)
+        case .nextMarker:
+            return model.goToMarker(forward: true)
+        case .rerecordFromHere:
+            return model.rerecordFromHere()
         }
     }
 
@@ -211,12 +230,12 @@ extension EditorModel {
     }
 
     /// ↑ and ↓: the edit point before or after the playhead (the edges of the clips and of the zoom blocks, the camera's
-    /// and the screens' changes, the take's markers, the start and the end), paused.
+    /// and the screens' changes, the markers the output shows, the start and the end), paused.
     func goToEditPoint(forward: Bool) -> Bool {
         guard canPlay, let document else { return false }
         if isPlaying { pause() }
         let map = TimeMap(sequence: document.sequence)
-        let points = EditPoints(document: document, timeMap: map, markers: markerTimes).all
+        let points = EditPoints(document: document, timeMap: map, recorded: recordedMarkers).all
         guard let frame = KeyboardCommands.editPointFrame(
             from: playheadFrame, forward: forward, points: points, frameRate: document.frameRate,
             frameCount: map.frameCount(frameRate: document.frameRate))
@@ -246,7 +265,15 @@ extension EditorModel {
             let shown = PrivacyTrackRules.items(document)
             guard !shown.isEmpty else { return false }
             selection = .privacyBlocks(Set(shown.map(\.id)))
+        case .annotations?:
+            let shown = AnnotationTrackRules.items(document)
+            guard !shown.isEmpty else { return false }
+            selection = .annotations(Set(shown.map(\.item.id)))
         case .cameraChange?, .layoutBlock?, .screenChange?:
+            return false
+        case .gainRange?:
+            return false
+        case .musicItem?:
             return false
         }
         return true
@@ -265,7 +292,7 @@ extension EditorModel {
     func deleteMarkedRangeOrSelection() -> TimelineEditResult {
         guard let range = timelineMarks.range else { return deleteSelection() }
         guard canEdit, let document else { return .nothing }
-        switch SequenceCommands.deleteRange(document, output: range, makeID: Self.newID) {
+        switch SequenceCommands.deleteRange(document, output: range, takeBounds: takeBounds, makeID: Self.newID) {
         case .failure(.lastClip):
             return .lastClip
         case let .success(step):
@@ -275,10 +302,10 @@ extension EditorModel {
         }
     }
 
-    /// ⌥[ and ⌥]: the start or the end of the clip under the playhead, up to it.
+    /// ⌥[ and ⌥]: the start or the end of the clip under the playhead, up to it, within the bounds of that clip's take.
     @discardableResult
     func trimToPlayhead(_ edge: ClipEdge) -> Bool {
-        guard canEdit, let document, let project = overlayProject,
+        guard canEdit, let document, let project = playheadProject,
             let step = SequenceCommands.trimToPlayhead(
                 document, edge: edge, atOutput: playheadNanoseconds, take: project.take, events: project.events)
         else { return false }
@@ -318,6 +345,15 @@ extension EditorModel {
             step = PrivacyCommands.move(document, id: id, toOutputStart: range.lowerBound + delta)
         case .privacyBlocks?:
             step = nil
+        case let .annotations(ids)? where ids.count == 1:
+            guard let id = ids.first, let range = TimelineAnnotationItems.range(of: id, in: document) else { return false }
+            step = AnnotationCommands.move(document, id: id, toOutputStart: range.lowerBound + delta)
+        case .annotations?, .gainRange?:
+            step = nil
+        case let .musicItem(id)?:
+            // A piece of music moves between its neighbours (3c).
+            guard let item = document.music.items.first(where: { $0.id == id }) else { return false }
+            step = MusicCommands.move(document, id: id, toOutputStart: item.start + delta, timeMap: map)
         case .zooms?, .clips?, nil:
             step = nil
         }

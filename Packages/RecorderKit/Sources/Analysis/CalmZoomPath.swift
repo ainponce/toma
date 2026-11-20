@@ -55,7 +55,10 @@ public struct CalmZoomState: Equatable, Sendable {
 ///   `StageCrop` at the larger of the depth of the instant and that of the block (that of the last one left while it
 ///   fades, or across a gap that the next block goes on from without a jump, the next one's): the block's while it closes
 ///   in, while it is there and while it fades, so the focus does not move, and between two blocks of other depths that
-///   touch or nearly touch, the instant's, which goes from one to the other with the spring, so the focus does not jump.
+///   touch or nearly touch, the instant's, which goes from one to the other with the spring, so the focus does not jump
+///   there. One jump is left, accepted: a calm block shorter than about 0.5 s that ends before its centre settles,
+///   beside one of another depth, near a screen's edge; where the gap after it starts, the centre still on its way is
+///   placed at the next block's depth at once, which can move it (66 px at 720p with 4×, 2× for 0.2 s and 4× at an edge).
 ///   Its size is the stage over the depth of the instant, so Highlight and Dim close on the focus from the whole stage
 ///   and the loupe magnifies from 1× to the block's depth, without moving.
 /// - How much is seen (`amount`): the step response of `zoom.spring` (`stepResponse(of:)`) summed over the edges of each

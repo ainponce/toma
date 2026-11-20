@@ -45,7 +45,10 @@ extension SequenceCommands {
         let cuts = ranges.mapValues(union)
         let frame = oneFrame(of: doc)
         var ids = Set(doc.sequence.map(\.id))
-        var changes = SequenceChanges(doc.sequence)
+        // What is taken out only shortens the clips it touches or takes them out: in a sequence of one take, no cut gets
+        // a clip before it that ends later nor starts sooner itself, so the take holds none tighter. (Across takes, a
+        // clip of another take can come to be before a cut; the transcript's commands have no bounds of the takes.)
+        var changes = SequenceChanges(doc.sequence, takeBounds: nil)
         var touched: [String] = []
         // Removed and inserted so far, for the index of the next change.
         var (removed, inserted) = (0, 0)
@@ -142,7 +145,8 @@ extension SequenceCommands {
         }
         // The clips lengthened, replaced whole, and then the new ones inserted from the first: each at its index.
         let originals = Dictionary(doc.sequence.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var changes = SequenceChanges(doc.sequence)
+        // What is given back lengthens clips of `take` and adds some: their cuts are held to what `take` has.
+        var changes = SequenceChanges(doc.sequence, takeBounds: [take: bounds])
         var touched: [String] = []
         for clip in sequence {
             if made.contains(clip.id) {

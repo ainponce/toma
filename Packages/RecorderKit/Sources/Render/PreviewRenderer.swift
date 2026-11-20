@@ -72,7 +72,8 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
         }
     }
 
-    /// Makes `view` show the preview: the renderer's device, `.bgra8Unorm` drawables of exactly
+    /// Makes `view` show the preview: the renderer's device, readable `.bgra8Unorm` drawables (not `framebufferOnly`: the
+    /// calm zoom's Dim and loupe copy what is drawn of the frame) of exactly
     /// `renderer.outputSize` (scaled to the view by its layer), tagged Rec. 709 like the export, and this
     /// object as its delegate. The view keeps the delegate weakly: keep this object alive while it shows.
     @MainActor
@@ -81,7 +82,8 @@ public final class PreviewRenderer: NSObject, MTKViewDelegate, @unchecked Sendab
         view.colorPixelFormat = Compositor.pixelFormat
         view.autoResizeDrawable = false
         view.drawableSize = CGSize(width: renderer.outputSize.x, height: renderer.outputSize.y)
-        view.framebufferOnly = true
+        // Readable: the calm zoom's Dim and loupe copy the frame drawn so far (`Compositor.drawCalmZoom`).
+        view.framebufferOnly = false
         (view.layer as? CAMetalLayer)?.colorspace = CGColorSpace(name: CGColorSpace.itur_709)
         view.delegate = self
     }

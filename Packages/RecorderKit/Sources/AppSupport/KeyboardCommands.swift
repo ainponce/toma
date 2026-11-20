@@ -100,12 +100,19 @@ public enum EditorCommand: Equatable, Sendable {
     /// ⇧↑ and ⇧↓ (phase 3 plan 3a, decision 16): moves the annotations chosen by that many points of the preview (−10 up,
     /// 10 down), the vertical of ← → with ⇧ (`stepSeconds`). Does nothing without annotations chosen.
     case nudgeVertically(points: Int)
+    /// M (phase 3 plan 3d, decision 18): a marker at the playhead.
+    case addMarker
+    /// ⌥← and ⌥→: the marker before and after the playhead.
+    case previousMarker, nextMarker
+    /// ⇧⌘R (phase 3 plan 3d, decision 18): "Re-record from Here", from the playhead, with the focus anywhere.
+    case rerecordFromHere
 
     /// Whether holding the key does it again with each repeat: only what moves the playhead, the selection or the scale
     /// by a step. The rest happens once a press (held L does not run up to 8×).
     public var repeats: Bool {
         switch self {
         case .step, .stepSeconds, .previousEditPoint, .nextEditPoint, .nudge, .nudgeVertically, .zoomIn, .zoomOut: true
+        case .previousMarker, .nextMarker: true
         default: false
         }
     }
@@ -115,6 +122,9 @@ public enum EditorCommand: Equatable, Sendable {
     public var edits: Bool {
         switch self {
         case .split, .delete, .trimStartToPlayhead, .trimEndToPlayhead, .nudge, .nudgeVertically, .addZoom, .layout: true
+        case .addMarker: true
+        // Its end applies the new take as an edit (`take.rerecord`).
+        case .rerecordFromHere: true
         default: false
         }
     }
@@ -180,6 +190,7 @@ public struct KeyboardCommands {
         case ("o", [.command]): .open
         case let (digit, [.command]):
             Int(digit).flatMap { (1...9).contains($0) ? .tab($0) : nil }
+        case ("r", [.command, .shift]): .rerecordFromHere
         default: nil
         }
     }
@@ -218,6 +229,9 @@ public struct KeyboardCommands {
         case ("n", []): .toggleSnapping
         case ("z", [.shift]): .fitTimeline
         case ("escape", []): .deselect
+        case ("m", []): .addMarker
+        case ("←", [.option]): .previousMarker
+        case ("→", [.option]): .nextMarker
         default: byPlace(key)
         }
     }

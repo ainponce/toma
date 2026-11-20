@@ -5,7 +5,8 @@ import ProjectFormat
 import SwiftUI
 
 /// The Audio tab (design §5.4): a row for each track of sound of the take, with its volume (0 to 200 %) and Mute, and
-/// whether the mix avoids clipping. The click sounds are set in the Cursor tab.
+/// whether the mix avoids clipping; under them, the music (phase 3 design §7.4, `AudioMusicSection`). The click sounds
+/// are set in the Cursor tab.
 struct AudioTab: View {
     let model: EditorModel
     let audio: AudioPlan
@@ -15,6 +16,9 @@ struct AudioTab: View {
             if model.audioTracks.isEmpty {
                 Text("This recording has no audio.")
                     .foregroundStyle(.secondary)
+                Divider()
+                // The music (3c): a recording without sound can have it.
+                AudioMusicSection(model: model)
             } else {
                 ForEach(model.audioTracks) { track in
                     let gain = audio.trackGain(take: track.take, track: track.track, takes: track.takes) ?? TrackGain(gain: 1, muted: false)
@@ -35,6 +39,10 @@ struct AudioTab: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                        } else if let app = track.appName {
+                            // A track of one app (phase 3 design §7.1).
+                            Text(verbatim: app)
+                                .font(.subheadline.weight(.semibold))
                         } else {
                             Text("System Audio")
                                 .font(.subheadline.weight(.semibold))
@@ -54,6 +62,9 @@ struct AudioTab: View {
                 PanelSection {
                     AudioMasterRows(model: model, audio: audio)
                 }
+                Divider()
+                // The music, under the tracks (3c, design §7.4).
+                AudioMusicSection(model: model)
             }
         }
     }

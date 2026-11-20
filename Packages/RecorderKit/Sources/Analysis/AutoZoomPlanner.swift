@@ -9,18 +9,20 @@ import ProjectFormat
 /// It works in output time, so it sees what the output shows (cuts closed, speeds applied; plan decision 16), with the
 /// `Activity` of the take and these steps; seconds are of output:
 /// 1. Groups: in time order, a click, drag or pause joins the group before it while it starts at most `groupGap` after
-///    the group's last one ends and the box of the group with it, with 12 % of the crop on each side, fits in the crop of
-///    depth `depth` (the stage over `depth`); otherwise it starts a group.
+///    the group's last one ends, in the same run of the take's clips (4), and the box of the group with it, with 12 % of
+///    the crop on each side, fits in the crop of depth `depth` (the stage over `depth`); otherwise it starts a group.
 /// 2. Holding: a span of typing (only with `holdWhileTyping`) or of scrolling that starts at most `groupGap` after a
 ///    group's last element, or inside it or before it and still going, holds the group to the span's end.
 /// 3. Typing alone: with `holdWhileTyping`, a span of typing that holds no group makes one when the last click at or
 ///    before its start is at most 10 s before it and the pointer went at most 40 pt from that click until then: the group
 ///    starts with the typing, its box is the click's point.
 /// 4. A block lasts from `leadIn` before its group's first element (never before 0) to `leadOut` after its last one or
-///    the end of what holds it, at least 1.2 s (its end goes later), never past the end of the output.
-/// 5. Neighbours: a block that starts less than 0.8 s after the end of the one before it (or before that end) is merged
-///    into it when their boxes fit together (as in 1); otherwise both meet at the midpoint between the last element of
-///    the first and the first element of the second.
+///    the end of what holds it, at least 1.2 s (its end goes later), never past the end of the output, and never past
+///    the run of the take's clips its first element is in (consecutive clips of the take, phase 3 design §9: at the
+///    border between two takes the zoom's path cuts), where it is cut. With one take, the run is the whole output.
+/// 5. Neighbours: a block that starts less than 0.8 s after the end of the one before it (or before that end), in the
+///    same run, is merged into it when their boxes fit together (as in 1); otherwise both meet at the midpoint between
+///    the last element of the first and the first element of the second.
 /// 6. Depth: `min(depth, the depth whose crop fits the box with its margin)`; a block below 1.15× is not made. A block at
 ///    `depth` leaves it out (`nil`: it follows the setting).
 /// 7. Focus: `.follow` with `follow`, and always where the screen follows the cursor (`style.reframe` `followCursor`,
@@ -54,13 +56,18 @@ public enum AutoZoomPlanner {
     static let minimumDepth = 1.15
     static let minimumFreeDuration: Int64 = 1_000_000_000
 
-    public static func plan(take: TakeRecord, events: [InputEvent], document: EditDocument) -> [ZoomRegion] {
+    /// `contentRatio`: the ratio `auto` follows, for a take that is not the one of the document's first clip
+    /// (`StagePoints.init(take:events:document:contentRatio:)`: the blocks fit the output's stage); `nil` works it out
+    /// from `take`.
+    public static func plan(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, contentRatio: Double?? = nil
+    ) -> [ZoomRegion] {
         let timeMap = TimeMap(sequence: document.sequence)
         guard document.zoom.auto.enabled, timeMap.duration > 0 else { return [] }
-        let stage = StagePoints(take: take, events: events, document: document)
+        let stage = StagePoints(take: take, events: events, document: document, contentRatio: contentRatio)
         let found = ActivityExtraction(take: take, events: events, timeMap: timeMap, stage: stage)
         let planner = Planner(
-            settings: document.zoom.auto, stage: stage, timeMap: timeMap, sequence: document.sequence,
+            settings: document.zoom.auto, stage: stage, timeMap: timeMap, sequence: document.sequence, take: take.id,
             followsCursor: document.style.reframe == .followCursor)
         let blocks = planner.neighboursSettled(planner.blocks(of: planner.groups(found)))
 
@@ -134,8 +141,13 @@ private struct Planner {
     let gap: Int64
     let leadIn: Int64
     let leadOut: Int64
+    /// The output ranges of the runs of consecutive clips of the take, in order and apart (a run of another take, or a
+    /// gap, between two): a block never leaves the one it starts in.
+    let runs: [Range<Int64>]
 
-    init(settings: AutoZoomSettings, stage: StagePoints, timeMap: TimeMap, sequence: [Clip], followsCursor: Bool) {
+    init(
+        settings: AutoZoomSettings, stage: StagePoints, timeMap: TimeMap, sequence: [Clip], take: String, followsCursor: Bool
+    ) {
         self.settings = settings
         self.stage = stage
         self.timeMap = timeMap
@@ -144,6 +156,24 @@ private struct Planner {
         gap = TimeMap.outputNanoseconds(seconds: settings.groupGap)
         leadIn = TimeMap.outputNanoseconds(seconds: settings.leadIn)
         leadOut = TimeMap.outputNanoseconds(seconds: settings.leadOut)
+        var runs: [Range<Int64>] = []
+        for (k, clip) in sequence.enumerated() where clip.take == take && k < timeMap.clipOutputStarts.count {
+            let start = timeMap.clipOutputStarts[k]
+            let end = k + 1 < timeMap.clipOutputStarts.count ? timeMap.clipOutputStarts[k + 1] : timeMap.duration
+            guard start < end else { continue }
+            if let last = runs.last, last.upperBound == start {
+                runs[runs.count - 1] = last.lowerBound..<end
+            } else {
+                runs.append(start..<end)
+            }
+        }
+        self.runs = runs
+    }
+
+    /// The run of the take's clips that shows output instant `τ` (`runs`); `nil` outside them.
+    func run(at τ: Int64) -> Range<Int64>? {
+        let k = Self.partition(runs.count) { runs[$0].upperBound <= τ }
+        return k < runs.count && runs[k].contains(τ) ? runs[k] : nil
     }
 
     /// Steps 1 to 3: the groups, with what holds them, in start order.
@@ -160,7 +190,7 @@ private struct Planner {
 
         var groups: [Group] = []
         for element in elements {
-            if let group = groups.last, element.start - group.last <= gap {
+            if let group = groups.last, element.start - group.last <= gap, run(at: element.start) == run(at: group.first) {
                 let box = Self.union(group.box, element.box)
                 if fits(box) {
                     groups[groups.count - 1] = Group(
@@ -210,10 +240,12 @@ private struct Planner {
     /// Steps 4 and 6: the block of each group, without those too shallow or empty.
     func blocks(of groups: [Group]) -> [Block] {
         groups.compactMap { group in
-            let start = max(group.first.subtractingSaturating(leadIn), 0)
-            let end = min(
+            var start = max(group.first.subtractingSaturating(leadIn), 0)
+            var end = min(
                 max(max(group.last, group.held).addingSaturating(leadOut), start.addingSaturating(AutoZoomPlanner.minimumDuration)),
                 timeMap.duration)
+            // Cut at the borders of its take's run.
+            if let run = run(at: group.first) { (start, end) = (max(start, run.lowerBound), min(end, run.upperBound)) }
             let depth = min(settings.depth, Self.fittingDepth(group.box, stage: stage.stageSize))
             guard depth >= AutoZoomPlanner.minimumDepth, start < end else { return nil }
             return Block(start: start, end: end, first: group.first, last: group.last, box: group.box, host: group.host, depth: depth)
@@ -224,7 +256,9 @@ private struct Planner {
     func neighboursSettled(_ blocks: [Block]) -> [Block] {
         var settled: [Block] = []
         for var block in blocks {
-            guard var previous = settled.last, block.start - previous.end < AutoZoomPlanner.neighbourGap else {
+            guard var previous = settled.last, block.start - previous.end < AutoZoomPlanner.neighbourGap,
+                run(at: block.first) == run(at: previous.first)
+            else {
                 settled.append(block)
                 continue
             }

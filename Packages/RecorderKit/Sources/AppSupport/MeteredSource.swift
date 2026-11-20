@@ -106,10 +106,12 @@ public enum AudioPeak {
 }
 
 /// A capture source that hears what it captures: it forwards everything to `base` and from it as it is,
-/// and keeps the peak of the last block it delivered (`AudioPeak`), which any thread can read.
+/// and keeps the peak of the last block it delivered (`AudioPeak`), which any thread can read. A listener can
+/// hear every block too (`listen`), as Follow the Voice does.
 public final class MeteredSource: CaptureSource {
     public let base: any CaptureSource
     private let peak = PeakHolder()
+    private let listener = ListenerHolder()
 
     public init(_ base: any CaptureSource) {
         self.base = base
@@ -125,8 +127,18 @@ public final class MeteredSource: CaptureSource {
     /// source has stopped or failed.
     public var peakDecibels: Float { peak.value }
 
+    /// Each block it delivers, also to `listener` (on the capture queue: it retains the block and returns), after the
+    /// sink has had it, so the take never waits for it. `nil` stops giving. It hears every run, from one to the next,
+    /// until `listen` is called again; once `listen` returns, the listener before hears nothing more.
+    ///
+    /// The listener is called under the source's lock: it must never wait (`LiveMicrophoneFeed.append` only keeps the
+    /// block), nor call `listen`.
+    public func listen(_ listener: (@Sendable (CMSampleBuffer) -> Void)?) {
+        self.listener.set(listener)
+    }
+
     public func start(on queue: DispatchSerialQueue, sink: any CaptureSink) async throws {
-        try await base.start(on: queue, sink: MeteringSink(sink: sink, peak: peak))
+        try await base.start(on: queue, sink: MeteringSink(sink: sink, peak: peak, listener: listener))
     }
 
     public func stop() async {
@@ -145,20 +157,50 @@ private final class PeakHolder: Sendable {
     }
 }
 
+/// The listener of a metered source, behind a lock: set by `listen`, called by each run's sink.
+private final class ListenerHolder: Sendable {
+    /// In a struct, not as a bare function: a function value that goes `inout` through the generic `withLock` is
+    /// wrapped in reabstraction thunks each time (in a debug build), so calling it once a block would nest it deeper
+    /// with every block, without end, until releasing it overflowed the stack.
+    private struct Listener: Sendable {
+        let hear: @Sendable (CMSampleBuffer) -> Void
+    }
+
+    private let listener = Mutex<Listener?>(nil)
+
+    func set(_ new: (@Sendable (CMSampleBuffer) -> Void)?) {
+        let old = listener.withLock { listener in
+            defer { listener = new.map(Listener.init) }
+            return listener
+        }
+        // Released here, outside the lock: whatever the listener held goes without the capture queue waiting.
+        withExtendedLifetime(old) {}
+    }
+
+    /// Under the lock, so once `set` returns the listener before is never called again.
+    func hand(_ sample: CMSampleBuffer) {
+        listener.withLock { $0?.hear(sample) }
+    }
+}
+
 /// Between a metered source and the sink it was started with, for one run: measures every block on its
-/// way through. The source retains it only while the run lasts, and it retains the sink as long.
+/// way through, and hands it to the source's listener once the sink has it. The source retains it only while
+/// the run lasts, and it retains the sink as long.
 private final class MeteringSink: CaptureSink {
     private let sink: any CaptureSink
     private let peak: PeakHolder
+    private let listener: ListenerHolder
 
-    init(sink: any CaptureSink, peak: PeakHolder) {
+    init(sink: any CaptureSink, peak: PeakHolder, listener: ListenerHolder) {
         self.sink = sink
         self.peak = peak
+        self.listener = listener
     }
 
     func source(_ trackID: String, didOutput sample: CMSampleBuffer) {
         peak.value = AudioPeak.decibels(of: sample)
         sink.source(trackID, didOutput: sample)
+        listener.hand(sample)
     }
 
     func source(_ trackID: String, didStopWithError error: any Error) {

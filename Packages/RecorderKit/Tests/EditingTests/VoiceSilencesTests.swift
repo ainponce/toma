@@ -95,3 +95,28 @@ private typealias F = VoiceFixture
     #expect(edited.camera.layouts.map(\.start) == [F.at(1.5), F.at(8.5), F.at(15.5)])
     #expect(edited.camera.layouts.map(\.kind) == [.screenOnly, .screenOnly, .screenOnly])
 }
+
+@Test func quietOfEveryTakeJoinsAcrossTakes() {
+    // take-001 [0, 10) then take-002 (60 s later in the host) [0, 10): output [0, 10) and [10, 20).
+    let second = "take-002"
+    func later(_ seconds: Double) -> HostTime { F.at(60 + seconds) }
+    let clips = [
+        Clip(id: "c-00000001", take: F.takeID, start: F.at(0), end: F.at(10), speed: 1),
+        Clip(id: "c-00000002", take: second, start: later(0), end: later(10), speed: 1),
+    ]
+    let map = TimeMap(sequence: clips)
+    // 2 s of quiet at the end of the first take and 2 s at the start of the second: one silence of 4 s at the joint;
+    // 1 s in the middle of the second is not one.
+    let quiet: [String: [Range<HostTime>]] = [
+        F.takeID: [F.at(8)..<F.at(10)],
+        second: [later(0)..<later(2), later(5)..<later(6)],
+    ]
+    #expect(VoiceSilences.fromQuiet(ofTakes: quiet, timeMap: map) == [F.range(8, 12)])
+    // Each take alone finds none of 3 s.
+    #expect(VoiceSilences.fromQuiet(quiet[F.takeID]!, take: F.takeID, timeMap: map).isEmpty)
+    #expect(VoiceSilences.fromQuiet(quiet[second]!, take: second, timeMap: map).isEmpty)
+    // One take is the phase 2's.
+    let one = [F.at(3)..<F.at(8)]
+    #expect(VoiceSilences.fromQuiet(ofTakes: [F.takeID: one], timeMap: map) == VoiceSilences.fromQuiet(one, take: F.takeID, timeMap: map))
+    #expect(VoiceSilences.fromQuiet(ofTakes: [:], timeMap: map).isEmpty)
+}

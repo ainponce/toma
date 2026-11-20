@@ -9,7 +9,8 @@ import os
 /// One audio track of a take, a microphone or system audio, as one continuous stream of 48 kHz Float32 PCM on the take's
 /// timeline, whose frame 0 is host time `origin` (`TakeTimeline.bounds`, where the legacy document starts). A `Reader`
 /// reads any range of it (`EditedMix` reads the ranges its clips keep). A file of audio of its own (an imported clip or
-/// sound, a theme of the music library) is such a stream too, of one segment from frame 0 (`load(file:id:channels:)`).
+/// sound, a theme of the music library) is such a stream too, of one segment from frame 0 (`load(_:id:channels:holding:)`),
+/// of which a stretch can be held decoded in memory (`held`) when its codec need not decode the same bits twice.
 ///
 /// Each segment is placed by host time: its frames go to timeline frame `(host − origin) × 48 kHz`, where a frame's host
 /// time comes from its segment's clock map (`ClockMap`), made from the track's own `audioClock` anchors. Segments that
@@ -40,7 +41,8 @@ import os
 /// a segment with that many goes as it is, a mono one goes to both channels, and any other is mixed down with every
 /// channel at unity gain into each, clipped to full scale. That keeps the level of the one or two live inputs a
 /// multichannel interface usually has; AVFoundation's own downmix gives silence for a discrete layout
-/// (`kAudioChannelLayoutTag_DiscreteInOrder`).
+/// (`kAudioChannelLayoutTag_DiscreteInOrder`). A file of audio of its own of more than two channels (a 5.1 clip) is
+/// mixed down by ITU-R BS.775 instead, never clipped (`open(file:)`), as a sound of one's own is for the music.
 final class AudioTrackTimeline: Sendable {
     static let sampleRate = 48_000.0
     /// The longest gap between two segments that is closed instead of filled with silence.
@@ -60,6 +62,14 @@ final class AudioTrackTimeline: Sendable {
     /// Spans of the source that are silent because a segment's audio could not be used, in the order of the segments:
     /// those that could not be opened, then where reading one stopped.
     let missing: [MissingSpan]
+    /// A stretch of the stream kept in memory as it was decoded when it was placed (`load(_:id:channels:holding:)`): its
+    /// first timeline frame and its frames from there, interleaved. A `Reader` copies them and reads only the rest of a
+    /// range from the files. `nil` for a stream read from its files as it plays.
+    private let held: (start: Int64, frames: [Float])?
+    /// The timeline frames `held` keeps; `nil` for none.
+    var heldFrames: Range<Int64>? {
+        held.map { $0.start..<($0.start + Int64($0.frames.count / channels)) }
+    }
     /// The segments `load` decoded to find where their audio ends.
     var decodedSegments: Int { placed.count }
 
@@ -83,6 +93,10 @@ final class AudioTrackTimeline: Sendable {
         /// there is neither), for `missing`.
         var start: HostTime
         var end: HostTime?
+        /// For a file of audio of its own with more than two channels, what each of its channels adds to the left and to
+        /// the right (`ImportedAudio.downmix`, ITU-R BS.775), never clipped; `nil` for a take's segment, whose channels
+        /// all go at unity gain into each (see the type).
+        var weights: [(left: Float, right: Float)]? = nil
     }
 
     /// A segment as it is heard: its audio over timeline frames `start ..< end`, where `segment.map` (shifted to close a
@@ -211,7 +225,10 @@ final class AudioTrackTimeline: Sendable {
         let placed: [Placed], unread: [MissingSpan]
         do {
             (placed, unread) = try await withTaskCancellationHandler {
-                try await offTheCooperativePool { [segments] in try place(segments, origin: origin, channels: channels, cancelled: cancelled) }
+                try await offTheCooperativePool { [segments] in
+                    let (placed, missing, _) = try place(segments, origin: origin, channels: channels, cancelled: cancelled)
+                    return (placed, missing)
+                }
             } onCancel: {
                 cancelled.cancel()
             }
@@ -221,20 +238,33 @@ final class AudioTrackTimeline: Sendable {
         return AudioTrackTimeline(track: track.id, channels: channels, placed: placed, missing: missing + unread)
     }
 
-    /// A file of audio, `url`, as a line of its own with `channels` channels (1 or 2) and the ID `id` (for `MissingAudio`):
-    /// one segment from timeline frame 0 on, its decoded frame `n` at frame `n` (resampled to 48 kHz as a segment of a
-    /// take is, and to `channels` the same way), decoded to its end once, off Swift's cooperative pool, so it can then be
-    /// read from anywhere. For a clip or a sound of `assets/` (phase 3 design §5.4 and §7.7, once
-    /// `ProjectPackage.mediaAsset(_:as:)` gave its URL) and for a theme of the music library in its cache (§7.6).
-    ///
-    /// The file is looked at before `AVURLAsset` is given it, without following a link (`lstat`): one that is not there,
-    /// is a link, is not a regular file, has 0 bytes or has no audio track AVFoundation can open is silence, nothing
-    /// placed, with the reason in `missing` (from frame 0 to its end); the same, from where it stops, for one whose
-    /// reading stops partway.
-    /// - Throws: `ExportError.cancelled` if the task is cancelled while loading.
-    static func load(file url: URL, id: String, channels: Int) async throws -> AudioTrackTimeline {
-        precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
-        guard !Task.isCancelled else { throw ExportError.cancelled }
+    /// A file of audio as `open(file:)` found it, for `load(_:id:channels:holding:)`: its first audio track ready to
+    /// decode, or why it cannot be heard.
+    struct OpenedFile: Sendable {
+        /// The file's name, for `MissingAudio`.
+        let file: String
+        fileprivate let audio: Opened
+
+        /// Its first audio track, or the span of it that is silent and why.
+        fileprivate enum Opened: Sendable {
+            case success(Segment)
+            case failure(MissingSpan)
+        }
+
+        /// Its frames at 48 kHz as its track's duration says, to the nearest frame: `nil` if it does not say, or if it
+        /// cannot be heard.
+        var estimatedFrames: Int64? {
+            guard case let .success(segment) = audio, let frames = segment.frames, frames.isFinite, frames >= 0, frames < 1e15
+            else { return nil }
+            return Int64(frames.rounded())
+        }
+    }
+
+    /// The file of audio at `url`, opened (never decoded): looked at before `AVURLAsset` is given it, without following a
+    /// link (`lstat`). One that is not there, is a link, is not a regular file, has 0 bytes or has no audio track
+    /// AVFoundation can open cannot be heard. One of more than two channels is mixed down by ITU-R BS.775
+    /// (`ImportedAudio.downmix`, as a sound of one's own is for the music), never at unity gain.
+    static func open(file url: URL) async -> OpenedFile {
         let origin = HostTime(nanoseconds: 0)
         let file = url.lastPathComponent
         let audio: SegmentAudio
@@ -249,42 +279,87 @@ final class AudioTrackTimeline: Sendable {
         } else {
             audio = await openAudio(at: url)
         }
-        let segment: Segment
         switch audio {
         case let .audio(asset, audioTrack, sourceRate, sourceChannels, frames):
             // Decoded frame 0 at timeline frame 0, one for one (the decoder gives the file at 48 kHz).
             let map = ClockMap(start: origin, anchors: [], sourceRate: sampleRate, timelineStart: origin, outputRate: sampleRate)
-            segment = Segment(
+            var weights: [(left: Float, right: Float)]?
+            if sourceChannels > 2 {
+                let format = try? await audioTrack.load(.formatDescriptions).first
+                weights = ImportedAudio.downmix(format.flatMap { ImportedAudio.labels(of: $0, channels: sourceChannels) }, channels: sourceChannels)
+            }
+            let segment = Segment(
                 file: file, asset: asset, track: audioTrack, map: map, channels: sourceChannels, sourceRate: sourceRate, frames: frames,
-                start: origin, end: nil)
+                start: origin, end: nil, weights: weights)
+            return OpenedFile(file: file, audio: .success(segment))
         case .unusable(let reason):
             logger.info("Audio file \(file, privacy: .public): \(String(describing: reason), privacy: .public); silence")
-            return AudioTrackTimeline(
-                track: id, channels: channels, placed: [], missing: [MissingSpan(file: file, start: origin, end: nil, reason: reason)])
+            return OpenedFile(file: file, audio: .failure(MissingSpan(file: file, start: origin, end: nil, reason: reason)))
         }
+    }
+
+    /// A file of audio, `url`, as a line of its own: `load(_:id:channels:holding:)` of `open(file:)`, holding nothing.
+    /// - Throws: `ExportError.cancelled` if the task is cancelled while loading.
+    static func load(file url: URL, id: String, channels: Int) async throws -> AudioTrackTimeline {
+        try await load(await open(file: url), id: id, channels: channels)
+    }
+
+    /// A file of audio, `opened`, as a line of its own with `channels` channels (1 or 2) and the ID `id` (for
+    /// `MissingAudio`): one segment from timeline frame 0 on, its decoded frame `n` at frame `n` (resampled to 48 kHz as a
+    /// segment of a take is, and to `channels` the same way), decoded to its end once, off Swift's cooperative pool, so it
+    /// can then be read from anywhere. For a clip or a sound of `assets/` (phase 3 design §5.4 and §7.7, once
+    /// `ProjectPackage.mediaAsset(_:as:)` gave its URL) and for a theme of the music library in its cache (§7.6).
+    ///
+    /// The frames of `holding` it decodes on that one pass are kept in memory (`held`, `heldFrames`): every range of them
+    /// then gives the same bits, whatever was read before and however often, which reading the file again need not. For a
+    /// codec that does not decode the same bits twice: macOS's AAC decoder gives samples a few units in the last place
+    /// apart (up to 2·10⁻⁷, −134 dBFS) from one reader to the next.
+    ///
+    /// A file that cannot be heard (`open(file:)`) is silence, nothing placed, with the reason in `missing` (from frame 0
+    /// to its end); the same, from where it stops, for one whose reading stops partway.
+    /// - Throws: `ExportError.cancelled` if the task is cancelled while loading (the decoding stops at its next block).
+    static func load(_ opened: OpenedFile, id: String, channels: Int, holding window: Range<Int64>? = nil) async throws -> AudioTrackTimeline {
+        precondition(channels == 1 || channels == 2, "AudioTrackTimeline: \(channels) channels")
+        guard !Task.isCancelled else { throw ExportError.cancelled }
+        let origin = HostTime(nanoseconds: 0)
+        let segment: Segment
+        switch opened.audio {
+        case .success(let opened): segment = opened
+        case .failure(let missing): return AudioTrackTimeline(track: id, channels: channels, placed: [], missing: [missing])
+        }
+        // Decoded frame `n` is timeline frame `n`: what is held is what a reader from frame 0 gives there.
+        let keeping = window.map { $0.clamped(to: 0..<Int64.max) }.flatMap { $0.isEmpty ? nil : $0 }
         let cancelled = CancellationFlag()
-        let placed: [Placed], unread: [MissingSpan]
+        let placed: [Placed], unread: [MissingSpan], kept: [Float]
         do {
-            (placed, unread) = try await withTaskCancellationHandler {
-                try await offTheCooperativePool { [segment] in try place([segment], origin: origin, channels: channels, cancelled: cancelled) }
+            (placed, unread, kept) = try await withTaskCancellationHandler {
+                try await offTheCooperativePool { [segment] in
+                    try place([segment], origin: origin, channels: channels, cancelled: cancelled, keeping: keeping)
+                }
             } onCancel: {
                 cancelled.cancel()
             }
         } catch is CancellationError {
             throw ExportError.cancelled  // while it waited for a decoding slot
         }
-        return AudioTrackTimeline(track: id, channels: channels, placed: placed, missing: unread)
+        let held = keeping.flatMap { keeping in kept.isEmpty ? nil : (start: keeping.lowerBound, frames: kept) }
+        return AudioTrackTimeline(track: id, channels: channels, placed: placed, missing: unread, held: held)
     }
 
     /// Where the audio of each of `segments` (in time order) is heard, as reading the track in order from frame 0 finds
     /// it: each segment from where the one before ended (frame 0 for the first), shifted to follow on from there over a
     /// closed gap, skipped if its audio ends before that frame, decoded to find where its audio ends. Also the spans of
     /// the segments that could not be read, from where reading stopped.
+    ///
+    /// With `keeping`, the decoded frames of the first segment within it are kept as they are decoded (`kept`, from its
+    /// lower bound): for a file of its own, whose decoded frame `n` is its timeline frame `n`.
     private static func place(
-        _ segments: [Segment], origin: HostTime, channels: Int, cancelled: CancellationFlag
-    ) throws -> (placed: [Placed], missing: [MissingSpan]) {
+        _ segments: [Segment], origin: HostTime, channels: Int, cancelled: CancellationFlag, keeping: Range<Int64>? = nil
+    ) throws -> (placed: [Placed], missing: [MissingSpan], kept: [Float]) {
         var placed: [Placed] = []
         var missing: [MissingSpan] = []
+        var kept: [Float] = []
+        var keeping = keeping
         // Where the audio placed last ended, and where the next segment's reading begins.
         var lastAudioEnd: Int64?
         var reading: Int64 = 0
@@ -295,9 +370,11 @@ final class AudioTrackTimeline: Sendable {
                 if abs(gap) <= maxClosedGap * sampleRate { segment.map.shift(by: -gap) }
             }
             if let frames = segment.frames, segment.map.output(atDecoded: frames) <= Double(reading) { continue }
-            let decoded: (frames: Int64, failure: String?, seekOrigin: CMTime?, tail: [Float])
+            let decoded: (frames: Int64, failure: String?, seekOrigin: CMTime?, tail: [Float], kept: [Float])
             do {
-                decoded = try SegmentDecoder.length(of: segment, channels: channels, cancelled: cancelled)
+                decoded = try SegmentDecoder.length(of: segment, channels: channels, cancelled: cancelled, keeping: keeping)
+                keeping = nil
+                kept = decoded.kept
             } catch ExportError.cancelled {
                 throw ExportError.cancelled
             } catch {
@@ -318,7 +395,7 @@ final class AudioTrackTimeline: Sendable {
             lastAudioEnd = end
             reading = end
         }
-        return (placed, missing)
+        return (placed, missing, kept)
     }
 
     /// The first timeline frame from `start` on where `map` shows no decoded frame of the `decodedFrames` there are:
@@ -427,11 +504,14 @@ final class AudioTrackTimeline: Sendable {
         return (kept, rejected)
     }
 
-    private init(track: String, channels: Int, placed: [Placed], missing: [MissingSpan]) {
+    private init(
+        track: String, channels: Int, placed: [Placed], missing: [MissingSpan], held: (start: Int64, frames: [Float])? = nil
+    ) {
         self.track = track
         self.channels = channels
         self.placed = placed
         self.missing = missing
+        self.held = held
     }
 
     /// The clean voice of `dry` (`soundIsolation-2`, plan decision 14) as a stream of its own with `channels` channels:
@@ -495,6 +575,27 @@ final class AudioTrackTimeline: Sendable {
             let channels = timeline.channels
             samples.removeAll(keepingCapacity: true)
             samples.append(contentsOf: repeatElement(0, count: frames.count * channels))
+            guard let held = timeline.held, let heldFrames = timeline.heldFrames else {
+                readFiles(frames, into: &samples, from: frames.lowerBound)
+                return
+            }
+            // What is held, as it was decoded; the rest from the files.
+            let kept = frames.clamped(to: heldFrames)
+            guard !kept.isEmpty else {
+                readFiles(frames, into: &samples, from: frames.lowerBound)
+                return
+            }
+            if frames.lowerBound < kept.lowerBound { readFiles(frames.lowerBound..<kept.lowerBound, into: &samples, from: frames.lowerBound) }
+            let into = Int(kept.lowerBound - frames.lowerBound) * channels
+            let from = Int(kept.lowerBound - held.start) * channels, to = Int(kept.upperBound - held.start) * channels
+            samples.replaceSubrange(into..<(into + to - from), with: held.frames[from..<to])
+            if kept.upperBound < frames.upperBound { readFiles(kept.upperBound..<frames.upperBound, into: &samples, from: frames.lowerBound) }
+        }
+
+        /// Reads timeline frames `frames` from the segments' files into `samples`, which holds zeros from timeline frame
+        /// `first` on: each frame at its place from `first`.
+        private func readFiles(_ frames: Range<Int64>, into samples: inout [Float], from first: Int64) {
+            let channels = timeline.channels
             let placed = timeline.placed
             // The first segment whose audio ends after the range starts.
             var low = 0, high = placed.count
@@ -507,7 +608,7 @@ final class AudioTrackTimeline: Sendable {
                 let from = max(frames.lowerBound, placed[k].start), to = min(frames.upperBound, placed[k].end)
                 if from < to, let reader = reader(of: k, from: from) {
                     var frame = from
-                    while frame < to, reader.read(frame: frame, into: &samples, at: Int(frame - frames.lowerBound) * channels) {
+                    while frame < to, reader.read(frame: frame, into: &samples, at: Int(frame - first) * channels) {
                         frame += 1
                     }
                 }
@@ -624,6 +725,9 @@ private final class SegmentDecoder {
     /// Channels of the stream (what `next()` gives) and of the file.
     private let channels: Int
     private let sourceChannels: Int
+    /// What each of the file's channels adds to the left and to the right, when it has more than two and is a file of its
+    /// own (`Segment.weights`).
+    private let weights: [(left: Float, right: Float)]?
     private var finished = false
 
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "MP4Exporter")
@@ -633,6 +737,7 @@ private final class SegmentDecoder {
         file = segment.file
         self.channels = channels
         sourceChannels = segment.channels
+        weights = segment.weights.flatMap { $0.count == segment.channels ? $0 : nil }
         reader = try AVAssetReader(asset: segment.asset)
         if let start { reader.timeRange = CMTimeRange(start: start, duration: .positiveInfinity) }
         output = AVAssetReaderTrackOutput(track: segment.track, outputSettings: [
@@ -662,9 +767,10 @@ private final class SegmentDecoder {
     /// reader started on the grid in its middle gives what this one does there (`AudioTrackTimeline.startsExactly`);
     /// and the last `tailFrames` frames.
     /// - Throws: what opening the file throws, or `ExportError.cancelled` once `cancelled` is set.
+    /// With `keeping`, also the decoded frames within it, interleaved, from its lower bound (or the first decoded there).
     static func length(
-        of segment: AudioTrackTimeline.Segment, channels: Int, cancelled: CancellationFlag
-    ) throws -> (frames: Int64, failure: String?, seekOrigin: CMTime?, tail: [Float]) {
+        of segment: AudioTrackTimeline.Segment, channels: Int, cancelled: CancellationFlag, keeping: Range<Int64>? = nil
+    ) throws -> (frames: Int64, failure: String?, seekOrigin: CMTime?, tail: [Float], kept: [Float]) {
         let decoder = try SegmentDecoder(segment, channels: channels)
         let rate = CMTimeScale(AudioTrackTimeline.sampleRate)
         let grid = AudioTrackTimeline.seekGrid(sourceRate: segment.sourceRate)
@@ -676,6 +782,7 @@ private final class SegmentDecoder {
             if start > 0 { check = (start, AudioTrackTimeline.seekCheck(at: start)) }
         }
         var reference: [Float] = []
+        var kept: [Float] = []
         var tail: [Float] = []
         let tailSamples = Int(AudioTrackTimeline.tailFrames) * channels
         var frames: Int64 = 0
@@ -690,6 +797,10 @@ private final class SegmentDecoder {
             if let compared = check?.frames {
                 let kept = (frames..<(frames + count)).clamped(to: compared)
                 if !kept.isEmpty { reference += block[(Int(kept.lowerBound - frames) * channels)..<(Int(kept.upperBound - frames) * channels)] }
+            }
+            if let keeping {
+                let held = (frames..<(frames + count)).clamped(to: keeping)
+                if !held.isEmpty { kept += block[(Int(held.lowerBound - frames) * channels)..<(Int(held.upperBound - frames) * channels)] }
             }
             frames += count
             tail += block
@@ -714,7 +825,7 @@ private final class SegmentDecoder {
                 logger.info("Audio segment \(segment.file, privacy: .public) at \(segment.sourceRate, privacy: .public) Hz: \(reason, privacy: .public); each seek decodes it from its start")
             }
         }
-        return (frames, decoder.failure, onTime ? origin : nil, tail)
+        return (frames, decoder.failure, onTime ? origin : nil, tail, kept)
     }
 
     /// Decoded frames `range`, interleaved, of a decoder whose first frame is decoded frame `first`, decoding on to them
@@ -763,6 +874,25 @@ private final class SegmentDecoder {
                 return nil
             }
             if sourceChannels == channels { return decoded }
+            if let weights {
+                // A file of its own of more than two channels: ITU-R BS.775, never clipped; a mono stream hears the mean.
+                var mixed: [Float] = []
+                mixed.reserveCapacity(decoded.count / sourceChannels * channels)
+                for frame in stride(from: 0, to: decoded.count - sourceChannels + 1, by: sourceChannels) {
+                    var left: Float = 0, right: Float = 0
+                    for c in 0..<sourceChannels {
+                        left += weights[c].left * decoded[frame + c]
+                        right += weights[c].right * decoded[frame + c]
+                    }
+                    if channels == 1 {
+                        mixed.append((left + right) * 0.5)
+                    } else {
+                        mixed.append(left)
+                        mixed.append(right)
+                    }
+                }
+                return mixed
+            }
             // Mono to both channels, or every channel at unity gain into each, clipped.
             var mixed: [Float] = []
             mixed.reserveCapacity(decoded.count / sourceChannels * channels)

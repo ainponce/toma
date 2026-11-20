@@ -302,7 +302,7 @@ struct BackgroundTab: View {
 
     private func chooseImage() {
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.png, .jpeg, .heic]
+        panel.allowedContentTypes = EditorModel.ImportedFile.image.contentTypes
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         let model = model

@@ -48,9 +48,9 @@ final class PreviewOverlayView: NSView {
     private var bubbleReference = SizeReference.height
     /// Whose style `bubbleStyle` is: the take's (1b) or a Bubble block's.
     private var bubbleTarget = LayoutTrackRules.BubbleTarget.none
-    /// The stage's points of the document shown, made from the take's screens the model read once
-    /// (`EditorModel.takeScreens`): cheap for each revision, never a pass over the take's events.
-    private var stagePoints: (document: EditDocument, points: StagePoints)?
+    /// The stage's points of the document shown in the take of the clip at the playhead, made from that take's screens
+    /// the model read once (`EditorModel.screensByTake`): cheap for each revision, never a pass over the take's events.
+    private var stagePoints: (document: EditDocument, take: String, points: StagePoints)?
 
     /// A drag of the box: where it started (stage units) and the box then.
     private struct BoxDrag {
@@ -114,13 +114,17 @@ final class PreviewOverlayView: NSView {
     private var lastTick: CFTimeInterval?
     /// The rect of the privacy block selected (phase 2), over everything else here.
     private let privacyEditor: PrivacyRectEditorView
+    /// The annotations of the frame at the playhead (phase 3, `AnnotationEditorView`), over all but the privacy rect.
+    private let annotationEditor: AnnotationEditorView
 
     init(model: EditorModel) {
         self.model = model
         privacyEditor = PrivacyRectEditorView(model: model)
+        annotationEditor = AnnotationEditorView(model: model)
         super.init(frame: .zero)
         wantsLayer = true
         setAccessibilityElement(false)
+        addSubview(annotationEditor)
         addSubview(privacyEditor)
     }
 
@@ -140,8 +144,9 @@ final class PreviewOverlayView: NSView {
     func refresh() {
         let document = model.document, selection = model.selection, playing = model.isPlaying, editable = model.canEdit
         _ = model.playheadFrame
-        let project = model.overlayProject, now = model.playheadNanoseconds
+        let project = model.playheadProject, now = model.playheadNanoseconds
         privacyEditor.refresh()
+        annotationEditor.refresh()
         guard boxDrag == nil, bubbleDrag == nil, splitDrag == nil else { return }
         zoom = nil
         splitState = nil
@@ -163,7 +168,8 @@ final class PreviewOverlayView: NSView {
         {
             // In a split, the screen is its card (design §5.7), where it is drawn now.
             let screen = splitState.map { SplitHandleGeometry.stageUnits($0.screen, output: $0.output) }
-                ?? points(of: document, project)?.screenRect(at: region.start) ?? Rect(x: 0, y: 0, width: stage.x, height: stage.y)
+                ?? points(of: document, model.project(ofTake: region.take) ?? project)?.screenRect(at: region.start)
+                ?? Rect(x: 0, y: 0, width: stage.x, height: stage.y)
             zoom = ZoomBox(
                 id: id, focus: SIMD2(x, y), depth: region.depth ?? document.zoom.auto.depth, screen: screen, stage: stage)
         }
@@ -185,12 +191,18 @@ final class PreviewOverlayView: NSView {
         }
     }
 
-    /// The stage's points of `document`, kept while it is the same document.
+    /// The stage's points of `document` in `project`'s take, kept while it is the same document and take.
     private func points(of document: EditDocument, _ project: LoadedProject) -> StagePoints? {
-        if stagePoints?.document != document, let screens = model.takeScreens {
-            stagePoints = (document, StagePoints(take: project.take, document: document, screens: screens))
+        if stagePoints?.document != document || stagePoints?.take != project.take.id,
+            let screens = model.screensByTake[project.take.id]
+        {
+            // In the output's stage, whatever take it is of (the ratio of the first clip's take).
+            let ratio = model.contentRatio(of: document)
+            stagePoints = (
+                document, project.take.id,
+                StagePoints(take: project.take, document: document, screens: screens, contentRatio: .some(ratio)))
         }
-        return stagePoints?.points
+        return stagePoints?.take == project.take.id ? stagePoints?.points : nil
     }
 
     /// The split that rules at output instant `now`, if one does: the block's or the project's, with the screen's aspect at
@@ -373,6 +385,7 @@ final class PreviewOverlayView: NSView {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let local = convert(point, from: superview)
         if let editor = privacyEditor.hitTest(local) { return editor }
+        if let annotations = annotationEditor.hitTest(local) { return annotations }
         return hit(at: local) == nil ? nil : self
     }
 

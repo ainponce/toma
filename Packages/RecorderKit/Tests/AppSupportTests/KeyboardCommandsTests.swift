@@ -59,8 +59,8 @@ import Testing
         #expect(command("↓") == .nextEditPoint)
         #expect(command("home") == .start)
         #expect(command("end") == .end)
-        // Other modifiers are not the table's.
-        #expect(command("←", [.option]) == nil)
+        // Other modifiers are not the table's (⌥← and ⌥→ are the markers', phase 3: `markerKeys`).
+        #expect(command("←", [.option]) == .previousMarker)
         #expect(command("→", [.command]) == nil)
         #expect(command("↑", [.option]) == nil)
         #expect(command("↓", [.command, .shift]) == nil)
@@ -312,5 +312,54 @@ import Testing
         #expect(command("0", [.option], focus: .preview) == nil)
         // The key an event with ⌥ gives (`charactersIgnoringModifiers`).
         #expect(EditorKey(characters: "3", unmodified: "3", modifiers: [.option]) == EditorKey(key: "3", modifiers: [.option]))
+    }
+
+    /// M adds a marker at the playhead, ⌥← and ⌥→ go to the marker before and after it (3d plan decision 18): with the
+    /// focus on the preview or the timeline only. ⌥⌘M is still the island's.
+    @Test func markerKeys() {
+        for focus in [EditorFocus.preview, .timeline] {
+            #expect(command("m", focus: focus) == .addMarker)
+            #expect(command("←", [.option], focus: focus) == .previousMarker)
+            #expect(command("→", [.option], focus: focus) == .nextMarker)
+        }
+        for focus in [EditorFocus.textField, .panel, .toolbar] {
+            #expect(command("m", focus: focus) == nil)
+            #expect(command("←", [.option], focus: focus) == nil)
+            #expect(command("→", [.option], focus: focus) == nil)
+        }
+        for focus in Self.focuses { #expect(command("m", [.command, .option], focus: focus) == nil) }
+        #expect(command("m", [.shift]) == nil)
+        #expect(command("m", [.option]) == nil)
+        #expect(command("←", [.option, .shift]) == nil)
+        // ← and → alone still step a frame.
+        #expect(command("←") == .step(frames: -1))
+        #expect(command("→") == .step(frames: 1))
+        // The key an event of ⌥← gives.
+        #expect(EditorKey(characters: "\u{F702}", unmodified: "\u{F702}", modifiers: [.option]) == EditorKey(key: "←", modifiers: [.option]))
+        // Held, the playhead goes on from marker to marker; a marker is added once a press, and never during a drag.
+        #expect(EditorCommand.previousMarker.repeats)
+        #expect(EditorCommand.nextMarker.repeats)
+        #expect(!EditorCommand.addMarker.repeats)
+        #expect(EditorCommand.addMarker.edits)
+        #expect(!EditorCommand.previousMarker.edits)
+        #expect(!EditorCommand.nextMarker.edits)
+    }
+
+    /// ⇧⌘R re-records from the playhead (3d plan decision 18): with the focus anywhere, a field's too, as the keys with ⌘
+    /// are; ⌘R alone, or with ⌥, is no command of the editor. Never during a drag, and once a press.
+    @Test func rerecordShortcut() {
+        for focus in Self.focuses { #expect(command("r", [.command, .shift], focus: focus) == .rerecordFromHere) }
+        #expect(command("r", [.command, .shift], focus: .textField) == .rerecordFromHere)
+        for focus in Self.focuses {
+            #expect(command("r", [.command], focus: focus) == nil)
+            #expect(command("r", [.command, .option], focus: focus) == nil)
+            #expect(command("r", [.command, .shift, .option], focus: focus) == nil)
+        }
+        #expect(command("r", [.shift]) == nil)
+        #expect(command("r") == nil)
+        // The key an event of ⇧⌘R gives: "R" ignoring the modifiers but ⇧, "r" without any.
+        #expect(EditorKey(characters: "R", unmodified: "r", modifiers: [.command, .shift]) == EditorKey(key: "r", modifiers: [.command, .shift]))
+        #expect(!EditorCommand.rerecordFromHere.repeats)
+        #expect(EditorCommand.rerecordFromHere.edits)
     }
 }

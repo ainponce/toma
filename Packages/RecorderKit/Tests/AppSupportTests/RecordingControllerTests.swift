@@ -1067,6 +1067,32 @@ enum AwaitPoint: CaseIterable {
         }
     }
 
+    /// Follow the Voice listens to the take's microphone (plan 3d, T5) while the take records it, and the take goes on.
+    @Test func theTakesMicrophoneCanBeListenedTo() async throws {
+        try await withRig { rig in
+            #expect(rig.controller.microphoneSource == nil)  // no take
+            rig.controller.startRecording(selection: .mainDisplay(1), settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let source = try #require(rig.controller.microphoneSource)
+            #expect(source.kind == .microphone)
+            let heard = Mutex(0)
+            source.listen { _ in heard.withLock { $0 += 1 } }
+            #expect(await eventually { heard.withLock { $0 } >= 20 })
+            #expect(await eventually { abs(rig.controller.microphoneLevel - -12.04) < 0.1 })
+            source.listen(nil)
+            await rig.controller.stop(openingEditor: false)
+            #expect(rig.controller.microphoneSource == nil)
+
+            // A take without a microphone has none to listen to.
+            var selection = CaptureSelection.mainDisplay(1)
+            selection.microphone = .off
+            rig.controller.startRecording(selection: selection, settings: QuickSettings())
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            #expect(rig.controller.microphoneSource == nil)
+            await rig.controller.stop(openingEditor: false)
+        }
+    }
+
     @Test func refusedPauseLeavesTheTakeUnpaused() async throws {
         try await withRig { rig in
             // The take closes on its own (the disk is full), and the controller hears of it late: a pause

@@ -529,7 +529,10 @@ public final class EditSession {
     /// `.lut` the `.cube` at `url` for the camera's colors (`AssetImport.copyLUT`, phase 2 design §6.3), or with `.video`
     /// or `.audio` the clip or the sound at `url` (phase 3), for the step that names it, which comes after:
     /// `.imported(path)` once it is on the drive. The file is decoded first, on the queue of files, as the package's asset
-    /// reader decodes one: `.notAnImage` if it does not, and nothing is written. A `.cube` is read and parsed first instead
+    /// reader decodes one: `.notAnImage` if it does not, and nothing is written. A TIFF, a GIF or a PDF is converted to
+    /// PNG there instead (`AssetImport.convertedPNG(of:extension:)`, phase 3 design §5.4), once: `.notAnImage` if it does
+    /// not convert, and nothing is written; that PNG is what is placed, however many times the copy is tried, never the
+    /// file read again. A `.cube` is read and parsed first instead
     /// (`CubeLUT.parse`): `.notALUT(reason)` if it is not a 3D LUT, `.notAnImage` if it cannot be read at all, and nothing
     /// is written; the copy parses it again, so what is placed is what was parsed. A clip or a sound is opened with
     /// AVFoundation first (`AssetImport.mediaRefusal`): `.notPlayable` if it does not play, and nothing is written; it is
@@ -545,11 +548,17 @@ public final class EditSession {
     /// changed the package (it is opened again), as with `perform`.
     public func importAsset(_ url: URL, kind: AssetKind = .image) async -> AssetImportOutcome {
         guard isEditable else { return .notEditable }
+        // A TIFF's, a GIF's or a PDF's PNG, converted once here.
+        let converted: Data?
         if kind.isMedia {
             if let refusal = await AssetImport.mediaRefusal(of: url, as: kind) { return refusal }
+            converted = nil
         } else {
             do {
-                if let refusal = try await Self.run(on: files, { AssetImport.refusal(of: url, as: kind) }) { return refusal }
+                switch try await Self.run(on: files, { AssetImport.screened(url, as: kind) }) {
+                case let .refused(outcome): return outcome
+                case let .accepted(png): converted = png
+                }
             } catch {
                 return .notAnImage
             }
@@ -584,7 +593,9 @@ public final class EditSession {
         while true {
             let package = ProjectPackage(url: packageURL)
             let placed = (try? await Self.run(on: files) { () -> Result<String, AssetImport.Failure> in
-                Result { () throws(AssetImport.Failure) in try AssetImport.place(url, into: package, as: kind) }
+                Result { () throws(AssetImport.Failure) in
+                    try AssetImport.place(url, into: package, as: kind, converted: converted)
+                }
             }) ?? .failure(.destination(POSIXError(.EIO)))
             switch placed {
             case let .success(path):
@@ -603,8 +614,9 @@ public final class EditSession {
         }
     }
 
-    /// "Apply Default Style" (design §5.9): `StyleCommands.applyDefaultStyle` of `style` for the take, as one step that
-    /// `perform` takes. An image background is brought into the package first from `styleDirectory`, the default style's
+    /// "Apply Default Style" (design §5.9): `StyleCommands.applyDefaultStyle` of `style` for every take the sequence shows
+    /// (`StyleCommands.applyDefaultStyle(_:_:takes:)`, their events read off the main actor), as one step that `perform`
+    /// takes. An image background is brought into the package first from `styleDirectory`, the default style's
     /// folder (its `<sha>.<ext>`, with `importAsset`); without the folder, or if the image is not there, does not decode
     /// or cannot be saved, the classic gradient (`Background.tomaClassic`) is applied in its place. `.refused` if the
     /// project cannot be edited, or has all of it already.
@@ -622,13 +634,13 @@ public final class EditSession {
             }
             style.style.background = background
         }
-        guard let step = StyleCommands.applyDefaultStyle(document, style, take: project.take, events: project.events)
+        guard let takes = await shownTakes(), let step = StyleCommands.applyDefaultStyle(document, style, takes: takes)
         else { return .refused }
         return perform(step)
     }
 
-    /// "Apply" a named style (1c design §8): `StyleCommands.applyStyle` of `style` for the take, as one step that `perform`
-    /// takes. An image background is brought into the package first from `imageDirectory`, the folder of the style's
+    /// "Apply" a named style (1c design §8): `StyleCommands.applyStyle` of `style` for every take the sequence shows
+    /// (`StyleCommands.applyStyle(_:_:takes:)`, their events read off the main actor), as one step that `perform` takes. An image background is brought into the package first from `imageDirectory`, the folder of the style's
     /// image (`StyleLibrary.imageDirectory(of:)`), with `importAsset`, as `applyDefaultStyle` does; without the folder, or
     /// if the image is not there or does not decode, the rest is applied and the project keeps its background
     /// (`imageMissing`). An error of the disk is never a missing image: `importAsset` tries it again meanwhile, and if it
@@ -651,9 +663,22 @@ public final class EditSession {
             // The document as it is after the import, which waited.
             style.look.style.background = imported.map { .image(file: $0) } ?? document.style.background
         }
-        guard let step = StyleCommands.applyStyle(document, style, take: project.take, events: project.events)
+        guard let takes = await shownTakes(), let step = StyleCommands.applyStyle(document, style, takes: takes)
         else { return (.refused, imageMissing) }
         return (perform(step), imageMissing)
+    }
+
+    /// The takes `document`'s sequence shows (`LoadedProject.takesShown(by:)`) with their events, read on the session's
+    /// queue of files (each take's from the disk the first time): never on the main actor. Read again if the document
+    /// came to show other takes meanwhile, so they are those of the document as it is on return; `nil` if the session
+    /// closed meanwhile.
+    private func shownTakes() async -> [(TakeRecord, [InputEvent])]? {
+        while !isClosed {
+            let shown = project.takesShown(by: document)
+            guard let takes = try? await Self.run(on: files, { shown.map { ($0.take, $0.events) } }) else { return nil }
+            if takes.map(\.0.id) == project.takesShown(by: document).map(\.take.id) { return takes }
+        }
+        return nil
     }
 
     /// Waits for the attempt at the upgrade to version 3 under way to come back, then until the journal confirmed every

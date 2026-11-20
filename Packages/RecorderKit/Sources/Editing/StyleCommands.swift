@@ -106,7 +106,17 @@ public enum StyleCommands {
     private static func changes(
         _ doc: EditDocument, look: DefaultStyle, camera: CameraLook?, take: TakeRecord, events: [InputEvent]
     ) -> DocumentChanges {
-        let recordedImages = events.contains { if case .cursorImage = $0.kind { true } else { false } }
+        changes(doc, look: look, camera: camera, recordedImages: hasCursorImages(events)) { styled in
+            ZoomCommands.replanned(styled, take: take, events: events)
+        }
+    }
+
+    /// The changes "Apply" makes, as `changes(_:look:camera:take:events:)` says, with the cursor drawn from the recorded
+    /// images if `recordedImages`, and the zoom's blocks `replanned` gives for the document so styled.
+    static func changes(
+        _ doc: EditDocument, look: DefaultStyle, camera: CameraLook?, recordedImages: Bool,
+        replanned: (EditDocument) -> [ZoomRegion]
+    ) -> DocumentChanges {
         let styled = styled(doc, look: look, camera: camera, cursor: recordedImages ? .system : .toma)
         var changes = DocumentChanges()
         changes.set(["style"], from: doc.style, to: styled.style)
@@ -122,8 +132,13 @@ public enum StyleCommands {
             changes.set(["camera", "layout"], from: doc.camera.layout, to: styled.camera.layout)
             changes.set(["camera", "sizeReference"], from: doc.camera.sizeReference, to: styled.camera.sizeReference)
         }
-        changes.edit(.zoomRegions, from: doc.zoom.regions, to: ZoomCommands.replanned(styled, take: take, events: events), id: \.id)
+        changes.edit(.zoomRegions, from: doc.zoom.regions, to: replanned(styled), id: \.id)
         return changes
+    }
+
+    /// Whether `events` hold a `cursorImage`: a take that recorded its cursor's images.
+    static func hasCursorImages(_ events: [InputEvent]) -> Bool {
+        events.contains { if case .cursorImage = $0.kind { true } else { false } }
     }
 
     /// `doc` with `look` and `camera` as "Apply" puts them, its zoom's blocks as they are: the stage of `look` with

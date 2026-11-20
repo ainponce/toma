@@ -55,8 +55,10 @@ struct TrackItems<Info> {
 /// - Camera: each change at its own instant, if it is kept (`TimeMap.output(atSource:take:)`, as `EditPoints` reads it), and
 ///   each layout block where the preview shows it (`LayoutTimeline.blockOutputs`); a change inside a block is not seen while
 ///   it rules (`LayoutTimeline.hiddenChanges`).
-/// - The ruler's markers: each `marker` event of the take at its instant, if it is kept: from the take's marker times,
-///   found once per take (`markerTimes(in:)`), never by going over its events for each revision or drag move.
+/// - The ruler's markers: those the output shows (`MarkerList.visible`, phase 3 plan 3d decisions 1 and 2), the recorded
+///   ones of every take (from their instants, found once per take when the project opens: `MarkerList.Recorded`, never
+///   by going over the events for each revision or drag move) and the ones added in the editor, each where its instant
+///   is kept.
 struct TimelineContent {
     struct ClipInfo {
         /// Its source's start, in host nanoseconds.
@@ -71,6 +73,8 @@ struct TimelineContent {
     struct Zoom {
         var depth: Double
         var automatic: Bool
+        /// The mode it is drawn in (`ZoomRegion.resolvedMode(auto:)`, phase 3 design §6).
+        var mode: ZoomMode = .classic
     }
 
     struct Screen {
@@ -99,6 +103,8 @@ struct TimelineContent {
         var muted: Bool
         /// The host time of pair 0 of its waveform: its earliest segment's start (`Waveform`).
         var origin: UInt64
+        /// The same in each take that recorded the track, by take id (3d): each clip's waveform is its own take's.
+        var origins: [String: UInt64] = [:]
     }
 
     let layout: TimelineLayout
@@ -112,6 +118,10 @@ struct TimelineContent {
     let cameraChanges: TrackItems<CameraChangeInfo>
     /// The privacy blocks (phase 2 design §7.1).
     let privacy: TimelinePrivacyItems
+    /// The annotations, in their lanes (phase 3 design §5.6).
+    let annotations: TimelineAnnotationItems
+    /// The clips with content of the Video track (phase 3 design §5.2–§5.4).
+    let contentClips: TimelineContentClipItems
     /// The captions (phase 2 design §5.2); none without a transcript.
     let captions: TrackItems<CaptionInfo>
     /// The layout blocks, where the preview shows them.
@@ -122,29 +132,34 @@ struct TimelineContent {
     let splitOrientation: SplitOrientation
     /// The layout outside the blocks (the header's second line).
     let projectLayout: LayoutKind
-    /// In order.
-    let markers: [Int64]
+    /// By output time (`MarkerList.visible`).
+    let markers: [VisibleMarker]
     /// The spans of the screen or the camera that could not be read (`MissingVideo`), in order.
     let missing: [Range<Int64>]
     let audio: [String: AudioTrack]
+    /// Where each clip's sound plays (phase 3 design §7.3: a J or L cut moves it off its picture), the stretches at another
+    /// volume of each audio row by its track's id, where the output plays them (`AudioRangeCommands.shownRanges`), and
+    /// the cuts of the sequence the sound can be cut at J or L (`AudioRowRules.cuts`).
+    let audioWindows: TrackItems<AudioWindowInfo>
+    let audioRanges: [String: [AudioRangeCommands.ShownRange]]
+    let audioCuts: [(clip: Int, picture: Int64, audio: Int64)]
     /// The width of the screen the take starts on over its height: the thumbnails' shape.
     let screenAspect: Double
+    /// The take the thumbnails of the frozen frames are of (`TimelineContentClipItems`): the session's own.
+    let ownTake: String
+    /// The document shown: the Music and Imported Clips rows draw its music and its imported clips (phase 3).
+    let document: EditDocument
     /// The screen shown from each source instant on: the take's first, then its changes in time order.
     private let initialScreen: String?
     private let screenChanges: [(t: UInt64, track: String)]
+    /// The same for each take of `takes` and `take`, by take id (3d): what the thumbnails of each clip are of.
+    private let screensOfTakes: [String: (initial: String?, changes: [(t: UInt64, track: String)])]
 
-    /// The source instants of the take's `marker` events, in order: what the ruler's markers are made from. Goes over
-    /// every event of the take; the editor does it once, off the main thread.
-    static func markerTimes(in events: [InputEvent]) -> [HostTime] {
-        events.compactMap { event -> HostTime? in
-            if case .marker = event.kind { event.t } else { nil }
-        }.sorted()
-    }
-
-    /// `markers`: the take's marker times (`markerTimes(in:)`); `contentRatio`: what "Like the Recording" follows; `takes`:
-    /// those the sequence shows (`take` alone when empty), whose audio tracks have rows (`TimelineLayout(takes:document:)`).
+    /// `recorded`: the instants of the `marker` events of every take (`MarkerList.Recorded`); `contentRatio`: what "Like the
+    /// Recording" follows; `takes`: those the sequence shows (`take` alone when empty), whose audio tracks have rows
+    /// (`TimelineLayout(takes:document:)`).
     init(
-        take: TakeRecord, markers: [HostTime], document: EditDocument, missing: [ClosedRange<Double>],
+        take: TakeRecord, recorded: MarkerList.Recorded, document: EditDocument, missing: [ClosedRange<Double>],
         contentRatio: Double? = nil, takes: [TakeRecord] = []
     ) {
         let map = TimeMap(sequence: document.sequence)
@@ -168,6 +183,15 @@ struct TimelineContent {
         let changes = document.screens.changes.filter { $0.take == takeID }.sorted { $0.t < $1.t }
         initialScreen = document.screens.initial[takeID]
         screenChanges = changes.map { ($0.t.nanoseconds, $0.track) }
+        ownTake = take.id
+        var screensOfTakes: [String: (initial: String?, changes: [(t: UInt64, track: String)])] = [:]
+        for record in [take] + takes where screensOfTakes[record.id] == nil {
+            screensOfTakes[record.id] = record.id == takeID
+                ? (initialScreen, screenChanges)
+                : (document.screens.initial[record.id],
+                   document.screens.changes.filter { $0.take == record.id }.sorted { $0.t < $1.t }.map { ($0.t.nanoseconds, $0.track) })
+        }
+        self.screensOfTakes = screensOfTakes
         var spans: [(id: String, track: String?, start: Int64)] = [("initial", initialScreen, 0)]
         for change in changes {
             guard let rules = map.output(ofChangeAt: change.t, take: takeID) else { continue }
@@ -187,9 +211,13 @@ struct TimelineContent {
             else { return nil }
             return .init(
                 id: region.id, output: output,
-                info: Zoom(depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto))
+                info: Zoom(
+                    depth: region.depth ?? document.zoom.auto.depth, automatic: region.origin == .auto,
+                    mode: region.resolvedMode(auto: document.zoom.auto)))
         })
         privacy = TimelinePrivacyItems(document: document)
+        annotations = TimelineAnnotationItems(document: document, map: map)
+        contentClips = TimelineContentClipItems(document: document, map: map, take: take.id)
         let output = StageLayout.outputSize(aspect: document.aspect, shortSide: 1080, contentRatio: contentRatio)
         captions = TimelineCaptionItems.items(document: document, map: map, outputSize: output)
         let orientation = CameraLayoutGeometry.orientation(output: SIMD2(Double(output.x), Double(output.y)))
@@ -216,7 +244,7 @@ struct TimelineContent {
                     id: change.id, output: $0..<$0, info: CameraChangeInfo(hiddenBy: block.flatMap { kinds[$0] }, hidingBlock: block))
             }
         })
-        self.markers = markers.compactMap { map.output(atSource: $0, take: takeID) }.sorted()
+        markers = MarkerList.visible(document: document, recorded: recorded, timeMap: map)
         self.missing = missing.map { TimeMap.outputNanoseconds(seconds: $0.lowerBound)..<TimeMap.outputNanoseconds(seconds: $0.upperBound) }
             .filter { !$0.isEmpty }
             .sorted { $0.lowerBound < $1.lowerBound }
@@ -226,30 +254,49 @@ struct TimelineContent {
         var audio: [String: AudioTrack] = [:]
         let takeIDs = takes.map(\.id)
         for record in [take] + takes {
-            for track in record.tracks where !track.kind.isVideo && audio[track.id] == nil {
+            for track in record.tracks where !track.kind.isVideo {
                 guard let origin = track.segments.map(\.startHostTime.nanoseconds).min() else { continue }
+                guard audio[track.id] == nil else {
+                    if audio[track.id]?.origins[record.id] == nil { audio[track.id]?.origins[record.id] = origin }
+                    continue
+                }
                 let key = AudioPlan.key(take: record.id, track: track.id)
                 let gain = document.audio.trackGain(take: record.id, track: track.id, takes: takeIDs)
                 audio[track.id] = AudioTrack(
                     key: key, isMicrophone: track.kind == .microphone, gain: gain?.gain ?? 1, muted: gain?.muted ?? false,
-                    origin: origin)
+                    origin: origin, origins: [record.id: origin])
             }
         }
         self.audio = audio
+        audioWindows = TimelineAudioItems.windows(document.sequence, map: map)
+        let hasRanges = document.audio.tracks.values.contains { !$0.ranges.isEmpty }
+        audioRanges = hasRanges
+            ? Dictionary(uniqueKeysWithValues: audio.keys.map { ($0, AudioRangeCommands.shownRanges(document, track: $0, timeMap: map)) }) : [:]
+        audioCuts = AudioRowRules.cuts(document, timeMap: map)
 
         let first = initialScreen.flatMap(take.track)
         let frame = first?.source.captureArea ?? first?.source.globalFrame
         screenAspect = frame.map { $0.height > 0 ? min(max($0.width / $0.height, 0.5), 3) : 16.0 / 9 } ?? 16.0 / 9
+        self.document = document
     }
 
     /// The screen track shown at source instant `t` of the take: the last change at or before it, or the first screen.
     func screenTrack(atSource t: UInt64) -> String? {
-        var (low, high) = (0, screenChanges.count)
+        Self.screenTrack(atSource: t, initial: initialScreen, changes: screenChanges)
+    }
+
+    /// The same at source instant `t` of take `take` (3d), one of the takes the content was made with; `nil` for another.
+    func screenTrack(atSource t: UInt64, take: String) -> String? {
+        screensOfTakes[take].flatMap { Self.screenTrack(atSource: t, initial: $0.initial, changes: $0.changes) }
+    }
+
+    private static func screenTrack(atSource t: UInt64, initial: String?, changes: [(t: UInt64, track: String)]) -> String? {
+        var (low, high) = (0, changes.count)
         while low < high {
             let middle = low + (high - low) / 2
-            if screenChanges[middle].t <= t { low = middle + 1 } else { high = middle }
+            if changes[middle].t <= t { low = middle + 1 } else { high = middle }
         }
-        return low > 0 ? screenChanges[low - 1].track : initialScreen
+        return low > 0 ? changes[low - 1].track : initial
     }
 }
 
@@ -337,7 +384,8 @@ final class ClipLayer: CALayer {
 }
 
 /// A zoom block: tinted with its hue, a border of it and a lighter top edge, its depth written on it; an automatic one
-/// lighter, with the symbol of the automatic zoom (✦) before its depth.
+/// lighter, with the symbol of the automatic zoom (✦) before its depth. A calm one (phase 3 design §6) has its mode's
+/// symbol there instead (`ZoomPanelRules.trackSymbol`), automatic or not.
 final class BlockLayer: CAShapeLayer {
     let label = CATextLayer()
     let icon = CALayer()
@@ -345,6 +393,8 @@ final class BlockLayer: CAShapeLayer {
     var labelText: String?
     var drawnSize = CGSize.zero
     var automatic: Bool?
+    /// The mode whose symbol is drawn.
+    var mode: ZoomMode?
 
     override init() {
         super.init()
@@ -446,19 +496,25 @@ final class TimelineTracks {
     private let spans: LayerPool<SpanLayer>
     private let layouts: LayerPool<LayoutBlockLayer>
     private let diamonds: LayerPool<CALayer>
-    /// Under each audio track's waveform, a region for each clip in sight, so the row reads as sound.
-    private let audioClips: LayerPool<CALayer>
     private let cameraNotice = CATextLayer()
-    private var waveforms: [String: CAShapeLayer] = [:]
+    /// The audio rows: their waveforms, volume lines, stretches and cuts of the sound (phase 3).
+    let audioRows = TimelineAudioRows()
+    /// The Music and Imported Clips rows (phase 3).
+    let musicRow = TimelineMusicRow()
     /// The Privacy row's blocks (phase 2).
     private let privacyRow = TimelinePrivacyRow()
+    /// The Annotations row's blocks (phase 3).
+    private let annotationsRow = TimelineAnnotationsRow()
+    /// The clips with content of the Video row (phase 3), and the lengths and frames of the imported clips' files.
+    let contentClips = TimelineContentClipsRow()
     /// The Captions row's blocks (phase 2).
     private let captionsRow = CaptionTrackLayers()
     /// The output time under the playhead, for the caption it highlights (`moved(playhead:)` when it moves).
     private(set) var playhead: Int64 = 0
 
-    /// The thumbnails, and the waveforms worked out so far by audio track.
-    var thumbnailCache: ThumbnailCache?
+    /// The thumbnails of each take by take id, and the waveforms worked out so far by take and audio track
+    /// (`AudioPlan.key(take:track:)`): each clip's are its own take's (3d).
+    var thumbnailCaches: [String: ThumbnailCache] = [:]
     var waveformLevels: [String: WaveformLevels] = [:]
     /// Called once a thumbnail arrived, to draw it.
     var thumbnailArrived: () -> Void = {}
@@ -470,6 +526,7 @@ final class TimelineTracks {
     var settling = false
 
     private struct ThumbnailKey: Hashable {
+        var take: String
         var track: String
         var source: UInt64
         var height: Int
@@ -481,8 +538,6 @@ final class TimelineTracks {
     /// The thumbnail each tile shows, or is waiting for.
     private var tileKeys: [String: ThumbnailKey] = [:]
     private static let keptThumbnails = 400
-    /// Clips faster than this are silent (`SpeedStretch.maximumSpeed` of the export): their waveform is flat.
-    private static let fastestHeard = 4.0
     /// The narrowest piece of a thumbnail drawn: under it, the clip's color.
     private static let narrowestThumbnail = 16.0
 
@@ -491,6 +546,7 @@ final class TimelineTracks {
         layer.addSublayer(rows)
         thumbnailStrip.mask = clipMask
         rows.addSublayer(thumbnailStrip)
+        thumbnailStrip.addSublayer(contentClips.layer)
         clipLayers = LayerPool(parent: rows) { ClipLayer() }
         hatches = LayerPool(parent: rows) {
             let hatch = CAShapeLayer()
@@ -519,19 +575,15 @@ final class TimelineTracks {
             diamond.zPosition = 2
             return diamond
         }
-        audioClips = LayerPool(parent: rows) {
-            let region = CALayer()
-            region.cornerRadius = 4
-            region.borderWidth = 1
-            // Under the waveforms.
-            region.zPosition = -1
-            return region
-        }
+        rows.addSublayer(audioRows.layer)
+        rows.addSublayer(musicRow.layer)
         TimelineText.setUp(cameraNotice, size: 10, weight: .regular)
         cameraNotice.string = String(localized: "The camera can't be read: only the screen is shown.")
         rows.addSublayer(cameraNotice)
         rows.addSublayer(privacyRow.layer)
+        rows.addSublayer(annotationsRow.layer)
         rows.addSublayer(captionsRow.layer)
+        contentClips.arrived = { [weak self] in self?.thumbnailArrived() }
         layer.addSublayer(separators)
         separators.lineWidth = 1
         separators.fillColor = nil
@@ -551,13 +603,16 @@ final class TimelineTracks {
         }
         separators.path = lines
 
-        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin, audioClips.begin] {
+        for pool in [clipLayers.begin, tiles.begin, hatches.begin, blocks.begin, spans.begin, layouts.begin, diamonds.begin] {
             pool()
         }
         privacyRow.begin()
+        annotationsRow.begin()
+        contentClips.begin()
         captionsRow.begin()
+        audioRows.begin()
+        musicRow.begin()
         var wanted: Set<ThumbnailKey> = []
-        var shownWaveforms: Set<String> = []
         for row in geometry.rows {
             switch row.track {
             case .ruler: break
@@ -568,19 +623,22 @@ final class TimelineTracks {
             case .privacy: privacyRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
             case .camera: layOutCamera(content, row, geometry, palette)
             case let .audio(id):
-                layOutWaveform(id, content, row, geometry, palette)
-                shownWaveforms.insert(id)
-            // Empty in the base of phase 3: the annotations (3a) and the sound (3c) draw in them.
-            case .annotations, .importedAudio, .music: break
+                let levels = waveformLevels
+                audioRows.layOut(
+                    id, content, row, geometry, palette, levels: { levels[AudioPlan.key(take: $0, track: id)] }, selected: selected,
+                    settling: settling)
+            case .annotations: annotationsRow.layOut(content, row, geometry, palette, selected: selected, settling: settling)
+            case .importedAudio: musicRow.layOutImported(content, row, geometry, palette, settling: settling)
+            case .music: musicRow.layOutMusic(content, row, geometry, palette, selected: selected, settling: settling)
             }
         }
-        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end, audioClips.end] { pool() }
+        for pool in [clipLayers.end, tiles.end, hatches.end, blocks.end, spans.end, layouts.end, diamonds.end] { pool() }
         privacyRow.end()
+        annotationsRow.end()
+        contentClips.end()
         captionsRow.end()
-        for (id, waveform) in waveforms where !shownWaveforms.contains(id) {
-            waveform.removeFromSuperlayer()
-            waveforms[id] = nil
-        }
+        audioRows.end()
+        musicRow.end()
         // What is no longer in sight is not made.
         for (key, task) in loading where !wanted.contains(key) {
             task.cancel()
@@ -599,21 +657,24 @@ final class TimelineTracks {
         layer.isHidden = true
         for task in loading.values { task.cancel() }
         loading = [:]
+        contentClips.stop()
     }
 
     /// Forgets the layers, so the next update makes them again with new colors.
     func reset() {
         for pool in [
             clipLayers.removeAll, tiles.removeAll, hatches.removeAll, blocks.removeAll, spans.removeAll, layouts.removeAll,
-            diamonds.removeAll, audioClips.removeAll,
+            diamonds.removeAll,
         ] {
             pool()
         }
         privacyRow.reset()
+        annotationsRow.reset()
+        contentClips.reset()
         captionsRow.reset()
+        audioRows.reset()
+        musicRow.reset()
         tileKeys = [:]
-        for waveform in waveforms.values { waveform.removeFromSuperlayer() }
-        waveforms = [:]
     }
 
     /// Forgets the thumbnails (another project, or the package moved).
@@ -624,12 +685,14 @@ final class TimelineTracks {
         thumbnailOrder = []
         tileKeys = [:]
         tiles.removeAll()
+        contentClips.forgetFrames()
     }
 
     /// How many layers the rows have in sight now, for the benchmark.
     var layerCount: Int {
         clipLayers.shownCount + tiles.shownCount + hatches.shownCount + blocks.shownCount + spans.shownCount
-            + layouts.shownCount + diamonds.shownCount + audioClips.shownCount + waveforms.count + captionsRow.layerCount
+            + layouts.shownCount + diamonds.shownCount + audioRows.layerCount + captionsRow.layerCount
+            + contentClips.layerCount + musicRow.layerCount
     }
 
     // MARK: - Video
@@ -678,6 +741,10 @@ final class TimelineTracks {
         }
 
         layOutThumbnails(content, geometry, height: height, &wanted)
+        // A frozen frame, a title card and an imported clip (phase 3), over the strip.
+        contentClips.layOut(
+            content, geometry, palette, height: height, selected: selected, settling: settling,
+            thumbnails: thumbnailCaches[content.ownTake])
 
         for (i, span) in content.missing.enumerated() where span.upperBound >= lower && span.lowerBound <= upper {
             guard let rect = geometry.itemRect(span, top: top, height: height, gap: 0) else { continue }
@@ -701,20 +768,22 @@ final class TimelineTracks {
         }
     }
 
-    /// The thumbnail tiles in sight, each showing the frame at its left edge from its left, cut at its clip's end, or the
-    /// clip's color until it arrives (never a frame of another time).
+    /// The thumbnail tiles in sight, each showing the frame at its left edge from its left, cut at its clip's end, of its
+    /// clip's own take (3d), or the clip's color until it arrives (never a frame of another time).
     private func layOutThumbnails(
         _ content: TimelineContent, _ geometry: TimelineGeometry, height: Double, _ wanted: inout Set<ThumbnailKey>
     ) {
-        guard let cache = thumbnailCache, height > 0 else { return }
+        guard !thumbnailCaches.isEmpty, height > 0 else { return }
         let pixels = min(max(Int((height * geometry.backingScale).rounded()), 1), 512)
         let (lower, upper) = geometry.visibleOutput
         let inSight = TimelineLayout.thumbnailTiles(
             sequence: content.sequence, map: content.map, visible: lower..<max(upper, lower), scale: geometry.scale,
             tileWidth: (height * content.screenAspect).rounded(), minimumWidth: Self.narrowestThumbnail)
         for tile in inSight {
-            guard let track = content.screenTrack(atSource: tile.source.nanoseconds) else { continue }
-            let key = ThumbnailKey(track: track, source: tile.source.nanoseconds, height: pixels)
+            let take = content.sequence[tile.clip].take
+            guard let cache = thumbnailCaches[take], let track = content.screenTrack(atSource: tile.source.nanoseconds, take: take)
+            else { continue }
+            let key = ThumbnailKey(take: take, track: track, source: tile.source.nanoseconds, height: pixels)
             wanted.insert(key)
             let id = "\(content.sequence[tile.clip].id) \(tile.index)"
             let (layer, isNew) = tiles.layer(id)
@@ -824,12 +893,14 @@ final class TimelineTracks {
                 block.icon.contentsScale = geometry.backingScale
                 block.highlight.backgroundColor = palette.highlight
             }
-            let automatic = item.info.automatic
+            let automatic = item.info.automatic, mode = item.info.mode
             let tint = automatic ? palette.zoomAuto : palette.zoom
-            if block.automatic != automatic || isNew {
+            let symbol = ZoomPanelRules.trackSymbol(mode: mode, automatic: automatic)
+            if block.automatic != automatic || block.mode != mode || isNew {
                 block.automatic = automatic
+                block.mode = mode
                 block.label.foregroundColor = tint.text
-                block.icon.contents = automatic ? Self.symbolImage("sparkles", scale: geometry.backingScale, color: tint.text) : nil
+                block.icon.contents = symbol.flatMap { Self.symbolImage($0, scale: geometry.backingScale, color: tint.text) }
             }
             let isSelected = selected.contains(item.id)
             block.fillColor = isSelected ? tint.selectedFill : tint.fill
@@ -855,9 +926,9 @@ final class TimelineTracks {
                 block.labelText = text
                 block.label.string = text
             }
-            // The depth (and an automatic block's symbol) stays at the left of what is in sight.
+            // The depth (and an automatic or calm block's symbol) stays at the left of what is in sight.
             let left = max(6, -rect.minX + 6)
-            let icon = automatic && rect.width >= 36
+            let icon = symbol != nil && rect.width >= 36
             block.icon.isHidden = !icon
             block.icon.frame = CGRect(x: left, y: (height - 10) / 2, width: 10, height: 10)
             let textLeft = icon ? left + 13 : left
@@ -1001,96 +1072,5 @@ final class TimelineTracks {
         let drawn = image.cgImage(forProposedRect: &rect, context: nil, hints: [.ctm: AffineTransform(scaleByX: scale, byY: scale)])
         if let drawn { symbols[key] = drawn }
         return drawn
-    }
-
-    // MARK: - Audio
-
-    /// The waveform of audio track `id` across what is in sight: for each point of width, the lowest and highest sample
-    /// of the source its output shows (none of a clip faster than 4×, which is silent), times the track's gain, and flat
-    /// when it is muted.
-    private func layOutWaveform(
-        _ id: String, _ content: TimelineContent, _ row: TimelineGeometry.Row, _ geometry: TimelineGeometry, _ palette: TimelinePalette
-    ) {
-        let shape: CAShapeLayer
-        if let existing = waveforms[id] {
-            shape = existing
-        } else {
-            shape = CAShapeLayer()
-            rows.addSublayer(shape)
-            waveforms[id] = shape
-        }
-        let track = content.audio[id]
-        let isMicrophone = track?.isMicrophone != false
-        shape.fillColor = isMicrophone ? palette.microphone : palette.systemAudio
-        shape.opacity = track?.muted == true ? 0.5 : 1
-        let top = row.top + 2, height = row.height - 4
-        shape.frame = CGRect(x: 0, y: top, width: geometry.areaWidth, height: height)
-        // A region under the waveform for each clip in sight, tinted as the track.
-        let tint = isMicrophone ? palette.microphoneClip : palette.systemAudioClip
-        let (lower, upper) = geometry.visibleOutput
-        content.clips.forEach(from: lower, to: upper) { item in
-            guard let rect = geometry.itemRect(item.output, top: top, height: height, gap: 1) else { return }
-            let (region, isNew) = audioClips.layer("\(id) \(item.id)")
-            if isNew {
-                region.backgroundColor = tint.fill
-                region.borderColor = palette.increaseContrast ? palette.contrastBorder : tint.stroke
-            }
-            region.opacity = shape.opacity
-            place(region, rect, isNew: isNew)
-        }
-        guard let track, let levels = waveformLevels[id] else {
-            shape.path = nil
-            return
-        }
-        let gain = Float(track.muted ? 0 : min(max(track.gain, 0), 2))
-        // Inside the regions, clear of their borders.
-        let middle = height / 2, half = height / 2 - 3
-        let clips = content.clips.items
-        let columns = Int(geometry.areaWidth.rounded(.up))
-        var tops: [CGPoint] = []
-        var bottoms: [CGPoint] = []
-        tops.reserveCapacity(columns + 1)
-        bottoms.reserveCapacity(columns + 1)
-        var k = 0
-        let duration = content.map.duration
-        for column in 0...columns {
-            let x = Double(column)
-            let a = geometry.output(atX: x), b = geometry.output(atX: x + 1)
-            guard b > 0, a < duration else { continue }
-            let from = max(a, 0), to = min(b, duration)
-            while k < clips.count, clips[k].output.upperBound <= from { k += 1 }
-            var low = Float.infinity, high = -Float.infinity
-            var t = from, j = k
-            while t < to, j < clips.count {
-                let clip = clips[j]
-                let end = min(to, clip.output.upperBound)
-                if !clip.info.silent, clip.info.speed <= Self.fastestHeard {
-                    let start = Double(clip.info.start) - Double(track.origin)
-                    let sa = start + Double(t - clip.output.lowerBound) * clip.info.speed
-                    let sb = start + Double(end - clip.output.lowerBound) * clip.info.speed
-                    if let range = levels.range(fromPair: sa / 1e7, toPair: sb / 1e7) {
-                        low = min(low, range.x)
-                        high = max(high, range.y)
-                    }
-                }
-                t = end
-                j += 1
-            }
-            if low > high { (low, high) = (0, 0) }
-            low = min(max(low * gain, -1), 1)
-            high = min(max(high * gain, -1), 1)
-            // At least half a point, so silence is a line.
-            let topY = middle - Double(high) * half, bottomY = max(middle - Double(low) * half, topY + 0.5)
-            tops.append(CGPoint(x: x, y: topY))
-            bottoms.append(CGPoint(x: x, y: bottomY))
-        }
-        guard !tops.isEmpty else {
-            shape.path = nil
-            return
-        }
-        let path = CGMutablePath()
-        path.addLines(between: tops + bottoms.reversed())
-        path.closeSubpath()
-        shape.path = path
     }
 }

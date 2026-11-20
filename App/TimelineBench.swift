@@ -39,10 +39,10 @@ enum TimelineBench {
         window.contentView = view
         window.orderFrontRegardless()
         let caches = ProjectCaches(root: FileManager.default.temporaryDirectory.appending(path: "toma-timeline-bench"), projectID: "bench")
-        view.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
-        let markers = TimelineContent.markerTimes(in: project.events)
-        view.show(take: project.take, markers: markers, document: document, missing: [600...630, 1800...1802])
-        for id in ["mic", "system-audio"] { view.setWaveform(WaveformLevels(syntheticWaveform()), for: id) }
+        view.tracks.thumbnailCaches = [project.take.id: ThumbnailCache(project: project, caches: caches)]
+        let markers: MarkerList.Recorded = [project.take.id: MarkerList.recordedInstants(in: project.events)]
+        view.show(take: project.take, recorded: markers, document: document, missing: [600...630, 1800...1802])
+        for id in ["mic", "system-audio"] { view.setWaveform(WaveformLevels(syntheticWaveform()), take: project.take.id, track: id) }
         view.playhead = 1_234_000_000_000
         view.layoutSubtreeIfNeeded()
 
@@ -92,7 +92,7 @@ enum TimelineBench {
 
     /// The main thread's work for each drag move and edit (final review D-I3), before and after; see the type's notes.
     private static func measureEdits(
-        _ view: EditorTimelineView, project: LoadedProject, document: EditDocument, markers: [HostTime]
+        _ view: EditorTimelineView, project: LoadedProject, document: EditDocument, markers: MarkerList.Recorded
     ) {
         print("edits on the hour: \(project.events.count) events, \(document.sequence.count) clips, \(document.zoom.regions.count) zooms")
         func milliseconds(_ body: () -> Void) -> Double {
@@ -102,8 +102,11 @@ enum TimelineBench {
         }
         let clip = document.sequence[250]
         let limits = SequenceCommands.trimLimits(document, clipID: clip.id, edge: .end, take: project.take, events: project.events)
+        let bounds = TakeTimeline.editableBounds(take: project.take, events: project.events)
         let steps = (1...120).compactMap { k in
-            SequenceCommands.trim(document, clipID: clip.id, edge: .end, toSource: clip.end.adding(seconds: -Double(k) / 60), limits: limits)
+            SequenceCommands.trim(
+                document, clipID: clip.id, edge: .end, toSource: clip.end.adding(seconds: -Double(k) / 60), limits: limits,
+                takeBounds: [project.take.id: bounds.start...bounds.end])
         }
         var before: [Double] = [], after: [Double] = []
         for step in steps {
@@ -111,7 +114,7 @@ enum TimelineBench {
                 // The model's apply for the preview, the timeline's own, and its content with a pass over the events.
                 let applied: EditDocument? = try? document.applying(step.changes)
                 _ = try? document.applying(step.changes) as EditDocument
-                _ = TimelineContent.markerTimes(in: project.events)
+                _ = MarkerList.recordedInstants(in: project.events)
                 view.setPreview(applied)
                 view.layoutSubtreeIfNeeded()
             })

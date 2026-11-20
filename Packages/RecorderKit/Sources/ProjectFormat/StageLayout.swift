@@ -61,6 +61,23 @@ public enum StageLayout {
         return contentRatio(take: take, document: document) { ScreenGeometry(track: $0, events: ordered) }
     }
 
+    /// The take whose screen `auto` follows in `document` (phase 3 design §9): that of the sequence's first clip, a clip
+    /// with content too (the take of its point); `ownTake` for a sequence without clips. One rule for the output of the
+    /// preview, the MP4 and the GIF, and for the stage of every take (`StagePoints`): the output keeps one size whatever
+    /// take a clip shows.
+    public static func contentRatioTake(of document: EditDocument, ownTake: String) -> String {
+        document.sequence.first?.take ?? ownTake
+    }
+
+    /// The ratio `auto` takes for `document` of `project`'s package: `contentRatio(take:document:events:)` of
+    /// `contentRatioTake(of:ownTake:)`, `project`'s own take without clips; `nil` for a take the manifest does not have.
+    /// What the preview, the MP4 and the GIF size themselves by. Reads that take's events (the disk, the first time they
+    /// are asked for): never on the main thread.
+    public static func contentRatio(project: LoadedProject, document: EditDocument) -> Double? {
+        guard let shown = project.focused(on: contentRatioTake(of: document, ownTake: project.take.id)) else { return nil }
+        return contentRatio(take: shown.take, document: document, events: shown.events)
+    }
+
     /// The screen's rect in an output of `outputSize`: the largest rect of `contentAspect` (width over height)
     /// centred inside `padding × width` of space on every side; the whole area inside the padding without an aspect,
     /// and an empty rect at the centre when the padding leaves no room.

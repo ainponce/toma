@@ -11,18 +11,24 @@ public struct DocumentOutline: Equatable, Sendable {
     public var aspect: Aspect
     /// The `documentVersion` the document is written in on disk, as `EditSession.readDocumentWithDiskVersion` gives it.
     public var diskVersion: Int
+    /// The takes the sequence shows, each once, in the order it first shows them (phase 3 design §8.1: the library's
+    /// camera is any of theirs).
+    public var takes: [String]
 
-    public init(outputSeconds: Double, aspect: Aspect, diskVersion: Int) {
+    public init(outputSeconds: Double, aspect: Aspect, diskVersion: Int, takes: [String] = []) {
         self.outputSeconds = outputSeconds
         self.aspect = aspect
         self.diskVersion = diskVersion
+        self.takes = takes
     }
 
     /// `document`'s, written on disk in `diskVersion`.
     public init(_ document: EditDocument, diskVersion: Int) {
+        var takes: [String] = []
+        for clip in document.sequence where !takes.contains(clip.take) { takes.append(clip.take) }
         self.init(
             outputSeconds: TimeMap(sequence: document.sequence).durationSeconds, aspect: document.aspect,
-            diskVersion: diskVersion)
+            diskVersion: diskVersion, takes: takes)
     }
 
     /// The outline of the document that comes from `project`'s events, `EditDocument.legacy(for:)` or, with

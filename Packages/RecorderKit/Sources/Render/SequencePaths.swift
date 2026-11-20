@@ -6,8 +6,11 @@ import ProjectFormat
 /// decision 10): each take's own, `MotionPaths(take:events:document:cameraReadable:)` of that take, its events and the
 /// whole document, so each take has its own screens, cursor and zoom camera, and at the border between two takes the
 /// zoom's path cuts (each starts where its take's clips put it, at rest before its first block). The paths of the
-/// project's own take are always there, shown or not, since a scene always has that take's (`FrameEvaluator`). With one
-/// take, that take's paths alone, as phase 2 builds them.
+/// project's own take are always there, shown or not, since a scene always has that take's (`FrameEvaluator`). Every
+/// take's stage is the output's (design §9: the stage is laid out with each clip's own screens, in the one output): a
+/// take that is not the one of the first clip has its paths built with the ratio `auto` follows
+/// (`StageLayout.contentRatio(project:document:)`), its screens fitted inside it. With one take, that take's paths alone,
+/// as phase 2 builds them.
 ///
 /// Built off the main thread, as `MotionPaths` is, and shared by the preview and the export at any size they draw.
 public struct SequencePaths: Sendable {
@@ -20,20 +23,29 @@ public struct SequencePaths: Sendable {
     /// (`LoadedProject.takesShown(by:)`: a take the manifest does not have has none), each with the camera readable as
     /// `cameraReadable` says for its id (`FrameRenderer.cameraReadableByTake`; `true` for an id it does not name, as
     /// `MotionPaths` takes it). A take's paths in `last`, built with the camera readable alike, are kept when they are
-    /// `document`'s too (`MotionPaths.areThePaths(of:)`: an edit of the background, the shadow or the corners), which costs
-    /// no rebuild; any other take's are built. Reads the events of the takes it builds for (the disk, the first time):
-    /// never on the main thread.
+    /// `document`'s too (`MotionPaths.areThePaths(of:contentRatio:)`: an edit of the background, the shadow or the
+    /// corners), which costs no rebuild; any other take's are built. Reads the events of the takes it builds for (the
+    /// disk, the first time): never on the main thread.
     public init(
         project: LoadedProject, document: EditDocument, cameraReadable: [String: Bool], reusing last: SequencePaths? = nil
     ) {
         var byTake: [String: MotionPaths] = [:], readable: [String: Bool] = [:]
-        for shown in [project] + project.takesShown(by: document) where byTake[shown.take.id] == nil {
+        let ratioTake = StageLayout.contentRatioTake(of: document, ownTake: project.take.id)
+        let takes = project.takesShown(by: document)
+        // The first clip's take first: its stage's ratio, worked out from its own screens, is every other take's
+        // (`StageLayout.contentRatio(project:document:)`; none for a take the manifest does not have).
+        let ordered = takes.filter { $0.take.id == ratioTake } + [project] + takes.filter { $0.take.id != ratioTake }
+        for shown in ordered where byTake[shown.take.id] == nil {
             let id = shown.take.id, camera = cameraReadable[id] ?? true
             readable[id] = camera
-            if let old = last?.byTake[id], last?.cameraReadable[id] == camera, old.areThePaths(of: document) {
+            let ratio: Double?? = id == ratioTake ? nil : .some(byTake[ratioTake]?.stage.contentRatio)
+            if let old = last?.byTake[id], last?.cameraReadable[id] == camera,
+               old.areThePaths(of: document, contentRatio: ratio)
+            {
                 byTake[id] = old
             } else {
-                byTake[id] = MotionPaths(take: shown.take, events: shown.events, document: document, cameraReadable: camera)
+                byTake[id] = MotionPaths(
+                    take: shown.take, events: shown.events, document: document, cameraReadable: camera, contentRatio: ratio)
             }
         }
         self.init(byTake: byTake, cameraReadable: readable)

@@ -71,6 +71,8 @@ public enum MediaFixtures {
                 }
                 frame += 1
                 appended = true
+                // Finished at once: the writer would otherwise hold the other input back to interleave it with more.
+                if frame == frames { video.markAsFinished() }
             }
             if let audio, let tone, audioFrame < totalAudioFrames, audio.isReadyForMoreMediaData {
                 let count = min(blockFrames, totalAudioFrames - audioFrame)
@@ -82,11 +84,12 @@ public enum MediaFixtures {
                 }
                 audioFrame += count
                 appended = true
+                if audioFrame == totalAudioFrames { audio.markAsFinished() }
             }
             if !appended { usleep(1_000) }
         }
-        video.markAsFinished()
-        audio?.markAsFinished()
+        if frames == 0 { video.markAsFinished() }
+        if let audio, totalAudioFrames == 0 { audio.markAsFinished() }
         writer.endSession(atSourceTime: CMTime(value: CMTimeValue((seconds * 1e9).rounded()), timescale: 1_000_000_000))
         let finished = DispatchSemaphore(value: 0)
         writer.finishWriting { finished.signal() }

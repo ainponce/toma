@@ -25,10 +25,15 @@ public struct MotionPaths: Sendable {
 
     /// `cameraReadable`: some camera track of the take can be read (plan decision 40, `LayoutTimeline.cameraReadable`),
     /// as the render is told (`FrameRenderer.cameraReadable`): the zoom camera's layouts see the camera as the render
-    /// does (`ZoomCameraPath`).
-    public init(take: TakeRecord, events: [InputEvent], document: EditDocument, cameraReadable: Bool = true) {
+    /// does (`ZoomCameraPath`). `contentRatio`: the ratio `auto` follows, for the paths of a take that is not the one of
+    /// the document's first clip (`StagePoints.init(take:events:document:contentRatio:)`: its stage is the output's);
+    /// `nil` works it out from `take`, as phase 2 does.
+    public init(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, cameraReadable: Bool = true,
+        contentRatio: Double?? = nil
+    ) {
         timeMap = TimeMap(sequence: document.sequence)
-        stage = StagePoints(take: take, events: events, document: document)
+        stage = StagePoints(take: take, events: events, document: document, contentRatio: contentRatio)
         cursor = CursorPath(take: take, events: events, style: document.cursor, timeMap: timeMap)
         reframe = ReframePath(document: document, timeMap: timeMap, stage: stage, cursor: cursor)
         zoom = ZoomCameraPath(
@@ -38,7 +43,7 @@ public struct MotionPaths: Sendable {
         calmZoom = CalmZoomPath(
             document: document, timeMap: timeMap, stage: stage, cursor: cursor, take: take, cameraReadable: cameraReadable,
             reframe: reframe)
-        inputs = Inputs(document, cameraReadable: cameraReadable)
+        inputs = Inputs(document, cameraReadable: cameraReadable, contentRatio: contentRatio)
     }
 
     /// The paths of `document` after an edit of the document `old` was built from, of the same take and events (design
@@ -71,18 +76,32 @@ public struct MotionPaths: Sendable {
     /// stage's camera is built on one thread and the card's, then the calm zoom's, on another: they read the same cursor
     /// and stage and nothing of each other.
     ///
-    /// Built off the main thread, like `init(take:events:document:cameraReadable:)`, with the camera readable as there.
+    /// Built off the main thread, like `init(take:events:document:cameraReadable:contentRatio:)`, with the camera readable
+    /// as there, and the ratio `auto` follows that `old` was built with: a take that is not the first clip's keeps the
+    /// output's stage (`init(take:events:document:after:cameraReadable:contentRatio:)` gives another one).
     public init(
         take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths, cameraReadable: Bool = true
     ) {
-        let inputs = Inputs(document, cameraReadable: cameraReadable)
+        self.init(
+            take: take, events: events, document: document, after: old, cameraReadable: cameraReadable,
+            contentRatio: old.inputs.contentRatio)
+    }
+
+    /// `init(take:events:document:after:cameraReadable:)` with the ratio `auto` follows given, as
+    /// `init(take:events:document:cameraReadable:contentRatio:)` takes it (`nil`: `take`'s own); another ratio than
+    /// `old`'s is another stage, so every path is built again.
+    public init(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths, cameraReadable: Bool = true,
+        contentRatio: Double??
+    ) {
+        let inputs = Inputs(document, cameraReadable: cameraReadable, contentRatio: contentRatio)
         guard inputs != old.inputs else {
             self = old
             return
         }
         let timeMap = TimeMap(sequence: document.sequence)
         let sameStage = inputs.stage == old.inputs.stage
-        let stage = sameStage ? old.stage : StagePoints(take: take, events: events, document: document)
+        let stage = sameStage ? old.stage : StagePoints(take: take, events: events, document: document, contentRatio: contentRatio)
         let (cursor, cursorChanged) = CursorPath.rebuilt(
             after: old.cursor, take: take, events: events, style: document.cursor, timeMap: timeMap)
         let timeChanged = Self.firstChangedOutput(old.inputs.sequence, old.timeMap, document.sequence, timeMap)
@@ -137,9 +156,16 @@ public struct MotionPaths: Sendable {
     /// frame and the padding, whether the screen follows the cursor, the cursor, the zoom and the camera, whose layouts
     /// decide whether there is a card's zoom and where the stage's keeps the cursor from the bubble), as after an edit of
     /// the background, the shadow or the corners.
-    /// Then a new revision keeps them rather than building them again (about 100 ms for an hour of take).
+    /// Then a new revision keeps them rather than building them again (about 100 ms for an hour of take). With the ratio
+    /// `auto` follows they were built with (`areThePaths(of:contentRatio:)`).
     public func areThePaths(of document: EditDocument) -> Bool {
-        inputs == Inputs(document, cameraReadable: inputs.cameraReadable)
+        areThePaths(of: document, contentRatio: inputs.contentRatio)
+    }
+
+    /// `areThePaths(of:)` for paths of `document` built with `contentRatio` (`init(take:events:document:cameraReadable:
+    /// contentRatio:)`): another ratio is another stage.
+    public func areThePaths(of document: EditDocument, contentRatio: Double??) -> Bool {
+        inputs == Inputs(document, cameraReadable: inputs.cameraReadable, contentRatio: contentRatio)
     }
 
     /// Everything of a document the paths read (`StagePoints`, `CursorPath`, `ReframePath`, `ZoomCameraPath`,
@@ -157,8 +183,10 @@ public struct MotionPaths: Sendable {
         /// With `layout` and `layouts`.
         let camera: CameraPlan
         let cameraReadable: Bool
+        /// The ratio `auto` follows as given (`nil`: the take's own).
+        let contentRatio: Double??
 
-        init(_ document: EditDocument, cameraReadable: Bool) {
+        init(_ document: EditDocument, cameraReadable: Bool, contentRatio: Double??) {
             sequence = document.sequence
             screens = document.screens
             aspect = document.aspect
@@ -175,23 +203,27 @@ public struct MotionPaths: Sendable {
             zoom = document.zoom
             camera = document.camera
             self.cameraReadable = cameraReadable
+            self.contentRatio = contentRatio
         }
 
-        /// What `StagePoints` reads: the screens, the aspect, the padding, the frame (none, a window, whose appearance,
-        /// title and buttons are only drawn, or the model of a device, whose finish is only drawn) and how the screen
-        /// fills the stage. A change of that last one builds every path again (`ReframePath`).
+        /// What `StagePoints` reads: the screens, the aspect and the ratio `auto` follows as given, the padding, the
+        /// frame (none, a window, whose appearance, title and buttons are only drawn, or the model of a device, whose
+        /// finish is only drawn) and how the screen fills the stage. A change of that last one builds every path again
+        /// (`ReframePath`).
         var stage: Stage {
             let measured: Stage.Frame = switch frame {
             case .none: .none
             case .macWindow: .window
             case let .device(device): .device(device.model)
             }
-            return Stage(screens: screens, aspect: aspect, padding: padding, frame: measured, reframe: reframe)
+            return Stage(
+                screens: screens, aspect: aspect, contentRatio: contentRatio, padding: padding, frame: measured, reframe: reframe)
         }
 
         struct Stage: Equatable {
             let screens: ScreenPlan
             let aspect: Aspect
+            let contentRatio: Double??
             let padding: Double
             let frame: Frame
             let reframe: Reframe
