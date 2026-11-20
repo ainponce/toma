@@ -2555,3 +2555,101 @@ Un documento 5 con todo lo nuevo, en las partes que cambian:
 | `frames` | Uno por cuadro del video: `{cursor, zoom}`. `cursor` es `{x, y, visible, pressed}` o `null` (sin cursor en el cuadro: antes del primero, fuera de la pantalla que se muestra, una placa, un clip importado): `x, y` su punta dibujada a través del zoom del cuadro; `visible` si se dibuja (opacidad mayor que 0, sin la cámara sobre todo el cuadro, y dentro del video); `pressed` si hay un botón apretado (`CursorSample.pressed` de la toma del cuadro; en un congelado, el del comienzo de su clip). `zoom` es `{depth, x, y}`: la cámara del cuadro (la del contenido de la tarjeta en Pantalla dividida, la del escenario si no, `depth` 1 y el centro del cuadro en reposo), con el centro en píxeles del escenario sin zoom |
 
 Otro esquema u otras reglas (de cualquiera de los dos archivos) son `metadata-2`.
+
+### El evento `focus` al grabar
+
+Lo escribe el `AccessibilityFocusRecorder` de una toma con «Seguir el foco del teclado» prendido y el permiso de Accesibilidad dado (diseño de las fases 4 y 5, §5.1). Lo que un lector puede esperar de esas líneas:
+
+- **Una lectura, dos líneas.** Se lee el foco al empezar, al reanudar y tras cada aviso de Accesibilidad, y cada lectura escribe primero el `element` y después el `caret`, con el mismo `t`, que es el instante de la lectura: así se sabe que van juntos. Cada tipo se compara con el último escrito de ese tipo (los cuatro números iguales) y uno igual no se escribe. Al empezar y al reanudar se olvida el último, así la primera lectura escribe el estado. Se lee a lo sumo una vez cada 50 ms (`FocusReadSchedule`): los avisos de esos 50 ms se juntan en una lectura al final, así el último estado siempre se escribe. Da 20 por segundo o menos de cada tipo.
+- **Rectángulos válidos.** Todos tienen números finitos, coordenadas de a lo sumo 100 000 pt en valor absoluto (`largestCoordinate`) y ancho y alto de 0 o más. El `element` tiene ancho y alto mayores que 0; el `caret`, alto mayor que 0 y un ancho que puede ser 0. Accesibilidad da puntos globales con el origen arriba a la izquierda de la pantalla principal, como `CGEvent.location`, y se escriben tal cual.
+- **El cursor de texto.** Es el rectángulo del rango de largo 0 en el comienzo de la selección (`AXSelectedTextRange.location`, por `AXBoundsForRangeParameterizedAttribute`). Si eso no da un rectángulo válido, el del carácter de largo 1 en `location`, o en `location − 1` al final del texto (`kAXNumberOfCharactersAttribute`), angostado a su borde de entrada (o de salida) con ancho 0.
+- **Campo seguro.** Si el rol o el subrol del elemento es `AXSecureTextField`, o si `IsSecureEventInputEnabled()` es verdadero al escribir, se escribe solo el `element`, nunca el `caret`. De un elemento se escribe solo su rectángulo: nunca el contenido, el valor, el rol, el título ni la app. En pausa no se escribe nada.
+- **Qué se observa.** La app de adelante (`NSWorkspace.frontmostApplication`, y cada `didActivateApplicationNotification`), con un `AXObserver` de `kAXFocusedUIElementChangedNotification` y `kAXSelectedTextChangedNotification` sobre la app y de `kAXValueChangedNotification` sobre el elemento con el foco, que se mueve con cada cambio de foco. Toma nunca se observa a sí misma: con Toma adelante no se lee nada. Una app que no da el cursor de texto (Chrome o una de Electron sin `AXManualAccessibility`, que Toma nunca cambia) da solo el `element`. Mover una ventana no avisa: su rectángulo queda viejo hasta la próxima lectura.
+- **El hilo.** Corre en un hilo propio (`dev.toma.focus`) con su `CFRunLoop`, con un tope de 50 ms por consulta (`AXUIElementSetMessagingTimeout`) sobre la app y sobre cada elemento con el foco. Parar o pausar nunca espera una consulta en curso, y después de que volvieron no se agrega ninguna línea.
+
+### `focusZoom-1`
+
+Con `zoom.auto.followsFocus`, el zoom automático (`autoZoom-1`) suma bloques sobre el foco del teclado que la toma grabó (diseño de las fases 4 y 5, §5.2). `focusZoom-1` nombra lo que se lee de los eventos `focus` y estas reglas: cambiar cualquiera es otro id. Las ids de los bloques y `planner` siguen siendo los de `autoZoom-1`, y del foco el documento guarda solo `followsFocus`. Sin `followsFocus`, o en una toma sin eventos `focus`, el planificador da exactamente los mismos bloques, ids incluidas, que antes de las fases 4 y 5. Los bloques del foco son `ZoomRegion` comunes, casi siempre con foco `fixed`: el render no cambia.
+
+- **Los cursores de texto de un tramo de escritura** (el tramo de `keyActivity` de siempre) son los `caret` que se ven en el tramo: su salida cae en él y su centro se muestra en el escenario. Un cursor de antes del tramo no se usa, porque podría ser de otra app. Sin «Anotar cuándo se escribe» (`keyActivity`) no hay tramos, y el foco hace zoom solo por los cambios de elemento.
+  - Un tramo sin cursores es escritura como antes: sostiene grupos y arma uno solo junto a un clic.
+  - Un tramo con cursores no sostiene ningún grupo ni arma ese: sus bloques son los del cursor, también sin «Mantener el zoom al escribir».
+  - Lo que hace el puntero dentro de un tramo con cursores no hace zoom: un clic, un arrastre o una pausa que empieza en él no es un elemento, como un cambio de elemento ahí tampoco lo es. Un clic que lleva el cursor de texto fuera de la vista igual corta el renglón, en el primer cursor de afuera. Así ningún bloque empieza dentro de un renglón, y dos bloques automáticos nunca se pisan.
+- **Partir en renglones.** El primer cursor del tramo es el ancla. Su vista es el recorte de la profundidad `min(depth, la que encaja su caja)` acomodado sobre su centro (como la cámara del zoom: dentro de la pantalla que se muestra), menos el 12 % del recorte de cada lado; un lado donde el recorte llega al borde de la pantalla no tiene límite, porque nada que se muestre queda más allá, así un cursor al comienzo de un renglón junto al borde no sale de la vista. El primer cursor cuya caja sale de la vista corta el renglón ahí y es el ancla del siguiente.
+  - Cada renglón es un grupo, desde su ancla hasta el corte (o el final del tramo), sostenido hasta ahí, con la caja de su ancla. No se une con nada ni nada se le une. Con un bloque vecino se encuentra en el punto medio, que entre dos renglones es el corte.
+  - Su foco es `fixed` en el centro del ancla, como fracción del rectángulo de la pantalla, salvo cuando la pantalla sigue al cursor (`style.reframe` `followCursor`), donde todos los bloques son `follow` como siempre.
+- **Los cambios de elemento.** Un `element` es un cambio si:
+  - no es el primer `focus` de la toma ni el primero en o después de un `resumed`: eso es el estado, no un cambio;
+  - no hay un `mouseDown` izquierdo o derecho en los 0,5 s de fuente antes (vino de un clic);
+  - no hay otro `element` en los 0,4 s de fuente después (es estable);
+  - su salida no cae en un tramo con cursores (un campo que crece mientras se escribe);
+  - lo que se ve de él no pasa del 70 % de lo que se muestra de la pantalla en ninguno de los dos ejes;
+  - su centro se ve.
+
+  Entra como un clic con la caja de lo que se ve de él: empieza en su salida con el `leadIn`, y se agrupa y se une con los clics. Un grupo con un cambio de elemento hace zoom a lo sumo 2,5×, y uno de solo cambios de elemento es `fixed` en el centro de su caja aunque `follow` esté prendido.
+- **Lo demás no cambia.** Los bloques del usuario ganan y lo borrado sigue borrado, también para los bloques del foco; los clics, los arrastres y las pausas siguen como siempre.
+- **El documento.** Un documento nuevo (`NewDocument`) pone `followsFocus` en `true` si su toma tiene algún evento `focus`, diga lo que diga el estilo por defecto; sumar una toma no lo cambia. Los estilos no llevan `followsFocus`, porque depende de la toma, como las imágenes del cursor: «Aplicar» y «Aplicar el estilo por defecto» dejan el del documento, y el estilo del proyecto (`StyleCommands.matchingStyle`) no lo compara. Un estilo guardado escribe el valor que tenga en `zoom.auto`, pero nunca se lee. Prenderlo o apagarlo en el panel replanea en un paso que se deshace (`zoom.regenerate`).
+
+### La Repetición
+
+La Repetición (diseño de las fases 4 y 5, §10) graba a un **paquete de trabajo** fuera de la biblioteca, `~/Library/Caches/dev.toma.Toma/Replay/current.toma` (`ReplayScratch`), y al guardar arma un proyecto nuevo con los últimos N segundos.
+
+```
+Replay/
+  current.toma/
+    replay-scratch             la marca: este paquete nunca es un proyecto
+    manifest.json              take-001 en `recording`, sus segmentos cerrados con `rotated` cada 10 s
+    takes/take-001/
+      display-1/seg-0007.mov   los segmentos que todavía no se podaron (la numeración sigue, nunca vuelve a 1)
+      events-0007.jsonl        los eventos, un archivo nuevo cada 10 s de tiempo
+      events-0008.jsonl
+      recording.lock           tomado mientras graba
+      cursors/<hash>.png
+```
+
+- **La marca** `replay-scratch` es un archivo común en la raíz del paquete, escrito y sincronizado antes de que haya una toma (`ReplayScratch.create`). Un paquete con la marca **nunca es un proyecto**: la recuperación lo saltea antes de leer su manifiesto (`RecoveryScanner.scan(package:)` no da nada, ni siquiera *para reparar*), la biblioteca no lo ve (vive en las cachés) y lo que un cierre forzado deja en `Replay/` se borra sin preguntar al abrir la app (`ReplayScratch.discardLeftovers`), menos un `current.toma` cuyo `recording.lock` alguien tiene tomado. Una carpeta se borra renombrándola antes a un nombre oculto (`.discarding-<UUID>`), así un borrado cortado nunca deja medio paquete con su nombre. Nada de esto sigue un enlace: uno dentro de `Replay/` se borra sin tocar lo que nombra, y una `Replay/` que es un enlace no se toca.
+- **`events-NNNN.jsonl`.** El registro de eventos de la toma de trabajo es uno solo, que pasa a un archivo nuevo cada 10 s (`EventLogWriter.rotate(to:)`: crea el nuevo con `O_EXCL` y sin seguir enlaces, escribe lo pendiente en el actual, lo sincroniza con `F_FULLFSYNC`, lo cierra y sigue en el nuevo). Cada archivo tiene líneas enteras del formato de `events.jsonl`. Van por tiempo, no por segmento: cada pista rota sus segmentos en su propio instante.
+- **`rotated`** solo aparece acá. Lo viejo (lo que terminó hace más de N + 10 s) se borra: el segmento y su entrada del manifiesto de trabajo, y un archivo de eventos después de guardar en memoria el estado que dice.
+- **Lo guardado es un proyecto común** de la versión 3 (o 4 si guarda una pista de iPhone o un `keyPress`), sin `rotated`, con una sola toma `take-001` `complete` que la app de la fase 3 abre:
+  - **El corte** (`ReplayCut`) está N segundos antes del fin de la pantalla (el mayor fin de sus pistas), o en su comienzo si se grabó menos. De cada pista se guardan los segmentos cerrados que terminan después del corte (el que lo cruza, entero) y empiezan antes del fin, renumerados desde `seg-0001.mov`, con `rotated` como `stopped` y los demás motivos como estaban; una pista sin ninguno no se guarda. El documento empieza en el corte (`Clip.start`), porque el primer segmento empieza antes.
+  - **`events.jsonl`** (`ReplayEvents`) empieza en el comienzo del primer segmento guardado (hasta 10 s antes del corte) con el estado vigente re-emitido en ese instante, antes que lo demás: `displayGeometry` de cada pantalla, `windowGeometry` de cada ventana guardada, `cursorImage`, la posición del cursor (`cursor`, la de su último `cursor`, `mouseDown`, `mouseUp` o `scroll`) y el último `focus` si lo hay. El estilo de cámara vigente va en `TakeRecord.cameraStyle`, no como evento. Un botón apretado en ese instante no se re-emite: un `mouseUp` solo no dibuja un clic. Se sacan los eventos de una pista que no se guarda, los del ciclo de vida de un segmento que no se guarda (`segmentStarted`, `audioClock`, `droppedSamples`, `streamInterrupted` y `deviceChanged` antes del primer segmento guardado de su pista o después del fin del último) y todo lo que pasa después del fin; los `segmentStarted` llevan el índice nuevo.
+  - **El manifiesto** (`ReplayManifest`): `startedAt` es el momento de guardar menos lo que dura la toma guardada, en segundos enteros, y `projectID` uno nuevo.
+### `shares.json`, los links para compartir
+
+«Compartir» (hito 5a, diseño de las fases 4 y 5, §8.2 y §8.3; decisión 4 del plan 5a) anota cada link en `shares.json`, en la raíz del paquete. Es el único archivo que el hito escribe en un paquete: el documento, el manifiesto y el registro de edición no cambian, y el manifiesto no lo nombra (un lector que no lo conoce lo ignora, como cualquier archivo de la raíz que no es suyo). Lo escriben el editor y `toma share`, siempre con `ShareHistory`.
+
+```json
+{
+  "shares" : [
+    {
+      "bucket" : "videos",
+      "bytes" : 48213990,
+      "createdAt" : "2026-11-20T15:04:05Z",
+      "documentHash" : "9f2c…64 dígitos hex…",
+      "endpoint" : "https://0123abcd.r2.cloudflarestorage.com",
+      "expiresAt" : "2026-11-27T15:04:05Z",
+      "folder" : "toma/k3m7q2x4za/",
+      "id" : "k3m7q2x4za",
+      "url" : "https://0123abcd.r2.cloudflarestorage.com/videos/toma/k3m7q2x4za/index.html?X-Amz-Algorithm=…"
+    }
+  ],
+  "version" : 1
+}
+```
+
+| Campo | Qué |
+|---|---|
+| `version` | `1`. Un archivo de una versión más nueva no se lee ni se reescribe |
+| `shares[].id` | El id del link (`ShareID`): 10 caracteres al azar de base 32 en minúsculas (`a`–`z`, `2`–`7`) |
+| `shares[].url` | El link: con URL pública base, `<base>/<prefijo><id>/index.html`, permanente; sin ella, la URL prefirmada de `index.html`, que vence |
+| `shares[].createdAt` | Cuándo se compartió, ISO 8601 en segundos enteros |
+| `shares[].expiresAt` | Opcional: cuándo vence un link firmado (lo mismo que su video y su póster, firmados en el mismo instante y por el mismo tiempo); ausente en un link público, que no vence. Nunca `null` |
+| `shares[].bytes` | Los bytes de los tres objetos juntos |
+| `shares[].documentHash` | El SHA-256 en hex del documento exportado tal como lo escribe `ProjectJSON.encoder()` (`ShareInputs.documentHash`) |
+| `shares[].endpoint`, `shares[].bucket` | El almacenamiento al que se subió, como lo tenían los Ajustes: «Borrar del almacenamiento» se niega si los Ajustes de ahora apuntan a otro |
+| `shares[].folder` | Dónde están sus objetos: `<prefijo><id>/`. Los tres son `video.mp4`, `poster.jpg` e `index.html` (la página `sharePage-1`), y borrar el link borra esos tres |
+
+- **Se escribe** entero y atómico con `ProjectJSON.encoder()` (claves ordenadas, con sangría, fechas ISO 8601) desde el descriptor de la carpeta del paquete (`DurableFile.writeAtomically(_:named:inDirectory:)`: `shares.json.tmp`, `F_FULLFSYNC` y `renameat`), así un lector ve las filas de antes o las de después, nunca una parte. Leer, agregar y escribir van bajo un `flock` exclusivo de ese descriptor: la app y `toma` sobre el mismo paquete nunca pierden una fila (en un volumen sin `flock`, como SMB o exFAT, sin el candado; cada escritura sigue siendo atómica). Agregar pone la fila al final; borrar saca las filas de ese id, y sin ninguna no escribe nada. La lista se muestra de la más nueva a la más vieja.
+- **Se lee** con `SafeRead` sin seguir enlaces, hasta 1 MiB (`ShareHistory.maxBytes`). Lo que no conoce sobrevive a una escritura: las claves de arriba que no son `version` ni `shares`, los campos de una fila que no conoce y las filas que no decodifica (no se listan, se guardan tal cual). Una fila decodifica si tiene los nueve campos de arriba (`expiresAt` puede faltar), su `id` es un `ShareID` y su `folder` es un prefijo y ese id (`<prefijo><id>/`, sin `/` al principio ni partes vacías, `.` o `..`): una fila editada a mano nunca nombra otros objetos para borrar.
+- **Ilegible.** Un `shares.json` que no es JSON, que no es un objeto con `version` 1 y una lista `shares`, de más de 1 MiB, un enlace o algo que no es un archivo común es ilegible (`ShareError.historyUnreadable`) y nunca se reescribe: compartir da el link igual y avisa que no se anotó. Un agregado que lo haría pasar de 1 MiB no se escribe (`EFBIG`), para que siga siendo legible.
+- **Nunca tiene el secreto**: la clave secreta vive solo en el Llavero. La única firma que guarda es la de la URL de un link firmado, que es lo que la persona comparte.

@@ -9,7 +9,7 @@ let package = Package(
         .library(
             name: "RecorderKit", targets: [
                 "ProjectFormat", "Analysis", "Editing", "Recording", "SyntheticCapture", "Recovery", "Render", "Export",
-                "Library", "Transcription", "ImageAnalysis", "ProjectJobs", "LocalAI",
+                "Library", "Transcription", "ImageAnalysis", "ProjectJobs", "LocalAI", "Sharing",
             ]),
         .library(name: "AppSupport", targets: ["AppSupport"]),
         .executable(name: "recorder-dev", targets: ["recorder-dev"]),
@@ -29,7 +29,7 @@ let package = Package(
         .target(name: "Render", dependencies: ["ProjectFormat", "Analysis"]),
         .target(name: "Export", dependencies: ["Render", "ProjectFormat", "Analysis"]),
         .target(name: "Library", dependencies: ["ProjectFormat", "Analysis", "Editing", "Render"]),
-        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing"]),
+        .target(name: "AppSupport", dependencies: ["ProjectFormat", "Recording", "Analysis", "Editing", "Sharing"]),
         // Phase 2's analysis (design of phase 2, §10, plan decision 15): no other module depends on these three.
         .target(name: "Transcription", dependencies: ["ProjectFormat", "Export"]),
         .target(name: "ImageAnalysis", dependencies: ["ProjectFormat", "Analysis", "Render"]),
@@ -42,6 +42,8 @@ let package = Package(
         // Phase 5's local AI (milestone 5b): chapters, title and summary from the transcript. FoundationModels is imported
         // only in `SystemTextModel.swift`, behind macOS 26, so it links weakly and Toma still opens on macOS 15. No AppKit.
         .target(name: "LocalAI", dependencies: ["ProjectFormat", "Analysis"]),
+        // Phase 5's share links (milestone 5a): SigV4, the S3 client, the page and shares.json. No AppKit, no user text.
+        .target(name: "Sharing", dependencies: ["ProjectFormat", "Analysis"]),
         // Shared by every test target; not a product. `Editing` for `MediaFixtures.imported`, which imports as the editor does.
         .target(name: "RecorderKitTestSupport", dependencies: ["ProjectFormat", "Recording", "SyntheticCapture", "Editing"]),
         .executableTarget(
@@ -76,6 +78,7 @@ let package = Package(
                 "Export",
                 // Only the tests: a metered microphone's listener feeding Follow the Voice's live feed (plan 3d, T5).
                 "Transcription",
+                "Sharing",
             ]),
         .testTarget(name: "LibraryTests", dependencies: ["Library", "Editing", "ProjectFormat", "Render", "RecorderKitTestSupport"]),
         .testTarget(name: "TranscriptionTests", dependencies: ["Transcription", "ProjectFormat", "Export", "Recording", "SyntheticCapture", "RecorderKitTestSupport"]),
@@ -87,6 +90,8 @@ let package = Package(
                 "ProjectAPI", "ProjectFormat", "Analysis", "Editing", "Export", "ProjectJobs", "Transcription", "RecorderKitTestSupport",
             ]),
         .testTarget(name: "LocalAITests", dependencies: ["LocalAI", "ProjectFormat", "Analysis", "RecorderKitTestSupport"]),
+        .testTarget(
+            name: "SharingTests", dependencies: ["Sharing", "ProjectFormat", "Analysis", "SyntheticCapture", "RecorderKitTestSupport"]),
     ],
     swiftLanguageModes: [.v6]
 )

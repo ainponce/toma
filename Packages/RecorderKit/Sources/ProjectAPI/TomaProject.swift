@@ -10,10 +10,13 @@ import ProjectFormat
 ///
 /// - `.read` never writes (plan 4b, Global Constraints): no `edit.lock`, no `NewDocument` for a project without edits, no
 ///   repair of a damaged log; the document is the one on disk, as `EditSession.readDocumentWithDiskVersion` reads it.
-/// - `.edit` is an `EditSession` with `edit.lock`, as the editor's. Each command is one `perform`, waited for on the disk
-///   (`flushed`) before it returns: what `apply` says was done is in the log. Another process holding the lock is
-///   `locked`. A project of version 1 to 4 stays as it is until the first command that changes it, which the session
-///   writes with its `migrate` (and, for version 1 or 2, the package's upgrade to 3).
+/// - `.edit` reads the document as `.read` does and asks whether another process holds `edit.lock` (`locked`), without
+///   taking it. The `EditSession`, with the lock, opens with the first command that changes the document, or the first
+///   undo or redo the log has: a command that fails or changes nothing writes nothing, not even the first document of
+///   a project never opened in the editor, and a project of version 1 to 4 stays as it is until a command changes it,
+///   which the session writes with its `migrate` (and, for version 1 or 2, the package's upgrade to 3). Each command is
+///   one `perform`, its own undo (never joined to the one before it, as a burst of keys is in the editor), waited for
+///   on the disk (`flushed`) before it returns: what `apply` says was done is in the log.
 ///
 /// Everything it throws is an `APIError`. What reads the disk (the takes' events) runs off the main actor.
 @MainActor public final class TomaProject {
@@ -25,66 +28,76 @@ import ProjectFormat
 
     private enum Storage {
         case read(LoadedProject, EditDocument)
+        /// `.edit` before its session opens: the document on disk, as `.read` reads it.
+        case editing(LoadedProject, EditDocument)
         case edit(EditSession)
     }
 
-    private let storage: Storage
+    /// What the log on disk can undo and redo as the project opened, before its session opens.
+    private struct DiskHistory: Sendable {
+        var undo: EditLabel?
+        var redo: EditLabel?
+    }
+
+    private var storage: Storage
     /// The `documentVersion` of the edit document on disk as the project opened; `nil` without one.
     private let openedDocumentVersion: Int?
+    private let diskHistory: DiskHistory
+    /// The session being opened, which every call waiting for it shares.
+    private var opening: Task<EditSession, any Error>?
     private var recorded: MarkerList.Recorded?
     /// Whether `close()` was called: nothing is done after it (the export checks it too).
     private(set) var closed = false
 
-    private init(url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?) {
+    private init(
+        url: URL, mode: Mode, environment: APIEnvironment, storage: Storage, openedDocumentVersion: Int?, diskHistory: DiskHistory
+    ) {
         self.url = url
         self.mode = mode
         self.environment = environment
         self.storage = storage
         self.openedDocumentVersion = openedDocumentVersion
+        self.diskHistory = diskHistory
     }
 
     /// Opens the package at `url` (a folder `.toma`, checked as `ProjectPaths` does) for reading or editing.
     public static func open(_ url: URL, mode: Mode, environment: APIEnvironment = .standard) async throws -> TomaProject {
         try ProjectPaths.checkPackage(url)
         let context = environment.editContext
-        switch mode {
-        case .read:
-            let read = await Task.detached { () -> Result<(LoadedProject, EditDocument, Int?), any Error> in
-                Result {
-                    let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
-                    return (project, document, Self.hasEditFiles(project) ? diskVersion : nil)
-                }
-            }.value
-            switch read {
-            case let .success((project, document, version)):
-                return TomaProject(
-                    url: url, mode: mode, environment: environment, storage: .read(project, document), openedDocumentVersion: version)
-            case let .failure(error):
-                throw apiError(error)
+        let read = await Task.detached { () -> Result<(LoadedProject, EditDocument, Int?, DiskHistory, Bool), any Error> in
+            Result {
+                let (project, document, diskVersion) = try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context)
+                let editing = mode == .edit
+                return (
+                    project, document, Self.hasEditFiles(project) ? diskVersion : nil,
+                    editing ? Self.diskHistory(of: project) : DiskHistory(),
+                    // Asked about, never taken nor made (`RecordingLock.isHeld`), as `EditSession` asks about it.
+                    editing && RecordingLock.isHeld(at: project.package.editLockURL))
             }
-        case .edit:
-            let version = await Task.detached { Self.writtenDocumentVersion(of: url) }.value
-            let session: EditSession
-            do { session = try await EditSession.open(url, take: nil, context: context) } catch { throw apiError(error) }
-            if case let .readOnly(reason) = session.access {
-                await session.close()
-                throw apiError(reason)
-            }
-            return TomaProject(url: url, mode: mode, environment: environment, storage: .edit(session), openedDocumentVersion: version)
+        }.value
+        switch read {
+        case let .success((project, document, version, history, locked)):
+            if locked { throw apiError(ReadOnlyReason.openElsewhere) }
+            return TomaProject(
+                url: url, mode: mode, environment: environment,
+                storage: mode == .read ? .read(project, document) : .editing(project, document), openedDocumentVersion: version,
+                diskHistory: history)
+        case let .failure(error):
+            throw apiError(error)
         }
     }
 
     /// In `.read`, the document on disk as `EditSession.readDocument` gives it; in `.edit`, the session's.
     public var document: EditDocument {
         switch storage {
-        case let .read(_, document): document
+        case let .read(_, document), let .editing(_, document): document
         case let .edit(session): session.document
         }
     }
 
     public var project: LoadedProject {
         switch storage {
-        case let .read(project, _): project
+        case let .read(project, _), let .editing(project, _): project
         case let .edit(session): session.project
         }
     }
@@ -101,7 +114,7 @@ import ProjectFormat
 
     /// The `documentVersion` the edit document is written in on disk; `nil` without one.
     public var documentVersion: Int? {
-        if case let .edit(session) = storage, session.documentIsCurrentOnDisk { return EditDocument.currentVersion }
+        if case let .edit(session) = storage { return session.diskDocumentVersion }
         return openedDocumentVersion
     }
 
@@ -142,13 +155,19 @@ import ProjectFormat
     /// Applies `command` as one step (`CommandSteps`), and waits for the disk. A setter given the value the project has
     /// changes nothing: `changed` is false.
     public func apply(_ command: ProjectCommand) async throws -> CommandResult {
-        let session = try editableSession()
+        try checkCanEdit()
         if case let .transcribe(language, replace) = command {
             return try await runTranscription(language: language, replace: replace)
         }
+        // Before the session opens, which may write: a command that fails or changes nothing never opens it.
+        if case let .editing(project, document) = storage, try await !changes(command, project: project, document: document) {
+            return result(command.name, changed: false, label: nil, created: nil)
+        }
+        let session = try await editableSession()
         while true {
             let revision = session.revision
-            let (scope, step) = await step(for: command, in: session)
+            let (scope, step) = await Self.step(
+                for: command, project: session.project, document: session.document, makeID: environment.makeID)
             // Another call changed the document while its takes were read: from the document as it is now.
             guard session.revision == revision else { continue }
             switch try step.get() {
@@ -178,9 +197,11 @@ import ProjectFormat
 
     /// Undoes the last step, from the edit log: also one an earlier process made.
     public func undo() async throws -> CommandResult {
-        let session = try editableSession()
+        try checkCanEdit()
+        if case .editing = storage, diskHistory.undo == nil { throw APIError(.refused, "there is nothing to undo") }
+        let session = try await editableSession()
         guard session.canUndo, let label = session.undoLabel else { throw APIError(.refused, "there is nothing to undo") }
-        let reopened = reopenings(of: session)
+        let reopened = session.reopenings
         guard session.undo() != .refused else {
             try checkEditable(session)
             throw APIError(.refused, "there is nothing to undo")
@@ -190,9 +211,11 @@ import ProjectFormat
     }
 
     public func redo() async throws -> CommandResult {
-        let session = try editableSession()
+        try checkCanEdit()
+        if case .editing = storage, diskHistory.redo == nil { throw APIError(.refused, "there is nothing to redo") }
+        let session = try await editableSession()
         guard session.canRedo, let label = session.redoLabel else { throw APIError(.refused, "there is nothing to redo") }
-        let reopened = reopenings(of: session)
+        let reopened = session.reopenings
         guard session.redo() != .refused else {
             try checkEditable(session)
             throw APIError(.refused, "there is nothing to redo")
@@ -201,37 +224,93 @@ import ProjectFormat
         return result("redo", changed: true, label: label.rawValue, created: nil)
     }
 
-    /// Releases the project: in `.edit`, the session writes its snapshot and lets go of `edit.lock`. Nothing after it.
+    /// Releases the project: in `.edit`, the session (if a command opened it) writes its snapshot and lets go of
+    /// `edit.lock`. Nothing after it.
     public func close() async {
         guard !closed else { return }
         closed = true
+        if let opening { _ = try? await opening.value }
         if case let .edit(session) = storage { await session.close() }
     }
 
-    // MARK: - Private
+    // MARK: - The session
 
-    /// The session, if the project can be edited now.
-    func editableSession() throws(APIError) -> EditSession {
-        guard !closed else { throw APIError(.refused, "the project is closed") }
-        guard case let .edit(session) = storage else {
-            throw APIError(.refused, "the project is open for reading: open it for editing to change it")
+    /// The edit session, opened now if no command opened it yet (it takes `edit.lock`, and may write as it opens: a new
+    /// project's first document, the repair of a damaged log): `locked` if another process has the lock, `refused` if
+    /// the project is closed or open for reading. Every command its own undo (`joinsBursts` off). What changes the
+    /// document asks for it, and only then (`transcribe` too, once it has a transcript to apply).
+    func editableSession() async throws -> EditSession {
+        try checkCanEdit()
+        if case let .edit(session) = storage {
+            try checkEditable(session)
+            return session
         }
-        try checkEditable(session)
+        let url = url, environment = environment
+        let task = opening ?? Task { try await Self.openSession(url, environment: environment) }
+        opening = task
+        let session: EditSession
+        do {
+            session = try await task.value
+        } catch {
+            opening = nil
+            throw Self.apiError(error)
+        }
+        opening = nil
+        if case let .edit(opened) = storage { return opened }
+        guard !closed else {
+            await session.close()
+            throw APIError(.refused, "the project is closed")
+        }
+        storage = .edit(session)
         return session
+    }
+
+    private static func openSession(_ url: URL, environment: APIEnvironment) async throws -> EditSession {
+        let session = try await EditSession.open(url, take: nil, context: environment.editContext)
+        if case let .readOnly(reason) = session.access {
+            await session.close()
+            throw apiError(reason)
+        }
+        session.joinsBursts = false
+        return session
+    }
+
+    /// `refused` if the project is closed or open for reading.
+    private func checkCanEdit() throws(APIError) {
+        guard !closed else { throw APIError(.refused, "the project is closed") }
+        guard mode == .edit else { throw APIError(.refused, "the project is open for reading: open it for editing to change it") }
     }
 
     private func checkEditable(_ session: EditSession) throws(APIError) {
         if case let .readOnly(reason) = session.access { throw Self.apiError(reason) }
     }
 
-    /// How many times the session opened the package again since it opened.
-    private func reopenings(of session: EditSession) -> Int {
-        session.notices.filter { $0 == .reopenedAfterOtherApp }.count
+    /// Whether `command` changes `document` (the one on disk, before the session opens): its error if it has one.
+    private func changes(_ command: ProjectCommand, project: LoadedProject, document: EditDocument) async throws -> Bool {
+        let (scope, step) = await Self.step(for: command, project: project, document: document, makeID: environment.makeID)
+        switch try step.get() {
+        case .unchanged:
+            return false
+        case .step:
+            return true
+        case .needsSession:
+            switch command {
+            case let .applyStyle(id):
+                return try await style(id, appliedTo: scope) != nil
+            case let .setBackground(.image(file)):
+                try Self.checkOutsideImage(file)
+                return true
+            default:
+                return true
+            }
+        }
     }
+
+    // MARK: - Private
 
     /// `perform` of `step`, waited for on the disk.
     func perform(_ step: EditStep, command: String, created: String?, in session: EditSession) async throws -> CommandResult {
-        let reopened = reopenings(of: session)
+        let reopened = session.reopenings
         guard session.perform(step) != .refused else {
             try checkEditable(session)
             throw APIError(.refused, "the change would leave a document Toma cannot draw")
@@ -246,7 +325,7 @@ import ProjectFormat
     private func settle(_ session: EditSession, reopened: Int) async throws(APIError) {
         _ = await session.flushed()
         try checkEditable(session)
-        if reopenings(of: session) > reopened {
+        if session.reopenings > reopened {
             throw APIError(.locked, "another app edited the project first: the change was discarded, and the project read again")
         }
         if session.hasUnsavedChanges {
@@ -278,6 +357,27 @@ import ProjectFormat
     /// The row Style's "Apply" (`EditSession.applyStyle`, its image brought into the package): Toma's style (`toma`), or
     /// one of the library's (`StyleLibrary`) by its id (plan 4b decision 24).
     private func applyStyle(_ id: String, scope: CommandScope, in session: EditSession) async throws -> CommandResult {
+        guard let (style, imageDirectory) = try await style(id, appliedTo: scope) else {
+            return result("applyStyle", changed: false, label: nil, created: nil)
+        }
+        let reopened = session.reopenings
+        // Its image waits out a full disk without end in `importAsset`: given up as soon as the session says so.
+        let ((outcome, _), failure) = await givingUpOnSaveFailure(of: session) {
+            await session.applyStyle(style, imageDirectory: imageDirectory)
+        }
+        guard outcome != .refused else {
+            try checkEditable(session)
+            if let failure { throw APIError(.refused, "the style's image could not be saved into the project (\(failure))") }
+            throw APIError(.refused, "the style could not be applied")
+        }
+        try await settle(session, reopened: reopened)
+        return result("applyStyle", changed: true, label: EditLabel.styleApply.rawValue, created: nil)
+    }
+
+    /// The style `id` names and the folder of its image, if applying it to `scope`'s document changes it: Toma's style
+    /// (`toma`), or one of the library's (`StyleLibrary`) by its id (plan 4b decision 24: «Toma's Style» of the row
+    /// Style). `nil` for a style the project has already: "Apply" changes nothing.
+    private func style(_ id: String, appliedTo scope: CommandScope) async throws -> (NamedStyle, URL?)? {
         let style: NamedStyle
         let imageDirectory: URL?
         if id == NamedStyle.tomaStyleID {
@@ -293,29 +393,55 @@ import ProjectFormat
             style = found
             imageDirectory = library.imageDirectory(of: found)
         }
-        // "Apply" of a style the project has already changes nothing (`StyleMenu.has`).
-        guard StyleCommands.applyStyle(scope.document, style, takes: scope.takes) != nil else {
-            return result("applyStyle", changed: false, label: nil, created: nil)
+        guard StyleCommands.applyStyle(scope.document, style, takes: scope.takes) != nil else { return nil }
+        return (style, imageDirectory)
+    }
+
+    /// `body` (an import, which `EditSession.importAsset` tries again every 2 s while the disk refuses it, without end),
+    /// cancelled as soon as the session shows `.saveFailed`, or when the caller's task is: the import then gives up with
+    /// `.saveFailed`, and the command says `refused`, as `perform` does on the same disk. Its value, and why it was given
+    /// up on (the session takes its notice away as the import ends).
+    private func givingUpOnSaveFailure<T: Sendable>(
+        of session: EditSession, _ body: @escaping @MainActor () async -> T
+    ) async -> (T, failure: String?) {
+        let work = Task { await body() }
+        let watch = Task { () -> String? in
+            while !Task.isCancelled {
+                if let failure = Self.saveFailure(of: session) {
+                    work.cancel()
+                    return failure
+                }
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+            return nil
         }
-        let reopened = reopenings(of: session)
-        let (outcome, _) = await session.applyStyle(style, imageDirectory: imageDirectory)
-        guard outcome != .refused else {
-            try checkEditable(session)
-            throw APIError(.refused, "the style could not be applied")
-        }
-        try await settle(session, reopened: reopened)
-        return result("applyStyle", changed: true, label: EditLabel.styleApply.rawValue, created: nil)
+        let value = await withTaskCancellationHandler { await work.value } onCancel: { work.cancel() }
+        watch.cancel()
+        return (value, await watch.value)
+    }
+
+    /// Why the session's last change could not be saved, if it says so (`EditNotice.saveFailed`).
+    private static func saveFailure(of session: EditSession) -> String? {
+        session.notices.lazy.compactMap { notice -> String? in
+            if case let .saveFailed(code) = notice { String(cString: strerror(code.rawValue)) } else { nil }
+        }.first
+    }
+
+    /// An image from outside the package, as a background takes one (fases 4 y 5 design §6.3): a regular file, not a
+    /// link, by a path without `..`.
+    private static func checkOutsideImage(_ file: String) throws(APIError) {
+        if URL(fileURLWithPath: file).pathComponents.contains("..") { throw APIError(.refused, "\(file): a path with “..” is refused") }
+        var info = stat()
+        guard lstat(file, &info) == 0 else { throw APIError(.refused, "there is no image at \(file)") }
+        guard info.st_mode & S_IFMT == S_IFREG else { throw APIError(.refused, "\(file) is a link or not a regular file") }
     }
 
     /// An image from outside the package copied into its `assets/` (`EditSession.importAsset`), for a background: the
     /// path it has there.
     private func importImage(_ file: String, in session: EditSession) async throws -> String {
+        try Self.checkOutsideImage(file)
         let source = URL(fileURLWithPath: file)
-        if source.pathComponents.contains("..") { throw APIError(.refused, "\(file): a path with “..” is refused") }
-        var info = stat()
-        guard lstat(file, &info) == 0 else { throw APIError(.refused, "there is no image at \(file)") }
-        guard info.st_mode & S_IFMT == S_IFREG else { throw APIError(.refused, "\(file) is a link or not a regular file") }
-        switch await session.importAsset(source, kind: .image) {
+        switch await givingUpOnSaveFailure(of: session, { await session.importAsset(source, kind: .image) }).0 {
         case let .imported(path):
             return path
         case .notAnImage, .notALUT, .notPlayable:
@@ -334,11 +460,12 @@ import ProjectFormat
         return await Task.detached { Self.scope(project: project, document: document, makeID: makeID) }.value
     }
 
-    /// `command`'s step on the session's document and its scope, both worked out off the main actor (planning the
-    /// automatic zoom again reads every event).
-    private func step(for command: ProjectCommand, in session: EditSession) async -> (CommandScope, Result<CommandStep, APIError>) {
-        let project = session.project, document = session.document, makeID = environment.makeID
-        return await Task.detached {
+    /// `command`'s step on `document` and its scope, both worked out off the main actor (planning the automatic zoom
+    /// again reads every event).
+    private static func step(
+        for command: ProjectCommand, project: LoadedProject, document: EditDocument, makeID: @escaping @Sendable (String) -> String
+    ) async -> (CommandScope, Result<CommandStep, APIError>) {
+        await Task.detached {
             let scope = Self.scope(project: project, document: document, makeID: makeID)
             do throws(APIError) {
                 return (scope, .success(try CommandSteps.step(for: command, in: scope)))
@@ -365,8 +492,11 @@ import ProjectFormat
     }
 
     func result(_ command: String, changed: Bool, label: String?, created: String?) -> CommandResult {
-        var undo: String?
-        if case let .edit(session) = storage { undo = session.undoLabel?.rawValue }
+        let undo: String? = switch storage {
+        case let .edit(session): session.undoLabel?.rawValue
+        case .editing: diskHistory.undo?.rawValue
+        case .read: nil
+        }
         return CommandResult(
             command: command, changed: changed, label: label, created: created,
             duration: TimeMap(sequence: document.sequence).durationSeconds, undo: undo, via: .project)
@@ -428,9 +558,12 @@ import ProjectFormat
         return lstat(project.package.editURL.path, &info) == 0 || lstat(project.package.editLogURL.path, &info) == 0
     }
 
-    /// The `documentVersion` `edit.json` is written in, read without following a link; `nil` without one.
-    private nonisolated static func writtenDocumentVersion(of url: URL) -> Int? {
-        guard let data = try? SafeRead.regularFile("edit.json", in: url) else { return nil }
-        return EditDocument.writtenVersion(of: data)
+    /// What the edit log of `project` can undo and redo, as its session would see it: nothing without a log.
+    private nonisolated static func diskHistory(of project: LoadedProject) -> DiskHistory {
+        guard project.manifest.formatVersion >= 3, let read = try? EditLogReader.read(project.package.editLogURL) else {
+            return DiskHistory()
+        }
+        let history = UndoHistory(entries: read.entries, createVersion: read.createVersion ?? EditDocument.currentVersion)
+        return DiskHistory(undo: history.undoLabel, redo: history.redoLabel)
     }
 }

@@ -63,7 +63,8 @@ extension Compositor {
     /// pass reopened counts in `counts.renderPasses`, and the drawing that read the frame in `counts.calmZoomSamples`.
     ///
     /// Over a frame with nothing behind its stage (`BackgroundLayer.transparent`, milestone 4c), Highlight and Dim darken
-    /// the stage drawn and not the void, with their pipelines of `AlphaPipelines`; the loupe is drawn as it is.
+    /// the stage drawn and not the void, and the loupe magnifies what is under it with its alpha, with their pipelines of
+    /// `AlphaPipelines`.
     func drawCalmZoom(
         _ layer: CalmZoomLayer?, frame: RenderFrame, through stage: StageTransform?, card: CardContent?, pass: LayerPass,
         encoder: inout any MTLRenderCommandEncoder, target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
@@ -98,8 +99,8 @@ extension Compositor {
             let middle = SIMD2(layer.focus.x + layer.focus.width / 2, layer.focus.y + layer.focus.height / 2)
             let center = stage?.outputPoint(ofStage: middle, outputSize: outputSize) ?? middle
             return try drawLoupe(
-                lens, center: center, amount: amount, outputSize: outputSize, encoder: &encoder, target: target,
-                passes: &passes, counts: &counts)
+                lens, center: center, amount: amount, outputSize: outputSize, transparent: transparent, encoder: &encoder,
+                target: target, passes: &passes, counts: &counts)
         }
     }
 
@@ -228,10 +229,11 @@ extension Compositor {
     }
 
     /// The loupe's `lens` centred at `center` (output pixels): a copy of its box in the target (with what its bulge
-    /// reads, `lensBox`), and the lens, its shadow and its ring over the target in a pass of its own, left in `encoder`.
-    /// Nothing, and `false`, when none of the box is in the target.
+    /// reads, `lensBox`), and the lens, its shadow and its ring over the target in a pass of its own, left in `encoder`;
+    /// over a `transparent` frame, the lens with the copy's alpha (`AlphaPipelines.lens`). Nothing, and `false`, when none
+    /// of the box is in the target.
     private func drawLoupe(
-        _ lens: LoupeLayer, center: SIMD2<Double>, amount: Double, outputSize: SIMD2<Int>,
+        _ lens: LoupeLayer, center: SIMD2<Double>, amount: Double, outputSize: SIMD2<Int>, transparent: Bool,
         encoder: inout any MTLRenderCommandEncoder, target: any MTLTexture, passes: inout CalmZoomPasses,
         counts: inout DrawCounts
     ) throws -> Bool {
@@ -262,7 +264,7 @@ extension Compositor {
         var quad = QuadUniforms(
             viewport: viewport, origin: origin, size: size, contentOrigin: origin, contentSize: size, uvOrigin: .zero,
             uvSize: .one, radius: 0)
-        encoder.setRenderPipelineState(layers.calmZoom.lens)
+        encoder.setRenderPipelineState(transparent ? layers.alpha.lens : layers.calmZoom.lens)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<LoupeUniforms>.stride, index: 1)
         encoder.setFragmentBytes(&shadow, length: MemoryLayout<LensShadowUniforms>.stride, index: 2)

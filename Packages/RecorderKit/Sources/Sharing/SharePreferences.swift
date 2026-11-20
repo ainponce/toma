@@ -52,3 +52,46 @@ public struct SharePreferences: Codable, Equatable, Sendable {
         linkDays = (try? container.decodeIfPresent(Int.self, forKey: .linkDays)) ?? defaults.linkDays
     }
 }
+
+/// Each service's template (plan 5a, decision 5): what Settings ▸ Share fills in when the service changes, and how its
+/// objects are addressed.
+extension ShareProvider {
+    /// The region a new configuration of this service signs for.
+    public var defaultRegion: String {
+        switch self {
+        case .r2: "auto"
+        case .b2: "us-west-004"
+        case .s3, .minio, .other: "us-east-1"
+        }
+    }
+
+    /// What the endpoint field shows while it is empty: the shape of this service's endpoint.
+    public var endpointTemplate: String {
+        switch self {
+        case .r2: "https://<ACCOUNT_ID>.r2.cloudflarestorage.com"
+        case .s3: "https://s3.<REGION>.amazonaws.com"
+        case .b2: "https://s3.<REGION>.backblazeb2.com"
+        case .minio: "http://localhost:9000"
+        case .other: ""
+        }
+    }
+
+    /// The endpoint of `region` for the services whose endpoint follows from it (S3 and B2); `nil` for the others, whose
+    /// endpoint is written by hand, and for a region that cannot be part of a host name.
+    public func endpoint(region: String) -> String? {
+        let region = region.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !region.isEmpty, region.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) else {
+            return nil
+        }
+        switch self {
+        case .s3: return "https://s3.\(region).amazonaws.com"
+        case .b2: return "https://s3.\(region).backblazeb2.com"
+        case .r2, .minio, .other: return nil
+        }
+    }
+
+    /// How an object's URL is written: S3 puts the bucket in the host; the others, in the path.
+    public var addressing: S3Addressing {
+        self == .s3 ? .virtualHosted : .path
+    }
+}

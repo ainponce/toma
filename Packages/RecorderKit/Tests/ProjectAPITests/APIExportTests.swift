@@ -29,11 +29,15 @@ private let small = ExportSettings(outputSize: [320, 180], framesPerSecond: 10)
             let url = try await APIFixtures.package(in: dir).package.url
             let project = try await TomaProject.open(url, mode: .edit, environment: environment)
             _ = try await project.apply(.addMusic(theme: "calm", volume: -6))
+            // ProRes, whose LPCM sound decodes to the samples mixed, and whose frames hardly depend on which of
+            // VideoToolbox's encoders writes them (H.264 at this size has too few bits for that).
+            var settings = small
+            settings.codec = .proRes422
             let reported = Reports()
-            let viaAPI = dir.appending(path: "api.mp4")
-            let result = try await project.export(to: viaAPI, format: .video(small)) { reported.add($0) }
+            let viaAPI = dir.appending(path: "api.mov")
+            let result = try await project.export(to: viaAPI, format: .video(settings)) { reported.add($0) }
             #expect(result == ExportResult(
-                path: viaAPI.path, format: "mp4", codec: "h264", width: 320, height: 180, framesPerSecond: 10, duration: 10,
+                path: viaAPI.path, format: "mov", codec: "prores422", width: 320, height: 180, framesPerSecond: 10, duration: 10,
                 bytes: result.bytes, chapters: 0, warnings: [], fcpxml: nil, metadata: nil))
             #expect(result.bytes > 0)
             let fractions = reported.all
@@ -47,18 +51,19 @@ private let small = ExportSettings(outputSize: [320, 180], framesPerSecond: 10)
             let prepared = try await ExportPreparation.prepared(
                 project: project.project, document: project.document, caches: caches, needs: .video, workers: workers) { _ in }
             #expect(prepared.analysis.musicFiles.count == 1)
-            let byHand = dir.appending(path: "hand.mp4")
+            let byHand = dir.appending(path: "hand.mov")
             try await MP4Exporter(
-                project: project.project, document: project.document, settings: small, analysis: prepared.analysis,
+                project: project.project, document: project.document, settings: settings, analysis: prepared.analysis,
                 remakeMusic: prepared.remakeMusic
             ).export(to: byHand) { _ in }
             await project.close()
 
             let (api, hand) = (try await videoFrames(of: viaAPI), try await videoFrames(of: byHand))
-            #expect(api.count == 100 && sameFrames(api, hand))
+            #expect(api.count == 100 && sameFrames(api, hand), "\(frameDifference(api, hand))")
             let (apiSound, handSound) = (try await decodedAudioChannels(of: viaAPI), try await decodedAudioChannels(of: byHand))
             #expect(apiSound.channels == handSound.channels && apiSound.samples.count == handSound.samples.count)
-            #expect(zip(apiSound.samples, handSound.samples).allSatisfy { abs($0 - $1) <= 1e-5 }, "the same sound decoded")
+            #expect(apiSound.samples == handSound.samples, "the same sound, sample by sample")
+            #expect(apiSound.samples.contains { abs($0) > 0.01 })
         }
     }
 
@@ -355,6 +360,18 @@ private func videoFrames(of url: URL) async throws -> [VideoFrame] {
         for y in 0..<height { bytes.append(contentsOf: UnsafeBufferPointer(start: base.advanced(by: y * row), count: width * 4)) }
         frames.append(VideoFrame(time: sample.presentationTimeStamp.seconds, bytes: bytes))
     }
+}
+
+/// Where `a` and `b` first differ, for the message of a failed comparison.
+private func frameDifference(_ a: [VideoFrame], _ b: [VideoFrame]) -> String {
+    guard a.count == b.count else { return "\(a.count) frames and \(b.count)" }
+    var worst = (frame: -1, mean: 0.0, times: (0.0, 0.0))
+    for (k, (a, b)) in zip(a, b).enumerated() where a.bytes != b.bytes || a.time != b.time {
+        let difference = zip(a.bytes, b.bytes).reduce(0) { $0 + abs(Int($1.0) - Int($1.1)) }
+        let mean = Double(difference) / Double(max(a.bytes.count, 1))
+        if mean >= worst.mean { worst = (k, mean, (a.time, b.time)) }
+    }
+    return worst.frame < 0 ? "the same" : "most apart: frame \(worst.frame) at \(worst.times), mean difference \(worst.mean)"
 }
 
 /// Whether `a` and `b` are the same frames decoded: at the same times and alike to a level on average. Not byte for byte:

@@ -3,9 +3,10 @@ import AppSupport
 import ProjectFormat
 import SwiftUI
 
-/// The panel's tabs, in the mockup's order (design §5.4): ⌘1 to ⌘8, and Annotations, ⌘9 (phase 3 design §5.6).
+/// The panel's tabs, in the mockup's order (design §5.4): ⌘1 to ⌘8, Annotations, ⌘9 (phase 3 design §5.6), and Info,
+/// without a key (fases 4 y 5 design §9, plan 5b decision 11).
 enum EditorPanelTab: Int, CaseIterable, Identifiable {
-    case background, frame, camera, cursor, zoom, audio, captions, privacy, annotations
+    case background, frame, camera, cursor, zoom, audio, captions, privacy, annotations, info
 
     var id: Int { rawValue }
 
@@ -20,6 +21,7 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .captions: "Captions"
         case .privacy: "Privacy"
         case .annotations: "Annotations"
+        case .info: "Info"
         }
     }
 
@@ -34,7 +36,13 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .captions: "captions.bubble"
         case .privacy: "eye.slash"
         case .annotations: "scribble.variable"
+        case .info: "info.circle"
         }
+    }
+
+    /// ⌘1 to ⌘9 for the first nine; none for Info, the tenth.
+    var shortcut: KeyboardShortcut? {
+        rawValue < 9 ? KeyboardShortcut(KeyEquivalent(Character(String(rawValue + 1))), modifiers: .command) : nil
     }
 
     /// The tab the selection asks for (design §5.4: the panel shows what is selected): a zoom block, Zoom; a camera change,
@@ -117,7 +125,7 @@ struct EditorPanel: View {
                     Image(systemName: item.symbol)
                 }
                 .buttonStyle(PanelTabStyle(isSelected: tab == item, indicator: indicator))
-                .keyboardShortcut(KeyEquivalent(Character(String(item.rawValue + 1))), modifiers: .command)
+                .keyboardShortcut(item.shortcut)
                 .help(Text(item.title))
                 .accessibilityLabel(Text(item.title))
                 .accessibilityAddTraits(tab == item ? .isSelected : [])
@@ -139,6 +147,7 @@ struct EditorPanel: View {
             case .captions: CaptionsTab(model: model)
             case .privacy: PrivacyTab(model: model)
             case .annotations: AnnotationsTab(model: model)
+            case .info: InfoTab(model: model, ai: model.ai, voice: model.voice)
             }
         }
     }

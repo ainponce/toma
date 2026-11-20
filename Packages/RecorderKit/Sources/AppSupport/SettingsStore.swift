@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import Foundation
 import ProjectFormat
+import Sharing
 import os
 
 /// What the recorder remembers between takes.

@@ -20,12 +20,13 @@ extension TomaProject {
     ///   many, unless `replace`.
     /// - Without an engine (before macOS 26), on a Mac that cannot transcribe, or without the model of the language on
     ///   this Mac, `notAvailable`: the API never downloads a model (only the app's "Download" does).
+    /// - The edit session (and `edit.lock`) opens only once there is a transcript that changes the document: `locked` if
+    ///   the app took the project meanwhile. A transcription that fails or changes nothing writes nothing.
     func runTranscription(language: String?, replace: Bool) async throws -> CommandResult {
-        let session = try editableSession()
         guard let engine = environment.speech else {
             throw APIError(.notAvailable, "transcribing needs macOS 26: there is no speech engine on this Mac")
         }
-        let project = session.project, document = session.document
+        let project = self.project, document = self.document
         let chosen: String
         if let language, !language.isEmpty {
             chosen = language
@@ -45,19 +46,31 @@ extension TomaProject {
         let voice = SequenceVoiceJobs(project: project, caches: caches, engine: engine, isolator: environment.isolator)
         let transcript = try await Self.transcribe(wanted, language: chosen, document: document, voice: voice)
 
-        // The document as it is now.
-        let current = try editableSession().document
+        // Nothing written for a transcript that changes nothing, or that is refused, of the document as it is now.
+        guard try Self.step(applying: transcript, to: self.document, replace: replace) != nil else {
+            return result("transcribe", changed: false, label: nil, created: nil)
+        }
+        // The session opens now, and its document is the one the step is made of.
+        let session = try await editableSession()
+        guard let step = try Self.step(applying: transcript, to: session.document, replace: replace) else {
+            return result("transcribe", changed: false, label: nil, created: nil)
+        }
+        return try await perform(step, command: "transcribe", created: nil, in: session)
+    }
+
+    /// The step that puts `transcript` in `document` as the app does (`create` when the transcript has no take but those
+    /// heard, `mergeTakes` otherwise); `nil` if it changes nothing. `refused` when it would lose corrections of the takes
+    /// heard, unless `replace`.
+    private nonisolated static func step(applying transcript: Transcript, to document: EditDocument, replace: Bool) throws -> EditStep? {
         let heard = Set(transcript.takes.map(\.take))
-        let lost = current.transcript.map { TranscriptCommands.lostCorrections($0, transcript, inTakes: heard) } ?? 0
+        let lost = document.transcript.map { TranscriptCommands.lostCorrections($0, transcript, inTakes: heard) } ?? 0
         if lost > 0, !replace {
             throw APIError(
                 .refused,
                 "transcribing again replaces \(lost) corrected word\(lost == 1 ? "" : "s"): give \"replace\": true to replace them")
         }
-        let whole = current.transcript.map { $0.takes.allSatisfy { heard.contains($0.take) } } ?? true
-        guard let step = whole ? TranscriptCommands.create(current, transcript) : TranscriptCommands.mergeTakes(current, transcript)
-        else { return result("transcribe", changed: false, label: nil, created: nil) }
-        return try await perform(step, command: "transcribe", created: nil, in: session)
+        let whole = document.transcript.map { $0.takes.allSatisfy { heard.contains($0.take) } } ?? true
+        return whole ? TranscriptCommands.create(document, transcript) : TranscriptCommands.mergeTakes(document, transcript)
     }
 
     /// The words of each take of `wanted` heard in `language`, one job after the other on a queue of their own, put

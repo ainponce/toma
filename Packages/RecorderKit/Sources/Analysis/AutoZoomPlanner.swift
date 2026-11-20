@@ -43,6 +43,24 @@ import ProjectFormat
 ///    in output time.
 ///
 /// With `enabled` off, or an output of 0 ns, it makes nothing.
+///
+/// With `followsFocus` (`focusZoom-1`, `FocusZoom`; fases 4 y 5 design §5.2) it also zooms on the keyboard's focus the
+/// take recorded, from what `Activity` reads of its `focus` events; without it, or without `focus` events, it plans
+/// exactly what it planned before, ids included. The focus only adds:
+/// - A change of the focused element is one more element of step 1, as a click with its box: it groups with clicks and
+///   its block merges with theirs (5). A group with one zooms `FocusZoom.maximumDepth` at most (6), and a group of only
+///   changes of the element is fixed at the centre of its box even with `follow` (7).
+/// - A span of typing with text cursors in it (`Activity.caretRuns`) holds no group and makes none alone (2 and 3), and
+///   a click, drag or pause that starts in it is no element (1): the span is the cursor's. It is split into lines, each
+///   a group of its own on its anchor, the first cursor of the line, from it to the next line's anchor (or the span's
+///   end), held to there. The next line starts at the first cursor whose box leaves the view of the line's anchor: the
+///   crop of `min(depth, the depth that fits the anchor's box)` placed on the anchor's centre (`StageCrop`), less 12 % of
+///   it on each side but at the screen's edge (a click that takes the text cursor out of the view cuts the line there
+///   too). Nothing joins such a group and it joins nothing (1 and 5): next to another block it meets it at the midpoint,
+///   between two lines their cut, and as nothing starts inside a line no block ends up over another. It is fixed at its
+///   anchor's centre (7), as typing should not chase the pointer, unless the screen follows the cursor.
+/// The other steps are the same for the blocks of the focus: the user's blocks win, a deletion stays, and their ids are
+/// `regionID`.
 public enum AutoZoomPlanner {
     public static let id = "autoZoom-1"
 
@@ -91,9 +109,11 @@ public enum AutoZoomPlanner {
     }
 }
 
-/// The steps of `AutoZoomPlanner.plan`, with its settings in output nanoseconds.
-private struct Planner {
-    /// What a block zooms on: a click, a drag or a pause, over `[start, end]` of output.
+/// The steps of `AutoZoomPlanner.plan`, with its settings in output nanoseconds. Internal so that `focusZoom-1`'s part
+/// lives with the rest of it (`FocusActivity.swift`).
+struct Planner {
+    /// What a block zooms on: a click, a drag or a pause, or a change of the focused element, over `[start, end]` of
+    /// output.
     struct Element {
         var start: Int64
         var end: Int64
@@ -101,6 +121,17 @@ private struct Planner {
         var box: Rect
         /// The source instant of `start`, where `box` was placed.
         var host: HostTime
+        /// Whether it is a change of the focused element (`focusZoom-1`).
+        var isFocus = false
+
+        /// The deepest its group zooms.
+        var maxDepth: Double { isFocus ? FocusZoom.maximumDepth : .infinity }
+    }
+
+    /// What a group is of (`focusZoom-1`): the pointer's (and the focused element's) elements, or a line of the text
+    /// cursor, which nothing joins.
+    enum Kind {
+        case pointer, caret
     }
 
     struct Group {
@@ -111,6 +142,11 @@ private struct Planner {
         var host: HostTime
         /// The end of what holds it; `last` when nothing does.
         var held: Int64
+        var kind = Kind.pointer
+        /// The deepest it zooms: `FocusZoom.maximumDepth` with a change of the focused element.
+        var maxDepth = Double.infinity
+        /// Whether all its elements are changes of the focused element: it is fixed on its box.
+        var focusOnly = false
     }
 
     /// A source range of the take, and the output range it is seen in.
@@ -129,6 +165,10 @@ private struct Planner {
         var box: Rect
         var host: HostTime
         var depth: Double
+        /// As in `Group`.
+        var kind = Kind.pointer
+        var maxDepth = Double.infinity
+        var focusOnly = false
     }
 
     let settings: AutoZoomSettings
@@ -186,6 +226,10 @@ private struct Planner {
         if settings.triggers == .clicksAndPauses {
             elements += activity.pauses.map { Element(start: $0.output, end: $0.output, box: Self.box(at: $0.point), host: $0.host) }
         }
+        if settings.followsFocus {
+            // `focusZoom-1`: a span with text cursors is the cursor's; what the pointer does in it zooms nothing.
+            elements = outsideCaretRuns(elements, activity) + focusElements(activity)
+        }
         elements = elements.enumerated().sorted { ($0.element.start, $0.offset) < ($1.element.start, $1.offset) }.map(\.element)
 
         var groups: [Group] = []
@@ -194,25 +238,32 @@ private struct Planner {
                 let box = Self.union(group.box, element.box)
                 if fits(box) {
                     groups[groups.count - 1] = Group(
-                        first: group.first, last: max(group.last, element.end), box: box, host: group.host, held: group.held)
+                        first: group.first, last: max(group.last, element.end), box: box, host: group.host, held: group.held,
+                        maxDepth: min(group.maxDepth, element.maxDepth), focusOnly: group.focusOnly && element.isFocus)
                     continue
                 }
             }
-            groups.append(Group(first: element.start, last: element.end, box: element.box, host: element.host, held: element.end))
+            groups.append(Group(
+                first: element.start, last: element.end, box: element.box, host: element.host, held: element.end,
+                maxDepth: element.maxDepth, focusOnly: element.isFocus))
         }
 
-        let typing = settings.holdWhileTyping ? activity.typing : []
+        // With `followsFocus`, a span of typing with text cursors is not typing here: its blocks are the cursor's.
+        let typed = settings.followsFocus ? typingWithoutCarets(activity) : activity.typing
+        let typing = settings.holdWhileTyping ? typed : []
         if settings.holdWhileTyping {
             let alone = typing.filter { span in !groups.contains { holds(span, $0) } }
             groups += alone.compactMap { typingGroup($0, found) }
         }
         let spans = typing + activity.scrolls
-        return groups.map { group in
+        let held = groups.map { group in
             var group = group
             for span in spans where holds(span, group) { group.held = max(group.held, span.upperBound) }
             return group
         }
-        .enumerated().sorted { ($0.element.first, $0.offset) < ($1.element.first, $1.offset) }.map(\.element)
+        // The text cursor's, which nothing holds.
+        let all = settings.followsFocus ? held + caretGroups(activity) : held
+        return all.enumerated().sorted { ($0.element.first, $0.offset) < ($1.element.first, $1.offset) }.map(\.element)
     }
 
     /// Whether `span` holds `group`: it starts at most `gap` after the group's last element (or before) and ends after
@@ -246,9 +297,11 @@ private struct Planner {
                 timeMap.duration)
             // Cut at the borders of its take's run.
             if let run = run(at: group.first) { (start, end) = (max(start, run.lowerBound), min(end, run.upperBound)) }
-            let depth = min(settings.depth, Self.fittingDepth(group.box, stage: stage.stageSize))
+            let depth = min(settings.depth, Self.fittingDepth(group.box, stage: stage.stageSize), group.maxDepth)
             guard depth >= AutoZoomPlanner.minimumDepth, start < end else { return nil }
-            return Block(start: start, end: end, first: group.first, last: group.last, box: group.box, host: group.host, depth: depth)
+            return Block(
+                start: start, end: end, first: group.first, last: group.last, box: group.box, host: group.host, depth: depth,
+                kind: group.kind, maxDepth: group.maxDepth, focusOnly: group.focusOnly)
         }
     }
 
@@ -263,11 +316,14 @@ private struct Planner {
                 continue
             }
             let box = Self.union(previous.box, block.box)
-            if fits(box) {
+            // A line of the text cursor merges with nothing.
+            if previous.kind == .pointer, block.kind == .pointer, fits(box) {
                 previous.end = max(previous.end, block.end)
                 previous.last = max(previous.last, block.last)
                 previous.box = box
-                previous.depth = min(settings.depth, Self.fittingDepth(box, stage: stage.stageSize))
+                previous.maxDepth = min(previous.maxDepth, block.maxDepth)
+                previous.focusOnly = previous.focusOnly && block.focusOnly
+                previous.depth = min(settings.depth, Self.fittingDepth(box, stage: stage.stageSize), previous.maxDepth)
                 settled[settled.count - 1] = previous
             } else {
                 let middle = previous.last + (block.first - previous.last) / 2
@@ -348,9 +404,9 @@ private struct Planner {
         return (first.source, end)
     }
 
-    /// Step 7.
+    /// Step 7; with `focusZoom-1`, a line of the text cursor and a group of only changes of the element are fixed too.
     private func focus(of block: Block) -> ZoomFocus {
-        guard !settings.follow, !followsCursor else { return .follow }
+        guard !followsCursor, !settings.follow || block.kind == .caret || block.focusOnly else { return .follow }
         let center = SIMD2(block.box.x + block.box.width / 2, block.box.y + block.box.height / 2)
         guard let screen = stage.screenRect(at: block.host), screen.width > 0, screen.height > 0 else { return .fixed(x: 0.5, y: 0.5) }
         return .fixed(x: (center.x - screen.x) / screen.width, y: (center.y - screen.y) / screen.height)
@@ -364,7 +420,7 @@ private struct Planner {
 
     /// The deepest zoom whose crop of the stage of `stage` fits `box` with its margin on each side (infinite for a
     /// point).
-    private static func fittingDepth(_ box: Rect, stage: SIMD2<Double>) -> Double {
+    static func fittingDepth(_ box: Rect, stage: SIMD2<Double>) -> Double {
         let room = stage * (1 - 2 * AutoZoomPlanner.margin)
         return min(room.x / box.width, room.y / box.height)
     }

@@ -503,6 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 || environment["TOMA_SHOWCASE_DEVICEFRAME"] != nil || environment["TOMA_SHOWCASE_REFRAME"] != nil
                 || environment["TOMA_SHOWCASE_PLAYHEAD"] != nil
                 || environment.keys.contains(where: { $0.hasPrefix("TOMA_SHOWCASE_P3_") })
+                || environment["TOMA_SHOWCASE_AI"] != nil
             {
                 Task {
                     while editors[url]?.structureIsSettled != true { try? await Task.sleep(for: .milliseconds(100)) }
@@ -574,6 +575,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     // TOMA_SHOWCASE_P3_<NAME>: the screens of phase 3, each feature's in its own file.
                     await model.showcasePhase3(environment)
+                    // TOMA_SHOWCASE_AI=<info|info-working|sheet|sheet-working|unavailable|no-transcript>: the local AI (5b).
+                    await model.showcaseAI(environment)
                 }
             }
             guard surface == "export" else { return }

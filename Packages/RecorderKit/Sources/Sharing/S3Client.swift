@@ -1,0 +1,457 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+import CryptoKit
+import Foundation
+import Synchronization
+import os
+
+/// A client for the S3 API, written by hand (design §8.1; plan 5a, decisions 6 and 7): a single PUT up to
+/// `Limits.singlePut`, a multipart upload above it, one part at a time; DELETE; an unsigned GET for "Test Connection"; and
+/// presigned GET links. Every request is signed again on each attempt. It only ever talks to the configured endpoint
+/// (redirects are not followed) and never logs more than the method, the object's key and the HTTP status.
+///
+/// Everything it throws is a `ShareError`, but for the file to upload when it cannot be read (Foundation's own error).
+public struct S3Client: Sendable {
+    public struct Limits: Sendable {
+        /// Up to this many bytes, one PUT; above, a multipart upload.
+        public var singlePut: Int64
+        /// The size of each part but the last (S3 allows 10 000 parts; a bigger file gets bigger parts).
+        public var partSize: Int
+        /// How long removing what a failed or cancelled upload left may take, all requests and retries included: past it
+        /// the removal is given up, so cancelling (or quitting) never waits on a stuck network.
+        public var cleanupTime: Duration
+
+        public static let standard = Limits(singlePut: 64 << 20, partSize: 16 << 20)
+
+        public init(singlePut: Int64, partSize: Int, cleanupTime: Duration = .seconds(5)) {
+            self.singlePut = singlePut
+            self.partSize = partSize
+            self.cleanupTime = cleanupTime
+        }
+    }
+
+    /// A request is tried this many times at most: three retries, after 1, 2 and 4 s.
+    public static let maximumAttempts = 4
+
+    public let configuration: ShareConfiguration
+    private let session: URLSession
+    private let limits: Limits
+    private let clock: ServerClock
+    private let pause: @Sendable (Duration) async throws -> Void
+
+    private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Share")
+
+    /// The session the app and `toma` upload with: ephemeral, nothing cached or kept (no cookies, no credentials), 60 s
+    /// without data for a request, a day at most for one.
+    public static func ephemeralSession() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCredentialStorage = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 24 * 60 * 60
+        configuration.waitsForConnectivity = false
+        return URLSession(configuration: configuration)
+    }
+
+    /// `now` is the Mac's clock (a test's own); `pause` waits between attempts (a test records it instead).
+    public init(
+        configuration: ShareConfiguration, session: URLSession, limits: Limits = .standard,
+        now: @escaping @Sendable () -> Date = Date.init,
+        pause: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
+    ) {
+        self.configuration = configuration
+        self.session = session
+        self.limits = limits
+        self.clock = ServerClock(now: now)
+        self.pause = pause
+    }
+
+    // MARK: - Uploads
+
+    /// Uploads the file at `file` (a link is followed) as `key`: one PUT, or a multipart upload when it is bigger than
+    /// `limits.singlePut`. When it throws, the upload left nothing behind as far as the storage could be reached within
+    /// `limits.cleanupTime`: a multipart upload is aborted, and the object itself is deleted when a request that writes
+    /// it (the PUT, or `CompleteMultipartUpload`) may have reached the storage without its answer reaching the Mac, or
+    /// was cancelled on the way. `progress` gets the bytes sent so far, rising, and the file's size last. Returns the
+    /// bytes uploaded.
+    ///
+    /// One case is left to the storage's lifecycle rules: a `CreateMultipartUpload` whose answer was lost (it is never
+    /// sent twice) can leave an empty upload, without parts, under an id the Mac never learned.
+    public func upload(
+        file: URL, key: String, contentType: String, progress: (@Sendable (Int64) -> Void)?
+    ) async throws -> Int64 {
+        let file = file.resolvingSymlinksInPath()
+        let size = try Self.size(of: file)
+        let meter = ProgressMeter(progress)
+        if size <= limits.singlePut {
+            let data = try Data(contentsOf: file, options: .mappedIfSafe)
+            try await put(data, key: key, contentType: contentType, sent: { meter.report($0) })
+            meter.report(Int64(data.count))
+            return Int64(data.count)
+        }
+        try await multipart(file: file, size: size, key: key, contentType: contentType, meter: meter)
+        return size
+    }
+
+    /// Uploads `data` as `key` with one PUT (the poster and the page). When it throws, the object is deleted if the PUT
+    /// may have reached the storage unanswered, as in `upload(file:…)`.
+    public func upload(data: Data, key: String, contentType: String) async throws {
+        try await put(data, key: key, contentType: contentType, sent: nil)
+    }
+
+    /// An unsigned GET of `publicURL` ("Test Connection" checks the public base URL serves what was uploaded). Any status
+    /// is returned; only a request without an answer throws.
+    public func get(publicURL: URL) async throws -> (status: Int, body: Data) {
+        guard !Task.isCancelled else { throw ShareError.cancelled }
+        var request = URLRequest(url: publicURL, cachePolicy: .reloadIgnoringLocalCacheData)
+        request.httpMethod = "GET"
+        do {
+            let (data, response) = try await session.data(for: request, delegate: TaskDelegate(sent: nil))
+            guard let http = response as? HTTPURLResponse else { throw ShareError.network(.badServerResponse) }
+            Self.logger.info("GET public \(publicURL.path(percentEncoded: false), privacy: .public) \(http.statusCode, privacy: .public)")
+            return (http.statusCode, data)
+        } catch let error as ShareError {
+            throw error
+        } catch {
+            if Task.isCancelled || Self.isCancellation(error) { throw ShareError.cancelled }
+            let code = (error as? URLError)?.code ?? .unknown
+            Self.logger.error("GET public failed: \(code.rawValue, privacy: .public)")
+            throw ShareError.network(code)
+        }
+    }
+
+    /// Deletes `key`. 200, 204 and a 404 that is `NoSuchKey` (or has no code) are a success: what is gone is gone. A
+    /// `NoSuchBucket` is not: the storage is not the one the key was uploaded to.
+    public func delete(key: String) async throws {
+        _ = try await send("DELETE", key: key, acceptsMissing: true)
+    }
+
+    /// A presigned GET of `key` that lasts `configuration.linkLifetime`, signed with the server's time when it was
+    /// corrected.
+    public func presignedGET(key: String) -> URL {
+        signer.presignedURL(
+            method: "GET", url: configuration.objectURL(key: key), expires: configuration.linkLifetime, date: clock.now())
+    }
+
+    // MARK: - Writes and what a failed one leaves
+
+    private func put(_ data: Data, key: String, contentType: String, sent: (@Sendable (Int64) -> Void)?) async throws {
+        let delivery = Delivery()
+        do {
+            _ = try await send("PUT", key: key, body: data, contentType: contentType, delivery: delivery, sent: sent)
+        } catch {
+            if delivery.mayHaveArrivedUnanswered { await cleanUp(key: key, uploadID: nil, deletesObject: true) }
+            throw error
+        }
+    }
+
+    private func multipart(file: URL, size: Int64, key: String, contentType: String, meter: ProgressMeter) async throws {
+        let partSize = max(Int64(limits.partSize), (size + 9_999) / 10_000)
+        // Never sent twice: a second POST after a lost answer would open another upload.
+        let created = try await send(
+            "POST", key: key, query: [("uploads", "")], contentType: contentType, retriesUnanswered: false)
+        guard let uploadID = S3XML.uploadID(in: created.body) else {
+            throw ShareError.server(status: created.response.statusCode, code: nil)
+        }
+        let completion = Delivery()
+        do {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            var parts: [(number: Int, etag: String)] = []
+            var offset: Int64 = 0
+            while offset < size {
+                guard !Task.isCancelled else { throw ShareError.cancelled }
+                let count = Int(min(partSize, size - offset))
+                try handle.seek(toOffset: UInt64(offset))
+                guard let chunk = try handle.read(upToCount: count), chunk.count == count else {
+                    throw CocoaError(.fileReadCorruptFile, userInfo: [NSURLErrorKey: file])
+                }
+                let number = parts.count + 1
+                let base = offset
+                let answer = try await send(
+                    "PUT", key: key, query: [("partNumber", String(number)), ("uploadId", uploadID)], body: chunk,
+                    sent: { meter.report(base + $0) })
+                guard let etag = answer.response.value(forHTTPHeaderField: "ETag"), !etag.isEmpty else {
+                    throw ShareError.server(status: answer.response.statusCode, code: nil)
+                }
+                parts.append((number, etag))
+                offset += Int64(count)
+                meter.report(offset)
+            }
+            let completed = try await send(
+                "POST", key: key, query: [("uploadId", uploadID)], body: S3XML.completeBody(parts: parts),
+                contentType: "application/xml", errorsInSuccess: true, delivery: completion)
+            // A 200 is a success only with its result: anything else may be an upload that never became the object.
+            guard S3XML.isCompleteResult(completed.body) else {
+                throw ShareError.server(status: completed.response.statusCode, code: nil)
+            }
+        } catch {
+            // Once `Complete` went out, the storage may have made the object even if no answer says so (a lost answer,
+            // a retry told `NoSuchUpload`, a cancel while it ran): the key is new to this upload, so it is deleted too.
+            await cleanUp(key: key, uploadID: uploadID, deletesObject: completion.wasAttempted)
+            if Self.isCancellation(error) { throw ShareError.cancelled }
+            throw error
+        }
+    }
+
+    /// Aborts the multipart upload (`uploadID`) and deletes the object (`deletesObject`), in that order, in a task of its
+    /// own that a cancellation does not reach, and within `limits.cleanupTime`: past it, what is still running is
+    /// cancelled. A failure is logged; the storage's lifecycle rules are the last resort.
+    private func cleanUp(key: String, uploadID: String?, deletesObject: Bool) async {
+        guard uploadID != nil || deletesObject else { return }
+        let client = self
+        let deadline = limits.cleanupTime
+        await Task {
+            await withTaskGroup(of: Void.self) { group in
+                group.addTask {
+                    if let uploadID {
+                        do {
+                            _ = try await client.send(
+                                "DELETE", key: key, query: [("uploadId", uploadID)], acceptsMissing: true)
+                        } catch {
+                            Self.logger.error("Abort of a multipart upload failed: \(key, privacy: .public)")
+                        }
+                    }
+                    if deletesObject {
+                        do {
+                            _ = try await client.send("DELETE", key: key, acceptsMissing: true)
+                        } catch {
+                            Self.logger.error("Delete after a failed upload failed: \(key, privacy: .public)")
+                        }
+                    }
+                }
+                group.addTask { try? await Task.sleep(for: deadline) }
+                await group.next()
+                group.cancelAll()
+            }
+        }.value
+    }
+
+    // MARK: - One request, with its retries
+
+    private struct Answer {
+        let response: HTTPURLResponse
+        let body: Data
+    }
+
+    /// Sends a signed request to `key` (each attempt signed again with the server-corrected clock) and retries what is
+    /// transient (decision 7): a network error, a 5xx, a 429, or `SlowDown`, `InternalError`, `RequestTimeout`; up to
+    /// `maximumAttempts` with pauses of 1, 2 and 4 s. `RequestTimeTooSkewed` corrects the clock once from the answer's
+    /// `Date`. `errorsInSuccess` reads an `<Error>` in a 2xx as a failure (`CompleteMultipartUpload`); `acceptsMissing`
+    /// takes a 404 `NoSuchKey`, `NoSuchUpload` or without a code as a success (a DELETE); `retriesUnanswered` false never
+    /// sends again a request that got no answer (one that is not idempotent). `delivery` learns whether an attempt went
+    /// out, and whether one may have reached the storage without its answer reaching the Mac.
+    private func send(
+        _ method: String, key: String, query: [(String, String)] = [], body: Data? = nil, contentType: String? = nil,
+        acceptsMissing: Bool = false, errorsInSuccess: Bool = false, retriesUnanswered: Bool = true,
+        delivery: Delivery? = nil, sent: (@Sendable (Int64) -> Void)? = nil
+    ) async throws(ShareError) -> Answer {
+        var request = URLRequest(url: Self.url(configuration.objectURL(key: key), query: query))
+        request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        if let contentType { request.setValue(contentType, forHTTPHeaderField: "Content-Type") }
+        let payloadHash = SigV4.hex(SHA256.hash(data: body ?? Data()))
+        var attempt = 0
+        var correctedClock = false
+        while true {
+            guard !Task.isCancelled else { throw .cancelled }
+            attempt += 1
+            let signed = signer.signed(request, payloadHash: payloadHash, date: clock.now())
+            let data: Data
+            let response: URLResponse
+            delivery?.attempted()
+            do {
+                let delegate = TaskDelegate(sent: sent)
+                if let body {
+                    (data, response) = try await session.upload(for: signed, from: body, delegate: delegate)
+                } else {
+                    (data, response) = try await session.data(for: signed, delegate: delegate)
+                }
+            } catch {
+                delivery?.unanswered()
+                if Task.isCancelled || Self.isCancellation(error) {
+                    Self.logger.info("\(method, privacy: .public) \(key, privacy: .public) cancelled")
+                    throw .cancelled
+                }
+                let code = (error as? URLError)?.code ?? .unknown
+                Self.logger.error("\(method, privacy: .public) \(key, privacy: .public) network \(code.rawValue, privacy: .public)")
+                guard retriesUnanswered, Self.retriesNetwork(code), attempt < Self.maximumAttempts else {
+                    throw .network(code)
+                }
+                try await wait(after: attempt)
+                continue
+            }
+            guard let http = response as? HTTPURLResponse else { throw .network(.badServerResponse) }
+            let status = http.statusCode
+            Self.logger.info("\(method, privacy: .public) \(key, privacy: .public) \(status, privacy: .public)")
+            let success = (200..<300).contains(status)
+            let code = success && !errorsInSuccess ? nil : S3XML.errorCode(in: data)
+            if success && code == nil { return Answer(response: http, body: data) }
+            if status == 404 && acceptsMissing && (code == nil || code == "NoSuchKey" || code == "NoSuchUpload") {
+                return Answer(response: http, body: data)
+            }
+            if code == "RequestTimeTooSkewed" {
+                guard !correctedClock, let serverDate = http.value(forHTTPHeaderField: "Date").flatMap(Self.httpDate) else {
+                    throw .clockSkew
+                }
+                clock.correct(serverDate: serverDate)
+                correctedClock = true
+                attempt -= 1
+                continue
+            }
+            guard Self.isTransient(status: status, code: code), attempt < Self.maximumAttempts else {
+                throw Self.error(status: status, code: code)
+            }
+            try await wait(after: attempt)
+        }
+    }
+
+    private func wait(after attempt: Int) async throws(ShareError) {
+        do {
+            try await pause(.seconds(1 << (attempt - 1)))
+        } catch {
+            throw .cancelled
+        }
+    }
+
+    private var signer: SigV4 { SigV4(credentials: configuration.credentials, region: configuration.region) }
+
+    // MARK: - Rules
+
+    /// The object's URL with `query`, each name and value encoded as SigV4 encodes it (a bare `+` would be a space to
+    /// S3); a name without a value is written bare (`?uploads`).
+    static func url(_ object: URL, query: [(String, String)]) -> URL {
+        guard !query.isEmpty, var components = URLComponents(url: object, resolvingAgainstBaseURL: false) else {
+            return object
+        }
+        components.percentEncodedQuery = query.map { name, value in
+            let name = SigV4.uriEncode(name, encodeSlash: true)
+            return value.isEmpty ? name : "\(name)=\(SigV4.uriEncode(value, encodeSlash: true))"
+        }.joined(separator: "&")
+        return components.url ?? object
+    }
+
+    static let transientCodes: Set<String> = ["SlowDown", "InternalError", "RequestTimeout", "ServiceUnavailable"]
+
+    /// A 5xx but `501 Not Implemented` and `505 HTTP Version Not Supported` (another attempt gets the same), a 429, or a
+    /// transient code in any status.
+    static func isTransient(status: Int, code: String?) -> Bool {
+        (status >= 500 && status != 501 && status != 505) || status == 429
+            || code.map(transientCodes.contains) == true
+    }
+
+    static let authenticationCodes: Set<String> = [
+        "AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "AuthorizationHeaderMalformed", "InvalidToken",
+        "ExpiredToken", "AccountProblem", "AllAccessDisabled", "InvalidSecurity", "NotSignedUp", "Unauthorized",
+    ]
+
+    static func error(status: Int, code: String?) -> ShareError {
+        if code == "NoSuchBucket" { return .noSuchBucket }
+        if let code, authenticationCodes.contains(code) { return .authentication(code: code) }
+        if status == 401 || status == 403 { return .authentication(code: code ?? String(status)) }
+        return .server(status: status, code: code)
+    }
+
+    /// Network errors worth another attempt: all but a cancellation and what another attempt cannot change (a bad URL,
+    /// the server's certificate, App Transport Security).
+    static func retriesNetwork(_ code: URLError.Code) -> Bool {
+        let final: Set<URLError.Code> = [
+            .cancelled, .badURL, .unsupportedURL, .appTransportSecurityRequiresSecureConnection,
+            .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid,
+            .serverCertificateHasUnknownRoot, .clientCertificateRejected, .clientCertificateRequired,
+            .userAuthenticationRequired, .userCancelledAuthentication, .fileDoesNotExist, .fileIsDirectory,
+            .noPermissionsToReadFile, .dataLengthExceedsMaximum,
+        ]
+        return !final.contains(code)
+    }
+
+    static func isCancellation(_ error: any Error) -> Bool {
+        if error is CancellationError { return true }
+        if let error = error as? ShareError { return error == .cancelled }
+        return (error as? URLError)?.code == .cancelled
+    }
+
+    /// An HTTP date (`Fri, 24 May 2013 00:00:00 GMT`), as a server's `Date` header writes it.
+    static func httpDate(_ text: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter.date(from: text.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static func size(of file: URL) throws -> Int64 {
+        let attributes = try FileManager.default.attributesOfItem(atPath: file.path(percentEncoded: false))
+        return (attributes[.size] as? NSNumber)?.int64Value ?? 0
+    }
+}
+
+/// What became of the attempts of one request: whether one went out, and whether one ended without an answer (a lost
+/// connection, a timeout, a cancel on the way), so the storage may have done it without the Mac knowing.
+private final class Delivery: Sendable {
+    private let state = Mutex((attempted: false, unanswered: false))
+
+    func attempted() { state.withLock { $0.attempted = true } }
+    func unanswered() { state.withLock { $0.unanswered = true } }
+    var wasAttempted: Bool { state.withLock { $0.attempted } }
+    var mayHaveArrivedUnanswered: Bool { state.withLock { $0.unanswered } }
+}
+
+/// The Mac's clock, moved by the difference with the storage's once a request was refused as `RequestTimeTooSkewed`.
+/// Shared by the copies of one client, so the parts after a correction are signed right the first time.
+private final class ServerClock: Sendable {
+    private let localNow: @Sendable () -> Date
+    private let offset = Mutex<TimeInterval>(0)
+
+    init(now: @escaping @Sendable () -> Date) { localNow = now }
+
+    func now() -> Date { localNow().addingTimeInterval(offset.withLock { $0 }) }
+
+    func correct(serverDate: Date) {
+        let difference = serverDate.timeIntervalSince(localNow())
+        offset.withLock { $0 = difference }
+    }
+}
+
+/// Reports the bytes sent so far, only ever rising: a retried part starts from zero again, and that is not shown.
+private final class ProgressMeter: Sendable {
+    private let callback: (@Sendable (Int64) -> Void)?
+    private let reported = Mutex<Int64>(-1)
+
+    init(_ callback: (@Sendable (Int64) -> Void)?) { self.callback = callback }
+
+    /// Called under the lock so two reports can never arrive out of order.
+    func report(_ bytes: Int64) {
+        guard let callback else { return }
+        reported.withLock { reported in
+            guard bytes > reported else { return }
+            reported = bytes
+            callback(bytes)
+        }
+    }
+}
+
+/// Each task's delegate: the upload's progress, and no redirect followed (a request only ever goes to the configured
+/// endpoint; a 3xx comes back as an error).
+private final class TaskDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let sent: (@Sendable (Int64) -> Void)?
+
+    init(sent: (@Sendable (Int64) -> Void)?) { self.sent = sent }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, didSendBodyData bytesSent: Int64, totalBytesSent: Int64,
+        totalBytesExpectedToSend: Int64
+    ) {
+        sent?(totalBytesSent)
+    }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping @Sendable (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}

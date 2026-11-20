@@ -26,12 +26,16 @@ private let newline = UInt8(ascii: "\n")
 ///
 /// An existing file is appended to, after making it end at a line break the way
 /// `EventLogReader.truncateIncompleteTail` does. Use one writer per file.
+///
+/// Only the Replay moves a writer to a new file (`rotate(to:)`); one that never rotates writes the one file it was
+/// opened on, as always.
 public final class EventLogWriter: Sendable {
     public static let flushInterval: Duration = .milliseconds(250)
     public static let syncInterval: Duration = .seconds(2)
 
-    /// The file it appends to.
-    public let url: URL
+    /// The file it appends to: the one it was opened on, or the last one `rotate(to:)` moved it to. Read without waiting
+    /// for the file's I/O.
+    public var url: URL { currentURL.withLock { $0 } }
 
     /// The only state `append` touches, so it never waits for disk I/O.
     private struct Pending {
@@ -55,9 +59,10 @@ public final class EventLogWriter: Sendable {
         var ticksSinceSync = 0
     }
 
-    // Lock order: `file`, then `pending`. `append` takes only `pending`.
+    // Lock order: `file`, then `pending`, then `currentURL`. `append` takes only `pending`, `url` only `currentURL`.
     private let pending = Mutex(Pending())
     private let file: Mutex<FileState>
+    private let currentURL: Mutex<URL>
     private let timer: any DispatchSourceTimer
     private let io: EventLogIO
     private let ticksPerSync: Int
@@ -89,7 +94,7 @@ public final class EventLogWriter: Sendable {
             throw error
         }
 
-        self.url = url
+        currentURL = Mutex(url)
         file = Mutex(FileState(fd: fd))
         self.io = io
         ticksPerSync = max(1, Int((syncInterval / flushInterval).rounded()))
@@ -174,6 +179,50 @@ public final class EventLogWriter: Sendable {
             file.encodingError = nil
             if let error { throw error }
         }
+    }
+
+    /// Only the Replay (fases 4 y 5 design §10.2): moves the writer to the new file `url`, so the event log goes on in
+    /// one file per segment of time.
+    ///
+    /// Creates `url` (`O_EXCL`, never following a link) and full-syncs its folder; then writes what `append` buffered
+    /// before this call to the current file, full-syncs it (`F_FULLFSYNC`) and closes it, and from then on appends to
+    /// `url`, which `url` (the property) names. Lines appended after it returns go to `url`.
+    ///
+    /// If `url` cannot be created (it exists, it is a link, its folder is gone), throws and goes on in the current file,
+    /// unchanged. Otherwise it always moves to `url`, and a failure of the old file is thrown as `close()` throws it
+    /// (bytes that could not be written to it are lost): a failed write or sync of the timer, else its own write, sync or
+    /// `close(2)`, else an event `append` could not encode. After `close()`, does nothing.
+    public func rotate(to url: URL) throws {
+        try file.withLock { file in
+            guard let old = file.fd else { return }
+            let new = try Self.createNewFile(url)
+            drainPending(into: &file)
+
+            var ownError: (any Error)?
+            do { try writeUnwritten(&file, to: old) } catch { ownError = error }
+            do { try io.fullSync(old) } catch { ownError = ownError ?? error }
+            if Darwin.close(old) != 0, ownError == nil { ownError = POSIXError.current() }
+            let error = file.ioError ?? ownError ?? file.encodingError
+
+            file = FileState(fd: new)
+            currentURL.withLock { $0 = url }
+            if let error { throw error }
+        }
+    }
+
+    /// Creates the empty file `url` for appending, never over anything there nor through a link, and full-syncs its
+    /// folder. On a failure nothing is left at `url`.
+    private static func createNewFile(_ url: URL) throws -> Int32 {
+        let fd = open(url.path, O_RDWR | O_APPEND | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError.current() }
+        do {
+            try DurableFile.syncDirectory(url.deletingLastPathComponent())
+        } catch {
+            Darwin.close(fd)
+            unlink(url.path)
+            throw error
+        }
+        return fd
     }
 
     /// Every `flushInterval`, on the timer's queue.
