@@ -58,9 +58,9 @@ private struct CaptionsEmptyState: View {
             case .noAudio:
                 CaptionsNote("This recording has no audio.")
             case .queued:
-                TranscribingRow(progress: 0) { voice.cancelTranscription() }
+                TranscribingRow(progress: 0, count: count) { voice.cancelTranscription() }
             case .running(let progress):
-                TranscribingRow(progress: progress) { voice.cancelTranscription() }
+                TranscribingRow(progress: progress, count: count) { voice.cancelTranscription() }
             case .idle, .failed, .done:
                 LanguageChoice(voice: voice)
                 modelRow
@@ -77,6 +77,10 @@ private struct CaptionsEmptyState: View {
 
     private var transcription: EditorVoice.Transcription {
         CaptionsShowcase.transcription ?? voice.transcription
+    }
+
+    private var count: EditorVoice.TakeCount? {
+        CaptionsShowcase.count ?? voice.transcriptionCount
     }
 
     private var modelStatus: LanguageModelStatus {
@@ -159,29 +163,49 @@ private struct LanguageChoice: View {
     }
 }
 
-/// "Transcribing… 42 %" with its bar and Cancel.
+/// "Transcribing… 42 %" with its bar and Cancel; with several takes, "Transcribing 2 of 3…", the bar over all of them.
 private struct TranscribingRow: View {
+    /// Of the take it is on.
     let progress: Double
+    /// Which take it is on, with more than one.
+    let count: EditorVoice.TakeCount?
     let cancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
-                Text(
-                    verbatim: String(
-                        format: String(localized: "Transcribing… %lld %%", comment: "The Captions tab: the transcription under way"),
-                        CaptionsEmptyState.percent(progress))
-                )
-                .monospacedDigit()
+                Text(verbatim: text)
+                    .monospacedDigit()
                 Spacer(minLength: 8)
                 Button("Cancel", action: cancel)
                     .controlSize(.small)
             }
-            ProgressView(value: min(max(progress, 0), 1))
+            ProgressView(value: overall)
                 .progressViewStyle(.linear)
                 .controlSize(.small)
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private var text: String {
+        if let count {
+            String(
+                format: String(
+                    localized: "Transcribing %lld of %lld…",
+                    comment: "The Captions tab: the transcription of several takes under way, which of them it is on"),
+                count.take, count.of)
+        } else {
+            String(
+                format: String(localized: "Transcribing… %lld %%", comment: "The Captions tab: the transcription under way"),
+                CaptionsEmptyState.percent(progress))
+        }
+    }
+
+    /// From 0 to 1, over every take being transcribed.
+    private var overall: Double {
+        let progress = min(max(progress, 0), 1)
+        guard let count, count.of > 0 else { return progress }
+        return min(max((Double(count.take - 1) + progress) / Double(count.of), 0), 1)
     }
 }
 
@@ -340,9 +364,11 @@ private struct CaptionsTranscript: View {
             }
             switch CaptionsShowcase.transcription ?? voice.transcription {
             case .queued:
-                TranscribingRow(progress: 0) { voice.cancelTranscription() }
+                TranscribingRow(progress: 0, count: CaptionsShowcase.count ?? voice.transcriptionCount) { voice.cancelTranscription() }
             case .running(let progress):
-                TranscribingRow(progress: progress) { voice.cancelTranscription() }
+                TranscribingRow(progress: progress, count: CaptionsShowcase.count ?? voice.transcriptionCount) {
+                    voice.cancelTranscription()
+                }
             case .failed(let reason):
                 CaptionsNote(verbatim: reason, warning: true)
             default:
@@ -381,7 +407,7 @@ private struct CaptionsTranscript: View {
                         .controlSize(.small)
                 }
                 if text.hasCut(selection) {
-                    Button("Restore") { _ = model.restoreWords(selection, in: text) }
+                    Button("Restore") { model.restoreWords(selection, in: text) }
                         .controlSize(.small)
                 }
             } else {
@@ -464,7 +490,7 @@ private struct CaptionsTranscript: View {
         TranscriptTextActions(
             seek: { word in model.seekToWord(text.words[word].ref) },
             cut: { words in cut(words, in: text) },
-            restore: { words in _ = model.restoreWords(words, in: text) },
+            restore: { words in model.restoreWords(words, in: text) },
             correct: { word, corrected in model.correctWord(text.words[word].ref, corrected) },
             toggleBreak: { word in model.toggleCaptionBreak(text.words[word].ref) },
             playPause: { if model.canPlay { model.togglePlay() } })
@@ -627,22 +653,50 @@ extension EditorModel {
         return outcome
     }
 
-    /// Restore: the cut words among `words` of `text` given back (`transcript.restore`), within the take's editable
-    /// timeline. Whether it gave any back.
-    @discardableResult
-    func restoreWords(_ words: ClosedRange<Int>, in text: TranscriptText) -> Bool {
-        guard canEdit, !isGesturing, let project = overlayProject else { return false }
-        let editable = TakeTimeline.editableBounds(take: project.take, events: project.events)
-        guard editable.start <= editable.end else { return false }
-        var restored = false
-        for run in text.takeRuns(words) {
-            guard let document, document.transcript?.takes[run.take].take == project.take.id,
-                let step = TranscriptCommands.restore(
-                    document, take: run.take, words: run.words, bounds: editable.start...editable.end, makeID: Self.newID)
-            else { continue }
-            if perform(step) != .refused { restored = true }
+    /// Restore: the cut words among `words` of `text` given back (`transcript.restore`), a step for each take they are
+    /// of, each within the editable timeline of its own take (plan 3d decision 17). Those of the session's take at once;
+    /// another take's timeline is found off the main thread (its events are read the first time), and its words given
+    /// back if the document is still the one they were asked on.
+    func restoreWords(_ words: ClosedRange<Int>, in text: TranscriptText) {
+        guard canEdit, !isGesturing, let project = overlayProject, let document, let transcript = document.transcript else {
+            return
         }
-        return restored
+        let runs = text.takeRuns(words)
+        let takes = Set(runs.compactMap { transcript.takes.indices.contains($0.take) ? transcript.takes[$0.take].take : nil })
+        guard takes.contains(where: { $0 != project.take.id }) else {
+            return restore(runs, bounds: Self.editableBounds(of: [project]))
+        }
+        Task {
+            let bounds = await Task.detached(priority: .userInitiated) {
+                Self.editableBounds(of: takes.compactMap { project.focused(on: $0) })
+            }.value
+            guard self.document == document else { return }
+            restore(runs, bounds: bounds)
+        }
+    }
+
+    /// The editable timeline of each of `takes` (`TakeTimeline.editableBounds`), by its id; reads the events of a take
+    /// that has not read them yet.
+    private nonisolated static func editableBounds(of takes: [LoadedProject]) -> [String: ClosedRange<HostTime>] {
+        var bounds: [String: ClosedRange<HostTime>] = [:]
+        for take in takes {
+            let editable = TakeTimeline.editableBounds(take: take.take, events: take.events)
+            if editable.start <= editable.end { bounds[take.take.id] = editable.start...editable.end }
+        }
+        return bounds
+    }
+
+    /// The cut words of `runs` given back, a step for each, each within the timeline of its take in `bounds` (a take
+    /// without one is left as it is).
+    private func restore(_ runs: [TranscriptText.TakeRun], bounds: [String: ClosedRange<HostTime>]) {
+        guard canEdit, !isGesturing else { return }
+        for run in runs {
+            guard let document, let takes = document.transcript?.takes, takes.indices.contains(run.take),
+                let editable = bounds[takes[run.take].take],
+                let step = TranscriptCommands.restore(document, take: run.take, words: run.words, bounds: editable, makeID: Self.newID)
+            else { continue }
+            perform(step)
+        }
     }
 
     /// The word `ref` corrected to `text` (`transcript.word`): the captions change, the sound does not.
@@ -693,9 +747,9 @@ extension EditorModel {
 
 /// `TOMA_SHOWCASE_CAPTIONS=<variant>` (Debug, with `TOMA_SHOWCASE_TAB=6`), for screenshots of the tab: `empty`,
 /// `download`, `downloading`, `transcribing`, `queued`, `failed`, `macos15`, `unavailable` and `noaudio` show the tab
-/// without a transcript in that state; `cuts` cuts three words and a filler, starts a caption and selects three words;
-/// `style` does that with the Style open; `fillers` and `pauses` mark them as their buttons do; `correct` edits a word;
-/// `playing` plays at 2× without sound from the first word.
+/// without a transcript in that state (`takes`: transcribing the second of three takes); `cuts` cuts three words and a
+/// filler, starts a caption and selects three words; `style` does that with the Style open; `fillers` and `pauses` mark
+/// them as their buttons do; `correct` edits a word; `playing` plays at 2× without sound from the first word.
 @MainActor
 enum CaptionsShowcase {
     #if DEBUG
@@ -706,14 +760,14 @@ enum CaptionsShowcase {
     #endif
 
     static var forcesEmpty: Bool {
-        ["empty", "download", "downloading", "transcribing", "queued", "failed", "macos15", "unavailable", "noaudio"]
+        ["empty", "download", "downloading", "transcribing", "queued", "failed", "macos15", "unavailable", "noaudio", "takes"]
             .contains(variant ?? "")
     }
 
     static var transcription: EditorVoice.Transcription? {
         switch variant {
         case "empty"?, "download"?, "downloading"?: .idle
-        case "transcribing"?: .running(0.42)
+        case "transcribing"?, "takes"?: .running(0.42)
         case "queued"?: .queued
         case "failed"?:
             .failed(String(format: String(localized: "Couldn't transcribe: %@"), String(localized: "its audio can't be read")))
@@ -731,6 +785,10 @@ enum CaptionsShowcase {
         case "downloading"?: .downloading
         default: nil
         }
+    }
+
+    static var count: EditorVoice.TakeCount? {
+        variant == "takes" ? EditorVoice.TakeCount(take: 2, of: 3) : nil
     }
 
     static var downloadProgress: Double? {

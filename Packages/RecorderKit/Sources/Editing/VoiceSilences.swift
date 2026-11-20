@@ -28,7 +28,14 @@ public enum VoiceSilences {
     /// The quiet stretches of `take`'s microphone `spans` (source time) in the output, each with the cuts inside it
     /// closed, the ones that overlap or touch joined, in order, at least `minimumSilence` long.
     public static func fromQuiet(_ spans: [Range<HostTime>], take: String, timeMap: TimeMap) -> [Range<Int64>] {
-        let outputs = spans.compactMap { timeMap.outputRange(ofSource: $0, take: take) }
+        fromQuiet(ofTakes: [take: spans], timeMap: timeMap)
+    }
+
+    /// `fromQuiet(_:take:timeMap:)` of several takes at once (phase 3 design §8.1, plan 3d decision 17): the quiet
+    /// stretches of each take's microphone, by its id, in the output, joined across takes as within one, so a silence at
+    /// the end of one take's clip and at the start of the next take's is one. With one take, the phase 2's.
+    public static func fromQuiet(ofTakes quiet: [String: [Range<HostTime>]], timeMap: TimeMap) -> [Range<Int64>] {
+        let outputs = quiet.flatMap { take, spans in spans.compactMap { timeMap.outputRange(ofSource: $0, take: take) } }
             .filter { !$0.isEmpty }
             .sorted { ($0.lowerBound, $0.upperBound) < ($1.lowerBound, $1.upperBound) }
         var merged: [Range<Int64>] = []
