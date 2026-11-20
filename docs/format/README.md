@@ -2493,3 +2493,28 @@ Un documento 5 con todo lo nuevo, en las partes que cambian:
 
 - **El evento `focus`** (ver [Tipos](#tipos)) es aditivo: no sube el manifiesto ni el documento. Un lector que no lo conoce, como el de la fase 3, salta esas líneas y las cuenta en `skippedLines`, como cualquier línea de un tipo que no entiende; los demás eventos siguen escribiéndose byte por byte igual (`focusEventRoundTripsAndOldKindsStay`). Una línea con un `kind` que no es `element` ni `caret`, o sin uno de sus campos, también se salta.
 - **El motivo de cierre `rotated`** (ver [`manifest.json`](#manifestjson)) es un valor más de `endReason`. Solo lo escribe la Repetición en su paquete de trabajo, fuera de la biblioteca (diseño de las fases 4 y 5, §10.2): un manifiesto con un `rotated` no lo decodifica un lector de la fase 3, así que nunca está en una toma del usuario.
+
+### La Repetición
+
+La Repetición (diseño de las fases 4 y 5, §10) graba a un **paquete de trabajo** fuera de la biblioteca, `~/Library/Caches/dev.toma.Toma/Replay/current.toma` (`ReplayScratch`), y al guardar arma un proyecto nuevo con los últimos N segundos.
+
+```
+Replay/
+  current.toma/
+    replay-scratch             la marca: este paquete nunca es un proyecto
+    manifest.json              take-001 en `recording`, sus segmentos cerrados con `rotated` cada 10 s
+    takes/take-001/
+      display-1/seg-0007.mov   los segmentos que todavía no se podaron (la numeración sigue, nunca vuelve a 1)
+      events-0007.jsonl        los eventos, un archivo nuevo cada 10 s de tiempo
+      events-0008.jsonl
+      recording.lock           tomado mientras graba
+      cursors/<hash>.png
+```
+
+- **La marca** `replay-scratch` es un archivo común en la raíz del paquete, escrito y sincronizado antes de que haya una toma (`ReplayScratch.create`). Un paquete con la marca **nunca es un proyecto**: la recuperación lo saltea antes de leer su manifiesto (`RecoveryScanner.scan(package:)` no da nada, ni siquiera *para reparar*), la biblioteca no lo ve (vive en las cachés) y lo que un cierre forzado deja en `Replay/` se borra sin preguntar al abrir la app (`ReplayScratch.discardLeftovers`), menos un `current.toma` cuyo `recording.lock` alguien tiene tomado. Una carpeta se borra renombrándola antes a un nombre oculto (`.discarding-<UUID>`), así un borrado cortado nunca deja medio paquete con su nombre. Nada de esto sigue un enlace: uno dentro de `Replay/` se borra sin tocar lo que nombra, y una `Replay/` que es un enlace no se toca.
+- **`events-NNNN.jsonl`.** El registro de eventos de la toma de trabajo es uno solo, que pasa a un archivo nuevo cada 10 s (`EventLogWriter.rotate(to:)`: crea el nuevo con `O_EXCL` y sin seguir enlaces, escribe lo pendiente en el actual, lo sincroniza con `F_FULLFSYNC`, lo cierra y sigue en el nuevo). Cada archivo tiene líneas enteras del formato de `events.jsonl`. Van por tiempo, no por segmento: cada pista rota sus segmentos en su propio instante.
+- **`rotated`** solo aparece acá. Lo viejo (lo que terminó hace más de N + 10 s) se borra: el segmento y su entrada del manifiesto de trabajo, y un archivo de eventos después de guardar en memoria el estado que dice.
+- **Lo guardado es un proyecto común** de la versión 3 (o 4 si guarda una pista de iPhone o un `keyPress`), sin `rotated`, con una sola toma `take-001` `complete` que la app de la fase 3 abre:
+  - **El corte** (`ReplayCut`) está N segundos antes del fin de la pantalla (el mayor fin de sus pistas), o en su comienzo si se grabó menos. De cada pista se guardan los segmentos cerrados que terminan después del corte (el que lo cruza, entero) y empiezan antes del fin, renumerados desde `seg-0001.mov`, con `rotated` como `stopped` y los demás motivos como estaban; una pista sin ninguno no se guarda. El documento empieza en el corte (`Clip.start`), porque el primer segmento empieza antes.
+  - **`events.jsonl`** (`ReplayEvents`) empieza en el comienzo del primer segmento guardado (hasta 10 s antes del corte) con el estado vigente re-emitido en ese instante, antes que lo demás: `displayGeometry` de cada pantalla, `windowGeometry` de cada ventana guardada, `cursorImage`, la posición del cursor (`cursor`, la de su último `cursor`, `mouseDown`, `mouseUp` o `scroll`) y el último `focus` si lo hay. El estilo de cámara vigente va en `TakeRecord.cameraStyle`, no como evento. Un botón apretado en ese instante no se re-emite: un `mouseUp` solo no dibuja un clic. Se sacan los eventos de una pista que no se guarda, los del ciclo de vida de un segmento que no se guarda (`segmentStarted`, `audioClock`, `droppedSamples`, `streamInterrupted` y `deviceChanged` antes del primer segmento guardado de su pista o después del fin del último) y todo lo que pasa después del fin; los `segmentStarted` llevan el índice nuevo.
+  - **El manifiesto** (`ReplayManifest`): `startedAt` es el momento de guardar menos lo que dura la toma guardada, en segundos enteros, y `projectID` uno nuevo.
