@@ -265,12 +265,15 @@ private func edited(seed: UInt64) throws -> (editor: Editor, migrateSeq: Int) {
 }
 
 /// An editor over `UndoHistory` the way the session uses it on a 1b project (its create in version 1), as in
-/// `LogCompactionTests`, with the migrate of its first edit in 1c.
+/// `LogCompactionTests`, with the migrate of its first edit in 1c. Its lines are of the version the log is at (1, then 2,
+/// as 1b and 1c write them); the document it keeps is of the current version, so it applies them carried, as the session
+/// does with the lines of before a migrate.
 private struct Editor {
     var history: UndoHistory
     private(set) var entries: [EditLogEntry]
     private(set) var document: EditDocument
     private var groups: [Int: [EditChange]] = [:]
+    private var version = 1
 
     init(_ document: EditDocument) {
         let create = EditLogEntry.create(seq: 1, document: document, app: app)
@@ -281,12 +284,14 @@ private struct Editor {
 
     mutating func migrate() {
         append(.migrate(seq: history.nextSeq, from: 1, to: 2))
+        version = 2
     }
 
     mutating func perform(_ step: EditStep, at: Date) throws {
         let group = history.groupForNext(step, at: at)
-        document = try document.applying(step.changes)
-        groups[group, default: []] += step.changes
+        let carried = try #require(DocumentMigration.carried(step.changes, from: version, to: EditDocument.currentVersion))
+        document = try document.applying(carried)
+        groups[group, default: []] += carried
         append(.do(seq: history.nextSeq, group: group, label: step.label.rawValue, changes: step.changes, at: at.roundedToWholeSeconds))
     }
 
@@ -333,7 +338,11 @@ private func randomStep(_ document: EditDocument, migrated: Bool, using generato
     case 4:
         var clip = document.sequence[0]
         clip.speed = [0.5, 1, 2, 4].randomElement(using: &generator) ?? 1
-        return document.replaceChange(.sequence, id: clip.id, with: clip).map { EditStep(label: .speed, target: clip.id, changes: [$0]) }
+        // As 1b and 1c write a clip: without its `audioShift`, which version 4 adds.
+        guard let before = writtenIn1b(document.sequence[0]), let after = writtenIn1b(clip), before != after else { return nil }
+        return EditStep(
+            label: .speed, target: clip.id,
+            changes: [.replace(collection: EditCollection.sequence.pointer, id: clip.id, before: before, after: after)])
     case 5:
         return document.setChange("/camera/show", !document.camera.show).map {
             EditStep(label: .camera, target: "/camera/show", changes: [$0])
@@ -345,6 +354,13 @@ private func randomStep(_ document: EditDocument, migrated: Bool, using generato
     default:
         return document.setChange("/camera/shadow", level).map { EditStep(label: .camera, target: "/camera/shadow", changes: [$0]) }
     }
+}
+
+/// `clip` as 1b and 1c write it, without what version 4 adds; `nil` if it cannot be encoded.
+private func writtenIn1b(_ clip: Clip) -> JSONValue? {
+    guard case var .object(members) = try? JSONValue(encoding: clip) else { return nil }
+    members["audioShift"] = nil
+    return .object(members)
 }
 
 /// The documents met undoing every group of `entries` and then redoing every one, each line appended and replayed from

@@ -322,25 +322,26 @@ private enum SessionFixture {
         #expect(session.document.style.padding == 0.1)
         #expect(session.redo() == .refused)
         #expect(session.perform(EditStep(label: .padding, target: "/style/padding", changes: [])) == .refused)
-        // The new document's `create` is in the oldest version that holds it, 2, and the first edit migrates it.
-        #expect(await session.flushed() == 5)
+        // The new document's `create` is in the oldest version that holds it, 2, and the first edit migrates it, to 3
+        // and to 4.
+        #expect(await session.flushed() == 6)
         #expect(session.revision == 3)
         #expect(changes == 3)
-        #expect(session.document.logSequence == 5)
+        #expect(session.document.logSequence == 6)
         await session.close()
         #expect(session.perform(try SessionFixture.padding(session.document, 0.2)) == .refused)
         let entries = try SessionFixture.entries(project.package)
-        #expect(entries.map(\.seq) == [1, 2, 3, 4, 5])
-        #expect(entries[1] == .migrate(seq: 2, from: 2, to: 3))
-        #expect(entries[3] == .undo(seq: 4, group: 3))
-        #expect(entries[4] == .redo(seq: 5, group: 3))
+        #expect(entries.map(\.seq) == [1, 2, 3, 4, 5, 6])
+        #expect(Array(entries[1...2]) == [.migrate(seq: 2, from: 2, to: 3), .migrate(seq: 3, from: 3, to: 4)])
+        #expect(entries[4] == .undo(seq: 5, group: 4))
+        #expect(entries[5] == .redo(seq: 6, group: 4))
 
         let again = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
         #expect(again.document.style.padding == 0.1)
         #expect(again.undoLabel == .padding)
         #expect(again.undo() == .applied)
         #expect(again.document.style.padding == 0.08)
-        #expect(await again.flushed() == 6)
+        #expect(await again.flushed() == 7)
         await again.close()
     }
 }
@@ -361,7 +362,7 @@ private enum SessionFixture {
         #expect(!session.canUndo && session.canRedo)
         #expect(session.redo() == .applied)
         #expect(session.canUndo && !session.canRedo)
-        #expect(await session.flushed() == 5)
+        #expect(await session.flushed() == 6)
         await session.close()
         #expect(!session.canUndo && !session.canRedo)
 
@@ -390,15 +391,15 @@ private enum SessionFixture {
         #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .applied)
         await session.close()
         let snapshot = try SessionFixture.snapshot(project.package)
-        #expect(snapshot.logSequence == 3)
+        #expect(snapshot.logSequence == 4)
         try FileManager.default.removeItem(at: project.package.editLogURL)
 
         let again = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
         #expect(again.document == snapshot)
         #expect(again.undoLabel == nil)
-        #expect(try SessionFixture.entries(project.package) == [.create(seq: 3, document: snapshot, app: SessionFixture.app)])
+        #expect(try SessionFixture.entries(project.package) == [.create(seq: 4, document: snapshot, app: SessionFixture.app)])
         #expect(again.perform(try SessionFixture.padding(again.document, 0.2)) == .applied)
-        #expect(await again.flushed() == 4)
+        #expect(await again.flushed() == 5)
         await again.close()
     }
 }
@@ -428,16 +429,16 @@ private enum SessionFixture {
         let context = SessionFixture.context(caches: dir.appending(path: "Caches"))
         await (try await SessionFixture.open(project, context)).close()
         var json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: project.package.editURL)) as? [String: Any])
-        json["documentVersion"] = 4
+        json["documentVersion"] = 5
         try JSONSerialization.data(withJSONObject: json).write(to: project.package.editURL)
         let before = try treeHash(project.package.url)
 
         let session = try await SessionFixture.open(project, context)
-        #expect(session.access == .readOnly(.newerDocument(4)))
+        #expect(session.access == .readOnly(.newerDocument(5)))
         #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .refused)
         await session.close()
         #expect(try treeHash(project.package.url) == before)
-        #expect(throws: EditDocumentError.newerVersion(4)) {
+        #expect(throws: EditDocumentError.newerVersion(5)) {
             try EditSession.readDocument(project.package.url, take: nil, context: context)
         }
     }
@@ -563,29 +564,29 @@ private enum SessionFixture {
         }
         await session.close()
         let entries = try SessionFixture.entries(project.package)
-        // The `create`, the `migrate` of the first edit and the four steps.
-        #expect(entries.map(\.seq) == [1, 2, 3, 4, 5, 6])
+        // The `create`, the two `migrate`s of the first edit and the four steps.
+        #expect(entries.map(\.seq) == [1, 2, 3, 4, 5, 6, 7])
         // No snapshot newer than the damage: the state is the last good line's.
         try FileManager.default.removeItem(at: project.package.editURL)
         var lines = try SessionFixture.lines(project.package.editLogURL)
-        lines[4] = #"{"garbage":"#
+        lines[5] = #"{"garbage":"#
         try SessionFixture.write(lines, to: project.package.editLogURL)
         let original = try Data(contentsOf: project.package.editLogURL)
 
         let again = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
         #expect(again.access == .editable)
         #expect(again.document.style.padding == 0.11)
-        guard case let .do(_, _, _, _, at) = entries[3] else { throw TestSupportError.failed("line 4 is no do") }
+        guard case let .do(_, _, _, _, at) = entries[4] else { throw TestSupportError.failed("line 5 is no do") }
         #expect(again.notices == [.recovered(upTo: at)])
         let copies = try SessionFixture.damagedCopies(project.package)
         #expect(copies.count == 1)
         #expect(copies.first.map { $0.lastPathComponent.wholeMatch(of: /edit-log\.jsonl\.damaged-\d{8}-\d{6}/) != nil } == true)
         #expect(try copies.first.map { try Data(contentsOf: $0) } == original)
-        #expect(try SessionFixture.entries(project.package) == Array(entries.prefix(4)))
-        #expect(await again.flushed() == 4)
+        #expect(try SessionFixture.entries(project.package) == Array(entries.prefix(5)))
+        #expect(await again.flushed() == 5)
         #expect(again.undoLabel == .padding)
         #expect(again.perform(try SessionFixture.padding(again.document, 0.2)) == .applied)
-        #expect(await again.flushed() == 5)
+        #expect(await again.flushed() == 6)
         await again.close()
         #expect(try SessionFixture.damagedCopies(project.package) == copies)
     }
@@ -603,10 +604,10 @@ private enum SessionFixture {
         // A whole line that does not match the document (its `before` is not what is there), and one after it.
         let at = Date(timeIntervalSince1970: 1_794_773_700)
         let mismatch = EditLogEntry.do(
-            seq: 4, group: 4, label: "style.shadow", changes: [.set(path: try JSONPointer("/style/shadow"), before: .number(0.9), after: .number(0.2))],
+            seq: 5, group: 5, label: "style.shadow", changes: [.set(path: try JSONPointer("/style/shadow"), before: .number(0.9), after: .number(0.2))],
             at: at)
         let after = EditLogEntry.do(
-            seq: 5, group: 5, label: "style.cornerRadius",
+            seq: 6, group: 6, label: "style.cornerRadius",
             changes: [.set(path: try JSONPointer("/style/cornerRadius"), before: .number(0.012), after: .number(0.05))], at: at)
         try SessionFixture.write(
             try SessionFixture.lines(project.package.editLogURL) + [try mismatch.jsonLine(), try after.jsonLine()],
@@ -615,8 +616,8 @@ private enum SessionFixture {
         let again = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
         #expect(again.document.style.padding == 0.1)
         #expect(again.document.style.cornerRadius == 0.012)
-        // The `create`, the `migrate` of the first edit and its step.
-        guard case let .do(_, _, _, _, goodAt) = good[2] else { throw TestSupportError.failed("line 3 is no do") }
+        // The `create`, the two `migrate`s of the first edit and its step.
+        guard case let .do(_, _, _, _, goodAt) = good[3] else { throw TestSupportError.failed("line 4 is no do") }
         #expect(again.notices == [.recovered(upTo: goodAt)])
         // The history is only what the replay applied.
         #expect(again.undoLabel == .padding)
@@ -624,7 +625,7 @@ private enum SessionFixture {
         #expect(again.undoLabel == nil)
         #expect(again.document.style.padding == 0.08)
         await again.close()
-        #expect(try SessionFixture.entries(project.package).prefix(3) == good[...])
+        #expect(try SessionFixture.entries(project.package).prefix(4) == good[...])
     }
 }
 
@@ -638,9 +639,9 @@ private enum SessionFixture {
         }
         await session.close()
         let snapshot = try SessionFixture.snapshot(project.package)
-        #expect(snapshot.logSequence == 6)
+        #expect(snapshot.logSequence == 7)
         var lines = try SessionFixture.lines(project.package.editLogURL)
-        lines[2] = "garbage"
+        lines[3] = "garbage"
         try SessionFixture.write(lines, to: project.package.editLogURL)
         let original = try Data(contentsOf: project.package.editLogURL)
 
@@ -649,10 +650,10 @@ private enum SessionFixture {
         #expect(again.document == snapshot)
         #expect(again.undoLabel == nil)
         #expect(again.notices.count == 1)
-        #expect(try SessionFixture.entries(project.package) == [.create(seq: 6, document: snapshot, app: SessionFixture.app)])
+        #expect(try SessionFixture.entries(project.package) == [.create(seq: 7, document: snapshot, app: SessionFixture.app)])
         #expect(try SessionFixture.damagedCopies(project.package).map { try Data(contentsOf: $0) } == [original])
         #expect(again.perform(try SessionFixture.padding(again.document, 0.2)) == .applied)
-        #expect(await again.flushed() == 7)
+        #expect(await again.flushed() == 8)
         await again.close()
     }
 }
@@ -674,10 +675,10 @@ private enum SessionFixture {
         #expect(again.notices.isEmpty)
         #expect(again.document.style.padding == 0.1)
         #expect(again.perform(try SessionFixture.padding(again.document, 0.2)) == .applied)
-        #expect(await again.flushed() == 4)
+        #expect(await again.flushed() == 5)
         await again.close()
         let read = try EditLogReader.read(project.package.editLogURL)
-        #expect(read.entries.map(\.seq) == [1, 2, 3, 4])
+        #expect(read.entries.map(\.seq) == [1, 2, 3, 4, 5])
         #expect(!read.droppedTruncatedTail)
         #expect(read.damagedLine == nil)
     }
@@ -707,8 +708,8 @@ private enum SessionFixture {
         #expect(try SessionFixture.snapshot(project.package).logSequence == 1)
 
         io.releaseSyncs()
-        #expect(await session.flushed() == 5)
-        #expect(await eventually { (try? SessionFixture.snapshot(project.package).logSequence) == 5 })
+        #expect(await session.flushed() == 6)
+        #expect(await eventually { (try? SessionFixture.snapshot(project.package).logSequence) == 6 })
         #expect(!session.hasUnsavedChanges)
         await session.close()
         #expect(try SessionFixture.snapshot(project.package) == session.document)
@@ -720,7 +721,7 @@ private enum SessionFixture {
         let project = try await SessionFixture.package(in: dir)
         let session = try await SessionFixture.open(project, SessionFixture.context(caches: dir.appending(path: "Caches")))
         #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .applied)
-        #expect(await session.flushed() == 3)
+        #expect(await session.flushed() == 4)
         let moved = dir.appending(path: "Elsewhere", directoryHint: .isDirectory)
         try FileManager.default.createDirectory(at: moved, withIntermediateDirectories: false)
         let newURL = moved.appending(path: "Moved.toma", directoryHint: .isDirectory)
@@ -728,14 +729,14 @@ private enum SessionFixture {
         #expect(SessionFixture.realPath(session.packageURL) == SessionFixture.realPath(newURL))
 
         #expect(session.perform(try SessionFixture.padding(session.document, 0.2)) == .applied)
-        #expect(await session.flushed() == 4)
+        #expect(await session.flushed() == 5)
         let movedPackage = ProjectPackage(url: newURL)
-        #expect(await eventually { (try? SessionFixture.snapshot(movedPackage).logSequence) == 4 })
+        #expect(await eventually { (try? SessionFixture.snapshot(movedPackage).logSequence) == 5 })
         #expect(!FileManager.default.fileExists(atPath: project.package.url.path))
         #expect(!session.hasUnsavedChanges)
         #expect(!session.notices.contains { if case .saveFailed = $0 { true } else { false } })
         await session.close()
-        #expect(try SessionFixture.entries(movedPackage).map(\.seq) == [1, 2, 3, 4])
+        #expect(try SessionFixture.entries(movedPackage).map(\.seq) == [1, 2, 3, 4, 5])
         #expect(!FileManager.default.fileExists(atPath: project.package.url.path))
     }
 }
@@ -785,19 +786,19 @@ private enum SessionFixture {
         let caches = dir.appending(path: "Caches")
         let session = try await SessionFixture.open(project, SessionFixture.context(caches: caches))
         #expect(session.perform(try SessionFixture.padding(session.document, 0.1)) == .applied)
-        #expect(await session.flushed() == 3)
+        #expect(await session.flushed() == 4)
         try FileManager.default.removeItem(at: project.package.editLogURL)
 
         // The next line finds the log gone: a new one starts with the document as it is, this step included.
         #expect(session.perform(try SessionFixture.padding(session.document, 0.2)) == .applied)
         #expect(await eventually { (try? SessionFixture.entries(project.package))?.first.map { if case .create = $0 { true } else { false } } == true })
-        #expect(await session.flushed() == 5)
+        #expect(await session.flushed() == 6)
         var expected = session.document
-        expected.logSequence = 5
-        #expect(try SessionFixture.entries(project.package) == [.create(seq: 5, document: expected, app: SessionFixture.app)])
+        expected.logSequence = 6
+        #expect(try SessionFixture.entries(project.package) == [.create(seq: 6, document: expected, app: SessionFixture.app)])
         #expect(session.undoLabel == nil)
         #expect(session.perform(try SessionFixture.padding(session.document, 0.3)) == .applied)
-        #expect(await session.flushed() == 6)
+        #expect(await session.flushed() == 7)
         #expect(await eventually { !session.notices.contains { if case .saveFailed = $0 { true } else { false } } })
         #expect(!session.hasUnsavedChanges)
         await session.close()
@@ -844,8 +845,8 @@ private enum SessionFixture {
         }
         await first.close()
         let uncompacted = try SessionFixture.entries(project.package)
-        // The `create`, the `migrate` of the first edit and the thirty steps.
-        #expect(uncompacted.count == 32)
+        // The `create`, the two `migrate`s of the first edit and the thirty steps.
+        #expect(uncompacted.count == 33)
 
         let compacting = SessionFixture.context(caches: caches, compaction: (maxBytes: .max, maxEntries: 10))
         let second = try await SessionFixture.open(project, compacting)
@@ -883,13 +884,13 @@ private enum SessionFixture {
             if step == 13 { io.failWrites(with: .ENOSPC) }
             let path = step.isMultiple(of: 2) ? "/style/padding" : "/style/shadow"
             #expect(session.perform(try SessionFixture.step(session.document, path, 0.01 * Double(step), step.isMultiple(of: 2) ? .padding : .shadow)) == .applied)
-            // The `create`, the `migrate` of the first edit and the steps.
-            if step <= 12 { #expect(await session.flushed() == step + 2 + (step > 5 ? 2 : 0)) }
+            // The `create`, the two `migrate`s of the first edit and the steps.
+            if step <= 12 { #expect(await session.flushed() == step + 3 + (step > 5 ? 2 : 0)) }
             // An undo and a redo, which a compaction would drop.
             if step == 5 {
                 #expect(session.undo() == .applied)
                 #expect(session.redo() == .applied)
-                #expect(await session.flushed() == 9)
+                #expect(await session.flushed() == 10)
             }
         }
         #expect(session.hasUnsavedChanges)
@@ -900,7 +901,7 @@ private enum SessionFixture {
         #expect(try Data(contentsOf: project.package.editLogURL) == log)
         #expect(try Data(contentsOf: project.package.editURL) == snapshot)
         #expect(session.hasUnsavedChanges)
-        #expect(try SessionFixture.entries(project.package).count == 16)
+        #expect(try SessionFixture.entries(project.package).count == 17)
     }
 }
 
@@ -919,7 +920,7 @@ private enum SessionFixture {
         let again = try await SessionFixture.open(project, context)
         await again.close()
         #expect(SessionFixture.inode(project.package.editLogURL) == inode)
-        #expect(try SessionFixture.entries(project.package).count == 5)
+        #expect(try SessionFixture.entries(project.package).count == 6)
     }
 }
 

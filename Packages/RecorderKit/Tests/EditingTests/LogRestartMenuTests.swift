@@ -78,8 +78,8 @@ private final class HeldOpens: Sendable {
         let session = try await EditSession.open(project.package.url, take: nil, context: context)
         let padding = try #require(session.document.setChange("/style/padding", 0.1))
         #expect(session.perform(EditStep(label: .padding, target: "/style/padding", changes: [padding])) == .applied)
-        // The `create`, the `migrate` of the first edit and its step.
-        #expect(await session.flushed() == 3)
+        // The `create`, the two `migrate`s of the first edit and its step.
+        #expect(await session.flushed() == 4)
         #expect(session.undoLabel == .padding && session.canUndo)
 
         // What the menu reads each time the session says something changed.

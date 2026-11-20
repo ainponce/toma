@@ -362,8 +362,10 @@ private enum Pending {
         #expect(try Pending.lines(url) == before)
 
         #expect(session.perform(try Pending.step(session.document, "/style/shadow", 0.2, .shadow)) == .applied)
-        #expect(await session.flushed() == 6)
-        #expect(Array(try Pending.read(url).entries.suffix(3).prefix(2)) == [.migrate(seq: 4, from: 1, to: 2), .migrate(seq: 5, from: 2, to: 3)])
+        #expect(await session.flushed() == 7)
+        #expect(
+            Array(try Pending.read(url).entries.suffix(4).prefix(3))
+                == [.migrate(seq: 4, from: 1, to: 2), .migrate(seq: 5, from: 2, to: 3), .migrate(seq: 6, from: 3, to: 4)])
         #expect(session.undo() == .applied)
         #expect(session.undo() == .refused)
         let undone = session.document
@@ -463,8 +465,8 @@ private enum Pending {
         let session = try await Pending.open(url, context)
         #expect(session.document == document)
         #expect(session.perform(try Pending.padding(session.document, 0.1)) == .applied)
-        #expect(await session.flushed() == 7)
-        // The migrates and the step are on disk: the project is of version 3 now, also before the snapshot.
+        #expect(await session.flushed() == 8)
+        // The migrates and the step are on disk: the project is of the current version now, also before the snapshot.
         #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == EditDocument.currentVersion)
         let edited = session.document
         await session.close()
@@ -484,22 +486,24 @@ private enum Pending {
         let session = try await Pending.open(url, Pending.context(caches: dir.appending(path: "Caches"), io: io.io))
         #expect(io.writes.isEmpty)
         #expect(session.perform(try Pending.padding(session.document, 0.1)) == .applied)
-        #expect(await session.flushed() == 7)
+        #expect(await session.flushed() == 8)
 
         let lines = try Pending.lines(url)
         #expect(Array(lines.prefix(4)) == before)
-        #expect(lines.count == 7)
+        #expect(lines.count == 8)
         let entries = try Pending.read(url).entries
-        #expect(entries.count == 7)
-        #expect(Array(entries[4...5]) == [.migrate(seq: 5, from: 1, to: 2), .migrate(seq: 6, from: 2, to: 3)])
+        #expect(entries.count == 8)
+        #expect(
+            Array(entries[4...6])
+                == [.migrate(seq: 5, from: 1, to: 2), .migrate(seq: 6, from: 2, to: 3), .migrate(seq: 7, from: 3, to: 4)])
         if case let .do(seq, group, label, _, _)? = entries.last {
-            #expect((seq, group, label) == (7, 7, "style.padding"))
+            #expect((seq, group, label) == (8, 8, "style.padding"))
         } else {
             Issue.record("no do line: \(entries)")
         }
-        // One write with the three lines.
+        // One write with the four lines.
         #expect(io.writes.count == 1)
-        #expect(io.writes.first == Array((lines[4] + "\n" + lines[5] + "\n" + lines[6] + "\n").utf8))
+        #expect(io.writes.first == Array(lines[4...7].map { $0 + "\n" }.joined().utf8))
         #expect(try Pending.read(url).createVersion == 1)
 
         // The snapshot after it is of the current version.
@@ -519,11 +523,16 @@ private enum Pending {
         #expect(session.undoLabel == .shadow)
         #expect(session.undo() == .applied)
         #expect(session.document.style.shadow == 0)
-        #expect(await session.flushed() == 7)
+        #expect(await session.flushed() == 8)
         let entries = try Pending.read(url).entries
-        #expect(Array(entries.suffix(3)) == [.migrate(seq: 5, from: 1, to: 2), .migrate(seq: 6, from: 2, to: 3), .undo(seq: 7, group: 4)])
+        #expect(
+            Array(entries.suffix(4))
+                == [
+                    .migrate(seq: 5, from: 1, to: 2), .migrate(seq: 6, from: 2, to: 3), .migrate(seq: 7, from: 3, to: 4),
+                    .undo(seq: 8, group: 4),
+                ])
         let lines = try Pending.lines(url)
-        #expect(io.writes == [Array((lines[4] + "\n" + lines[5] + "\n" + lines[6] + "\n").utf8)])
+        #expect(io.writes == [Array(lines[4...7].map { $0 + "\n" }.joined().utf8)])
         let undone = session.document
         await session.close()
         #expect(try Pending.snapshotVersion(url) == EditDocument.currentVersion)
@@ -534,10 +543,10 @@ private enum Pending {
         #expect(again.redoLabel == .shadow)
         #expect(again.redo() == .applied)
         #expect(again.document.style.shadow != 0)
-        #expect(await again.flushed() == 8)
+        #expect(await again.flushed() == 9)
         await again.close()
         // Only one `migrate` to each version.
-        #expect(try Pending.lines(url).count { $0.contains(#""type":"migrate""#) } == 2)
+        #expect(try Pending.lines(url).count { $0.contains(#""type":"migrate""#) } == 3)
     }
 }
 
@@ -551,11 +560,13 @@ private enum Pending {
         let add = try #require(LayoutCommands.add(session.document, kind: .split, at: 0, timeMap: map, makeID: { $0 + "0000000a" }))
         #expect(session.perform(add) == .applied)
         #expect(session.perform(try #require(LayoutCommands.setProjectLayout(session.document, .cameraOnly))) == .applied)
-        #expect(await session.flushed() == 8)
+        #expect(await session.flushed() == 9)
         let read = try Pending.read(url)
         #expect(read.createVersion == 1)
-        #expect(read.entries.count == 8)
-        #expect(Array(read.entries[4...5]) == [.migrate(seq: 5, from: 1, to: 2), .migrate(seq: 6, from: 2, to: 3)])
+        #expect(read.entries.count == 9)
+        #expect(
+            Array(read.entries[4...6])
+                == [.migrate(seq: 5, from: 1, to: 2), .migrate(seq: 6, from: 2, to: 3), .migrate(seq: 7, from: 3, to: 4)])
         let labels = read.entries.suffix(2).compactMap { entry -> String? in
             guard case let .do(_, _, label, _, _) = entry else { return nil }
             return label
@@ -598,7 +609,7 @@ private enum Pending {
         #expect(session.redoLabel == .padding)
         #expect(Pending.state(session.document) == Pending.state(created))
         #expect(session.document.documentVersion == EditDocument.currentVersion)
-        #expect(await session.flushed() == 11)
+        #expect(await session.flushed() == 12)
         await session.close()
 
         let again = try await Pending.open(url, Pending.context(caches: caches))
@@ -644,18 +655,18 @@ private enum Pending {
         // The retry writes the rest of the buffer: every line, once each, in order.
         io.heal()
         #expect(await eventually(timeout: .seconds(20)) { !session.hasUnsavedChanges })
-        #expect(await session.flushed() == 7)
+        #expect(await session.flushed() == 8)
         let lines = try Pending.lines(url)
-        #expect(lines.count == 7)
+        #expect(lines.count == 8)
         #expect(Array(lines.prefix(5)) == before + [migrate])
         let entries = try Pending.read(url).entries
-        #expect(entries.map(\.seq) == [1, 2, 3, 4, 5, 6, 7])
+        #expect(entries.map(\.seq) == [1, 2, 3, 4, 5, 6, 7, 8])
         if case let .do(_, _, label, _, _)? = entries.last {
             #expect(label == "style.padding")
         } else {
             Issue.record("no do line: \(entries)")
         }
-        #expect(io.writes.map(\.count).reduce(0, +) == (lines[4] + "\n" + lines[5] + "\n" + lines[6] + "\n").utf8.count)
+        #expect(io.writes.map(\.count).reduce(0, +) == lines[4...7].map { $0 + "\n" }.joined().utf8.count)
         await session.close()
         #expect(try EditSession.readDocumentWithDiskVersion(url, take: nil, context: context).diskVersion == EditDocument.currentVersion)
     }
@@ -675,7 +686,7 @@ private enum Pending {
         #expect(session.redo() == .applied)
         #expect(session.perform(try Pending.step(session.document, "/style/shadow", 0.2, .shadow)) == .applied)
         #expect(session.undo() == .applied)
-        #expect(await session.flushed() == 11)
+        #expect(await session.flushed() == 12)
         // The log before the compaction, in a copy of the package.
         let copy = dir.appending(path: "Uncompacted.toma", directoryHint: .isDirectory)
         try FileManager.default.copyItem(at: url, to: copy)
@@ -685,10 +696,11 @@ private enum Pending {
         let compacted = try Pending.read(url)
         let uncompacted = try Pending.read(copy)
         #expect(compacted.entries.count < uncompacted.entries.count)
-        #expect(compacted.entries.last?.seq == 11)
+        #expect(compacted.entries.last?.seq == 12)
         #expect(compacted.createVersion == 1)
         #expect(compacted.entries.first == uncompacted.entries.first)
-        guard compacted.entries.count > 2, case .migrate(_, 1, 2) = compacted.entries[1], case .migrate(_, 2, 3) = compacted.entries[2]
+        guard compacted.entries.count > 3, case .migrate(_, 1, 2) = compacted.entries[1], case .migrate(_, 2, 3) = compacted.entries[2],
+            case .migrate(_, 3, 4) = compacted.entries[3]
         else {
             Issue.record("the migrates right after the create: \(compacted.entries)")
             return

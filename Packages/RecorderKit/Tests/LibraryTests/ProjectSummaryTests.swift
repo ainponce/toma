@@ -208,10 +208,10 @@ private func unblocking<T>(
 
         // A document of a newer version, in a package this version reads.
         let newerDocument = urls[7]
-        try Data(#"{"documentVersion": 4}"#.utf8).write(to: ProjectPackage(url: newerDocument).editURL)
+        try Data(#"{"documentVersion": 5}"#.utf8).write(to: ProjectPackage(url: newerDocument).editURL)
         let newer = Reading.summary(newerDocument, in: dir)
         #expect(newer.state == .newerVersion)
-        #expect(newer.documentVersion == 4)
+        #expect(newer.documentVersion == 5)
         #expect(newer.formatVersion == 3)
 
         // A package of a newer format.

@@ -147,8 +147,8 @@ private func perform(_ step: EditStep, after seconds: Double, in history: inout 
 }
 
 @Test func labelsAreTheNamesTheLogKeeps() {
-    // The 21 actions of design §5.11, the 12 of the 1c design §13.1 after them and the 25 of phase 2 design §8 after
-    // those; their raw values are written in edit-log.jsonl, so they never change.
+    // The 21 actions of design §5.11, the 12 of the 1c design §13.1 after them, the 25 of phase 2 design §8 after those
+    // and the 25 of phase 3 design §10 last; their raw values are written in edit-log.jsonl, so they never change.
     #expect(EditLabel.allCases.map(\.rawValue) == [
         "split", "delete", "trim", "speed", "zoom.add", "zoom.move", "zoom.change", "zoom.delete", "zoom.regenerate",
         "style.background", "style.padding", "style.cornerRadius", "style.shadow", "style.frame", "cursor", "camera", "screen",
@@ -159,5 +159,9 @@ private func perform(_ step: EditStep, after seconds: Double, in history: inout 
         "transcript.pauses", "captions.show", "captions.style", "camera.hideSilences", "camera.background", "camera.framing",
         "camera.look", "camera.sync", "audio.cleanup", "audio.normalize", "style.reframe", "privacy.add", "privacy.change",
         "privacy.move", "privacy.trim", "privacy.delete", "privacy.auto", "keys.overlay", "speed.typing",
+        "annotation.add", "annotation.change", "annotation.move", "annotation.trim", "annotation.layer", "annotation.delete",
+        "clip.freeze", "clip.card", "clip.media", "clip.content", "zoom.mode", "audio.range", "audio.shift", "music.add",
+        "music.change", "music.move", "music.trim", "music.delete", "music.ducking", "take.rerecord", "take.use", "marker.add",
+        "marker.rename", "marker.move", "marker.delete",
     ])
 }

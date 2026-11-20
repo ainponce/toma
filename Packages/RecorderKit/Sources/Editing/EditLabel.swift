@@ -2,8 +2,8 @@
 import ProjectFormat
 
 /// The action an undo step is, for the Edit menu's "Undo «action»" (the 21 undo labels of design §5.11, the 12 of the
-/// 1c design §13.1 after them, and the 25 of phase 2 design §8 after those). Its raw value is the `label` of a `do` line
-/// of `edit-log.jsonl`, so the names never change; the app localizes them.
+/// 1c design §13.1 after them, the 25 of phase 2 design §8 after those, and the 25 of phase 3 design §10 last). Its raw
+/// value is the `label` of a `do` line of `edit-log.jsonl`, so the names never change; the app localizes them.
 public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case split, delete, trim, speed
     case zoomAdd = "zoom.add", zoomMove = "zoom.move", zoomChange = "zoom.change", zoomDelete = "zoom.delete"
@@ -35,6 +35,17 @@ public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case privacyDelete = "privacy.delete", privacyAuto = "privacy.auto"
     case keysOverlay = "keys.overlay"
     case speedTyping = "speed.typing"
+    // Phase 3 design §10 (plan decision 17), in its order: the annotations and the clips with content (3a), the zoom's
+    // mode (3b), the sound's stretches, cuts and music (3c), the takes and the markers (3d).
+    case annotationAdd = "annotation.add", annotationChange = "annotation.change", annotationMove = "annotation.move"
+    case annotationTrim = "annotation.trim", annotationLayer = "annotation.layer", annotationDelete = "annotation.delete"
+    case clipFreeze = "clip.freeze", clipCard = "clip.card", clipMedia = "clip.media", clipContent = "clip.content"
+    case zoomMode = "zoom.mode"
+    case audioRange = "audio.range", audioShift = "audio.shift"
+    case musicAdd = "music.add", musicChange = "music.change", musicMove = "music.move", musicTrim = "music.trim"
+    case musicDelete = "music.delete", musicDucking = "music.ducking"
+    case takeRerecord = "take.rerecord", takeUse = "take.use"
+    case markerAdd = "marker.add", markerRename = "marker.rename", markerMove = "marker.move", markerDelete = "marker.delete"
 }
 
 /// What one command changes, before it is a line of the log: its changes, and the grouping key of design §6.4.

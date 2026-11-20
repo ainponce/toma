@@ -1506,6 +1506,701 @@ Lo que calcula el análisis de la fase 2 (diseño de la fase 2, §10) va a la ca
 - **El zoom** se queda dentro de los límites del dispositivo, como dentro de una ventana, y lo mueve junto con la pantalla. En las disposiciones de tarjetas (Pantalla dividida), el dispositivo entero entra en la tarjeta de la pantalla; en Solo cámara no se ve. **Con Seguir el cursor** (`style.reframe` `followCursor`) no hay marco: la pantalla está recortada.
 - **El acabado (oscuro o claro) solo se dibuja**: cambiarlo no rehace los caminos del movimiento; cambiar el modelo, sí.
 
+## Cambios del documento 4
+
+Desde la fase 3, el documento de edición es la versión 4 (`EditDocument.currentVersion`): una sola versión nueva con todos los campos de la fase 3 (diseño de la fase 3, §10), así las capas, el zoom tranquilo, el audio y las tomas trabajan sobre los mismos tipos y hay una sola migración. Suma las anotaciones, la música, los marcadores, los clips con contenido (cuadro congelado, placa de título y clip importado), el corte del audio de cada clip, el modo del zoom con su lupa y el volumen por tramo de cada pista. La versión del documento no cambia la del paquete; un lector del documento 4 lee los documentos 1, 2 y 3 migrándolos y rechaza el 5 o uno más nuevo (`newerVersion`), esté en `edit.json` o en el `create` del registro.
+
+| Lugar | Qué es | Legado (lo que escribe la migración) |
+|---|---|---|
+| `annotations` | `items[]`, cada anotación con `id` (`a-` y 8 hex al azar), `anchor`, `layer` (entero; más alto, más arriba, dentro de las pegadas a la grabación y dentro de las de la salida), `kind`, `rect` (`{x, y, width, height}`: anclada a la toma, en fracciones del rectángulo del contenido del escenario; si no, del cuadro de salida), `rotation` (grados; 0), `opacity` (0 a 1; 1), `enter` (`none`, `fade`, `pop`, `draw`; `fade`) y `exit` (`none`, `fade`; `fade`) | `{"items": []}` |
+| `annotations.items[].anchor` | Plano con su `type`: `content` con `take`, `start` y `end` (`HostTime` de la fuente: pegada a la grabación), `output` con `start` y `end` (ns de salida: fija en la salida) o `whole` (todo el video) | — |
+| `annotations.items[].kind` | Plano: los campos de su valor junto a `type`. `text`: `string`, `preset` (`plain`, `label`, `lowerThird`, `title`), `font` (`system`, `rounded`, `serif`, `mono`; `system`), `weight` (`regular`, `semibold`, `bold`, `heavy`; `semibold`), `size` (fracción del alto de su espacio; 0,05), `color` (RGBA; blanco), `fill` (RGBA, opcional; negro al 70 % en `label` y `lowerThird`, ninguno en los otros) y `align` (`leading`, `center`, `trailing`; `center`). `arrow`: `from` y `to` (`{x, y}`, en el espacio de su anclaje; el `rect` sale de los extremos), `curve` (−1 a 1; 0), `color` (#FF453A), `width` (0,006) y `head` (`filled`, `open`, `none`). `shape`: `shape` (`rect`, `roundedRect`, `ellipse`), `stroke` (#FF453A), `width` (0,004) y `fill` opcional. `callout`: `text` (un texto como el de `text`, sin `type`) y `target` (`{x, y}`). `step`: `color` (#FF453A; el número sale del orden en la secuencia). `image`: `asset`, `fit` (`fit`, `fill`), `corner` (0) y `shadow` (`false`). `clip`: `asset`, `start` y `end` (ns del archivo), `volume` (dB; 0), `muted` (`false`), `corner` (0) y `shadow` (`false`); solo con anclaje `output` o `whole` | — |
+| `music` | `items[]`, cada tema con `id` (`mu-` y 8 hex), `source` (`library:music-1/<id>` o su camino `assets/…`), `start` y `end` (ns de salida), `offset` (ns dentro del tema; 0), `gain` (dB; −14), `fadeIn` (ns; 1 s), `fadeOut` (ns; 2 s) y `loop` (`true`); y `ducking`: `enabled`, `amount` (dB), `attack` y `release` (s) | `{"ducking": {"amount": -12, "attack": 0.3, "enabled": true, "release": 0.8}, "items": []}` |
+| `markers` | `items[]`, cada marcador con `id` (`m-` y 8 hex), `take`, `t` (`HostTime`), `name` (`""`), `origin` (`recorded`, `added`) y `hidden` (`false`). Un marcador grabado sin entrada se muestra sin nombre; nombrarlo, moverlo o esconderlo agrega su entrada con `origin` `recorded` y el mismo `take` y `t` | `{"items": []}` |
+| `sequence[].content` | Opcional: lo que muestra el clip en lugar de un tramo de su toma, plano con su `type`: `freeze` con `duration`, `card` con `card` y `duration`, o `media` con `media`. Con contenido, `start == end`: el punto de la toma donde está. `duration` en ns de salida (2 s un cuadro congelado nuevo, 3 s una placa nueva; de 0,1 a 60 s). La placa: `title`, `subtitle` (`""`), `style` (`centered`, `leading`, `large`, `minimal`), `background` (plano: `stage`, `color` con `color`, o `blurredFrame`) y `textColor` (blanco). El clip importado: `asset` (`assets/<32 hex>.<mov\|mp4\|m4v>`), `start` y `end` (ns del archivo), `speed` (1) y `volume` (dB; 0) | Ausente: un tramo de la toma |
+| `sequence[].audioShift` | Dónde corta el audio contra la imagen al empezar el clip, en ns de salida con signo: negativo antes (corte J, el clip se oye antes de verse), positivo después (corte L, se sigue oyendo el de antes) | `0`, en cada clip |
+| `zoom.auto.mode` | El modo de los bloques automáticos sin uno propio: `classic`, `highlight`, `dim` o `loupe` | `classic` |
+| `zoom.regions[].mode` | Opcional: el modo del bloque; sin él, `classic` en uno manual y `zoom.auto.mode` en uno automático | Ausente |
+| `zoom.regions[].loupe` | Opcional: la lente del bloque en `loupe`, `radius` (fracción del lado corto de la salida, de 0,06 a 0,4) y `shape` (`circle`, `roundedRect`); sin ella, 0,16 y `circle` | Ausente |
+| `audio.tracks.<toma>/<pista>.ranges` | Los tramos de la pista a otro volumen, anclados a la fuente: `id` (`g-` y 8 hex), `take`, `start` y `end` (`HostTime`) y `gain` (dB; −120 es −∞) | `[]`, en cada pista |
+
+- **Las formas planas** (decisión 2 del plan de la base de la fase 3), en el JSON compacto del registro: `{"duration":2000000000,"type":"freeze"}`, `{"card":{…},"duration":3000000000,"type":"card"}`, `{"media":{…},"type":"media"}`; `{"type":"stage"}`, `{"color":[0,0.5,1,1],"type":"color"}`, `{"type":"blurredFrame"}`; `{"end":9,"start":5,"take":"take-001","type":"content"}`, `{"end":9,"start":5,"type":"output"}`, `{"type":"whole"}`; `{"color":[1,1,1,1],"type":"step"}`, `{"target":{"x":0.5,"y":0.25},"text":{…},"type":"callout"}`. Ninguno de los valores de una anotación tiene un campo `type`.
+- **Lo que se omite.** `content` en un clip que es un tramo de la toma, `mode` y `loupe` en un bloque sin ellos y `fill` en un texto o una forma sin fondo: nunca se escriben como `null`. Todo lo demás se escribe siempre, como los campos de los documentos 2 y 3. Un `zoom.auto` sin `mode` se lee como `classic`, porque así lo guardan las fases 1 y 2 en sus estilos (`default-style.json` y el `style.json` de un `.tomastyle`); en un documento 4 siempre está, y un cambio que lo saca se rechaza.
+- **Un valor desconocido hace inválido el documento** (un `type` de contenido, de fondo, de anclaje o de anotación, un `mode`, un `preset`, una `font`… que no son estos): está dañado, no es más nuevo. Lo mismo la falta de un campo obligatorio (`audioShift`, `ranges`, `annotations`…).
+- **#FF453A** es `[1, 0.27058823529411763, 0.22745098039215686, 1]` (`RGBA.annotationRed`).
+
+El ejemplo del documento 3 de arriba con todos los campos de la fase 3 lejos de su valor legado (después del primer clip, el segundo con su audio 120 ms antes; al final de ese, un cuadro congelado de 2 s, una placa sobre un color y un clip importado a 1,5×; el segundo zoom con una lupa redondeada de 0,2 y los automáticos atenuando; el micrófono en silencio 2 s; una anotación de cada tipo: un tercio inferior con su fondo, una flecha curva, una forma con relleno, un globo, un paso, una imagen sobre todo el video y un clip sobre la salida; un tema de la biblioteca sin bajada; un marcador con nombre, escondido), como lo escribe `ProjectJSON.encoder()`; lo guarda `version4ExampleRoundTripsByteForByte`, que lo lee y lo vuelve a escribir byte por byte:
+
+```json
+{
+  "annotations" : {
+    "items" : [
+      {
+        "anchor" : {
+          "end" : 81240000000000,
+          "start" : 81236000000000,
+          "take" : "take-001",
+          "type" : "content"
+        },
+        "enter" : "fade",
+        "exit" : "fade",
+        "id" : "a-1a2b3c4d",
+        "kind" : {
+          "align" : "center",
+          "color" : [
+            1,
+            1,
+            1,
+            1
+          ],
+          "fill" : [
+            0,
+            0,
+            0,
+            0.7
+          ],
+          "font" : "system",
+          "preset" : "lowerThird",
+          "size" : 0.05,
+          "string" : "Ana Pérez",
+          "type" : "text",
+          "weight" : "semibold"
+        },
+        "layer" : 0,
+        "opacity" : 1,
+        "rect" : {
+          "height" : 0.12,
+          "width" : 0.4,
+          "x" : 0.05,
+          "y" : 0.78
+        },
+        "rotation" : 0
+      },
+      {
+        "anchor" : {
+          "end" : 81244000000000,
+          "start" : 81241000000000,
+          "take" : "take-001",
+          "type" : "content"
+        },
+        "enter" : "draw",
+        "exit" : "none",
+        "id" : "a-2b3c4d5e",
+        "kind" : {
+          "color" : [
+            1,
+            0.27058823529411763,
+            0.22745098039215686,
+            1
+          ],
+          "curve" : 0.4,
+          "from" : {
+            "x" : 0.2,
+            "y" : 0.3
+          },
+          "head" : "filled",
+          "to" : {
+            "x" : 0.45,
+            "y" : 0.5
+          },
+          "type" : "arrow",
+          "width" : 0.006
+        },
+        "layer" : 1,
+        "opacity" : 1,
+        "rect" : {
+          "height" : 0.2,
+          "width" : 0.25,
+          "x" : 0.2,
+          "y" : 0.3
+        },
+        "rotation" : 0
+      },
+      {
+        "anchor" : {
+          "end" : 8000000000,
+          "start" : 5000000000,
+          "type" : "output"
+        },
+        "enter" : "fade",
+        "exit" : "fade",
+        "id" : "a-3c4d5e6f",
+        "kind" : {
+          "fill" : [
+            1,
+            1,
+            1,
+            0.25
+          ],
+          "shape" : "roundedRect",
+          "stroke" : [
+            1,
+            1,
+            1,
+            1
+          ],
+          "type" : "shape",
+          "width" : 0.005
+        },
+        "layer" : 2,
+        "opacity" : 0.9,
+        "rect" : {
+          "height" : 0.2,
+          "width" : 0.3,
+          "x" : 0.6,
+          "y" : 0.1
+        },
+        "rotation" : 0
+      },
+      {
+        "anchor" : {
+          "end" : 81249000000000,
+          "start" : 81246000000000,
+          "take" : "take-001",
+          "type" : "content"
+        },
+        "enter" : "pop",
+        "exit" : "fade",
+        "id" : "a-4d5e6f70",
+        "kind" : {
+          "target" : {
+            "x" : 0.62,
+            "y" : 0.41
+          },
+          "text" : {
+            "align" : "leading",
+            "color" : [
+              0.1,
+              0.1,
+              0.1,
+              1
+            ],
+            "fill" : [
+              1,
+              1,
+              1,
+              0.9
+            ],
+            "font" : "rounded",
+            "preset" : "label",
+            "size" : 0.04,
+            "string" : "Acá",
+            "weight" : "bold"
+          },
+          "type" : "callout"
+        },
+        "layer" : 3,
+        "opacity" : 1,
+        "rect" : {
+          "height" : 0.08,
+          "width" : 0.2,
+          "x" : 0.5,
+          "y" : 0.2
+        },
+        "rotation" : 0
+      },
+      {
+        "anchor" : {
+          "end" : 81249000000000,
+          "start" : 81246000000000,
+          "take" : "take-001",
+          "type" : "content"
+        },
+        "enter" : "fade",
+        "exit" : "fade",
+        "id" : "a-5e6f7081",
+        "kind" : {
+          "color" : [
+            1,
+            0.27058823529411763,
+            0.22745098039215686,
+            1
+          ],
+          "type" : "step"
+        },
+        "layer" : 4,
+        "opacity" : 1,
+        "rect" : {
+          "height" : 0.07,
+          "width" : 0.04,
+          "x" : 0.6,
+          "y" : 0.38
+        },
+        "rotation" : 0
+      },
+      {
+        "anchor" : {
+          "type" : "whole"
+        },
+        "enter" : "fade",
+        "exit" : "fade",
+        "id" : "a-6f708192",
+        "kind" : {
+          "asset" : "assets/0f1e2d3c4b5a69788796a5b4c3d2e1f0.png",
+          "corner" : 0.02,
+          "fit" : "fit",
+          "shadow" : true,
+          "type" : "image"
+        },
+        "layer" : 0,
+        "opacity" : 0.8,
+        "rect" : {
+          "height" : 0.1,
+          "width" : 0.1,
+          "x" : 0.85,
+          "y" : 0.05
+        },
+        "rotation" : -5
+      },
+      {
+        "anchor" : {
+          "end" : 14000000000,
+          "start" : 10000000000,
+          "type" : "output"
+        },
+        "enter" : "fade",
+        "exit" : "fade",
+        "id" : "a-708192a3",
+        "kind" : {
+          "asset" : "assets/9a8b7c6d5e4f30211203f4e5d6c7b8a9.mov",
+          "corner" : 0.03,
+          "end" : 5000000000,
+          "muted" : false,
+          "shadow" : true,
+          "start" : 1000000000,
+          "type" : "clip",
+          "volume" : -3
+        },
+        "layer" : 1,
+        "opacity" : 1,
+        "rect" : {
+          "height" : 0.3,
+          "width" : 0.3,
+          "x" : 0.65,
+          "y" : 0.6
+        },
+        "rotation" : 0
+      }
+    ]
+  },
+  "aspect" : "16:9",
+  "audio" : {
+    "limiter" : true,
+    "normalize" : true,
+    "tracks" : {
+      "take-001/mic" : {
+        "cleanup" : 0.6,
+        "gain" : 1,
+        "muted" : false,
+        "ranges" : [
+          {
+            "end" : 81252000000000,
+            "gain" : -120,
+            "id" : "g-4b5c6d7e",
+            "start" : 81250000000000,
+            "take" : "take-001"
+          }
+        ]
+      },
+      "take-001/system-audio" : {
+        "cleanup" : 0,
+        "gain" : 0.8,
+        "muted" : false,
+        "ranges" : [
+
+        ]
+      }
+    }
+  },
+  "camera" : {
+    "background" : "removed",
+    "border" : {
+      "color" : [
+        1,
+        1,
+        1,
+        1
+      ],
+      "width" : 0
+    },
+    "changes" : [
+      {
+        "id" : "k-1c2d0a9e",
+        "origin" : "recorded",
+        "style" : {
+          "anchor" : "topLeading",
+          "shape" : "circle",
+          "size" : 0.24
+        },
+        "t" : 81290000000000,
+        "take" : "take-001"
+      }
+    ],
+    "framing" : {
+      "center" : {
+        "x" : 0.4,
+        "y" : 0.35
+      },
+      "mode" : "manual",
+      "zoom" : 1.8
+    },
+    "initial" : {
+      "take-001" : {
+        "anchor" : "bottomTrailing",
+        "shape" : "circle",
+        "size" : 0.24
+      }
+    },
+    "layout" : {
+      "kind" : "bubble"
+    },
+    "layoutRules" : "cameraLayout-1",
+    "layouts" : [
+
+    ],
+    "look" : {
+      "intensity" : 0.75,
+      "lut" : "assets/5f0c3a2e9b1d4c7a8e6f0b2d4a6c8e0f1a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d.cube",
+      "preset" : "custom"
+    },
+    "mirror" : false,
+    "shadow" : 0,
+    "show" : true,
+    "sizeReference" : "height",
+    "spring" : {
+      "damping" : 0.95,
+      "response" : 0.5
+    },
+    "syncOffset" : 40000000
+  },
+  "captions" : {
+    "show" : true,
+    "style" : {
+      "highlight" : false,
+      "highlightColor" : [
+        0.2,
+        0.6,
+        1,
+        1
+      ],
+      "position" : "top",
+      "preset" : "classic",
+      "size" : "large",
+      "uppercase" : true
+    }
+  },
+  "cursor" : {
+    "clickEffect" : "ripple-1",
+    "clickSound" : "none",
+    "clickSoundGain" : 0.5,
+    "hideWhenIdle" : true,
+    "idleDelay" : 2,
+    "motionBlur" : 0.5,
+    "scale" : 1.5,
+    "show" : true,
+    "smoothing" : {
+      "damping" : 1,
+      "response" : 0.16
+    },
+    "style" : "system"
+  },
+  "documentVersion" : 4,
+  "frameRate" : 60,
+  "keys" : {
+    "mode" : "all",
+    "position" : "top",
+    "size" : "small"
+  },
+  "logSequence" : 128,
+  "markers" : {
+    "items" : [
+      {
+        "hidden" : true,
+        "id" : "m-0a1b2c3d",
+        "name" : "Demo",
+        "origin" : "recorded",
+        "t" : 81262000000000,
+        "take" : "take-001"
+      }
+    ]
+  },
+  "music" : {
+    "ducking" : {
+      "amount" : -12,
+      "attack" : 0.3,
+      "enabled" : false,
+      "release" : 0.8
+    },
+    "items" : [
+      {
+        "end" : 60000000000,
+        "fadeIn" : 500000000,
+        "fadeOut" : 3000000000,
+        "gain" : -18,
+        "id" : "mu-1f2e3d4c",
+        "loop" : false,
+        "offset" : 15000000000,
+        "source" : "library:music-1/calma",
+        "start" : 0
+      }
+    ]
+  },
+  "privacy" : {
+    "blocks" : [
+      {
+        "color" : [
+          0.1,
+          0.1,
+          0.1,
+          1
+        ],
+        "effect" : "pixelate",
+        "end" : 81253000000000,
+        "id" : "p-5e1d0c2a",
+        "keys" : [
+          {
+            "rect" : {
+              "height" : 0.25,
+              "width" : 0.4,
+              "x" : 0.1,
+              "y" : 0.2
+            },
+            "t" : 81250000000000
+          },
+          {
+            "rect" : {
+              "height" : 0.25,
+              "width" : 0.4,
+              "x" : 0.3,
+              "y" : 0.5
+            },
+            "t" : 81252000000000
+          }
+        ],
+        "origin" : "email",
+        "rect" : {
+          "height" : 0.25,
+          "width" : 0.4,
+          "x" : 0.1,
+          "y" : 0.2
+        },
+        "start" : 81250000000000,
+        "strength" : 0.8,
+        "take" : "take-001"
+      }
+    ]
+  },
+  "screens" : {
+    "changes" : [
+      {
+        "id" : "p-9a01b2c3",
+        "origin" : "auto",
+        "t" : 81260000000000,
+        "take" : "take-001",
+        "track" : "display-2"
+      }
+    ],
+    "initial" : {
+      "take-001" : "display-1"
+    },
+    "planner" : "screenFollow-1"
+  },
+  "sequence" : [
+    {
+      "audioShift" : 0,
+      "end" : 81276901234567,
+      "id" : "c-00a1b2c3",
+      "speed" : 1,
+      "start" : 81234567890123,
+      "take" : "take-001"
+    },
+    {
+      "audioShift" : -120000000,
+      "end" : 81334000000000,
+      "id" : "c-00d4e5f6",
+      "speed" : 2,
+      "start" : 81277458000000,
+      "take" : "take-001"
+    },
+    {
+      "audioShift" : 0,
+      "content" : {
+        "duration" : 2000000000,
+        "type" : "freeze"
+      },
+      "end" : 81334000000000,
+      "id" : "c-00f0e1d2",
+      "speed" : 1,
+      "start" : 81334000000000,
+      "take" : "take-001"
+    },
+    {
+      "audioShift" : 0,
+      "content" : {
+        "card" : {
+          "background" : {
+            "color" : [
+              0.1,
+              0.1,
+              0.12,
+              1
+            ],
+            "type" : "color"
+          },
+          "style" : "large",
+          "subtitle" : "Lo que sigue",
+          "textColor" : [
+            1,
+            1,
+            1,
+            1
+          ],
+          "title" : "Capítulo 2"
+        },
+        "duration" : 3000000000,
+        "type" : "card"
+      },
+      "end" : 81334000000000,
+      "id" : "c-01a2b3c4",
+      "speed" : 1,
+      "start" : 81334000000000,
+      "take" : "take-001"
+    },
+    {
+      "audioShift" : 0,
+      "content" : {
+        "media" : {
+          "asset" : "assets/1d2c3b4a59687766554433221100ffee.mp4",
+          "end" : 4000000000,
+          "speed" : 1.5,
+          "start" : 0,
+          "volume" : -6
+        },
+        "type" : "media"
+      },
+      "end" : 81334000000000,
+      "id" : "c-02b3c4d5",
+      "speed" : 1,
+      "start" : 81334000000000,
+      "take" : "take-001"
+    }
+  ],
+  "style" : {
+    "background" : {
+      "type" : "wallpaper",
+      "wallpaper" : "aurora-1"
+    },
+    "backgroundBlur" : 0,
+    "cornerRadius" : 0.012,
+    "frame" : {
+      "finish" : "light",
+      "model" : "iPhone",
+      "type" : "device"
+    },
+    "geometryTransition" : "spring",
+    "padding" : 0.08,
+    "reframe" : "followCursor",
+    "screenSampling" : "mipmapped",
+    "shadow" : 0.6
+  },
+  "transcript" : {
+    "engine" : "speechTranscriber-1",
+    "language" : "es-AR",
+    "takes" : [
+      {
+        "take" : "take-001",
+        "track" : "mic",
+        "words" : [
+          {
+            "end" : 81235400000000,
+            "start" : 81235000000000,
+            "text" : "Hola,"
+          },
+          {
+            "breakBefore" : true,
+            "end" : 81236000000000,
+            "start" : 81235500000000,
+            "text" : "mundo."
+          }
+        ]
+      }
+    ]
+  },
+  "zoom" : {
+    "auto" : {
+      "depth" : 2,
+      "enabled" : true,
+      "follow" : true,
+      "groupGap" : 2.5,
+      "holdWhileTyping" : true,
+      "leadIn" : 0.5,
+      "leadOut" : 1,
+      "mode" : "dim",
+      "planner" : "autoZoom-1",
+      "triggers" : "clicks"
+    },
+    "motionBlur" : 0.5,
+    "regions" : [
+      {
+        "end" : 81245000000000,
+        "focus" : {
+          "type" : "follow"
+        },
+        "id" : "z-3fa2b1c0",
+        "instant" : false,
+        "origin" : "auto",
+        "start" : 81241000000000,
+        "take" : "take-001"
+      },
+      {
+        "depth" : 1.6,
+        "end" : 81300000000000,
+        "focus" : {
+          "type" : "fixed",
+          "x" : 0.31,
+          "y" : 0.72
+        },
+        "id" : "z-7e11d0aa",
+        "instant" : false,
+        "loupe" : {
+          "radius" : 0.2,
+          "shape" : "roundedRect"
+        },
+        "mode" : "loupe",
+        "origin" : "user",
+        "start" : 81296000000000,
+        "take" : "take-001"
+      }
+    ],
+    "show" : true,
+    "spring" : {
+      "damping" : 1,
+      "response" : 0.7
+    },
+    "suppressed" : [
+      {
+        "end" : 81320000000000,
+        "start" : 81318000000000,
+        "take" : "take-001"
+      }
+    ]
+  }
+}
+```
+
+### La migración del documento 3 al 4
+
+- **La migración 3 → 4 es aditiva**: una fila más de la tabla de `DocumentMigration` (`isAdditive(from: 3)`). Agrega, en este orden y con estos valores congelados (`addedPlaces[3]`): `/annotations` `{"items":[]}`, `/markers` `{"items":[]}`, `/music` `{"ducking":{"amount":-12,"attack":0.3,"enabled":true,"release":0.8},"items":[]}`, `/sequence/*/audioShift` `0` (en cada clip), `/zoom/auto/mode` `"classic"` y `/audio/tracks/*/ranges` `[]` (en cada pista), sobre lo que ya hubiera ahí, y nada más. Sin ninguna otra edición, el documento migrado dibuja y suena exactamente lo que dibujaba y sonaba en la fase 2 (`make golden-3`).
+- Lo que el documento 4 deja ausente en su valor legado, `/sequence/*/content`, `/zoom/regions/*/mode` y `/zoom/regions/*/loupe`, no existe en un documento 3: uno hecho a mano con alguno está dañado, la migración lo rechaza en el primero que encuentra (`invalidDocument` en `/sequence/1/content`, por ejemplo) y se lee como `DecodingError`, nunca como más nuevo. Las filas de la tabla aceptan `*` (cada miembro o elemento) también en lo ausente y en los valores nuevos, como en lo agregado.
+- `DocumentMigration.reverted` baja de 4 a 3 (y de ahí a 2 y a 1) solo si cada lugar agregado tiene su valor legado y no hay ninguno de los ausentes: un documento que usa algo de la fase 3 no tiene versión 3.
+- **Qué no conmuta con 3 → 4.** `touchesAddedFields(_:from: 3)` es verdadero para la raíz, `/documentVersion`, un lugar agregado o algo debajo de uno (`/annotations`, `/music/ducking/amount`, un `insert` en `/markers/items`, `/sequence/<i>/audioShift`, `/zoom/auto/mode`, `/audio/tracks/<clave>/ranges`), y para un valor que tiene uno de esos lugares con otro valor. Un cambio de la fase 2 que escribe un objeto que contiene un lugar agregado se lleva a través del `migrate` (`carried`), con ese lugar en su valor congelado: un clip entero (un `insert` o un `replace` en `/sequence`, o la secuencia entera, como al cortar o cambiar la velocidad) gana `audioShift: 0`, un `TrackGain` entero (el volumen de una pista) gana `ranges: []` y `/zoom/auto` entero (aplicar un estilo) gana `mode: "classic"`. Ninguna acción de la fase 2 escribe un lugar agregado, así que deshacer cruza la migración.
+- **Antes de la primera edición, en el disco sigue en su versión.** Un proyecto de la fase 2 (documento 3), de 1c (2) o de 1b (1) que en la fase 3 solo se abre, se reproduce o se exporta no cambia, y la app de la fase 2 lo sigue abriendo (`openingAVersion3ProjectWritesNothing`, `openingVersion1And2ProjectsWriteNothing`). Hasta la primera edición, la instantánea al cerrar, la compactación y la reparación del registro se escriben en la versión del disco. Una toma que ningún editor abrió escribe al abrirse su documento nuevo en la versión más vieja que lo contiene, nunca debajo de 2: en la práctica el 2, o el 4 si el estilo por defecto ya usa algo de la fase 3 (un zoom automático que atenúa). La primera edición agrega en **una sola escritura** el `migrate` de cada versión que falta y el paso: `{"from":3,"seq":N,"to":4,"type":"migrate"}` y el `do` en un proyecto de la fase 2; `2 → 3`, `3 → 4` y el `do` en uno de 1c o en una toma nueva; `1 → 2`, `2 → 3`, `3 → 4` y el `do` en uno de 1b (`firstEditWritesEveryMigrateAndTheStepInOneWrite`). Un registro que termina en uno o más `migrate` sin nada después es esa escritura cortada: al leer se truncan y el proyecto abre como antes de la edición (`cutAtEveryByteOfTheFirstEditOpensBeforeOrAfterTo4`, `diskFullOnTheFirstEditTo4NeverLeavesMigrateAlone`). La compactación de un registro de la fase 2 deja el `create` en la versión 3 y el `migrate` justo después (`compactionKeepsTheV3CreateAndTheMigrate`).
+
+### El registro con el documento 4
+
+- **Las colecciones.** `/annotations/items`, `/music/items` y `/markers/items` admiten `insert`, `remove` y `replace` (por `id`), como `/zoom/regions`. Los tramos de volumen de una pista son la colección `/audio/tracks/<clave>/ranges`, con la clave escapada (`/audio/tracks/take-001~1mic/ranges`), y existen mientras existe la pista (`EditCollection.gainRanges(track:)`). `EditCollection` pasa a ser una estructura con su puntero (`pointer`), que se lee con `JSONPointer` y nunca partiendo su texto por `/`; los nombres y los textos de las colecciones de antes no cambian.
+- **Las etiquetas** (`label`) nuevas son veinticinco, después de las de la fase 2: `annotation.add`, `annotation.change`, `annotation.move`, `annotation.trim`, `annotation.layer`, `annotation.delete`, `clip.freeze`, `clip.card`, `clip.media`, `clip.content`, `zoom.mode`, `audio.range`, `audio.shift`, `music.add`, `music.change`, `music.move`, `music.trim`, `music.delete`, `music.ducking`, `take.rerecord`, `take.use`, `marker.add`, `marker.rename`, `marker.move` y `marker.delete`.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.

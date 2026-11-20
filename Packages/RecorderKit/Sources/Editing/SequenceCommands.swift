@@ -299,8 +299,7 @@ struct SequenceChanges {
     private(set) var changes: [EditChange] = []
 
     /// `EditCollection.sequence`.
-    private static let collection = JSONPointer(
-        components: EditCollection.sequence.rawValue.split(separator: "/").map(String.init))
+    private static let collection = EditCollection.sequence.pointer
 
     mutating func replace(_ clip: Clip, with new: Clip) {
         changes.append(.replace(collection: Self.collection, id: clip.id, before: Self.encoded(clip), after: Self.encoded(new)))
