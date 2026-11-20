@@ -60,6 +60,7 @@ public enum ZoomCommands {
         var region = old
         (region.take, region.start, region.end) = (source.take, source.start, source.end)
         guard old.origin == .auto else { return touched(doc, k, region, label: .zoomMove) }
+        region.mode = Self.writtenMode(of: old, auto: doc.zoom.auto)
         var ids = Set(doc.zoom.regions.map(\.id))
         region.id = DocumentIDs.new("z-", makeID, avoiding: &ids)
         region.origin = .user
@@ -113,6 +114,40 @@ public enum ZoomCommands {
         if let instant { region.instant = instant }
         guard region != doc.zoom.regions[k] else { return nil }
         return touched(doc, k, region, label: .zoomChange)
+    }
+
+    /// Changes the mode of block `id` to `mode` (`classic` is `nil` in a block of the user's). An automatic block becomes
+    /// the user's with the mode written. `nil` if it already shows that mode or there is no such block.
+    public static func setMode(_ doc: EditDocument, id: String, mode: ZoomMode) -> EditStep? {
+        guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }) else { return nil }
+        var region = doc.zoom.regions[k]
+        guard region.resolvedMode(auto: doc.zoom.auto) != mode else { return nil }
+        region.mode = mode == .classic ? nil : mode
+        return touched(doc, k, region, label: .zoomMode, keepingMode: true)
+    }
+
+    /// Changes the lens of block `id`: `nil` leaves a field alone, the radius is held in `LoupeStyle.radiusRange`, and a
+    /// lens equal to the default is `nil`. `nil` if nothing changes, there is no such block or the radius is not a number.
+    public static func setLoupe(_ doc: EditDocument, id: String, radius: Double? = nil, shape: LoupeShape? = nil) -> EditStep? {
+        guard let k = doc.zoom.regions.firstIndex(where: { $0.id == id }) else { return nil }
+        if let radius, radius.isNaN { return nil }
+        var region = doc.zoom.regions[k]
+        var style = region.resolvedLoupe
+        if let radius {
+            style.radius = min(max(radius, LoupeStyle.radiusRange.lowerBound), LoupeStyle.radiusRange.upperBound)
+        }
+        if let shape { style.shape = shape }
+        region.loupe = style == .default ? nil : style
+        guard region != doc.zoom.regions[k] else { return nil }
+        return touched(doc, k, region, label: .zoomChange)
+    }
+
+    /// The mode of the automatic blocks without one of their own (`/zoom/auto/mode`), in one step that plans nothing.
+    /// `nil` if it is the same.
+    public static func setAutoMode(_ doc: EditDocument, _ mode: ZoomMode) -> EditStep? {
+        var changes = DocumentChanges()
+        changes.set(["zoom", "auto", "mode"], from: doc.zoom.auto.mode, to: mode)
+        return changes.step(label: .zoomMode, target: "/zoom/auto/mode")
     }
 
     /// Deletes the blocks with the ids `ids`; for each automatic one, its source range goes into `zoom.suppressed` (once),
@@ -194,13 +229,23 @@ public enum ZoomCommands {
     }
 
     /// The step that makes block `k` of `doc` `region`, the user's.
-    private static func touched(_ doc: EditDocument, _ k: Int, _ region: ZoomRegion, label: EditLabel) -> EditStep? {
+    private static func touched(
+        _ doc: EditDocument, _ k: Int, _ region: ZoomRegion, label: EditLabel, keepingMode: Bool = false
+    ) -> EditStep? {
         var region = region
-        region.origin = .user
         let old = doc.zoom.regions[k]
+        // An automatic block keeps the mode it showed when it becomes the user's, so it never changes with the owner.
+        if old.origin == .auto, !keepingMode { region.mode = writtenMode(of: old, auto: doc.zoom.auto) }
+        region.origin = .user
         var changes = DocumentChanges()
         changes.replace(old, with: region, in: .zoomRegions, id: old.id)
         return changes.step(label: label, target: old.id)
+    }
+
+    /// The `mode` a block of the user's holds to show what `block` shows: `nil` for `classic`.
+    private static func writtenMode(of block: ZoomRegion, auto: AutoZoomSettings) -> ZoomMode? {
+        let mode = block.resolvedMode(auto: auto)
+        return mode == .classic ? nil : mode
     }
 
     /// The blocks of `doc` on the Zoom track: each where the output shows it, with the cuts inside it closed.
@@ -219,7 +264,7 @@ public enum ZoomCommands {
         let region = ZoomRegion(
             id: DocumentIDs.new("z-", makeID, avoiding: &ids), take: source.take, start: source.start, end: source.end,
             origin: .user, depth: min(max(doc.zoom.auto.depth, depthRange.lowerBound), depthRange.upperBound), focus: .follow,
-            instant: false)
+            instant: false, mode: doc.zoom.auto.mode == .classic ? nil : doc.zoom.auto.mode)
         let index = doc.zoom.regions.firstIndex { $0.start > region.start } ?? doc.zoom.regions.count
         var changes = DocumentChanges()
         changes.insert(region, into: .zoomRegions, at: index)
