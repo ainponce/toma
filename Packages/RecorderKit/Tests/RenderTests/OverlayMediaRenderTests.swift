@@ -526,7 +526,7 @@ private func pictureTexture(
             let frame = try renderer.frame(of: renderer.scene, at: 3.5)
             let kept = Set(renderer.videos(of: frame).map(\.track))
             #expect(kept.contains(TrackKey(take: nil, track: sequenceID)) && !kept.contains(TrackKey(take: nil, track: overlayID)))
-            let released = renderer.releaseMedia(keeping: kept)
+            let released = renderer.releaseVideos(keeping: kept)
             #expect(released == [TrackKey(take: nil, track: overlayID)])
             #expect(renderer.mediaResources.existingReader(for: sequenceID) === sequenceReader)
             #expect(renderer.mediaResources.existingReader(for: overlayID) == nil)
