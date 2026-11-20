@@ -215,7 +215,8 @@ private func pictureTexture(
             var counts = DrawCounts()
             try drawer.compositor.encode(
                 frame, screen: drawer.screen, camera: nil, cursor: drawer.cursor, into: target, commandBuffer: commandBuffer,
-                counts: &counts, layerTextures: LayerTextures(media: nil, annotations: AnnotationTextures(images: [asset: picture])))
+                counts: &counts, layerTextures: LayerTextures(
+                    media: nil, annotations: AnnotationTextures(images: [asset: OverlayImageTexture(texture: picture, opaque: true)])))
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
             #expect(counts.outputAnnotations == (image == nil ? 0 : 1))
@@ -250,8 +251,9 @@ private func pictureTexture(
     }
 
     /// A transparent PNG with an opaque green square and a red band at half alpha, over the video with its shadow: where
-    /// it is transparent, the frame is exactly as without it, its shadow too (none under its own box); the square is
-    /// green; the band is red over what was there; below its box, the shadow darkens the frame; decoded once.
+    /// it is transparent away from them, the frame is exactly as without it, and so just past its box (its shadow follows
+    /// its alpha: no rectangular halo); the square is green, and its shadow darkens the frame just below it; the band is
+    /// red over what was there; decoded once.
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
     func transparentPNGStaysTransparent() async throws {
         try await withTemporaryDirectory { dir in
@@ -262,24 +264,31 @@ private func pictureTexture(
             let renderer = try FrameRenderer(project: project, document: document(project, annotations), outputSize: [640, 360])
             let legacy = try FrameRenderer(project: project, outputSize: [640, 360])
             let (drawn, without) = try await offThePool { (try renderer.renderBytes(at: 1), try legacy.renderBytes(at: 1)) }
-            // Transparent: inside the box, away from the square and the band, and at its corners.
-            for (x, y) in [(170, 150), (200, 250), (350, 150), (162, 278), (357, 278), (300, 120)] {
+            // Transparent: inside the box, away from the square and the band (by more than the shadow's blur), and at its
+            // corners; and just past the box, where a box's shadow would be.
+            for (x, y) in [(170, 150), (170, 250), (350, 150), (350, 250), (165, 275), (355, 275), (170, 284), (350, 284)] {
                 #expect(at(drawn, x, y) == at(without, x, y), "at (\(x), \(y))")
             }
             // The square.
             for (x, y) in [(212, 132), (260, 180), (307, 227)] {
                 #expect(near(at(drawn, x, y), [0, 255, 0, 255]), "at (\(x), \(y)): \(at(drawn, x, y))")
             }
-            // The band: half red over the frame.
+            // The band: half red over the frame, and over its own shadow under it (the frame a little darker, at most half
+            // its alpha of 45 %), as a drop shadow shows through what is half transparent.
             for (x, y) in [(200, 84), (300, 95)] {
                 let (over, under) = (at(drawn, x, y), at(without, x, y))
-                #expect(abs(over.z - (255 + under.z) / 2) <= 3 && abs(over.y - under.y / 2) <= 3, "at (\(x), \(y)): \(over) over \(under)")
+                // Red, green and blue (BGRA's z, y, x): the band's own (255, 0, 0) at half, over the frame darkened by
+                // at most 0.45 × 0.5.
+                for (drawnChannel, frameChannel, band) in [(over.z, under.z, 255.0), (over.y, under.y, 0), (over.x, under.x, 0)] {
+                    let lightest = (band + Double(frameChannel)) / 2, darkest = (band + Double(frameChannel) * (1 - 0.225)) / 2
+                    #expect(Double(drawnChannel) <= lightest + 3 && Double(drawnChannel) >= darkest - 3, "at (\(x), \(y)): \(over) over \(under)")
+                }
             }
-            // Its shadow, under the box (0.01 × 200 down, σ 4 px): darker just below it, as without it far from it.
-            #expect(brightness(at(drawn, 260, 284)) < brightness(at(without, 260, 284)) - 10)
+            // Its shadow (0.01 × 200 down, σ 4 px), the square's: darker just below the square, as without it far from it.
+            #expect(brightness(at(drawn, 260, 234)) < brightness(at(without, 260, 234)) - 10)
             #expect(at(drawn, 260, 300) == at(without, 260, 300) && at(drawn, 140, 180) == at(without, 140, 180))
             #expect(OverlayImageCache.shared.decodeCount(of: image, in: project.package) == 1)
-            #expect(renderer.annotationResources.images.uploadCount == 1)
+            #expect(renderer.annotationResources.images.textureCount == 1)
         }
     }
 
@@ -317,8 +326,8 @@ private func pictureTexture(
 
     /// One reader of a file for its clips over the video: two clips of it one after the other share it. A file in the
     /// sequence and over the video at another instant at once is read by two (the sequence's and the overlays'), and two
-    /// clips over the video of one file at different instants at once by two lanes: each reader read forward, opened once,
-    /// never back and forth.
+    /// clips over the video of one file at different instants at once by two lanes (each its own, fixed): each reader read
+    /// forward, opened once, never back and forth.
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
     func oneReaderPerAsset() async throws {
         try await withTemporaryDirectory { dir in
@@ -412,7 +421,7 @@ private func pictureTexture(
             let legacyExported = try await offThePool { try legacy.renderBytes(at: 1.5) }
             #expect(exported == legacyExported)
             #expect(renderer.mediaResources.readerCount == 0)
-            #expect(renderer.annotationResources.images.uploadCount == 0)
+            #expect(renderer.annotationResources.images.textureCount == 0)
             // A text with them is drawn.
             var text = annotations
             text.append(overlay(4, .text(TextAnnotation(string: "Hello", preset: .label)), rect, from: 0, to: 4, layer: 1))
@@ -477,20 +486,153 @@ private func pictureTexture(
             #expect(before.outputAnnotations.isEmpty && before.annotationsAhead.contains { $0.layer.id == "a-00000001" })
             _ = try await offThePool { try renderer.renderBytes(at: 0.8) }
             renderer.annotationResources.images.waitUntilPrepared()
-            #expect(renderer.annotationResources.images.uploadCount == 1)
+            #expect(renderer.annotationResources.images.textureCount == 1)
             let shown = try await offThePool { try renderer.renderBytes(at: 1.2) }
-            #expect(renderer.annotationResources.images.uploadCount == 1)
+            #expect(renderer.annotationResources.images.textureCount == 1)
             let fresh = try FrameRenderer(project: project, document: document(project, annotations), outputSize: [640, 360], frameRate: 30)
             let made = try await offThePool { try fresh.renderBytes(at: 1.2) }
             #expect(made == shown)
         }
     }
 
+    /// A file in the sequence and over the video: the overlays' reader is made with its own id (`asset:<path>#overlay`),
+    /// so letting it go once its clip ends names it alone, and the sequence's reader of the same file, and what the
+    /// preview keeps of its frames (`PreviewEngine`'s shown and exact frames, by track), stay.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func anOverlayReaderIsLetGoByItsOwnID() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, _, clip) = try await overlayProject(in: dir)
+            var both = document(project, [
+                overlay(1, .clip(ClipAnnotation(asset: clip, start: 0, end: 2_000_000_000)), NormalizedRect(x: 0.6, y: 0.6, width: 0.3, height: 0.3),
+                        from: 2, to: 3),
+            ])
+            let take = both.sequence[0]
+            let point = take.start.adding(seconds: 2)
+            var head = take, tail = take
+            (head.id, head.end) = ("c-00000001", point)
+            (tail.id, tail.start) = ("c-00000003", point)
+            both.sequence = [
+                head,
+                Clip(id: "c-00000002", take: take.take, start: point, end: point, speed: 1,
+                     content: .media(MediaClip(asset: clip, start: 0, end: 2_000_000_000))),
+                tail,
+            ]
+            let renderer = try FrameRenderer(project: project, document: both, outputSize: [640, 360], frameRate: 30)
+            let sequenceID = AssetFrameReader.readerID(of: clip), overlayID = FrameRenderer.overlayReaderID(of: clip, lane: 0)
+            let sequenceReader = try #require(renderer.reader(for: sequenceID))
+            let overlayReader = try #require(renderer.reader(for: overlayID))
+            #expect(sequenceReader.trackID == sequenceID && overlayReader.trackID == overlayID)
+            // At 3.5 s the overlay is over and the sequence's clip goes on.
+            let frame = try renderer.frame(of: renderer.scene, at: 3.5)
+            let kept = Set(renderer.videos(of: frame).map(\.track))
+            #expect(kept.contains(TrackKey(take: nil, track: sequenceID)) && !kept.contains(TrackKey(take: nil, track: overlayID)))
+            let released = renderer.releaseMedia(keeping: kept)
+            #expect(released == [TrackKey(take: nil, track: overlayID)])
+            #expect(renderer.mediaResources.existingReader(for: sequenceID) === sequenceReader)
+            #expect(renderer.mediaResources.existingReader(for: overlayID) == nil)
+        }
+    }
+
+    /// A clip over the video drawn ten times smaller than its frames follows the style's sampling of the screens: with
+    /// Toma's default style (`screenSampling` `mipmapped`) its layer says so and its frame is copied with its mipmaps and
+    /// read trilinear (a copy made; another picture than read bilinear, with the legacy style's `bilinear`); the export,
+    /// the frame drawn alone and the preview paused on it, the same bytes.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func aClipFollowsTheScreenSampling() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, _, clip) = try await overlayProject(in: dir)
+            let small = NormalizedRect(x: 0.4, y: 0.4, width: 0.1, height: 0.1)
+            var styled = document(project, [overlay(1, .clip(ClipAnnotation(asset: clip, start: 0, end: 2_000_000_000)), small, from: 0, to: 2)])
+            styled.style = DefaultStyle.toma.style
+            #expect(styled.style.screenSampling == .mipmapped)
+            var bilinear = styled
+            bilinear.style.screenSampling = .bilinear
+            let (size, rate, n) = (SIMD2(640, 360), 30, 30)
+            let renderer = try FrameRenderer(project: project, document: styled, outputSize: size, frameRate: rate)
+            let flat = try FrameRenderer(project: project, document: bilinear, outputSize: size, frameRate: rate)
+            let frame = try renderer.frame(of: renderer.scene, at: 1)
+            #expect(frame.outputAnnotations.map(\.mipmapped) == [true])
+            #expect(try flat.frame(of: flat.scene, at: 1).outputAnnotations.map(\.mipmapped) == [false])
+            let legacy = try FrameRenderer(project: project, document: document(project, [overlay(1, .clip(ClipAnnotation(asset: clip, start: 0, end: 2_000_000_000)), small, from: 0, to: 2)]), outputSize: size)
+            #expect(try legacy.frame(of: legacy.scene, at: 1).outputAnnotations.map(\.mipmapped) == [false])
+
+            let exported = try await exportBytes(renderer, frames: 10...n, rate: rate)
+            #expect(renderer.annotationResources.mipmappedCopies.count.made >= 1)
+            let alone = try await offThePool { try renderer.renderBytes(at: seconds(n, rate: rate)) }
+            #expect(alone == exported)
+            let read = try await offThePool { try flat.renderBytes(at: seconds(n, rate: rate)) }
+            // Inside the clip's rect (256, 144) 64 × 36, which covers the stage under it (whose screen the style samples
+            // the same way): another picture, its moving white square reduced ten times.
+            var inside = 0
+            for y in 144..<180 {
+                for x in 257..<319 where at(read, x, y) != at(alone, x, y) { inside += 1 }
+            }
+            #expect(inside > 0)
+            #expect(flat.annotationResources.mipmappedCopies.count.made == 0)
+            let (paused, pausedFrames) = engine(try FrameRenderer(project: project, document: styled, outputSize: size, frameRate: rate))
+            paused.request(.paused(frame: n))
+            #expect(await eventually(timeout: .seconds(30)) { pausedFrames.count >= 1 })
+            #expect(try await paused.drawnBytes() == exported)
+        }
+    }
+
+    /// A clip's reader lane is fixed for its annotation: of three clips of one file over the video, the first (0.2–1.2 s)
+    /// and the second (0.7–1.7 s), shown at once, take lanes 0 and 1, and the second keeps 1 once the first is over; the
+    /// third (1.3–2 s), coming after the first, takes its lane 0. Another file's clip, at once, its own lane 0.
+    @Test func clipLanesAreFixedPerAnnotation() {
+        let take = StageDrawing.bareTake(seconds: 4)
+        var edited = EditDocument.legacy(take: take, events: [])
+        let file = "assets/0123456789abcdef0123456789abcdef.mov", other = "assets/fedcba9876543210fedcba9876543210.mov"
+        func clipKind(_ asset: String) -> AnnotationKind { .clip(ClipAnnotation(asset: asset, start: 0, end: 3_000_000_000)) }
+        let rect = NormalizedRect(x: 0.1, y: 0.1, width: 0.2, height: 0.2)
+        edited.annotations = AnnotationPlan(items: [
+            overlay(3, clipKind(file), rect, from: 1.3, to: 2, layer: 0),
+            overlay(2, clipKind(file), rect, from: 0.7, to: 1.7, layer: 1),
+            overlay(1, clipKind(file), rect, from: 0.2, to: 1.2, layer: 2),
+            overlay(4, clipKind(other), rect, from: 0.5, to: 1.5, layer: 3),
+        ])
+        let scene = FrameEvaluator(take: take, events: [], document: edited, outputSize: [640, 360])
+        func lanes(at t: Double) -> [String: Int] {
+            Dictionary(uniqueKeysWithValues: scene.frame(at: t).outputAnnotations.map { ($0.id, $0.lane) })
+        }
+        #expect(lanes(at: 0.9) == ["a-00000001": 0, "a-00000002": 1, "a-00000004": 0])
+        #expect(lanes(at: 1.25) == ["a-00000002": 1, "a-00000004": 0])
+        #expect(lanes(at: 1.5) == ["a-00000002": 1, "a-00000003": 0])
+        #expect(FrameRenderer.overlayClipVideos(of: scene.frame(at: 1.5)).map(\.key.trackID).sorted() == [
+            FrameRenderer.overlayReaderID(of: file, lane: 0), FrameRenderer.overlayReaderID(of: file, lane: 1),
+        ].sorted())
+        #expect(FrameRenderer.overlayReaderID(of: file, lane: 1) == "asset:" + file + "#overlay-2")
+        // Not a clip: lane 0, never mipmapped, whatever the style.
+        edited.style.screenSampling = .mipmapped
+        edited.annotations.items.append(overlay(5, .text(TextAnnotation(string: "Hi", preset: .label)), rect, from: 0, to: 2))
+        let text = FrameEvaluator(take: take, events: [], document: edited, outputSize: [640, 360]).frame(at: 1).outputAnnotations
+        #expect(text.first { $0.id == "a-00000005" }.map { ($0.lane, $0.mipmapped) } ?? (1, true) == (0, false))
+        #expect(text.first { $0.id == "a-00000001" }?.mipmapped == true)
+    }
+
+    /// The image's texture is made once for every renderer of the device (its decoded bytes let go once uploaded): the
+    /// preview's and the export's renderers draw the very same texture.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func anImageTextureIsSharedByTheRenderers() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, image, _) = try await overlayProject(in: dir)
+            let annotations = [overlay(1, .image(ImageAnnotation(asset: image, fit: .fit)), NormalizedRect(x: 0.2, y: 0.2, width: 0.3, height: 0.5), from: 0, to: 3)]
+            let first = try FrameRenderer(project: project, document: document(project, annotations), outputSize: [640, 360])
+            let second = try FrameRenderer(project: project, document: document(project, annotations), outputSize: [640, 360])
+            let (a, b) = (first.annotationResources.images.texture(for: image), second.annotationResources.images.texture(for: image))
+            let (made, shared) = (try #require(a), try #require(b))
+            #expect(made.texture === shared.texture && !made.opaque)
+            #expect(OverlayImageCache.shared.decodeCount(of: image, in: project.package) == 1)
+            let (one, two) = try await offThePool { (try first.renderBytes(at: 1), try second.renderBytes(at: 1)) }
+            #expect(one == two)
+        }
+    }
+
     /// The preview at 1080p with ten annotations, two images and a clip among them (phase 3 design §15): a take of 1920 ×
-    /// 1080, seven annotations drawn as bitmaps (five stuck to the recording, two of the output), two images (a photo of
-    /// 1600 × 1200 with its shadow and a transparent PNG) and a clip of 1280 × 720 over it; 120 frames at 60 fps played by
-    /// the preview engine at the export's size, one request every 1/60 s, and drawn in order as the export does; against
-    /// the same without annotations.
+    /// 1080 in Toma's default style, seven annotations drawn as bitmaps (five stuck to the recording, two of the output),
+    /// two images (a photo of 1600 × 1200 with its shadow and a transparent PNG with its own) and a clip of 1280 × 720 over
+    /// it, read from its mipmaps; 120 frames at 60 fps played by the preview engine at the export's size, one request
+    /// every 1/60 s, and drawn in order as the export does; against the same without annotations.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"), .timeLimit(.minutes(10)))
     func annotationsPreviewBench() async throws {
         try await withTemporaryDirectory { dir in
@@ -531,7 +673,7 @@ private func pictureTexture(
                 (over, .text(TextAnnotation(string: "Ana Pérez\nProduct design", preset: .lowerThird)), NormalizedRect(x: 0.05, y: 0.78, width: 0.3, height: 0.1)),
                 (over, .shape(ShapeAnnotation(shape: .roundedRect, fill: RGBA(1, 1, 0, 0.2))), NormalizedRect(x: 0.55, y: 0.45, width: 0.25, height: 0.25)),
                 (over, .image(ImageAnnotation(asset: photoAsset, fit: .fill, corner: 0.05, shadow: true)), NormalizedRect(x: 0.7, y: 0.05, width: 0.25, height: 0.3)),
-                (over, .image(ImageAnnotation(asset: logoAsset, fit: .fit)), NormalizedRect(x: 0.4, y: 0.7, width: 0.12, height: 0.2)),
+                (over, .image(ImageAnnotation(asset: logoAsset, fit: .fit, shadow: true)), NormalizedRect(x: 0.4, y: 0.7, width: 0.12, height: 0.2)),
                 (over, .clip(ClipAnnotation(asset: clipAsset, start: 0, end: 4_000_000_000, corner: 0.03, shadow: true)),
                  NormalizedRect(x: 0.62, y: 0.6, width: 0.33, height: 0.33)),
             ]
@@ -539,7 +681,9 @@ private func pictureTexture(
                 Annotation(id: String(format: "a-%08x", k + 1), anchor: item.0, layer: k, kind: item.1, rect: item.2)
             }
             #expect(annotations.count == 10)
-            let edited = document(project, annotations)
+            // Toma's default style: the screen and the clip sampled from their mipmaps.
+            var edited = document(project, annotations)
+            edited.style = DefaultStyle.toma.style
             let size = SIMD2(1920, 1080), rate = 60, frames = 120
 
             /// 120 frames played by an engine, one request every 1/60 s: how many were drawn, how many late, and the
@@ -575,7 +719,8 @@ private func pictureTexture(
                 let elapsed = ContinuousClock.now - started
                 return Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
             }
-            let legacy = EditDocument.legacy(for: project)
+            var legacy = EditDocument.legacy(for: project)
+            legacy.style = DefaultStyle.toma.style
             // The process's first playback (the decoders' sessions, the shaders), not measured.
             _ = try await play(legacy)
             let none = try await play(legacy), ten = try await play(edited)

@@ -51,10 +51,16 @@ public struct AnnotationLayer: Equatable, Sendable {
     public var scale: Double
     /// 0 to 1: the fraction of an arrow's or a shape's stroke drawn; 1 for everything else and once it is in.
     public var drawn: Double
+    /// A clip's frames are sampled trilinear from a copy with their mipmaps, as the screens with `style.screenSampling`
+    /// `mipmapped` (a large clip drawn small does not shimmer); `false` for everything else.
+    public var mipmapped: Bool
+    /// A clip's reader lane (`FrameRenderer.overlayReaderID(of:lane:)`): fixed for the annotation, the first one free
+    /// among the clips of its file over the video when it starts (`AnnotationScene`); 0 for everything else.
+    public var lane: Int
 
     public init(
         id: String, content: Content, rect: Rect, space: Rect, unit: Double, rotation: Double, opacity: Double, scale: Double,
-        drawn: Double
+        drawn: Double, mipmapped: Bool = false, lane: Int = 0
     ) {
         self.id = id
         self.content = content
@@ -65,6 +71,8 @@ public struct AnnotationLayer: Equatable, Sendable {
         self.opacity = opacity
         self.scale = scale
         self.drawn = drawn
+        self.mipmapped = mipmapped
+        self.lane = lane
     }
 }
 
@@ -104,6 +112,8 @@ struct AnnotationScene: Sendable {
         var measure: TextMeasure
         /// Of the output's group: what does not depend on the output time, worked out once for the size.
         var placed: Placed?
+        /// A clip's reader lane: the first free among the clips of its file when it starts (`AnnotationLayer.lane`).
+        var lane = 0
     }
 
     /// What a layer is besides its time: its content, its box, its space and its rotation.
@@ -116,6 +126,8 @@ struct AnnotationScene: Sendable {
 
     private let document: EditDocument
     private let timeMap: TimeMap
+    /// Clips are sampled from their mipmaps (`style.screenSampling` `mipmapped`, `AnnotationLayer.mipmapped`).
+    private let mipmappedClips: Bool
     /// The take's annotations stuck to its recording, in their layers' order.
     private let contentItems: [Item]
     /// The annotations of the output and of the whole video, in their layers' order.
@@ -127,6 +139,7 @@ struct AnnotationScene: Sendable {
     init(document: EditDocument, take: TakeRecord, events: [InputEvent], timeMap: TimeMap, outputSize: SIMD2<Int>) {
         self.document = document
         self.timeMap = timeMap
+        mipmappedClips = document.style.screenSampling == .mipmapped
         guard !document.annotations.items.isEmpty else {
             (contentItems, outputItems, screens) = ([], [], [:])
             return
@@ -163,7 +176,7 @@ struct AnnotationScene: Sendable {
             items.sorted { ($0.item.annotation.layer, $0.order) < ($1.item.annotation.layer, $1.order) }.map(\.item)
         }
         contentItems = ordered(content)
-        outputItems = ordered(output)
+        outputItems = Self.withClipLanes(ordered(output))
         guard !contentItems.isEmpty else {
             screens = [:]
             return
@@ -190,7 +203,7 @@ struct AnnotationScene: Sendable {
                 let state = AnnotationTiming.state(of: item.annotation, atOutput: output, document: document, timeMap: timeMap),
                 let placed = Self.placed(item, space: space, aspect: nil, fileTime: 0)
             else { return nil }
-            return Self.layer(item.annotation, placed, state)
+            return Self.layer(item, placed, state, mipmappedClips: mipmappedClips)
         }
     }
 
@@ -206,7 +219,7 @@ struct AnnotationScene: Sendable {
                 // Within the range, which is never longer than the file's stretch: from its start to before its end.
                 placed.content = .clip(clip, fileTime: clip.start + (output - item.range.lowerBound))
             }
-            return Self.layer(item.annotation, placed, state)
+            return Self.layer(item, placed, state, mipmappedClips: mipmappedClips)
         }
     }
 
@@ -359,11 +372,33 @@ struct AnnotationScene: Sendable {
 
     // MARK: - Private
 
-    /// `annotation`'s layer, `placed`, at `state`.
-    private static func layer(_ annotation: Annotation, _ placed: Placed, _ state: AnnotationState) -> AnnotationLayer {
-        AnnotationLayer(
-            id: annotation.id, content: placed.content, rect: placed.rect, space: placed.space, unit: placed.space.height,
-            rotation: placed.rotation, opacity: state.opacity, scale: state.scale, drawn: state.drawn)
+    /// `item`'s layer, `placed`, at `state`; a clip from its mipmaps with `mipmappedClips`, in its lane.
+    private static func layer(_ item: Item, _ placed: Placed, _ state: AnnotationState, mipmappedClips: Bool) -> AnnotationLayer {
+        var isClip = false
+        if case .clip = placed.content { isClip = true }
+        return AnnotationLayer(
+            id: item.annotation.id, content: placed.content, rect: placed.rect, space: placed.space, unit: placed.space.height,
+            rotation: placed.rotation, opacity: state.opacity, scale: state.scale, drawn: state.drawn,
+            mipmapped: isClip && mipmappedClips, lane: isClip ? item.lane : 0)
+    }
+
+    /// `items` with the reader lane of each clip (`AnnotationLayer.lane`): by file, in the order they start (then their
+    /// layers' order), each in the first lane none of the file's clips before it still holds at its start, so clips of a
+    /// file one after the other share a lane (a reader) and clips shown at once each keep theirs while they are shown.
+    private static func withClipLanes(_ items: [Item]) -> [Item] {
+        var items = items
+        var ends: [String: [Int64]] = [:]
+        let clips = items.indices.filter { if case .clip = items[$0].annotation.kind { true } else { false } }
+        for index in clips.sorted(by: { (items[$0].range.lowerBound, $0) < (items[$1].range.lowerBound, $1) }) {
+            guard case let .clip(clip) = items[index].annotation.kind else { continue }
+            let range = items[index].range
+            var lanes = ends[clip.asset] ?? []
+            let lane = lanes.firstIndex { $0 <= range.lowerBound } ?? lanes.count
+            if lane == lanes.count { lanes.append(range.upperBound) } else { lanes[lane] = range.upperBound }
+            ends[clip.asset] = lanes
+            items[index].lane = lane
+        }
+        return items
     }
 
     /// Where `item`'s annotation is in `space` and what it draws there (a step with its number, a clip at `fileTime`): its

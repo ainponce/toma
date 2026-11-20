@@ -75,7 +75,8 @@ final class MediaClipResources: Sendable {
 
     /// The reader of `id`, a clip's reader id (`AssetFrameReader.readerID(of:)`): the one kept, or one made now (kept from
     /// then on), also in place of one that has given no frame for `retryInterval` seconds or more (while the file gives
-    /// one); `nil` for any other id, and while the file gives none (`AssetFrameReader.make(asset:package:orientations:)`).
+    /// one), its `trackID` `id`; `nil` for any other id, and while the file gives none
+    /// (`AssetFrameReader.make(asset:id:package:orientations:)`).
     func reader(for id: String) -> TrackFrameReader? {
         guard let asset = AssetFrameReader.asset(ofReaderID: id) else { return nil }
         return state.withLock { state in
@@ -85,7 +86,7 @@ final class MediaClipResources: Sendable {
                     return kept
                 }
             }
-            guard let reader = AssetFrameReader.make(asset: asset, package: package, orientations: orientations) else {
+            guard let reader = AssetFrameReader.make(asset: asset, id: id, package: package, orientations: orientations) else {
                 return kept
             }
             state.made?(reader)

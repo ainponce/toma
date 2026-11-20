@@ -20,6 +20,8 @@ struct AnnotationPipelines {
     private let overlayBlurTarget: any MTLRenderPipelineState
     private let clippedOverlayTarget: any MTLRenderPipelineState
     private let clippedOverlayBlurTarget: any MTLRenderPipelineState
+    /// What an image's shadow reads its alpha with (`overlayColor`): trilinear, transparent past its edges.
+    let shadowSampler: any MTLSamplerState
     let rasters: AnnotationRasters
 
     init(maker: PipelineMaker) throws {
@@ -48,6 +50,16 @@ struct AnnotationPipelines {
         clippedOverlayBlurTarget = try maker.pipeline(
             vertex: "overlayVertex", fragment: "clippedOverlayTargetFragment", blending: .over,
             into: LayerPass.blurTarget.attachments)
+        let sampler = MTLSamplerDescriptor()
+        sampler.minFilter = .linear
+        sampler.magFilter = .linear
+        sampler.mipFilter = .linear
+        sampler.sAddressMode = .clampToZero
+        sampler.tAddressMode = .clampToZero
+        guard let shadowSampler = maker.device.makeSamplerState(descriptor: sampler) else {
+            throw RenderError.metalResourceUnavailable("overlay shadow sampler")
+        }
+        self.shadowSampler = shadowSampler
         rasters = AnnotationRasters()
     }
 
@@ -77,8 +89,10 @@ struct AnnotationPipelines {
 /// that is missing or cannot be read, a clip whose file cannot be read. `nil` draws none of them. They must stay alive
 /// until the command buffer they are drawn in completes.
 struct AnnotationTextures {
-    var images: [String: any MTLTexture] = [:]
+    var images: [String: OverlayImageTexture] = [:]
     var clips: [String: any MTLTexture] = [:]
+    /// The clips whose texture is a copy of their frame with its mipmaps, by the layer's id: sampled trilinear.
+    var mipmappedClips: Set<String> = []
     /// How each clip's frame is turned upright, by the layer's id: as decoded when missing.
     var orientations: [String: MediaOrientation] = [:]
 
@@ -153,14 +167,16 @@ extension Compositor {
             let picture: OverlayPicture
             switch layer.content {
             case let .image(image):
-                guard let texture = textures?.images[image.asset] else { continue }
+                guard let made = textures?.images[image.asset] else { continue }
                 picture = OverlayPicture(
-                    texture: texture, orientation: .upright, fit: image.fit, corner: image.corner, shadow: image.shadow, opaque: false)
+                    texture: made.texture, orientation: .upright, fit: image.fit, corner: image.corner, shadow: image.shadow,
+                    opaque: false, mipmapped: true, shadowFromAlpha: !made.opaque)
             case let .clip(clipLayer, _):
                 guard let texture = textures?.clips[layer.id] else { continue }
                 picture = OverlayPicture(
                     texture: texture, orientation: textures?.orientations[layer.id] ?? .upright, fit: .fit, corner: clipLayer.corner,
-                    shadow: clipLayer.shadow, opaque: true)
+                    shadow: clipLayer.shadow, opaque: true, mipmapped: textures?.mipmappedClips.contains(layer.id) ?? false,
+                    shadowFromAlpha: false)
             case .text, .arrow, .shape, .callout, .step:
                 if drawBitmap(
                     layer, through: stage, zoomed: zoomed, depth: depth, clip: clip, viewport: viewport, outputSize: outputSize,
@@ -176,6 +192,7 @@ extension Compositor {
             else { continue }
             if !overlayBound {
                 encoder.setRenderPipelineState(pipelines.overlayPipeline(for: pass, clipped: clip != nil))
+                encoder.setFragmentSamplerState(pipelines.shadowSampler, index: 1)
                 if let clip { Self.setClip(clip, at: 2, encoder: encoder) }
                 overlayBound = true
                 bound = false
@@ -184,8 +201,8 @@ extension Compositor {
             encoder.setFragmentBytes(&uniforms.overlay, length: MemoryLayout<OverlayUniforms>.stride, index: 0)
             encoder.setFragmentBytes(&uniforms.shadow, length: MemoryLayout<OverlayShadowUniforms>.stride, index: 1)
             encoder.setFragmentTexture(picture.texture, index: 0)
-            // An image's mipmaps; a clip's frame has none.
-            encoder.setFragmentSamplerState(picture.opaque ? screenSampler : trilinearSampler, index: 0)
+            // An image's mipmaps, and a clip's copied with them; a clip's frame as decoded, bilinear.
+            encoder.setFragmentSamplerState(picture.mipmapped ? trilinearSampler : screenSampler, index: 0)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
             drawn += 1
         }
@@ -245,7 +262,9 @@ extension Compositor {
     /// picture fitted whole into the layer's box with its upright proportion (`.fit`, centred) or covering it (`.fill`, its
     /// middle cropped); its corners `corner` (0 to 0.5) of the box's shorter side, at most half the picture's; with
     /// `shadow`, black at 45 % of σ 0.02 of the box's shorter side, 0.01 of it down the output (whatever the layer's
-    /// rotation), its quad reaching 3σ and the offset past the picture; popped and rotated about the centre of the box,
+    /// rotation), its quad reaching 3σ and the offset past the picture, the picture's rounded box's or, for an image that
+    /// is not all opaque (`shadowFromAlpha`), its alpha's too, read blurred from its mipmaps at the level of σ
+    /// (`overlayShadowLevel`); popped and rotated about the centre of the box,
     /// at its opacity. And the quad as `annotationVertex` would draw it, for `covers`. `nil` for a layer that draws
     /// nothing: at opacity 0 or not a number, of no size, or with a texture of no size.
     static func overlayUniforms(
@@ -290,6 +309,11 @@ extension Compositor {
             reach += 3 * Self.overlayShadowSigma * shorter + Self.overlayShadowOffset * shorter
         }
         let quad = Rect(x: rect.x - reach, y: rect.y - reach, width: rect.width + 2 * reach, height: rect.height + 2 * reach)
+        // How many texels of the texture a unit of the layer's coordinates is, along each side of the picture.
+        let texels = SIMD2(
+            Double(crop.size.x) * (picture.orientation.swapsSides ? textureSize.y : textureSize.x) / rect.width,
+            Double(crop.size.y) * (picture.orientation.swapsSides ? textureSize.x : textureSize.y) / rect.height)
+        let shadowLevel = Self.overlayShadowLevel(sigma: Self.overlayShadowSigma * shorter * max(texels.x, texels.y))
         let o = picture.orientation
         let texOrigin = o.origin + crop.origin.x * o.across + crop.origin.y * o.down
         let half = SIMD2<Double>(outputSize) / 2
@@ -303,7 +327,8 @@ extension Compositor {
             pictureOrigin: SIMD2<Float>(Float(rect.x), Float(rect.y)), pictureSize: SIMD2<Float>(Float(rect.width), Float(rect.height)),
             texOrigin: texOrigin, texAcross: crop.size.x * o.across, texDown: crop.size.y * o.down, depth: Float(depth),
             scale: Float(layer.scale), opacity: Float(min(layer.opacity, 1)), radius: Float(radius), pixels: Float(pixels),
-            shadow: picture.shadow && shadow.opacity > 0 ? 1 : 0, opaque: picture.opaque ? 1 : 0)
+            shadow: picture.shadow && shadow.opacity > 0 ? (picture.shadowFromAlpha ? 2 : 1) : 0, opaque: picture.opaque ? 1 : 0,
+            shadowLevel: Float(shadowLevel))
         let corners = AnnotationUniforms(
             viewport: overlay.viewport, origin: overlay.origin, size: overlay.size, pivot: pivot, rotation: rotation,
             stageCenter: stageCenter, outputCenter: overlay.outputCenter, depth: overlay.depth, scale: overlay.scale,
@@ -316,6 +341,13 @@ extension Compositor {
     static let overlayShadowOpacity = 0.45
     static let overlayShadowSigma = 0.02
     static let overlayShadowOffset = 0.01
+
+    /// The mipmap level an image's alpha is read at for its shadow blurred by `sigma` texels: a texel of level L, read
+    /// bilinear, spreads it like a Gaussian of σ ≈ 0.41 × 2^L, so 2^L ≈ 2.4σ; 0 at most 1 texel.
+    static func overlayShadowLevel(sigma: Double) -> Double {
+        guard sigma.isFinite, sigma > 0 else { return 0 }
+        return max(log2(2.4 * sigma), 0)
+    }
 
     /// Whether the quad of `uniforms` (`annotationVertex`'s corners) reaches into an output of `viewport`.
     static func covers(_ u: AnnotationUniforms, viewport: SIMD2<Double>) -> Bool {
@@ -344,11 +376,16 @@ struct OverlayPicture {
     var corner: Double
     var shadow: Bool
     var opaque: Bool
+    /// Sampled trilinear from its mipmaps (an image's, a clip's copy).
+    var mipmapped: Bool
+    /// Its shadow follows its alpha too (an image not all opaque).
+    var shadowFromAlpha: Bool
 }
 
 /// `OverlayUniforms` in `ShaderSource.annotationsMetal`: 128 bytes. How an image or a clip is drawn: its quad and its
 /// picture's rect in the layer's coordinates, popped and rotated about `pivot` and through the zoom as an annotation's
-/// bitmap (`AnnotationUniforms`), the texture coordinates across the picture, its corners, its shadow and its opacity.
+/// bitmap (`AnnotationUniforms`), the texture coordinates across the picture, its corners, its shadow (0 none, 1 its
+/// rounded box's, 2 that and its alpha's, read at `shadowLevel`) and its opacity.
 struct OverlayUniforms {
     var viewport: SIMD2<Float>
     var origin: SIMD2<Float>
@@ -369,7 +406,7 @@ struct OverlayUniforms {
     var pixels: Float
     var shadow: Float
     var opaque: Float
-    var padding: Float = 0
+    var shadowLevel: Float
 }
 
 /// `ShadowUniforms` in `ShaderSource.coreMetal`: 32 bytes (the compositor's own is private to its file), here in the
