@@ -787,17 +787,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         editor.hideForRerecord()
         Task {
             await island.rerecord(
-                request.take, target: request.target, cameraStyle: request.cameraStyle, projectName: request.projectName,
-                asked: request.asked)
+                request.take, target: request.target, scriptWord: request.scriptWord, cameraStyle: request.cameraStyle,
+                projectName: request.projectName, asked: request.asked)
         }
         return true
     }
 
-    /// The recorder told how the re-record of `target` ended (`RecordingController.rerecordEnded`): the island lets it go,
-    /// and its editor comes back, whatever "When Recording Stops" says, and applies a take recorded. Coming back to say
-    /// nothing was recorded, the editor stays behind a window that asks for something (the permissions, the island saying
-    /// why the take could not start); to quit, it is only put back on the screen.
+    /// The recorder told how the re-record of `target` ended (`RecordingController.rerecordEnded`). A start that failed
+    /// while the open island says why is held there (`IslandRerecordRules.end`): Record tries it again into the same
+    /// package, and closing the island cancels it, which ends it again, for good. Otherwise the island lets it go, and its
+    /// editor comes back, whatever "When Recording Stops" says, and applies a take recorded. Coming back to say nothing was
+    /// recorded, the editor stays behind a window that asks for something (the permissions), and doesn't take Toma to the
+    /// front if the user went to another app meanwhile; to quit, it is only put back on the screen.
     private func rerecordEnded(_ target: RerecordTarget, _ outcome: RerecordOutcome) {
+        if let island, island.holdsRerecord,
+            IslandRerecordRules.end(outcome, islandShowsStartFailure: island.isShowingStartFailure) == .holdForRetry
+        {
+            Self.logger.notice("A re-record's start failed: the island holds it, its editor hidden")
+            return
+        }
         island?.rerecordEnded(target)
         let editor = rerecordingEditor
         rerecordingEditor = nil
@@ -806,10 +814,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch outcome {
         case .recorded:
             present(editor)
-        case .nothing where island?.isShowingStartFailure == true || onboarding?.window?.isVisible == true:
+        case .nothing where onboarding?.window?.isVisible == true || !NSApp.isActive:
+            // Shown without being made key or activating Toma: in front of its own windows only.
+            updateActivationPolicy(activatingIfRegular: false)
             editor.window?.orderFront(nil)
             if let front = onboarding?.window, front.isVisible { front.orderFront(nil) }
-            updateActivationPolicy(activatingIfRegular: false)
         case .nothing:
             present(editor)
         case .quit:

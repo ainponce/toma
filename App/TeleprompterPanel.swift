@@ -101,9 +101,20 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
     private var isChangingScreens = false
     /// Where the script goes while it follows the voice.
     private var follow = SpringValue(value: 0, spring: Motion.timelineScroll)
-    /// The re-record whose project's script it reads (`RecordingController.currentRequest`), from its countdown until
-    /// it ends.
+    /// The re-record whose project's script it reads (`rerecordTarget`), from when the island holds it until it ends.
     private var rerecordPackage: URL?
+    /// A re-record the island holds (`IslandPanel`, plan 3d decision 9) from before its take is asked for: when the island
+    /// opens for a source the take lacks, the project's script shows from the playhead's sentence while the user chooses,
+    /// not only from the countdown. `nil` once it ends.
+    var heldRerecord: RerecordTarget? {
+        didSet { if heldRerecord != oldValue { followRerecord() } }
+    }
+
+    /// The re-record whose project's script is read: the take's asked for (from its countdown), or the one the island
+    /// holds before it.
+    private var rerecordTarget: RerecordTarget? {
+        recording.currentRequest?.target ?? heldRerecord
+    }
     private var scriptLoad: Task<Void, Never>?
     /// Writes the project's script a second after the last change to it.
     private var scriptSave: Task<Void, Never>?
@@ -237,7 +248,7 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
     /// The word the take starts at: the first of the sentence a re-record begins at (decision 12), if the script read is
     /// its project's, which the word is of; the start otherwise.
     private var startWord: Int? {
-        guard model.projectScript != nil, let word = recording.currentRequest?.target?.scriptWord else { return nil }
+        guard model.projectScript != nil, let word = rerecordTarget?.scriptWord else { return nil }
         let words = model.layout.words
         guard !words.words.isEmpty else { return nil }
         return words.sentenceStart(of: word)
@@ -275,10 +286,11 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         setting.value.isOn ? model.script : nil
     }
 
-    /// A re-record began (from its countdown): if its project has a script, the teleprompter reads it, and writes its
-    /// changes into it; once it ends, whatever was changed last is written and the settings' script is back, as it was.
+    /// A re-record began (the island holds it, or its countdown began): if its project has a script, the teleprompter
+    /// reads it, and writes its changes into it; once it ends, whatever was changed last is written and the settings'
+    /// script is back, as it was.
     private func followRerecord() {
-        let package = recording.currentRequest?.target?.packageURL.standardizedFileURL
+        let package = rerecordTarget?.packageURL.standardizedFileURL
         guard package != rerecordPackage else { return }
         saveProjectScript()
         scriptLoad?.cancel()

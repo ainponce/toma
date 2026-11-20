@@ -1215,6 +1215,13 @@ Con macOS 26, el modelo del español en la Mac (Subtítulos) y el teleprompter p
 - El video exportado de una toma grabada siguiendo la voz no muestra el teleprompter ni sus notas, y el paquete no tiene nada de Seguir la voz (solo `script.txt`). VoiceOver lee «Seguir la voz» en el botón, con su estado, y la nota.
 - El agente no pudo capturar la pantalla (estaba bloqueada): vio el teleprompter dibujado desde sus vistas (`TOMA_SHOWCASE_P3_TELEPROMPTER=follow` y `follow-note` con `TOMA_SHOWCASE_P3_TELEPROMPTER_PNG=<archivo>`, isla `display`), sin el vidrio ni el movimiento del resorte (con la pantalla bloqueada no corre el display link).
 
+**«Regrabar desde acá»: arranque fallido, burbuja y guion** (T12, revisión)
+
+Con el proyecto de «El menú Tomas y «Regrabar desde acá»».
+- Una toma con cámara: en el editor, cambiar la forma o el lugar de la burbuja a la mitad (un cambio de cámara) y regrabar desde después de ese cambio. Durante la cuenta regresiva y la toma, la burbuja de la isla tiene la forma y el lugar del editor en el cursor (no los de los ajustes de la isla); al terminar, la cámara no salta en el corte. Grabar después una toma nueva desde la isla: la burbuja vuelve a la de los ajustes, sin cambios.
+- Hacer fallar el arranque de una regrabación (por ejemplo, una ventana que se cierra durante la cuenta regresiva): la isla queda abierta diciendo por qué, todavía con «Regrabar en «Nombre»», y el editor sigue escondido. Elegir otra ventana y Grabar: graba en el mismo proyecto (ningún proyecto nuevo) y la isla no recuerda esa selección para la próxima toma. Hacerlo fallar otra vez y cerrar la isla (Esc): el editor vuelve una sola vez, sin cambios.
+- Regrabar con una fuente faltante: con la isla abierta (antes de Grabar), el teleprompter ya muestra el guion del proyecto en la oración del cursor. Cerrar la isla con un clic en otra app: el editor vuelve atrás de esa app, sin traer Toma al frente.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

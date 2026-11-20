@@ -22,7 +22,8 @@ struct DisplayChoice: Identifiable {
 }
 
 /// A "Re-record from Here" the island records (phase 3 design §8.2, 3d plan decisions 9 and 10): into the package of
-/// `target`, the camera starting as `cameraStyle`, from the moment the editor asked for it.
+/// `target` (with the script's word the teleprompter starts at), the camera starting as `cameraStyle`, from the moment the
+/// editor asked for it.
 struct IslandRerecord {
     var target: RerecordTarget
     /// The style that rules under the editor's playhead.
@@ -214,8 +215,11 @@ final class OpenPanelModel {
         guard recordProblem == nil else { return }
         let quick = recordedQuick
         if let rerecord {
-            // The take's sources, not a choice of the user's: nothing is saved for the next take.
-            recording.startRerecord(into: rerecord.target, selection: selection, settings: quick, cameraStyle: rerecord.cameraStyle)
+            // The take's sources, not a choice of the user's: nothing is saved for the next take, also when Record tries a
+            // re-record again after its start failed. The camera starts as the bubble shows it: the style under the
+            // editor's playhead (`CameraSetting.useTemporarily`), with what the user changed of it here.
+            let style = camera.isTemporary ? camera.style : rerecord.cameraStyle
+            recording.startRerecord(into: rerecord.target, selection: selection, settings: quick, cameraStyle: style)
             return
         }
         var settings = store.settings

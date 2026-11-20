@@ -244,7 +244,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             let request = IslandRerecord(
                 target: RerecordTarget(packageURL: URL(filePath: "/tmp/Demo de producto.toma")), cameraStyle: .default,
                 projectName: "Demo de producto", asked: .now)
-            rerecord = (request, selection)
+            holdRerecord(request, selection: selection)
             panel.prepare(request, selection: selection)
         }
         // TOMA_SHOWCASE_ISLAND_PNG=<path>: the open island's content (700 × 400) drawn into that PNG on black, off the
@@ -290,12 +290,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// "Re-record from Here" (phase 3 design §8.2, 3d plan decision 9): `take`'s sources that are still there
     /// (`RerecordSelection`: its displays, area, window of the same app or iPhone, its camera and microphone, its system
-    /// audio), recorded into the package of `target`, the camera starting as `cameraStyle`. With none missing, and nothing
-    /// else in the way, the countdown starts at once (`RecordingController.startRerecord`); otherwise the island opens on
-    /// what there is, titled "Re-record into «`projectName`»", for the user to choose the rest, and Esc, ✕ or closing it
+    /// audio), recorded into the package of `target`, its script's word (`scriptWord`, waited for) the teleprompter's
+    /// start, the bubble drawn and the camera starting as `cameraStyle` (never saved). With none missing, and nothing else
+    /// in the way, the countdown starts at once (`RecordingController.startRerecord`); otherwise the island opens on what
+    /// there is, titled "Re-record into «`projectName`»", for the user to choose the rest, and Esc, ✕ or closing it
     /// cancels the re-record. A panel the island had open for another take closes first: what it chose is not this one's.
     func rerecord(
-        _ take: TakeRecord, target: RerecordTarget, cameraStyle: CameraStyle, projectName: String, asked: ContinuousClock.Instant
+        _ take: TakeRecord, target: RerecordTarget, scriptWord: Task<Int?, Never>, cameraStyle: CameraStyle, projectName: String,
+        asked: ContinuousClock.Instant
     ) async {
         switch machine.state {
         case .open: send(.dismiss)
@@ -308,13 +310,14 @@ final class IslandPanel: NSObject, NSWindowDelegate {
             await ExternalDeviceList.shared.open()
             devices = Set(await Task.detached(priority: .userInitiated) { ExternalDeviceCatalog.devices().map(\.uniqueID) }.value)
         }
+        var target = target
+        target.scriptWord = await scriptWord.value
         let choice = RerecordSelection.choice(
             for: take, displays: Set(LiveTakeEnvironment.displays().map(\.id)),
             window: { id in WindowList.window(id).map(WindowList.owner(of:)) },
             cameras: Set(cameras.devices.map(\.id)), microphones: Set(microphones.devices.map(\.id)), devices: devices)
         let request = IslandRerecord(target: target, cameraStyle: cameraStyle, projectName: projectName, asked: asked)
-        rerecord = (request, choice.selection)
-        rerecordCounted = false
+        holdRerecord(request, selection: choice.selection)
         let missing = choice.missing.map { "\($0)" }.sorted().joined(separator: ", ")
         Self.logger.notice("Re-record of \(take.id, privacy: .public); missing: \(missing.isEmpty ? "nothing" : missing, privacy: .public)")
         let panel = makePanelModel()
@@ -326,16 +329,36 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         // The island could not open (a take just saved is still being told, or another one started): nothing is recorded
         // and the editor comes back.
         if machine.state != .open {
-            rerecord = nil
+            releaseRerecord()
             recording.cancelRerecord(target)
         }
     }
 
-    /// The recorder told the end of the re-record of `target` (`RecordingController.rerecordEnded`): the island no longer
-    /// records into that package. Its open panel for it closes, unless it says why the take could not start.
+    /// The island records into the editor's package from now on: the bubble shows the style under the editor's playhead
+    /// (unsaved), and the teleprompter reads the package's script from where the playhead was, from before the countdown.
+    private func holdRerecord(_ request: IslandRerecord, selection: CaptureSelection) {
+        rerecord = (request, selection)
+        rerecordCounted = false
+        camera.useTemporarily(request.cameraStyle)
+        teleprompter.heldRerecord = request.target
+    }
+
+    /// The re-record is over for the island: the saved camera style and the settings' script are back.
+    private func releaseRerecord() {
+        rerecord = nil
+        camera.endTemporaryStyle()
+        teleprompter.heldRerecord = nil
+    }
+
+    /// The island holds a re-record: from `rerecord(_:…)` until it is over for good (`rerecordEnded(_:)`, or closed).
+    var holdsRerecord: Bool { rerecord != nil }
+
+    /// The recorder told the end of the re-record of `target` (`RecordingController.rerecordEnded`) and the app let it end
+    /// (`IslandRerecordRules.end`): the island no longer records into that package. Its open panel for it closes, unless
+    /// it says why a take could not start.
     func rerecordEnded(_ target: RerecordTarget) {
         guard rerecord != nil else { return }
-        rerecord = nil
+        releaseRerecord()
         guard let panel = model.panel, panel.rerecord != nil else { return }
         panel.rerecord = nil
         switch machine.state {
@@ -347,7 +370,7 @@ final class IslandPanel: NSObject, NSWindowDelegate {
 
     /// The open island says why the last take could not start.
     var isShowingStartFailure: Bool {
-        machine.state == .open && machine.hasStartFailure
+        IslandRerecordRules.showsStartFailure(machine)
     }
 
     /// A take could not start: the island opens and says why, above Record (no alert during a take).
@@ -601,9 +624,12 @@ final class IslandPanel: NSObject, NSWindowDelegate {
         if state != .recordingOpen { model.isConfirmingRestart = false }
         // The open island of a re-record closed without recording it (Esc, ✕, a click outside, the shortcut): the re-record
         // is cancelled, and its editor comes back.
-        if let rerecord, before == .open || before == .choosing, state == .rest || state == .peek {
-            self.rerecord = nil
+        if let rerecord, IslandRerecordRules.closesWithoutRecording(from: before, to: state) {
+            releaseRerecord()
             recording.cancelRerecord(rerecord.request.target)
+        } else if rerecord != nil, before == .open, state != .choosing, let selection = model.panel?.selection {
+            // Record was clicked: what the user chose is what an island opened again to say why the start failed shows.
+            rerecord?.selection = selection
         }
         if state != .open, systemAudioPrompt.isMakingRoom {
             systemAudioPrompt.islandLeftOpen()
