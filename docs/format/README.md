@@ -2210,6 +2210,28 @@ El ejemplo del documento 3 de arriba con todos los campos de la fase 3 lejos de 
 - **Los comandos de la secuencia con contenido.** Partir nunca corta un clip con contenido (en sus bordes, como en los de cualquiera); sus bordes no lo recortan (`trimLimits` da su punto solo y `trim` no hace nada: su largo es el de su contenido) y ninguna velocidad lo cambia; borrarlo lo saca entero, y borrar un rango lo saca solo si el rango lo cubre entero. Los comandos que editan los tramos de la toma (recortar, borrar por la transcripción y devolver, acelerar lo tecleado) dejan cada punto donde está: un recorte no pasa el punto de un clip con contenido de su toma, y lo que se devuelve a cada lado de un punto va del lado suyo. Un clip que hace un comando (un pedazo de un corte) empieza su sonido con su imagen (`audioShift` 0), y un corte del audio que un paso deja fuera de sus límites, porque los clips de su borde son más cortos u otros, se acota en el mismo paso.
 - **La validación** (§10, `DocumentRules.problems(in:)`, decisión 6 del plan de la base), además de lo que el `decode` rechaza: un clip con contenido con `start != end` (`contentNotAPoint`), el invariante roto (`outOfOrder`), un `audioShift` fuera de sus límites (`audioShiftOutOfRange`), la duración de un `freeze` o un `card` fuera de 0,1…60 s o un `media` con `end <= start` (`contentDuration`), el `asset` de un clip importado, de una imagen o de un clip anotación, o la `source` de un tema, que no es un archivo de `assets/` (`assets/` y un solo nombre) ni, en un tema, uno de la biblioteca (`library:music-1/` y un id de letras ASCII, dígitos y `-`) (`assetOutsideAssets`), y un clip anotación anclado a la toma (`clipAnnotationAnchoredToContent`). El editor rechaza un paso que deja uno, sin escribir nada; un documento hecho a mano con uno abre de solo lectura (`unsafeEditFiles`), mostrado como se puede dibujar: cada clip con contenido en su punto (`end = start`) con su duración acotada, cada corte del audio acotado, y sin las anotaciones y los temas con un archivo fuera de `assets/` ni los clips anotación anclados a la toma. Una secuencia fuera de orden se muestra como la lee `TimeMap`. Ningún documento de las fases 1 y 2 tiene un problema mientras su secuencia está en orden, como la deja todo editor de esas fases.
 
+### La caché de la música
+
+Los temas de la biblioteca de música (`music-1`, diseño de la fase 3, §7.6) no van en el paquete ni en la carpeta de cachés del proyecto: van en la caché de la app, una vez para todos los proyectos, en `~/Library/Caches/dev.toma.Toma/Music/music-1/<id>-<huella>.caf` (`MusicLibrary`), con `<id>` uno de `calm`, `focus`, `drive`, `piano`, `pulse` y `breeze`. Un documento nombra un tema por su fuente, `library:music-1/<id>`, nunca por la ruta del archivo.
+
+- **La huella** (`MusicScore.fingerprint`) son 16 dígitos hexadecimales en minúscula: los primeros 8 bytes del SHA-256 de `music-1/engine-<versión del motor>/` y la partitura del tema en JSON con las claves ordenadas. Cambia con cualquier nota, preset o ajuste de la partitura y con la versión del motor (`MusicSynth.engineVersion`), así que un archivo hecho con otra partitura (un marcador, una afinación anterior del tema, un motor anterior) nunca pasa por el tema: el tema se hace de nuevo con su nombre nuevo y los archivos de sus otras versiones (`<id>-<16 hex>.caf`) se borran.
+- **Un marcador no se guarda nunca.** Un tema que todavía es un marcador (`isPlaceholder`) se hace una vez por cada `MusicLibrary`, en una carpeta propia dentro de la carpeta temporal del sistema que se borra cuando la biblioteca se va, y la próxima lo hace otra vez.
+
+- **Se rehace igual si falta.** Un tema se sintetiza la primera vez que se lo pide (`MusicSynth`, código determinista: los mismos bytes en toda Mac y en cada corrida) y se guarda. Si macOS vacía la caché, o el archivo no está, se vuelve a sintetizar, idéntico, y quien lo necesita (el export) espera; nada del paquete depende de esa carpeta.
+- **Entero y atómico.** Se escribe en un temporal oculto de la misma carpeta (`.<id>.<UUID>.tmp.caf`) que se mueve sobre `<id>-<huella>.caf` con `rename(2)` (`ProjectCaches.temporaryFile(for:)` y `commit(_:to:)`), fuera del hilo principal: el nombre tiene el archivo entero o no está. Una síntesis que se cancela (todos los que la pidieron se fueron) no deja ni el archivo ni el temporal.
+- **El archivo es un CAF propio:** PCM lineal en `Float32` little-endian, dos canales intercalados, 48 kHz, con solo sus bloques `desc` y `data` (`MusicFile`). Cada tema dura exactamente 5 760 000 cuadros (120 s), así que el archivo mide 68 + 8 × 5 760 000 = 46 080 068 bytes. Los 68 bytes de antes de las muestras (en big-endian, como pide CAF, salvo las muestras):
+
+  | Bytes | Qué |
+  |---|---|
+  | 0–7 | `caff`, versión 1, flags 0 |
+  | 8–19 | el tipo del bloque `desc` y su tamaño, 32 |
+  | 20–51 | 48 000,0 (`Float64`), `lpcm`, flags 3 (float, little-endian), 8 bytes por paquete, 1 cuadro por paquete, 2 canales, 32 bits por canal |
+  | 52–63 | el tipo del bloque `data` y su tamaño, 4 + 8 × cuadros |
+  | 64–67 | su contador de ediciones, 0 |
+
+- **Un archivo con otro tamaño o encabezado no es el tema** y se rehace: uno cortado, otro CAF, uno de otra cantidad de cuadros. Con el nombre de la huella, eso basta: las muestras no se comparan. Un enlace en su lugar no se sigue nunca (`O_NOFOLLOW`): no es el tema, y el tema nuevo lo reemplaza a él, no a lo que apunta.
+- El id del algoritmo lleva su versión: los bytes de cada tema se fijan en sus pruebas y pueden cambiar hasta el merge de la fase 3 a `main`; después, otro sonido es `music-2`, en otra carpeta, y `library:music-1/<id>` sigue sonando igual. Ver `docs/music.md`.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
@@ -2313,26 +2335,3 @@ Compatibilidad:
 
 - **El lector acepta 1…5** (`Manifest.supportedFormatVersions`, `1...5`) y rechaza cualquier otra antes de decodificar el manifiesto: un manifiesto de la versión 6 o más es de una Toma más nueva (*versión más nueva* en la biblioteca, *para reparar* en la recuperación, que no lo toca).
 - La app de la fase 2 (lector de `1...4`) dice que un paquete v5 es de una versión más nueva y no lo toca; la de la fase 1 (`1...3`), lo mismo. Un paquete de una toma sigue en 3 o 4 aunque tenga pistas por app, clips, audio o guion: su manifiesto lo leen igual (lo que pueden abrir lo decide además la versión del documento de edición).
-## Cambios del documento 4
-
-### La caché de la música
-
-Los temas de la biblioteca de música (`music-1`, diseño de la fase 3, §7.6) no van en el paquete ni en la carpeta de cachés del proyecto: van en la caché de la app, una vez para todos los proyectos, en `~/Library/Caches/dev.toma.Toma/Music/music-1/<id>-<huella>.caf` (`MusicLibrary`), con `<id>` uno de `calm`, `focus`, `drive`, `piano`, `pulse` y `breeze`. Un documento nombra un tema por su fuente, `library:music-1/<id>`, nunca por la ruta del archivo.
-
-- **La huella** (`MusicScore.fingerprint`) son 16 dígitos hexadecimales en minúscula: los primeros 8 bytes del SHA-256 de `music-1/engine-<versión del motor>/` y la partitura del tema en JSON con las claves ordenadas. Cambia con cualquier nota, preset o ajuste de la partitura y con la versión del motor (`MusicSynth.engineVersion`), así que un archivo hecho con otra partitura (un marcador, una afinación anterior del tema, un motor anterior) nunca pasa por el tema: el tema se hace de nuevo con su nombre nuevo y los archivos de sus otras versiones (`<id>-<16 hex>.caf`) se borran.
-- **Un marcador no se guarda nunca.** Un tema que todavía es un marcador (`isPlaceholder`) se hace una vez por cada `MusicLibrary`, en una carpeta propia dentro de la carpeta temporal del sistema que se borra cuando la biblioteca se va, y la próxima lo hace otra vez.
-
-- **Se rehace igual si falta.** Un tema se sintetiza la primera vez que se lo pide (`MusicSynth`, código determinista: los mismos bytes en toda Mac y en cada corrida) y se guarda. Si macOS vacía la caché, o el archivo no está, se vuelve a sintetizar, idéntico, y quien lo necesita (el export) espera; nada del paquete depende de esa carpeta.
-- **Entero y atómico.** Se escribe en un temporal oculto de la misma carpeta (`.<id>.<UUID>.tmp.caf`) que se mueve sobre `<id>-<huella>.caf` con `rename(2)` (`ProjectCaches.temporaryFile(for:)` y `commit(_:to:)`), fuera del hilo principal: el nombre tiene el archivo entero o no está. Una síntesis que se cancela (todos los que la pidieron se fueron) no deja ni el archivo ni el temporal.
-- **El archivo es un CAF propio:** PCM lineal en `Float32` little-endian, dos canales intercalados, 48 kHz, con solo sus bloques `desc` y `data` (`MusicFile`). Cada tema dura exactamente 5 760 000 cuadros (120 s), así que el archivo mide 68 + 8 × 5 760 000 = 46 080 068 bytes. Los 68 bytes de antes de las muestras (en big-endian, como pide CAF, salvo las muestras):
-
-  | Bytes | Qué |
-  |---|---|
-  | 0–7 | `caff`, versión 1, flags 0 |
-  | 8–19 | el tipo del bloque `desc` y su tamaño, 32 |
-  | 20–51 | 48 000,0 (`Float64`), `lpcm`, flags 3 (float, little-endian), 8 bytes por paquete, 1 cuadro por paquete, 2 canales, 32 bits por canal |
-  | 52–63 | el tipo del bloque `data` y su tamaño, 4 + 8 × cuadros |
-  | 64–67 | su contador de ediciones, 0 |
-
-- **Un archivo con otro tamaño o encabezado no es el tema** y se rehace: uno cortado, otro CAF, uno de otra cantidad de cuadros. Con el nombre de la huella, eso basta: las muestras no se comparan. Un enlace en su lugar no se sigue nunca (`O_NOFOLLOW`): no es el tema, y el tema nuevo lo reemplaza a él, no a lo que apunta.
-- El id del algoritmo lleva su versión: los bytes de cada tema se fijan en sus pruebas y pueden cambiar hasta el merge de la fase 3 a `main`; después, otro sonido es `music-2`, en otra carpeta, y `library:music-1/<id>` sigue sonando igual. Ver `docs/music.md`.
