@@ -30,7 +30,9 @@ public struct TakeInfo: Equatable, Sendable {
 /// Takes menu, and "Use from Here", "Add to End" and the step that "Re-record from Here" applies once the new take is
 /// recorded, as pure functions of the document. `take` is the project focused on that take (`LoadedProject.focused(on:)`).
 ///
-/// Each command is one step, aimed at `/sequence`, that does this:
+/// Each command is one step that does this, and that never joins the one before it in an undo group, however soon after
+/// it comes: its `target` is the ids of the clips it adds, in order, joined by commas (as `SequenceCommands` aims a step
+/// at its clips), never ones a step before it added, so each "Use from Here", "Add to End" and re-record undoes alone:
 /// 1. **The cut.** The sequence is cut at the output instant `τ` (clamped to the output), as `SequenceCommands.split`
 ///    cuts it: the clip shown there ends at the source instant shown there and every clip after it goes, and so does a
 ///    clip with content at `τ`, whole (it is never cut). A clip a cut would leave a piece of less than a frame of is not
@@ -127,8 +129,10 @@ public enum TakeCommands {
         for clip in doc.sequence[firstGone...] {
             sequence.remove(clip, at: firstGone)
         }
+        var added: [String] = []
         for (offset, var piece) in pieces.enumerated() {
             piece.id = SequenceCommands.newID(makeID, avoiding: &ids)
+            added.append(piece.id)
             sequence.insert(piece, at: firstGone + offset)
         }
 
@@ -138,7 +142,8 @@ public enum TakeCommands {
             else { return nil }
             changes += parts
         }
-        return EditStep(label: label, target: EditCollection.sequence.rawValue, changes: changes)
+        // New clip ids, which no clip of the sequence has: never the target of the step before, whose clips are in it.
+        return EditStep(label: label, target: added.joined(separator: ","), changes: changes)
     }
 
     /// Where the sequence is cut at output instant `τ` (clamped to the output): the number of clips that stay whole, and

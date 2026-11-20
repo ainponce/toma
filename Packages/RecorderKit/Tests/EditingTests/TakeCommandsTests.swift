@@ -132,7 +132,8 @@ import ProjectFormat
             let step = try #require(TakeCommands.rerecord(
                 document, take: try Self.focused(project, "take-002"), atOutput: Self.output(2.5), makeID: IDs().make))
             #expect(step.label == .takeRerecord)
-            #expect(step.target == "/sequence")
+            // Aimed at the clips it adds, so it never joins the step before it in an undo group.
+            #expect(step.target == "c-00000101")
             let edited = try Self.applying(step, to: document)
             #expect(Self.pieces(edited, project) == [Self.piece("take-001", 0, 2.5), Self.piece("take-002", 0, 3)])
             // The clip split keeps its id; the new one has a new id, at 1×, its sound with its picture.
@@ -146,7 +147,7 @@ import ProjectFormat
             let use = try #require(TakeCommands.useFromHere(
                 document, take: try Self.focused(project, "take-002"), atOutput: Self.output(2.5), makeID: IDs().make))
             #expect(use.label == .takeUse)
-            #expect(use.target == "/sequence")
+            #expect(use.target == "c-00000101")
             #expect(use.changes == step.changes)
         }
     }
@@ -209,7 +210,7 @@ import ProjectFormat
             // At the end, or past it, the step of "Add to End".
             let append = try #require(TakeCommands.appendToEnd(document, take: second, makeID: IDs().make))
             #expect(append.label == .takeUse)
-            #expect(append.target == "/sequence")
+            #expect(append.target == "c-00000101")
             #expect(Self.pieces(try Self.applying(append, to: document), project) == [
                 Self.piece("take-001", 0, 2), Self.piece("take-001", 2.5, 4), Self.piece("take-002", 0, 3),
             ])
@@ -430,6 +431,61 @@ import ProjectFormat
         }
     }
 
+    @MainActor @Test func twoTakeStepsNeverUndoTogether() async throws {
+        try await withTemporaryDirectory { dir in
+            let project = try await Self.firstTake(in: dir)
+            let original = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2)])
+            try DurableFile.writeAtomically(try ProjectJSON.encoder().encode(original), to: project.package.editURL)
+            // A clock the test moves: the session groups a burst of steps by the exact moment.
+            let clock = Mutex(Date(timeIntervalSince1970: 1_794_773_523.25))
+            let ids = IDs()
+            let context = EditContext(
+                app: AppInfo(name: "Toma", version: "0.3.0"), cachesRoot: dir.appending(path: "Caches"), defaultStyle: .toma,
+                now: { clock.withLock { $0 } }, makeID: { ids.make($0) })
+            let session = try await EditSession.open(project.package.url, take: nil, context: context)
+            #expect(session.access == .editable)
+            let opened = session.document
+            let second = try Self.focused(session.project, "take-002")
+            let first = try Self.focused(session.project, "take-001")
+
+            // "Use from Here" twice, 0.1 s apart, the same label and both on the sequence; then "Add to End" and
+            // "Re-record from Here" the same way.
+            let use = try #require(TakeCommands.appendToEnd(session.document, take: second, makeID: ids.make))
+            #expect(session.perform(use) == .applied)
+            let afterOne = session.document
+            clock.withLock { $0 += 0.1 }
+            let again = try #require(TakeCommands.appendToEnd(session.document, take: first, makeID: ids.make))
+            #expect(again.label == use.label)
+            #expect(session.perform(again) == .applied)
+            let afterTwo = session.document
+            clock.withLock { $0 += 0.1 }
+            let rerecord = try #require(TakeCommands.rerecord(session.document, take: second, atOutput: Self.output(1), makeID: ids.make))
+            #expect(session.perform(rerecord) == .applied)
+            clock.withLock { $0 += 0.1 }
+            let rerecordAgain = try #require(
+                TakeCommands.rerecord(session.document, take: first, atOutput: Self.output(0.5), makeID: ids.make))
+            #expect(session.perform(rerecordAgain) == .applied)
+
+            // Each undoes alone (the session moves `logSequence` with each line of the log).
+            func same(_ a: EditDocument, _ b: EditDocument) -> Bool {
+                var (a, b) = (a, b)
+                (a.logSequence, b.logSequence) = (0, 0)
+                return a == b
+            }
+            #expect(session.undoLabel == .takeRerecord)
+            #expect(session.undo() == .applied)
+            #expect(session.undoLabel == .takeRerecord)
+            #expect(session.undo() == .applied)
+            #expect(same(session.document, afterTwo))
+            #expect(session.undo() == .applied)
+            #expect(same(session.document, afterOne))
+            #expect(session.undoLabel == .takeUse)
+            #expect(session.undo() == .applied)
+            #expect(same(session.document, opened))
+            await session.close()
+        }
+    }
+
     @Test func invariantHoldsAfterEveryTakeCommand() async throws {
         try await withTemporaryDirectory { dir in
             let project = try await Self.firstTake(in: dir)
@@ -478,6 +534,7 @@ import ProjectFormat
                     // What is added is the take's, at 1×, each clip at least a frame.
                     let added = edited.sequence.filter { clip in !document.sequence.contains { $0.id == clip.id } }
                     #expect(!added.isEmpty, "\(context)")
+                    #expect(step.target == added.map(\.id).joined(separator: ","), "\(context)")
                     #expect(added.allSatisfy { $0.take == take.take.id && $0.speed == 1 && $0.content == nil }, "\(context)")
                     #expect(added.allSatisfy { TimeMap.outputDuration(of: $0) >= frame }, "\(context)")
                 }
