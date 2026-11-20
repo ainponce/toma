@@ -1872,13 +1872,19 @@ private func posixError() -> POSIXError {
 extension EditDocument {
     /// Whether every value the render reads as a number of frames or a rate is one the design allows: a frame rate of
     /// `EditDocument.frameRates` and clip speeds in `ClipSpeed.range` (Task 5: an absurd frame rate stops
-    /// `TimeMap.frameCount`).
+    /// `TimeMap.frameCount`); and whether it keeps every rule of the document of phase 3 (`DocumentRules.problems(in:)`,
+    /// base plan decision 6), so a step that breaks one is refused.
     fileprivate var isDrawable: Bool {
         Self.frameRates.contains(frameRate) && sequence.allSatisfy { ClipSpeed.range.contains($0.speed) }
+            && DocumentRules.problems(in: self).isEmpty
     }
 
     /// This document with its frame rate the nearest allowed one and its speeds as `TimeMap` reads them
-    /// (`ClipSpeed.clamped`).
+    /// (`ClipSpeed.clamped`), and as it is shown with a rule of phase 3 broken (base plan decision 6): each clip with
+    /// content its point (`end = start`) and its duration as `ClipContent.outputDuration` reads it, each cut of the sound
+    /// as `SequenceRules.audioShift(of:at:)` reads it, and without the annotations and the themes whose file is not one
+    /// of `assets/` and the clip annotations anchored to the take. A sequence out of order is shown as `TimeMap` reads
+    /// it, and an imported clip of no length or whose file is not one of `assets/` is never shown or read.
     fileprivate var drawable: EditDocument {
         var document = self
         if !Self.frameRates.contains(frameRate) {
@@ -1887,7 +1893,25 @@ extension EditDocument {
         }
         for index in document.sequence.indices {
             document.sequence[index].speed = ClipSpeed.clamped(document.sequence[index].speed)
+            guard let content = document.sequence[index].content else { continue }
+            document.sequence[index].end = document.sequence[index].start
+            switch content {
+            case .freeze: document.sequence[index].content = .freeze(duration: content.outputDuration)
+            case let .card(card, _): document.sequence[index].content = .card(card, duration: content.outputDuration)
+            case .media: break
+            }
         }
+        let shifts = document.sequence.indices.map { SequenceRules.audioShift(of: document.sequence, at: $0) }
+        for (index, shift) in shifts.enumerated() { document.sequence[index].audioShift = shift }
+        document.annotations.items.removeAll { annotation in
+            switch annotation.kind {
+            case let .image(image): !DocumentRules.isAssetPath(image.asset)
+            case let .clip(clip):
+                if case .content = annotation.anchor { true } else { !DocumentRules.isAssetPath(clip.asset) }
+            case .text, .arrow, .shape, .callout, .step: false
+            }
+        }
+        document.music.items.removeAll { !DocumentRules.isMusicSource($0.source) }
         return document
     }
 }

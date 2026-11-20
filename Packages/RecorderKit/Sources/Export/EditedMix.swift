@@ -483,7 +483,8 @@ public final class EditedMix: Sendable {
 
     /// The clips of `sequence` with any output frames, in order, as the mix plays them: faded where the sound would
     /// jump, read on where a clip goes on with the source of the one before (at 1× frame for frame, at another speed in
-    /// the same run), and the runs the stretched ones play.
+    /// the same run), and the runs the stretched ones play. A clip with content is silent here (phase 3 base plan
+    /// decision 8: the sound of an imported clip is `EditedMix+Media`'s), and the clips on both sides of it fade.
     private static func pieces(
         of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, source: Source
     ) -> (pieces: [Piece], runs: [SpeedStretch.Run]) {
@@ -505,7 +506,9 @@ public final class EditedMix: Sendable {
             let from = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.start))
             let to = frames(ofNanoseconds: nanoseconds(from: source.origin, to: clip.end))
             var piece = Piece(start: start, end: end, sound: .silent, fadesIn: false, fadesOut: false)
-            if clip.take == source.takeID, clipSpeed == 1 {
+            if clip.content != nil {
+                // Silent: a point of the take that lasts.
+            } else if clip.take == source.takeID, clipSpeed == 1 {
                 piece.sound = .source(from)
             } else if clip.take == source.takeID, clipSpeed <= SpeedStretch.maximumSpeed {
                 piece.sound = .stretched(run: runs.count)
