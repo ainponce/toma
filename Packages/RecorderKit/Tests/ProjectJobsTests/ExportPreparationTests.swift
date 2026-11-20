@@ -147,15 +147,12 @@ private func tree(_ folder: URL) -> [String] {
             let music = try await ExportPreparation.music(voice.analysis, document: fixture.document, needs: .video, music: other.music) { _ in }
             #expect(music.analysis == prepared.analysis)
             #expect(voice.cleanupSkipped == prepared.cleanupSkipped && music.remakeMusic != nil)
-            // And the contract's `prepare`, with workers of its own, from nothing: for a GIF of the document without music
-            // (so neither the system's isolation nor the user's music library is asked; the camera's caches are there,
-            // so Vision is not either), the camera's of the others.
-            var silent = fixture.document
-            silent.music.items = []
+            // And the contract's `prepare`, with workers of its own of the isolation and the library given (the camera's
+            // caches are there, so Vision is not asked): the same, with the music's remaking.
             let alone = try await ExportPreparation.prepare(
-                project: fixture.project, document: silent, caches: fixture.caches, needs: .gif) { _ in }
-            #expect(alone.personMasks == prepared.analysis.personMasks && alone.faceTracks == prepared.analysis.faceTracks)
-            #expect(alone.cleanVoice.isEmpty && alone.musicFiles.isEmpty)
+                project: fixture.project, document: fixture.document, caches: fixture.caches, needs: .video,
+                isolator: SilentIsolation(log: fixture.log), library: fixture.library) { _ in }
+            #expect(alone.analysis == prepared.analysis && alone.remakeMusic != nil && !alone.cleanupSkipped)
         }
     }
 

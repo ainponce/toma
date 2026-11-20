@@ -46,9 +46,10 @@ public struct ExportWorkers: Sendable {
 
     /// Workers of their own for an export without the editor (the API's, the command line's): a new queue, the voice
     /// jobs without a speech engine (an export never transcribes), cleaned by `isolator`, and the music of `library`.
+    /// Neither has a default: the caller's environment says which (the API's `APIEnvironment.isolator` and
+    /// `musicRoot`), so nothing reaches the user's music cache or the system's isolation unasked.
     public static func standalone(
-        project: LoadedProject, caches: ProjectCaches, isolator: any VoiceIsolating = SystemVoiceIsolation(),
-        library: MusicLibrary = .shared
+        project: LoadedProject, caches: ProjectCaches, isolator: any VoiceIsolating, library: MusicLibrary
     ) -> ExportWorkers {
         ExportWorkers(
             jobs: ProjectJobs(), voice: SequenceVoiceJobs(project: project, caches: caches, engine: nil, isolator: isolator),
@@ -110,17 +111,17 @@ public struct ExportPreparationError: Error, CustomStringConvertible {
 /// alerts); the API calls `prepared`, which runs them in that order. Nothing here writes into the package: only the
 /// project's caches.
 public enum ExportPreparation {
-    /// The analysis an export of `document` reads, prepared with workers of its own (`ExportWorkers.standalone`), from
-    /// nothing: `prepared(…).analysis`. Its jobs are cancelled if it throws.
+    /// The export of `document` prepared from nothing with workers of its own (`ExportWorkers.standalone` of `isolator`
+    /// and `library`, which the caller's environment gives): `prepared(…)`, whose `remakeMusic` the exporter takes with
+    /// its `analysis`. Its jobs are cancelled if it throws.
     @concurrent public static func prepare(
         project: LoadedProject, document: EditDocument, caches: ProjectCaches, needs: ExportNeeds,
-        progress: @escaping @Sendable (Double) -> Void
-    ) async throws -> AnalysisInputs {
-        let workers = ExportWorkers.standalone(project: project, caches: caches)
+        isolator: any VoiceIsolating, library: MusicLibrary, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> PreparedExport {
+        let workers = ExportWorkers.standalone(project: project, caches: caches, isolator: isolator, library: library)
         do {
             return try await prepared(
-                project: project, document: document, caches: caches, needs: needs, workers: workers, progress: progress
-            ).analysis
+                project: project, document: document, caches: caches, needs: needs, workers: workers, progress: progress)
         } catch {
             await workers.jobs.cancelAll()
             throw error
