@@ -1614,3 +1614,11 @@ La corrida con la clave equivocada no tocó `dist/appcast.xml` (mismo SHA-1 ante
 - Con la cabeza de la línea de reproducción sobre un marcador (después de ⌥→, de elegirlo en el menú Marcadores o de hacer clic en su bandera), arrastrar la cabeza mueve la reproducción y no el marcador; arrastrar la bandera por su lado derecho, o con la reproducción en otro lado, sigue moviendo el marcador (también con marcadores grabados).
 - Edición ▸ Agregar tarjeta de título (y Congelar cuadro, o insertar un clip importado): el panel pasa a la pestaña Anotaciones con el inspector del clip (título, subtítulo, estilo, fondo, volumen, velocidad) y no se queda en la pestaña anterior.
 - Con un arrastre en curso en la vista previa (una anotación movida con el mouse), Edición ▸ Duplicar, Ordenar, Congelar cuadro y Agregar tarjeta de título están desactivados y sus atajos (⌘D, ⌘], ⌘[) no hacen nada; al soltar, el arrastre se guarda completo y no se pierde.
+
+## Pendientes del dueño de las fases 4 y 5
+
+Una sola pasada de fin de fase, contra la app de la rama `fase-4-5`, en orden: la preparación y el detalle por área. Cada comprobación dice qué se tiene que ver; si se ve otra cosa, anotarlo con la versión exacta de macOS. Cada tarea de las fases 4 y 5 suma sus comprobaciones al final de esta sección.
+
+### 0. Preparación
+
+### 2. Detalle por área
