@@ -71,13 +71,18 @@ enum LayerPass {
 }
 
 /// The pipelines of phase 2's layers (phase 2 design §11 and §12), each in its layer's file (`Compositor+<Layer>.swift`),
-/// built at the end of `Compositor.init` with its `PipelineMaker`: none in the base of phase 2.
+/// built at the end of `Compositor.init` with its `PipelineMaker`: none in the base of phase 2. Then phase 3's (phase 3
+/// design §12 and §14), the same way: none in the base of phase 3.
 struct LayerPipelines {
     let captions: CaptionPipelines
     let keys: KeyPipelines
     let privacy: PrivacyPipelines
     let cameraLook: CameraLookPipelines
     let deviceFrame: DeviceFramePipelines
+    let mediaClip: MediaClipPipelines
+    let calmZoom: CalmZoomPipelines
+    let annotations: AnnotationPipelines
+    let titleCard: TitleCardPipelines
 
     init(maker: PipelineMaker) throws {
         deviceFrame = try DeviceFramePipelines(maker: maker)
@@ -85,15 +90,39 @@ struct LayerPipelines {
         cameraLook = try CameraLookPipelines(maker: maker)
         keys = try KeyPipelines(maker: maker)
         captions = try CaptionPipelines(maker: maker)
+        mediaClip = try MediaClipPipelines(maker: maker)
+        calmZoom = try CalmZoomPipelines(maker: maker)
+        annotations = try AnnotationPipelines(maker: maker)
+        titleCard = try TitleCardPipelines(maker: maker)
     }
+}
+
+/// What phase 3's layers are drawn with besides the take's videos (phase 3 design §12), which only the renderer makes
+/// (`FrameRenderer.mediaTextures(for:decoded:commandBuffer:)` and `annotationTextures(for:decoded:commandBuffer:)`), each
+/// field filled by its milestone: the imported clip's frame, and the annotations' images and clips. `none`, as every frame
+/// of phases 1 and 2, draws none of them. They must stay alive until the command buffer they are drawn in completes.
+/// Unchecked: Metal's textures are not marked `Sendable`, and these are made and drawn under the renderer's lock.
+public struct LayerTextures: @unchecked Sendable {
+    var media: MediaClipTextures?
+    var annotations: AnnotationTextures?
+
+    public static let none = LayerTextures()
 }
 
 extension Compositor {
     /// Steps 5 and 6 of phase 2 design §11, over the camera, into `pass`: the keys of `frame`, then its captions, and the
     /// textures of its captions ahead drawn in the background (`CaptionTextures.prepare`), which draws nothing into the
     /// frame. Every frame reaches it once (`DrawCounts.overlaySteps`), whatever its path; with neither, nothing is drawn.
-    func drawOverlays(_ frame: RenderFrame, pass: LayerPass, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts) {
+    /// Before them, phase 3's (phase 3 design §12, base plan decision 9): the title card, then the output's annotations,
+    /// with `annotations`.
+    func drawOverlays(
+        _ frame: RenderFrame, annotations: AnnotationTextures?, pass: LayerPass, encoder: any MTLRenderCommandEncoder,
+        counts: inout DrawCounts
+    ) {
         counts.overlaySteps += 1
+        drawTitleCard(frame.titleCard, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
+        drawOutputAnnotations(
+            frame.outputAnnotations, textures: annotations, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
         drawKeys(frame.keys, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
         drawCaptions(frame.captions, outputSize: frame.outputSize, pass: pass, encoder: encoder, counts: &counts)
         layers.captions.textures.prepare(frame.captionsAhead, device: device)

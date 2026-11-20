@@ -78,7 +78,8 @@ public final class FrameRenderer: @unchecked Sendable {
     let commandQueue: any MTLCommandQueue
     /// The renderer's scene (`setScene(_:)`).
     private let current: Mutex<FrameEvaluator>
-    private let package: ProjectPackage
+    /// Internal for phase 3's layers (`FrameRenderer+<Layer>.swift`), which read the package's assets.
+    let package: ProjectPackage
     private let take: TakeRecord
     private let events: [InputEvent]
     /// The frames per second scenes are drawn at; the document's when `nil`.
@@ -104,6 +105,10 @@ public final class FrameRenderer: @unchecked Sendable {
     /// What the camera's colour and background are drawn with: the LUTs, and the readers of the person's masks, which
     /// `videos(of:)` and `reader(for:)` add to the take's (phase 2 design §6.1 and §6.3).
     let cameraLook: CameraLookResources
+    /// What phase 3's imported clips and annotations are drawn with (phase 3 design §5.1 and §5.4): their readers and
+    /// images, which `videos(of:)`, `reader(for:)` and `draw` add to the take's (`FrameRenderer+<Layer>.swift`).
+    let mediaResources: MediaClipResources
+    let annotationResources: AnnotationResources
     private let textureCache: CVMetalTextureCache
     private let lock = NSLock()
     /// The frames per second the renderer's scene is drawn at (the document's unless given): the motion blur's frame, and
@@ -222,6 +227,8 @@ public final class FrameRenderer: @unchecked Sendable {
         backgroundImages = try BackgroundImages(device: device, library: compositor.library, package: project.package)
         cursorImages = try CursorImages(device: device, package: project.package, take: project.take.id)
         cameraLook = CameraLookResources(device: device, package: project.package)
+        mediaResources = MediaClipResources(device: device, package: project.package)
+        annotationResources = AnnotationResources(device: device, package: project.package)
         let cameraReadable = LayoutTimeline.cameraReadable(take: project.take) {
             SegmentAvailability.classify($0, in: project.package)
         }
@@ -330,7 +337,8 @@ public final class FrameRenderer: @unchecked Sendable {
     /// Encodes `frame` into `target` with the screen and camera frames `decoded` gives for each (track, source instant)
     /// it shows, asked for in this order: the screen, the screen being left, the camera; then what the camera's colour and
     /// background are drawn with (`CameraLookResources`), its mask among them, whose absence draws the camera's original
-    /// and is never an error. Every way to draw ends here. Call with `lock` held.
+    /// and is never an error; then what phase 3's imported clip and annotations are drawn with (`mediaTextures`,
+    /// `annotationTextures`). Every way to draw ends here. Call with `lock` held.
     private func draw(
         _ frame: RenderFrame, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
         decoded: (_ trackID: String, _ time: HostTime) throws -> CachedTexture?
@@ -352,6 +360,15 @@ public final class FrameRenderer: @unchecked Sendable {
                 commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
                 return cached
             }, commandBuffer: commandBuffer)
+        /// What `decoded` gives for a video of phase 3's layers, kept alive until `commandBuffer` completes.
+        func kept(_ id: String, _ time: HostTime) throws -> CachedTexture? {
+            guard let cached = try decoded(id, time) else { return nil }
+            commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
+            return cached
+        }
+        let layerTextures = LayerTextures(
+            media: try mediaTextures(for: frame, decoded: kept, commandBuffer: commandBuffer),
+            annotations: try annotationTextures(for: frame, decoded: kept, commandBuffer: commandBuffer))
         let backgroundImage = try Self.backgroundTexture(of: frame, images: backgroundImages, outputSize: frame.outputSize)
         let titleTexture = titles(for: frame.outputSize)
         let windowTitle = try TitleTexture.source(for: frame).flatMap {
@@ -362,7 +379,7 @@ public final class FrameRenderer: @unchecked Sendable {
         let cursor = try cursorImages.texture(for: image ?? .toma(.arrow))
         try compositor.encode(
             frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
-            windowTitle: windowTitle, cameraLook: look, into: target, commandBuffer: commandBuffer)
+            windowTitle: windowTitle, cameraLook: look, into: target, commandBuffer: commandBuffer, layerTextures: layerTextures)
     }
 
     /// The texture `frame`'s background is drawn with (`Compositor.encode`'s `backgroundImage`), from `images`, for
@@ -478,13 +495,15 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// The (track, source instant) of each video `frame` shows, in `draw`'s order: the screen, the screen being left, the
     /// camera, then what the camera is drawn with (`CameraLookResources.videos(of:)`: its person's mask, by a reader id that
-    /// is no track of the take). A part a layout hides is not in the frame (1c design §14.4), so it is not decoded.
+    /// is no track of the take), then phase 3's imported clip and annotation clips (`mediaVideos(of:)`,
+    /// `annotationVideos(of:)`, by reader ids that are no track either). A part a layout hides is not in the frame (1c
+    /// design §14.4), so it is not decoded.
     func videos(of frame: RenderFrame) -> [DecodedKey] {
         [
             frame.screen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
             frame.previousScreen.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
             frame.camera.map { DecodedKey(trackID: $0.trackID, time: $0.sourceTime) },
-        ].compactMap { $0 } + cameraLook.videos(of: frame)
+        ].compactMap { $0 } + cameraLook.videos(of: frame) + mediaVideos(of: frame) + annotationVideos(of: frame)
     }
 
     /// The prefetcher of track `trackID` (or of a person's mask, by its reader id), made the first time; `nil` for a video
@@ -632,10 +651,10 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// The reader of track `trackID` of the take, made the first time it is asked for; for an id that is no track of the
-    /// take, `CameraLookResources.reader(for:)`'s (a person's mask), `nil` for any other. Every scene of the renderer reads
-    /// with it.
+    /// take, `CameraLookResources.reader(for:)`'s (a person's mask), or else `mediaReader(for:)`'s (a file of `assets/`),
+    /// `nil` for any other. Every scene of the renderer reads with it.
     func reader(for trackID: String) -> TrackFrameReader? {
-        guard let track = take.track(trackID) else { return cameraLook.reader(for: trackID) }
+        guard let track = take.track(trackID) else { return cameraLook.reader(for: trackID) ?? mediaReader(for: trackID) }
         return readers.withLock { readers in
             if let reader = readers[trackID] { return reader }
             let reader = TrackFrameReader(package: package, track: track)

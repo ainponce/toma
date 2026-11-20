@@ -86,6 +86,22 @@ public struct RenderFrame: Equatable, Sendable {
     /// in this frame, but their textures are drawn ahead, off the frame (`CaptionTextures.prepare`), so the frame that
     /// changes word or caption binds a texture made already. Empty without captions, as every document of phase 1.
     public var captionsAhead: [CaptionLayer]
+    /// The imported clip of the sequence (phase 3 design §5.4 and §12, step 2), drawn where the screens are; `nil` without
+    /// one, as every document of phases 1 and 2.
+    public var media: MediaClipLayer?
+    /// The calm zoom (phase 3 design §6 and §12, step 4): highlight, dim or the loupe, over the stage drawn; `nil` without
+    /// one, as every document of phases 1 and 2.
+    public var calmZoom: CalmZoomLayer?
+    /// The annotations stuck to the recording (phase 3 design §5.1 and §12, step 5), by layer, in the stage (the zoom moves
+    /// them), under the camera. Empty without them, as every document of phases 1 and 2.
+    public var contentAnnotations: [AnnotationLayer]
+    /// The annotations of the output (phase 3 design §5.1 and §12, step 7), by layer, over the camera and under the keys:
+    /// those of the frame's output time, over a frozen frame, a title card or an imported clip too. Empty without them, as
+    /// every document of phases 1 and 2.
+    public var outputAnnotations: [AnnotationLayer]
+    /// The title card (phase 3 design §5.2 and §12), which takes the place of steps 1 to 6, under the output's annotations
+    /// (base plan decision 9); `nil` without one, as every document of phases 1 and 2.
+    public var titleCard: TitleCardLayer?
 
     /// Whether the frame is drawn in a card's mode (`card`, `backgroundTransform`).
     var isCardMode: Bool { card != nil || backgroundTransform != nil }
@@ -114,7 +130,12 @@ public struct RenderFrame: Equatable, Sendable {
         deviceFrame: DeviceFrameLayer? = nil,
         keys: KeyOverlayLayer? = nil,
         captions: CaptionLayer? = nil,
-        captionsAhead: [CaptionLayer] = []
+        captionsAhead: [CaptionLayer] = [],
+        media: MediaClipLayer? = nil,
+        calmZoom: CalmZoomLayer? = nil,
+        contentAnnotations: [AnnotationLayer] = [],
+        outputAnnotations: [AnnotationLayer] = [],
+        titleCard: TitleCardLayer? = nil
     ) {
         self.outputSize = outputSize
         self.gradientStart = gradientStart
@@ -140,6 +161,11 @@ public struct RenderFrame: Equatable, Sendable {
         self.keys = keys
         self.captions = captions
         self.captionsAhead = captionsAhead
+        self.media = media
+        self.calmZoom = calmZoom
+        self.contentAnnotations = contentAnnotations
+        self.outputAnnotations = outputAnnotations
+        self.titleCard = titleCard
     }
 }
 

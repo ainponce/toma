@@ -32,6 +32,13 @@ import ProjectFormat
 /// fill (`cameraFill`), then the keys and the captions over the camera, on every path (`drawOverlays`). A layer that is
 /// `nil` or empty, as with the legacy values, draws nothing and changes no call, so the frame is drawn as in phase 1.
 ///
+/// Phase 3's layers (phase 3 design §12, base plan decision 9) are drawn the same way, by their own files: the imported
+/// clip where the screens are (`drawMediaClip`, in `drawStage`); over the stage, after the click effects, the calm zoom
+/// (`drawCalmZoom`, which may end the pass and go on in one into the target alone) and the annotations stuck to the
+/// recording (`drawContentAnnotations`), before the camera (`drawOverTheStage`); and first of `drawOverlays`, the title
+/// card and the output's annotations, under the keys. With the legacy values each is `nil` or empty and changes no call,
+/// so the frame is drawn as in phase 2.
+///
 /// The shaders are compiled and the pipelines built once, in `init`. The same frame and source textures
 /// always give the same bytes on the same GPU.
 public final class Compositor: @unchecked Sendable {
@@ -200,8 +207,9 @@ public final class Compositor: @unchecked Sendable {
     /// none of its textures, draws the camera as in phase 1, and a background without its mask is Original's, its shape,
     /// border and shadow too (`RenderFrame.droppingCameraBackground()`). Throws `RenderError.metalResourceUnavailable`, having
     /// encoded nothing, when Metal cannot make the screen's copy or the blur's tile memory: a frame is never drawn some
-    /// other way. `screen`, `previousScreen`, `camera`, `cursor`, `backgroundImage`, `windowTitle` and `cameraLook`'s
-    /// textures must stay alive until `commandBuffer` completes.
+    /// other way. Phase 3's layers are drawn with `layerTextures` (the renderer's): `.none` draws none of what they read.
+    /// `screen`, `previousScreen`, `camera`, `cursor`, `backgroundImage`, `windowTitle`, `cameraLook`'s and
+    /// `layerTextures`' textures must stay alive until `commandBuffer` completes.
     public func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
@@ -212,16 +220,18 @@ public final class Compositor: @unchecked Sendable {
         windowTitle: (any MTLTexture)? = nil,
         cameraLook: CameraLookTextures? = nil,
         into target: any MTLTexture,
-        commandBuffer: any MTLCommandBuffer
+        commandBuffer: any MTLCommandBuffer,
+        layerTextures: LayerTextures = .none
     ) throws {
         var counts = DrawCounts()
         try encode(
             frame, screen: screen, previousScreen: previousScreen, camera: camera, cursor: cursor, backgroundImage: backgroundImage,
-            windowTitle: windowTitle, cameraLook: cameraLook, into: target, commandBuffer: commandBuffer, counts: &counts)
+            windowTitle: windowTitle, cameraLook: cameraLook, into: target, commandBuffer: commandBuffer, counts: &counts,
+            layerTextures: layerTextures)
     }
 
-    /// `encode(_:screen:camera:cursor:backgroundImage:windowTitle:cameraLook:into:commandBuffer:)`, counting what it draws
-    /// in `counts`: for tests.
+    /// `encode(_:screen:camera:cursor:backgroundImage:windowTitle:cameraLook:into:commandBuffer:layerTextures:)`, counting
+    /// what it draws in `counts`: for tests.
     func encode(
         _ frame: RenderFrame,
         screen: (any MTLTexture)?,
@@ -233,7 +243,8 @@ public final class Compositor: @unchecked Sendable {
         cameraLook: CameraLookTextures? = nil,
         into target: any MTLTexture,
         commandBuffer: any MTLCommandBuffer,
-        counts: inout DrawCounts
+        counts: inout DrawCounts,
+        layerTextures: LayerTextures = .none
     ) throws {
         // Its screens as they are drawn (`screenImage`). A camera's background whose mask is not decoded is the original:
         // Removed's shape, border and shadow, and what the camera covers, as Original draws them.
@@ -247,7 +258,7 @@ public final class Compositor: @unchecked Sendable {
             drawCamera(
                 layer, texture: camera, cameraLook: look, outputSize: frame.outputSize, pipelines: directCamera, encoder: encoder,
                 counts: &counts)
-            drawOverlays(frame, pass: directCamera.pass, encoder: encoder, counts: &counts)
+            drawOverlays(frame, annotations: layerTextures.annotations, pass: directCamera.pass, encoder: encoder, counts: &counts)
             encoder.endEncoding()
             return
         }
@@ -259,17 +270,17 @@ public final class Compositor: @unchecked Sendable {
         let previousImage = try self.screenImage(of: &frame.previousScreen, in: previousScreen, commandBuffer: commandBuffer)
         let textures = StageTextures(
             screen: screenImage, previousScreen: previousImage, cursor: cursor, backgroundImage: backgroundImage,
-            windowTitle: windowTitle)
+            windowTitle: windowTitle, layers: layerTextures)
         let targetSize = SIMD2(target.width, target.height)
         if frame.isCardMode {
-            encodeCard(
+            try encodeCard(
                 frame, textures: textures, camera: camera, cameraLook: look, tileMemory: tileMemory, into: target,
                 commandBuffer: commandBuffer, counts: &counts)
             return
         }
         let stage = Self.moving(frame.stage, outputSize: frame.outputSize)
         if let tileMemory {
-            let encoder = blurPass(into: target, tileMemory: tileMemory, commandBuffer: commandBuffer)
+            var encoder = blurPass(into: target, tileMemory: tileMemory, commandBuffer: commandBuffer)
             counts.renderPasses += 1
             if !frame.subframes.isEmpty {
                 var weight = Float(1 / Double(frame.subframes.count))
@@ -297,20 +308,22 @@ public final class Compositor: @unchecked Sendable {
                 encoder.setRenderPipelineState(blur.resolveCursor)
             }
             encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
-            drawOverTheStage(
-                frame, through: stage, device: stage, camera: camera, cameraLook: look, clickEffect: blur.clickEffect,
-                cameraPipelines: blur.camera, encoder: encoder, counts: &counts)
+            try drawOverTheStage(
+                frame, through: stage, device: stage, camera: camera, cameraLook: look, layerTextures: layerTextures,
+                clickEffect: blur.clickEffect, cameraPipelines: blur.camera, encoder: &encoder, target: target,
+                commandBuffer: commandBuffer, counts: &counts)
             encoder.endEncoding()
             return
         }
-        let encoder = renderPass(into: target, commandBuffer: commandBuffer)
+        var encoder = renderPass(into: target, commandBuffer: commandBuffer)
         counts.renderPasses += 1
         drawStage(
             frame, through: stage, cursor: frame.cursor, textures: textures, pipelines: direct, targetSize: targetSize, encoder: encoder,
             counts: &counts)
-        drawOverTheStage(
-            frame, through: stage, device: stage, camera: camera, cameraLook: look, clickEffect: clickEffectPipeline,
-            cameraPipelines: directCamera, encoder: encoder, counts: &counts)
+        try drawOverTheStage(
+            frame, through: stage, device: stage, camera: camera, cameraLook: look, layerTextures: layerTextures,
+            clickEffect: clickEffectPipeline, cameraPipelines: directCamera, encoder: &encoder, target: target,
+            commandBuffer: commandBuffer, counts: &counts)
         encoder.endEncoding()
     }
 
@@ -449,7 +462,8 @@ public final class Compositor: @unchecked Sendable {
     /// `stage` is the background's transform, the shadow's and the window frame's, and the screens and the cursor are drawn
     /// through the card's content and cut to it: the screens square, so the card's cut alone shapes them and no background
     /// shows inside the card, at its corners either (1c design §5.4). Only the `parts` asked for are drawn: the
-    /// background, the shadow and the window frame (`.frame`), then the screens and the cursor (`.content`).
+    /// background, the shadow and the window frame (`.frame`), then the screens and the cursor (`.content`), with the
+    /// imported clip of the sequence after the screens (phase 3 design §12, step 2: `drawMediaClip`, with `textures.layers`).
     func drawStage(
         _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, parts: StageParts = .all,
         cursor cursorLayer: CursorLayer?, textures: StageTextures, pipelines: StagePipelines, culling: Bool = false,
@@ -523,6 +537,11 @@ public final class Compositor: @unchecked Sendable {
             counts.screens += 1
         }
 
+        // Phase 3's imported clip of the sequence (phase 3 design §12, step 2), where the screens are.
+        drawMediaClip(
+            frame.media, through: stage, card: card, textures: textures.layers.media, outputSize: size, pass: pipelines.pass,
+            encoder: encoder, counts: &counts)
+
         // 5. Cursor, its hotspot at the cursor position, pressed smaller about it, at its opacity.
         if let cursorLayer {
             drawCursor(
@@ -592,13 +611,19 @@ public final class Compositor: @unchecked Sendable {
     /// Draws what goes over the stage of `frame`, in the pass of `cameraPipelines`: the device's island or notch through
     /// `device`, the frame's transform of the device frame (the stage's on the stage, the background's in a card), once
     /// and never blurred (`drawDeviceOverlay`, plan 2b decision 10); its click effects through `stage` (design §7.2, step
-    /// 6), never blurred, with `clickEffect` (in a card, cut to it: `card`); then the camera in output space (step 7) with
-    /// `cameraPipelines` and `cameraLook`; then the keys and the captions (phase 2 design §11, steps 5 and 6).
+    /// 6), never blurred, with `clickEffect` (in a card, cut to it: `card`); then phase 3's calm zoom and annotations stuck
+    /// to the recording through `stage` (phase 3 design §12, steps 4 and 5), with `layerTextures`; then the camera in
+    /// output space (step 7) with `cameraPipelines` and `cameraLook`; then the keys and the captions (phase 2 design §11,
+    /// steps 5 and 6). Every frame with a stage reaches step 4 once (`DrawCounts.stageOverlaySteps`). When the calm zoom
+    /// ends `encoder`'s pass (`drawCalmZoom`), it leaves in `encoder` the pass into `target` it opened, and what follows
+    /// is drawn into it with `directCamera`'s pipelines: the caller ends that one. Throws what `drawCalmZoom` throws,
+    /// having ended `encoder`'s pass, so the frame is not drawn.
     func drawOverTheStage(
         _ frame: RenderFrame, through stage: StageTransform?, card: CardContent? = nil, device: StageTransform?,
-        camera: (any MTLTexture)?, cameraLook: CameraLookTextures?, clickEffect: any MTLRenderPipelineState,
-        cameraPipelines: CameraPipelines, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
-    ) {
+        camera: (any MTLTexture)?, cameraLook: CameraLookTextures?, layerTextures: LayerTextures,
+        clickEffect: any MTLRenderPipelineState, cameraPipelines: CameraPipelines, encoder: inout any MTLRenderCommandEncoder,
+        target: any MTLTexture, commandBuffer: any MTLCommandBuffer, counts: inout DrawCounts
+    ) throws {
         // The device's island or notch, over the cursor.
         drawDeviceOverlay(
             frame.deviceFrame, through: device, outputSize: frame.outputSize, pass: cameraPipelines.pass, encoder: encoder,
@@ -609,6 +634,26 @@ public final class Compositor: @unchecked Sendable {
             frame.clickEffects, through: stage, outputSize: frame.outputSize, clip: card, pipeline: clickEffect, encoder: encoder,
             counts: &counts)
 
+        // Phase 3's calm zoom (phase 3 design §12, step 4), over the stage drawn: in a pass into the target alone from here
+        // when it ended this one.
+        counts.stageOverlaySteps += 1
+        var cameraPipelines = cameraPipelines
+        let movedToTheTarget: Bool
+        do {
+            movedToTheTarget = try drawCalmZoom(
+                frame.calmZoom, frame: frame, through: stage, card: card, pass: cameraPipelines.pass, encoder: &encoder,
+                target: target, commandBuffer: commandBuffer, counts: &counts)
+        } catch {
+            encoder.endEncoding()
+            throw error
+        }
+        if movedToTheTarget { cameraPipelines = directCamera }
+
+        // Phase 3's annotations stuck to the recording (step 5), in the stage, under the camera.
+        drawContentAnnotations(
+            frame.contentAnnotations, through: stage, card: card, textures: layerTextures.annotations, outputSize: frame.outputSize,
+            pass: cameraPipelines.pass, encoder: encoder, counts: &counts)
+
         // 7. Camera, over the stage.
         if let layer = frame.camera, let camera {
             drawCamera(
@@ -616,8 +661,8 @@ public final class Compositor: @unchecked Sendable {
                 encoder: encoder, counts: &counts)
         }
 
-        // Phase 2's keys and captions, over everything.
-        drawOverlays(frame, pass: cameraPipelines.pass, encoder: encoder, counts: &counts)
+        // Phase 3's title card and output's annotations, then phase 2's keys and captions, over everything.
+        drawOverlays(frame, annotations: layerTextures.annotations, pass: cameraPipelines.pass, encoder: encoder, counts: &counts)
     }
 
     /// Draws the camera `layer` with `texture`, its frame (design §7.2, step 7, and 1c design §14.3), in output space with
@@ -1096,6 +1141,16 @@ struct DrawCounts: Equatable, Sendable {
     /// their background (blurred or removed) and its mask.
     var deviceOverlays = 0
     var cameraBackgrounds = 0
+    /// Phase 3's layers drawn (phase 3 design §12): imported clips of the sequence, calm zooms, annotations stuck to the
+    /// recording and of the output, and title cards.
+    var mediaClips = 0
+    var calmZooms = 0
+    var contentAnnotations = 0
+    var outputAnnotations = 0
+    var titleCards = 0
+    /// How many times the step over the stage was reached (phase 3 design §12, step 4: `Compositor.drawOverTheStage`, the
+    /// calm zoom's): once a frame with a stage, on every path but the camera over every pixel, drawn or not.
+    var stageOverlaySteps = 0
 }
 
 /// Where a pipeline draws: alone into the target, or into one attachment of the motion blur's pass (0 the subsample, 1
@@ -1181,6 +1236,8 @@ struct StageTextures {
     var cursor: any MTLTexture
     var backgroundImage: (any MTLTexture)?
     var windowTitle: (any MTLTexture)?
+    /// What phase 3's layers are drawn with (`Compositor.encode`'s `layerTextures`).
+    var layers: LayerTextures = .none
 }
 
 /// `StageMapping` in `ShaderSource.metal`: 16 bytes. The stage point, in pixels of the frame's output size, under each

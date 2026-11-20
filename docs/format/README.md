@@ -2232,6 +2232,24 @@ Los temas de la biblioteca de música (`music-1`, diseño de la fase 3, §7.6) n
 - **Un archivo con otro tamaño o encabezado no es el tema** y se rehace: uno cortado, otro CAF, uno de otra cantidad de cuadros. Con el nombre de la huella, eso basta: las muestras no se comparan. Un enlace en su lugar no se sigue nunca (`O_NOFOLLOW`): no es el tema, y el tema nuevo lo reemplaza a él, no a lo que apunta.
 - El id del algoritmo lleva su versión: los bytes de cada tema se fijan en sus pruebas y pueden cambiar hasta el merge de la fase 3 a `main`; después, otro sonido es `music-2`, en otra carpeta, y `library:music-1/<id>` sigue sonando igual. Ver `docs/music.md`.
 
+### El orden de dibujo con el documento 4
+
+Un cuadro se dibuja en este orden (diseño de la fase 3, §12); lo nuevo, en negrita:
+
+1. El fondo, la sombra y el marco de ventana o de dispositivo.
+2. La pantalla a través del zoom y del reencuadre, con los desenfoques de privacidad, **o el clip importado de la secuencia** (`sequence[].content` `media`) en su lugar.
+3. El cursor y los efectos de clic.
+4. **El zoom tranquilo** (`zoom.regions[].mode` `highlight`, `dim` o `loupe`: resaltar, atenuar o la lupa, que muestrea lo dibujado de 1 a 3).
+5. **Las anotaciones pegadas a la grabación** (`annotations` con anclaje `content`), por capa, dentro del escenario: el zoom las transforma.
+6. La cámara.
+7. **Las anotaciones de la salida** (anclaje `output` o `whole`), por capa, con sus imágenes y sus clips.
+8. Las teclas en pantalla.
+9. Los subtítulos.
+
+**Una placa** (`content` `card`) reemplaza 1 a 6 y no tiene teclas ni subtítulos; las anotaciones de la salida se dibujan encima, así se puede anotar una placa (decisión 9 del plan de la base): al final del cuadro van la placa, las anotaciones de la salida, las teclas y los subtítulos, en ese orden. **Un cuadro congelado** (`content` `freeze`) es el cuadro de su toma en el comienzo de su clip y en su punto, entero (pantalla, cursor, zoom, cámara, anotaciones pegadas), sin desenfoque de movimiento e igual en toda su duración (decisión 8). Las anotaciones de la salida son las de cada instante de salida, también sobre un cuadro congelado, una placa o un clip importado. Es el mismo orden en cada forma de dibujar un cuadro: directo, con el desenfoque de movimiento del zoom o del cursor, con el zoom dentro de la tarjeta y con la cámara a pantalla completa asentada (ahí no hay escenario ni paso 4: la cámara y encima los pasos 7 a 9). Cuando atenuar o la lupa tienen que leer lo ya dibujado del escenario, terminan el pase y lo que sigue (5 a 9) se dibuja en un pase nuevo sobre el destino.
+
+**Con los valores legados, cada capa nueva vale `nil` o vacía y no cambia ninguna llamada**: sin clips con contenido, sin zoom tranquilo y sin anotaciones, el compositor hace las mismas llamadas, en el mismo orden y con los mismos uniforms que la fase 2, y el shader es el de la fase 2 (las partes de las capas nuevas, vacías en la base, van después de las de la fase 2 en el orden de arriba). Un documento 1, 2 o 3 migrado se dibuja byte por byte como antes (la dorada 3, `make golden-3`).
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
