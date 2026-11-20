@@ -1023,14 +1023,17 @@ Una sola pasada de fin de fase, contra la app de la rama `fase-3`, en orden: la 
 
 ### 0. Preparación
 
-1. **Antes de instalar la app de la fase 3, guardar un proyecto de la fase 2.** Con la app de la fase 2 (`build/fase2/Toma.app`), abrir un proyecto con cámara, editarlo (un corte, otro margen y el volumen de una pista alcanzan), exportarlo y cerrarlo. Si queda alguno de la fase 1 (1b o 1c) sin abrir en la fase 2, guardarlo también. Esos proyectos son los de «Un proyecto de la fase 1 o 2 abierto en la fase 3», abajo.
+La app de la fase 3 está en `build/fase3/Toma.app` (Release, firma ad hoc). Es una compilación nueva, así que macOS pide de nuevo los permisos: «Abrir Ajustes del Sistema» la vuelve a poner en la lista. La de la fase 2 sigue en `build/fase2/Toma.app` porque estaba abierta al cerrar la fase, y también queda comprimida en `build/fase2/Toma-fase2.zip`. Hay que usarla en el paso 1 y después sacarla (paso 2): con las dos registradas, «Salir y volver a abrir» de Ajustes del Sistema puede abrir la que no es y los permisos no se aplican. Cuando una comprobación pide «la app de la fase 2», descomprimirla aparte (`ditto -x -k build/fase2/Toma-fase2.zip ~/Desktop/ && mv ~/Desktop/Toma.app ~/Desktop/Toma-fase2.app`), usarla, cerrarla y borrarla otra vez.
+
+1. **Antes de abrir la app de la fase 3, guardar un proyecto de la fase 2.** Con la app de la fase 2 (`build/fase2/Toma.app`), abrir un proyecto con cámara, editarlo (un corte, otro margen y el volumen de una pista alcanzan), exportarlo y cerrarlo. Si queda alguno de la fase 1 (1b o 1c) sin abrir en la fase 2, guardarlo también. Esos proyectos son los de «Un proyecto de la fase 1 o 2 abierto en la fase 3», abajo.
+2. **Sacar la app de la fase 2.** Cerrarla (Toma ▸ Salir) y mandar `build/fase2/Toma.app` a la Papelera; la copia comprimida queda. Abrir `build/fase3/Toma.app` y darle los permisos que pida.
 
 ### 2. Detalle por área
 
 **Un proyecto de la fase 1 o 2 abierto en la fase 3** (B2)
 
 Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que se lo edita en la fase 3: mirarlo no lo cambia.
-- Con el proyecto de la preparación: abrirlo en la app de la fase 3, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 2. Abrirlo otra vez con `build/fase2/Toma.app`: abre igual que antes, con sus ediciones y sin ningún aviso.
+- Con el proyecto de la preparación: abrirlo en la app de la fase 3, reproducirlo, moverse por la línea de tiempo, exportarlo sin tocar nada y cerrarlo. Se ve y se oye igual que en la fase 2. Abrirlo otra vez con la app de la fase 2 (`Toma-fase2.app`, ver la preparación): abre igual que antes, con sus ediciones y sin ningún aviso.
 - Abrirlo en la app de la fase 3 y deshacer (⌘Z) hasta el principio: cada paso de la fase 2 se deshace en orden (el volumen, el margen, el corte) y Edición ▸ Deshacer nombra cada uno. Rehacer los devuelve. Con un paso nuevo (otro margen), cerrar y abrirlo con la app de la fase 2: dice que es de una versión más nueva y no lo cambia.
 
 **El editor de la fase 3, vacío** (B11)
@@ -1043,7 +1046,7 @@ Un proyecto de la fase 1 o 2 sigue siendo de su versión en el disco hasta que s
 - En la isla, Audio del sistema ▸ Por app ▸ «Elegir apps…»: el menú se titula «Una pista por app». Con 8 apps elegidas, arriba dice «Hasta 8 apps» y las demás están apagadas (las elegidas se pueden sacar). Con el panel en español, ningún texto se corta.
 - Elegir Safari y Música en Por app y grabar 20 s con las dos sonando: en `manifest.json` de la toma hay dos pistas, `system-audio-com-apple-Safari` y `system-audio-com-apple-Music`, cada una con su `appBundleID` y su `appName` («Safari», «Música» o «Music» según el idioma del sistema), y cada una tiene solo lo suyo: en el editor, silenciar una calla solo esa app.
 - Con Música cerrada al empezar y abierta a los 10 s: su pista está en el manifiesto desde el principio y suena en silencio hasta que Música abre; después graba su sonido.
-- Ese proyecto lo abre la app de la fase 2 (`build/fase2/Toma.app`) sin aviso y mezcla las dos apps.
+- Ese proyecto lo abre la app de la fase 2 (`Toma-fase2.app`, ver la preparación) sin aviso y mezcla las dos apps.
 - «Todo» sigue en una sola pista `system-audio`; Por app sin apps elegidas graba una pista `system-audio` en silencio, como en la fase 2.
 **Regrabar en el mismo paquete** (T6, con «Regrabar desde acá» de T12)
 
