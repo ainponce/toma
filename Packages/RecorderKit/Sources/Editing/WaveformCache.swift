@@ -149,7 +149,7 @@ public actor WaveformCache {
 ///
 /// Unchecked because `AVAssetTrack` is not marked `Sendable`: the track is only handed to the one
 /// `AVAssetReaderTrackOutput` that decodes it, on the queue, and not used anywhere else meanwhile.
-private struct DecoderInput: @unchecked Sendable {
+struct DecoderInput: @unchecked Sendable {
     var asset: AVURLAsset
     var track: AVAssetTrack
     /// The track's sample rate, which decoding keeps.
@@ -157,14 +157,14 @@ private struct DecoderInput: @unchecked Sendable {
 }
 
 /// Set once the work that decodes is cancelled, read by the decoding on the queue between buffers.
-private final class DecodingCancellation: Sendable {
+final class DecodingCancellation: Sendable {
     private let flag = Atomic(false)
     var isCancelled: Bool { flag.load(ordering: .relaxed) }
     func cancel() { flag.store(true, ordering: .relaxed) }
 }
 
 /// The minimum and maximum of every 10 ms of a segment's samples, as they are decoded.
-private struct SegmentEnvelope {
+struct SegmentEnvelope {
     let sampleRate: Double
     private(set) var pairs: [SIMD2<Float>] = []
     /// Frames added so far.
