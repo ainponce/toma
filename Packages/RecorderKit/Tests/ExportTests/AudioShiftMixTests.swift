@@ -91,6 +91,20 @@ import Testing
                 #expect(level > 0.1, "\(Double(window) / 48_000) s: \(level)")
             }
 
+            // [1, 1.5) s at 0.5× and [1.5, 3.5) s at 2×, one going on from the other, the second heard 0.5 s sooner:
+            // from 0.5 s of its source, before where the first starts, which its stretch is fed too.
+            var sped = edited(project, [(1, 1.5), (1.5, 3.5)], shifts: [1: -500_000_000])
+            (sped.sequence[0].speed, sped.sequence[1].speed) = (0.5, 2)
+            let jAfterSlow = try await EditedMix.make(project: project, document: sped, framesPerSecond: 60)
+            #expect(jAfterSlow.cuts.starts == [0, 24_000] && jAfterSlow.cuts.sourceShift == [0, -48_000])
+            #expect(
+                jAfterSlow.playDescription.contains("run 24000..<96000 from 24000 heard 24000..<168000 at 2.0"),
+                "\(jAfterSlow.playDescription)")
+            let afterSlow = try await rendered(jAfterSlow)
+            for window in stride(from: 24_000 + 1_440, to: 96_000 - 960, by: 480) {
+                let level = rms(afterSlow[window..<(window + 480)])
+                #expect(level > 0.1, "\(Double(window) / 48_000) s: \(level)")
+            }
         }
     }
 
