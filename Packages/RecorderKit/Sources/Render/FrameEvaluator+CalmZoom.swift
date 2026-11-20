@@ -60,12 +60,15 @@ public struct LoupeLayer: Equatable, Sendable {
 ///   path's as it is. Its size is the output over the depth of the instant.
 /// - In a split's card (`RenderFrame.card`), where what is drawn of the screen is on the card and the card's zoom shows
 ///   the crop of the screen's content (`CardZoomPath`), it is that crop: the path's centre at its fractions of the
-///   screen's rect in stage units (`StagePoints.rects(of:)`) taken to the screen's content on the card, the content
-///   over the depth of the instant; while the card comes in or goes (`CardPlacement.mix` from 0 to 1), the stage's focus
-///   and the card's mixed by it, so it does not jump. The compositor draws it through the card's content and cuts
-///   Highlight's and Dim's hole to the card.
+///   screen's rect in stage units (`StagePoints.rects(of:)`), held with `StageCrop` at the depth it is placed at where
+///   the card's crop can be (in the content, and in the window around it, as `CardViewport` keeps the card's camera),
+///   taken to the screen's content on the card, the content over the depth of the instant; while the card comes in or
+///   goes (`CardPlacement.mix` from 0 to 1), the stage's focus and the card's mixed by it, so it does not jump. So once
+///   settled it never shows past the content, and near its edges it is the classic card's crop. The compositor draws it
+///   through the card's content and cuts Highlight's and Dim's hole to the card.
 /// - In `loupe` mode the lens is the block's (`LoupeStyle`), its radius a fraction of the output's short side, and it
-///   magnifies by the depth of the instant: from 1× to the block's depth, without moving.
+///   magnifies by the depth of the instant up to 4× (`largestMagnification`): from 1× to the block's depth, without
+///   moving.
 ///
 /// `nil` without a calm block (`MotionPaths.calmZoom`) and where nothing of one is seen.
 struct CalmZoomScene: Sendable {
@@ -77,6 +80,10 @@ struct CalmZoomScene: Sendable {
     /// path reads it.
     private let clipTakes: [String]
     private let take: String
+
+    /// How many times larger the loupe shows what is under it at most (phase 3 design §6: 1.25 to 4), whatever the
+    /// block's depth, which can be up to 16 (`ZoomBlock`).
+    static let largestMagnification = 4.0
 
     init(document: EditDocument, take: TakeRecord, timeMap: TimeMap, paths: MotionPaths) {
         path = paths.calmZoom
@@ -105,10 +112,18 @@ struct CalmZoomScene: Sendable {
         }
         var half = size / state.depth / 2
         if let card = frame.card, let content = frame.screen?.rect,
-           let screen = host.flatMap(stage.shownScreen(at:)).map({ stage.rects(of: $0.view).screen }),
-           screen.width > 0, screen.height > 0
+           let rects = host.flatMap(stage.shownScreen(at:)).map({ stage.rects(of: $0.view) }),
+           rects.screen.width > 0, rects.screen.height > 0
         {
-            let fraction = (state.center - SIMD2(screen.x, screen.y)) / SIMD2(screen.width, screen.height)
+            let (window, screen) = rects
+            // In fractions of the content, held where the card's crop of that depth can be: in the content, and in the
+            // window around it, as the card's camera keeps it (`CardViewport`).
+            let origin = SIMD2(screen.x, screen.y), units = SIMD2(screen.width, screen.height)
+            let around = Rect(
+                x: (window.x - screen.x) / units.x, y: (window.y - screen.y) / units.y, width: window.width / units.x,
+                height: window.height / units.y)
+            let fraction = StageCrop.clamp(
+                center: (state.center - origin) / units, depth: placedDepth, stage: SIMD2(1, 1), screen: around)
             let extent = SIMD2(content.width, content.height)
             let weight = card.mix.isNaN ? 0 : min(max(card.mix, 0), 1)
             center += (SIMD2(content.x, content.y) + fraction * extent - center) * weight
@@ -116,7 +131,8 @@ struct CalmZoomScene: Sendable {
         }
         let loupe = state.mode == .loupe
             ? LoupeLayer(
-                radius: state.loupe.radius * min(size.x, size.y), shape: state.loupe.shape, magnification: state.depth)
+                radius: state.loupe.radius * min(size.x, size.y), shape: state.loupe.shape,
+                magnification: min(state.depth, Self.largestMagnification))
             : nil
         return CalmZoomLayer(
             mode: state.mode, amount: state.amount,

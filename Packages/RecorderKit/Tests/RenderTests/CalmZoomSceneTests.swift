@@ -205,6 +205,40 @@ private func near(_ a: Rect, _ b: Rect, _ tolerance: Double) -> Bool {
         }
     }
 
+    /// The loupe magnifies at most 4× (phase 3 design §6, 1.25 to 4), whatever the block's depth (blocks read 1 to 16):
+    /// from 1× as it comes in to 4× settled, for a block of the user's at 8× and for an automatic one of `zoom.auto.depth`
+    /// 8; Highlight's focus is still the stage over the depth of the instant.
+    @Test func loupeMagnifiesAtMostFourTimes() throws {
+        var user = document(.loupe)
+        user.zoom.regions[0].depth = 8
+        var automatic = document(.classic)
+        automatic.zoom.regions[0].origin = .auto
+        automatic.zoom.regions[0].mode = nil
+        automatic.zoom.regions[0].depth = nil
+        automatic.zoom.auto.depth = 8
+        automatic.zoom.auto.mode = .loupe
+        for (label, document) in [("user's", user), ("automatic", automatic)] {
+            let evaluator = scene(document)
+            let calm = try #require(evaluator.paths.calmZoom)
+            var below = 0, capped = 0
+            for t in frames() {
+                guard let layer = evaluator.frame(at: t).calmZoom else { continue }
+                let state = try #require(calm.state(atOutput: TimeMap.outputNanoseconds(seconds: t)))
+                let lens = try #require(layer.loupe, "\(label) at \(t) s")
+                #expect(lens.magnification == min(state.depth, 4), "\(label) at \(t) s: \(lens) \(state.depth)")
+                #expect(lens.magnification >= 1 && lens.magnification <= 4)
+                if lens.magnification < 4 { below += 1 } else { capped += 1 }
+                #expect(abs(layer.focus.width - 1280 / state.depth) < 1e-9, "\(label) at \(t) s")
+            }
+            #expect(below > 0 && capped > 30, "\(label): \(below) \(capped)")
+            let settled = try #require(calm.state(atOutput: TimeMap.outputNanoseconds(seconds: 2.4)))
+            #expect(settled.depth > 7.9 && evaluator.frame(at: 2.4).calmZoom?.loupe?.magnification == 4, "\(label)")
+        }
+        var lit = user
+        lit.zoom.regions[0].mode = .highlight
+        #expect(scene(lit).frame(at: 2.4).calmZoom?.loupe == nil)
+    }
+
     /// No calm block, or `zoom.show` off: no layer anywhere.
     @Test func noCalmBlockNoLayer() {
         var off = document(.highlight)
