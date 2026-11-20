@@ -32,7 +32,7 @@ private struct Expected {
     /// straight sixteenths.
     var swing: ClosedRange<Double>?
     /// The SHA-256 of its samples as Float32 little-endian (plan decision 4). It changes with any change to the theme
-    /// or the engine: until the merge of phase 3 into `main` that is fine (update it); after, another sound is music-2.
+    /// or the engine: until the first published version that is fine (update it); after, another sound is music-2.
     var digest: String
 
     static func of(_ id: String) -> Expected {

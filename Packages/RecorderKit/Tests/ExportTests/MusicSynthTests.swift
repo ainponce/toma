@@ -153,7 +153,7 @@ private func seconds(_ s: Double) -> Int { Int(s * 48_000) }
         #expect(MusicMetrics.peak(first) > 0.05)
         // Pinned, so another Mac (or another version of macOS) gives these very bytes. A change to the engine that changes
         // them raises `MusicSynth.engineVersion` (so the music library makes its themes again) and adds a row here for
-        // it; a row is never edited. Until the merge of phase 3 into `main` that is fine; after, another sound is music-2.
+        // it; a row is never edited. Until the first published version that is fine; after, another sound is music-2.
         let pinned = [1: "9c136a165a700d05c21d0e57af74ad83dcd4f9445969ef77b6db729ba180d597"]
         let digest = SHA256.hash(data: MusicFile.data(interleaved: first)).map { String(format: "%02x", $0) }.joined()
         #expect(digest == pinned[MusicSynth.engineVersion])
