@@ -51,4 +51,7 @@ public enum TakeNotice: Equatable, Sendable {
     /// "Record Keys to Show Them" is on but Input Monitoring is not allowed (a take never asks for it): the take is
     /// recorded without keys.
     case keysNotRecorded
+    /// "Follow Keyboard Focus" is on but Accessibility is not allowed (a take never asks for it): the take is recorded
+    /// without focus.
+    case keyboardFocusNotRecorded
 }

@@ -337,17 +337,19 @@ public final class RecordingController {
     }
 
     /// What the preflight asks about: the permission the take requires (`requiredPermission`), the microphone, the
-    /// camera and system audio when the take uses them, and Input Monitoring when "Record Keys to Show Them" is on
-    /// (`RecorderSettings.recordKeys`, read now, so a change applies from the next take or restart). Input Monitoring is
-    /// never asked for by a take: only the settings do. An iPhone's take never wants it: it records nothing of the
-    /// Mac's input.
+    /// camera and system audio when the take uses them, Input Monitoring when "Record Keys to Show Them" is on
+    /// (`RecorderSettings.recordKeys`) and Accessibility when "Follow Keyboard Focus" is (`recordFocus`), both read now, so a
+    /// change applies from the next take or restart. Neither is ever asked for by a take: only the settings do (a system
+    /// prompt would be in the video). An iPhone's take never wants them: it records nothing of the Mac's input.
     private func wantedPermissions(_ request: TakeRequest) -> Set<PermissionKind> {
         var wanted: Set<PermissionKind> = [requiredPermission(request)]
         if usesMicrophone(request) { wanted.insert(.microphone) }
         if request.selection.camera != .off { wanted.insert(.camera) }
         if request.selection.systemAudio != .off { wanted.insert(.systemAudio) }
-        if request.selection.mode != .device, SettingsStore(defaults: defaults).settings.recordKeys {
-            wanted.insert(.inputMonitoring)
+        if request.selection.mode != .device {
+            let settings = SettingsStore(defaults: defaults).settings
+            if settings.recordKeys { wanted.insert(.inputMonitoring) }
+            if settings.recordFocus { wanted.insert(.accessibility) }
         }
         return wanted
     }
@@ -424,6 +426,8 @@ public final class RecordingController {
         }
         // The keys are wanted but not allowed: the take records without them (the settings are where it is asked for).
         if wanted.contains(.inputMonitoring), !preflight.granted.contains(.inputMonitoring) { addNotice(.keysNotRecorded) }
+        // The same for the keyboard focus and Accessibility: the take records without it.
+        if wanted.contains(.accessibility), !preflight.granted.contains(.accessibility) { addNotice(.keyboardFocusNotRecorded) }
 
         while true {
             switch await attempt(request, granted: preflight.granted) {

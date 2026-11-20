@@ -17,8 +17,9 @@ public enum PermissionKind: String, CaseIterable, Sendable {
     /// Optional: without it the system audio track is silent. macOS never says whether it was allowed, so once it
     /// was asked for it reads as granted, meaning requested (`SystemPermissionProbe`).
     case systemAudio
-    /// Optional, and never needed to record: only to switch desktops from the island, by posting ⌃← and ⌃→
-    /// (`SpaceJumper`). Asked for only when the user asks to (plan decision 27).
+    /// Optional, and never needed to record: to switch desktops from the island, by posting ⌃← and ⌃→ (`SpaceJumper`),
+    /// and, with "Follow Keyboard Focus", to read where the focus and the text cursor are (`AccessibilityFocusRecorder`).
+    /// Asked for only when the user asks to (plan decision 27); a take wants it only with that setting and never asks.
     case accessibility
     /// Optional, and no take wants it until the keys on screen (phase 2): only to read the keys pressed. Like
     /// Accessibility it only answers yes or no (`CGPreflightListenEventAccess`).
@@ -305,7 +306,7 @@ public struct PreflightResult: Equatable, Sendable {
 
 /// The check before every take: one permission is required (screen recording; for an iPhone or iPad, the camera's),
 /// every other permission is optional (the take is recorded without that source). Only the permissions wanted are
-/// asked about: a take never needs Accessibility, and a microphone, a camera or system audio that is off is neither
+/// asked about: a take needs Accessibility only with "Follow Keyboard Focus" on (and never asks for it), and a microphone, a camera or system audio that is off is neither
 /// missing nor recorded.
 public enum RecordingPreflight {
     /// `wanted` holds the `required` permission, plus the microphone, the camera and system audio when the take would
