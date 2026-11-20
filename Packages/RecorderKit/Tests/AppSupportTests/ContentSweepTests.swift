@@ -143,9 +143,9 @@ import Testing
             }
 
             // The commands of the transcript cut and restore the take's stretches, and leave each point where it is.
-            let cut = try #require(TranscriptCommands.cut(withContent, take: 0, words: 1...1, makeID: { _ in "c-0000f001" })).get()
+            let cut = try #require(TranscriptCommands.cut(withContent, take: 0, words: 1...1, takeBounds: [:], makeID: { _ in "c-0000f001" })).get()
             let cutDocument = try withContent.applying(cut.changes)
-            let plainCut = try plain.applying(try #require(TranscriptCommands.cut(plain, take: 0, words: 1...1, makeID: { _ in "c-0000f001" })).get().changes)
+            let plainCut = try plain.applying(try #require(TranscriptCommands.cut(plain, take: 0, words: 1...1, takeBounds: [:], makeID: { _ in "c-0000f001" })).get().changes)
             #expect(cutDocument.sequence.filter { $0.content == nil } == plainCut.sequence)
             #expect(cutDocument.sequence.filter { $0.content != nil } == withContent.sequence.filter { $0.content != nil })
             #expect(DocumentRules.problems(in: cutDocument) == [])

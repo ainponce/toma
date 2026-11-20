@@ -10,7 +10,7 @@ import ProjectFormat
 
 /// `document` with the words `words` of the first take cut, as the text's ⌫ does.
 private func cutting(_ words: ClosedRange<Int>, in document: EditDocument) throws -> EditDocument {
-    let step = try #require(TranscriptCommands.cut(document, take: 0, words: words, makeID: BySource.newIDs)).get()
+    let step = try #require(TranscriptCommands.cut(document, take: 0, words: words, takeBounds: [:], makeID: BySource.newIDs)).get()
     #expect(step.label == .transcriptCut)
     return try BySource.applying(step, to: document)
 }
@@ -54,11 +54,11 @@ private func cutting(_ words: ClosedRange<Int>, in document: EditDocument) throw
 
 @Test func cutOfCutWordsIsNil() throws {
     let edited = try cutting(3...4, in: BySource.transcribed())
-    #expect(TranscriptCommands.cut(edited, take: 0, words: 3...4, makeID: BySource.newIDs) == nil)
-    #expect(TranscriptCommands.cut(edited, take: 0, words: 4...4, makeID: BySource.newIDs) == nil)
-    #expect(TranscriptCommands.cut(edited, take: 0, words: 3...5, makeID: BySource.newIDs) != nil)
-    #expect(TranscriptCommands.cut(edited, take: 0, words: 8...12, makeID: BySource.newIDs) == nil)
-    #expect(TranscriptCommands.cut(BySource.document(), take: 0, words: 0...0, makeID: BySource.newIDs) == nil)
+    #expect(TranscriptCommands.cut(edited, take: 0, words: 3...4, takeBounds: [:], makeID: BySource.newIDs) == nil)
+    #expect(TranscriptCommands.cut(edited, take: 0, words: 4...4, takeBounds: [:], makeID: BySource.newIDs) == nil)
+    #expect(TranscriptCommands.cut(edited, take: 0, words: 3...5, takeBounds: [:], makeID: BySource.newIDs) != nil)
+    #expect(TranscriptCommands.cut(edited, take: 0, words: 8...12, takeBounds: [:], makeID: BySource.newIDs) == nil)
+    #expect(TranscriptCommands.cut(BySource.document(), take: 0, words: 0...0, takeBounds: [:], makeID: BySource.newIDs) == nil)
 }
 
 @Test func cutOfWordsAcrossClipsAtTwoSpeeds() throws {
@@ -258,17 +258,17 @@ private func cutting(_ words: ClosedRange<Int>, in document: EditDocument) throw
         TranscriptCommands.fillers(in: document) == [
             TranscriptWordRef(take: 0, word: 1), TranscriptWordRef(take: 0, word: 3), TranscriptWordRef(take: 0, word: 5),
         ])
-    let step = try #require(TranscriptCommands.removeFillers(document, makeID: BySource.newIDs)).get()
+    let step = try #require(TranscriptCommands.removeFillers(document, takeBounds: [:], makeID: BySource.newIDs)).get()
     #expect(step.label == .transcriptFillers)
     let edited = try BySource.applying(step, to: document)
     #expect(BySource.cutWords(edited) == [1, 3, 5, 9])
     // Each from 40 ms before it to 40 ms before the next word: a second each.
     #expect(BySource.duration(edited) == BySource.duration(document) - 3_000_000_000)
     #expect(TranscriptCommands.fillers(in: edited) == [])
-    #expect(TranscriptCommands.removeFillers(edited, makeID: BySource.newIDs) == nil)
+    #expect(TranscriptCommands.removeFillers(edited, takeBounds: [:], makeID: BySource.newIDs) == nil)
     // Two fillers one after the other are one cut.
     let two = BySource.transcribed(["Bueno,", "eh", "mmm", "esto", "es", "una", "prueba", "de", "voz", "fin"])
-    let both = try BySource.applying(try #require(TranscriptCommands.removeFillers(two, makeID: BySource.newIDs)).get(), to: two)
+    let both = try BySource.applying(try #require(TranscriptCommands.removeFillers(two, takeBounds: [:], makeID: BySource.newIDs)).get(), to: two)
     #expect(both.sequence == [BySource.clip(1, 0, 0.96), BySource.clip("c-00000010", 2.96, 30)])
     // In a language without fillers, none.
     #expect(TranscriptCommands.fillers(in: BySource.transcribed(texts, language: "pt-BR")) == [])
@@ -284,7 +284,7 @@ private func cutting(_ words: ClosedRange<Int>, in document: EditDocument) throw
     #expect(TranscriptCommands.pauseThresholds == [500_000_000, 1_000_000_000, 2_000_000_000])
     let pauses = TranscriptCommands.pauses(in: document, threshold: TranscriptCommands.defaultPauseThreshold)
     #expect(pauses == [SourceRange(take: BySource.takeID, start: BySource.at(0.7), end: BySource.at(1.8))])
-    let step = try #require(TranscriptCommands.shortenPauses(document, threshold: 1_000_000_000, makeID: BySource.newIDs)).get()
+    let step = try #require(TranscriptCommands.shortenPauses(document, threshold: 1_000_000_000, takeBounds: [:], makeID: BySource.newIDs)).get()
     #expect(step.label == .transcriptPauses)
     let edited = try BySource.applying(step, to: document)
     let map = TimeMap(sequence: edited.sequence)
@@ -299,10 +299,10 @@ private func cutting(_ words: ClosedRange<Int>, in document: EditDocument) throw
         [BySource.clip(1, 0, 30)],
         words: [BySource.word("Hola", 0, 0.5), BySource.word("a", 2, 2.5), BySource.word("todos", 3, 3.5)])
     let edited = try BySource.applying(
-        try #require(TranscriptCommands.shortenPauses(document, threshold: 1_000_000_000, makeID: BySource.newIDs)).get(),
+        try #require(TranscriptCommands.shortenPauses(document, threshold: 1_000_000_000, takeBounds: [:], makeID: BySource.newIDs)).get(),
         to: document)
     #expect(TranscriptCommands.pauses(in: edited, threshold: 1_000_000_000) == [])
-    #expect(TranscriptCommands.shortenPauses(edited, threshold: 1_000_000_000, makeID: BySource.newIDs) == nil)
+    #expect(TranscriptCommands.shortenPauses(edited, threshold: 1_000_000_000, takeBounds: [:], makeID: BySource.newIDs) == nil)
     // At half a second only the other one counts, the pause of 0.4 s left is not one.
     #expect(
         TranscriptCommands.pauses(in: edited, threshold: 500_000_000) == [
@@ -336,7 +336,7 @@ private func cutting(_ words: ClosedRange<Int>, in document: EditDocument) throw
             SourceRange(take: BySource.takeID, start: BySource.at(0.7), end: BySource.at(3.8))
         ])
     let edited = try BySource.applying(
-        try #require(TranscriptCommands.shortenPauses(long, threshold: 1_000_000_000, makeID: BySource.newIDs)).get(), to: long)
+        try #require(TranscriptCommands.shortenPauses(long, threshold: 1_000_000_000, takeBounds: [:], makeID: BySource.newIDs)).get(), to: long)
     let map = TimeMap(sequence: edited.sequence)
     let gap = try #require(map.output(atSource: BySource.at(4), take: BySource.takeID))
         - (try #require(map.output(atSource: BySource.at(0.5), take: BySource.takeID)))

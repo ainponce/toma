@@ -48,12 +48,10 @@ public enum MarkerList {
 
     /// The markers the output shows, by output time (ties by id): each recorded instant without an entry as a marker
     /// without a name; with an entry of origin `recorded` and the same take and `t`, that entry (nothing if it is
-    /// hidden); and each added entry that is not hidden. Those whose instant is cut have no output and are left out.
+    /// hidden); and each added entry that is not hidden. Each where `output(take:t:sequence:timeMap:)` places it; those
+    /// whose instant is cut have no output and are left out.
     public static func visible(document: EditDocument, recorded: Recorded, timeMap: TimeMap) -> [VisibleMarker] {
-        struct Key: Hashable {
-            let take: String
-            let t: HostTime
-        }
+        let points = Points(sequence: document.sequence, timeMap: timeMap)
         var recordedEntries: [Key: Marker] = [:]
         for entry in document.markers.items where entry.origin == .recorded {
             let key = Key(take: entry.take, t: entry.t)
@@ -63,7 +61,8 @@ public enum MarkerList {
         var result: [VisibleMarker] = []
         var shown = Set<String>()
         func show(_ id: String, entry: Marker?, take: String, t: HostTime, name: String, origin: MarkerOrigin) {
-            guard let output = timeMap.output(atSource: t, take: take), shown.insert(id).inserted else { return }
+            guard let output = output(take: take, t: t, points: points, timeMap: timeMap), shown.insert(id).inserted
+            else { return }
             result.append(
                 VisibleMarker(id: id, entryID: entry?.id, take: take, t: t, name: name, origin: origin, output: output))
         }
@@ -82,6 +81,14 @@ public enum MarkerList {
             show(entry.id, entry: entry, take: entry.take, t: entry.t, name: entry.name, origin: entry.origin)
         }
         return result.sorted { ($0.output, $0.id) < ($1.output, $1.id) }
+    }
+
+    /// Where the output shows a marker of `take` at `t`, in ns: where the first clip with content of that take whose point
+    /// is `t` starts (a title card, a frozen frame or an imported clip that lasts), before a stretch that starts there, so
+    /// one put on such a clip (its point, `MarkerCommands.add`) shows where it was put; otherwise at `t`'s own output
+    /// (`TimeMap.output(atSource:take:)`). `nil` if neither shows it: `t` is cut. `timeMap` is that of `sequence`.
+    public static func output(take: String, t: HostTime, sequence: [Clip], timeMap: TimeMap) -> Int64? {
+        output(take: take, t: t, points: Points(sequence: sequence, timeMap: timeMap), timeMap: timeMap)
     }
 
     /// The nearest marker before (`forward` false) or after the frame `frame`, not the one under it: by the frame each
@@ -105,5 +112,33 @@ public enum MarkerList {
     static func frame(of marker: VisibleMarker, frameRate: Int, frameCount: Int) -> Int {
         let n = Int((Double(marker.output) / 1e9 * Double(frameRate)).rounded())
         return min(max(n, 0), max(frameCount - 1, 0))
+    }
+
+    // MARK: - Private
+
+    /// A place of a take.
+    private struct Key: Hashable {
+        let take: String
+        let t: HostTime
+    }
+
+    /// Where the clips with content of a sequence start in its output, by their take and point: the first of each place,
+    /// of those that last (`TimeMap.outputDuration(of:)` above 0; one that does not is never shown).
+    private struct Points {
+        private var starts: [Key: Int64] = [:]
+
+        init(sequence: [Clip], timeMap: TimeMap) {
+            for (k, clip) in sequence.enumerated()
+            where clip.content != nil && k < timeMap.clipOutputStarts.count && TimeMap.outputDuration(of: clip) > 0 {
+                let key = Key(take: clip.take, t: clip.start)
+                if starts[key] == nil { starts[key] = timeMap.clipOutputStarts[k] }
+            }
+        }
+
+        func start(take: String, t: HostTime) -> Int64? { starts[Key(take: take, t: t)] }
+    }
+
+    private static func output(take: String, t: HostTime, points: Points, timeMap: TimeMap) -> Int64? {
+        points.start(take: take, t: t) ?? timeMap.output(atSource: t, take: take)
     }
 }

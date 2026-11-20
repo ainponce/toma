@@ -73,7 +73,7 @@ enum MarkerFixtures {
     #expect(Set(shown.map(\.id)).count == 2)
 }
 
-@Test func aMarkerOnAFreezePointShowsAtItsEdge() {
+@Test func aMarkerOnAFreezePointShowsAtItsStart() {
     let sequence = [
         Clip(id: "c-00000001", take: "take-001", start: MarkerFixtures.at(0), end: MarkerFixtures.at(1), speed: 1),
         Clip(id: "c-00000002", take: "take-001", start: MarkerFixtures.at(1), end: MarkerFixtures.at(1), speed: 1, content: .freeze(duration: MarkerFixtures.ns(2))),
@@ -81,7 +81,57 @@ enum MarkerFixtures {
     ]
     let document = MarkerFixtures.document(sequence: sequence)
     let shown = MarkerList.visible(document: document, recorded: ["take-001": [MarkerFixtures.at(1)]], timeMap: TimeMap(sequence: sequence))
-    #expect(shown.map(\.output) == [MarkerFixtures.ns(3)])
+    // The frozen frame shows the instant from its start, before the stretch that starts there.
+    #expect(shown.map(\.output) == [MarkerFixtures.ns(1)])
+}
+
+/// A title card or a frozen frame of `take-001` at its point: at the start of the output, splitting a stretch, at the end
+/// of the output, and a frozen frame at the end of a stretch with a cut after it. Each with the output where it starts.
+enum PointFixtures {
+    static func card(_ id: String, at s: Double) -> Clip {
+        Clip(
+            id: id, take: "take-001", start: MarkerFixtures.at(s), end: MarkerFixtures.at(s), speed: 1,
+            content: .card(TitleCard(title: "Capítulo 2", style: .centered, background: .stage), duration: MarkerFixtures.ns(3)))
+    }
+
+    static func stretch(_ id: String, _ start: Double, _ end: Double) -> Clip {
+        Clip(id: id, take: "take-001", start: MarkerFixtures.at(start), end: MarkerFixtures.at(end), speed: 1)
+    }
+
+    /// (the sequence, the point, where the point's clip starts in the output, in s)
+    static let cases: [(sequence: [Clip], point: Double, start: Double)] = [
+        // Card 0–3 s, then the stretch that starts at its point, 3–7 s.
+        ([card("c-00000001", at: 0), stretch("c-00000002", 0, 4)], 0, 0),
+        // 0–2 s, the card 2–5 s, and the rest of the stretch it split, 5–7 s.
+        ([stretch("c-00000001", 0, 2), card("c-00000002", at: 2), stretch("c-00000003", 2, 4)], 2, 2),
+        // 0–2 s and the card at the end, 2–5 s: no stretch starts at its point.
+        ([stretch("c-00000001", 0, 2), card("c-00000002", at: 2)], 2, 2),
+        // 0–2 s, the frozen frame of its end 2–4 s, and after a cut 4–6 s: no stretch starts at its point.
+        ([
+            stretch("c-00000001", 0, 2),
+            Clip(
+                id: "c-00000002", take: "take-001", start: MarkerFixtures.at(2), end: MarkerFixtures.at(2), speed: 1,
+                content: .freeze(duration: MarkerFixtures.ns(2))),
+            stretch("c-00000003", 3, 5),
+        ], 2, 2),
+    ]
+}
+
+@Test(arguments: PointFixtures.cases.indices)
+func aMarkerOnACardOrAFreezeShowsAtItsStart(index: Int) {
+    let (sequence, point, start) = PointFixtures.cases[index]
+    let added = Marker(id: "m-00000001", take: "take-001", t: MarkerFixtures.at(point), name: "Capítulo 2", origin: .added)
+    let document = MarkerFixtures.document([added], sequence: sequence)
+    let map = TimeMap(sequence: sequence)
+    let shown = MarkerList.visible(document: document, recorded: [:], timeMap: map)
+    #expect(shown.map(\.output) == [MarkerFixtures.ns(start)])
+    let chapters = Chapters.list(shown, duration: map.duration, introTitle: "Intro")
+    #expect(chapters.last == Chapter(start: MarkerFixtures.ns(start), title: "Capítulo 2"))
+    #expect(chapters.count == (start == 0 ? 1 : 2))
+    // A recorded marker at the point shows there too.
+    let recorded = MarkerList.visible(
+        document: MarkerFixtures.document(sequence: sequence), recorded: ["take-001": [MarkerFixtures.at(point)]], timeMap: map)
+    #expect(recorded.map(\.output) == [MarkerFixtures.ns(start)])
 }
 
 @Test func hiddenEntriesAndAddedEntries() {

@@ -8,8 +8,8 @@ import ProjectFormat
 ///
 /// Each one is where the output shows it (`TimeMap`): a block from its first kept instant to the end of its last one,
 /// with the cuts inside it closed (`outputRange(ofSource:take:)`), a layout block as the preview places it
-/// (`LayoutTimeline.blockOutputs(of:timeMap:)`: two at most 1 ns apart touch, so they make one point); a change or a
-/// marker at its own instant if it is kept. What is cut is not a point: a change in a cut rules from the start of the
+/// (`LayoutTimeline.blockOutputs(of:timeMap:)`: two at most 1 ns apart touch, so they make one point); a change at its
+/// own instant if it is kept; a marker where the ruler shows it (`MarkerList.output(take:t:sequence:timeMap:)`). What is cut is not a point: a change in a cut rules from the start of the
 /// next clip, which is one already.
 public struct EditPoints: Sendable {
     /// In order, without repeats, from 0 to the output's duration.
@@ -19,7 +19,7 @@ public struct EditPoints: Sendable {
     public init(document: EditDocument, timeMap: TimeMap, markers: [HostTime]) {
         var outputs: [Int64] = []
         if let take = document.sequence.first?.take {
-            outputs = markers.compactMap { timeMap.output(atSource: $0, take: take) }
+            outputs = markers.compactMap { MarkerList.output(take: take, t: $0, sequence: document.sequence, timeMap: timeMap) }
         }
         self.init(document: document, timeMap: timeMap, markerOutputs: outputs)
     }
