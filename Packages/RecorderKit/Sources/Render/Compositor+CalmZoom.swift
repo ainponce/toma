@@ -61,6 +61,9 @@ extension Compositor {
     ///
     /// Every texture is made before the pass is ended, so a texture Metal cannot make leaves the pass given as it is. The
     /// pass reopened counts in `counts.renderPasses`, and the drawing that read the frame in `counts.calmZoomSamples`.
+    ///
+    /// Over a frame with nothing behind its stage (`BackgroundLayer.transparent`, milestone 4c), Highlight and Dim darken
+    /// the stage drawn and not the void, with their pipelines of `AlphaPipelines`; the loupe is drawn as it is.
     func drawCalmZoom(
         _ layer: CalmZoomLayer?, frame: RenderFrame, through stage: StageTransform?, card: CardContent?, pass: LayerPass,
         encoder: inout any MTLRenderCommandEncoder, target: any MTLTexture, commandBuffer: any MTLCommandBuffer,
@@ -71,6 +74,7 @@ extension Compositor {
         else { return false }
         let amount = min(layer.amount, 1)
         let outputSize = frame.outputSize
+        let transparent = frame.background == .transparent
         let focus = stage?.outputRect(ofStage: layer.focus, outputSize: outputSize) ?? layer.focus
         var passes = CalmZoomPasses(commandBuffer: commandBuffer, refusal: layers.calmZoom.refusals.forTests)
         switch layer.mode {
@@ -78,15 +82,16 @@ extension Compositor {
             return false
         case .highlight:
             var uniforms = CalmZoomLook.focusUniforms(.highlight, amount: amount, focus: focus, outputSize: outputSize)
-            encoder.setRenderPipelineState(layers.calmZoom.highlight(for: pass))
+            let highlight = transparent ? layers.alpha.highlight(for: pass) : layers.calmZoom.highlight(for: pass)
+            encoder.setRenderPipelineState(highlight)
             drawOverTheOutput(&uniforms, card: card, outputSize: outputSize, encoder: encoder)
             counts.calmZooms += 1
             return false
         case .dim:
             try checkReadable(target)
             try drawDim(
-                focus: focus, amount: amount, card: card, outputSize: outputSize, encoder: &encoder, target: target,
-                passes: &passes, counts: &counts)
+                focus: focus, amount: amount, card: card, outputSize: outputSize, transparent: transparent, encoder: &encoder,
+                target: target, passes: &passes, counts: &counts)
             return true
         case .loupe:
             guard let lens = layer.loupe, lens.radius > 0, lens.radius.isFinite, !lens.magnification.isNaN else { return false }
@@ -169,10 +174,11 @@ extension Compositor {
 
     /// Dim (`CalmZoomLook`) of `focus` as drawn: a copy of the whole target with its mipmaps up to the level of its blur
     /// (`dimBlurLevel`), that level blurred in two passes, and its veil over the target in a pass of its own, left in
-    /// `encoder`.
+    /// `encoder`; over a `transparent` frame, the veil with the copy's alpha (`AlphaPipelines.dim`).
     private func drawDim(
-        focus: Rect, amount: Double, card: CardContent?, outputSize: SIMD2<Int>, encoder: inout any MTLRenderCommandEncoder,
-        target: any MTLTexture, passes: inout CalmZoomPasses, counts: inout DrawCounts
+        focus: Rect, amount: Double, card: CardContent?, outputSize: SIMD2<Int>, transparent: Bool,
+        encoder: inout any MTLRenderCommandEncoder, target: any MTLTexture, passes: inout CalmZoomPasses,
+        counts: inout DrawCounts
     ) throws {
         let pipelines = layers.calmZoom
         let width = target.width, height = target.height
@@ -213,7 +219,7 @@ extension Compositor {
 
         counts.renderPasses += 1
         var uniforms = CalmZoomLook.focusUniforms(.dim, amount: amount, focus: focus, outputSize: outputSize)
-        encoder.setRenderPipelineState(pipelines.dim)
+        encoder.setRenderPipelineState(transparent ? layers.alpha.dim : pipelines.dim)
         encoder.setFragmentTexture(blurred, index: 0)
         encoder.setFragmentSamplerState(screenSampler, index: 0)
         drawOverTheOutput(&uniforms, card: card, outputSize: outputSize, encoder: encoder)

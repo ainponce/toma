@@ -240,6 +240,12 @@ public struct FrameEvaluator: Sendable {
     /// (`LayoutTimeline.isTrivial`) and the layouts' for any other.
     var forcedPath: Path?
 
+    /// Every frame with nothing behind its stage (`BackgroundLayer.transparent`, milestone 4c, design §7.1): a parameter
+    /// of the drawing, like the size or the frames per second, never of the document. Set in
+    /// `frame(at:cursorImageOfTakeIsReadable:)`, the one way out of a scene, so it holds for every take, title card,
+    /// frozen frame and imported clip; `resized(to:)` keeps it. `false`, the frames as ever.
+    public var transparentBackground = false
+
     /// `paths`: the document's (`MotionPaths(take:events:document:cameraReadable:)`), built here when `nil`. `frameRate`:
     /// the frames per second the output is drawn at, whose frame the motion blur's shutters are fractions of; the
     /// document's when `nil`.
@@ -429,12 +435,13 @@ public struct FrameEvaluator: Sendable {
     /// `frame(at:cursorImageIsReadable:)` with the recorded cursor images of each take `cursorImageOfTakeIsReadable` says
     /// can be read, by the take as `RenderFrame.take` names it (`nil` for the scene's own) and hash: each take's images
     /// are its own files (`takes/<take>/cursors/`), however alike their hashes. With the title cards that start next
-    /// (`RenderFrame.titleCardsAhead`), whose texts are drawn ahead.
+    /// (`RenderFrame.titleCardsAhead`), whose texts are drawn ahead. With `transparentBackground`, nothing behind the stage.
     func frame(
         at outputTime: Double, cursorImageOfTakeIsReadable: (_ take: String?, _ hash: String) throws -> Bool
     ) rethrows -> RenderFrame {
         let τ = TimeMap.outputNanoseconds(seconds: outputTime)
         var frame = try clipFrame(atOutput: τ, cursorImageIsReadable: cursorImageOfTakeIsReadable)
+        if transparentBackground { frame.background = .transparent }
         if timeMap.duration > 0 {
             let clamped = min(max(τ, 0), timeMap.duration - 1)
             frame.outputAnnotations = annotations.output(atOutput: clamped)

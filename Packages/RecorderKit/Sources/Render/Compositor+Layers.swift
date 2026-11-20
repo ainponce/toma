@@ -72,7 +72,8 @@ enum LayerPass {
 
 /// The pipelines of phase 2's layers (phase 2 design §11 and §12), each in its layer's file (`Compositor+<Layer>.swift`),
 /// built at the end of `Compositor.init` with its `PipelineMaker`: none in the base of phase 2. Then phase 3's (phase 3
-/// design §12 and §14), the same way: none in the base of phase 3.
+/// design §12 and §14), the same way: none in the base of phase 3. Last, milestone 4c's transparent background
+/// (`Compositor+Alpha.swift`), which only a transparent frame draws with.
 struct LayerPipelines {
     let captions: CaptionPipelines
     let keys: KeyPipelines
@@ -83,6 +84,7 @@ struct LayerPipelines {
     let calmZoom: CalmZoomPipelines
     let annotations: AnnotationPipelines
     let titleCard: TitleCardPipelines
+    let alpha: AlphaPipelines
 
     init(maker: PipelineMaker) throws {
         deviceFrame = try DeviceFramePipelines(maker: maker)
@@ -94,6 +96,7 @@ struct LayerPipelines {
         calmZoom = try CalmZoomPipelines(maker: maker)
         annotations = try AnnotationPipelines(maker: maker)
         titleCard = try TitleCardPipelines(maker: maker)
+        alpha = try AlphaPipelines(maker: maker)
     }
 }
 

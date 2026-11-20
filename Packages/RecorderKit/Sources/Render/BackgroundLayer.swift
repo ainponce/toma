@@ -13,6 +13,11 @@ public enum BackgroundLayer: Equatable, Sendable {
     /// An image of the package covering the stage (aspect fill, centred), blurred; the frame's gradient (Toma classic)
     /// when the image is missing or cannot be read.
     case image(BackgroundImage)
+    /// Nothing (milestone 4c, design §7.1): the stage over a transparent target, for the export's codecs with alpha and
+    /// the preview's checkerboard. The pass clears to (0,0,0,0) and the background's step writes (0,0,0,0) without
+    /// blending, so every subsample of the motion blur starts from nothing; everything else is drawn over it with its
+    /// premultiplied alpha. Never in a document: `FrameEvaluator.transparentBackground` puts it in a frame.
+    case transparent
 }
 
 /// An image of the package behind the stage: the user's own or the desktop picture a take saved.

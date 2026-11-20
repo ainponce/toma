@@ -43,8 +43,11 @@ public enum PreviewRequest: Equatable, Sendable {
 /// drawable cannot be read) and reduced on the GPU with a box filter to the layer's drawable, so the layer shows it
 /// pixel for pixel (Core Animation would reduce it without mipmaps, and text would shimmer). The layer is the renderer's
 /// device, `.bgra8Unorm`, tagged Rec. 709 like the export (as QuickTime shows the MP4), and waits at most a second for a
-/// drawable. Whoever drives it asks from a display link (`NSView.displayLink(target:selector:)`) added to the run loop's
-/// `.common` modes, so it keeps asking while a slider of the panel is dragged.
+/// drawable. While `showsAlpha` (milestone 4c, design §7.1: the export sheet has a codec with alpha), every scene is drawn
+/// with nothing behind its stage, the export's frame of that codec, and the reduction lays it over a checkerboard in the
+/// drawable alone (`encodeShown`): the engine's texture never has it. Whoever drives it asks from a display link
+/// (`NSView.displayLink(target:selector:)`) added to the run loop's `.common` modes, so it keeps asking while a slider of
+/// the panel is dragged.
 ///
 /// Errors while drawing are logged once each and leave the frame before on screen.
 public final class PreviewEngine: @unchecked Sendable {
@@ -77,6 +80,8 @@ public final class PreviewEngine: @unchecked Sendable {
         var drawnSize: SIMD2<Int>?
         /// Tests and the benchmark.
         var hooks = Hooks()
+        /// `PreviewEngine.showsAlpha`.
+        var showsAlpha = false
     }
 
     /// What tests and `recorder-dev bench-preview` look at.
@@ -107,7 +112,6 @@ public final class PreviewEngine: @unchecked Sendable {
     private struct Drawing {
         /// The texture frames are drawn into, at the scene's size.
         var target: (any MTLTexture)?
-        var downsample: (any MTLRenderPipelineState)?
         var downsampleFailed = false
         /// The frame of each track last drawn, by take and track: what stays on screen while a newer one is not decoded
         /// (never another take's of the same id).
@@ -130,6 +134,15 @@ public final class PreviewEngine: @unchecked Sendable {
         /// While playing: what is scheduled of the frames ahead (`DecodeAhead`).
         var ahead: DecodeAhead?
     }
+
+    /// The side of the checkerboard's squares under a transparent frame, in the drawable's pixels.
+    static let checkerSquare = 16
+    /// The greys of its squares, the one at the drawable's top-left corner first: Rec. 709 values written as they are, as
+    /// everything else is.
+    static let checkerGreys: (Float, Float) = (0.20, 0.28)
+
+    /// The reduction's pipelines (`encodeShown`), made the first time: apart from `drawing`, so a test may encode one too.
+    private let shownPipelines = Mutex<ShownPipelines?>(nil)
 
     /// Shows `renderer`'s frames in `layer`, which it sets up: `renderer.device`, `.bgra8Unorm`, Rec. 709,
     /// `allowsNextDrawableTimeout`. The scene is the renderer's (`FrameRenderer.scene`) until `setScene(_:)`. Whoever
@@ -177,8 +190,32 @@ public final class PreviewEngine: @unchecked Sendable {
     /// renderer's once the engine's queue gets to it, and draws the last request again with it (the paused frame with a
     /// new revision of the edit). Returns at once, from any thread.
     public func setScene(_ scene: FrameEvaluator) {
-        let start = shared.withLock { shared in
+        redrawingTheLastRequest { shared in
             shared.scene = scene
+            return true
+        }
+    }
+
+    /// Whether the frames are drawn with nothing behind their stage (`FrameEvaluator.transparentBackground`, milestone
+    /// 4c): while `true`, each scene is (one that is already stays so either way), and the drawable shows them over a
+    /// checkerboard (`checkerSquare`, `checkerGreys`), never the engine's texture. `false` at first. Changing it draws the
+    /// last request again, as `setScene(_:)` does; from any thread, returning at once.
+    public var showsAlpha: Bool {
+        get { shared.withLock { $0.showsAlpha } }
+        set {
+            redrawingTheLastRequest { shared in
+                guard shared.showsAlpha != newValue else { return false }
+                shared.showsAlpha = newValue
+                return true
+            }
+        }
+    }
+
+    /// Applies `change` to what is shared and, when it says it changed what is drawn, counts a new scene and draws the
+    /// last request again with it.
+    private func redrawingTheLastRequest(_ change: (inout Shared) -> Bool) {
+        let start = shared.withLock { shared in
+            guard change(&shared) else { return false }
             shared.sceneNumber += 1
             if shared.pending == nil { shared.pending = shared.last }
             guard shared.pending != nil else { return false }
@@ -226,7 +263,9 @@ public final class PreviewEngine: @unchecked Sendable {
                     return nil
                 }
                 shared.pending = nil
-                return (request, shared.scene, shared.sceneNumber, shared.hooks)
+                var scene = shared.scene
+                if shared.showsAlpha { scene.transparentBackground = true }
+                return (request, scene, shared.sceneNumber, shared.hooks)
             }
             guard let (request, scene, number, hooks) = next else { return }
             if number != drawing.sceneNumber {
@@ -472,7 +511,8 @@ public final class PreviewEngine: @unchecked Sendable {
             return texture
         }
         if let drawable = layer.nextDrawable() {
-            try downsample(target, into: drawable.texture, commandBuffer: commandBuffer)
+            try encodeShown(
+                target, into: drawable.texture, overCheckerboard: frame.background == .transparent, commandBuffer: commandBuffer)
             commandBuffer.present(drawable)
         }
         drawing.shown.merge(shown) { $1 }
@@ -516,9 +556,12 @@ public final class PreviewEngine: @unchecked Sendable {
     }
 
     /// Reduces `source` into `drawable` with a box filter (each pixel the average of the texels it covers, in their
-    /// share), or enlarges it bilinearly.
-    private func downsample(_ source: any MTLTexture, into drawable: any MTLTexture, commandBuffer: any MTLCommandBuffer) throws {
-        let pipeline = try downsamplePipeline()
+    /// share), or enlarges it bilinearly; `overCheckerboard` (a transparent frame), over a checkerboard of the drawable's
+    /// pixels (`checkerSquare`, `checkerGreys`), opaque: `c + grey × (1 − c.a)`. Internal for tests.
+    func encodeShown(
+        _ source: any MTLTexture, into drawable: any MTLTexture, overCheckerboard: Bool, commandBuffer: any MTLCommandBuffer
+    ) throws {
+        let pipelines = try self.pipelines()
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = drawable
         pass.colorAttachments[0].loadAction = .dontCare
@@ -528,32 +571,49 @@ public final class PreviewEngine: @unchecked Sendable {
         }
         encoder.label = "PreviewEngine downsample"
         var scale = SIMD2<Float>(Float(source.width) / Float(drawable.width), Float(source.height) / Float(drawable.height))
-        encoder.setRenderPipelineState(pipeline)
+        encoder.setRenderPipelineState(overCheckerboard ? pipelines.checker : pipelines.box)
         encoder.setFragmentTexture(source, index: 0)
         encoder.setFragmentBytes(&scale, length: MemoryLayout<SIMD2<Float>>.stride, index: 0)
+        if overCheckerboard {
+            var checker = SIMD4<Float>(Float(Self.checkerSquare), Self.checkerGreys.0, Self.checkerGreys.1, 0)
+            encoder.setFragmentBytes(&checker, length: MemoryLayout<SIMD4<Float>>.stride, index: 1)
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
     }
 
-    private func downsamplePipeline() throws -> any MTLRenderPipelineState {
-        if let pipeline = drawing.downsample { return pipeline }
-        let device = renderer.device
-        let library = try device.makeLibrary(source: Self.downsampleSource, options: nil)
-        guard let vertex = library.makeFunction(name: "previewVertex") else { throw RenderError.missingShaderFunction("previewVertex") }
-        guard let fragment = library.makeFunction(name: "previewBoxFragment") else {
-            throw RenderError.missingShaderFunction("previewBoxFragment")
+    /// The reduction's two pipelines, from `downsampleSource`.
+    private struct ShownPipelines: @unchecked Sendable {
+        let box: any MTLRenderPipelineState
+        let checker: any MTLRenderPipelineState
+    }
+
+    private func pipelines() throws -> ShownPipelines {
+        try shownPipelines.withLock { made in
+            if let made { return made }
+            let device = renderer.device
+            let library = try device.makeLibrary(source: Self.downsampleSource, options: nil)
+            func function(_ name: String) throws -> any MTLFunction {
+                guard let function = library.makeFunction(name: name) else { throw RenderError.missingShaderFunction(name) }
+                return function
+            }
+            func pipeline(_ fragment: String) throws -> any MTLRenderPipelineState {
+                let descriptor = MTLRenderPipelineDescriptor()
+                descriptor.vertexFunction = try function("previewVertex")
+                descriptor.fragmentFunction = try function(fragment)
+                descriptor.colorAttachments[0].pixelFormat = Compositor.pixelFormat
+                return try device.makeRenderPipelineState(descriptor: descriptor)
+            }
+            let pipelines = try ShownPipelines(box: pipeline("previewBoxFragment"), checker: pipeline("previewCheckerFragment"))
+            made = pipelines
+            return pipelines
         }
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = vertex
-        descriptor.fragmentFunction = fragment
-        descriptor.colorAttachments[0].pixelFormat = Compositor.pixelFormat
-        let pipeline = try device.makeRenderPipelineState(descriptor: descriptor)
-        drawing.downsample = pipeline
-        return pipeline
     }
 
     /// One triangle over the drawable; each pixel is the box average of the source's texels it covers (`scale` texels of
-    /// the source per pixel on each axis), or, enlarging on both axes, the bilinear sample at its centre.
+    /// the source per pixel on each axis), or, enlarging on both axes, the bilinear sample at its centre
+    /// (`previewBoxFragment`); over the checkerboard, that over a grey of the square of `checker.x` pixels it is in, the
+    /// first `checker.y` and the next `checker.z` (`previewCheckerFragment`).
     static let downsampleSource = """
         #include <metal_stdlib>
         using namespace metal;
@@ -567,14 +627,13 @@ public final class PreviewEngine: @unchecked Sendable {
             return out;
         }
 
-        fragment float4 previewBoxFragment(PreviewVertexOut in [[stage_in]], texture2d<float> source [[texture(0)]],
-                                           constant float2 &scale [[buffer(0)]]) {
+        static float4 previewBox(float2 position, texture2d<float> source, float2 scale) {
             float2 size = float2(source.get_width(), source.get_height());
             if (scale.x <= 1.0 && scale.y <= 1.0) {
                 constexpr sampler linear(filter::linear, address::clamp_to_edge);
-                return source.sample(linear, in.position.xy * scale / size);
+                return source.sample(linear, position * scale / size);
             }
-            float2 low = floor(in.position.xy) * scale;
+            float2 low = floor(position) * scale;
             float2 high = min(low + scale, size);
             int2 first = int2(floor(low));
             int2 last = int2(ceil(high)) - 1;
@@ -589,6 +648,20 @@ public final class PreviewEngine: @unchecked Sendable {
                 }
             }
             return total > 0.0 ? sum / total : float4(0.0, 0.0, 0.0, 1.0);
+        }
+
+        fragment float4 previewBoxFragment(PreviewVertexOut in [[stage_in]], texture2d<float> source [[texture(0)]],
+                                           constant float2 &scale [[buffer(0)]]) {
+            return previewBox(in.position.xy, source, scale);
+        }
+
+        fragment float4 previewCheckerFragment(PreviewVertexOut in [[stage_in]], texture2d<float> source [[texture(0)]],
+                                               constant float2 &scale [[buffer(0)]],
+                                               constant float4 &checker [[buffer(1)]]) {
+            float4 shown = previewBox(in.position.xy, source, scale);
+            uint2 square = uint2(floor(in.position.xy / checker.x));
+            float grey = ((square.x + square.y) & 1u) == 0u ? checker.y : checker.z;
+            return shown + float4(grey, grey, grey, 1.0) * (1.0 - shown.a);
         }
         """
 
