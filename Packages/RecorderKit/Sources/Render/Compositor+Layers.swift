@@ -101,12 +101,11 @@ struct LayerPipelines {
 /// (`FrameRenderer.mediaTextures(for:decoded:commandBuffer:)` and `annotationTextures(for:decoded:commandBuffer:)`), each
 /// field filled by its milestone: the imported clip's frame, and the annotations' images and clips. `none`, as every frame
 /// of phases 1 and 2, draws none of them. They must stay alive until the command buffer they are drawn in completes.
-/// Unchecked: Metal's textures are not marked `Sendable`, and these are made and drawn under the renderer's lock.
-public struct LayerTextures: @unchecked Sendable {
+public struct LayerTextures {
     var media: MediaClipTextures?
     var annotations: AnnotationTextures?
 
-    public static let none = LayerTextures()
+    public static var none: Self { .init() }
 }
 
 extension Compositor {

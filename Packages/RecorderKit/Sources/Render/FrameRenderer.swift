@@ -353,19 +353,14 @@ public final class FrameRenderer: @unchecked Sendable {
         let screen = try frame.screen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let previousScreen = try frame.previousScreen.flatMap { try texture($0.trackID, $0.sourceTime) }
         let camera = try frame.camera.flatMap { try texture($0.trackID, $0.sourceTime) }
-        let look = try cameraLook.textures(
-            for: frame,
-            decoded: { id, time in
-                guard let cached = try decoded(id, time) else { return nil }
-                commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
-                return cached
-            }, commandBuffer: commandBuffer)
-        /// What `decoded` gives for a video of phase 3's layers, kept alive until `commandBuffer` completes.
+        /// What `decoded` gives for a video of the camera's look or of phase 3's layers, kept alive until `commandBuffer`
+        /// completes.
         func kept(_ id: String, _ time: HostTime) throws -> CachedTexture? {
             guard let cached = try decoded(id, time) else { return nil }
             commandBuffer.addCompletedHandler { _ in withExtendedLifetime(cached) {} }
             return cached
         }
+        let look = try cameraLook.textures(for: frame, decoded: kept, commandBuffer: commandBuffer)
         let layerTextures = LayerTextures(
             media: try mediaTextures(for: frame, decoded: kept, commandBuffer: commandBuffer),
             annotations: try annotationTextures(for: frame, decoded: kept, commandBuffer: commandBuffer))
@@ -543,8 +538,9 @@ public final class FrameRenderer: @unchecked Sendable {
 
     /// Draws `frame` with the frames `decoded` holds into `pixelBuffer`, commits it and calls `completion` on `renderQueue`
     /// once the GPU is done; throws, having committed nothing, what kept it from being drawn: `RenderError.frameNotDecoded`
-    /// for a frame of a track of the take that `decoded` lacks (never for a person's mask, which no track of the take is:
-    /// without it, the camera's original). Runs on `renderQueue` (and in tests).
+    /// for a frame `decoded` lacks of a video with a reader (`reader(for:)`: a track of the take, a person's mask, an
+    /// imported clip or an annotation's clip), the preview's own rule, so the export never leaves out silently what the
+    /// preview draws. Runs on `renderQueue` (and in tests).
     func draw(
         _ frame: RenderFrame, decoded: [DecodedKey: CachedTexture?], into pixelBuffer: CVPixelBuffer,
         completion: @escaping @Sendable ((any Error)?) -> Void
@@ -556,9 +552,9 @@ public final class FrameRenderer: @unchecked Sendable {
             let target = try metalTexture(for: pixelBuffer)
             try draw(frame, into: target.texture, commandBuffer: commandBuffer) { trackID, time in
                 if let texture = decoded[DecodedKey(trackID: trackID, time: time)] { return texture }
-                // A track the take does not have shows nothing, as drawing it frame by frame does, and a video that is no
-                // track of the take (a person's mask) is drawn without; any track of the take was decoded.
-                guard take.track(trackID) != nil else { return nil }
+                // A video without a reader shows nothing, as drawing it frame by frame does; any video with one (a track
+                // of the take, a person's mask, an imported clip or an annotation's clip) was decoded.
+                guard reader(for: trackID) != nil else { return nil }
                 throw RenderError.frameNotDecoded(track: trackID, sourceTime: time)
             }
             return target
