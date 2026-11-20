@@ -143,7 +143,7 @@ private enum Info {
     // The labels are the last two, with their names in the log.
     #expect(EditLabel.projectTitle.rawValue == "project.title")
     #expect(EditLabel.projectSummary.rawValue == "project.summary")
-    #expect(Array(EditLabel.allCases.suffix(2)) == [.projectTitle, .projectSummary])
+    #expect(Array(EditLabel.allCases.suffix(3).prefix(2)) == [.projectTitle, .projectSummary])
 }
 
 @Test func emptyTitleAndSummaryRemoveInfo() throws {

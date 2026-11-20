@@ -2483,6 +2483,7 @@ Un documento 5 con todo lo nuevo, en las partes que cambian:
 ### El registro con el documento 5
 
 - **Las etiquetas** (`label`) nuevas van después de las de la fase 3: `project.title` y `project.summary`. Los hitos de las fases 4 y 5 suman las suyas al final.
+- **La etiqueta nueva `marker.chapters`** (hito 5b): los capítulos que la IA propuso y el usuario aceptó, en un paso (`ChapterCommands.add`), con el id del primer marcador que toca como destino.
 - **El título y el resumen** (`InfoCommands`) se cambian con un `set` de `/info` entero, con `/info` como destino: tipear en un campo es un solo grupo de deshacer. Cada texto se guarda sin espacios ni saltos de línea en sus extremos y recortado a su límite, y un título y un resumen vacíos a la vez sacan `info` (un `set` a `null`), como en el documento legado.
 
 ### La validación

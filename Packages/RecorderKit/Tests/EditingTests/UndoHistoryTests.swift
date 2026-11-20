@@ -164,6 +164,6 @@ private func perform(_ step: EditStep, after seconds: Double, in history: inout 
         "clip.freeze", "clip.card", "clip.media", "clip.content", "zoom.mode", "audio.range", "audio.shift", "music.add",
         "music.change", "music.move", "music.trim", "music.delete", "music.ducking", "take.rerecord", "take.use", "marker.add",
         "marker.rename", "marker.move", "marker.delete",
-        "project.title", "project.summary",
+        "project.title", "project.summary", "marker.chapters",
     ])
 }

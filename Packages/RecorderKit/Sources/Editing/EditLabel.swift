@@ -49,6 +49,8 @@ public enum EditLabel: String, Codable, Sendable, CaseIterable {
     case markerAdd = "marker.add", markerRename = "marker.rename", markerMove = "marker.move", markerDelete = "marker.delete"
     // Phases 4 and 5 (fases 4 y 5 design §4.1), each added at the end: the project's title and summary.
     case projectTitle = "project.title", projectSummary = "project.summary"
+    // Milestone 5b: the chapters the user accepted from the AI's proposal, added as markers in one step.
+    case markerChapters = "marker.chapters"
 }
 
 /// What one command changes, before it is a line of the log: its changes, and the grouping key of design §6.4.

@@ -914,8 +914,8 @@ private enum WholeObjects {
         #expect(label.rawValue == raw)
         #expect(EditLabel(rawValue: raw) == label)
     }
-    // And after them, the 2 of phases 4 and 5 (`InfoCommandsTests`).
-    #expect(EditLabel.allCases.count == 33 + 25 + 25 + 2)
+    // And after them, the 2 of phases 4 and 5 (`InfoCommandsTests`) and `marker.chapters` (5b).
+    #expect(EditLabel.allCases.count == 33 + 25 + 25 + 2 + 1)
     #expect(Array(EditLabel.allCases[(33 + 25)..<(33 + 25 + 25)]) == labels.map(\.0))
     // The labels of before, the same.
     #expect(EditLabel.allCases.first == .split)
