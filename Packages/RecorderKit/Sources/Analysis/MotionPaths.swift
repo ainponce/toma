@@ -77,10 +77,22 @@ public struct MotionPaths: Sendable {
     /// and stage and nothing of each other.
     ///
     /// Built off the main thread, like `init(take:events:document:cameraReadable:contentRatio:)`, with the camera readable
-    /// and the ratio `auto` follows as there (another ratio is another stage).
+    /// as there, and the ratio `auto` follows that `old` was built with: a take that is not the first clip's keeps the
+    /// output's stage (`init(take:events:document:after:cameraReadable:contentRatio:)` gives another one).
+    public init(
+        take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths, cameraReadable: Bool = true
+    ) {
+        self.init(
+            take: take, events: events, document: document, after: old, cameraReadable: cameraReadable,
+            contentRatio: old.inputs.contentRatio)
+    }
+
+    /// `init(take:events:document:after:cameraReadable:)` with the ratio `auto` follows given, as
+    /// `init(take:events:document:cameraReadable:contentRatio:)` takes it (`nil`: `take`'s own); another ratio than
+    /// `old`'s is another stage, so every path is built again.
     public init(
         take: TakeRecord, events: [InputEvent], document: EditDocument, after old: MotionPaths, cameraReadable: Bool = true,
-        contentRatio: Double?? = nil
+        contentRatio: Double??
     ) {
         let inputs = Inputs(document, cameraReadable: cameraReadable, contentRatio: contentRatio)
         guard inputs != old.inputs else {

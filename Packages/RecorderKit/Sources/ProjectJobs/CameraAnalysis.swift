@@ -74,22 +74,13 @@ public enum CameraAnalysis {
     }
 
     /// `inputs` with its masks and faces replaced by what the caches hold whole for what `document` asks of each of
-    /// `takes`: `fill(_:document:take:package:caches:)` of each, none of them emptying another's. Reads the disk: never on
-    /// the main thread.
+    /// `takes`: `CameraAnalysisCaches.fill(_:document:takes:package:caches:)`, each take's under its own, none of them
+    /// emptying another's (a take listed twice, once). Reads the disk: never on the main thread.
     public static func fill(
         _ inputs: inout AnalysisInputs, document: EditDocument, takes: [TakeRecord], package: ProjectPackage,
         caches: ProjectCaches
     ) {
-        var masks: [CameraSegment: URL] = [:]
-        var faces: [CameraSegment: CameraFaceTrack] = [:]
-        for take in takes {
-            var part = AnalysisInputs()
-            fill(&part, document: document, take: take, package: package, caches: caches)
-            masks.merge(part.personMasks) { first, _ in first }
-            faces.merge(part.faceTracks) { first, _ in first }
-        }
-        inputs.personMasks = masks
-        inputs.faceTracks = faces
+        CameraAnalysisCaches.fill(&inputs, document: document, takes: takes, package: package, caches: caches)
     }
 
     /// What an export does before it starts: every job `document` needs of each take its sequence shows (`neededJobs`,
