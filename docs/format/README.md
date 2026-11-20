@@ -2429,3 +2429,65 @@ Compatibilidad:
 
 - **El lector acepta 1…5** (`Manifest.supportedFormatVersions`, `1...5`) y rechaza cualquier otra antes de decodificar el manifiesto: un manifiesto de la versión 6 o más es de una Toma más nueva (*versión más nueva* en la biblioteca, *para reparar* en la recuperación, que no lo toca).
 - La app de la fase 2 (lector de `1...4`) dice que un paquete v5 es de una versión más nueva y no lo toca; la de la fase 1 (`1...3`), lo mismo. Un paquete de una toma sigue en 3 o 4 aunque tenga pistas por app, clips, audio o guion: su manifiesto lo leen igual (lo que pueden abrir lo decide además la versión del documento de edición).
+
+### Los metadatos para editores (`metadata-1`)
+
+`Exportar ▸ Metadatos para editores (FCPXML)` (diseño de las fases 4 y 5, §7.2; decisiones 8 a 11 del plan 4c, `ExternalEditorExport`) escribe dos archivos junto al video exportado entero, nunca dentro de un paquete: `<nombre>.fcpxml` y `<nombre>.toma-metadata.json`, con `<nombre>` el del video sin su extensión. Los dos salen de una sola lectura de la salida (`EditorTimeline`), así nunca dicen cosas distintas, y describen solo el export entero: el video de un rango, de otro tamaño o de otros cuadros por segundo, o con más de un cuadro de diferencia con `TimeMap.frameCount(frameRate:)`, se rechaza (`ExportError.writerFailed`) y no se escribe nada. Cada uno se reemplaza atómico (`DurableFile.writeAtomically`), el FCPXML primero; si el JSON no se puede escribir, el FCPXML recién escrito se borra: los dos o ninguno.
+
+**Los cuadros.** Todo tiempo de salida `τ` (ns) cae en el cuadro `n = round(τ · fps / 10⁹)` del video, el que lo muestra. Lo que cae en un cuadro de más allá del último (`n ≥ frames`) no está, en ninguno de los dos archivos. Cada cuadro del video es el que dibuja el renderer en su tiempo (`TimeMap.frameTime(n, frameRate:)`), con la cámara de cada toma legible como la encuentra el renderer en el paquete y sin análisis (lo que leen las cachés no mueve el cursor ni el zoom).
+
+**El FCPXML** (FCPXML 1.11, escrito a mano). Un proyecto con el video como único `asset-clip` y sus marcadores:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE fcpxml>
+<fcpxml version="1.11">
+    <resources>
+        <format id="r1" frameDuration="1/30s" width="1920" height="1080" colorSpace="1-1-1 (Rec. 709)"/>
+        <asset id="r2" name="Demo" start="0s" duration="105/30s" hasVideo="1" format="r1" videoSources="1" hasAudio="1" audioSources="1" audioChannels="2" audioRate="48000">
+            <media-rep kind="original-media" src="file:///Users/me/Movies/Demo.mp4"/>
+        </asset>
+    </resources>
+    <library>
+        <event name="Proyecto">
+            <project name="Demo">
+                <sequence format="r1" duration="105/30s" tcStart="0s" tcFormat="NDF" audioLayout="stereo" audioRate="48k">
+                    <spine>
+                        <asset-clip ref="r2" offset="0s" start="0s" duration="105/30s" name="Demo">
+                            <chapter-marker start="15/30s" duration="1/30s" value="Intro"/>
+                            <marker start="24/30s" duration="1/30s" value="Click"/>
+                            <marker start="36/30s" duration="21/30s" value="Zoom 2.0×"/>
+                        </asset-clip>
+                    </spine>
+                </sequence>
+            </project>
+        </event>
+    </library>
+</fcpxml>
+```
+
+- **Los tiempos** son cuadros del video: `"<n>/<fps>s"`, `"0s"` el 0, sin reducir la fracción. El `format` no tiene `name` (cualquier tamaño de la hoja) y su `frameDuration` es `1/<fps>s`.
+- **El asset** es el video: su URL de archivo tal como se le dio (`media-rep@src`), su nombre, sus cuadros. Con una pista de audio lleva `hasAudio="1" audioSources="1" audioChannels="<canales>" audioRate="48000"`; sin ella, ninguno de esos atributos. La secuencia es `mono` con un canal, `stereo` si no, siempre a `48k`.
+- **El evento** se llama como el paquete del proyecto (sin `.toma`); el proyecto, el asset y el clip, como el video.
+- **Los marcadores del clip**, por orden de `start` (en un mismo cuadro: capítulos, clics, zooms; después, en su orden):
+  - un `chapter-marker` de un cuadro por marcador que muestra la salida (`MarkerList.visible`: ni los ocultos ni los de un tramo cortado), con su nombre, o «Marker» si no tiene;
+  - un `marker` «Click» de un cuadro por clic que la salida conserva (`CursorPath.clicks` de cada toma);
+  - un `marker` de rango por bloque de zoom (abajo, los de `zoomBlocks`), del cuadro de su comienzo a su fin acotados a `[0, frames]` y de un cuadro por lo menos: «Zoom 2.0×» (Clásico), «Highlight 2.0×», «Dim 2.0×» o «Loupe 2.0×», la profundidad con un decimal.
+- **El idioma de las etiquetas** es el de los capítulos (`ExportSettings.chapterLanguage`; decisión del controlador sobre el plan, que las ponía solo en inglés): con un idioma `es` (`es`, `es-419`…), «Marcador», «Clic», «Zoom 2,0×», «Resaltar 2,0×», «Atenuar 2,0×» y «Lupa 2,0×», con coma decimal; con cualquier otro, o sin idioma, en inglés.
+- **El escapado.** En cada atributo `& < > " '` van como `&amp; &lt; &gt; &quot; &apos;`, el tabulador y el salto de línea como `&#9;` y `&#10;` (así un lector los conserva), y los demás caracteres de control C0 y U+FFFE y U+FFFF, que XML 1.0 no admite, se quitan.
+- Una prueba lo parsea con `XMLDocument` y lo valida contra la DTD de FCPXML 1.11 de los elementos que usa (`FCPXMLDTD`, escrita a mano en las pruebas).
+
+**`metadata-1`** es un objeto JSON compacto con sus claves ordenadas (`[.sortedKeys, .withoutEscapingSlashes]`), en tiempo de salida y en píxeles del video (origen arriba a la izquierda): los píxeles a 0,01, los segundos a 10⁻⁶ y las profundidades a 10⁻⁶. Un campo marcado `null` está siempre, con `null`.
+
+| Clave | Qué |
+|---|---|
+| `format` | `"metadata-1"` |
+| `video` | `{file, width, height, frameRate, frames, duration, alpha}`: el nombre del archivo del video (sin carpeta), su tamaño, sus cuadros por segundo y sus cuadros, `frames / frameRate` en segundos, y si tiene alfa |
+| `cuts` | Un tramo por clip de la secuencia que la salida muestra (los de duración 0 no están), en su orden: `{take, sourceStart, sourceEnd, start, end, speed, content}`. La fuente en ns de host time de su toma (`HostTime`), un punto (`sourceStart == sourceEnd`) en un clip con contenido; la salida en segundos (`TimeMap.clipOutputStarts` y `outputDuration(of:)`); la velocidad como la lee `ClipSpeed.clamped` (la del clip importado en uno de `media`, 1 en un congelado y en una placa); `content` `null` para un tramo de la toma, `"freeze"`, `"titleCard"` o `"media"` |
+| `markers` | Los marcadores que muestra la salida, por tiempo: `{id, name, time, frame}`, con el id de su entrada o `rec-<toma>-<ns>` (`VisibleMarker.id`) y `name` `""` si no tiene |
+| `chapters` | Los de la pista de capítulos del archivo (`ExportSettings.chapters`): `{title, time, frame}` |
+| `clicks` | Los clics de cada toma que la salida conserva, por tiempo: `{time, frame, x, y}`, con `x` e `y` donde su cuadro dibuja el cursor, `null` si ahí no se ve |
+| `zoomBlocks` | `zoom.regions` donde la salida los muestra, sus cortes cerrados (`TimeMap.outputRange(ofSource:take:)`), por comienzo; ninguno con `zoom.show` apagado: `{id, start, end, startFrame, endFrame, depth, mode, origin}`. `start` y `end` en segundos de salida; `startFrame` y `endFrame` acotados a `[0, frames]`, de un cuadro por lo menos (uno que empieza después del último cuadro no está); `depth` la suya o `auto.depth`, acotada a 1…16 (1 si no es un número), como la lee la cámara; `mode` el de `resolvedMode(auto:)` (`classic`, `highlight`, `dim`, `loupe`); `origin` `auto` o `user`. Los solapes no se resuelven: son notas, y la cámara de cada cuadro (`frames`) es la dibujada |
+| `frames` | Uno por cuadro del video: `{cursor, zoom}`. `cursor` es `{x, y, visible, pressed}` o `null` (sin cursor en el cuadro: antes del primero, fuera de la pantalla que se muestra, una placa, un clip importado): `x, y` su punta dibujada a través del zoom del cuadro; `visible` si se dibuja (opacidad mayor que 0, sin la cámara sobre todo el cuadro, y dentro del video); `pressed` si hay un botón apretado (`CursorSample.pressed` de la toma del cuadro; en un congelado, el del comienzo de su clip). `zoom` es `{depth, x, y}`: la cámara del cuadro (la del contenido de la tarjeta en Pantalla dividida, la del escenario si no, `depth` 1 y el centro del cuadro en reposo), con el centro en píxeles del escenario sin zoom |
+
+Otro esquema u otras reglas (de cualquiera de los dos archivos) son `metadata-2`.
