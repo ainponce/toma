@@ -1654,3 +1654,9 @@ Con un proyecto con un fondo de color, esquinas redondeadas y sombra, exportado 
 - Importar el `.fcpxml` en Final Cut Pro (Archivo ▸ Importar ▸ XML): abre sin avisos, crea el evento con el nombre del proyecto y un proyecto con el nombre del video, el video enlazado (no fuera de línea), los marcadores de capítulo, un marcador «Clic» en cada clic («Click» con la app en inglés) y un marcador de rango en cada bloque de zoom («Zoom 2,0×», «Atenuar 2,0×»…), en su lugar al reproducir.
 - Leer el `.toma-metadata.json` desde un script (o una expresión de After Effects): `video.frames` es la cantidad de cuadros del video, `frames` tiene uno por cuadro, y el cursor de un cuadro cae donde el video lo dibuja.
 - Exportar entre las marcas con el mismo pedido: no aparece ningún `.fcpxml` ni `.toma-metadata.json` nuevo junto al video.
+
+**La hoja de export con alfa y los metadatos** (X4)
+
+- En un proyecto con un fondo de color: abrir ⌘E y elegir «HEVC con alfa» (o ProRes 4444) en Códec: la vista previa del editor muestra un damero gris detrás del escenario (la ventana, la sombra y la cámara por encima) y la hoja dice «La vista previa muestra la transparencia como un damero.». Volver a H.264 o cerrar la hoja (Cancelar, Exportar…, Esc) saca el damero. Con «GIF animado» elegido, tampoco hay damero.
+- Con un zoom en modo Atenuar bajo la cabeza y HEVC con alfa elegido: el damero se ve oscurecido solo detrás del escenario, no donde no hay nada que atenuar.
+- Con «Entre las marcas» elegido el interruptor «Metadatos para editores (FCPXML)» queda desactivado y dice «Solo con el video entero.»; con «Todo el video» se puede encender, y siempre arranca apagado al abrir la hoja. Exportar con él encendido deja el `.fcpxml` y el `.toma-metadata.json` junto al video.

@@ -918,6 +918,17 @@
         }
       }
     },
+    "Also writes the markers, clicks and zooms next to the video, for Final Cut, DaVinci or After Effects." : {
+      "comment" : "The export sheet: under Metadata for Editors",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Escribe también los marcadores, los clics y los zooms junto al video, para Final Cut, DaVinci o After Effects."
+          }
+        }
+      }
+    },
     "Ambient" : {
       "comment" : "The style of a theme of the music library",
       "localizations" : {
@@ -4934,6 +4945,17 @@
         }
       }
     },
+    "HEVC with Alpha" : {
+      "comment" : "The export sheet: the codec HEVC with an alpha channel",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "HEVC con alfa"
+          }
+        }
+      }
+    },
     "Head" : {
       "comment" : "The inspector of an arrow: its point",
       "localizations" : {
@@ -6246,6 +6268,17 @@
         }
       }
     },
+    "Metadata for Editors (FCPXML)" : {
+      "comment" : "The export sheet: a toggle that writes an FCPXML and a JSON next to the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Metadatos para editores (FCPXML)"
+          }
+        }
+      }
+    },
     "Microphone" : {
       "localizations" : {
         "es" : {
@@ -7220,6 +7253,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Se acelera 1 tramo: %@ → %@"
+          }
+        }
+      }
+    },
+    "Only for the whole video." : {
+      "comment" : "The export sheet: Metadata for Editors is off with Between the Marks",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Solo con el video entero."
           }
         }
       }
@@ -10694,6 +10738,17 @@
         }
       }
     },
+    "The preview shows the transparency as a checkerboard." : {
+      "comment" : "The export sheet: under the codec, with a codec with alpha",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "La vista previa muestra la transparencia como un damero."
+          }
+        }
+      }
+    },
     "The project can't be found." : {
       "comment" : "The library: a project of Other places",
       "localizations" : {
@@ -12107,6 +12162,28 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Transición"
+          }
+        }
+      }
+    },
+    "Transparent background, to edit in Final Cut or another editor. The largest files." : {
+      "comment" : "The export sheet: when to pick ProRes 4444",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondo transparente, para editar en Final Cut u otro editor. Los archivos más grandes."
+          }
+        }
+      }
+    },
+    "Transparent background, to put the video over others in an editor. Plays in Safari and on Apple devices." : {
+      "comment" : "The export sheet: when to pick HEVC with alpha",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Fondo transparente, para poner el video sobre otros en un editor. Se reproduce en Safari y en dispositivos Apple."
           }
         }
       }
