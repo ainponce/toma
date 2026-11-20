@@ -348,6 +348,9 @@ struct EditCheck: ParsableCommand {
     @Option(help: "The seq of the last step reported saved: the log must reach it (0 if none was).")
     var confirmed: Int
 
+    @Flag(help: "The project is a saved Replay: its create is ReplayDocument's (the sequence cut at the Replay's start), so it is not compared with NewDocument's.")
+    var replay = false
+
     func run() throws {
         let url = URL(fileURLWithPath: package, isDirectory: true)
         let context = EditContext(
@@ -399,7 +402,7 @@ struct EditCheck: ParsableCommand {
             print("OK: \(version), no line in edit-log.jsonl, the \(kind) document")
             return
         }
-        guard isInitial(created) else { throw failure("the create of edit-log.jsonl is not the \(kind) document") }
+        guard replay || isInitial(created) else { throw failure("the create of edit-log.jsonl is not the \(kind) document") }
         // A new document's `create` is in the oldest version that holds it (2), and the first edit migrates it.
         let createVersion = log?.createVersion ?? EditDocument.currentVersion
         guard let replay = EditReplay.replay(snapshot: nil, entries: entries, createVersion: createVersion),

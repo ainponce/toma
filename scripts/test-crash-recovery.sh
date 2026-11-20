@@ -25,6 +25,11 @@
 # Ninth, a second take (second_take_case): synth-record --into a package with take-001 and an edit, killed with SIGKILL
 # while it records take-002; the package must be at version 5, take-002 recovered, and take-001 and the editor's files
 # unchanged byte for byte.
+# Tenth, the Replay (replay_case): synth-replay of 70 s with N = 30 s must hold at most 50 s of media per track on disk
+# and leave no working package; killed with SIGKILL while it buffers, recover finds nothing and changes nothing, and
+# replay-cleanup deletes the working package; killed five times at a random moment while it saves, the library holds at
+# most one whole project and, once replay-cleanup ran, no hidden .*.replay-saving folder; an uninterrupted save is a whole
+# project that exports 9.9 s or more.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -761,6 +766,139 @@ PY
   echo "app tracks crash case passed"
 }
 
+# Waits (up to 20 s) until the file $1 has a line "scratch: <path>" and prints the path.
+replay_scratch_path() {
+  local WAITED=0 LINE
+  until LINE=$(grep -m1 '^scratch: ' "$1" 2>/dev/null); do
+    if [ "$WAITED" -ge 200 ]; then
+      echo "FAIL: synth-replay did not start" >&2
+      exit 1
+    fi
+    sleep 0.1
+    WAITED=$((WAITED + 1))
+  done
+  echo "${LINE#scratch: }"
+}
+
+# After a kill -9 of synth-replay on $1 (scratch root) and $2 (library): the working package is never recovered nor
+# changed by recover, replay-cleanup deletes it, and the library has at most one .toma (whole, if there is one) and no
+# hidden save folder once replay-cleanup ran. Prints the number of projects the library holds.
+replay_after_kill() {
+  local TMP=$1 BEFORE COUNT
+  if [ ! -d "$TMP/scratch/current.toma" ]; then
+    echo "FAIL: the killed Replay left no working package to check"
+    exit 1
+  fi
+  BEFORE=$(package_hash "$TMP/scratch/current.toma")
+  "$BIN" recover "$TMP/scratch" > "$TMP/recover.out"
+  if grep -qE '^(recovered|needs repair|skipped):' "$TMP/recover.out" || [ "$(package_hash "$TMP/scratch/current.toma")" != "$BEFORE" ]; then
+    echo "FAIL: recover touched or reported the Replay's working package:"
+    cat "$TMP/recover.out"
+    exit 1
+  fi
+  "$BIN" replay-cleanup "$TMP/scratch" --library "$TMP/library" > "$TMP/cleanup.out"
+  if [ -e "$TMP/scratch/current.toma" ] || ! grep -q "^removed: .*current.toma" "$TMP/cleanup.out"; then
+    echo "FAIL: replay-cleanup did not delete the working package"
+    exit 1
+  fi
+  if [ -n "$(find "$TMP/library" -maxdepth 1 -name '.*' ! -name . ! -name .DS_Store)" ]; then
+    echo "FAIL: replay-cleanup left a hidden folder in the library"
+    ls -a "$TMP/library"
+    exit 1
+  fi
+  COUNT=$(find "$TMP/library" -maxdepth 1 -name '*.toma' | wc -l | tr -d ' ')
+  if [ "$COUNT" -gt 1 ]; then
+    echo "FAIL: a killed save left $COUNT projects"
+    exit 1
+  fi
+  REPLAY_PROJECTS=$COUNT
+}
+
+# The Replay (plan 5c, Task R4; design §10, §12): synth-replay never leaves a project nor a recoverable take behind.
+replay_case() {
+  local TMP PID PKG N TRACK SECONDS_ON_DISK
+  TMP=$(mktemp -d)
+  mkdir -p "$TMP/library"
+  echo "== replay: 70 s with N = 30 s, at most 50 s on disk per track (in $TMP)"
+  "$BIN" synth-replay "$TMP/scratch" --library "$TMP/library" --duration 70 --seconds 30 --camera --system-audio \
+    --report-disk > "$TMP/disk.out"
+  cat "$TMP/disk.out"
+  if [ "$(grep -c '^on disk: ' "$TMP/disk.out")" -ne 4 ]; then
+    echo "FAIL: synth-replay did not report its four tracks"
+    exit 1
+  fi
+  while read -r _ _ TRACK SECONDS_ON_DISK; do
+    # 50 s is N + 20 s (design §12); half a second of slack for the rounding of the durations the files report.
+    if ! LC_ALL=C awk -v s="$SECONDS_ON_DISK" 'BEGIN { exit !(s <= 50.5) }'; then
+      echo "FAIL: $TRACK holds $SECONDS_ON_DISK s on disk (more than 50)"
+      exit 1
+    fi
+  done < <(grep '^on disk: ' "$TMP/disk.out")
+  if [ -e "$TMP/scratch/current.toma" ]; then
+    echo "FAIL: the Replay left its working package after stopAndDiscard"
+    exit 1
+  fi
+
+  echo "== replay: kill -9 while it buffers (20 s in)"
+  "$BIN" synth-replay "$TMP/scratch" --library "$TMP/library" --duration 40 --seconds 15 > "$TMP/out" &
+  PID=$!
+  replay_scratch_path "$TMP/out" > /dev/null
+  sleep 20
+  kill -9 "$PID"
+  wait "$PID" 2>/dev/null || true
+  replay_after_kill "$TMP"
+  if [ "$REPLAY_PROJECTS" -ne 0 ]; then
+    echo "FAIL: a Replay that never saved left a project"
+    exit 1
+  fi
+
+  echo "== replay: kill -9 at a random moment while it saves (5 times)"
+  for N in 1 2 3 4 5; do
+    rm -rf "$TMP/library" "$TMP/scratch"
+    mkdir -p "$TMP/library"
+    "$BIN" synth-replay "$TMP/scratch" --library "$TMP/library" --duration 30 --seconds 10 --save-at 15 > "$TMP/out" &
+    PID=$!
+    replay_scratch_path "$TMP/out" > /dev/null
+    sleep "$(LC_ALL=C awk -v r="$RANDOM" 'BEGIN { printf "%.3f", 15.0 + 0.8 * r / 32767 }')"
+    kill -9 "$PID"
+    wait "$PID" 2>/dev/null || true
+    replay_after_kill "$TMP"
+    if [ "$REPLAY_PROJECTS" -eq 1 ]; then
+      PKG=$(find "$TMP/library" -maxdepth 1 -name '*.toma')
+      "$BIN" verify "$PKG" --min-duration 8 --max-drop-ratio 0.01 > "$TMP/verify.out"
+      "$BIN" edit-check "$PKG" --confirmed 0 --replay > /dev/null
+    fi
+    echo "run $N: $REPLAY_PROJECTS project(s) in the library"
+  done
+
+  echo "== replay: a save that is not killed"
+  rm -rf "$TMP/library" "$TMP/scratch"
+  mkdir -p "$TMP/library"
+  "$BIN" synth-replay "$TMP/scratch" --library "$TMP/library" --duration 22 --seconds 10 --save-at 15 --camera --system-audio \
+    > "$TMP/out"
+  PKG=$(grep '^saved: ' "$TMP/out" | sed -e 's/^saved: //' -e 's/ [0-9.]*$//')
+  if [ -z "$PKG" ] || [ ! -d "$PKG" ]; then
+    echo "FAIL: the Replay did not save"
+    cat "$TMP/out"
+    exit 1
+  fi
+  "$BIN" verify "$PKG" --min-duration 8 --max-drop-ratio 0.01
+  "$BIN" edit-check "$PKG" --confirmed 0 --replay
+  "$BIN" export "$PKG" "$TMP/replay.mp4" > "$TMP/export.out"
+  if grep -q '^warning: no ' "$TMP/export.out"; then
+    echo "FAIL: the export of the saved Replay left out part of it:"
+    grep '^warning: no ' "$TMP/export.out"
+    exit 1
+  fi
+  if ! LC_ALL=C awk -v s="$(afinfo "$TMP/replay.mp4" | awk '/estimated duration/ { print $3; exit }')" \
+    'BEGIN { exit !(s >= 9.9) }'; then
+    echo "FAIL: the saved Replay exports less than 9.9 s"
+    exit 1
+  fi
+  rm -rf "$TMP"
+  echo "replay crash case passed"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
@@ -771,4 +909,5 @@ gif_case
 keys_case
 second_take_case
 app_tracks_case
+replay_case
 echo "crash test passed"
