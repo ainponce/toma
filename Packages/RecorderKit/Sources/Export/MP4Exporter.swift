@@ -69,23 +69,33 @@ public final class MP4Exporter: Sendable {
     public let range: ExportRange?
     /// What the frames and the mix read of the project's analysis caches (phase 2 design §10): `.none` in phase 1.
     public let analysis: AnalysisInputs
+    /// Makes again the files of the music the mix could not open (`EditedMix.unopenedMusic`: macOS emptied a cache
+    /// between the export's preparation and the export), which the export waits for once before it writes anything, and
+    /// makes the music again with (plan 3c; `MusicAnalysis.remaking(for:)`). Without, such music is silent.
+    public let remakeMusic: MusicRemaking?
     /// For tests: sees each frame's pixel buffer on the export's queue, in frame order, right before it is appended.
     let frameSink: FrameSink?
 
     /// What a test's `frameSink` is given: the frame's index and the pixel buffer drawn for it.
     typealias FrameSink = @Sendable (_ frame: Int, _ pixelBuffer: CVPixelBuffer) -> Void
 
-    /// The export of `range` of `document`'s output, of all of it when `nil`, reading `analysis` of the caches.
+    /// Makes the files of the music of `sources` again and gives each one's, by source (one it cannot read left out).
+    public typealias MusicRemaking = @Sendable (_ sources: [String]) async throws -> [String: URL]
+
+    /// The export of `range` of `document`'s output, of all of it when `nil`, reading `analysis` of the caches, with the
+    /// music `remakeMusic` makes again if the mix finds its file gone.
     public convenience init(
         project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil,
-        analysis: AnalysisInputs = .none
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
     ) {
-        self.init(project: project, document: document, settings: settings, range: range, frameSink: nil, analysis: analysis)
+        self.init(
+            project: project, document: document, settings: settings, range: range, frameSink: nil, analysis: analysis,
+            remakeMusic: remakeMusic)
     }
 
     init(
         project: LoadedProject, document: EditDocument, settings: ExportSettings, range: ExportRange? = nil, frameSink: FrameSink?,
-        analysis: AnalysisInputs = .none
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
     ) {
         self.project = project
         self.document = document
@@ -93,6 +103,7 @@ public final class MP4Exporter: Sendable {
         self.range = range
         self.frameSink = frameSink
         self.analysis = analysis
+        self.remakeMusic = remakeMusic
     }
 
     /// The export of the legacy document (`EditDocument.legacy(for:)`): what phase 0 and 1a export.
@@ -132,7 +143,9 @@ public final class MP4Exporter: Sendable {
 
         let renderer = try FrameRenderer(
             project: project, document: document, outputSize: settings.outputSize, frameRate: fps, analysis: analysis)
-        let mix = try await EditedMix.make(project: project, document: document, framesPerSecond: fps, analysis: analysis)
+        let mix = try await Self.remadeMusic(
+            of: try await EditedMix.make(project: project, document: document, framesPerSecond: fps, analysis: analysis),
+            analysis: analysis, remake: remakeMusic)
         let audioFrames = Self.audioFrames(of: part, frameCount: frameCount, framesPerSecond: fps, mix: mix)
         let audio = mix.hasSound ? try AudioMix(mix: mix, frames: audioFrames) : nil
         guard !Task.isCancelled else { throw ExportError.cancelled }
@@ -196,15 +209,16 @@ public final class MP4Exporter: Sendable {
     ///   for a frame rate that is not positive), or what reading or mixing the audio throws.
     static func mixSamples(
         of project: LoadedProject, document: EditDocument, framesPerSecond: Int, range: ExportRange? = nil,
-        analysis: AnalysisInputs = .none
+        analysis: AnalysisInputs = .none, remakeMusic: MusicRemaking? = nil
     ) async throws -> [Float] {
         if let refusal = refusal(of: document, of: project) { throw refusal }
         guard framesPerSecond > 0 else { throw ExportError.writerFailed("the frame rate must be positive, not \(framesPerSecond)") }
         let timeMap = TimeMap(sequence: document.sequence)
         let part = try part(of: range, in: timeMap, framesPerSecond: framesPerSecond)
         let frameCount = part?.frameCount(fps: framesPerSecond) ?? timeMap.frameCount(frameRate: framesPerSecond)
-        let mix = try await EditedMix.make(
-            project: project, document: document, framesPerSecond: framesPerSecond, analysis: analysis)
+        let mix = try await remadeMusic(
+            of: try await EditedMix.make(project: project, document: document, framesPerSecond: framesPerSecond, analysis: analysis),
+            analysis: analysis, remake: remakeMusic)
         guard mix.hasSound else { return [] }
         let frames = audioFrames(of: part, frameCount: frameCount, framesPerSecond: framesPerSecond, mix: mix)
         // Mixing decodes: off the cooperative pool, as the export's own queue does it.
@@ -224,6 +238,26 @@ public final class MP4Exporter: Sendable {
             }
             return samples
         }
+    }
+
+    /// `mix`, made with `analysis`, with its music made again once if it could not open the file of a source
+    /// (`EditedMix.unopenedMusic`, a cache macOS emptied since the export's preparation): `remake` makes those files
+    /// again and the mix plays them (`EditedMix.with(analysis:)`); still gone, or without `remake`, that music is silent.
+    /// - Throws: what `remake` throws (a file that could not be written); `ExportError.cancelled` if it was cancelled.
+    static func remadeMusic(of mix: EditedMix, analysis: AnalysisInputs, remake: MusicRemaking?) async throws -> EditedMix {
+        let unopened = mix.unopenedMusic
+        guard !unopened.isEmpty, let remake else { return mix }
+        logger.info("The music of \(unopened.joined(separator: ", "), privacy: .public) was gone: made again before the export")
+        let files: [String: URL]
+        do {
+            files = try await remake(unopened)
+        } catch is CancellationError {
+            throw ExportError.cancelled
+        }
+        guard !Task.isCancelled else { throw ExportError.cancelled }
+        var remade = analysis
+        remade.musicFiles.merge(files) { _, new in new }
+        return await mix.with(analysis: remade)
     }
 
     /// Why `document` of `project` cannot be exported, or `nil` when it can: `nothingToExport` when its clips last no

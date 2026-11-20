@@ -9,9 +9,12 @@ import os
 /// adds it after the tracks, the clicks and the imported clips, before the limiter.
 ///
 /// - Every file `analysis.musicFiles` names is opened once (`MusicFile(contentsOf:)`, mapped, never decoded) by `make`
-///   and kept by the music of every other revision (`with(document:timeMap:cuts:)`). A piece whose source has no file
-///   there, or whose file cannot be opened (gone, a link, not ours), is silent, and `make` logs it. The mix never makes a
-///   file: `MusicAnalysis` (plan 3c, U8) does, and the export waits for it.
+///   and kept by the music of every other revision (`with(document:timeMap:cuts:)`): once open, a file macOS removes
+///   still plays. A piece whose source has no file there, or whose file cannot be opened (gone, a link, not ours), is
+///   silent, and `make` logs it. The mix never makes a file: `MusicAnalysis` (plan 3c, U8) does, and the export waits for
+///   it. A file it made can still go before the mix opens it (macOS emptying a cache in between): `unopened` lists the
+///   sources of the document whose file could not be opened, and the export has them made again and makes the music again
+///   with them before it writes anything (`MP4Exporter.remakeMusic`).
 /// - A piece plays over the output frames `frames(start) ..< min(frames(end), frames(D))` (`EditedMix.frames(ofNanoseconds:)`:
 ///   it ends with the output, and the output never goes on for it), a start before 0 read as 0; its frame `f` plays the
 ///   frame `f − frames(start) + frames(offset)` of its file (an offset below 0 read as 0) at its gain, `10^(g / 20)` with
@@ -71,6 +74,11 @@ struct MusicMix: Sendable {
     private let files: [String: MusicFile]
     /// How many files this music opened itself: none for the music of another revision.
     let openedFiles: Int
+    /// The sources of the document's pieces that `analysis.musicFiles` had a file for that could not be opened, in order:
+    /// the ones the export has made again (`MP4Exporter.remakeMusic`).
+    let unopened: [String]
+    /// Every source whose file could not be opened, shared by the music of every revision.
+    private let failed: Set<String>
     /// The microphone and device sound tracks of each take whose voice can lower the music, by take ID.
     private let voiceTracks: [String: [String]]
     /// The stretches with a voice of each of `voiceTracks`, by `AudioPlan.key`, in ns of the source, in order.
@@ -170,10 +178,12 @@ struct MusicMix: Sendable {
         cuts: AudioCuts? = nil, tracks: Set<String>? = nil
     ) async -> MusicMix {
         var files: [String: MusicFile] = [:]
+        var failed: Set<String> = []
         for (source, url) in analysis.musicFiles.sorted(by: { $0.key < $1.key }) {
             do {
-                files[source] = try open(url)
+                files[source] = try MusicFile(contentsOf: url)
             } catch {
+                failed.insert(source)
                 logger.error("The music of \(source, privacy: .public) cannot be opened (\(String(describing: error), privacy: .public)): it is silent")
             }
         }
@@ -210,8 +220,8 @@ struct MusicMix: Sendable {
             }
         }
         return MusicMix(
-            files: files, openedFiles: files.count, voiceTracks: voiceTracks, voice: voice, document: document, timeMap: timeMap,
-            cuts: cuts, ramps: nil)
+            files: files, openedFiles: files.count, failed: failed, voiceTracks: voiceTracks, voice: voice, document: document,
+            timeMap: timeMap, cuts: cuts, ramps: nil)
     }
 
     /// The music of another revision of the document, `document` with its map `timeMap` and its cuts of the sound `cuts`:
@@ -219,8 +229,8 @@ struct MusicMix: Sendable {
     /// silent in it until the mix reads an analysis that has one (`EditedMix.with(analysis:)`).
     func with(document: EditDocument, timeMap: TimeMap, cuts: AudioCuts) -> MusicMix {
         MusicMix(
-            files: files, openedFiles: 0, voiceTracks: voiceTracks, voice: voice, document: document, timeMap: timeMap, cuts: cuts,
-            ramps: ramps)
+            files: files, openedFiles: 0, failed: failed, voiceTracks: voiceTracks, voice: voice, document: document,
+            timeMap: timeMap, cuts: cuts, ramps: ramps)
     }
 
     private init() {
@@ -228,6 +238,8 @@ struct MusicMix: Sendable {
         soundEnd = 0
         files = [:]
         openedFiles = 0
+        unopened = []
+        failed = []
         voiceTracks = [:]
         voice = [:]
         envelope = DuckingEnvelope(voiced: [], ducking: .default)
@@ -235,11 +247,13 @@ struct MusicMix: Sendable {
     }
 
     private init(
-        files: [String: MusicFile], openedFiles: Int, voiceTracks: [String: [String]], voice: [String: [Range<Int64>]],
-        document: EditDocument, timeMap: TimeMap, cuts: AudioCuts?, ramps: DuckingRamps?
+        files: [String: MusicFile], openedFiles: Int, failed: Set<String>, voiceTracks: [String: [String]],
+        voice: [String: [Range<Int64>]], document: EditDocument, timeMap: TimeMap, cuts: AudioCuts?, ramps: DuckingRamps?
     ) {
         self.files = files
         self.openedFiles = openedFiles
+        self.failed = failed
+        unopened = Set(document.music.items.map(\.source)).intersection(failed).sorted()
         self.voiceTracks = voiceTracks
         self.voice = voice
         let contentEnd = EditedMix.frames(ofNanoseconds: timeMap.duration)
@@ -414,15 +428,6 @@ struct MusicMix: Sendable {
             }
         }
         return voiced
-    }
-
-    /// The file at `url`, opened again once if it is not there (a theme moved into place as it was opened).
-    private static func open(_ url: URL) throws -> MusicFile {
-        do {
-            return try MusicFile(contentsOf: url)
-        } catch let error as POSIXError where error.code == .ENOENT {
-            return try MusicFile(contentsOf: url)
-        }
     }
 
     /// The first index in `0..<count` for which `isBefore` is false, given that it is true for a prefix and false after.

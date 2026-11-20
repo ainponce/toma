@@ -33,8 +33,11 @@ private let logger = Logger(subsystem: "dev.toma.Toma", category: "Music")
 /// into place, `ProjectCaches.temporaryFile(for:)` and `commit(_:to:)`), never on the main thread, and the decoding and
 /// the reading of the audio never on Swift's cooperative pool (`ImportedAudio`, `TrackAudio`, `SilenceFinder`).
 ///
-/// A file `prepare` gave can still go before the mix opens it (macOS emptying the cache): the mix finds that source
-/// silent, and a `prepare` called again makes it again.
+/// A file `prepare` gave can still go before the mix opens it (macOS emptying a cache in between): the preview finds
+/// that source silent until it is made again, and the export has it made again before it writes anything: the mix
+/// lists the sources it could not open (`EditedMix.unopenedMusic`) and the exporter asks `remaking(for:)` for them once
+/// (`MP4Exporter.remakeMusic`), then plays them. The work runs at user-initiated priority: an export or "Preparing…"
+/// waits for it.
 public actor MusicAnalysis {
     /// The file that plays each piece of music, by `MusicItem.source`, and where each voice track has a voice, by
     /// `AudioPlan.key(take:track:)`: what `AnalysisInputs.musicFiles` and `.voiceActivity` hold.
@@ -112,7 +115,7 @@ public actor MusicAnalysis {
     ///   other pieces too.
     public func prepare(_ document: EditDocument, progress: @escaping @Sendable (Double) -> Void) async throws -> Prepared {
         let pieces = pieces(document)
-        let report = RisingProgress(progress)
+        let report = OrderedProgress(progress)
         let parts = PartsProgress(count: pieces.count, report: report)
         report(0)
         var result: Prepared = ([:], [:])
@@ -131,6 +134,37 @@ public actor MusicAnalysis {
         try Task.checkCancellation()
         report(1)
         return result
+    }
+
+    /// `inputs` with the music's files and voice `document` needs (`AnalysisInputs.musicFiles` and `.voiceActivity`),
+    /// made first where they are missing (`prepare`): what an export does first. The export then has what macOS removes
+    /// meanwhile made again: give it `remaking(for:)` of the same document.
+    /// - Throws: what `prepare` throws.
+    public func prepareExport(
+        _ document: EditDocument, onto inputs: AnalysisInputs, progress: @escaping @Sendable (Double) -> Void
+    ) async throws -> AnalysisInputs {
+        let prepared = try await prepare(document, progress: progress)
+        var result = inputs
+        result.musicFiles = prepared.musicFiles
+        result.voiceActivity = prepared.voiceActivity
+        return result
+    }
+
+    /// The files of the pieces of `document`'s music whose source is one of `sources`, made again where they are not
+    /// there whole (`prepare` of those pieces alone, without the voice): what the export asks for when the mix could not
+    /// open them (`MP4Exporter.remakeMusic`), by source; one that cannot be read is left out.
+    /// - Throws: what `prepare` throws.
+    public func remake(_ sources: [String], of document: EditDocument) async throws -> [String: URL] {
+        let wanted = Set(sources)
+        var pieces = document
+        pieces.music.items = document.music.items.filter { wanted.contains($0.source) }
+        pieces.music.ducking.enabled = false
+        return try await prepare(pieces) { _ in }.musicFiles
+    }
+
+    /// `remake(_:of:)` of `document`, as the exporter takes it (`MP4Exporter.remakeMusic`).
+    public nonisolated func remaking(for document: EditDocument) -> MP4Exporter.MusicRemaking {
+        { sources in try await self.remake(sources, of: document) }
     }
 
     /// How many callers wait for the work that makes `file`, for the tests.
@@ -245,7 +279,8 @@ public actor MusicAnalysis {
         var waiters: [Int: CheckedContinuation<Result<Outcome, any Error>, Never>]
     }
 
-    /// What `body` makes `file` into, on a task of its own at utility priority, shared with every caller asking for
+    /// What `body` makes `file` into, on a task of its own at user-initiated priority (an export or "Preparing…" waits for
+    /// it), shared with every caller asking for
     /// `file` while it runs. A caller whose task is cancelled stops waiting at once if another one still waits; the last
     /// one cancels the work and waits until it returned, so nothing of it is left once this throws.
     private func shared(
@@ -269,7 +304,7 @@ public actor MusicAnalysis {
                     let hub = ProgressHub()
                     hub.listen(waiter, progress)
                     // `finish` runs on this actor, after this.
-                    let task = Task.detached(priority: .utility) {
+                    let task = Task.detached(priority: .userInitiated) {
                         let result = await body(hub)
                         await self.finish(key, id: id, result: result)
                     }
@@ -312,7 +347,8 @@ public actor MusicAnalysis {
         for continuation in entry.waiters.values { continuation.resume(returning: answer) }
     }
 
-    /// Decodes `asset` into `file` through a temporary next to it; `.nothing` for a sound that cannot be read.
+    /// Decodes `asset` into `file` through a temporary next to it; `.nothing` for a file that is no sound
+    /// (`ImportedAudioError.notAudio`), the `JobError` `.failed` for one whose reading stopped partway (the export says so).
     private static func decoded(_ asset: URL, into file: URL, decode: Decode, hub: ProgressHub) async -> Result<Outcome, any Error> {
         // Another caller's work may have made it since this one looked.
         if isDecoded(file) { return .success(.file(file)) }
@@ -331,9 +367,14 @@ public actor MusicAnalysis {
         } catch {
             unlink(temporary.path)
             if error is CancellationError || Task.isCancelled { return .failure(CancellationError()) }
-            if let error = error as? ImportedAudioError {
-                logger.error("Music \(asset.lastPathComponent, privacy: .public): \(String(describing: error), privacy: .public); left silent")
+            switch error as? ImportedAudioError {
+            case .notAudio?:
+                logger.error("Music \(asset.lastPathComponent, privacy: .public) is no sound: left silent")
                 return .success(.nothing)
+            case .readingStopped(let reason)?:
+                return .failure(JobError(.failed("the sound \(asset.lastPathComponent) could not be read to its end: \(reason)")))
+            case nil:
+                break
             }
             return .failure(VoiceJobs.jobError(error))
         }
@@ -511,9 +552,9 @@ private final class ProgressHub: Sendable {
 /// The progress of `prepare`: the mean of its pieces', each never down.
 private final class PartsProgress: Sendable {
     private let parts: Mutex<[Double]>
-    private let report: RisingProgress
+    private let report: OrderedProgress
 
-    init(count: Int, report: RisingProgress) {
+    init(count: Int, report: OrderedProgress) {
         parts = Mutex([Double](repeating: 0, count: count))
         self.report = report
     }
@@ -528,9 +569,21 @@ private final class PartsProgress: Sendable {
     }
 }
 
-/// Reports a fraction only when it is past the last one reported: from 0 to 1, never down.
-private final class RisingProgress: Sendable {
-    private let last = Mutex(-1.0)
+/// Reports fractions from 0 to 1, each past the one reported before it, one call at a time and in order, from any
+/// thread, never with its lock held: a fraction that comes while another is being reported is reported after it, by the
+/// thread reporting (only the highest of those that came meanwhile), and a lower one is dropped. So the closure may take
+/// its time or report through this again.
+final class OrderedProgress: Sendable {
+    private struct State {
+        /// The highest fraction reported or waiting to be.
+        var highest = -1.0
+        /// The fraction waiting to be reported, if any.
+        var waiting: Double?
+        /// Whether a thread is reporting now.
+        var reporting = false
+    }
+
+    private let state = Mutex(State())
     private let report: @Sendable (Double) -> Void
 
     init(_ report: @escaping @Sendable (Double) -> Void) {
@@ -540,10 +593,21 @@ private final class RisingProgress: Sendable {
     func callAsFunction(_ fraction: Double) {
         guard !fraction.isNaN else { return }
         let value = min(max(fraction, 0), 1)
-        last.withLock { last in
-            guard value > last else { return }
-            last = value
-            report(value)
+        let reports = state.withLock { state -> Bool in
+            guard value > state.highest else { return false }
+            state.highest = value
+            state.waiting = value
+            guard !state.reporting else { return false }
+            state.reporting = true
+            return true
+        }
+        guard reports else { return }
+        while let next = state.withLock({ state -> Double? in
+            defer { state.waiting = nil }
+            if state.waiting == nil { state.reporting = false }
+            return state.waiting
+        }) {
+            report(next)
         }
     }
 }

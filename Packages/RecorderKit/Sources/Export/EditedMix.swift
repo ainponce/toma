@@ -495,6 +495,10 @@ public final class EditedMix: Sendable {
     /// sounds or music. Without, the export has no audio.
     var hasSound: Bool { !keys.isEmpty || !clickFrames.isEmpty || media.hasSound || music.hasSound }
 
+    /// The sources of the document's music whose file the analysis named but could not be opened (`MusicMix.unopened`):
+    /// gone since it was made, for the export to have them made again (`MP4Exporter.remakeMusic`).
+    public var unopenedMusic: [String] { music.unopened }
+
     /// What the mix plays, as text, for the tests that hold it as it was (`MultiTakeMixTests`): its channels and lengths,
     /// each piece (its output frames, what it plays and its fades), each run, each track's key, gains and cleanup, the
     /// click frames and the spans left silent. What the first take plays reads as in phase 2, without its index.

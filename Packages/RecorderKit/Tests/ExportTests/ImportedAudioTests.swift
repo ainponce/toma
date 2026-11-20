@@ -33,6 +33,30 @@ private func writeSound(at url: URL, seconds: Double, sampleRate: Double, channe
     try file.write(from: buffer)
 }
 
+/// A CAF of Float32 at 48 kHz (no resampling, so the decoder gives its samples exactly) of `channels` channels with the
+/// layout `tag`: `blocks` blocks of 4 800 frames, block `k` holding `value(k, c)` in channel `c`, the same in each frame.
+private func writeMultichannel(
+    at url: URL, channels: Int, tag: AudioChannelLayoutTag, blocks: Int, _ value: (Int, Int) -> Float
+) throws {
+    var layout = AudioChannelLayout()
+    layout.mChannelLayoutTag = tag
+    let settings: [String: Any] = [
+        AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: 48_000, AVNumberOfChannelsKey: channels,
+        AVLinearPCMBitDepthKey: 32, AVLinearPCMIsFloatKey: true, AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+        AVChannelLayoutKey: Data(bytes: &layout, count: MemoryLayout<AudioChannelLayout>.size),
+    ]
+    let file = try AVAudioFile(forWriting: url, settings: settings, commonFormat: .pcmFormatFloat32, interleaved: false)
+    let frames = blocks * 4_800
+    let buffer = try #require(AVAudioPCMBuffer(pcmFormat: file.processingFormat, frameCapacity: AVAudioFrameCount(frames)))
+    buffer.frameLength = AVAudioFrameCount(frames)
+    for c in 0..<channels {
+        let samples = try #require(buffer.floatChannelData?[c])
+        for n in 0..<frames { samples[n] = value(n / 4_800, c) }
+    }
+    try file.write(from: buffer)
+}
+
 /// The frames of the file `AVAudioFile` reads at `url`, as it reads them: its format and its length.
 private func readBack(_ url: URL) throws -> (sampleRate: Double, channels: Int, frames: Int64) {
     let file = try AVAudioFile(forReading: url)
@@ -122,6 +146,54 @@ private final class Fractions: Sendable {
                 try await ImportedAudio.decode(link, to: destination) { _ in }
             }
             #expect(!FileManager.default.fileExists(atPath: destination.path))
+        }
+    }
+
+    /// A 5.1 sound (L R C LFE Ls Rs) is mixed down with ITU-R BS.775's coefficients, scaled so that no side adds up to
+    /// more than 1: block `k` has only channel `k` at 0.5, and the last every channel at 0.9, which never goes past full
+    /// scale (summed at unity gain it would be 3.6, clipped).
+    @Test func fiveOneIsMixedDownWithoutClipping() async throws {
+        try await withTemporaryDirectory { dir in
+            let source = dir.appending(path: "five-one.caf")
+            try writeMultichannel(at: source, channels: 6, tag: kAudioChannelLayoutTag_MPEG_5_1_A, blocks: 7) { k, c in
+                k == 6 ? 0.9 : (k == c ? 0.5 : 0)
+            }
+            let destination = dir.appending(path: "out.caf")
+            try await ImportedAudio.decode(source, to: destination) { _ in }
+            let file = try MusicFile(contentsOf: destination)
+            #expect(file.frames == 7 * 4_800)
+            let half = 1 / 2.0.squareRoot(), sum = 1 + 2 * half
+            // Each channel's coefficients into the left and the right.
+            let expected: [(Double, Double)] = [(1, 0), (0, 1), (half, half), (0, 0), (half, 0), (0, half)]
+            var samples: [Float] = []
+            for (k, weight) in expected.enumerated() {
+                file.read((k * 4_800 + 2_400)..<(k * 4_800 + 2_401), into: &samples)
+                #expect(abs(Double(samples[0]) - 0.5 * weight.0 / sum) < 1e-6, "channel \(k), left: \(samples[0])")
+                #expect(abs(Double(samples[1]) - 0.5 * weight.1 / sum) < 1e-6, "channel \(k), right: \(samples[1])")
+            }
+            file.read((6 * 4_800 + 2_400)..<(6 * 4_800 + 2_401), into: &samples)
+            #expect(abs(samples[0] - 0.9) < 1e-6 && abs(samples[1] - 0.9) < 1e-6, "\(samples)")
+            file.read(0..<file.frames, into: &samples)
+            #expect(samples.allSatisfy { abs($0) <= 0.9 + 1e-6 })
+        }
+    }
+
+    /// A sound of four channels its layout does not name (discrete) is the average of them all in both channels.
+    @Test func unnamedChannelsAreAveraged() async throws {
+        try await withTemporaryDirectory { dir in
+            let source = dir.appending(path: "discrete.caf")
+            try writeMultichannel(
+                at: source, channels: 4, tag: kAudioChannelLayoutTag_DiscreteInOrder | 4, blocks: 5
+            ) { k, c in k == 4 ? 1 : (k == c ? 0.5 : 0) }
+            let destination = dir.appending(path: "out.caf")
+            try await ImportedAudio.decode(source, to: destination) { _ in }
+            let file = try MusicFile(contentsOf: destination)
+            var samples: [Float] = []
+            for k in 0..<5 {
+                file.read((k * 4_800 + 2_400)..<(k * 4_800 + 2_401), into: &samples)
+                let expected: Float = k == 4 ? 1 : 0.125
+                #expect(abs(samples[0] - expected) < 1e-6 && abs(samples[1] - expected) < 1e-6, "block \(k): \(samples)")
+            }
         }
     }
 

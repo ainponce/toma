@@ -59,7 +59,8 @@ public actor MusicLibrary {
     private let score: @Sendable (String) -> MusicScore?
     private let synthesize: @Sendable (MusicScore, () -> Bool) -> [Float]?
     private let known = Mutex<[String: Theme]>([:])
-    private let queue = DispatchQueue(label: "dev.toma.Toma.MusicLibrary", qos: .utility)
+    // User-initiated: what makes a theme is "Preparing…" or an export, waiting for it.
+    private let queue = DispatchQueue(label: "dev.toma.Toma.MusicLibrary", qos: .userInitiated)
     private var work: [String: (task: Task<Result<URL, any Error>, Never>, waiters: Int)] = [:]
     /// How many themes were rendered to the end (a cancelled synthesis does not count), and how many pieces of work have
     /// not returned yet, for tests.
