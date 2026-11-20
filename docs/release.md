@@ -1124,6 +1124,11 @@ Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcr
 - Exportar en 4K un proyecto con un texto de cada estilo (Simple, Etiqueta, Tercio inferior y Título), una flecha curva, una forma, un globo y un paso, unos pegados a la grabación con un zoom de 2× que entra y otros de la salida: en el video los textos y los trazos se ven nítidos (sin bordes borrosos ni escalones) en reposo y mientras el zoom entra, los textos se cortan en las mismas palabras que en la vista previa, y la punta de cada flecha pegada sigue sobre el mismo botón durante todo el zoom.
 - En la Mac base (M1), reproducir la vista previa en 1080p con diez anotaciones a la vista (y una flecha y una forma que se trazan al entrar): sigue a 60 fps, sin saltos cuando aparecen todas juntas.
 
+**Capítulos en el archivo** (T2, con la hoja de export de T11)
+
+- Con dos marcadores con nombre («Demo» a los 10 s y «Configuración ✨» a los 20 s), exportar un MP4 (H.264) y un MOV (ProRes 422) con «Capítulos en el archivo» prendido y abrirlos en QuickTime Player: su lista de capítulos tiene «Introducción» (o «Intro» con la app en inglés) en 0:00, «Demo» en 0:10 y «Configuración ✨» en 0:20, con los acentos y el emoji bien; elegir uno salta ahí. El video no muestra ningún texto encima. Lo mismo con macOS en inglés y la app en español.
+- Exportar el rango de 0:15 a 0:30: la lista empieza con «Demo» en 0:00 y sigue con «Configuración ✨» en 0:05. Con «Capítulos en el archivo» apagado, QuickTime no muestra capítulos.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.
