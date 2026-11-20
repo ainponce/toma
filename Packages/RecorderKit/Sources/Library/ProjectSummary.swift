@@ -136,7 +136,8 @@ public struct ProjectSummary: Codable, Equatable, Sendable {
     /// How long the output lasts, by its document.
     public var outputSeconds: Double?
     public var aspect: Aspect?
-    /// The take it shows (the last one) has a camera track.
+    /// A take its sequence shows has a camera track (phase 3 design §8.1); before its document is read, or without
+    /// clips, the take it shows (the last one, or the first clip's).
     public var hasCamera: Bool
     public var formatVersion: Int?
     /// The `documentVersion` its document is written in on disk: 1 for a project of 1b not edited in 1c, which the
@@ -266,7 +267,8 @@ public enum ProjectReader {
                 summary.documentVersion = outline.diskVersion
                 summary.outputSeconds = outline.outputSeconds
                 summary.aspect = outline.aspect
-                summary.hasCamera = project.take.tracks.contains { $0.kind == .camera }
+                let shown = outline.takes.isEmpty ? [project.take] : project.takes.filter { outline.takes.contains($0.id) }
+                summary.hasCamera = shown.contains { take in take.tracks.contains { $0.kind == .camera } }
                 if outline.diskVersion > EditDocument.currentVersion {
                     summary.state = .newerVersion
                     return summary
