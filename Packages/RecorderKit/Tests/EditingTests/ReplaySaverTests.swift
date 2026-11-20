@@ -88,21 +88,55 @@ private enum SaverFixture {
         return data as Data
     }
 
-    /// A Replay whose `freeze()` gives `result`, counting the calls to `thaw()`.
+    /// A Replay whose `freeze()` gives `result` (after `freezeDelay`), writing down each `freeze` and `thaw` in `calls`;
+    /// `thaw()` calls `onThaw` first.
     final class Source: ReplaySource {
         private let result: Result<ReplaySnapshot, ReplayError>
-        private let thawed = Mutex(0)
+        private let freezeDelay: Duration
+        private let onThaw: (@Sendable () -> Void)?
+        private let log = Mutex<[String]>([])
 
-        init(_ result: Result<ReplaySnapshot, ReplayError>) {
+        init(
+            _ result: Result<ReplaySnapshot, ReplayError>, freezeDelay: Duration = .zero, onThaw: (@Sendable () -> Void)? = nil
+        ) {
             self.result = result
+            self.freezeDelay = freezeDelay
+            self.onThaw = onThaw
         }
 
-        var thaws: Int { thawed.withLock { $0 } }
+        var calls: [String] { log.withLock { $0 } }
+        var thaws: Int { calls.filter { $0 == "thaw" }.count }
 
-        func freeze() async throws -> ReplaySnapshot { try result.get() }
+        func freeze() async throws -> ReplaySnapshot {
+            log.withLock { $0.append("freeze") }
+            if freezeDelay > .zero { try? await Task.sleep(for: freezeDelay) }
+            return try result.get()
+        }
 
         func thaw() async {
-            thawed.withLock { $0 += 1 }
+            onThaw?()
+            log.withLock { $0.append("thaw") }
+        }
+    }
+
+    /// A value the closures of a test share.
+    final class Box<Value: Sendable>: Sendable {
+        private let mutex: Mutex<Value>
+
+        init(_ value: Value) {
+            mutex = Mutex(value)
+        }
+
+        var value: Value {
+            get { mutex.withLock { $0 } }
+            set { mutex.withLock { $0 = newValue } }
+        }
+    }
+
+    /// The hidden folders of saves in `folder`.
+    static func stagingFolders(in folder: URL) -> [URL] {
+        names(in: folder).filter { $0.hasSuffix(ReplaySaver.stagingSuffix) }.map {
+            folder.appending(path: $0, directoryHint: .isDirectory)
         }
     }
 
@@ -365,17 +399,19 @@ private enum SaverFixture {
             let fixture = try await ReplayFixture(in: dir, seconds: 8)
             let projects = SaverFixture.projects(dir)
 
-            // Saved.
+            // Saved, under the longest name a save takes (200 bytes of UTF-8).
+            let longest = String(repeating: "é", count: 100)
             let saved = SaverFixture.Source(.success(fixture.snapshot))
-            _ = try await ReplaySaver.save(from: saved, SaverFixture.request(dir, seconds: 3))
-            #expect(saved.thaws == 1)
+            let result = try await ReplaySaver.save(from: saved, SaverFixture.request(dir, seconds: 3, name: longest))
+            #expect(result.projectURL.lastPathComponent == longest + ".toma")
+            #expect(saved.calls == ["freeze", "thaw"])
 
             // Nothing to save: `freeze()` threw, after it may have stopped pruning.
             let empty = SaverFixture.Source(.failure(.nothingToSave))
             await #expect(throws: ReplayError.nothingToSave) {
                 try await ReplaySaver.save(from: empty, SaverFixture.request(dir, seconds: 3, name: "Empty"))
             }
-            #expect(empty.thaws == 1)
+            #expect(empty.calls == ["freeze", "thaw"])
 
             // No screen in the take.
             var withoutScreen = fixture.snapshot
@@ -384,7 +420,7 @@ private enum SaverFixture {
             await #expect(throws: ReplayError.noScreen) {
                 try await ReplaySaver.save(from: noScreen, SaverFixture.request(dir, seconds: 3, name: "No Screen"))
             }
-            #expect(noScreen.thaws == 1)
+            #expect(noScreen.calls == ["freeze", "thaw"])
 
             // A file that cannot be cloned, before the thaw.
             let clone = SaverFixture.Source(.success(fixture.snapshot))
@@ -392,27 +428,81 @@ private enum SaverFixture {
                 try await ReplaySaver.save(
                     from: clone, SaverFixture.request(dir, seconds: 3, name: "Clone"), files: SaverFixture.failing { _ in true })
             }
-            #expect(clone.thaws == 1)
+            #expect(clone.calls == ["freeze", "thaw"])
 
-            // A name the disk refuses, after the thaw.
-            let long = SaverFixture.Source(.success(fixture.snapshot))
-            await #expect(throws: POSIXError(.ENAMETOOLONG)) {
-                try await ReplaySaver.save(from: long, SaverFixture.request(dir, seconds: 3, name: String(repeating: "x", count: 300)))
+            // A file that cannot be written after the thaw: something took the log's name in the hidden folder meanwhile.
+            let late = SaverFixture.Source(.success(fixture.snapshot)) {
+                for staging in SaverFixture.stagingFolders(in: projects) {
+                    try? Data("{}".utf8).write(to: staging.appending(path: "edit-log.jsonl"))
+                }
             }
-            #expect(long.thaws == 1)
+            await #expect(throws: POSIXError(.EEXIST)) {
+                try await ReplaySaver.save(from: late, SaverFixture.request(dir, seconds: 3, name: "Late"))
+            }
+            #expect(late.calls == ["freeze", "thaw"])
 
-            // A name that is not one plain name, or no seconds: refused before anything, with nothing frozen.
-            let hidden = SaverFixture.Source(.success(fixture.snapshot))
-            for name in ["", ".hidden", "a/b"] {
-                await #expect(throws: POSIXError(.EINVAL)) {
-                    try await ReplaySaver.save(from: hidden, SaverFixture.request(dir, seconds: 3, name: name))
+            #expect(SaverFixture.names(in: projects) == [longest + ".toma"])
+        }
+    }
+
+    @Test func aNameThatIsNotOneIsRefusedBeforeAnything() async throws {
+        try await withTemporaryDirectory { dir in
+            let fixture = try await ReplayFixture(in: dir, seconds: 8)
+            let source = SaverFixture.Source(.success(fixture.snapshot))
+            let names = [
+                "", ".hidden", "a/b", "a:b", " leading", "trailing ", "line\nbreak", "bell\u{7}", "nul\0",
+                String(repeating: "x", count: 201), String(repeating: "é", count: 101),
+                // Too long for a file name at all: refused before the rename would refuse it.
+                String(repeating: "x", count: 300),
+            ]
+            for name in names {
+                #expect(!ReplaySaver.isValidName(name), "\(name.debugDescription)")
+                await #expect(throws: POSIXError(.EINVAL), "\(name.debugDescription)") {
+                    try await ReplaySaver.save(from: source, SaverFixture.request(dir, seconds: 3, name: name))
                 }
             }
             await #expect(throws: POSIXError(.EINVAL)) {
-                try await ReplaySaver.save(from: hidden, SaverFixture.request(dir, seconds: 0, name: "Zero"))
+                try await ReplaySaver.save(from: source, SaverFixture.request(dir, seconds: 0))
             }
-            #expect(hidden.thaws == 0)
+            // Nothing was frozen nor thawed, and nothing written.
+            #expect(source.calls.isEmpty)
+            #expect(SaverFixture.names(in: SaverFixture.projects(dir)).isEmpty)
+            for name in [SaverFixture.name, "Demo 2", String(repeating: "x", count: 200), "Ñandú · copia"] {
+                #expect(ReplaySaver.isValidName(name), "\(name)")
+            }
+        }
+    }
 
+    @Test func concurrentSavesTakeTurns() async throws {
+        try await withTemporaryDirectory { dir in
+            let fixture = try await ReplayFixture(in: dir, seconds: 8)
+            // A slow freeze: two saves that did not wait for each other would both freeze before either thaws.
+            let source = SaverFixture.Source(.success(fixture.snapshot), freezeDelay: .milliseconds(200))
+            async let first = ReplaySaver.save(from: source, SaverFixture.request(dir, seconds: 3))
+            async let second = ReplaySaver.save(from: source, SaverFixture.request(dir, seconds: 3))
+            let names = try await [first, second].map(\.projectURL.lastPathComponent).sorted()
+            #expect(source.calls == ["freeze", "thaw", "freeze", "thaw"])
+            #expect(names == [SaverFixture.name + " 2.toma", SaverFixture.name + ".toma"])
+        }
+    }
+
+    @Test func liveSaveIsNeverRemoved() async throws {
+        try await withTemporaryDirectory { dir in
+            let fixture = try await ReplayFixture(in: dir, seconds: 8)
+            let projects = SaverFixture.projects(dir)
+            // In the middle of the save (at its thaw), the app opens and cleans up the projects folder.
+            let seen = SaverFixture.Box<(staging: [String], removed: [URL])>(([], []))
+            let source = SaverFixture.Source(.success(fixture.snapshot)) {
+                let staging = SaverFixture.stagingFolders(in: projects).map(\.lastPathComponent)
+                seen.value = (staging, ReplaySaver.removeAbandonedSaves(in: projects))
+            }
+            let result = try await ReplaySaver.save(from: source, SaverFixture.request(dir, seconds: 3))
+            let (staging, removed) = seen.value
+            #expect(staging.count == 1)
+            #expect(removed.isEmpty)
+            #expect(try LoadedProject.load(result.projectURL).take.status == .complete)
+            // Its lock does not stay in the project.
+            #expect(!SaverFixture.exists(result.projectURL.appending(path: ReplaySaver.lockName)))
             #expect(SaverFixture.names(in: projects) == [SaverFixture.name + ".toma"])
         }
     }
@@ -421,13 +511,32 @@ private enum SaverFixture {
         try await withTemporaryDirectory { dir in
             let projects = SaverFixture.projects(dir)
             try FileManager.default.createDirectory(at: projects, withIntermediateDirectories: true)
-            // What a forced quit leaves in the middle of a save: the hidden folder, whole but for its rename.
             let fixture = try await ReplayFixture(in: dir, seconds: 8)
             let done = try await ReplaySaver.save(
                 from: fixture.source, SaverFixture.request(dir, seconds: 3, name: "Done"))
-            let abandoned = "." + UUID().uuidString + ReplaySaver.stagingSuffix
-            try FileManager.default.copyItem(at: done.projectURL, to: projects.appending(path: abandoned))
-            // Never a project, before it is removed.
+            func staging() -> String { "." + UUID().uuidString + ReplaySaver.stagingSuffix }
+            func lockURL(_ name: String) -> URL { projects.appending(path: name).appending(path: ReplaySaver.lockName) }
+            let minutesAgo = Date(timeIntervalSinceNow: -120)
+
+            // What a forced quit leaves in the middle of a save: the hidden folder, whole but for its rename, with its
+            // lock file and nobody holding it (the kernel let go of it with the process).
+            let crashed = staging()
+            try FileManager.default.copyItem(at: done.projectURL, to: projects.appending(path: crashed))
+            try Data("{}".utf8).write(to: lockURL(crashed))
+            // One a crash cut between the folder and its lock, a while ago.
+            let lockless = staging()
+            try FileManager.default.copyItem(at: done.projectURL, to: projects.appending(path: lockless))
+            try FileManager.default.setAttributes([.modificationDate: minutesAgo], ofItemAtPath: projects.appending(path: lockless).path)
+            // A save that has just made its folder and not its lock yet.
+            let starting = staging()
+            try FileManager.default.createDirectory(at: projects.appending(path: starting), withIntermediateDirectories: false)
+            // A save another holder of its lock is making (another process, or another save of this one): even old.
+            let live = staging()
+            try FileManager.default.copyItem(at: done.projectURL, to: projects.appending(path: live))
+            let holder = open(lockURL(live).path, O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK | O_CLOEXEC, 0o644)
+            #expect(holder >= 0)
+            try FileManager.default.setAttributes([.modificationDate: minutesAgo], ofItemAtPath: projects.appending(path: live).path)
+            // Never a project, before they are removed.
             #expect(RecoveryScanner.scan(directory: projects).isEmpty)
 
             let others = [
@@ -437,18 +546,22 @@ private enum SaverFixture {
             for name in others {
                 try FileManager.default.createDirectory(at: projects.appending(path: name), withIntermediateDirectories: false)
             }
-            let link = "." + UUID().uuidString + ReplaySaver.stagingSuffix
+            let link = staging()
             let target = dir.appending(path: "Target", directoryHint: .isDirectory)
             try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
             try Data("keep".utf8).write(to: target.appending(path: "file"))
             try FileManager.default.createSymbolicLink(atPath: projects.appending(path: link).path, withDestinationPath: target.path)
 
             let removed = ReplaySaver.removeAbandonedSaves(in: projects)
-            #expect(removed.map(\.lastPathComponent) == [abandoned])
-            #expect(SaverFixture.names(in: projects) == (others + [link, "Done.toma"]).sorted())
+            #expect(removed.map(\.lastPathComponent) == [crashed, lockless].sorted())
+            #expect(SaverFixture.names(in: projects) == (others + [link, starting, live, "Done.toma"]).sorted())
             #expect(SaverFixture.names(in: target) == ["file"])
             #expect(try LoadedProject.load(done.projectURL).take.status == .complete)
-            #expect(ReplaySaver.removeAbandonedSaves(in: projects).isEmpty)
+
+            // Once its holder lets go (its process died), the save it was making is abandoned too.
+            close(holder)
+            #expect(ReplaySaver.removeAbandonedSaves(in: projects).map(\.lastPathComponent) == [live])
+            #expect(SaverFixture.names(in: projects) == (others + [link, starting, "Done.toma"]).sorted())
             #expect(ReplaySaver.removeAbandonedSaves(in: dir.appending(path: "Nowhere")).isEmpty)
         }
     }
