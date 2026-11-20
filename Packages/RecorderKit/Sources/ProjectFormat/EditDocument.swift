@@ -896,6 +896,17 @@ public struct AudioPlan: Codable, Equatable, Sendable {
     public static func key(take: String, track: String) -> String {
         "\(take)/\(track)"
     }
+
+    /// The gain of track `track` of take `take` in a sequence that shows `takes` (phase 3 design §9: a track's gain holds
+    /// by its id in every take): its own key's, or else that of the same track in the first of `takes` that has one;
+    /// `nil` if none has. With one take, what `tracks` has for it.
+    public func trackGain(take: String, track: String, takes: [String]) -> TrackGain? {
+        if let own = tracks[Self.key(take: take, track: track)] { return own }
+        for other in takes {
+            if let gain = tracks[Self.key(take: other, track: track)] { return gain }
+        }
+        return nil
+    }
 }
 
 public struct TrackGain: Codable, Equatable, Sendable {

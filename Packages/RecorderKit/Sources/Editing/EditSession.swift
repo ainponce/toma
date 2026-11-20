@@ -260,6 +260,10 @@ public final class EditSession {
     /// Opens the project at `url` for editing, its take `take` (the last one when `nil`). The work on files runs off
     /// the main actor. Throws what `LoadedProject.load` throws, and the error of an edit file that cannot be read for
     /// another reason than the ones `ReadOnlyReason` names.
+    ///
+    /// Without a take, in a package of more than one take, `project` is the one loaded focused on the take of the
+    /// document's first clip (phase 3 design §9: a take the sequence does not use is never the one shown), with its
+    /// events read as `LoadedProject.load` reads them, and their error thrown; with one take, the last one.
     public static func open(_ url: URL, take: String?, context: EditContext) async throws -> EditSession {
         EditSession(try await Opening.open(url, take: take, context: context), context: context)
     }
@@ -273,6 +277,7 @@ public final class EditSession {
     /// The project comes with its events read (`LoadedProject.load(_:take:)`'s, whatever the document comes from), for
     /// the callers that draw or rebuild from them: an event log that cannot be read is thrown here, never drawn as no
     /// events. `readDocumentWithDiskVersion(_:take:context:)` gives a project that reads them only when asked for.
+    /// Without a take, it is focused on the take of the document's first clip, as `open` focuses it.
     public nonisolated static func readDocument(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument) {
@@ -291,7 +296,8 @@ public final class EditSession {
     /// events), and its project reads them only when they are asked for (`LoadedProject.events`, which then has none if
     /// they cannot be read; `LoadedProject.readEvents()` throws why): what does not use them never opens `events.jsonl`
     /// (Task 31b, design §15). One that is a link, is reached through one or is not a regular file is refused all the
-    /// same, at once (`LoadedProject.load(_:take:deferringEvents:)`).
+    /// same, at once (`LoadedProject.load(_:take:deferringEvents:)`). Without a take, the project is focused on the take
+    /// of the document's first clip, as `open` focuses it, its events read only when they are asked for.
     public nonisolated static func readDocumentWithDiskVersion(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, EditDocument, diskVersion: Int) {
@@ -305,7 +311,7 @@ public final class EditSession {
         let project = try LoadedProject.load(url, take: take, deferringEvents: read)
         let files = try readOnlyEditFiles(of: project)
         let (document, diskVersion) = try readOnlyDocument(of: project, files: files, context: context)
-        return (project, document, diskVersion)
+        return (take == nil ? project.focusedOnFirstClip(of: document) : project, document, diskVersion)
     }
 
     /// What the library shows of the document `readDocumentWithDiskVersion(_:take:context:)` reads (design §6.8): its
@@ -314,7 +320,7 @@ public final class EditSession {
     /// would come from the take's events is told from the take without decoding them where it does not depend on them
     /// (`DocumentOutline.withoutEvents`): a version 1 or 2 package, or a version 3 one without edit files, of a take
     /// with at most one screen that recorded something, and for a `NewDocument` an event log that holds no pause. The
-    /// project reads its events only when they are asked for, as `readDocumentWithDiskVersion`'s does.
+    /// project reads its events only when they are asked for, and is focused as `readDocumentWithDiskVersion`'s is.
     public nonisolated static func readOutline(
         _ url: URL, take: String?, context: EditContext
     ) throws -> (LoadedProject, DocumentOutline) {
@@ -336,7 +342,8 @@ public final class EditSession {
             }
         }
         let (document, diskVersion) = try readOnlyDocument(of: project, files: files, context: context)
-        return (project, DocumentOutline(document, diskVersion: diskVersion))
+        let shown = take == nil ? project.focusedOnFirstClip(of: document) : project
+        return (shown, DocumentOutline(document, diskVersion: diskVersion))
     }
 
     /// The edit files of a version 3 project for a read without the lock, `nil` for a version 1 or 2 one (which never
@@ -1214,7 +1221,8 @@ private enum Opening {
         try? FileManager.default.createDirectory(at: caches.directory, withIntermediateDirectories: true)
         let folder = try PackageFolder(url)
         let current = folder.path().map { URL(fileURLWithPath: $0, isDirectory: true) } ?? url
-        return try await open(project, folder: folder, url: current, caches: caches, context: context)
+        return try await open(
+            project, folder: folder, url: current, caches: caches, context: context, focusing: take == nil)
     }
 
     /// The package `folder` is open on, its take `take`, opened anew from the disk where it is now, with the caches it
@@ -1229,8 +1237,11 @@ private enum Opening {
         return try await open(project, folder: folder, url: url, caches: caches, context: context)
     }
 
+    /// `focusing`: the project is shown focused on the take of the document's first clip (`EditSession.open` without a
+    /// take), its events read here, off the main actor, before the session takes it.
     private static func open(
-        _ project: LoadedProject, folder: PackageFolder, url current: URL, caches: ProjectCaches, context: EditContext
+        _ project: LoadedProject, folder: PackageFolder, url current: URL, caches: ProjectCaches, context: EditContext,
+        focusing: Bool = false
     ) async throws -> Opened {
         var opened = Opened(project: project, caches: caches, folder: folder, url: current, document: .legacy(for: project))
         let package = project.package
@@ -1250,7 +1261,9 @@ private enum Opening {
             return opened
         }
         // Read-only whatever it holds: without the lock, and nothing written (no new document, no repair of the log).
-        if let forced = context.forcedReadOnly { return try readOnly(opened, forced, context: context) }
+        if let forced = context.forcedReadOnly {
+            return try readOnly(opened, forced, context: context, focusing: focusing)
+        }
         let lock: HeldRecordingLock
         do {
             // Another opener's `RecordingLock.isHeld` takes the lock for a moment: that is not another app editing.
@@ -1259,7 +1272,7 @@ private enum Opening {
                 retryDelay: RecordingLock.probeRetryDelay)
         } catch let error as POSIXError {
             guard let reason = lockRefusal(error.code) else { throw error }
-            return try readOnly(opened, reason, context: context)
+            return try readOnly(opened, reason, context: context, focusing: focusing)
         }
         let files: EditFiles
         do {
@@ -1269,6 +1282,14 @@ private enum Opening {
             throw error
         }
         let resolution = Resolution.of(project, files: files, context: context)
+        if focusing {
+            do {
+                opened.project = try project.focusedOnFirstClip(of: resolution.shown).withEventsRead()
+            } catch {
+                lock.release(inDirectory: folder.descriptor)
+                throw error
+            }
+        }
         opened.document = resolution.shown
         opened.diskVersion = resolution.diskVersion
         opened.createVersion = resolution.createVersion
@@ -1365,10 +1386,14 @@ private enum Opening {
     }
 
     /// The project read-only, its document read without writing anything; a newer document wins over `reason`.
-    private static func readOnly(_ opened: Opened, _ reason: ReadOnlyReason, context: EditContext) throws -> Opened {
+    /// `focusing` as `open` says.
+    private static func readOnly(
+        _ opened: Opened, _ reason: ReadOnlyReason, context: EditContext, focusing: Bool
+    ) throws -> Opened {
         var opened = opened
         let files = try EditFiles.read(opened.project.package)
         let resolution = Resolution.of(opened.project, files: files, context: context)
+        if focusing { opened.project = try opened.project.focusedOnFirstClip(of: resolution.shown).withEventsRead() }
         opened.document = resolution.shown
         opened.diskVersion = resolution.diskVersion
         opened.createVersion = resolution.createVersion
@@ -1865,6 +1890,24 @@ private final class PackageFolder: Sendable {
 
 private func posixError() -> POSIXError {
     POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+}
+
+// MARK: - The take shown
+
+extension LoadedProject {
+    /// This project as the editor shows `document` (phase 3 design §9): in a package of more than one take, focused on
+    /// the take of the document's first clip the package has (`takesShown(by:)`), so a take the sequence does not use
+    /// is never the one shown; itself with one take, an empty sequence or no take of it in the package.
+    fileprivate func focusedOnFirstClip(of document: EditDocument) -> LoadedProject {
+        guard takes.count > 1 else { return self }
+        return takesShown(by: document).first ?? self
+    }
+
+    /// This project with its events read now, off the main actor, and their error thrown (`readEvents()`).
+    fileprivate func withEventsRead() throws -> LoadedProject {
+        try readEvents()
+        return self
+    }
 }
 
 // MARK: - What a render can draw
