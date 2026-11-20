@@ -301,16 +301,23 @@ golden-2-record:
 GOLDEN_3_DIR ?= $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-3
 GOLDEN_3 = $(abspath $(GOLDEN_3_DIR))
 GOLDEN_3_SRC = $(or $(GOLDEN_ROOT),$(CURDIR)/)build/golden-3-src
-GOLDEN_3_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden3FramesMatch|golden3MixMatches'
+# What golden 3 compares: the frames, the mix, and that every golden document, migrated, keeps the rules of the document
+# of phase 3 (theGoldenDocumentsHaveNoProblem: none of them turns read-only). Recording runs the first two alone.
+GOLDEN_3_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden3FramesMatch|golden3MixMatches|theGoldenDocumentsHaveNoProblem'
+GOLDEN_3_RECORD_TESTS = swift test --package-path Packages/RecorderKit --filter 'golden3FramesMatch|golden3MixMatches'
 # Sets $$commit to the commit the golden files of phase 3 were recorded from.
 GOLDEN_3_COMMIT = commit=$$(cat "$(GOLDEN_3)/COMMIT" 2>/dev/null || echo "<the last commit of the branch golden-3-base>")
 # Records them again from $$commit, in a worktree of that commit, with the ones there moved aside.
 GOLDEN_3_RECORD_AGAIN = mv '$(GOLDEN_3)' '$(GOLDEN_3).old' && git worktree add '$(GOLDEN_3_SRC)' $$commit \
 	&& make -C '$(GOLDEN_3_SRC)' golden-3-record GOLDEN_3_DIR='$(GOLDEN_3)' && git worktree remove '$(GOLDEN_3_SRC)'
-# Whether both golden tests of phase 3 ran and passed, from the output of GOLDEN_3_TESTS in file $(1): a filter that
+# Whether every golden test of phase 3 ran and passed, from the output of GOLDEN_3_TESTS in file $(1): a filter that
 # matches no test exits with 0 too.
 GOLDEN_3_RAN = { grep -qF 'golden3FramesMatch() passed' "$(1)" && grep -qF 'golden3MixMatches() passed' "$(1)" \
-	|| { echo "golden3FramesMatch and golden3MixMatches did not both run and pass: nothing was compared" >&2; false; }; }
+	&& grep -qF 'theGoldenDocumentsHaveNoProblem() passed' "$(1)" \
+	|| { echo "golden3FramesMatch, golden3MixMatches and theGoldenDocumentsHaveNoProblem did not all run and pass: nothing was compared" >&2; false; }; }
+# The same for the two tests a recording runs (GOLDEN_3_RECORD_TESTS).
+GOLDEN_3_RECORDED = { grep -qF 'golden3FramesMatch() passed' "$(1)" && grep -qF 'golden3MixMatches() passed' "$(1)" \
+	|| { echo "golden3FramesMatch and golden3MixMatches did not both run and pass: nothing was recorded" >&2; false; }; }
 
 golden-3 golden-3-record: SHELL := /bin/bash
 
@@ -355,8 +362,8 @@ golden-3-record:
 	@test -z "$$(git status --porcelain)" || { echo "this checkout has uncommitted changes: the golden files of phase 3 are recorded from a commit, which they name in COMMIT" >&2; exit 1; }
 	@set -o pipefail; log=$$(mktemp -t toma-golden-3); \
 	rm -rf "$(GOLDEN_3).partial" && mkdir -p "$(GOLDEN_3).partial" && \
-	TOMA_GOLDEN_3_DIR="$(GOLDEN_3).partial" TOMA_GOLDEN_RECORD=1 $(GOLDEN_3_TESTS) 2>&1 | tee "$$log" && \
-	$(call GOLDEN_3_RAN,$$log) && \
+	TOMA_GOLDEN_3_DIR="$(GOLDEN_3).partial" TOMA_GOLDEN_RECORD=1 $(GOLDEN_3_RECORD_TESTS) 2>&1 | tee "$$log" && \
+	$(call GOLDEN_3_RECORDED,$$log) && \
 	bash scripts/golden-system.sh > "$(GOLDEN_3).partial/VERSION" && git rev-parse HEAD > "$(GOLDEN_3).partial/COMMIT" && \
 	test ! -e "$(GOLDEN_3)" && mv "$(GOLDEN_3).partial" "$(GOLDEN_3)"; \
 	status=$$?; rm -f "$$log"; \
