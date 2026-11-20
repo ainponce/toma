@@ -122,11 +122,14 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
     private var scriptChanged = false
     /// The writes of the project's script, each after the one before.
     private var scriptWrites: Task<Void, Never>?
+    private var terminationObserver: (any NSObjectProtocol)?
 
     /// After a hitch the script goes up at most this much time at once.
     private static let longestStep: CFTimeInterval = 0.1
     /// How long after the last change the project's script is written.
     private static let scriptSaveDelay = Duration.seconds(1)
+    /// How long a quit waits for the project's script to be written.
+    private static let scriptQuitWait = DispatchTimeInterval.seconds(2)
     private static let logger = Logger(subsystem: "dev.toma.Toma", category: "Teleprompter")
 
     init(setting: TeleprompterSetting, recording: RecordingController) {
@@ -160,7 +163,14 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         showcase()
         #endif
         model.relayout()
-        observe()
+        // A project's script changed just before quitting is written before the app ends.
+        terminationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.writeScriptBeforeQuitting() }
+        }
+        // As things are now: Follow the Voice saved on says at once why it cannot follow, and turns the speed off.
+        changed()
     }
 
     /// The island is now at `islandFrame`: the teleprompter goes under it, in the same frame.
@@ -230,10 +240,17 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
             // Turned on: the voice is taken to be at the line being read (before the take, where it starts).
             if followsVoice { voice.restart(script: model.layout.words, at: wordBeingRead) }
         }
-        voice.update(TeleprompterVoice.Take(
-            followsVoice: followsVoice, isRecording: isRecordingATake, isPaused: recording.isUserPaused || recording.isPaused,
-            serial: recording.takeSerial, recordsMicrophone: recording.recordsMicrophone))
         showOrHide()
+    }
+
+    /// The voice is followed only while the teleprompter is on the screen with Follow the Voice on: turned off, or
+    /// leaving the screen during a take, nothing listens to the microphone any more (until it comes back).
+    private func updateVoice() {
+        let isShown = TeleprompterLayout.isVisible(isOn: setting.value.isOn, island: island)
+        voice.update(TeleprompterVoice.Take(
+            followsVoice: isShown && setting.value.followsVoice, isRecording: isRecordingATake,
+            isPaused: recording.isUserPaused || recording.isPaused, serial: recording.takeSerial,
+            recordsMicrophone: recording.recordsMicrophone))
     }
 
     private var isRecordingATake: Bool {
@@ -337,16 +354,27 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
         }
     }
 
+    /// The app quits: what was changed of the project's script is written now, and its writes are waited for (at most
+    /// `scriptQuitWait`), so a change made just before quitting is not lost.
+    private func writeScriptBeforeQuitting() {
+        saveProjectScript()
+        guard let writes = scriptWrites else { return }
+        let written = DispatchSemaphore(value: 0)
+        Task.detached {
+            await writes.value
+            written.signal()
+        }
+        _ = written.wait(timeout: .now() + Self.scriptQuitWait)
+    }
+
     // MARK: - Showing and hiding
 
     private func showOrHide() {
         if TeleprompterLayout.isVisible(isOn: setting.value.isOn, island: island) {
             let returning = !panel.isVisible || isHiding
             isHiding = false
-            if startOffset(returning: returning, isRecording: isRecordingATake) != nil {
-                startAgain()
-                voice.refreshAvailability()
-            }
+            // Back with Follow the Voice on, what the Mac has is asked again (`TeleprompterVoice.update`).
+            if startOffset(returning: returning, isRecording: isRecordingATake) != nil { startAgain() }
             if !panel.isVisible {
                 panel.alphaValue = 0
                 panel.orderFrontRegardless()
@@ -357,6 +385,8 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
             // Unless the island takes it back, the keyboard goes back to the app in front once the panel is
             // ordered out.
             endEditing(reordering: false)
+            // What was changed of the project's script is written as the teleprompter leaves, not a second later.
+            saveProjectScript()
             if panel.isVisible, !isHiding {
                 isHiding = true
                 fade(to: 0) { [weak self] in
@@ -368,6 +398,7 @@ final class TeleprompterPanel: NSObject, NSWindowDelegate {
                 }
             }
         }
+        updateVoice()
         updateScrolling()
     }
 

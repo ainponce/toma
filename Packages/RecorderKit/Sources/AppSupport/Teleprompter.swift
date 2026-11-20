@@ -232,6 +232,19 @@ public enum TeleprompterFollow {
                 word = max(word, alignment.trying(heard).position)
             }
         }
+
+        /// The final result of what was said just before the take was paused, which comes while it is: confirmed, so what
+        /// is heard next aligns after it, but not shown, since nothing moves while the take is paused (`showConfirmed`).
+        public mutating func confirm(_ text: String) {
+            let heard = ScriptWords(text).words.map(\.text)
+            guard !heard.isEmpty else { return }
+            alignment.hear(heard)
+        }
+
+        /// The take goes on: what was confirmed while it was paused shows (never going back).
+        public mutating func showConfirmed() {
+            word = max(word, alignment.position)
+        }
     }
 
     /// Why Follow the Voice, on, does not follow: the teleprompter says it, and goes up at its speed instead.

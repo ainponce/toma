@@ -12,7 +12,8 @@ import os
 /// each block and returns, so the take never waits) by the system's live engine (`LiveSpeech`: dictation when its model
 /// is on the Mac, else the transcription's), and what it says moves `place` (`TeleprompterFollow.Place`: final results
 /// confirmed, volatile ones on trial, never back) from the word the take began at. A new take (`takeSerial`, a restart's
-/// too) starts again; while the take is paused nothing is heard, and nothing moves.
+/// too) starts again; while the take is paused nothing is heard, and nothing moves (the final result of what was said
+/// just before the pause is confirmed, and shows once the take goes on).
 ///
 /// It never asks for a permission nor downloads a model (`LiveSpeech.availability` only asks what is installed). When it
 /// cannot follow, `note` says why and the teleprompter goes up at its speed: macOS 15, the language's model missing, a
@@ -151,7 +152,10 @@ final class TeleprompterVoice {
         }
         if let session, session.serial != take.serial { endSession() }
         if session == nil { startSession(language: language, kind: kind, serial: take.serial) }
+        let goesOn = session?.isListening == false && !take.isPaused
         session?.listen(!take.isPaused)
+        // What was said before a pause and confirmed during it shows once the take goes on.
+        if goesOn { place.showConfirmed() }
     }
 
     private func note(for take: Take) -> TeleprompterFollow.Note? {
@@ -202,9 +206,15 @@ final class TeleprompterVoice {
         Self.logger.info("Following the voice in \(language, privacy: .public) with \(kind.rawValue, privacy: .public)")
     }
 
+    /// A result of session `id`: it moves the place while the take records; while it is paused, nothing moves, but the
+    /// final result of what was said just before the pause is confirmed, so what comes after it aligns from there.
     private func heard(_ result: LiveSpeechResult, session id: Int) {
-        guard let session, session.id == id, session.isListening else { return }
-        place.hear(result.text, isFinal: result.isFinal)
+        guard let session, session.id == id else { return }
+        if session.isListening {
+            place.hear(result.text, isFinal: result.isFinal)
+        } else if result.isFinal {
+            place.confirm(result.text)
+        }
     }
 
     /// The engine of session `id` stopped by itself, with `error` or none: the take goes on at the teleprompter's speed.
