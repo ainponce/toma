@@ -1119,6 +1119,11 @@ Con macOS 26, el modelo del idioma instalado y Ajustes ▸ General ▸ «Transcr
 - En un proyecto de dos tomas (la segunda agregada con Tomas ▸ «Agregar al final» o regrabada) en «Como la grabación», con la segunda grabada en otra pantalla de otra proporción (la de la MacBook y un monitor 16:9): la vista previa, el MP4 y el GIF tienen la forma de la pantalla de la toma del primer clip; en el tramo de la otra toma su pantalla entra entera, centrada, y un zoom con foco fijo, el cursor y la burbuja caen donde apuntan, sin correrse a un costado. Mover al principio un clip de la otra toma cambia la forma de las tres a la suya.
 - Con las dos tomas en la secuencia: Regenerar los zooms automáticos y Seguir el cursor cambian los bloques y las pantallas de las dos, y dejan los del usuario; Aplicar un estilo (y el estilo por defecto) cambia el estilo del proyecto y vuelve a planear los zooms de las dos; con la cámara en Fondo borroso en las dos, la tarjeta de la Biblioteca muestra la burbuja sin el cuarto y dice que el proyecto tiene cámara aunque solo la tenga la segunda.
 
+**El sonido de los clips importados** (A10)
+
+- Con auriculares, en un proyecto con voz, soltar en la pista Video un `.mov` con sonido (una canción o alguien hablando): en su tramo se oye el clip y no la toma, sin chasquidos en los bordes; a −6 dB en el inspector, más bajo; a 2×, más rápido con el mismo tono; a 8×, callado. Lo mismo exportado.
+- Agregar un clip encima con sonido (Anotaciones ▸ Clip…): se oye junto con la voz desde que aparece hasta que termina el archivo, una sola vez; Silenciar lo calla en la vista previa y en el export. Recién importado, se oye apenas termina de prepararse la mezcla (unos segundos en un proyecto largo), sin cerrar el editor.
+
 ## Prueba en seco (ad hoc)
 
 **Antes de la revisión final.** En esa versión una corrida ad hoc escribía en `dist/` y buscaba la clave de Sparkle en el llavero; desde la revisión final escribe en `build/adhoc-dist/` y no consulta el llavero (ver "Prueba en seco después de la revisión final", al final). Lo de abajo queda como registro de lo que se probó entonces.

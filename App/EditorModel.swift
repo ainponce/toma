@@ -605,6 +605,10 @@ final class EditorModel {
             }
             guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
             baseMix = mix
+            // An imported clip the document came to name while it was made: made again with it (plan 3a decision 15).
+            if let session, mix.lacksMedia(for: session.document) {
+                makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
+            }
             if let player {
                 // Remade with new analysis: the player takes the revision shown's mix as it is built.
                 player.setMix(mix)
@@ -997,6 +1001,11 @@ final class EditorModel {
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
             build(next, revision: session.revision)
+            // An imported clip the mix has not opened is silent in it until the mix is made again with it (plan 3a
+            // decision 15); one being made checks once it is.
+            if !makingMix, let baseMix, baseMix.lacksMedia(for: next) {
+                makeMix(of: currentProject(of: session), document: next, revision: session.revision)
+            }
             image.documentChanged(next)
             voice.documentChanged(next)
         }
