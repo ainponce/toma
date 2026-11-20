@@ -399,6 +399,84 @@ private func brightness(_ pixel: SIMD4<UInt8>) -> Int { Int(pixel.x) + Int(pixel
         }
     }
 
+    /// A title card right after a clip (`[take 0–2 s] [the file's 0–1 s] [a card of 1 s] [take 2–4 s]`), with each of its
+    /// backgrounds: over its first 0.3 s it fades against the clip's last instant held (the file's `end − 1`), the clip
+    /// faded to `1 − p` with its shadow (at 0.15 s, half: `TitleCardScene.faded`), and then over the background alone; a
+    /// blurred frame, without a screen in that frame, is the same as the project's background. Nothing of the clip's under
+    /// the card once it is in, and none over the card's own clip.
+    @Test func cardFadesAgainstAMediaClip() {
+        let take = StageDrawing.bareTake(seconds: 4)
+        let asset = "assets/0123456789abcdef0123456789abcdef.mov"
+        let point = base.adding(seconds: 2)
+        for background in [TitleCardBackground.stage, .color(RGBA(0, 0, 0, 0.5)), .blurredFrame] {
+            var document = EditDocument.legacy(take: take, events: [])
+            document.sequence = [
+                Clip(id: "c-00000001", take: takeID, start: base, end: point, speed: 1),
+                Clip(
+                    id: "c-00000002", take: takeID, start: point, end: point, speed: 1,
+                    content: .media(MediaClip(asset: asset, start: 0, end: 1_000_000_000))),
+                Clip(
+                    id: "c-00000003", take: takeID, start: point, end: point, speed: 1,
+                    content: .card(TitleCard(title: "Toma", style: .centered, background: background), duration: 1_000_000_000)),
+                Clip(id: "c-00000004", take: takeID, start: point, end: base.adding(seconds: 4), speed: 1),
+            ]
+            let scene = FrameEvaluator(take: take, events: [], document: document, outputSize: [640, 360])
+            #expect(scene.timeMap.clipOutputStarts == [0, 2_000_000_000, 3_000_000_000, 4_000_000_000])
+            let clip = scene.frame(at: 2.5).media
+            #expect(clip?.opacity == 1)
+            let half = scene.frame(at: 3.15)
+            #expect(half.titleCard?.opacity == 0.5, "\(background)")
+            #expect(half.media?.opacity == 0.5 && half.media?.fileTime == 999_999_999, "\(background)")
+            #expect(half.media?.room == clip?.room && half.media?.asset == asset, "\(background)")
+            #expect(scene.frame(at: 3.0).media?.opacity == 1, "\(background)")
+            for t in [3.3, 3.5, 3.9] {
+                #expect(scene.frame(at: t).media == nil && scene.frame(at: t).titleCard != nil, "\(background) at \(t) s")
+            }
+        }
+        // `faded` alone: the clip at `f`, `blurred` never shows one.
+        var frame = RenderFrame(outputSize: [640, 360], gradientStart: .zero, gradientEnd: .one, gradientAngleDegrees: 0)
+        frame.media = MediaClipLayer(asset: asset, fileTime: 5, room: Rect(x: 64, y: 64, width: 512, height: 232), cornerRadius: 0, shadow: 0)
+        #expect(TitleCardScene.faded(frame, keeping: 0.25).media?.opacity == 0.25)
+        #expect(TitleCardScene.faded(frame, keeping: 1).media?.opacity == 1)
+        frame.screen = ScreenLayer(trackID: trackID, sourceTime: base, rect: Rect(x: 0, y: 0, width: 640, height: 360), cornerRadius: 0)
+        #expect(TitleCardScene.blurred(frame, 0.5)?.media == nil)
+    }
+
+    /// The clip at an opacity, its shadow with it (as under a card fading against it): in the clip, the clip at 1 and the
+    /// background mixed half and half at 0.5; under its bottom edge, half the darkening of its shadow; at 0, nothing drawn.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
+    func fadedClipIsDrawnAtItsOpacity() throws {
+        let drawer = try MediaDrawer()
+        let size = SIMD2(640, 360)
+        var frame = RenderFrame(
+            outputSize: size, gradientStart: SIMD4(0.2, 0.3, 0.8, 1), gradientEnd: SIMD4(0.9, 0.6, 0.2, 1), gradientAngleDegrees: 30)
+        let room = Rect(x: 64, y: 64, width: 512, height: 232)
+        frame.media = MediaClipLayer(asset: "assets/0123456789abcdef0123456789abcdef.mov", fileTime: 0, room: room, cornerRadius: 19.2, shadow: 1)
+        func drawn(_ opacity: Double?) throws -> (counts: DrawCounts, bytes: [UInt8]) {
+            var faded = frame
+            if let opacity { faded.media?.opacity = opacity } else { faded.media = nil }
+            return try drawer.draw(faded, texture: drawer.clip)
+        }
+        let (whole, half, none, plain) = (try drawn(1), try drawn(0.5), try drawn(0), try drawn(nil))
+        #expect(whole.counts.mediaClips == 1 && half.counts.mediaClips == 1 && none.counts.mediaClips == 0)
+        #expect(none.bytes == plain.bytes)
+        // The 320 × 180 clip fills the room's height: 412.4 × 232, centred.
+        let rect = try #require(frame.media?.rect(fitting: [320, 180]))
+        func at(_ bytes: [UInt8], _ x: Double, _ y: Double) -> SIMD4<Float> {
+            SIMD4<Float>(pixel(bytes, width: size.x, x: Int(x), y: Int(y)))
+        }
+        for (x, y) in [(rect.midX, rect.midY), (rect.x + 40, rect.y + 60), (rect.maxX - 40, rect.maxY - 60)] {
+            let mixed = (at(whole.bytes, x, y) + at(plain.bytes, x, y)) / 2
+            let difference = at(half.bytes, x, y) - mixed
+            #expect(max(abs(difference.x), abs(difference.y), abs(difference.z)) <= 1.5, "at (\(x), \(y))")
+        }
+        // Under the bottom edge, the shadow alone: half as dark.
+        let (x, y) = (rect.midX, rect.maxY + 6)
+        let darkening = at(plain.bytes, x, y) - at(whole.bytes, x, y), halfDarkening = at(plain.bytes, x, y) - at(half.bytes, x, y)
+        #expect(darkening.x + darkening.y + darkening.z > 30)
+        #expect(abs((halfDarkening.x + halfDarkening.y + halfDarkening.z) * 2 - (darkening.x + darkening.y + darkening.z)) <= 6)
+    }
+
     /// A phone's clip shot upright, encoded on its side (640 × 360 with a quarter turn): drawn upright, 360 × 640 in the
     /// room (391.5 × 696 at 1080p), with what is along the top of its encoded frame (the moving square, at its frame 18 in
     /// the middle of that row) down its right side.
@@ -493,6 +571,11 @@ private struct MediaDrawer {
 
     /// What drawing `frame` drew, its imported clip with `texture`.
     func counts(of frame: RenderFrame, texture: (any MTLTexture)?) throws -> DrawCounts {
+        try draw(frame, texture: texture).counts
+    }
+
+    /// Draws `frame`, its imported clip with `texture`: what it drew, and the bytes.
+    func draw(_ frame: RenderFrame, texture: (any MTLTexture)?) throws -> (counts: DrawCounts, bytes: [UInt8]) {
         let target = try StageDrawing.target(device: device, size: frame.outputSize)
         let commandBuffer = try #require(queue.makeCommandBuffer())
         var counts = DrawCounts()
@@ -503,7 +586,7 @@ private struct MediaDrawer {
         commandBuffer.commit()
         commandBuffer.waitUntilCompleted()
         #expect(commandBuffer.status == .completed)
-        return counts
+        return (counts, StageDrawing.bytes(of: target))
     }
 }
 

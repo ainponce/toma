@@ -46,15 +46,17 @@ extension Compositor {
     /// frame fitted whole into the layer's room with its upright proportion (`MediaClipLayer.rect(fitting:)`, of the
     /// texture's size), bilinear and opaque over a rounded rect of the layer's corners (at most half its shorter side), and
     /// before it, under it, the screen's shadow of the layer's weight `s` (`FrameEvaluator`'s: at opacity `0.55·s`, of
-    /// σ `(0.004 + 0.016·s)·W`, `0.010·s·W` down). A frame of the sequence's clip has no zoom and no card (plan 3a decision
+    /// σ `(0.004 + 0.016·s)·W`, `0.010·s·W` down); the two at the layer's opacity (0 to 1), as the camera with its shadow
+    /// (at 1, the clip opaque). A frame of the sequence's clip has no zoom and no card (plan 3a decision
     /// 12); were it drawn through `stage`, or the card's content `card`, it would move with it, its corners and its shadow
     /// scaled by its depth. Nothing without a layer or a frame of it (a file that cannot be read: the background alone),
-    /// nor in a room that is empty.
+    /// nor in a room that is empty, nor at an opacity not above 0.
     func drawMediaClip(
         _ layer: MediaClipLayer?, through stage: StageTransform?, card: CardContent?, textures: MediaClipTextures?,
         outputSize: SIMD2<Int>, pass: LayerPass, encoder: any MTLRenderCommandEncoder, counts: inout DrawCounts
     ) {
-        guard let layer, let textures else { return }
+        guard let layer, let textures, layer.opacity > 0 else { return }
+        let opacity = Float(min(layer.opacity, 1))
         let frame = textures.frame
         let picture = textures.orientation.uprightSize(of: SIMD2(Double(frame.width), Double(frame.height)))
         let fitted = layer.rect(fitting: picture)
@@ -68,7 +70,7 @@ extension Compositor {
         let viewport = SIMD2<Float>(Float(outputSize.x), Float(outputSize.y))
         var quad = Self.imageQuad(in: rect, cornerRadius: corners, uvOrigin: .zero, uvSize: .one, viewport: viewport)
 
-        // The shadow, under the clip: drawn alone where the clip is not, as the camera's (`cameraShadowFragment`).
+        // The shadow, under the clip: drawn where the clip lets it through, as the camera's (`cameraShadowFragment`).
         let weight = layer.shadow.isNaN ? 0 : min(max(layer.shadow, 0), 1)
         let width = Double(outputSize.x) * depth
         let shadow = ShadowLayer(
@@ -82,18 +84,19 @@ extension Compositor {
                 uvSize: .one, radius: 0)
             var uniforms = MediaClipShadowUniforms(
                 lower: box.lower, upper: box.upper, sigma: box.sigma, corner: box.corner, opacity: box.opacity)
-            var shape = Self.shape(rect, cornerRadius: corners, viewport: viewport), opacity: Float = 1
+            var shape = Self.shape(rect, cornerRadius: corners, viewport: viewport), shadowOpacity = opacity
             encoder.setRenderPipelineState(shadowPipeline)
             encoder.setVertexBytes(&shadowQuad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
             encoder.setFragmentBytes(&uniforms, length: MemoryLayout<MediaClipShadowUniforms>.stride, index: 0)
             encoder.setFragmentBytes(&shape, length: MemoryLayout<QuadUniforms>.stride, index: 1)
-            encoder.setFragmentBytes(&opacity, length: MemoryLayout<Float>.stride, index: 2)
+            encoder.setFragmentBytes(&shadowOpacity, length: MemoryLayout<Float>.stride, index: 2)
             encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         }
 
         // The clip's frame, upright, over its rounded rect.
         let orientation = textures.orientation
-        var uniforms = MediaClipUniforms(origin: orientation.origin, across: orientation.across, down: orientation.down)
+        var uniforms = MediaClipUniforms(
+            origin: orientation.origin, across: orientation.across, down: orientation.down, opacity: opacity)
         encoder.setRenderPipelineState(picturePipeline)
         encoder.setVertexBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
@@ -110,7 +113,8 @@ private struct MediaClipUniforms {
     var origin: SIMD2<Float>
     var across: SIMD2<Float>
     var down: SIMD2<Float>
-    var padding: SIMD2<Float> = .zero
+    var opacity: Float
+    var padding: Float = 0
 }
 
 /// `ShadowUniforms` in `ShaderSource.coreMetal`: 32 bytes (the compositor's own is private to its file).

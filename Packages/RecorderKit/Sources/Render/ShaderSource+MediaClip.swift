@@ -4,8 +4,9 @@ extension ShaderSource {
     /// The part of the library (`metal`) of an imported clip of the sequence (phase 3 design §5.4 and §12, step 2), drawn
     /// where the screens are: its frame, bilinear and opaque over its rounded rect (the core's `imageCoverage`, as the
     /// screen), read through the clip's orientation (`MediaOrientation`: the texture coordinates of the upright picture's
-    /// top-left corner and along its sides), so a clip a player turns upright is drawn upright. Its shadow is the core's
-    /// camera's, under it (`cameraShadowFragment`, `cameraShadowTargetFragment`, at opacity 1).
+    /// top-left corner and along its sides), so a clip a player turns upright is drawn upright, at its opacity. Its shadow
+    /// is the core's camera's, under it at the same opacity (`cameraShadowFragment`, `cameraShadowTargetFragment`), so the
+    /// two drawn one after the other are the clip with its shadow, together at that opacity.
     /// - `mediaClipFragment`: straight into the target, or into a subsample's attachment.
     /// - `mediaClipTargetFragment`: into the target of the motion blur's pass (the core's `TargetOut`).
     static let mediaClipMetal = #"""
@@ -14,18 +15,19 @@ extension ShaderSource {
         float2 origin;   // texture coordinates at the upright picture's top-left corner
         float2 across;   // per unit of its width
         float2 down;     // per unit of its height
-        float2 padding;
+        float opacity;   // 0 to 1: 1, opaque
+        float padding;
     };
 
     // The clip's frame at the pixel at p, over its image (`imageCoverage`): the fraction of the picture under it, through
-    // the orientation, sampled bilinear, opaque.
+    // the orientation, sampled bilinear, opaque, at its opacity.
     static float4 mediaClipColor(QuadOut in, constant QuadUniforms &u, constant MediaClipUniforms &m,
                                  texture2d<float> frame, sampler linearSampler) {
         float coverage = imageCoverage(in.p, u);
         float2 d = (in.p - u.contentOrigin) / u.contentSize;
         float2 uv = m.origin + d.x * m.across + d.y * m.down;
         float3 color = frame.sample(linearSampler, uv).rgb;
-        return float4(color, 1.0) * coverage;
+        return float4(color, 1.0) * (coverage * m.opacity);
     }
 
     fragment float4 mediaClipFragment(QuadOut in [[stage_in]],

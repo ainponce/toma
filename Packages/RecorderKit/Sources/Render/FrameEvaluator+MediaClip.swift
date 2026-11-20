@@ -4,8 +4,8 @@ import ProjectFormat
 /// The imported clip a frame of the sequence shows (phase 3 design §5.4 and §12, step 2; plan 3a decision 12), drawn where
 /// the screens are: the frame of its file at `fileTime`, read by its reader (`AssetFrameReader.readerID(of:)`), fitted
 /// whole into `room` with the proportion of the frame as the renderer decodes it, turned upright
-/// (`rect(fitting:)`), with corners of `cornerRadius` and the screen's shadow of weight `shadow`. No window or device
-/// frame, cursor, camera nor zoom.
+/// (`rect(fitting:)`), with corners of `cornerRadius` and the screen's shadow of weight `shadow`, at `opacity`. No window
+/// or device frame, cursor, camera nor zoom.
 public struct MediaClipLayer: Equatable, Sendable {
     /// The clip's file, as the document names it (`assets/<sha>.<mov|mp4|m4v>`).
     public var asset: String
@@ -18,13 +18,17 @@ public struct MediaClipLayer: Equatable, Sendable {
     public var cornerRadius: Double
     /// The style's shadow, 0 to 1: the screen's, cast by the clip.
     public var shadow: Double
+    /// 0 to 1, the clip and its shadow together: 1 in its own frames, less under a title card fading against it
+    /// (`TitleCardScene.faded(_:keeping:)`).
+    public var opacity: Double
 
-    public init(asset: String, fileTime: Int64, room: Rect, cornerRadius: Double, shadow: Double) {
+    public init(asset: String, fileTime: Int64, room: Rect, cornerRadius: Double, shadow: Double, opacity: Double = 1) {
         self.asset = asset
         self.fileTime = fileTime
         self.room = room
         self.cornerRadius = cornerRadius
         self.shadow = shadow
+        self.opacity = opacity
     }
 
     /// `fileTime` as the reader reads it: host time from 0, the file's own time (none before it).
