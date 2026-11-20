@@ -43,4 +43,24 @@ public enum ZoomPanelRules {
     public static let leadInRange: ClosedRange<Double> = 0...2
     public static let leadOutRange: ClosedRange<Double> = 0...3
     public static let secondsStep = 0.1
+    /// "Loupe Size": the lens's radius, a fraction of the output's short side (`LoupeStyle.radiusRange`, 0.06 to 0.4), in
+    /// steps of 0.01 (the panel shows it in % of the short side).
+    public static let loupeRadiusRange = LoupeStyle.radiusRange
+    public static let loupeRadiusStep = 0.01
+
+    /// The SF Symbol of a zoom mode (phase 3 plan 3b decision 10), in the Zoom tab's menu and on the Zoom track.
+    public static func symbol(_ mode: ZoomMode) -> String {
+        switch mode {
+        case .classic: "plus.magnifyingglass"
+        case .highlight: "highlighter"
+        case .dim: "sun.min"
+        case .loupe: "magnifyingglass.circle"
+        }
+    }
+
+    /// The symbol a block of the Zoom track shows before its depth: a calm block, its mode's (automatic or not); a Classic
+    /// one, the automatic zoom's ✦ if it is automatic and none if it is the user's, as in phase 2.
+    public static func trackSymbol(mode: ZoomMode, automatic: Bool) -> String? {
+        mode.isCalm ? symbol(mode) : (automatic ? "sparkles" : nil)
+    }
 }

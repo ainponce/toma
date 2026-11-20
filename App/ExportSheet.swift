@@ -51,7 +51,8 @@ final class ExportChoices {
     let durationSeconds: Double
     /// The range between the marks, cut to the video (`ExportRangeRules.markedRange`); `nil` without both marks.
     let marked: Range<Int64>?
-    /// The shorter side of what was recorded of the screen, in pixels; `nil` when unknown.
+    /// The shorter side of what was recorded of the screen, in pixels, the largest of the takes the sequence shows; `nil`
+    /// when unknown.
     let recordedShortSide: Int?
 
     var kind: ExportKind {
@@ -112,7 +113,8 @@ final class ExportChoices {
         duration = timeMap.duration
         durationSeconds = timeMap.durationSeconds
         marked = ExportRangeRules.markedRange(marks, duration: duration)
-        recordedShortSide = ExportPreferences.recordedShortSide(of: project.take)
+        // The largest of the takes the sequence shows (3d plan decision 17).
+        recordedShortSide = project.takeRecords(shownBy: document).compactMap(ExportPreferences.recordedShortSide(of:)).max()
         kind = remembered.kind
         rangeChoice = Self.defaultChoice(remembered.kind, marked: marked, duration: duration)
         resolution = ExportResolution(rawValue: remembered.shortSide) ?? .p1080

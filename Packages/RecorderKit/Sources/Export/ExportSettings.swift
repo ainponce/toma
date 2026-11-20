@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AVFoundation
+import Analysis
 import ProjectFormat
 import Render
 
@@ -84,6 +85,14 @@ public struct ExportSettings: Sendable, Equatable {
     internal var framesInFlight = 3
     /// How the video is encoded, and in which file: H.264 in an MP4, as phase 1 exported, unless asked otherwise.
     public var codec: ExportCodec = .h264
+    /// The chapters the file carries in its chapter track (`ChapterTrack`), in output order with starts in ns of the
+    /// whole output (`Chapters.list`); the export of a range shifts them to it (`Chapters.within`). None, the file has
+    /// no chapter track, as before phase 3. Not in the size estimate, nor remembered by the export sheet.
+    public var chapters: [Chapter] = []
+    /// The language of the chapters' titles, a BCP 47 tag (the app's, `es` or `en`), whose language the chapter track
+    /// carries so a player that looks for chapters in its viewer's languages finds them; `nil`, the track's language is
+    /// undetermined (`und`).
+    public var chapterLanguage: String? = nil
 
     /// What HEVC spends of H.264's bitrate for the same quality (phase 2 design §6.8).
     static let hevcShareOfH264 = 0.6
@@ -113,23 +122,25 @@ public struct ExportSettings: Sendable, Equatable {
 
     public init(
         outputSize: SIMD2<Int> = [1920, 1080], framesPerSecond: Int = 60, quality: ExportQuality = .standard,
-        codec: ExportCodec = .h264
+        codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil
     ) {
         self.outputSize = outputSize
         self.framesPerSecond = framesPerSecond
         self.quality = quality
         self.codec = codec
+        self.chapters = chapters
+        self.chapterLanguage = chapterLanguage
     }
 
     /// The video of the export sheet: `aspect` at `resolution` (`StageLayout.outputSize`: both sides even); `auto` from
     /// `contentRatio`, the ratio of the recording's screen (16:9 without it).
     public init(
         aspect: Aspect, resolution: ExportResolution, framesPerSecond: Int, quality: ExportQuality,
-        contentRatio: Double? = nil, codec: ExportCodec = .h264
+        contentRatio: Double? = nil, codec: ExportCodec = .h264, chapters: [Chapter] = [], chapterLanguage: String? = nil
     ) {
         self.init(
             outputSize: StageLayout.outputSize(aspect: aspect, shortSide: resolution.rawValue, contentRatio: contentRatio),
-            framesPerSecond: framesPerSecond, quality: quality, codec: codec)
+            framesPerSecond: framesPerSecond, quality: quality, codec: codec, chapters: chapters, chapterLanguage: chapterLanguage)
     }
 
     /// About how many bytes an export of `durationSeconds` takes (the export sheet's estimate, design §5.6, plan 2b

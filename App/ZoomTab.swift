@@ -4,8 +4,8 @@ import ProjectFormat
 import SwiftUI
 
 /// The Zoom tab (design §5.4): above, the card of the selected zoom if one is selected; then whether zooms show, the
-/// automatic zoom's settings (a change of any plans the automatic zooms again, in one step), the zoom's speed and its
-/// motion blur, and the button that plans them again.
+/// automatic zoom's settings (a change of any plans the automatic zooms again, in one step; their mode, phase 3 design §6,
+/// is a step of its own), the zoom's speed and its motion blur, and the button that plans them again.
 struct ZoomTab: View {
     let model: EditorModel
     let document: EditDocument
@@ -22,7 +22,7 @@ struct ZoomTab: View {
         let auto = model.autoZoomSettings ?? document.zoom.auto
         VStack(alignment: .leading, spacing: 18) {
             if case let .zooms(ids)? = model.selection, ids.count == 1, let region = document.zoom.regions.first(where: { ids.contains($0.id) }) {
-                SelectedZoomCard(model: model, region: region, projectDepth: auto.depth)
+                SelectedZoomCard(model: model, region: region, projectDepth: auto.depth, mode: region.resolvedMode(auto: document.zoom.auto))
                 Divider()
             }
             PanelSection {
@@ -35,6 +35,8 @@ struct ZoomTab: View {
                 }
             }
             PanelSection {
+                ZoomModePicker(selection: auto.mode) { model.setAutoZoomMode($0) }
+                    .help(Text("The mode of the automatic zooms nobody changed."))
                 Picker(
                     "Zoom On",
                     selection: Binding(get: { auto.triggers }, set: { new in model.changeAutoZoom { $0.triggers = new } })
@@ -102,19 +104,34 @@ struct ZoomTab: View {
     }
 }
 
-/// "Selected Zoom" (design §5.4): the block's depth (the project's, for an automatic one nobody touched), where it looks,
-/// how it moves, and Delete Zoom. Touching any of it makes an automatic block the user's.
+/// "Selected Zoom" (design §5.4): the block's mode (phase 3 design §6) and, in Loupe, the lens's size and shape; its depth
+/// (the project's, for an automatic one nobody touched), where it looks, how it moves, and Delete Zoom. Touching any of
+/// it makes an automatic block the user's, with the mode it shows.
 private struct SelectedZoomCard: View {
     let model: EditorModel
     let region: ZoomRegion
     let projectDepth: Double
+    /// The mode the block is drawn in (`ZoomRegion.resolvedMode(auto:)` with the document's settings).
+    let mode: ZoomMode
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isFixed: Bool {
         if case .fixed = region.focus { true } else { false }
     }
 
+    /// "16 %": the lens's radius in % of the output's short side.
+    private static func percent(_ radius: Double) -> String {
+        Int((radius * 100).rounded()).formatted() + " %"
+    }
+
     var body: some View {
         PanelSection("Selected Zoom") {
+            ZoomModePicker(selection: mode) { model.setZoomMode(region.id, $0) }
+            if mode == .loupe {
+                loupe
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -Motion.panelSwapRise)))
+            }
             Toggle(
                 "Use the Project's",
                 isOn: Binding(
@@ -149,6 +166,61 @@ private struct SelectedZoomCard: View {
             .pickerStyle(.segmented)
             .panelTitled("Animation")
             Button("Delete Zoom", role: .destructive) { model.deleteZoom(region.id) }
+        }
+        .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: mode == .loupe)
+    }
+
+    /// "Loupe Size" and "Shape" (plan 3b decision 2): a lens equal to the default one is not written.
+    private var loupe: some View {
+        let style = region.resolvedLoupe
+        return VStack(alignment: .leading, spacing: 8) {
+            PanelStepSlider(
+                title: "Loupe Size", value: style.radius, range: ZoomPanelRules.loupeRadiusRange, step: ZoomPanelRules.loupeRadiusStep,
+                format: Self.percent
+            ) { model.setLoupe(region.id, radius: $0) }
+            // Its title above it: "Rectángulo redondeado" beside "Forma" would be cut in the panel's width.
+            Picker("Shape", selection: Binding(get: { style.shape }, set: { model.setLoupe(region.id, shape: $0) })) {
+                Label("Circle", systemImage: "circle").tag(LoupeShape.circle)
+                Label("Rounded Rectangle", systemImage: "rectangle").tag(LoupeShape.roundedRect)
+            }
+            .panelTitled("Shape")
+        }
+    }
+}
+
+/// "Mode" (phase 3 design §6): a menu of the four modes, each with its symbol and its name.
+private struct ZoomModePicker: View {
+    let selection: ZoomMode
+    let choose: @MainActor @Sendable (ZoomMode) -> Void
+
+    var body: some View {
+        Picker("Mode", selection: Binding(get: { selection }, set: choose)) {
+            ForEach(ZoomMode.allCases, id: \.self) { mode in
+                Label(ZoomModeNames.title(mode), systemImage: ZoomPanelRules.symbol(mode)).tag(mode)
+            }
+        }
+    }
+}
+
+/// The names of the zoom's modes: their own keys (`zoom.mode.*`), since "Classic" and "Highlight" are also looks of the
+/// captions, with other words in Spanish.
+enum ZoomModeNames {
+    static func title(_ mode: ZoomMode) -> LocalizedStringKey {
+        switch mode {
+        case .classic: "zoom.mode.classic"
+        case .highlight: "zoom.mode.highlight"
+        case .dim: "zoom.mode.dim"
+        case .loupe: "zoom.mode.loupe"
+        }
+    }
+
+    /// The same name as a string (VoiceOver's label of a block).
+    static func text(_ mode: ZoomMode) -> String {
+        switch mode {
+        case .classic: String(localized: "zoom.mode.classic", comment: "A zoom mode: the camera moves in, as before")
+        case .highlight: String(localized: "zoom.mode.highlight", comment: "A zoom mode: a ring around the focus and the rest a little darker")
+        case .dim: String(localized: "zoom.mode.dim", comment: "A zoom mode: outside the focus darker and blurred")
+        case .loupe: String(localized: "zoom.mode.loupe", comment: "A zoom mode: a lens over the focus that shows it bigger")
         }
     }
 }

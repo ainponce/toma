@@ -215,6 +215,17 @@ final class EditorModel {
     private(set) var isDeviceTake = false
     /// The take noted when keys were typed (`keyActivity`): "Hold While Typing" has something to hold.
     private(set) var canHoldWhileTyping = false
+    /// The flags above of the takes the sequence shows (`takeFlags(of:)`, `EditorModel+Takes`): each one set only when
+    /// it changes.
+    func show(_ flags: TakeFlags) {
+        if hasCamera != flags.hasCamera { hasCamera = flags.hasCamera }
+        if hasCursorImages != flags.hasCursorImages { hasCursorImages = flags.hasCursorImages }
+        if hasKeyPresses != flags.hasKeyPresses { hasKeyPresses = flags.hasKeyPresses }
+        if screenIsDevice != flags.screenIsDevice { screenIsDevice = flags.screenIsDevice }
+        if hasClicks != flags.hasClicks { hasClicks = flags.hasClicks }
+        if canHoldWhileTyping != flags.canHoldWhileTyping { canHoldWhileTyping = flags.canHoldWhileTyping }
+        if isDeviceTake != flags.isDeviceTake { isDeviceTake = flags.isDeviceTake }
+    }
     /// The tracks of sound of the takes the sequence shows, as the Audio tab and the timeline list them.
     private(set) var audioTracks: [AudioTrackRow] = []
     /// Solo (phase 3 design §7.2): the audio rows the preview lets be heard, none for all of them; never saved, so it is
@@ -521,11 +532,11 @@ final class EditorModel {
         let project = currentProject(of: session)
         let size = previewSize(of: document)
         let renderer: FrameRenderer
-        let screens: TakeScreens, markers: [HostTime], byTake: [String: TakeScreens]
+        let screens: TakeScreens, markers: [HostTime], byTake: [String: TakeScreens], flags: TakeFlags
         do {
-            // Builds the motion paths, and reads the takes' events for what the overlays and the timeline read of them:
-            // never on the main thread.
-            (renderer, screens, markers, byTake) = try await Task.detached {
+            // Builds the motion paths, and reads the takes' events for what the overlays, the panel and the timeline read
+            // of them: never on the main thread.
+            (renderer, screens, markers, byTake, flags) = try await Task.detached {
                 let renderer = try FrameRenderer(project: project, document: document, outputSize: size)
                 let screens = TakeScreens(take: project.take, events: project.events)
                 var byTake = [project.take.id: screens]
@@ -533,7 +544,8 @@ final class EditorModel {
                 for shown in project.takesShown(by: document) where byTake[shown.take.id] == nil {
                     byTake[shown.take.id] = TakeScreens(take: shown.take, events: shown.events)
                 }
-                return (renderer, screens, TimelineContent.markerTimes(in: project.events), byTake)
+                let flags = Self.takeFlags(of: project.takesShown(by: document))
+                return (renderer, screens, TimelineContent.markerTimes(in: project.events), byTake, flags)
             }.value
         } catch {
             Self.logger.error("Cannot draw \(project.package.url.path, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -564,15 +576,10 @@ final class EditorModel {
         shownRevision = revision
         timeline = Timeline(document, revision: revision)
         self.document = document
-        hasCamera = project.take.tracks.contains { $0.kind == .camera && !$0.segments.isEmpty }
-        hasCursorImages = project.events.contains { if case .cursorImage = $0.kind { true } else { false } }
-        hasKeyPresses = project.events.contains { if case .keyPress = $0.kind { true } else { false } }
-        screenIsDevice = project.take.tracks.contains { $0.kind == .device }
-        hasClicks = ZoomPanelRules.hasClicks(events: project.events)
-        canHoldWhileTyping = ZoomPanelRules.canHoldWhileTyping(events: project.events)
+        // Of every take the sequence shows (3d plan decision 17).
+        show(flags)
         // In the timeline's order (`TimelineLayout`): the microphones, the system audio, an iPhone's or iPad's sound.
         audioTracks = AudioTrackRow.rows(of: project.takeRecords(shownBy: document))
-        isDeviceTake = project.take.tracks.contains { $0.kind == .device }
         hasDesktopPhoto = false
         Self.findDesktopPhoto(in: project, document: document) { [weak self] found in self?.hasDesktopPhoto = found }
         previewAspect = document.aspect
@@ -610,6 +617,11 @@ final class EditorModel {
             }
             guard !closed, state == .ready, builder != nil, generation == mixGeneration else { return }
             baseMix = mix
+            // The sequence came to show a take this mix has no source for meanwhile (3d): made again with it.
+            if let session, Self.mixLacksATake(mix.takeIDs, project: project, document: session.document) {
+                makeMix(of: currentProject(of: session), document: session.document, revision: session.revision)
+                return
+            }
             if let player {
                 // Remade with new analysis: the player takes the revision shown's mix as it is built.
                 player.setMix(mix)
@@ -1017,11 +1029,20 @@ final class EditorModel {
             shownRevision = session.revision
             onEdited()
             let next = session.document
+            let takesBefore = document.map(Self.takeIDs(shownBy:))
             document = next
             durationSeconds = TimeMap(sequence: next.sequence).durationSeconds
             // A take the sequence starts or stops showing adds or takes away its tracks.
             let rows = AudioTrackRow.rows(of: session.project.takeRecords(shownBy: next))
             if rows != audioTracks { audioTracks = rows }
+            // And its flags in the panel; a take the mix has no source for is silent in it (`EditedMix.takeIDs`): the
+            // mix is made again with it (3d).
+            if Self.takeIDs(shownBy: next) != takesBefore {
+                refreshTakeFlags(of: next)
+                if let base = baseMix, Self.mixLacksATake(base.takeIDs, project: session.project, document: next) {
+                    makeMix(of: currentProject(of: session), document: next, revision: session.revision)
+                }
+            }
             pruneSelection(in: next)
             if !isPlaying { movePlayhead(to: Timeline(next, revision: session.revision)) }
             build(next, revision: session.revision)
@@ -1405,7 +1426,7 @@ final class EditorModel {
                         project: project, document: document, settings: settings, range: range, analysis: analysis)
                     let summary = try await exporter.export(to: destination, progress: progress)
                     exportFinished(at: destination)
-                    let said = preparation.notices + Self.leftOut(summary, take: project.take)
+                    let said = preparation.notices + Self.leftOut(summary, takes: project.takeRecords(shownBy: document))
                     if !said.isEmpty { showAlert(said.joined(separator: "\n\n"), style: .warning) }
                 case let .gif(settings):
                     let exporter = GIFExporter(project: project, document: document, settings: settings, analysis: analysis)
@@ -1486,12 +1507,14 @@ final class EditorModel {
         }
     }
 
-    /// What the export had to leave out, one sentence for each kind.
-    private static func leftOut(_ summary: ExportSummary, take: TakeRecord) -> [String] {
+    /// What the export had to leave out, one sentence for each kind, the kind of each track found in `takes` (those the
+    /// sequence shows: a track's id is the same in every take that recorded it).
+    private static func leftOut(_ summary: ExportSummary, takes: [TakeRecord]) -> [String] {
         var leftOut: [String] = []
-        let systemAudio = Set(take.tracks.filter { $0.kind == .systemAudio }.map(\.id))
+        let tracks = takes.flatMap(\.tracks)
+        let systemAudio = Set(tracks.filter { $0.kind == .systemAudio }.map(\.id))
         let systemAudioGaps = summary.missingAudio.filter { systemAudio.contains($0.track) }.count
-        let deviceAudio = Set(take.tracks.filter { $0.kind == .deviceAudio }.map(\.id))
+        let deviceAudio = Set(tracks.filter { $0.kind == .deviceAudio }.map(\.id))
         let deviceAudioGaps = summary.missingAudio.filter { deviceAudio.contains($0.track) }.count
         let microphoneGaps = summary.missingAudio.count - systemAudioGaps - deviceAudioGaps
         if microphoneGaps > 0 {
@@ -1504,7 +1527,7 @@ final class EditorModel {
             leftOut.append(String(
                 localized: "The video was exported, but \(deviceAudioGaps) parts have no sound of the iPhone or iPad: it couldn't be read."))
         }
-        let cameras = Set(take.tracks.filter { $0.kind == .camera }.map(\.id))
+        let cameras = Set(tracks.filter { $0.kind == .camera }.map(\.id))
         let cameraGaps = summary.missingVideo.filter { cameras.contains($0.track) }.count
         let screenGaps = summary.missingVideo.count - cameraGaps
         if screenGaps > 0 {

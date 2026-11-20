@@ -104,9 +104,10 @@ extension EditorModel {
     /// The automatic zoom's settings as the panel shows them: those being planned, else the document's.
     var autoZoomSettings: AutoZoomSettings? { autoZoomPending ?? document?.zoom.auto }
 
-    /// Changes a setting of the automatic zoom: the planner runs again, off the main thread, and the automatic zooms that
-    /// were not touched are replaced, with the setting, in one step (`ZoomCommands.regenerate`). Changes that come while it
-    /// plans are joined: only the last is planned next.
+    /// Changes a setting of the automatic zoom: the planner runs again over every take the sequence shows, off the main
+    /// thread, and the automatic zooms that were not touched are replaced, with the setting, in one step
+    /// (`ZoomCommands.regenerate(_:takes:settings:)`). Changes that come while it plans are joined: only the last is
+    /// planned next.
     func changeAutoZoom(_ edit: (inout AutoZoomSettings) -> Void) {
         guard canEdit, var settings = autoZoomSettings else { return }
         edit(&settings)
@@ -126,8 +127,11 @@ extension EditorModel {
         autoZoomTask = Task {
             defer { autoZoomTask = nil }
             while let wanted = autoZoomPending, let document, let project = overlayProject {
-                let take = project.take, events = project.events
-                let step = await Task.detached { ZoomCommands.regenerate(document, take: take, events: events, settings: wanted) }.value
+                // Every take the sequence shows, each from its own events (3d plan decision 17).
+                let step = await Task.detached {
+                    let takes = project.takesShown(by: document).map { ($0.take, $0.events) }
+                    return ZoomCommands.regenerate(document, takes: takes, settings: wanted)
+                }.value
                 // Asked again, or the document changed, while it planned: plan again from what is there now.
                 guard autoZoomPending == wanted, self.document == document else { continue }
                 perform(step)

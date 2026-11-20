@@ -483,7 +483,10 @@ final class TimelineInteraction {
                 drag = .trimMedia(base, clip: clip, edge: edge, outputStart: outputStart, fileDuration: fileDuration)
             }
         case let .edge(.video, id, edge):
-            guard let k = document.sequence.firstIndex(where: { $0.id == id }), let base = begin(), let project = base.project else { return }
+            // Within the bounds of the clip's own take (3d plan decision 17).
+            guard let k = document.sequence.firstIndex(where: { $0.id == id }), let base = begin(),
+                let project = base.project?.focused(on: document.sequence[k].take)
+            else { return }
             let limits = SequenceCommands.trimLimits(document, clipID: id, edge: edge, take: project.take, events: project.events)
             drag = .trimClip(base, clip: document.sequence[k], edge: edge, outputStart: base.map.clipOutputStarts[k], limits: limits)
         case let .edge(.zoom, id, edge):
@@ -1010,9 +1013,15 @@ final class TimelineInteraction {
     }
 
     private func addScreenItems(to menu: NSMenu, id: String) {
-        guard let model, let item = item(id), let project = model.overlayProject,
+        guard let model, let item = item(id), let session = model.overlayProject,
             let shown = view.content?.screens.items.first(where: { $0.id == id })
         else { return }
+        // The screens of the take shown where the stretch starts, the one "Show «name»" changes
+        // (`TrackCommands.showScreen`); "Follow the Cursor" plans every take the sequence shows.
+        let start = view.content.flatMap { content in
+            content.map.source(atOutput: item.output.lowerBound).map { content.sequence[$0.clip].take }
+        }
+        let project = start.flatMap(session.focused(on:)) ?? session
         let screens = project.take.tracks.filter { $0.kind.isScreen && !$0.segments.isEmpty }
         for screen in screens where screen.source.name != shown.info.name {
             let show = MenuAction(String(format: String(localized: "Show “%@”"), screen.source.name)) {
@@ -1186,15 +1195,17 @@ extension EditorModel {
         perform(step)
     }
 
-    /// "Follow the Cursor": the screens regenerated, planned off the main thread (it reads every event of the take and
-    /// looks at each segment's file), as the automatic zooms are; planned again from the document as it is then if it
-    /// changed meanwhile.
+    /// "Follow the Cursor": the screens of every take the sequence shows regenerated, planned off the main thread (it
+    /// reads every event of each take and looks at each segment's file), as the automatic zooms are; planned again from
+    /// the document as it is then if it changed meanwhile.
     func followCursor() {
         guard canEdit, followCursorTask == nil else { return }
         followCursorTask = Task {
             defer { followCursorTask = nil }
             while !closed, canEdit, let document, let project = overlayProject {
-                let step = await Task.detached { TrackCommands.followCursor(document, project: project) }.value
+                let step = await Task.detached {
+                    TrackCommands.followCursor(document, projects: project.takesShown(by: document))
+                }.value
                 guard self.document == document else { continue }
                 if !step.changes.isEmpty { perform(step) }
                 break

@@ -8,7 +8,7 @@ import ProjectFormat
 /// playhead and each clip, zoom block and camera change in sight, where they are drawn.
 ///
 /// - A clip: "Part from 0:12 to 0:31, speed 2×"; a block: "Automatic zoom of 2×, from 0:40 to 0:44" (or "Zoom of…" for
-///   one of the user's); a change: "Camera change at 0:42"; an annotation: "Text “Hola”, from 0:12 to 0:15" (phase 3),
+///   one of the user's; a calm one says its mode, "Zoom of 2×, Loupe, from…"); a change: "Camera change at 0:42"; an annotation: "Text “Hola”, from 0:12 to 0:15" (phase 3),
 ///   with Duplicate and Delete. Each one is selected with AXPress, as a click selects it, and
 ///   reads as selected while it is. While the document can be edited, a clip has the actions Split, Delete and Trim
 ///   Start and Trim End to Playhead (those that need the playhead on the clip do nothing without it), and a block and a
@@ -77,13 +77,30 @@ final class TimelineAccessibility {
         for zoom in content.zooms.items {
             let depth = TimelineFormat.multiplier(zoom.info.depth)
             let (start, end) = (Self.time(zoom.output.lowerBound), Self.time(zoom.output.upperBound))
-            let label = zoom.info.automatic
-                ? String(
-                    format: String(localized: "Automatic zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: an automatic zoom block, its depth, start and end"),
-                    depth, start, end)
-                : String(
-                    format: String(localized: "Zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: a zoom block of the user's, its depth, start and end"),
-                    depth, start, end)
+            let label: String
+            if zoom.info.mode.isCalm {
+                // A calm block says its mode (phase 3 design §6); a Classic one reads as in phase 2.
+                let mode = ZoomModeNames.text(zoom.info.mode)
+                label = zoom.info.automatic
+                    ? String(
+                        format: String(
+                            localized: "Automatic zoom of %1$@, %2$@, from %3$@ to %4$@",
+                            comment: "VoiceOver: an automatic zoom block, its depth, its mode (Highlight, Dim, Loupe), start and end"),
+                        depth, mode, start, end)
+                    : String(
+                        format: String(
+                            localized: "Zoom of %1$@, %2$@, from %3$@ to %4$@",
+                            comment: "VoiceOver: a zoom block of the user's, its depth, its mode (Highlight, Dim, Loupe), start and end"),
+                        depth, mode, start, end)
+            } else {
+                label = zoom.info.automatic
+                    ? String(
+                        format: String(localized: "Automatic zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: an automatic zoom block, its depth, start and end"),
+                        depth, start, end)
+                    : String(
+                        format: String(localized: "Zoom of %1$@, from %2$@ to %3$@", comment: "VoiceOver: a zoom block of the user's, its depth, start and end"),
+                        depth, start, end)
+            }
             add(zoom.id, .zoom, zoom.output, label: label, actions: [Action(.delete)])
         }
         for block in content.privacy.items.items {

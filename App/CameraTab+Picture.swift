@@ -56,7 +56,7 @@ struct CameraPictureSections: View {
             if let new { shape = new }
         }
         .task(id: seen?.key) {
-            if let key = seen?.key { await loadStill(key) }
+            if let seen { await loadStill(seen.key, take: seen.take) }
         }
         .task(id: still?.key) { await makeLooks() }
         .onChange(of: document.camera.framing) { _, _ in
@@ -270,29 +270,31 @@ struct CameraPictureSections: View {
         }
     }
 
-    /// The camera the preview draws at the playhead: its track and instant, and its shape. Not drawn there (hidden, a
-    /// Screen only block), the take's camera at the playhead's source instant, without a shape.
+    /// The camera the preview draws at the playhead: its track and instant, and its shape, of the take of the clip there
+    /// (3d plan decision 17). Not drawn there (hidden, a Screen only block), that take's camera at the playhead's source
+    /// instant, without a shape.
     private func cameraAtPlayhead() -> SeenCamera? {
         let now = model.playheadNanoseconds
+        guard let take = model.playheadProject?.take else { return nil }
         if let scene = model.shownScene, let layer = scene.frame(at: Double(now) / 1e9, cursorImageIsReadable: { _ in true }).camera,
             layer.rect.width > 0, layer.rect.height > 0
         {
             let side = min(layer.rect.width, layer.rect.height)
             return SeenCamera(
-                key: CameraStillKey(track: layer.trackID, time: layer.sourceTime),
+                key: CameraStillKey(track: layer.trackID, time: layer.sourceTime), take: take.id,
                 shape: CameraShapeSeen(aspect: layer.rect.width / layer.rect.height, cornerFraction: layer.cornerRadius / side))
         }
-        guard let take = model.panelSession?.project.take, let track = take.tracks.first(where: { $0.kind == .camera }),
+        guard let track = take.tracks.first(where: { $0.kind == .camera }),
             let found = TimeMap(sequence: document.sequence).source(atOutput: now)
         else { return nil }
-        return SeenCamera(key: CameraStillKey(track: track.id, time: found.source), shape: nil)
+        return SeenCamera(key: CameraStillKey(track: track.id, time: found.source), take: take.id, shape: nil)
     }
 
-    /// The still of `key`, once the playhead stays there (scrubbing asks for none).
-    private func loadStill(_ key: CameraStillKey) async {
+    /// The still of `key` of take `take`, once the playhead stays there (scrubbing asks for none).
+    private func loadStill(_ key: CameraStillKey, take: String) async {
         guard still?.key != key else { return }
         try? await Task.sleep(for: .milliseconds(80))
-        guard !Task.isCancelled, let project = model.exportProject else { return }
+        guard !Task.isCancelled, let project = model.project(ofTake: take) else { return }
         let found = await CameraStill.frame(project: project, track: key.track, at: key.time, maxPixelSide: Self.stillSide)
         guard !Task.isCancelled else { return }
         if let found {
@@ -464,6 +466,8 @@ private struct ModeSegments<Value: Hashable>: View {
 /// The camera the preview draws at the playhead, for its still and its shape.
 private struct SeenCamera: Equatable {
     var key: CameraStillKey
+    /// The take of the clip at the playhead, whose camera it is.
+    var take: String
     /// `nil` where the camera is not drawn.
     var shape: CameraShapeSeen?
 }

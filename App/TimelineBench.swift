@@ -39,10 +39,10 @@ enum TimelineBench {
         window.contentView = view
         window.orderFrontRegardless()
         let caches = ProjectCaches(root: FileManager.default.temporaryDirectory.appending(path: "toma-timeline-bench"), projectID: "bench")
-        view.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
+        view.tracks.thumbnailCaches = [project.take.id: ThumbnailCache(project: project, caches: caches)]
         let markers = TimelineContent.markerTimes(in: project.events)
         view.show(take: project.take, markers: markers, document: document, missing: [600...630, 1800...1802])
-        for id in ["mic", "system-audio"] { view.setWaveform(WaveformLevels(syntheticWaveform()), for: id) }
+        for id in ["mic", "system-audio"] { view.setWaveform(WaveformLevels(syntheticWaveform()), take: project.take.id, track: id) }
         view.playhead = 1_234_000_000_000
         view.layoutSubtreeIfNeeded()
 
