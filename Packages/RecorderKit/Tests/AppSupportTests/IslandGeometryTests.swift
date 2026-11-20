@@ -25,6 +25,10 @@ import Testing
         // A narrow notch still gives the peek's row its room.
         let narrow = ScreenTop(frame: top.frame, notch: CGRect(x: 700, y: 950, width: 120, height: 32), menuBarHeight: 32)
         #expect(IslandGeometry.shape(.peek, on: narrow).width == IslandGeometry.peekMinWidth)
+        // Peeking from the Replay's wings never narrows the island.
+        let wings = IslandGeometry.shape(.rest, on: top, replaying: true).width
+        #expect(IslandGeometry.shape(.peek, on: top, replaying: true).width == wings)
+        #expect(IslandGeometry.shape(.peek, on: top, replaying: false).width == 252)
         #expect(IslandGeometry.shape(.open, on: top) == IslandShape(width: 700, height: 400, bottomRadius: 34, roundsTopCorners: false))
         #expect(IslandGeometry.shape(.choosing, on: top) == IslandShape(width: 560, height: 48, bottomRadius: 24, roundsTopCorners: false))
         #expect(IslandGeometry.frame(IslandGeometry.shape(.open, on: top), on: top) == CGRect(x: 406, y: 582, width: 700, height: 400))
@@ -142,8 +146,8 @@ import Testing
         for top in [Self.notchScreen, Self.externalScreen] {
             #expect(IslandGeometry.shape(.rest, on: top, replaying: false) == IslandGeometry.shape(.rest, on: top))
             #expect(IslandGeometry.shape(.rest, on: top).width == (top.notch == nil ? 132 : 188))
-            // Only the rest has the Replay's wings.
-            for state in states where state != .rest {
+            // Only the rest has the Replay's wings; peeking from them under a notch keeps their width (checked above).
+            for state in states where state != .rest && !(state == .peek && top.notch != nil) {
                 #expect(IslandGeometry.shape(state, on: top, replaying: true) == IslandGeometry.shape(state, on: top), "\(state)")
             }
         }
