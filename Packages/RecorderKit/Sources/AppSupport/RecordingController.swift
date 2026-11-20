@@ -100,12 +100,15 @@ public final class RecordingController {
     /// countdown cancelled.
     @ObservationIgnored public var onConfirmation: (IslandConfirmation) -> Void = { _ in }
     /// A re-record ended (`startRerecord`, `cancelRerecord`): told once for each, after its take is closed and saved, or
-    /// once nothing more will be recorded for it. Set by the app delegate.
+    /// once nothing more will be recorded for it, with the target `startRerecord` was given. Set by the app delegate.
     @ObservationIgnored public var rerecordEnded: (RerecordTarget, RerecordOutcome) -> Void = { _, _ in }
-    /// The script to save into the project of each take as it starts recording (plan 3d, decision 11): the
-    /// teleprompter's, if it is on; `nil` (or an empty text) saves none. Read once the take records, never while it counts
-    /// down; written off the main thread (`ProjectPackage.writeScript`), and a failure is only logged.
-    @ObservationIgnored public var scriptToSave: @MainActor () -> String? = { nil }
+    /// The script to save into the project of each take as it starts recording (plan 3d, decision 11), asked with the
+    /// take's re-record target (`nil` for a take in a new project): the teleprompter's, if it is on; `nil` (or an empty
+    /// text) saves none. Read once the take records, never while it counts down; written off the main thread
+    /// (`ProjectPackage.writeScript`), and a failure is only logged. A re-record never replaces a script its package
+    /// already has (`script.txt` there, of any kind): during a re-record the teleprompter owns that one and saves its
+    /// edits itself.
+    @ObservationIgnored public var scriptToSave: @MainActor (_ target: RerecordTarget?) -> String? = { _ in nil }
 
     private static let lastProjectKey = "lastProjectPath"
     private static let maximumNotices = 6
@@ -196,6 +199,19 @@ public final class RecordingController {
     @ObservationIgnored var markersWritten = 0
     /// The scripts being written (`scriptToSave`), each after the one before.
     @ObservationIgnored private var scriptWrites: Task<Void, Never>?
+    /// The re-record `startRerecord` began and `rerecordEnded` has not told yet.
+    @ObservationIgnored private var pendingRerecord: PendingRerecord?
+
+    /// A re-record from its start until its end is told.
+    private struct PendingRerecord {
+        /// As `startRerecord` was given it: what `rerecordEnded` tells.
+        let target: RerecordTarget
+        /// Its package's, as it began: a target recomputed later (another `scriptWord`, another form of the URL, the URL
+        /// after a rename or a move on the volume) still names it (`isPending`).
+        let identity: PackageIdentity?
+        /// `cancelRerecord` cancelled it before it recorded: it ends as `.nothing`, whatever its take did.
+        var cancelled = false
+    }
     private(set) var recordedTime = RecordedTime()
 
     public init(
@@ -238,11 +254,11 @@ public final class RecordingController {
     /// `startRecording` does, the camera looking like `cameraStyle` (the style in force under the editor's playhead). The
     /// package is the editor's: no project is made, and neither it nor any take of it is ever trashed or removed, also
     /// when the start fails, is cancelled or is restarted. Its editor is never opened: `rerecordEnded(target, …)` tells
-    /// once how the re-record ended, `.nothing` at once if another take is already in progress or the permissions open
-    /// (a re-record of `target` in progress tells its own end).
+    /// once how the re-record ended, `.nothing` at once if another take is already in progress or the permissions open.
+    /// Asked again for the package of the re-record in progress (`isPending`), nothing: that one tells its own end.
     public func startRerecord(into target: RerecordTarget, selection: CaptureSelection, settings: QuickSettings, cameraStyle: CameraStyle) {
         guard phase == .idle else {
-            if currentRequest?.target != target { rerecordEnded(target, .nothing) }
+            if !isPending(target) { rerecordEnded(target, .nothing) }
             return
         }
         let request = TakeRequest(selection: selection, settings: settings, cameraStyle: cameraStyle, target: target)
@@ -251,14 +267,45 @@ public final class RecordingController {
             rerecordEnded(target, .nothing)
             return
         }
+        pendingRerecord = PendingRerecord(target: target, identity: PackageIdentity(target.packageURL))
         begin(request, carrying: [], restarting: false)
     }
 
-    /// The island asked for a source of the re-record of `target` and was closed without recording: `rerecordEnded` tells
-    /// `.nothing`. A re-record of `target` in progress tells its own end, and goes on.
+    /// Cancels the re-record of `target`'s package (`isPending`) while it counts down or starts: nothing of it is used,
+    /// and it ends as `.nothing`, once (a take its start had opened is closed and stays in the package, unused, as any
+    /// restarted one). Once it records, or while it closes, nothing: it goes on, and tells its own end (the island stops
+    /// or restarts it). Without a re-record of that package (the island asked for a source of one and was closed without
+    /// recording), `rerecordEnded(target, .nothing)` at once.
     public func cancelRerecord(_ target: RerecordTarget) {
-        guard currentRequest?.target != target else { return }
-        rerecordEnded(target, .nothing)
+        guard isPending(target) else {
+            rerecordEnded(target, .nothing)
+            return
+        }
+        switch phase {
+        case .countingDown, .starting:
+            pendingRerecord?.cancelled = true
+            // Closed as a quit: not saved for the island, and no editor opens.
+            Task { await stop(.quit) }
+        case .idle, .recording, .stopping:
+            break
+        }
+    }
+
+    /// Whether `target` names the package of the re-record in progress: by its identity (`PackageIdentity`), so a target
+    /// recomputed with another `scriptWord`, another form of the URL or the URL after a rename is the same; by the
+    /// standardized URL when either identity cannot be read.
+    private func isPending(_ target: RerecordTarget) -> Bool {
+        guard let pending = pendingRerecord else { return false }
+        if let identity = pending.identity, let other = PackageIdentity(target.packageURL) { return identity == other }
+        return pending.target.packageURL.standardizedFileURL == target.packageURL.standardizedFileURL
+    }
+
+    /// Tells the re-record in progress that it ended as `outcome` (`.nothing` if it was cancelled), once: it is no longer
+    /// in progress.
+    private func tellRerecordEnded(_ outcome: RerecordOutcome) {
+        guard let pending = pendingRerecord else { return }
+        pendingRerecord = nil
+        rerecordEnded(pending.target, pending.cancelled ? .nothing : outcome)
     }
 
     /// Whether a take of `request` may start: what it requires is allowed (`RecordingPreflight`), or is the camera's
@@ -397,7 +444,8 @@ public final class RecordingController {
                 let newlyFailed = failedOptional.filter { !request.skipping.contains($0) }
                 if !newlyFailed.isEmpty, !startCancelled {
                     let kinds = newlyFailed.map(\.rawValue).joined(separator: ", ")
-                    Self.logger.notice("Could not start \(kinds, privacy: .public); recording again without it, in a new project")
+                    let place = request.target == nil ? "in a new project" : "in the same project, as its next take"
+                    Self.logger.notice("Could not start \(kinds, privacy: .public); recording again without it, \(place, privacy: .public)")
                     for kind in newlyFailed { addNotice(.optionalSourceFailedToStart(kind)) }
                     request.skipping.formUnion(newlyFailed)
                     continue
@@ -556,7 +604,7 @@ public final class RecordingController {
             if isPaused { recordedTime.paused(at: since) }
             takeSerial += 1
             setPhase(.recording(since: since))
-            saveScript(into: package)
+            saveScript(into: package, target: request.target)
             if let meter = prepared.microphoneMeter { watchForSilence(of: meter, in: recording) }
             // The take refused a style while it started.
             if let style = currentRequest?.cameraStyle, style != request.cameraStyle { sendCameraStyle(style, to: recording) }
@@ -676,44 +724,45 @@ public final class RecordingController {
         endTake()
         stopTask = nil
         guard closed.opened else {
-            endedWithoutATake(take.target)
+            if take.target != nil { tellRerecordEnded(.nothing) }
             return
         }
         if let identity = PackageIdentity(take.package.url) { recordedPackages.insert(identity) }
         lastProjectURL = take.package.url
         guard case .save(let opensEditor) = outcome else {
-            if let target = take.target { rerecordEnded(target, .quit) }
+            if take.target != nil { tellRerecordEnded(.quit) }
             return
         }
         lastSaved = SavedTake(
             projectURL: take.package.url, duration: recorded, markers: markers,
             trackKinds: closed.record?.tracks.map(\.kind) ?? take.trackKinds, openedEditor: opensEditor || take.target != nil)
-        if let target = take.target {
+        if take.target != nil {
             // A take that was opened has the ID its start returned.
             let takeID = closed.takeID ?? closed.record?.id
-            rerecordEnded(target, takeID.map { .recorded(takeID: $0) } ?? .nothing)
+            tellRerecordEnded(takeID.map { .recorded(takeID: $0) } ?? .nothing)
         } else if opensEditor {
             openEditor(take.package.url, closed.takeID)
         }
     }
 
-    /// A start, or a take, of `request` ended without recording anything: a re-record's editor hears `.nothing`.
+    /// A start of `request` ended without recording anything: a re-record's editor hears `.nothing`.
     private func endedWithoutATake(_ request: TakeRequest) {
-        endedWithoutATake(request.target)
+        if request.target != nil { tellRerecordEnded(.nothing) }
     }
 
-    private func endedWithoutATake(_ target: RerecordTarget?) {
-        if let target { rerecordEnded(target, .nothing) }
-    }
-
-    /// Writes the script `scriptToSave` gives into `package`, unless it gives none or an empty one, off the main thread and
-    /// after the writes before it (whole and atomic: `ProjectPackage.writeScript`). A failure is only logged.
-    private func saveScript(into package: ProjectPackage) {
-        guard let script = scriptToSave(), !script.isEmpty else { return }
+    /// Writes the script `scriptToSave` gives for `target` into `package`, unless it gives none or an empty one, or the
+    /// take is a re-record and the package has a script already; off the main thread and after the writes before it
+    /// (whole and atomic: `ProjectPackage.writeScript`). A failure is only logged.
+    private func saveScript(into package: ProjectPackage, target: RerecordTarget?) {
+        guard let script = scriptToSave(target), !script.isEmpty else { return }
         let previous = scriptWrites
         let logger = Self.logger
+        let rerecording = target != nil
         scriptWrites = Task.detached {
             await previous?.value
+            // Anything there, a link included, is the project's script (decision 11): the teleprompter's to change.
+            var info = stat()
+            if rerecording, lstat(package.scriptURL.path, &info) == 0 { return }
             do {
                 try package.writeScript(script)
             } catch {
@@ -896,8 +945,9 @@ public final class RecordingController {
 public enum RerecordOutcome: Equatable, Sendable {
     /// The take `takeID` was recorded into the package and saved: the editor comes back and applies it.
     case recorded(takeID: String)
-    /// Nothing was recorded: the countdown was cancelled, the permissions opened, the start failed or the island was
-    /// closed. The editor comes back as it was.
+    /// Nothing of the re-record is used: the countdown was cancelled, the permissions opened, the start failed, the island
+    /// was closed or cancelled it (`cancelRerecord`; a take its start had opened stays in the package, unused). The editor
+    /// comes back as it was.
     case nothing
     /// The take was closed to quit: it is in the package, and nothing is applied.
     case quit

@@ -259,9 +259,9 @@ import Testing
 
     @Test(arguments: [true, false]) func scriptIsSavedWhenTheTakeStarts(rerecording: Bool) async throws {
         try await withRerecordRig(countdown: 3) { rig in
-            var asked = 0
-            rig.controller.scriptToSave = {
-                asked += 1
+            var asked: [RerecordTarget?] = []
+            rig.controller.scriptToSave = { target in
+                asked.append(target)
                 return "Hola"
             }
             rig.sleep.hold()
@@ -272,13 +272,14 @@ import Testing
             }
             #expect(await eventually { rig.sleep.calls == 1 })
             // Not while counting down: once the take records.
-            #expect(asked == 0)
+            #expect(asked.isEmpty)
             rig.sleep.release()
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             let package = try #require(rig.takes.packages.first)
             #expect(package == rig.package || !rerecording)
             #expect(await eventually { package.readScript() == "Hola" })
-            #expect(asked == 1)
+            // Asked for the take's target: the re-record's, or none.
+            #expect(asked == [rerecording ? rig.target : nil])
             await rig.controller.stop(openingEditor: true)
             #expect(package.readScript() == "Hola")
         }
@@ -286,12 +287,193 @@ import Testing
 
     @Test(arguments: [nil, ""]) func withoutAScriptNothingIsWritten(script: String?) async throws {
         try await withRerecordRig { rig in
-            rig.controller.scriptToSave = { script }
+            rig.controller.scriptToSave = { _ in script }
             rig.rerecord()
             #expect(await eventually { rig.controller.phase.isRecordingATake })
             await rig.controller.stop(openingEditor: true)
             #expect(!FileManager.default.fileExists(atPath: rig.package.scriptURL.path))
             #expect(rig.package.readScript() == nil)
+        }
+    }
+
+    /// Decision 11: during a re-record the teleprompter owns the project's script, so the start of its take never replaces
+    /// it, whatever the script it is asked for is (the settings' one, say).
+    @Test func aRerecordNeverReplacesTheProjectsScript() async throws {
+        try await withRerecordRig { rig in
+            try rig.package.writeScript("Guion del proyecto")
+            var asked: [RerecordTarget?] = []
+            rig.controller.scriptToSave = { target in
+                asked.append(target)
+                return "Guion de los ajustes"
+            }
+            rig.rerecord()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            await rig.controller.stop(openingEditor: true)
+
+            #expect(asked == [rig.target])
+            #expect(rig.package.readScript() == "Guion del proyecto")
+        }
+    }
+
+    /// A target recomputed by the editor (another word of the script, another form of the URL, the URL after the package
+    /// was renamed) names the same re-record: it neither ends it twice nor starts another.
+    @Test(.timeLimit(.minutes(1))) func aRecomputedTargetIsTheSameRerecord() async throws {
+        try await withRerecordRig(countdown: 3) { rig in
+            rig.rerecord()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            let elsewhere = rig.folder.appendingPathComponent("../projects/Edited.toma/", isDirectory: true)
+            let recomputed = RerecordTarget(packageURL: elsewhere, scriptWord: 3)
+            #expect(recomputed != rig.target)
+            rig.controller.startRerecord(into: recomputed, selection: .mainDisplay(1), settings: QuickSettings(), cameraStyle: .default)
+            rig.controller.cancelRerecord(recomputed)
+            #expect(rig.ends.isEmpty && rig.controller.phase.isRecordingATake && rig.takes.requests.count == 1)
+            await rig.controller.stop(openingEditor: true)
+            #expect(rig.ends == [RerecordRig.End(target: rig.target, outcome: .recorded(takeID: "take-002"))])
+
+            // Renamed while it counts down: the island's cancel, with the URL the editor has now, cancels it.
+            rig.sleep.hold()
+            rig.rerecord()
+            #expect(await eventually { rig.sleep.calls == 4 })
+            let renamed = rig.folder.appendingPathComponent("Renamed.toma", isDirectory: true)
+            try FileManager.default.moveItem(at: rig.package.url, to: renamed)
+            rig.controller.cancelRerecord(RerecordTarget(packageURL: renamed, scriptWord: 7))
+            #expect(await eventually { rig.ends.count == 2 && rig.controller.phase == .idle })
+            try await Task.sleep(for: .milliseconds(300))
+            #expect(rig.ends.last == RerecordRig.End(target: rig.target, outcome: .nothing))
+            #expect(rig.ends.count == 2 && rig.takes.requests.count == 1)
+        }
+    }
+
+    /// The island's cancel before the re-record records: nothing of it is used, and it ends once as `.nothing`.
+    enum CancelPoint: CaseIterable {
+        /// While it counts down: nothing is recorded.
+        case countdown
+        /// While its take starts: the take is closed and stays in the package, unused.
+        case starting
+    }
+
+    @Test(.timeLimit(.minutes(1)), arguments: CancelPoint.allCases) func cancelBeforeItRecordsEndsWithNothing(point: CancelPoint) async throws {
+        try await withRerecordRig(countdown: point == .countdown ? 3 : 0) { rig in
+            let before = try treeHash(rig.package.url)
+            switch point {
+            case .countdown:
+                rig.sleep.hold()
+                rig.rerecord()
+                #expect(await eventually { rig.sleep.calls == 1 })
+            case .starting:
+                rig.takes.startGate.close()
+                rig.rerecord()
+                #expect(await eventually { rig.takes.startGate.arrivals == 1 })
+                #expect(rig.controller.phase == .starting)
+            }
+            rig.controller.cancelRerecord(rig.target)
+            if point == .starting {
+                await settle()
+                rig.takes.startGate.open()
+            }
+            #expect(await eventually { !rig.ends.isEmpty && rig.controller.phase == .idle })
+            try await Task.sleep(for: .milliseconds(300))
+
+            #expect(rig.ends == [RerecordRig.End(target: rig.target, outcome: .nothing)])
+            #expect(rig.controller.lastSaved == nil && rig.editorOpenings.isEmpty)
+            switch point {
+            case .countdown:
+                #expect(try treeHash(rig.package.url) == before)
+                #expect(rig.takes.requests.isEmpty)
+            case .starting:
+                let takes = try rig.manifest().takes
+                #expect(takes.map(\.id) == ["take-001", "take-002"])
+                #expect(takes.map(\.status) == [.complete, .complete])
+            }
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+        }
+    }
+
+    /// A stop that comes while the take starts closes it (`.handedToStop`): the take if it started, nothing if its start
+    /// failed; once, and nothing is removed.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true]) func aStopWhileTheTakeStartsEndsOnce(startFails: Bool) async throws {
+        try await withRerecordRig { rig in
+            if startFails { rig.takes.factory.displayFailures = 99 }
+            rig.takes.startGate.close()
+            rig.rerecord()
+            #expect(await eventually { rig.takes.startGate.arrivals == 1 })
+            let stopping = Task { await rig.controller.stop(openingEditor: true) }
+            await settle()
+            rig.takes.startGate.open()
+            await stopping.value
+            try await Task.sleep(for: .milliseconds(300))
+
+            #expect(rig.ends == [RerecordRig.End(target: rig.target, outcome: startFails ? .nothing : .recorded(takeID: "take-002"))])
+            #expect(rig.controller.phase == .idle)
+            #expect(rig.startFailures.isEmpty)  // the stop came first: no failure to say
+            #expect(try rig.manifest().takes.map(\.id) == ["take-001", "take-002"])
+            #expect(try rig.projectsOnDisk() == [rig.package.url.lastPathComponent])
+        }
+    }
+
+    /// A stop (or a quit) that comes while a restart closes the take ends the re-record with that take, once: no new take
+    /// starts, and nothing goes to the trash.
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true]) func aStopDuringARestartEndsWithTheTake(quitting: Bool) async throws {
+        try await withRerecordRig { rig in
+            rig.rerecord()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            rig.takes.stopGate.close()
+            rig.controller.restartTake()
+            #expect(await eventually { rig.takes.stopGate.arrivals == 1 })
+            let stopping = Task { await rig.controller.stop(openingEditor: !quitting) }
+            await settle()
+            rig.takes.stopGate.open()
+            await stopping.value
+            try await Task.sleep(for: .milliseconds(300))
+
+            #expect(rig.ends == [RerecordRig.End(target: rig.target, outcome: quitting ? .quit : .recorded(takeID: "take-002"))])
+            #expect(rig.controller.phase == .idle && rig.takes.requests.count == 1)
+            #expect(try rig.manifest().takes.map(\.id) == ["take-001", "take-002"])
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+            #expect(!rig.confirmations.contains(.movedToTrash))
+        }
+    }
+
+    enum RestartEnd: CaseIterable {
+        /// The new take's start fails for the screen.
+        case newTakeFails
+        /// The new take's countdown is stopped.
+        case countdownStopped
+        /// The island's cancel, in the new take's countdown.
+        case countdownCancelled
+    }
+
+    /// A restart whose new take never records ends the re-record once, as `.nothing`: the restarted take stays in the
+    /// package, unused.
+    @Test(.timeLimit(.minutes(1)), arguments: RestartEnd.allCases) func aRestartWithoutANewTakeEndsWithNothing(end: RestartEnd) async throws {
+        try await withRerecordRig(countdown: end == .newTakeFails ? 0 : 3) { rig in
+            rig.rerecord()
+            #expect(await eventually { rig.controller.phase.isRecordingATake })
+            switch end {
+            case .newTakeFails:
+                rig.takes.factory.displayFailures = 99
+                rig.controller.restartTake()
+            case .countdownStopped, .countdownCancelled:
+                rig.sleep.hold()
+                rig.controller.restartTake()
+                #expect(await eventually { rig.sleep.calls == 4 })  // the new take's first second
+                if end == .countdownStopped {
+                    await rig.controller.stop(openingEditor: true)
+                } else {
+                    rig.controller.cancelRerecord(rig.target)
+                }
+            }
+            #expect(await eventually { !rig.ends.isEmpty && rig.controller.phase == .idle })
+            try await Task.sleep(for: .milliseconds(300))
+
+            #expect(rig.ends == [RerecordRig.End(target: rig.target, outcome: .nothing)])
+            #expect(rig.startFailures.count == (end == .newTakeFails ? 1 : 0))
+            let takes = try rig.manifest().takes
+            // The new take's failed start is kept as the coordinator closed it.
+            #expect(takes.map(\.id) == (end == .newTakeFails ? ["take-001", "take-002", "take-003"] : ["take-001", "take-002"]))
+            #expect(!FileManager.default.fileExists(atPath: ProjectTrash.folder(in: rig.folder).path))
+            #expect(try rig.projectsOnDisk() == [rig.package.url.lastPathComponent])
+            #expect(rig.creations == 0 && rig.editorOpenings.isEmpty)
         }
     }
 
@@ -325,6 +507,11 @@ extension RecordingController.Phase {
     fileprivate var isRecordingATake: Bool {
         if case .recording = self { true } else { false }
     }
+}
+
+/// Lets the main-actor jobs already queued (a stop just asked for) run up to their next wait.
+@MainActor private func settle() async {
+    for _ in 0..<10 { await Task.yield() }
 }
 
 /// A controller whose takes are recorded with its own defaults, `countdown` seconds of countdown (each a wait of
@@ -441,7 +628,8 @@ extension RecordingController.Phase {
 }
 
 /// What `prepareTake` was asked for, and the plans it made: `TakePlanner`'s of the request with displays 1 (the main
-/// one) and 2 connected and `factory`'s synthetic sources, each recorded by a coordinator of its own.
+/// one) and 2 connected and `factory`'s synthetic sources, each recorded by a coordinator of its own behind `startGate`
+/// and `stopGate` (open unless the test closes them).
 @MainActor private final class Takes {
     private static let displays = [
         DisplayInfo(id: 1, frame: Rect(x: 0, y: 0, width: 64, height: 36), scale: 1, isMain: true, maximumFramesPerSecond: 60),
@@ -449,6 +637,10 @@ extension RecordingController.Phase {
     ]
 
     let factory = FakeFactory()
+    /// Passed by every take's `start()` before the coordinator's.
+    let startGate = Gate()
+    /// Passed by every take's `stop()` before the coordinator's.
+    let stopGate = Gate()
     private(set) var requests: [TakeRequest] = []
     private(set) var packages: [ProjectPackage] = []
     private let disk: FakeDisk
@@ -467,9 +659,85 @@ extension RecordingController.Phase {
             package: package, sources: plan.sources, input: plan.input, diskMonitor: disk.monitor(volume: package.url),
             systemActivity: AsyncStream { $0.finish() }, cameraStyle: request.cameraStyle)
         return PreparedTake(
-            recording: coordinator, optional: plan.optional,
+            recording: GatedRecording(coordinator: coordinator, startGate: startGate, stopGate: stopGate), optional: plan.optional,
             kinds: Dictionary(uniqueKeysWithValues: plan.sources.map { ($0.trackID, $0.kind) }), load: plan.load,
             microphoneMeter: plan.microphoneMeter)
+    }
+}
+
+/// A coordinator whose `start()` and `stop()` first pass a gate the test holds.
+private final class GatedRecording: TakeRecording {
+    let coordinator: RecordingCoordinator
+    private let startGate: Gate
+    private let stopGate: Gate
+
+    var warnings: AsyncStream<RecordingWarning> { coordinator.warnings }
+
+    init(coordinator: RecordingCoordinator, startGate: Gate, stopGate: Gate) {
+        self.coordinator = coordinator
+        self.startGate = startGate
+        self.stopGate = stopGate
+    }
+
+    func setOnAutoStop(_ handler: @escaping @Sendable (TakeRecord, (any Error)?) -> Void) async {
+        await coordinator.setOnAutoStop(handler)
+    }
+
+    func start() async throws -> String {
+        await startGate.pass()
+        return try await coordinator.start()
+    }
+
+    func stop() async throws -> TakeRecord {
+        await stopGate.pass()
+        return try await coordinator.stop()
+    }
+
+    func pause() async throws {
+        try await coordinator.pause()
+    }
+
+    func resume() async throws {
+        try await coordinator.resume()
+    }
+
+    func addMarker() async throws -> HostTime {
+        try await coordinator.addMarker()
+    }
+
+    func setCameraStyle(_ style: CameraStyle) async throws {
+        try await coordinator.setCameraStyle(style)
+    }
+}
+
+/// Holds whoever passes it while it is closed, and counts who came.
+private final class Gate: Sendable {
+    private let state = Mutex((isOpen: true, arrivals: 0, waiting: [CheckedContinuation<Void, Never>]()))
+
+    var arrivals: Int { state.withLock { $0.arrivals } }
+
+    func close() {
+        state.withLock { $0.isOpen = false }
+    }
+
+    func open() {
+        let waiting = state.withLock { state in
+            state.isOpen = true
+            defer { state.waiting = [] }
+            return state.waiting
+        }
+        for continuation in waiting { continuation.resume() }
+    }
+
+    func pass() async {
+        await withCheckedContinuation { continuation in
+            let isOpen = state.withLock { state in
+                state.arrivals += 1
+                if !state.isOpen { state.waiting.append(continuation) }
+                return state.isOpen
+            }
+            if isOpen { continuation.resume() }
+        }
     }
 }
 
