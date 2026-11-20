@@ -48,10 +48,10 @@ import Testing
         let pauses = Pauses()
         let client: S3Client
 
-        init(fake: FakeS3 = FakeS3(), linkDays: Int = 7) throws {
+        init(fake: FakeS3 = FakeS3(), linkDays: Int = 7, limits: S3Client.Limits = S3ClientTests.limits) throws {
             self.fake = fake
             client = S3Client(
-                configuration: try fake.configuration(linkDays: linkDays), session: fake.session, limits: S3ClientTests.limits,
+                configuration: try fake.configuration(linkDays: linkDays), session: fake.session, limits: limits,
                 now: clock.now, pause: pauses.pause)
         }
     }
@@ -164,10 +164,120 @@ import Testing
             }
         }
         #expect(error == .server(status: 200, code: "InvalidPart"))
-        let last = try #require(fixture.fake.requests.last)
-        #expect(last.method == "DELETE" && last.queryItems["uploadId"] != nil && last.signatureMatches)
+        // The upload is aborted, and then the key deleted: once `Complete` went out, the object may exist.
+        let cleanup = fixture.fake.requests.suffix(2)
+        #expect(cleanup.map(\.method) == ["DELETE", "DELETE"])
+        #expect(cleanup.first?.queryItems["uploadId"] != nil && cleanup.last?.query == nil)
+        #expect(cleanup.last?.path == "/bucket/toma/x/video.mp4")
+        #expect(cleanup.allSatisfy { $0.signatureMatches })
         #expect(fixture.fake.openUploads == 0)
         #expect(fixture.fake.object(at: "/bucket/toma/x/video.mp4") == nil)
+    }
+
+    /// Review I1: `Complete` made the object, its answer was lost, and the retry is told `NoSuchUpload`.
+    @Test func lostCompleteAnswerRemovesTheObject() async throws {
+        let fixture = try Fixture()
+        fixture.fake.script(
+            when: { request, _ in request.method == "POST" && request.queryItems["uploadId"] != nil },
+            .processThenFail(.networkConnectionLost))
+        let error = await Self.shareError {
+            try await withTemporaryDirectory { directory in
+                let file = try Self.write(Self.bytes(600 << 10), in: directory)
+                _ = try await fixture.client.upload(file: file, key: "toma/x/video.mp4", contentType: "video/mp4", progress: nil)
+            }
+        }
+        #expect(error == .server(status: 404, code: "NoSuchUpload"))
+        let completes = fixture.fake.requests.filter { $0.method == "POST" && $0.queryItems["uploadId"] != nil }
+        #expect(completes.count == 2)
+        let last = try #require(fixture.fake.requests.last)
+        #expect(last.method == "DELETE" && last.query == nil && last.path == "/bucket/toma/x/video.mp4")
+        #expect(fixture.fake.object(at: "/bucket/toma/x/video.mp4") == nil)
+        #expect(fixture.fake.openUploads == 0)
+    }
+
+    /// Review I1: the person cancels while `Complete` runs, and the storage finishes it anyway.
+    @Test func cancelDuringCompleteRemovesTheObject() async throws {
+        let fixture = try Fixture()
+        fixture.fake.script(
+            when: { request, _ in request.method == "POST" && request.queryItems["uploadId"] != nil }, .processThenHang)
+        try await withTemporaryDirectory { directory in
+            let file = try Self.write(Self.bytes(600 << 10), in: directory)
+            let client = fixture.client
+            let upload = Task {
+                try await client.upload(file: file, key: "toma/x/video.mp4", contentType: "video/mp4", progress: nil)
+            }
+            let completing = await eventually { fixture.fake.object(at: "/bucket/toma/x/video.mp4") != nil }
+            #expect(completing)
+            upload.cancel()
+            let error = await Self.shareError { _ = try await upload.value }
+            #expect(error == .cancelled)
+        }
+        let last = try #require(fixture.fake.requests.last)
+        #expect(last.method == "DELETE" && last.query == nil && last.signatureMatches)
+        #expect(fixture.fake.object(at: "/bucket/toma/x/video.mp4") == nil)
+        #expect(fixture.fake.openUploads == 0)
+    }
+
+    /// Review I1: every attempt of a PUT reached the storage, and every answer was lost.
+    @Test func lostPutAnswersRemoveTheObject() async throws {
+        let fixture = try Fixture()
+        fixture.fake.script(
+            when: { request, _ in request.method == "PUT" }, .processThenFail(.timedOut), .processThenFail(.timedOut),
+            .processThenFail(.timedOut), .processThenFail(.timedOut))
+        let error = await Self.shareError {
+            try await fixture.client.upload(data: Data("<html>".utf8), key: "toma/x/index.html", contentType: "text/html")
+        }
+        #expect(error == .network(.timedOut))
+        #expect(fixture.fake.requests.map(\.method) == ["PUT", "PUT", "PUT", "PUT", "DELETE"])
+        #expect(fixture.fake.object(at: "/bucket/toma/x/index.html") == nil)
+
+        // A PUT the storage refused with an answer left nothing: no delete follows.
+        let refused = try Fixture()
+        refused.fake.script(request: 1, .error(403, code: "AccessDenied"))
+        _ = await Self.shareError {
+            try await refused.client.upload(data: Data("x".utf8), key: "toma/x/index.html", contentType: "text/html")
+        }
+        #expect(refused.fake.requests.map(\.method) == ["PUT"])
+    }
+
+    /// Review M1: `CreateMultipartUpload` is not idempotent, so a lost answer is not followed by a second one.
+    @Test func createIsNeverSentTwice() async throws {
+        let fixture = try Fixture()
+        fixture.fake.script(request: 1, .processThenFail(.networkConnectionLost))
+        let error = await Self.shareError {
+            try await withTemporaryDirectory { directory in
+                let file = try Self.write(Self.bytes(600 << 10), in: directory)
+                _ = try await fixture.client.upload(file: file, key: "toma/x/video.mp4", contentType: "video/mp4", progress: nil)
+            }
+        }
+        #expect(error == .network(.networkConnectionLost))
+        #expect(fixture.fake.requests.count == 1 && fixture.pauses.all.isEmpty)
+        // An answered failure is still retried: the storage said it made nothing.
+        let answered = try Fixture()
+        answered.fake.script(request: 1, .error(503, code: "SlowDown"))
+        try await withTemporaryDirectory { directory in
+            let file = try Self.write(Self.bytes(600 << 10), in: directory)
+            _ = try await answered.client.upload(file: file, key: "toma/x/video.mp4", contentType: "video/mp4", progress: nil)
+        }
+        #expect(answered.fake.openUploads == 0 && answered.fake.object(at: "/bucket/toma/x/video.mp4") != nil)
+    }
+
+    /// Review M2: a cleanup on a stuck network gives up at `cleanupTime`, so cancelling or quitting never waits on it.
+    @Test func stuckCleanupGivesUpAtItsDeadline() async throws {
+        let limits = S3Client.Limits(singlePut: 512 << 10, partSize: 256 << 10, cleanupTime: .milliseconds(300))
+        let fixture = try Fixture(limits: limits)
+        fixture.fake.script(when: { request, _ in request.partNumber == 2 }, .error(403, code: "AccessDenied"))
+        fixture.fake.script(when: { request, _ in request.method == "DELETE" }, .hang)
+        let started = ContinuousClock.now
+        let error = await Self.shareError {
+            try await withTemporaryDirectory { directory in
+                let file = try Self.write(Self.bytes(700 << 10), in: directory)
+                _ = try await fixture.client.upload(file: file, key: "toma/x/video.mp4", contentType: "video/mp4", progress: nil)
+            }
+        }
+        #expect(error == .authentication(code: "AccessDenied"))
+        #expect(ContinuousClock.now - started < .seconds(5))
+        #expect(fixture.fake.requests.last?.method == "DELETE")
     }
 
     @Test func failedPartAbortsTheUpload() async throws {
@@ -233,6 +343,8 @@ import Testing
             try await lost.client.upload(data: Data("p".utf8), key: "toma/x/poster.jpg", contentType: "image/jpeg")
         }
         #expect(networkError == .network(.timedOut))
+        // No answer ever came, so the PUT may have arrived: the key is deleted after it.
+        #expect(lost.fake.requests.map(\.method) == ["PUT", "PUT", "PUT", "PUT", "DELETE"])
     }
 
     @Test func otherClientErrorsAreNotRetried() async throws {
@@ -338,7 +450,39 @@ import Testing
         fixture.fake.script(request: 4, .error(403, code: "AccessDenied"))
         let error = await Self.shareError { try await fixture.client.delete(key: "toma/x/video.mp4") }
         #expect(error == .authentication(code: "AccessDenied"))
-        #expect(fixture.fake.requests.count == 4)
+        // A missing bucket is another storage, not a deleted object (review M7).
+        fixture.fake.script(request: 5, .error(404, code: "NoSuchBucket"))
+        let bucket = await Self.shareError { try await fixture.client.delete(key: "toma/x/video.mp4") }
+        #expect(bucket == .noSuchBucket)
+        #expect(fixture.fake.requests.count == 5)
+    }
+
+    /// Review M10: a 501 or a 505 is the same on every attempt.
+    @Test func notImplementedIsNotRetried() async throws {
+        for status in [501, 505] {
+            let fixture = try Fixture()
+            fixture.fake.script(request: 1, .error(status, code: "NotImplemented"))
+            let error = await Self.shareError {
+                try await fixture.client.upload(data: Data("p".utf8), key: "toma/x/a", contentType: "text/plain")
+            }
+            #expect(error == .server(status: status, code: "NotImplemented"))
+            #expect(fixture.fake.requests.count == 1)
+        }
+    }
+
+    /// Review M8: a link to the file uploads the file it points to, measured as that file.
+    @Test func aLinkedFileIsMeasuredAtItsTarget() async throws {
+        let fixture = try Fixture()
+        let data = Self.bytes(700 << 10)
+        try await withTemporaryDirectory { directory in
+            let file = try Self.write(data, in: directory)
+            let link = directory.appendingPathComponent("link.mp4")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+            let sent = try await fixture.client.upload(file: link, key: "toma/x/video.mp4", contentType: "video/mp4", progress: nil)
+            #expect(sent == Int64(data.count))
+        }
+        #expect(fixture.fake.requests.first?.queryItems["uploads"] != nil)
+        #expect(fixture.fake.object(at: "/bucket/toma/x/video.mp4")?.data == data)
     }
 
     @Test func progressRisesToTheFileSize() async throws {
