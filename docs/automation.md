@@ -214,3 +214,51 @@ biblioteca y el socket de control. Para pruebas (o para usuarios avanzados), cad
 
 Con Claude Code: `claude mcp add toma -e TOMA_PROJECTS_FOLDER=/ruta/a/proyectos -- toma mcp`. En Claude Desktop, una clave
 `"env": {"TOMA_PROJECTS_FOLDER": "/ruta/a/proyectos"}` junto a `command` y `args`.
+
+## IA local: capítulos, título y resumen
+
+`toma ai` y la herramienta `suggest_chapters` le piden al modelo del Mac (Apple Intelligence, macOS 26 o más; nada sale
+del equipo) una propuesta a partir de la transcripción. **Solo proponen**: no tocan el proyecto. El resultado trae los
+comandos listos (`addMarker`, `setTitle`, `setSummary`) para que quien los revisó los aplique con `toma edit --file` o
+`apply_commands`.
+
+| Subcomando | Qué propone |
+|---|---|
+| `toma ai chapters <proyecto> [--transcribe]` | Capítulos de 30 s en adelante, con título corto (hasta 40 caracteres) en el idioma de la transcripción, uno por línea con su tiempo |
+| `toma ai title <proyecto> [--transcribe] [--variation N]` | Un título de hasta 70 caracteres; `--variation` 1, 2… da otros |
+| `toma ai summary <proyecto> [--transcribe] [--variation N]` | Un resumen de 2 a 4 frases |
+
+- **Transcripción.** Hace falta una. Sin ella, el error dice cómo hacerla; `--transcribe` la hace primero (edita el
+  proyecto, en un paso que se deshace: con el proyecto abierto en Toma, sale con 3, `locked`).
+- **Sin el modelo.** Sin Apple Intelligence, antes de macOS 26 o con un idioma que el modelo no escribe, sale con 1 y el
+  código `notAvailable`, con el motivo («Apple Intelligence is not turned on», «the on-device model requires macOS 26»…).
+  Lo mismo para un video de menos de un minuto (`too short for chapters`).
+- **Tiempo.** Los capítulos de un video de 20 minutos tardan unos 30 segundos; el progreso va a la salida de errores
+  (`progress: part 2 of 3`).
+
+```
+$ toma ai chapters ~/Movies/Toma/Tutorial.toma
+00:00 Introducción
+02:14 Instalar el paquete
+05:40 Configurar el editor
+
+$ toma ai chapters ~/Movies/Toma/Tutorial.toma --json > capitulos.json
+$ python3 -c 'import json; print(json.dumps(json.load(open("capitulos.json"))["commands"]))' > comandos.json
+$ toma edit ~/Movies/Toma/Tutorial.toma --file comandos.json
+```
+
+Con `--json`, `toma ai chapters` da `{"language", "chapters": [{"at", "time", "title"}], "skippedParts", "commands"}`
+(`at` en segundos de la salida; `commands`, un `addMarker` por capítulo) y `title` y `summary` dan
+`{"kind", "text", "command"}` con `setTitle` o `setSummary`.
+
+**Desde un agente (MCP).** `suggest_chapters{project}` devuelve el mismo informe de capítulos (solo lee, y manda
+`notifications/progress` por parte si la llamada trae `progressToken`). Un error vuelve con `isError: true` y su código,
+`notAvailable` si falta el modelo o la transcripción. El agente muestra los capítulos y, con el visto bueno, manda los
+`commands` a `apply_commands`:
+
+```
+→ tools/call suggest_chapters {"project": "~/Movies/Toma/Tutorial.toma"}
+← {"chapters": [{"at": 0, "time": "0:00", "title": "Introducción"}, {"at": 134, "time": "2:14", "title": "Instalar el paquete"}],
+   "commands": [{"command": "addMarker", "at": 0, "name": "Introducción"}, {"command": "addMarker", "at": 134, "name": "Instalar el paquete"}], …}
+→ tools/call apply_commands {"project": "~/Movies/Toma/Tutorial.toma", "commands": [← los "commands" de arriba]}
+```
