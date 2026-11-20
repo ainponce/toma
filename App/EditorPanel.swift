@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import AppSupport
+import ProjectFormat
 import SwiftUI
 
 /// The panel's tabs, in the mockup's order (design §5.4): ⌘1 to ⌘8, and Annotations, ⌘9 (phase 3 design §5.6).
@@ -49,6 +50,15 @@ enum EditorPanelTab: Int, CaseIterable, Identifiable {
         case .clips?, .screenChange?, nil: nil
         }
     }
+
+    /// As `tab(for:)`, and a single selected clip with a content of its own (a title card, a frozen frame or an imported
+    /// clip) asks for Annotations, where its inspector is (`ContentClipInspector`).
+    static func tab(for selection: EditorSelection?, in document: EditDocument?) -> EditorPanelTab? {
+        if case let .clips(ids)? = selection, ids.count == 1,
+            document?.sequence.first(where: { ids.contains($0.id) })?.content != nil
+        { return .annotations }
+        return tab(for: selection)
+    }
 }
 
 /// The editor's panel, the content of the system's inspector (`NSSplitViewItem(inspectorWithViewController:)`, decision 31):
@@ -89,7 +99,7 @@ struct EditorPanel: View {
         }
         .animation(.panel(Motion.panelSwap, reduceMotion: reduceMotion), value: tab)
         .onChange(of: model.selection) { _, selection in
-            if let wanted = EditorPanelTab.tab(for: selection), tabs.contains(wanted) { model.panelTab = wanted }
+            if let wanted = EditorPanelTab.tab(for: selection, in: model.document), tabs.contains(wanted) { model.panelTab = wanted }
         }
         .onChange(of: model.hasCamera) { _, has in
             if !has, tab == .camera { model.panelTab = .background }
