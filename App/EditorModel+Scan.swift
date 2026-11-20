@@ -13,11 +13,12 @@ import SwiftUI
 /// cache once it is done, the findings sheet, and "Blur N", one step `privacy.auto`. Also what the Privacy tab's card
 /// changes of the selected block (its strength, its color, deleting it).
 extension EditorModel {
-    /// The takes the search looks at: each take of the document the editor has loaded (it loads one, the session's).
+    /// The takes the search looks at: each take the document's sequence shows, the project focused on it, in the order
+    /// the sequence first shows them (`SensitiveScanJob.projects(of:shownBy:)`, phase 3 design §8.1): a take new in the
+    /// sequence has a job of its own.
     var sensitiveScanProjects: [LoadedProject] {
-        guard let document, let project = overlayProject, document.sequence.contains(where: { $0.take == project.take.id })
-        else { return [] }
-        return [project]
+        guard let document, let project = overlayProject else { return [] }
+        return SensitiveScanJob.projects(of: project, shownBy: document)
     }
 
     /// "Find Sensitive Data": a job per take, at the end of the queue. One that waits or runs is not asked for twice; one

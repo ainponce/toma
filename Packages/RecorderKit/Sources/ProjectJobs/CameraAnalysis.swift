@@ -20,6 +20,9 @@ import ProjectFormat
 /// - **What it says.** Vision that cannot do it on this Mac, `JobError(.notOnThisMac, unavailable: true)`; a segment that
 ///   is not there or cannot be decoded, `.sourceUnreadable(file:)` with its path in the package; a full drive, `.noSpace`;
 ///   anything else, `.failed` with why.
+/// - **By take** (phase 3 design §8.1 and §9). Each take the sequence shows has the jobs of its own camera, take by take in
+///   the order the sequence first shows them (`SequenceAnalyses.takes(shownBy:in:)`): `neededJobs(document:takes:package:)`,
+///   `fill(_:document:takes:package:caches:)` and `prepareForExport`. With one take, what it is for that take alone.
 public enum CameraAnalysis {
     /// The jobs `document` needs for `take` (in `package`): the faces of each segment first (they are quick, and Follow
     /// the Face waits for them), then the masks, each in the segments' order. Reads each segment's `lstat`, never a file.
@@ -36,8 +39,15 @@ public enum CameraAnalysis {
         return kinds
     }
 
+    /// The jobs `document` needs for each of `takes` (in `package`), take by take in their order: `neededJobs(document:
+    /// take:package:)` of each.
+    public static func neededJobs(document: EditDocument, takes: [TakeRecord], package: ProjectPackage) -> [AnalysisJobKind] {
+        takes.flatMap { neededJobs(document: document, take: $0, package: package) }
+    }
+
     /// The work of `kind` for `project`'s take, with `caches`: `nil` unless `kind` is a mask or a face of a segment of a
-    /// camera track of that take. `segmenter` and `detector` are Vision's unless a test hands in others.
+    /// camera track of that take (the project focused on another take, `LoadedProject.focused(on:)`, works that one's).
+    /// `segmenter` and `detector` are Vision's unless a test hands in others.
     public static func work(
         for kind: AnalysisJobKind, project: LoadedProject, caches: ProjectCaches,
         segmenter: any PersonSegmenter = VisionPersonSegmenter(), detector: any FaceDetector = VisionFaceDetector()
@@ -63,8 +73,28 @@ public enum CameraAnalysis {
         CameraAnalysisCaches.fill(&inputs, document: document, take: take, package: package, caches: caches)
     }
 
-    /// What an export does before it starts: every job `document` needs (`neededJobs`), asked of `jobs` first in its
-    /// queue (`ProjectJobs.result(of:work:)`, one after another), then `fill`. It returns only once each job has ended.
+    /// `inputs` with its masks and faces replaced by what the caches hold whole for what `document` asks of each of
+    /// `takes`: `fill(_:document:take:package:caches:)` of each, none of them emptying another's. Reads the disk: never on
+    /// the main thread.
+    public static func fill(
+        _ inputs: inout AnalysisInputs, document: EditDocument, takes: [TakeRecord], package: ProjectPackage,
+        caches: ProjectCaches
+    ) {
+        var masks: [CameraSegment: URL] = [:]
+        var faces: [CameraSegment: CameraFaceTrack] = [:]
+        for take in takes {
+            var part = AnalysisInputs()
+            fill(&part, document: document, take: take, package: package, caches: caches)
+            masks.merge(part.personMasks) { first, _ in first }
+            faces.merge(part.faceTracks) { first, _ in first }
+        }
+        inputs.personMasks = masks
+        inputs.faceTracks = faces
+    }
+
+    /// What an export does before it starts: every job `document` needs of each take its sequence shows (`neededJobs`,
+    /// take by take, `project` focused on each), asked of `jobs` first in its queue (`ProjectJobs.result(of:work:)`, one
+    /// after another), then `fill` of them all. It returns only once each job has ended.
     /// A job Vision cannot do on this Mac (`unavailable`) or whose segment cannot be read (`.sourceUnreadable`) is left
     /// out, as the preview leaves it out: that segment draws its camera Original, or centred. Any other failure is thrown
     /// (`JobError`), as is `CancellationError`.
@@ -73,27 +103,38 @@ public enum CameraAnalysis {
         jobs: ProjectJobs, segmenter: any PersonSegmenter = VisionPersonSegmenter(),
         detector: any FaceDetector = VisionFaceDetector()
     ) async throws {
-        for kind in neededJobs(document: document, take: project.take, package: project.package) {
-            guard let work = work(for: kind, project: project, caches: caches, segmenter: segmenter, detector: detector)
-            else { continue }
-            do {
-                _ = try await jobs.result(of: kind, work: work)
-            } catch let error as JobError where error.unavailable {
-                continue
-            } catch let error as JobError {
-                guard case .sourceUnreadable = error.problem else { throw error }
+        let shown = project.takesShown(by: document)
+        for project in shown {
+            for kind in neededJobs(document: document, take: project.take, package: project.package) {
+                guard let work = work(for: kind, project: project, caches: caches, segmenter: segmenter, detector: detector)
+                else { continue }
+                do {
+                    _ = try await jobs.result(of: kind, work: work)
+                } catch let error as JobError where error.unavailable {
+                    continue
+                } catch let error as JobError {
+                    guard case .sourceUnreadable = error.problem else { throw error }
+                }
             }
         }
         try Task.checkCancellation()
-        fill(&inputs, document: document, take: project.take, package: project.package, caches: caches)
+        fill(&inputs, document: document, takes: shown.map(\.take), package: project.package, caches: caches)
     }
 
     /// How far the camera's jobs `kinds` of `take` are, 0 to 1, each weighed by the length of its segment (equally, when
     /// none has a length): one done, failed or unavailable counts whole, one running by its progress, one waiting or
     /// never asked for as nothing. `nil` when there is no job.
     public static func progress(_ states: [AnalysisJobKind: JobState], of kinds: [AnalysisJobKind], take: TakeRecord) -> Double? {
+        progress(states, of: kinds, takes: [take])
+    }
+
+    /// `progress(_:of:take:)` of jobs of any of `takes`, each weighed by the length of its segment in its own take (none
+    /// for a job of another take).
+    public static func progress(
+        _ states: [AnalysisJobKind: JobState], of kinds: [AnalysisJobKind], takes: [TakeRecord]
+    ) -> Double? {
         guard !kinds.isEmpty else { return nil }
-        let weights = kinds.map { segmentSeconds(of: $0, take: take) }
+        let weights = kinds.map { kind in takes.reduce(0) { $0 + segmentSeconds(of: kind, take: $1) } }
         let total = weights.reduce(0, +)
         var done = 0.0
         for (kind, weight) in zip(kinds, weights) {
