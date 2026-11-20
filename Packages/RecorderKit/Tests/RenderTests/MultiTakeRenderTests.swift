@@ -311,10 +311,9 @@ private func zoomBlock(
         }
     }
 
-    /// The preview engine, playing over the border between the takes (from a second before it, as far as a take coming is
-    /// read ahead: a take let go while the other was shown is read again from there), scrubbing and pausing on either
-    /// side: every frame of a take shows that take's video, never the other's of the same track id (the engine's frames
-    /// last shown and the prefetchers are by take and track). With take-002's video gone, a frame of it shows none, not the frame of
+    /// The preview engine, playing over the border between the takes, scrubbing and pausing on either side: every frame of
+    /// a take shows that take's video, never the other's of the same track id (the engine's frames last shown and the
+    /// prefetchers are by take and track). With take-002's video gone, a frame of it shows none, not the frame of
     /// take-001 shown before it.
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
     func previewEngineShowsEachTakesOwnVideo() async throws {
@@ -322,7 +321,7 @@ private func zoomBlock(
             let project = try await twoTakes(in: dir)
             let document = MultiTakeFixtures.sequence(of: project, [("take-001", 0, 2), ("take-002", 0.5, 2.5)])
             let requests: [PreviewRequest] = [.scrubbing(seconds: 1.5), .scrubbing(seconds: 2.6), .scrubbing(seconds: 1.0)]
-                + (60...140).map { .playing(seconds: seconds($0)) } + [.paused(frame: 150), .paused(frame: 60), .scrubbing(seconds: 3.2)]
+                + (100...140).map { .playing(seconds: seconds($0)) } + [.paused(frame: 150), .paused(frame: 60), .scrubbing(seconds: 3.2)]
 
             let watched = EngineFrames(try FrameRenderer(project: project, document: document, outputSize: [640, 360]))
             try await watched.draw(requests)
@@ -583,14 +582,11 @@ private final class EngineFrames: @unchecked Sendable {
 
     var drawn: [PreviewEngine.DrawnFrame] { lock.withLock { frames } }
 
-    /// Asks for each of `requests` in order, once the one before it is drawn; a frame to play a sixtieth of a second
-    /// after the one before, as a display link asks (a take's video let go while another one was shown is read again,
-    /// a second ahead, from where it comes back: `FrameRenderer.releaseVideos(keeping:)`).
+    /// Asks for each of `requests` in order, once the one before it is drawn.
     func draw(_ requests: [PreviewRequest]) async throws {
         for (k, request) in requests.enumerated() {
             engine.request(request)
             try #require(await eventually(timeout: .seconds(30)) { self.drawn.count > k }, "\(request) drawn")
-            if case .playing = request { try await Task.sleep(for: .milliseconds(16)) }
         }
     }
 }

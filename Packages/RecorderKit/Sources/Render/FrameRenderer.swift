@@ -771,7 +771,9 @@ public final class FrameRenderer: @unchecked Sendable {
         let owner: TakeRecord? = if let take { takeRecords[take] } else { self.take }
         guard let record = owner?.track(track.track) else {
             if let mask = cameraLook.reader(for: track.track) {
-                if Self.isOtherTakes(track) { readers.withLock { _ = $0.awake.insert(track) } }
+                // By the key `takeKey(of:)` names it with: the project's own take named by its id is no other take.
+                let key = TrackKey(take: take, track: track.track)
+                if Self.isOtherTakes(key) { readers.withLock { _ = $0.awake.insert(key) } }
                 return mask
             }
             return makingMedia ? mediaReader(for: track.track) : mediaResources.existingReader(for: track.track)

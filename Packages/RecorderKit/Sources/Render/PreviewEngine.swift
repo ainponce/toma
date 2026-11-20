@@ -35,7 +35,8 @@ public enum PreviewRequest: Equatable, Sendable {
 /// - `.playing(seconds:)`: the frame of the scene's grid at or before the instant, its videos decoded ahead by each
 ///   track's `FramePrefetcher` (the frames of the grid after it are scheduled as it goes, and a second ahead the first
 ///   frame of a track that a block border brings back: `DecodeAhead`, 1c design §14.4); a frame not decoded in time
-///   leaves the one before it on screen, and the frame is late. Late for `PreviewQuality.lateWindow` seconds in a row, the
+///   leaves the one before it on screen (with none, as after a jump into a take let go, its key frame at or before the
+///   instant, as scrubbing shows), and the frame is late. Late for `PreviewQuality.lateWindow` seconds in a row, the
 ///   preview draws at half the side (`PreviewQuality`, `FrameEvaluator.resized(to:)`) until it pauses.
 ///
 /// Every frame is drawn into a texture of the engine's own at the scene's size (what the tests read: a `framebufferOnly`
@@ -326,12 +327,15 @@ public final class PreviewEngine: @unchecked Sendable {
                 videos[key] = exact
                 continue
             }
-            switch try renderer.prefetcher(for: key.track)?.latestFrame(atSource: key.time) {
+            let prefetcher = try renderer.prefetcher(for: key.track)
+            switch try prefetcher?.latestFrame(atSource: key.time) {
             case let .onTime(texture)?:
                 videos[key] = texture
             case let .late(previous)?:
                 late = true
-                videos[key] = previous.map(\.frame) ?? drawing.shown[key.track] ?? nil
+                // Nothing decoded of the track yet, nor shown (playing from a jump, into a take let go or seen for the
+                // first time): its key frame at or before the instant, as scrubbing shows, rather than nothing.
+                videos[key] = previous.map(\.frame) ?? drawing.shown[key.track] ?? prefetcher?.keyFrame(atSource: key.time)
             case nil:
                 videos[key] = .some(nil)
             }
