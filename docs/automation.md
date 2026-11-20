@@ -43,6 +43,7 @@ toma --help           # los subcomandos y los códigos de salida
 | `toma undo <proyecto>`, `toma redo <proyecto>` | Deshace o rehace el último paso, también uno hecho en la app |
 | `toma export <proyecto> <salida>` | Exporta como la app (ver abajo) |
 | `toma mcp` | El servidor MCP por la entrada y la salida estándar (ver abajo) |
+| `toma share <proyecto> [--list \| --delete <id>]` | Sube el video a tu almacenamiento y da el link (ver «Compartir») |
 
 Todos (menos `mcp`) aceptan `--json`: la salida estándar tiene entonces exactamente un documento JSON, el resultado o
 `{"error": {"code": "…", "message": "…"}}`. Sin `--json`, un texto para leer; `edit` escribe una línea por comando a
@@ -127,6 +128,7 @@ con `id: null`.
 | `apply_commands` | `project`, `commands` | Los comandos de la API, en orden, cada uno su paso; para en el primero que falla |
 | `undo`, `redo` | `project` | Deshace o rehace el último paso del proyecto |
 | `export_video` | `project`, `output`, `codec`?, `size`?, `fps`?, `quality`?, `gif`? | Exporta como `toma export` |
+| `share` | `project`, `list`? | Sube el video al almacenamiento de Ajustes ▸ Compartir y devuelve el link; con `list: true`, lista los links del proyecto. Nunca borra (ver «Compartir») |
 
 - **Resultados.** Cada resultado trae el JSON en `structuredContent` y el mismo JSON como texto en `content`. Las
   herramientas que solo leen llevan `readOnlyHint: true`.
@@ -214,3 +216,33 @@ biblioteca y el socket de control. Para pruebas (o para usuarios avanzados), cad
 
 Con Claude Code: `claude mcp add toma -e TOMA_PROJECTS_FOLDER=/ruta/a/proyectos -- toma mcp`. En Claude Desktop, una clave
 `"env": {"TOMA_PROJECTS_FOLDER": "/ruta/a/proyectos"}` junto a `command` y `args`.
+
+## Compartir
+
+`toma share` sube el video de un proyecto a **tu** almacenamiento compatible con S3 (R2, S3, B2 o MinIO) y escribe el
+link a una página con el video. Usa lo que dejaste en Toma ▸ Ajustes ▸ Compartir (servicio, endpoint, bucket, prefijo,
+Access Key ID, URL pública y vencimiento) y la calidad de Ajustes ▸ Exportación; la clave secreta se lee del Llavero. Sin
+Compartir configurado dice «Share is not set up: open Toma ▸ Settings ▸ Share.» (`notAvailable`) y no exporta ni sube nada.
+
+```sh
+toma share Demo.toma                 # exporta H.264 1080p, sube y escribe el link
+toma share Demo.toma --json          # {"id","url","public","expiresAt","bytes","createdAt"}
+toma share Demo.toma --list          # los links del proyecto (no se conecta a nada)
+toma share Demo.toma --delete k3m7q2x4za   # lo borra del almacenamiento y del proyecto
+```
+
+- **El Llavero.** La primera vez, macOS pregunta si `toma` puede leer la clave del Llavero: «Permitir siempre» y no vuelve a
+  preguntar. La clave nunca sale por la salida, un registro ni un error.
+- **El link.** Sale por la salida estándar y debajo «Public link.» o «Link expires <fecha local>.». El progreso sale por la
+  salida de errores como `progress: N %`; ⌃C cancela y borra lo que se alcanzó a subir.
+- **`--list`** da una línea por link (`id`, link, vencimiento); con `--json`, un arreglo con los mismos campos que arriba.
+  **`--delete <id>`** (diez letras y dígitos base 32) borra los tres objetos del almacenamiento y la fila de `shares.json`;
+  un id que el proyecto no tiene es un error, y un link de otro almacenamiento que el de Ajustes no se borra.
+- **Códigos.** 0 bien; 1 un error; 2 uso (`--list` con `--delete`, un id que no es uno). Sin configurar o sin la clave,
+  `notAvailable`; credenciales o bucket rechazados, `refused`; la red o el almacenamiento fallan, o el link no se pudo
+  guardar en `shares.json` (lo subido se borra), `uploadFailed`; el export falla, `exportFailed`.
+- Lo único que escribe en el paquete es `shares.json`. Con el proyecto abierto en la app funciona igual: lee lo que hay en disco.
+
+**La herramienta MCP `share`** (`project`, `list`?) hace lo mismo que `toma share` y devuelve el mismo JSON (con
+`list: true`, `{"shares": [...]}`); con `progressToken` manda `notifications/progress`, y cancelarla borra lo subido. No
+borra links: eso queda en tus manos (el editor o `toma share --delete`). Sus errores son los de arriba, con `isError: true`.

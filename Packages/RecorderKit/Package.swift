@@ -41,7 +41,7 @@ let package = Package(
         .executableTarget(
             name: "toma",
             dependencies: [
-                "ProjectAPI", "ProjectFormat", "Editing", "Export", .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                "ProjectAPI", "ProjectFormat", "Editing", "Export", "Sharing", .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]),
         // Phase 5's local AI (milestone 5b): chapters, title and summary from the transcript. FoundationModels is imported
         // only in `SystemTextModel.swift`, behind macOS 26, so it links weakly and Toma still opens on macOS 15. No AppKit.
@@ -95,7 +95,7 @@ let package = Package(
                 "ProjectAPI", "ProjectFormat", "Analysis", "Editing", "Export", "ProjectJobs", "Transcription", "RecorderKitTestSupport",
             ]),
         // Runs the `toma` that is built (its directory of products found from the test bundle) and tests its texts.
-        .testTarget(name: "TomaCLITests", dependencies: ["toma", "ProjectAPI", "ProjectFormat", "RecorderKitTestSupport"]),
+        .testTarget(name: "TomaCLITests", dependencies: ["toma", "ProjectAPI", "ProjectFormat", "Sharing", "RecorderKitTestSupport"]),
         .testTarget(name: "LocalAITests", dependencies: ["LocalAI", "ProjectFormat", "Analysis", "RecorderKitTestSupport"]),
         .testTarget(
             name: "SharingTests", dependencies: ["Sharing", "ProjectFormat", "Analysis", "SyntheticCapture", "RecorderKitTestSupport"]),

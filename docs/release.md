@@ -1703,6 +1703,8 @@ Contra la Toma.app de la rama, con buckets propios del dueño (ningún agente cr
 - Exportar normal desde la hoja (MP4 entero, un tramo y un GIF) sigue igual que antes de esta versión: el anillo, «Cancelar export», los avisos de lo que quedó afuera.
 - Mientras corre un export de otro editor, «Compartir» está atenuado con «Esperar a que termine el export.».
 - La primera vez que corre `toma share` (S5), macOS pregunta por el Llavero: «Permitir siempre».
+- `toma share <proyecto>` con un bucket real (Ajustes ▸ Compartir ya probado): macOS pregunta una vez por el Llavero y con «Permitir siempre» no vuelve; imprime `progress: N %`, el link y «Public link.» o «Link expires …»; el link abre la página con el video. `--json` es un solo JSON; `--list` lo muestra (también en la ventanita del editor); `--delete <id>` lo borra del bucket y de la lista. ⌃C a mitad de la subida no deja objetos en el bucket. Sin Compartir configurado dice «Share is not set up: open Toma ▸ Settings ▸ Share.».
+- Desde Claude Code (`claude mcp add toma -- toma mcp`): «compartí este proyecto» da el link (y el progreso); «qué links tiene este proyecto» los lista sin subir nada.
 
 **La línea de comandos `toma` (A4)**
 

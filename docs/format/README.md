@@ -112,6 +112,7 @@ Lo que la API rechaza tiene un código estable y un mensaje en inglés para leer
 | `refused` | El comando no se puede hacer en el proyecto como está, y el mensaje dice por qué (un marcador o un bloque que no existe, un proyecto sin transcripción, un estilo que no está); también un comando a un proyecto abierto para leer, deshacer sin nada que deshacer, o un cambio que no se pudo guardar |
 | `exportFailed` | El export no terminó |
 | `notAvailable` | Lo que el comando necesita no está en esta Mac (el motor o el modelo de la transcripción) o no se puede hacer por ese camino |
+| `uploadFailed` | Compartir: la subida al almacenamiento del usuario falló (la red, la respuesta del almacenamiento) o el link no se pudo guardar en `shares.json`; lo que se alcanzó a subir se borra |
 
 Los códigos de salida de `toma`:
 

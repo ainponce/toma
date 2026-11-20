@@ -13,5 +13,6 @@ enum MCPToolCatalog {
         UndoTool(),
         RedoTool(),
         ExportVideoTool(),
+        ShareTool(),
     ]
 }
