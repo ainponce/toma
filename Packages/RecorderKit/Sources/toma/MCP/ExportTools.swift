@@ -50,17 +50,20 @@ struct ExportArguments: Sendable {
     var quality: String?
     var gif: Bool
     var background: Bool
+    /// `export_fcpxml`'s `replace`: its files for an external editor may replace files of their names next to the video.
+    var replace = false
 
-    /// The arguments of `tool`; `gif` and `background` are among them only when the tool takes them.
+    /// The arguments of `tool`; `gif`, `background` and `replace` are among them only when the tool takes them.
     /// `invalidCommand` for a codec, a quality, a size or a frame rate it does not take, a codec with a GIF, or an
     /// output whose extension is not the format's.
     init(
         _ arguments: JSONValue, tool: String, gif takesGIF: Bool, background takesBackground: Bool = false,
-        context: MCPContext
+        replace takesReplace: Bool = false, context: MCPContext
     ) throws {
         var keys: Set<String> = ["project", "output", "codec", "size", "fps", "quality"]
         if takesGIF { keys.insert("gif") }
         if takesBackground { keys.insert("background") }
+        if takesReplace { keys.insert("replace") }
         let arguments = try MCPArguments(arguments, tool: tool, keys: keys)
         project = try context.packageURL(try arguments.string("project"))
         output = try context.outputURL(try arguments.string("output"))
@@ -70,6 +73,7 @@ struct ExportArguments: Sendable {
         quality = try arguments.optionalString("quality")
         gif = try arguments.optionalBool("gif") ?? false
         background = try arguments.optionalBool("background") ?? false
+        replace = try arguments.optionalBool("replace") ?? false
         if let codec {
             guard !gif else { throw APIError(.invalidCommand, "\(tool): a GIF has no codec; leave “codec” out with “gif”") }
             guard ExportRequest.codecs[codec] != nil else {
@@ -133,7 +137,8 @@ struct ExportArguments: Sendable {
         kind: ExportRequest.Kind, place: PackageLocks.Ticket, context: MCPContext,
         progress: @escaping @Sendable (Double) -> Void
     ) async throws -> ExportResult {
-        let request = ExportRequest(kind: kind, codec: codec ?? "h264", size: size, fps: fps, quality: quality ?? "standard")
+        let request = ExportRequest(
+            kind: kind, codec: codec ?? "h264", size: size, fps: fps, quality: quality ?? "standard", replacesEditorFiles: replace)
         let project = project, destination = destination, environment = context.environment, locks = context.locks
         return try await locks.holding(place) { () async throws -> ExportResult in
             try await locks.holding(locks.reserve(.output(destination))) { () async throws -> ExportResult in

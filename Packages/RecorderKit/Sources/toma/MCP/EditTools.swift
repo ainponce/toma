@@ -15,8 +15,9 @@ struct ApplyCommandsTool: MCPTool {
         command runs (after the ones before it): read them with project_info, get_transcript or get_markers. The list \
         stops at the first command that fails; those before it stay done, and the result says which ran (results), \
         which failed (failedIndex, from 0) and why (error). A command that leaves things as they were is no error \
-        (changed: false). The commands: \(ProjectCommand.names.joined(separator: ", ")). Fails with "locked" while \
-        another app edits the project.
+        (changed: false). The commands: \(ProjectCommand.names.joined(separator: ", ")). While the project is open in \
+        Toma, Toma makes them in its editor, where they show at once (via: app; transcribe and a background image from \
+        outside the project are notAvailable then); fails with "locked" while another process edits the project.
         """
     }
     var inputSchema: JSONValue {

@@ -12,8 +12,9 @@ extension TomaProject {
     /// The `ExportFormat` `request` asks for of this project as it is now (plan 4b decisions 10 and 12): a video of the
     /// document's aspect at the size, frame rate, quality and codec asked for, with the chapters of the markers with a
     /// name (`Chapters.list`, its intro "Introducción" for a transcript in Spanish and "Intro" otherwise, in the
-    /// transcript's language); a GIF of the whole output. `invalidCommand` for a codec, a size, a frame rate or a
-    /// quality it does not take.
+    /// transcript's language); a GIF of the whole output; for an external editor, the video's settings with its files for
+    /// editors (`ExportSettings.editorMetadata`, replacing those there only with `replacesEditorFiles`). `invalidCommand`
+    /// for a codec, a size, a frame rate or a quality it does not take.
     public func format(for request: ExportRequest) async throws -> ExportFormat {
         let document = self.document, project = self.project
         guard ExportRequest.qualities.contains(request.quality) else {
@@ -48,11 +49,13 @@ extension TomaProject {
                 throw APIError(.invalidCommand, "the frame rate of a video is one of \(Self.list(EditDocument.frameRates))")
             }
             let chapters = Reports.chapters(await markers, document: document)
+            let editor = request.kind == .externalEditor
             let settings = ExportSettings(
                 aspect: document.aspect, resolution: resolution, framesPerSecond: fps, quality: high ? .high : .standard,
                 contentRatio: StageLayout.contentRatio(project: project, document: document), codec: codec, chapters: chapters,
-                chapterLanguage: chapters.isEmpty ? nil : Self.chapterLanguage(of: document))
-            return request.kind == .video ? .video(settings) : .externalEditor(settings)
+                chapterLanguage: chapters.isEmpty ? nil : Self.chapterLanguage(of: document), editorMetadata: editor,
+                replacesEditorFiles: editor && request.replacesEditorFiles)
+            return editor ? .externalEditor(settings) : .video(settings)
         }
     }
 
@@ -62,9 +65,15 @@ extension TomaProject {
     /// then `MP4Exporter` or `GIFExporter` with what it prepared. `progress` from 0 to 1, never down: the preparation is
     /// its first fifth. Nothing is ever written into a package; a file at `destination` is replaced once the export is
     /// whole. A destination without an extension gets its format's; another extension is `invalidCommand`.
-    /// - Throws: `APIError` (`refused` for a destination inside a package or where it cannot be written, `outOfRange`
-    ///   for an output that lasts less than a frame, `notAvailable` for an export for an external editor, `exportFailed`
-    ///   for the rest, with the stage of the preparation that failed);
+    ///
+    /// For an external editor (design §7.2), the video as `.video` exports it, and next to it `<name>.fcpxml` and
+    /// `<name>.toma-metadata.json` of that video, as the export sheet's switch writes them (`MP4Exporter` with
+    /// `ExportSettings.editorMetadata`, in the same pass: the sidecars describe the frames just encoded): their paths are
+    /// in the result. Files of their names already there are replaced only with `ExportSettings.replacesEditorFiles`;
+    /// otherwise the export is `refused` before anything is written.
+    /// - Throws: `APIError` (`refused` for a destination inside a package or where it cannot be written, or files for an
+    ///   external editor already there, `outOfRange` for an output that lasts less than a frame, `exportFailed` for the
+    ///   rest, with the stage of the preparation that failed);
     ///   `CancellationError` if the task is cancelled, leaving nothing.
     public func export(
         to destination: URL, format: ExportFormat, progress: (@Sendable (Double) -> Void)?
@@ -76,9 +85,6 @@ extension TomaProject {
             case .gif: ("gif", nil)
             }
         let destination = try Self.destination(destination, fileExtension: fileExtension, codec: codec)
-        if case .externalEditor = format {
-            throw APIError(.notAvailable, "the export for an external editor is not available from the API yet: export it from Toma")
-        }
         let project = self.project, document = self.document, environment = self.environment
         let caches = ProjectCaches(root: environment.cachesRoot, projectID: project.manifest.resolvedProjectID)
         let workers = ExportWorkers.standalone(
@@ -117,17 +123,23 @@ extension TomaProject {
             warnings.append("exported without noise cleanup: this Mac does not have the system's voice isolation")
         }
         switch format {
-        case let .video(settings), let .externalEditor(settings):
+        case .video(var settings), .externalEditor(var settings):
+            // The files for an external editor only for `.externalEditor`, whatever its settings say.
+            let editor: Bool = if case .externalEditor = format { true } else { false }
+            settings.editorMetadata = editor
+            settings.replacesEditorFiles = editor && settings.replacesEditorFiles
             let summary = try await MP4Exporter(
                 project: project, document: document, settings: settings, analysis: prepared.analysis,
                 remakeMusic: prepared.remakeMusic
             ).export(to: destination, progress: exporting)
             warnings += leftOut(summary)
+            let sidecars = editor ? ExternalEditorExport.sidecarURLs(of: destination) : nil
             return ExportResult(
                 path: destination.path, format: settings.codec.fileExtension, codec: ExportRequest.name(of: settings.codec),
                 width: settings.outputSize.x, height: settings.outputSize.y, framesPerSecond: settings.framesPerSecond,
                 duration: TimeMap(sequence: document.sequence).durationSeconds, bytes: size(of: destination),
-                chapters: settings.chapters.count, warnings: warnings, fcpxml: nil, metadata: nil)
+                chapters: settings.chapters.count, warnings: warnings, fcpxml: sidecars?.fcpxml.path,
+                metadata: sidecars?.metadata.path)
         case let .gif(settings):
             let size = settings.outputSize(project: project, document: document)
             let summary = try await GIFExporter(project: project, document: document, settings: settings, analysis: prepared.analysis)
@@ -198,6 +210,13 @@ extension TomaProject {
             return APIError(.exportFailed, "the \(error.stage.rawValue) could not be prepared: \(reason(error.underlying))")
         case ExportError.destinationNotAllowed:
             return APIError(.refused, "the export cannot be written there: a folder, a link, or inside a project")
+        case let ExportError.editorFilesExist(files):
+            let names = files.map(\.lastPathComponent).joined(separator: " and ")
+            return APIError(
+                .refused,
+                "\(names) \(files.count == 1 ? "is" : "are") already next to the video and would be replaced: export again "
+                    + "asking to replace them (toma export --fcpxml --replace, or export_fcpxml with replace: true), or "
+                    + "choose another output; nothing was written")
         case ExportError.nothingToExport, GIFExportError.rangeShorterThanAFrame:
             return APIError(.outOfRange, "the output lasts less than a frame: there is nothing to export")
         case ExportError.unsupportedCodec:
