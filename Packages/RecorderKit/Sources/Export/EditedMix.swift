@@ -56,6 +56,11 @@ import os
 /// - The export of a range of the output (`ExportRange`, 1c design §7.1) plays the frames of this mix from the range's
 ///   start on (`frames(of:frameCount:framesPerSecond:)`), as the whole video plays them: the range's edges get no fade
 ///   of their own.
+/// - Phase 3 adds its sound in the order of its design (§13) through four seams, empty in its base (base plan task B9),
+///   so a document of phase 1 or 2 mixes the same samples: where the sound of each clip starts and the source it reads
+///   there (`AudioCuts`, the J and L cuts), the volume of the ranges of each track (`GainRangePlan`, on each track's
+///   frames), then, after the tracks and the clicks and within the content, the sound of the imported clips
+///   (`MediaAudio`) and the music with its ducking (`MusicMix`), all before the limiter.
 ///
 /// A range of the mix is the same whatever was rendered before it, rendered without a preroll. With the limiter, whose
 /// gain depends on the frames before, a range that does not follow on from the one rendered last starts a limiter
@@ -82,7 +87,20 @@ public final class EditedMix: Sendable {
     /// The tracks mixed with their clean voice, by `AudioPlan.key`: those with a cleanup above 0 whose clean voice is
     /// there for every segment heard.
     public let cleanTracks: Set<String>
+    /// Where the sound of each clip starts and the source it reads there (phase 3 design §7.3): the clips' own starts
+    /// in the base.
+    let cuts: AudioCuts
+    /// The volume of the ranges of each track (phase 3 design §7.2): empty in the base.
+    let gainRanges: GainRangePlan
+    /// The sound of the imported clips (phase 3 design §5.4): `none` in the base. Kept by the mixes of other revisions
+    /// and of another analysis.
+    let media: MediaAudio
+    /// The music, with its ducking (phase 3 design §7.4 to §7.6): `none` in the base. Kept by the mixes of other
+    /// revisions; made again for another analysis, which says where its files are.
+    let music: MusicMix
 
+    /// The project the mix is of, for the music of another analysis (`with(analysis:)`).
+    private let project: LoadedProject
     /// The document and the frame rate the mix plays, for `with(analysis:)`.
     private let document: EditDocument
     private let framesPerSecond: Int
@@ -235,9 +253,12 @@ public final class EditedMix: Sendable {
             sources.append(try await source(of: take, tracks: own, channels: channels))
         }
         let prereadSegments = sources.reduce(0) { sum, source in source.tracks.reduce(sum) { $0 + $1.decodedSegments } }
+        let timeMap = TimeMap(sequence: document.sequence)
+        let media = await MediaAudio.make(project: project, document: document, timeMap: timeMap, channels: channels)
+        let music = await MusicMix.make(project: project, document: document, timeMap: timeMap, analysis: analysis, channels: channels)
         return EditedMix(
-            sources: sources, cleanLines: await cleanLines(of: sources, analysis: analysis), document: document,
-            framesPerSecond: framesPerSecond, prereadSegments: prereadSegments, analysis: analysis)
+            project: project, sources: sources, cleanLines: await cleanLines(of: sources, analysis: analysis), media: media, music: music,
+            document: document, framesPerSecond: framesPerSecond, prereadSegments: prereadSegments, analysis: analysis)
     }
 
     /// The source of the take `project` is focused on (`LoadedProject.focused(on:)`): its audio tracks `tracks` read with
@@ -262,20 +283,25 @@ public final class EditedMix: Sendable {
 
     /// The mix of another revision of the document, `document` at `framesPerSecond`, of the same project: it reads the
     /// same sources and the same clean voice, without decoding the one again to place it nor opening the other. A clip of
-    /// a take it has no source for (`takeIDs`) is silent in it.
+    /// a take it has no source for (`takeIDs`) is silent in it. It keeps the sound of the imported clips and the music
+    /// this mix opened (empty in the base of phase 3: plans 3a and 3c plan them again here for `document`, without
+    /// waiting).
     /// - Precondition: `framesPerSecond` is positive.
     public func with(document: EditDocument, framesPerSecond: Int) -> EditedMix {
         EditedMix(
-            sources: sources, cleanLines: cleanLines, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0,
-            analysis: analysis)
+            project: project, sources: sources, cleanLines: cleanLines, media: media, music: music, document: document,
+            framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
-    /// The mix of this document reading `analysis` of the caches instead: the same sources, without decoding them again;
-    /// only the clean files `analysis` names are opened (never decoded).
+    /// The mix of this document reading `analysis` of the caches instead: the same sources and imported clips, without
+    /// decoding them again; only the clean files `analysis` names are opened (never decoded), and the music is made again
+    /// (`MusicMix.make`), its files and its voice being `analysis`'s.
     public func with(analysis: AnalysisInputs) async -> EditedMix {
-        EditedMix(
-            sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis), document: document,
-            framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
+        let music = await MusicMix.make(
+            project: project, document: document, timeMap: TimeMap(sequence: document.sequence), analysis: analysis, channels: channels)
+        return EditedMix(
+            project: project, sources: sources, cleanLines: await Self.cleanLines(of: sources, analysis: analysis), media: media,
+            music: music, document: document, framesPerSecond: framesPerSecond, prereadSegments: 0, analysis: analysis)
     }
 
     /// Whether a mix reads the same of the caches in `a` as in `b`: the same clean voice and the same loudness. The
@@ -301,8 +327,8 @@ public final class EditedMix: Sendable {
     }
 
     private init(
-        sources: [Source], cleanLines: [AudioTrackTimeline?], document: EditDocument, framesPerSecond: Int, prereadSegments: Int,
-        analysis: AnalysisInputs
+        project: LoadedProject, sources: [Source], cleanLines: [AudioTrackTimeline?], media: MediaAudio, music: MusicMix,
+        document: EditDocument, framesPerSecond: Int, prereadSegments: Int, analysis: AnalysisInputs
     ) {
         precondition(framesPerSecond > 0, "EditedMix: \(framesPerSecond) frames per second")
         precondition(!sources.isEmpty, "EditedMix: no take")
@@ -311,8 +337,11 @@ public final class EditedMix: Sendable {
         let takes = sources.flatMap { source in source.tracks.map { _ in source.takeID } }
         let keys = sources.flatMap(\.keys), kinds = sources.flatMap(\.kinds)
         precondition(cleanLines.count == tracks.count, "EditedMix: \(cleanLines.count) clean lines")
+        self.project = project
         self.sources = sources
         self.keys = keys
+        self.media = media
+        self.music = music
         var next = 0
         trackRanges = sources.map { source in
             defer { next += source.tracks.count }
@@ -328,7 +357,10 @@ public final class EditedMix: Sendable {
         let timeMap = TimeMap(sequence: document.sequence)
         totalFrames = Self.totalFrames(frameCount: timeMap.frameCount(frameRate: framesPerSecond), framesPerSecond: framesPerSecond)
         contentFrames = Self.frames(ofNanoseconds: timeMap.duration)
-        (pieces, runs) = Self.pieces(of: document.sequence, timeMap: timeMap, contentFrames: contentFrames, sources: sources)
+        let cuts = AudioCuts(document: document, timeMap: timeMap)
+        self.cuts = cuts
+        (pieces, runs) = Self.pieces(of: document.sequence, cuts: cuts, contentFrames: contentFrames, sources: sources)
+        gainRanges = GainRangePlan(document: document, timeMap: timeMap, keys: sources.map(\.keys))
         // The takes the sequence shows, in the order it first shows them: where a track's gain is looked for by its id
         // when its own take has none (phase 3 base plan decision 11).
         var seen: Set<String> = []
@@ -400,9 +432,9 @@ public final class EditedMix: Sendable {
     /// segments that could not be opened, then where reading one stopped.
     public var missingAudio: [MissingAudio] { missing }
 
-    /// Whether there is anything to hear: an audio track of a take, or a click sound the clips keep. Without, the export
-    /// has no audio.
-    var hasSound: Bool { !keys.isEmpty || !clickFrames.isEmpty }
+    /// Whether there is anything to hear: an audio track of a take, a click sound the clips keep, an imported clip that
+    /// sounds or music. Without, the export has no audio.
+    var hasSound: Bool { !keys.isEmpty || !clickFrames.isEmpty || media.hasSound || music.hasSound }
 
     /// What the mix plays, as text, for the tests that hold it as it was (`MultiTakeMixTests`): its channels and lengths,
     /// each piece (its output frames, what it plays and its fades), each run, each track's key, gains and cleanup, the
@@ -507,8 +539,9 @@ public final class EditedMix: Sendable {
         }
     }
 
-    /// The sum of the tracks (each piece's, those of its take) and the click sounds over output frames `frames`, into
-    /// `samples`, before the limiter; a stretch that starts anew starts `preroll` frames before (0: at its run's start).
+    /// The sum of the tracks (each piece's, those of its take, at the volume of their ranges), the click sounds, the
+    /// imported clips and the music over output frames `frames`, into `samples`, before the limiter: silence outside the
+    /// content. A stretch that starts anew starts `preroll` frames before (0: at its run's start).
     private func mix(_ frames: Range<Int64>, preroll: Int64, into samples: inout [Float], state: inout State) {
         samples.removeAll(keepingCapacity: true)
         samples.append(contentsOf: repeatElement(0, count: frames.count * channels))
@@ -520,6 +553,7 @@ public final class EditedMix: Sendable {
             k += 1
             guard let take = piece.sound.take else { continue }
             let from = max(heard.lowerBound, piece.start), to = min(heard.upperBound, piece.end)
+            let firstTrack = trackRanges[take].lowerBound
             for t in trackRanges[take] where gains[t] != 0 {
                 // A track turned dry has no clean reader any more.
                 let cleanReader = state.cleanReaders[t]
@@ -537,23 +571,32 @@ public final class EditedMix: Sendable {
                     for i in state.track.indices { state.track[i] = state.track[i] * dry + state.clean[i] * cleanup }
                 }
                 for frame in from..<to {
-                    let gain = trackGain * piece.fade(at: frame)
+                    var gain = trackGain * piece.fade(at: frame)
+                    if !gainRanges.isEmpty { gain *= gainRanges.gain(take: take, track: t - firstTrack, atOutputFrame: frame) }
                     let input = Int(frame - from) * channels, output = Int(frame - frames.lowerBound) * channels
                     for c in 0..<channels { samples[output + c] += state.track[input + c] * gain }
                 }
             }
         }
-        guard !clickSound.isEmpty else { return }
-        let length = Int64(clickSound.count)
-        var c = Self.first(in: clickFrames.count) { clickFrames[$0] + length <= heard.lowerBound }
-        while c < clickFrames.count, clickFrames[c] < heard.upperBound {
-            let start = clickFrames[c]
-            c += 1
-            for frame in max(start, heard.lowerBound)..<min(start + length, heard.upperBound) {
-                let value = clickSound[Int(frame - start)], output = Int(frame - frames.lowerBound) * channels
-                for channel in 0..<channels { samples[output + channel] += value }
+        if !clickSound.isEmpty {
+            let length = Int64(clickSound.count)
+            var c = Self.first(in: clickFrames.count) { clickFrames[$0] + length <= heard.lowerBound }
+            while c < clickFrames.count, clickFrames[c] < heard.upperBound {
+                let start = clickFrames[c]
+                c += 1
+                for frame in max(start, heard.lowerBound)..<min(start + length, heard.upperBound) {
+                    let value = clickSound[Int(frame - start)], output = Int(frame - frames.lowerBound) * channels
+                    for channel in 0..<channels { samples[output + channel] += value }
+                }
             }
         }
+        // The imported clips, then the music (phase 3 design §13, steps 2 and 3), kept within the content.
+        guard media.hasSound || music.hasSound else { return }
+        media.add(frames, into: &samples, channels: channels)
+        music.add(frames, into: &samples, channels: channels)
+        let before = Int(heard.lowerBound - frames.lowerBound) * channels, after = Int(heard.upperBound - frames.lowerBound) * channels
+        for i in 0..<before { samples[i] = 0 }
+        for i in after..<samples.count { samples[i] = 0 }
     }
 
     /// Output frames `frames` of `piece` of one track, as `reader` reads it at 1× and `stretch` stretches it at another
@@ -576,16 +619,17 @@ public final class EditedMix: Sendable {
     // MARK: - From the document
 
     /// The clips of `sequence` with any output frames, in order, as the mix plays them, each from the source of its take:
-    /// faded where the sound would jump (between two takes too, as at a cut), read on where a clip goes on with the
-    /// source of the one before (at 1× frame for frame, at another speed in the same run), and the runs the stretched
-    /// ones play. A clip with content is silent here (phase 3 base plan decision 8: the sound of an imported clip is
-    /// `EditedMix+Media`'s), and so is a clip of a take `sources` does not have; the clips on both sides of either fade.
+    /// from where `cuts` starts its sound, reading its take from where `cuts` moves its start to; faded where the sound
+    /// would jump (between two takes too, as at a cut), read on where a clip goes on with the source of the one before
+    /// (at 1× frame for frame, at another speed in the same run), and the runs the stretched ones play. A clip with
+    /// content is silent here (phase 3 base plan decision 8: the sound of an imported clip is `EditedMix+Media`'s), and so
+    /// is a clip of a take `sources` does not have; the clips on both sides of either fade.
     private static func pieces(
-        of sequence: [Clip], timeMap: TimeMap, contentFrames: Int64, sources: [Source]
+        of sequence: [Clip], cuts: AudioCuts, contentFrames: Int64, sources: [Source]
     ) -> (pieces: [Piece], runs: [SpeedStretch.Run]) {
         // The source of each take, the first one for a take there twice.
         let sourceOf = Dictionary(sources.enumerated().map { ($1.takeID, $0) }) { first, _ in first }
-        let starts = timeMap.clipOutputStarts.map(frames(ofNanoseconds:))
+        let starts = cuts.starts
         var pieces: [Piece] = []
         var runs: [SpeedStretch.Run] = []
         // The clips of the first and the last piece.
@@ -603,7 +647,7 @@ public final class EditedMix: Sendable {
             // The frames of its take's timeline (none for a clip without a source: it is silent).
             let take = sourceOf[clip.take]
             let origin = take.map { sources[$0].origin } ?? clip.start
-            let from = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.start))
+            let from = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.start)) + cuts.sourceShift[k]
             let to = frames(ofNanoseconds: nanoseconds(from: origin, to: clip.end))
             var piece = Piece(start: start, end: end, sound: .silent, fadesIn: false, fadesOut: false)
             if clip.content != nil {
