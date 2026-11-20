@@ -25,6 +25,9 @@
 # Ninth, a second take (second_take_case): synth-record --into a package with take-001 and an edit, killed with SIGKILL
 # while it records take-002; the package must be at version 5, take-002 recovered, and take-001 and the editor's files
 # unchanged byte for byte.
+# Tenth, the command line (cli_case): toma edit --file of 200 addMarker on a fresh copy of a 10 s take, killed with
+# SIGKILL at a random moment 10 times; after every kill, every command toma said it did is in the project, edit-check
+# passes, toma info opens it, takes/ did not change, and toma edits it again.
 # Run with `make crash-test`.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -761,6 +764,78 @@ PY
   echo "app tracks crash case passed"
 }
 
+# The command line (plan 4b, Task A4): toma edit --file with 200 addMarker commands (each on a frame of its own, 45 ms
+# apart) on a fresh copy of one 10 s take, killed with SIGKILL at a random moment from 0.1 to 1.5 s (a run lasts about
+# 1.5 s; one that ends first must have done all 200), 10 times. toma prints a line once each command is on the disk, so
+# after every kill: the project holds at least the markers toma said it added, in order, and at most one more (the one
+# saved as it was killed); edit-check passes (the log replays and undoes back to the new document); toma info opens it;
+# takes/ is as it was; and toma edits it again (the kernel let go of edit.lock with the process). Every TOMA_* folder is
+# a temporary one.
+cli_case() {
+  local TMP PKG COPY RUN AFTER PID STATUS DONE MARKERS LAST TAKES CUT=0
+  TMP=$(mktemp -d)
+  swift build --package-path Packages/RecorderKit --product toma
+  local TOMA
+  TOMA="$(dirname "$BIN")/toma"
+  echo "== command line: synth-record --duration 10 (in $TMP)"
+  "$BIN" synth-record "$TMP" --duration 10 > "$TMP/out"
+  PKG=$(head -1 "$TMP/out")
+  awk 'BEGIN { printf "["; for (i = 0; i < 200; i++) printf "%s{\"command\":\"addMarker\",\"at\":%.3f,\"name\":\"M%d\"}", (i ? "," : ""), 0.02 + i * 0.045, i + 1; print "]" }' \
+    > "$TMP/markers.json"
+  for RUN in 1 2 3 4 5 6 7 8 9 10; do
+    COPY="$TMP/cli-$RUN.toma"
+    cp -R "$PKG" "$COPY"
+    TAKES=$(package_hash "$COPY/takes")
+    AFTER=$(LC_ALL=C awk -v r="$RANDOM" 'BEGIN { printf "%.3f", 0.1 + 1.4 * r / 32767 }')
+    STATUS=0
+    TOMA_CACHES_ROOT="$TMP/caches" TOMA_MUSIC_ROOT="$TMP/music" TOMA_STYLES="$TMP/styles" TOMA_PROJECTS_FOLDER="$TMP/projects" \
+      TOMA_CONTROL_SOCKET="$TMP/control.sock" "$TOMA" edit "$COPY" --file "$TMP/markers.json" > "$TMP/cli.out" 2> "$TMP/cli.err" &
+    PID=$!
+    sleep "$AFTER"
+    kill -9 "$PID" 2>/dev/null || true
+    wait "$PID" 2>/dev/null || STATUS=$?
+    DONE=$(grep -c '^addMarker: marker.add, created ' "$TMP/cli.out" || true)
+    if [ "$STATUS" -eq 137 ]; then
+      CUT=$((CUT + 1))
+    elif [ "$STATUS" -ne 0 ] || [ "$DONE" -ne 200 ]; then
+      echo "FAIL: toma edit ended with $STATUS after $DONE of 200 commands without being killed:"
+      cat "$TMP/cli.err"
+      exit 1
+    fi
+    echo "== command line: run $RUN, kill -9 after $AFTER s: toma said $DONE of 200 were done"
+    if ! "$BIN" edit-check "$COPY" --confirmed 0 > "$TMP/check.out" 2>&1; then
+      echo "FAIL: edit-check after toma edit was killed with $DONE of 200 done:"
+      cat "$TMP/check.out"
+      exit 1
+    fi
+    if ! "$TOMA" info "$COPY" > /dev/null 2> "$TMP/info.err"; then
+      echo "FAIL: toma info does not open the project after toma edit was killed:"
+      cat "$TMP/info.err"
+      exit 1
+    fi
+    # "0:01.370  m-0a1b2c3d  M31": the markers the commands added, by time, which is their order.
+    "$TOMA" markers "$COPY" | grep -E '  M[0-9]+$' > "$TMP/markers.out" || true
+    MARKERS=$(wc -l < "$TMP/markers.out" | tr -d ' ')
+    LAST=$(tail -1 "$TMP/markers.out" | awk '{ print $NF }')
+    if [ "$MARKERS" -lt "$DONE" ] || [ "$MARKERS" -gt $((DONE + 1)) ] || { [ "$MARKERS" -gt 0 ] && [ "$LAST" != "M$MARKERS" ]; }; then
+      echo "FAIL: toma said $DONE markers were added, but the project has $MARKERS, the last $LAST"
+      exit 1
+    fi
+    if [ "$(package_hash "$COPY/takes")" != "$TAKES" ]; then
+      echo "FAIL: takes/ changed while toma edit ran"
+      exit 1
+    fi
+    if ! "$TOMA" edit "$COPY" '{"command":"setTitle","title":"After the kill"}' > /dev/null 2> "$TMP/again.err"; then
+      echo "FAIL: toma does not edit the project again after the kill:"
+      cat "$TMP/again.err"
+      exit 1
+    fi
+    rm -rf "$COPY"
+  done
+  rm -rf "$TMP"
+  echo "command line crash case passed ($CUT of 10 runs killed before the end)"
+}
+
 run_case "" export
 run_case "--static-after 2"
 run_case "--displays 2 --camera --system-audio" export "display-1 display-2 camera mic system-audio"
@@ -771,4 +846,5 @@ gif_case
 keys_case
 second_take_case
 app_tracks_case
+cli_case
 echo "crash test passed"

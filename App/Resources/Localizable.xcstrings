@@ -645,6 +645,17 @@
         }
       }
     },
+    "Add %@ to your PATH to use it." : {
+      "comment" : "Under Install Command Line Tool in Settings; the folder where the link is, for example ~/.local/bin",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar %@ al PATH para usarla."
+          }
+        }
+      }
+    },
     "Add %lld Chapters" : {
       "comment" : "The chapters' sheet: the button that adds the chapters checked",
       "localizations" : {
@@ -1152,6 +1163,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hay otra grabación en curso en este proyecto."
+          }
+        }
+      }
+    },
+    "Another toma is at %@: it was left as it is." : {
+      "comment" : "Under Install Command Line Tool in Settings: a file or a link of something else has the name toma there",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Ya hay otro toma en %@: se dejó como estaba."
           }
         }
       }
@@ -2957,6 +2979,17 @@
         }
       }
     },
+    "Command Line Tool" : {
+      "comment" : "A setting: the toma command, to edit and export projects from Terminal",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Línea de comandos"
+          }
+        }
+      }
+    },
     "Connect the iPhone or iPad with a cable, unlock it and tap Trust." : {
       "comment" : "iPhone mode with no iPhone or iPad connected: how to connect one (Trust is the button the device shows)",
       "localizations" : {
@@ -4184,6 +4217,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Editar un título o desmarcar un capítulo para dejarlo afuera."
+          }
+        }
+      }
+    },
+    "Edit and export projects from Terminal with the toma command." : {
+      "comment" : "Under Install Command Line Tool in Settings, before it is installed",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Editar y exportar proyectos desde Terminal con el comando toma."
           }
         }
       }
@@ -5675,6 +5719,17 @@
         }
       }
     },
+    "Install Command Line Tool" : {
+      "comment" : "A button in Settings: puts a link to the toma command where Terminal finds it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Instalar la línea de comandos"
+          }
+        }
+      }
+    },
     "Instant" : {
       "comment" : "The Zoom tab: the selected zoom cuts in and out",
       "localizations" : {
@@ -5726,6 +5781,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "No puede empezar con un punto."
+          }
+        }
+      }
+    },
+    "It could not be installed: %@" : {
+      "comment" : "Under Install Command Line Tool in Settings; the system's reason follows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo instalar: %@"
           }
         }
       }
@@ -8919,6 +8985,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Normal"
+          }
+        }
+      }
+    },
+    "Reinstall Command Line Tool" : {
+      "comment" : "A button in Settings: puts the link to the toma command again",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Reinstalar la línea de comandos"
           }
         }
       }
@@ -12255,6 +12332,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta compilación no indica dónde está su código fuente: no la generó el flujo de publicación."
+          }
+        }
+      }
+    },
+    "This build of Toma has no command line tool." : {
+      "comment" : "Under Install Command Line Tool in Settings, in a build without it",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Esta compilación de Toma no trae la línea de comandos."
           }
         }
       }
