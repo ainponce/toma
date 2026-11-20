@@ -41,8 +41,31 @@ final class MediaClipResources: Sendable {
     private struct State {
         /// The readers kept, by their reader id.
         var readers: [String: TrackFrameReader] = [:]
+        /// The reader of each id let go last while none is kept, its `AVAssetReader` closed: what it could not read is
+        /// still said (`notes(for:)`), so a clip an export went past is still missing video.
+        var released: [String: TrackFrameReader] = [:]
+        /// The spans earlier readers of each id that gave frames could not decode (`TrackFrameReader.gaps`), gathered
+        /// from those let go before the last.
+        var gaps: [String: [TrackFrameReader.Gap]] = [:]
         /// `retryInterval`, less for tests.
         var retryInterval = MediaClipResources.retryInterval
+        /// Called with each reader made, before it reads: for tests.
+        var made: (@Sendable (TrackFrameReader) -> Void)?
+
+        /// Keeps what `reader`, of `id`, could not decode, if it gave frames (`gaps`): the spans of one that gave none
+        /// are only of that failure, which a newer reader leaves behind.
+        mutating func gather(_ reader: TrackFrameReader, of id: String) {
+            guard reader.unusableSince == nil else { return }
+            var known = gaps[id] ?? []
+            for gap in reader.gaps where !known.contains(gap) { known.append(gap) }
+            gaps[id] = known
+        }
+
+        /// `reader` kept as `id`'s from now on: the one let go before it, gathered (`gather`).
+        mutating func keep(_ reader: TrackFrameReader, as id: String) {
+            if let released = released.removeValue(forKey: id) { gather(released, of: id) }
+            readers[id] = reader
+        }
     }
 
     init(device: any MTLDevice, package: ProjectPackage) {
@@ -65,7 +88,9 @@ final class MediaClipResources: Sendable {
             guard let reader = AssetFrameReader.make(asset: asset, package: package, orientations: orientations) else {
                 return kept
             }
-            state.readers[id] = reader
+            state.made?(reader)
+            // One that gave no frame is let go as it is: its spans are of that failure alone.
+            state.keep(reader, as: id)
             return reader
         }
     }
@@ -76,13 +101,28 @@ final class MediaClipResources: Sendable {
     }
 
     /// Stops keeping the readers whose ids are not in `kept`, and returns them, for the caller to let go
-    /// (`TrackFrameReader.letGo()`).
+    /// (`TrackFrameReader.letGo()`). What each could not read stays known (`notes(for:)`): it is the last let go of its
+    /// id, and the one let go before it is gathered.
     func release(keeping kept: Set<String>) -> [TrackFrameReader] {
         state.withLock { state in
             let gone = state.readers.filter { !kept.contains($0.key) }
-            for id in gone.keys { state.readers[id] = nil }
+            for (id, reader) in gone {
+                state.readers[id] = nil
+                if let before = state.released.updateValue(reader, forKey: id) { state.gather(before, of: id) }
+            }
             return Array(gone.values)
         }
+    }
+
+    /// What the readers of `id` could not read, kept or let go: whether the latest gives no frame at all, with why (the
+    /// reason of its last span), and the spans the readers that gave frames could not decode (in the file's time). Waits
+    /// for a frame the kept reader is decoding.
+    func notes(for id: String) -> (unusable: MissingVideo.Reason?, gaps: [TrackFrameReader.Gap]) {
+        let (latest, gathered) = state.withLock { state in (state.readers[id] ?? state.released[id], state.gaps[id] ?? []) }
+        guard let latest else { return (nil, gathered) }
+        let gaps = latest.gaps
+        if latest.unusableSince != nil { return (gaps.last?.reason ?? .unreadable, gathered) }
+        return (nil, gathered + gaps.filter { !gathered.contains($0) })
     }
 
     /// How a player turns the frames of the clip `asset` upright, as noted when its track loaded; as decoded before.
@@ -92,6 +132,12 @@ final class MediaClipResources: Sendable {
 
     /// How many readers are kept: for tests.
     var readerCount: Int { state.withLock { $0.readers.count } }
+
+    /// Called with each reader made, before it reads (to load its track another way, say): for tests.
+    var readerMade: (@Sendable (TrackFrameReader) -> Void)? {
+        get { state.withLock { $0.made } }
+        set { state.withLock { $0.made = newValue } }
+    }
 
     /// `retryInterval`, which tests make shorter.
     var retryInterval: Double {
@@ -180,9 +226,10 @@ extension FrameRenderer {
 
     /// The imported clips of the sequence that cannot be drawn, in output seconds (`missingVideo`'s): the whole of each clip
     /// whose file the package's safe reader does not give (`.fileMissing`: gone, a link, not a video of `assets/`) or
-    /// whose reader gives no frame at all (its reason); otherwise each span of the file its reader could not decode, where
-    /// a clip shows it. By the clip's reader id (`AssetFrameReader.readerID(of:)`) as the track and its path as the file.
-    /// No reader is made here.
+    /// whose latest reader gives no frame at all (its reason); otherwise each span of the file its readers could not
+    /// decode, where a clip shows it: of those kept and of those let go (`MediaClipResources.notes(for:)`), so a clip the
+    /// frames drawn went past is still listed. By the clip's reader id (`AssetFrameReader.readerID(of:)`) as the track and
+    /// its path as the file. No reader is made here.
     func mediaMissingVideo(of scene: FrameEvaluator) -> [MissingVideo] {
         let timeMap = scene.timeMap, sequence = scene.document.sequence
         guard sequence.count == timeMap.clipOutputStarts.count else { return [] }
@@ -204,10 +251,9 @@ extension FrameRenderer {
                 missing.append(span(start, start + duration, .fileMissing))
                 continue
             }
-            guard let reader = mediaResources.existingReader(for: id) else { continue }
-            let gaps = reader.gaps
-            if reader.unusableSince != nil {
-                missing.append(span(start, start + duration, gaps.last?.reason ?? .unreadable))
+            let (unusable, gaps) = mediaResources.notes(for: id)
+            if let unusable {
+                missing.append(span(start, start + duration, unusable))
                 continue
             }
             for gap in gaps {

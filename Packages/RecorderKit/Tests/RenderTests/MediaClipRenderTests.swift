@@ -648,6 +648,44 @@ private func brightness(_ pixel: SIMD4<UInt8>) -> Int { Int(pixel.x) + Int(pixel
         }
     }
 
+    /// Two clips an export goes past, then a second more: one of a file AVFoundation cannot open (2–4 s), one whose track
+    /// never loads in time, so each of its frames asked for is a gap (5–7 s). Once their readers are let go, both are still
+    /// missing video: the first whole, the second over the span it was asked for.
+    @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired), .timeLimit(.minutes(5)))
+    func aClipTheExportWentPastIsStillMissingVideo() async throws {
+        try await withTemporaryDirectory { dir in
+            let (project, broken) = try await mediaProject(in: dir)
+            try Data(repeating: 7, count: 4096).write(to: project.package.fileURL(broken))
+            let other = try await offThePool { try MediaFixtures.clip(in: dir, seconds: 2, size: [320, 180], pattern: 9) }
+            let slow = try await MediaFixtures.imported(other, into: project, as: .video)
+            let document = mediaDocument(
+                project, MediaClip(asset: broken, start: 0, end: 2_000_000_000),
+                more: [(3, MediaClip(asset: slow, start: 0, end: 2_000_000_000))])
+            #expect(TimeMap(sequence: document.sequence).clipOutputStarts == [0, 2_000_000_000, 4_000_000_000, 5_000_000_000, 7_000_000_000])
+            let rate = 30
+            let renderer = try FrameRenderer(project: project, document: document, outputSize: [320, 180], frameRate: rate)
+            let (brokenID, slowID) = (AssetFrameReader.readerID(of: broken), AssetFrameReader.readerID(of: slow))
+            renderer.mediaResources.readerMade = { reader in
+                if reader.trackID == slowID { reader.trackLoader = { _ in .timedOut } }
+            }
+            _ = try await exportBytes(renderer, frames: 0...239, rate: rate)
+            #expect(renderer.mediaResources.readerCount == 0, "both let go a second past them")
+            let missing = renderer.missingVideo
+            #expect(missing.filter { $0.track == brokenID } == [MissingVideo(
+                track: brokenID, file: broken, start: 2, end: 4,
+                reason: missing.first { $0.track == brokenID }?.reason ?? .unreadable)])
+            if case .cannotOpen? = missing.first(where: { $0.track == brokenID })?.reason {} else {
+                Issue.record("\(missing)")
+            }
+            let gaps = missing.filter { $0.track == slowID }
+            #expect(!gaps.isEmpty && gaps.allSatisfy { $0.reason == .loadTimedOut && $0.file == slow }, "\(gaps)")
+            #expect(gaps.allSatisfy { $0.start >= 5 && $0.end <= 7 } && gaps.contains { $0.start < 5.1 }, "\(gaps)")
+            // Drawing the rest of it again does not lose them.
+            _ = try await exportBytes(renderer, frames: 0...30, rate: rate)
+            #expect(renderer.missingVideo.filter { [brokenID, slowID].contains($0.track) }.count == missing.count)
+        }
+    }
+
     /// A clip whose file is gone is missing video, whole, before a frame is drawn; and a frame prepared while it was gone
     /// draws the background without an error when the file is back by the time it is drawn: no reader is made then.
     @Test(.enabled(if: MetalCondition.isAvailable || MetalCondition.isRequired))
