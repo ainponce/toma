@@ -448,3 +448,28 @@ private enum Proportions {
         #expect(try cover(square) > (try cover(alone)) + 1e-4)
     }
 }
+
+/// Clicks less than the lead from the cut between the two takes (T10's finding): "Regenerate Zooms" keeps a block of each
+/// take, cut at the border, and never deletes the ones there; "Add to End" brings the new take's.
+@Test func blocksAtTheBorderBetweenTakesStay() throws {
+    try withTemporaryDirectory { directory in
+        let takes = [TwoTakes.take(TwoTakes.first), TwoTakes.take(TwoTakes.second)]
+        let events = [TwoTakes.first: TwoTakes.click(TwoTakes.first, 19.6), TwoTakes.second: TwoTakes.click(TwoTakes.second, 0.3)]
+        let both = takes.map { ($0, events[$0.id] ?? []) }
+        let document = TwoTakes.document(takes)
+        let edited = try TwoTakes.applying(ZoomCommands.regenerate(document, takes: both, settings: document.zoom.auto), to: document)
+        #expect(TwoTakes.autos(edited, of: TwoTakes.first) == [19.1...20])
+        #expect(TwoTakes.autos(edited, of: TwoTakes.second) == [0...1.3])
+        // Again: nothing goes.
+        #expect(ZoomCommands.regenerate(edited, takes: both, settings: edited.zoom.auto).changes.isEmpty)
+
+        // The second take added after the first: its block at its start.
+        let projects = try TwoTakes.projects(in: directory, takes, events: events)
+        var first = TwoTakes.document([takes[0]], sequence: [TwoTakes.clip(1, TwoTakes.first, 0, 20)])
+        first.zoom.regions = AutoZoomPlanner.plan(take: takes[0], events: both[0].1, document: first)
+        let step = try #require(TakeCommands.appendToEnd(first, take: projects[1], makeID: Proportions.IDs().make))
+        let appended = try TwoTakes.applying(step, to: first)
+        #expect(TwoTakes.autos(appended, of: TwoTakes.second) == [0...1.3])
+        #expect(TwoTakes.autos(appended, of: TwoTakes.first) == [19.1...20])
+    }
+}
