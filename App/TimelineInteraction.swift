@@ -954,10 +954,16 @@ enum TimelineEditResult {
 }
 
 extension EditorModel {
-    /// The clips a speed applies to: those selected, or the one under the playhead.
+    /// The clips a speed applies to: those selected, or the one under the playhead; never one with content (phase 3),
+    /// which no speed changes (`SequenceCommands.setSpeed`).
     var speedTargets: Set<String> {
-        if case let .clips(ids)? = selection { return ids }
-        guard let document, let (k, _) = TimeMap(sequence: document.sequence).source(atOutput: playheadNanoseconds) else { return [] }
+        guard let document else { return [] }
+        if case let .clips(ids)? = selection {
+            return ids.subtracting(document.sequence.filter { $0.content != nil }.map(\.id))
+        }
+        guard let (k, _) = TimeMap(sequence: document.sequence).source(atOutput: playheadNanoseconds),
+            document.sequence[k].content == nil
+        else { return [] }
         return [document.sequence[k].id]
     }
 
