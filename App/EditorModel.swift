@@ -1443,7 +1443,8 @@ final class EditorModel {
                 switch job {
                 case let .mp4(settings, range):
                     let exporter = MP4Exporter(
-                        project: project, document: document, settings: settings, range: range, analysis: analysis)
+                        project: project, document: document, settings: settings, range: range, analysis: analysis,
+                        remakeMusic: preparation.remakeMusic)
                     let summary = try await exporter.export(to: destination, progress: progress)
                     exportFinished(at: destination)
                     let said = preparation.notices + Self.leftOut(summary, takes: project.takeRecords(shownBy: document))
@@ -1740,6 +1741,9 @@ final class ExportPreparation {
     /// What the export reads of the analysis caches: the editor's as it started, each preparation's part replaced by
     /// what it waited for.
     var analysis: AnalysisInputs
+    /// Makes again the music whose file macOS removed after its preparation (plan 3c, `MusicAnalysis.remaking(for:)`): the
+    /// music's preparation sets it, and the MP4's exporter asks it once before it writes (`MP4Exporter.remakeMusic`).
+    var remakeMusic: MP4Exporter.MusicRemaking?
     /// What the export says once it is done, before what it had to leave out.
     private(set) var notices: [String] = []
     /// Whether a preparation waited for something: it reported less than the whole. The ring shows the preparations
