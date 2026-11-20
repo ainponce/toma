@@ -4,6 +4,7 @@ import CoreMedia
 import CoreVideo
 import Foundation
 import ProjectFormat
+import Synchronization
 import os
 
 /// Decoded frames of one video track (the screen or the camera) at any host time, across all its segments: the
@@ -110,6 +111,9 @@ public final class TrackFrameReader: @unchecked Sendable {
     }
 
     private let lock = NSLock()
+    /// When every segment was found unusable (`markUnusable`), the reader giving no frame from then on; read without
+    /// `lock`, so asking never waits for a frame being decoded.
+    private let unusable = Mutex<HostTime?>(nil)
     /// The track read (`TrackRecord.id`).
     let trackID: String
     /// Its files are found in it when they are opened: where it is then, if it follows the package (`handle`).
@@ -137,6 +141,20 @@ public final class TrackFrameReader: @unchecked Sendable {
 
     /// The earliest and the latest host times a frame was asked for so far (`nil` before the first), for tests.
     var askedFor: ClosedRange<HostTime>? { lock.withLock { asked } }
+
+    /// The wall-clock host time since which no segment can be used, so no frame is given (a file AVFoundation cannot open
+    /// or read through, one missing or empty from the start); `nil` while some segment can. Never waits for a frame being
+    /// decoded: for whoever makes a reader of the file again after a while (`MediaClipResources`).
+    var unusableSince: HostTime? { unusable.withLock { $0 } }
+
+    /// Whether an `AVAssetReader` is open, holding the frames read ahead of the last one asked for: for tests.
+    var isOpen: Bool { lock.withLock { open != nil } }
+
+    /// Lets its open `AVAssetReader` go, with the frames it holds, as a jump does (cancelled on a queue of its own); the
+    /// next frame asked for opens one again. Waits for a frame being decoded: never call it where that must not wait.
+    func letGo() {
+        lock.withLock { close() }
+    }
 
     /// Whether every host time a frame is asked for is noted (`askedTimes`), from now on: for tests.
     var recordsAsks: Bool {
@@ -203,6 +221,7 @@ public final class TrackFrameReader: @unchecked Sendable {
         let found = lstat(file.path, &info) == 0
         if !found || info.st_mode & S_IFMT != S_IFREG || info.st_size == 0 {
             segments[0].usable = false
+            unusable.withLock { $0 = HostTime.now() }
             noteGap(0, from: start, to: end ?? start, !found ? .fileMissing : info.st_size == 0 ? .empty : .unreadable)
         }
     }
@@ -474,6 +493,7 @@ public final class TrackFrameReader: @unchecked Sendable {
 
     private func markUnusable(_ k: Int, _ reason: MissingVideo.Reason) {
         segments[k].usable = false
+        if !segments.contains(where: \.usable) { unusable.withLock { $0 = $0 ?? HostTime.now() } }
         if open?.segment == k { close() }
         noteGap(k, from: segments[k].start, to: segments[k].end ?? segments[k].start, reason)
         Self.logger.error(

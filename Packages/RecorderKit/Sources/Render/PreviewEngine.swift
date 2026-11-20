@@ -121,6 +121,8 @@ public final class PreviewEngine: @unchecked Sendable {
         /// While scrubbing: the output second of the last scrub, and the frames of the grid decoded ahead for it.
         var lastScrub: Double?
         var decodingAhead: [Int] = []
+        /// The tracks those frames show: the imported clips' among them are kept (`releaseMedia(keeping:)`).
+        var decodingAheadTracks: Set<TrackKey> = []
         /// While playing: the frame of the grid presented last, of which scene and at which size, and the last one
         /// scheduled ahead.
         var playing: (presented: Int, scene: Int, size: SIMD2<Int>, scheduledThrough: Int)?
@@ -224,6 +226,7 @@ public final class PreviewEngine: @unchecked Sendable {
                 drawing.sceneNumber = number
                 // It dropped what was decoded ahead: a scrub schedules the exact frames again.
                 drawing.decodingAhead = []
+                drawing.decodingAheadTracks = []
                 drawing.lastScrub = nil
             }
             hooks.beforeDrawing?(request)
@@ -242,14 +245,16 @@ public final class PreviewEngine: @unchecked Sendable {
             stopPlaying()
             drawing.lastScrub = nil
             drawing.decodingAhead = []
+            drawing.decodingAheadTracks = []
             let index = clamp(n, scene)
             let seconds = Double(TimeMap.frameTime(index, frameRate: scene.frameRate)) / 1e9
             let frame = try renderer.frame(of: scene, at: seconds)
             let keys = videos(of: frame)
-            var exact = try exactFrames(of: keys.filter { drawing.exact[$0] == nil })
+            var exact = try exactFrames(of: keys.filter(needsDecoding))
             for key in keys where exact[key] == nil { exact[key] = drawing.exact[key] }
             drawing.exact = exact
             try present(frame, request: request, seconds: seconds, late: false, started: started, hooks: hooks) { exact[$0] ?? nil }
+            releaseMedia(keeping: Set(keys.map(\.track)))
         case let .scrubbing(seconds):
             stopPlaying()
             let frame = try renderer.frame(of: scene, at: seconds)
@@ -266,9 +271,11 @@ public final class PreviewEngine: @unchecked Sendable {
                 keyFrames[$0] ?? nil
             }
             if hooks.decodesExactFramesWhileScrubbing { try decodeExactFramesAhead(around: seconds, of: scene) }
+            releaseMedia(keeping: Set(videos(of: frame).map(\.track)).union(drawing.decodingAheadTracks))
         case let .playing(seconds):
             drawing.lastScrub = nil
             drawing.decodingAhead = []
+            drawing.decodingAheadTracks = []
             try play(at: seconds, request: request, scene: scene, number: number, started: started, hooks: hooks)
         }
     }
@@ -333,6 +340,8 @@ public final class PreviewEngine: @unchecked Sendable {
             try renderer.prefetcher(for: key.track)?.schedule(key.time)
         }
         drawing.playing = (n, number, size, max(ahead.scheduledThrough ?? n, n))
+        // The imported clips neither this frame nor those a second ahead show are let go.
+        releaseMedia(keeping: Set(self.videos(of: frame).map(\.track)).union(ahead.tracksAhead))
         // The first frame of a playback is not late: nothing was decoded ahead for it.
         if previous == nil { late = false }
         _ = drawing.quality.record(late: late, atSeconds: CACurrentMediaTime())
@@ -375,13 +384,35 @@ public final class PreviewEngine: @unchecked Sendable {
         let frames = Set([nearest - lead, nearest - 1, nearest].map { clamp($0, scene) }).sorted()
         guard frames != drawing.decodingAhead else { return }
         drawing.decodingAhead = frames
+        drawing.decodingAheadTracks = []
         resetPrefetchers()
         for n in frames {
             let frame = try renderer.frame(of: scene, at: Double(TimeMap.frameTime(n, frameRate: scene.frameRate)) / 1e9)
-            for key in videos(of: frame) where drawing.exact[key] == nil {
+            for key in videos(of: frame) {
+                drawing.decodingAheadTracks.insert(key.track)
+                guard drawing.exact[key] == nil else { continue }
                 try renderer.prefetcher(for: key.track)?.schedule(key.time)
             }
         }
+    }
+
+    /// Whether the frame of `key` is to be decoded for a pause: one the last pause did not decode, or an imported clip's
+    /// it found none of (its file gave no frame then: its reader is made again after a while, `MediaClipResources`).
+    private func needsDecoding(_ key: DecodedKey) -> Bool {
+        switch drawing.exact[key] {
+        case nil: true
+        case .some(.none): FrameRenderer.isMedia(key.track)
+        case .some(.some): false
+        }
+    }
+
+    /// Lets go of the imported clips' readers and prefetchers that `kept` does not name (`FrameRenderer.releaseMedia(keeping:)`),
+    /// and of the frames of theirs the engine keeps (shown, or decoded for a pause).
+    private func releaseMedia(keeping kept: Set<TrackKey>) {
+        let released = Set(renderer.releaseMedia(keeping: kept))
+        guard !released.isEmpty else { return }
+        for track in released { drawing.shown[track] = nil }
+        drawing.exact = drawing.exact.filter { !released.contains($0.key.track) }
     }
 
     /// Leaves playback: nothing more is decoded ahead, and the next playback starts at the export's size.

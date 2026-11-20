@@ -21,14 +21,21 @@ public struct MediaClipLayer: Equatable, Sendable {
     /// 0 to 1, the clip and its shadow together: 1 in its own frames, less under a title card fading against it
     /// (`TitleCardScene.faded(_:keeping:)`).
     public var opacity: Double
+    /// Sampled trilinear from a copy of the frame with its mipmaps, as the screens with `style.screenSampling`
+    /// `mipmapped`: a large clip drawn small does not shimmer.
+    public var mipmapped: Bool
 
-    public init(asset: String, fileTime: Int64, room: Rect, cornerRadius: Double, shadow: Double, opacity: Double = 1) {
+    public init(
+        asset: String, fileTime: Int64, room: Rect, cornerRadius: Double, shadow: Double, opacity: Double = 1,
+        mipmapped: Bool = false
+    ) {
         self.asset = asset
         self.fileTime = fileTime
         self.room = room
         self.cornerRadius = cornerRadius
         self.shadow = shadow
         self.opacity = opacity
+        self.mipmapped = mipmapped
     }
 
     /// `fileTime` as the reader reads it: host time from 0, the file's own time (none before it).
@@ -62,6 +69,7 @@ struct MediaClipScene: Sendable {
     private let room: Rect
     private let cornerRadius: Double
     private let shadow: Double
+    private let mipmapped: Bool
 
     init(document: EditDocument, timeMap: TimeMap, outputSize: SIMD2<Int>) {
         var clips: [Int: MediaClip] = [:]
@@ -74,6 +82,7 @@ struct MediaClipScene: Sendable {
         // The screen's corners and shadow (`FrameEvaluator.takeFrame`), read the same way.
         cornerRadius = style.cornerRadius * size.x
         shadow = style.shadow.isNaN ? 0 : min(max(style.shadow, 0), 1)
+        mipmapped = style.screenSampling == .mipmapped
     }
 
     /// The frame at `offset` ns into clip `k` of the sequence, an imported clip (`TimeMap.contentOffset(atOutput:)`), over
@@ -85,7 +94,7 @@ struct MediaClipScene: Sendable {
         var frame = background
         frame.media = MediaClipLayer(
             asset: media.asset, fileTime: Self.fileTime(of: media, atOffset: offset), room: room, cornerRadius: cornerRadius,
-            shadow: shadow)
+            shadow: shadow, mipmapped: mipmapped)
         return frame
     }
 

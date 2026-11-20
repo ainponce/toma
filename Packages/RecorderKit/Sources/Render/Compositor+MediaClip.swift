@@ -33,18 +33,20 @@ struct MediaClipPipelines {
 }
 
 /// What a frame's imported clip is drawn with: the frame of its file the renderer decoded for it
-/// (`FrameRenderer.mediaTextures(for:decoded:commandBuffer:)`), and how a player turns it upright. `nil` draws none. It
-/// must stay alive until the command buffer it is drawn in completes.
+/// (`FrameRenderer.mediaTextures(for:decoded:commandBuffer:)`), or a copy of it with its mipmaps (`mipmapped`, sampled
+/// trilinear), and how a player turns it upright. `nil` draws none. It must stay alive until the command buffer it is
+/// drawn in completes.
 struct MediaClipTextures {
     var frame: any MTLTexture
     var orientation: MediaOrientation = .upright
+    var mipmapped = false
 }
 
 extension Compositor {
     /// Draws the imported clip `layer` with `textures`, where the screens are (step 2 of phase 3 design §12, after them and
     /// before the cursor, `drawStage`), in an output of `outputSize`, into `pass`, counting it in `counts.mediaClips`: its
     /// frame fitted whole into the layer's room with its upright proportion (`MediaClipLayer.rect(fitting:)`, of the
-    /// texture's size), bilinear and opaque over a rounded rect of the layer's corners (at most half its shorter side), and
+    /// texture's size), bilinear (trilinear from its mipmaps, `MediaClipTextures.mipmapped`) and opaque over a rounded rect of the layer's corners (at most half its shorter side), and
     /// before it, under it, the screen's shadow of the layer's weight `s` (`FrameEvaluator`'s: at opacity `0.55·s`, of
     /// σ `(0.004 + 0.016·s)·W`, `0.010·s·W` down); the two at the layer's opacity (0 to 1), as the camera with its shadow
     /// (at 1, the clip opaque). A frame of the sequence's clip has no zoom and no card (plan 3a decision
@@ -102,7 +104,7 @@ extension Compositor {
         encoder.setFragmentBytes(&quad, length: MemoryLayout<QuadUniforms>.stride, index: 0)
         encoder.setFragmentBytes(&uniforms, length: MemoryLayout<MediaClipUniforms>.stride, index: 1)
         encoder.setFragmentTexture(frame, index: 0)
-        encoder.setFragmentSamplerState(screenSampler, index: 0)
+        encoder.setFragmentSamplerState(textures.mipmapped ? trilinearSampler : screenSampler, index: 0)
         encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
         counts.mediaClips += 1
     }
