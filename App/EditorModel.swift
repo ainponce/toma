@@ -326,10 +326,10 @@ final class EditorModel {
     /// jobs are enqueued here; closing the editor cancels them.
     let jobs = ProjectJobs()
     /// What an export does first, in order, before its exporter starts: each feature adds its own (for example, waiting
-    /// for its analysis jobs), given the export on its way (`ExportPreparation`: the document exported, the analysis the
+    /// for its analysis jobs), given the export on its way (`PendingExport`: the document exported, the analysis the
     /// export reads, which it sets its part of, its progress and what the export says once done). One that answers
     /// `false` cancels the export, saying nothing of its own.
-    var exportPreparations: [@MainActor (EditorModel, ExportPreparation) async -> Bool] = []
+    var exportPreparations: [@MainActor (EditorModel, PendingExport) async -> Bool] = []
     /// The camera's analysis (plan 2b decision 16): its masks and faces asked for, followed and handed to the preview, and
     /// waited for by the export.
     @ObservationIgnored private(set) lazy var image = EditorImage(model: self)
@@ -1433,7 +1433,7 @@ final class EditorModel {
             do {
                 // What each feature needs before the export (its analysis done), each with an equal part of the ring's
                 // first 20 % once one of them waits; one that says no stops it quietly.
-                let preparation = ExportPreparation(document: document, project: project, hasSound: job.hasSound, analysis: analysis)
+                let preparation = PendingExport(document: document, project: project, hasSound: job.hasSound, analysis: analysis)
                 let preparations = exportPreparations
                 for (index, prepare) in preparations.enumerated() {
                     try Task.checkCancellation()
@@ -1742,7 +1742,7 @@ final class EditorModel {
 /// the export reads of the analysis caches (each preparation sets its part of it), how far the preparation running is,
 /// and what the export says once it is done.
 @MainActor
-final class ExportPreparation {
+final class PendingExport {
     /// The document exported: the copy the export sheet took.
     let document: EditDocument
     /// The project, read from where its package is now.

@@ -152,16 +152,17 @@ final class EditorAudio {
         prepare(document)
     }
 
-    /// What an export does first (`EditorModel.exportPreparations`): waits for the files and the voice the exported
-    /// document's music needs (`MusicAnalysis.prepareExport`), reporting how far it is, and hands them to the export with
-    /// what makes again a file macOS removes before the exporter opens it (`remaking(for:)`, `MP4Exporter.remakeMusic`);
-    /// the preview reads the caches again. Nothing for a GIF, which has no sound, nor a document without music. `false`,
-    /// which stops the export, when it was cancelled meanwhile (saying nothing) or a file could not be made ("Couldn't
-    /// prepare the music: …").
-    func prepareExport(_ model: EditorModel, _ export: ExportPreparation) async -> Bool {
+    /// What an export does first (`EditorModel.exportPreparations`): the music's stage of the export's preparation
+    /// (`ExportPreparation.music`, which the API's export runs too): waits for the files and the voice the exported
+    /// document's music needs, reporting how far it is, and hands them to the export with what makes again a file macOS
+    /// removes before the exporter opens it (`MP4Exporter.remakeMusic`); the preview reads the caches again. Nothing for a
+    /// GIF, which has no sound, nor a document without music. `false`, which stops the export, when it was cancelled
+    /// meanwhile (saying nothing) or a file could not be made ("Couldn't prepare the music: …").
+    func prepareExport(_ model: EditorModel, _ export: PendingExport) async -> Bool {
         guard !closed, let caches else { return true }
         let document = export.document
-        guard export.hasSound, !document.music.items.isEmpty else {
+        let needs = ExportNeeds(sound: export.hasSound)
+        guard needs.sound, !document.music.items.isEmpty else {
             export.analysis.musicFiles = [:]
             export.analysis.voiceActivity = [:]
             return true
@@ -170,14 +171,16 @@ final class EditorAudio {
         let analysis = MusicAnalysis(project: export.project, caches: caches, library: Self.library)
         let report = RisingReport(export)
         do {
-            let inputs = try await analysis.prepareExport(document, onto: export.analysis) { fraction in
+            let (inputs, remake) = try await ExportPreparation.music(
+                export.analysis, document: document, needs: needs, music: analysis
+            ) { fraction in
                 Task { @MainActor in report.send(fraction) }
             }
             report.finish()
             guard !Task.isCancelled, !closed else { return false }
             export.analysis = inputs
             // What macOS removes from the caches before the exporter opens it is made again then, once.
-            export.remakeMusic = analysis.remaking(for: document)
+            export.remakeMusic = remake
             read()
             return true
         } catch {
@@ -499,16 +502,19 @@ final class EditorAudio {
     }
 }
 
-/// The progress of the music's preparation to the export's ring, only rising, and nothing once it is done (a report
-/// that arrives late is not the export's any more).
+/// The progress of a stage of the export's preparation (the music's, the camera's) to the export's ring, only rising,
+/// and nothing once it is done (a report that arrives late is not the export's any more).
 @MainActor
-private final class RisingReport {
-    private let export: ExportPreparation
-    private var last = 0.0
+final class RisingReport {
+    private let export: PendingExport
+    private var last: Double
     private var done = false
 
-    init(_ export: ExportPreparation) {
+    /// Reports only above `last`: from 0, the music's first report of nothing is not one (it says the preparation
+    /// waited only once it rises).
+    init(_ export: PendingExport, from last: Double = 0) {
         self.export = export
+        self.last = last
     }
 
     func send(_ fraction: Double) {
