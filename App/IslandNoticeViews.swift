@@ -262,13 +262,16 @@ struct IslandSavingView: View {
 
 /// A take saved (490 × 140): "Take saved", how long it is, its markers and its tracks, and why it stopped if
 /// it stopped by itself or closed with an error. When its editor did not open ("Stay Where I Am"): Open in
-/// the Editor · Record Another · Close.
+/// the Editor · Record Another · Close. A save of the Replay (`SavedTake.replaySeconds`, fases 4 y 5 design §10.3):
+/// «Saved: Last 30 s», its project's name and its tracks, and Open · Close.
 struct IslandSavedView: View {
     let take: SavedTake
     let recording: RecordingController
     /// Under the notch, the black band at the top.
     let topInset: Double
     let send: (IslandEvent) -> Void
+    /// Opens a project in the editor: the Replay's.
+    let openProject: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -277,14 +280,24 @@ struct IslandSavedView: View {
                     .symbolRenderingMode(.hierarchical)
                     .foregroundStyle(NoticePresentation.confirmation.tint)
                     .accessibilityHidden(true)
-                Text("Take saved")
-                    .font(.system(size: 14, weight: .semibold))
+                if let seconds = take.replaySeconds {
+                    Text("Saved: Last \(ReplayText.length(seconds))", comment: "The island once the Replay saved its last seconds: «30 s», «1 min»")
+                        .font(.system(size: 14, weight: .semibold))
+                } else {
+                    Text("Take saved")
+                        .font(.system(size: 14, weight: .semibold))
+                }
             }
-            details
-            if let stopped = recording.notices.last(where: { $0.presentation == .stopped }) {
-                IslandNoticeLine(notice: stopped, closeError: recording.lastCloseError, size: 11.5, lineLimit: 1)
+            if take.replaySeconds != nil {
+                replayDetails
+                replayActions
+            } else {
+                details
+                if let stopped = recording.notices.last(where: { $0.presentation == .stopped }) {
+                    IslandNoticeLine(notice: stopped, closeError: recording.lastCloseError, size: 11.5, lineLimit: 1)
+                }
+                if !take.openedEditor { actions }
             }
-            if !take.openedEditor { actions }
             Spacer(minLength: 0)
         }
         .padding(.top, topInset + 10)
@@ -309,6 +322,36 @@ struct IslandSavedView: View {
         .font(.system(size: 11.5))
         .opacity(0.65)
         .lineLimit(1)
+    }
+
+    /// The Replay's project, by its name in the library, and its tracks.
+    private var replayDetails: some View {
+        HStack(spacing: 6) {
+            Text(verbatim: take.projectURL.deletingPathExtension().lastPathComponent)
+                .truncationMode(.middle)
+            if let tracks = take.trackNames {
+                Dot()
+                Text(verbatim: tracks)
+                    .layoutPriority(1)
+            }
+        }
+        .font(.system(size: 11.5))
+        .opacity(0.65)
+        .lineLimit(1)
+    }
+
+    private var replayActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                openProject(take.projectURL)
+                send(.dismiss)
+            } label: {
+                Text("Open", comment: "The island once the Replay saved: opens its project in the editor")
+            }
+            Spacer(minLength: 0)
+            Button { send(.dismiss) } label: { Text("Close") }
+        }
+        .buttonStyle(GlassButtonStyle(compact: true))
     }
 
     private var actions: some View {
@@ -342,15 +385,19 @@ private struct Dot: View {
 
 extension SavedTake {
     /// The kinds of its tracks, each once, as a list ("Display and Microphone"); `nil` when it has none.
-    var trackNames: String? {
-        var kinds: [TrackKind] = []
-        for kind in trackKinds where !kinds.contains(kind) { kinds.append(kind) }
-        guard !kinds.isEmpty else { return nil }
-        return ListFormatter.localizedString(byJoining: kinds.map(\.savedTakeName))
-    }
+    var trackNames: String? { TrackKind.listed(trackKinds) }
 }
 
 extension TrackKind {
+    /// `kinds`, each once, as a list ("Display and Microphone"), in their order; `nil` when there are none. Also Settings ▸
+    /// Replay's sources.
+    static func listed(_ kinds: [TrackKind]) -> String? {
+        var unique: [TrackKind] = []
+        for kind in kinds where !unique.contains(kind) { unique.append(kind) }
+        guard !unique.isEmpty else { return nil }
+        return ListFormatter.localizedString(byJoining: unique.map(\.savedTakeName))
+    }
+
     /// How the saved take names a track of this kind: the open panel's names.
     fileprivate var savedTakeName: String {
         switch self {

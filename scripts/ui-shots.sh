@@ -8,11 +8,13 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=$1; surface=$2; shift 2
-path=""; wait=4
+path=""; wait=4; appearance=()
 if [[ $# -gt 0 && $1 != --* ]]; then path=$1; shift; fi
 while [[ $# -gt 0 ]]; do
   case $1 in
     --wait) wait=$2; shift 2 ;;
+    # The app's Appearance setting for this run only (the argument domain): nothing is saved.
+    --appearance) appearance=(-appearance "$2"); shift 2 ;;
     *) echo "unknown option $1" >&2; exit 2 ;;
   esac
 done
@@ -21,7 +23,7 @@ app=build/Build/Products/Debug/Toma.app/Contents/MacOS/Toma
 if [[ $surface == library ]]; then
   "$app" -TomaLibraryBench "$path" -TomaLibraryBenchKeepOpen >/dev/null 2>&1 &
 else
-  "$app" -TomaShowcase "$surface" ${path:+"$path"} >/dev/null 2>&1 &
+  "$app" -TomaShowcase "$surface" ${path:+"$path"} ${appearance[@]+"${appearance[@]}"} >/dev/null 2>&1 &
 fi
 pid=$!
 sleep "$wait"

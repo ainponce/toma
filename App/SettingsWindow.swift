@@ -8,7 +8,7 @@ import os
 
 /// The app's settings: the countdown before a take, what a stop does, transcribing a project as it opens, hiding the
 /// desktop's icons, noting when keys are typed, recording which keys (with its Input Monitoring permission), the shortcut
-/// that turns Do Not Disturb on and the global shortcuts. A Mac settings window: its panes' icons in
+/// that turns Do Not Disturb on, the global shortcuts, sharing and the Replay. A Mac settings window: its panes' icons in
 /// the toolbar, as tall as the pane shown. Titled like the permissions one, so while it is open (and no take records) the
 /// app is in the Dock.
 @MainActor
@@ -20,12 +20,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
         hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting,
-        probe: any PermissionProbe, onClose: @escaping () -> Void
+        probe: any PermissionProbe, replay: ReplayController, onClose: @escaping () -> Void
     ) {
         self.onClose = onClose
         model = SettingsModel(
             store: store, hotKeys: hotKeys, countdown: countdown, afterStop: afterStop, hideDesktopIcons: hideDesktopIcons,
-            focusShortcut: focusShortcut, appearance: appearance, probe: probe)
+            focusShortcut: focusShortcut, appearance: appearance, probe: probe, replay: replay)
         tabs = SettingsTabsController(model: model)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: SettingsPaneView.width, height: 300), styleMask: [.titled, .closable],
@@ -70,6 +70,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         // `share`, `share-new`, `share-problems` or `share-tested`: the Share pane, made up (`SettingsShareModel.showcase`).
         if pane.hasPrefix("share") { tabs.selectedTabViewItemIndex = SettingsPane.share.index }
+        // `replay`: the Replay pane as it is; `replay-on`, recording the display, the camera and the microphone, and
+        // `replay-problem`, off with the disk full: made up (nothing is saved).
+        if pane == "replay-on" || pane == "replay-problem" {
+            let on = pane == "replay-on"
+            model.showcaseReplay = ReplayShowcase(
+                look: ReplayLook(
+                    isEnabled: true, seconds: on ? 30 : 120, phase: on ? .on(since: .now) : .off, problem: on ? nil : .diskFull),
+                kinds: [.display, .camera, .microphone])
+            tabs.selectedTabViewItemIndex = SettingsPane.replay.index
+        }
         if let pane = SettingsPane(rawValue: pane) { tabs.selectedTabViewItemIndex = pane.index }
     }
     #endif
@@ -347,6 +357,10 @@ final class SettingsModel {
     @ObservationIgnored let appearance: AppearanceSetting
     /// "Follow Keyboard Focus", with Accessibility.
     @ObservationIgnored let keyboardFocus: KeyboardFocusSetting
+    /// The Replay, which its pane turns on and off and describes.
+    @ObservationIgnored let replay: ReplayController
+    /// The Replay as a showcase makes it up (`-TomaShowcase settings replay-on`), instead of `replay`'s.
+    var showcaseReplay: ReplayShowcase?
     @ObservationIgnored private let store: SettingsStore
     @ObservationIgnored private let transcription: TranscriptionPreferencesStore
     @ObservationIgnored private var probe: any PermissionProbe
@@ -355,9 +369,10 @@ final class SettingsModel {
     init(
         store: SettingsStore, hotKeys: HotKeyCenter, countdown: CountdownSetting, afterStop: AfterStopSetting,
         hideDesktopIcons: HideDesktopIconsSetting, focusShortcut: FocusShortcutSetting, appearance: AppearanceSetting,
-        probe: any PermissionProbe
+        probe: any PermissionProbe, replay: ReplayController
     ) {
         self.store = store
+        self.replay = replay
         self.appearance = appearance
         self.hotKeys = hotKeys
         self.countdown = countdown
@@ -524,7 +539,7 @@ private struct SettingsPaneView: View {
             case .recording: recording
             case .shortcuts: shortcuts
             case .share: SettingsSharePane()
-            case .replay: SettingsReplayPane()
+            case .replay: SettingsReplayPane(model: model, replay: model.replay)
             }
         }
         .formStyle(.grouped)
@@ -644,7 +659,7 @@ private struct InputMonitoringRow: View {
 }
 
 /// The text under a section, lined up with the rows' text above it as the system's settings set theirs.
-private struct SettingsFooter: View {
+struct SettingsFooter: View {
     let text: Text
 
     init(_ text: Text) {
@@ -809,8 +824,8 @@ private struct FocusShortcutPicker: View {
 }
 
 /// One action: its name, its shortcut (click it, then type the new one), and why the last one typed was
-/// not taken, or that its shortcut does nothing now because another app or macOS uses it.
-private struct ShortcutRow: View {
+/// not taken, or that its shortcut does nothing now because another app or macOS uses it. Also in Settings ▸ Replay.
+struct ShortcutRow: View {
     let model: SettingsModel
     let action: HotKeyAction
 

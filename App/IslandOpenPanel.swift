@@ -249,8 +249,9 @@ final class OpenPanelModel {
 }
 
 /// The open island (700 × 400, notch design §5.2): the mode, what to record (displays with the desktops, a
-/// window, or an area), the camera, audio and the teleprompter's switch, the settings, the encoder's load and
-/// Record, and above Record why a jump to another desktop posted nothing and why the last take could not start.
+/// window, or an area), the camera, audio and the teleprompter's switch, the settings, the Replay (fases 4 y 5 design
+/// §10.4), the encoder's load and Record, and above Record why a jump to another desktop posted nothing and why the last
+/// take could not start.
 struct IslandOpenPanel: View {
     @Bindable var panel: OpenPanelModel
     let desktops: DesktopsModel
@@ -259,6 +260,8 @@ struct IslandOpenPanel: View {
     /// Why the last take could not start (`userFacingDescription(of:)`), while the island says so.
     let startFailure: String?
     let send: (IslandEvent) -> Void
+    /// The island, for its Replay.
+    let island: IslandModel
 
     /// Room for the columns: 700 wide, less the margins and the gaps, in the prototype's proportions.
     private static let columnWidths: (Double, Double, Double) = (221, 211.5, 211.5)
@@ -290,7 +293,12 @@ struct IslandOpenPanel: View {
         .font(.system(size: 13))
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: panel.showsSettings)
         .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: desktops.problem)
+        .animation(.island(Motion.selector, reduceMotion: reduceMotion), value: island.replaying)
     }
+
+    /// The Replay's switch and Save, unless the island records into the editor's project (a re-record), which has nothing
+    /// to do with it.
+    private var showsReplay: Bool { panel.rerecord == nil }
 
     /// The settings card, just above the Settings button; a click on the columns around it closes it, and
     /// so does Esc (`IslandPanel`).
@@ -340,6 +348,7 @@ struct IslandOpenPanel: View {
                         }
                     }))
             Spacer()
+            if showsReplay { IslandReplayRow(model: island) }
             Button { send(.dismiss) } label: {
                 Image(systemName: "xmark").font(.system(size: 12, weight: .semibold))
                     .frame(width: 32, height: 32)
@@ -595,6 +604,10 @@ struct IslandOpenPanel: View {
                 }
                 .font(.system(size: 12.5, weight: .semibold))
                 .layoutPriority(-1)
+            }
+            if showsReplay, island.replaying {
+                IslandReplaySave(model: island)
+                    .transition(reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.94, anchor: .trailing)))
             }
             LoadIndicator(verdict: panel.load) { panel.showsSettings = true }
             let problem = panel.recordProblem

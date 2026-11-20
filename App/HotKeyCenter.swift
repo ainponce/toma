@@ -7,8 +7,8 @@ import SwiftUI
 import os
 
 /// The app's global shortcuts, registered with Carbon's `RegisterEventHotKey` (no Accessibility
-/// permission, no global event monitor): at rest only the island's, during a take all of them
-/// (`HotKeyBindings.activeActions`). Each is registered exclusively, so a combination another app holds
+/// permission, no global event monitor): at rest only the island's (and Save Replay's while the Replay records), during a
+/// take all of them but Save Replay (`HotKeyBindings.activeActions`). Each is registered exclusively, so a combination another app holds
 /// that way is refused (`eventHotKeyExistsErr`); macOS's own shortcuts are compared with the active
 /// ones of `CopySymbolicHotKeys` first, because the ordinary registration lets several apps have the
 /// same combination without an error. A shortcut that cannot be had is listed in `busy`.
@@ -24,6 +24,8 @@ final class HotKeyCenter {
     /// The registrations and the event handler; they go with the center.
     @ObservationIgnored private let carbon = CarbonHotKeys()
     @ObservationIgnored private var isRecording = false
+    /// The Replay records: Save Replay is registered at rest.
+    @ObservationIgnored private var replayOn = false
     /// While a shortcut is being typed in the settings, none is registered, so it reaches the settings.
     @ObservationIgnored private var isSuspended = false
 
@@ -53,6 +55,13 @@ final class HotKeyCenter {
         register()
     }
 
+    /// The Replay started or stopped recording.
+    func update(replayOn: Bool) {
+        guard replayOn != self.replayOn else { return }
+        self.replayOn = replayOn
+        register()
+    }
+
     /// Takes every shortcut away while the settings record one, and gives them back after.
     func suspend(_ suspended: Bool) {
         guard suspended != isSuspended else { return }
@@ -73,7 +82,7 @@ final class HotKeyCenter {
         carbon.unregisterAll()
         var busy: Set<HotKeyAction> = []
         if !isSuspended {
-            for action in HotKeyBindings.activeActions(isRecording: isRecording) {
+            for action in HotKeyBindings.activeActions(isRecording: isRecording, replayOn: replayOn) {
                 guard let combo = bindings.combos[action] else { continue }
                 guard !Self.isSystemShortcut(combo) else {
                     busy.insert(action)
