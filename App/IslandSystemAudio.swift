@@ -82,7 +82,8 @@ extension OpenPanelModel {
 
 /// System audio, without Toma or notifications: No · All · By App. By App, the chosen apps' icons and "Choose
 /// Apps…", a menu of the open apps (the ones playing audio first), each with its icon and a check once chosen, under
-/// "One Track per App": each is recorded in a track of its own, up to 8 (then the others are off, with "Up to 8 apps").
+/// "One Track per App": each is recorded in a track of its own, up to `SystemAudioTracks.maximumTracks` (then the others
+/// are off, with "Up to 8 apps").
 struct SystemAudioPicker: View {
     @Bindable var panel: OpenPanelModel
     @Environment(\.islandReduceMotion) private var reduceMotion
@@ -156,7 +157,7 @@ struct SystemAudioPicker: View {
         return Menu {
             Section("One Track per App") {
                 if panel.isFullOfAudioApplications {
-                    Text("Up to 8 apps")
+                    Text("Up to \(SystemAudioTracks.maximumTracks) apps")
                 }
                 ForEach(playing) { app in item(app, isOn: chosen.contains(app.id)) }
                 if !playing.isEmpty, !others.isEmpty { Divider() }

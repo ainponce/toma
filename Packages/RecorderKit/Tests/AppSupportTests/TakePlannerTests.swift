@@ -226,10 +226,11 @@ import Testing
             .display(id: 1, framesPerSecond: 60, scale: .native, area: nil, includedWindowIDs: []),
             .microphone(.systemDefault),
             .systemAudio(SystemAudioTrackPlan(
-                trackID: "system-audio-com-apple-Safari", scope: .applications(["com.apple.Safari"]), appBundleID: "com.apple.Safari")),
+                trackID: "system-audio-com-apple-Safari", scope: .applications(["com.apple.Safari"]), appBundleID: "com.apple.Safari",
+                otherApplications: ["com.spotify.client"])),
             .systemAudio(SystemAudioTrackPlan(
                 trackID: "system-audio-com-spotify-client", scope: .applications(["com.spotify.client"]),
-                appBundleID: "com.spotify.client")),
+                appBundleID: "com.spotify.client", otherApplications: ["com.apple.Safari"])),
             .input(windowTrack: nil, displayIDs: [1]),
         ])
         #expect(plan.sources.map(\.sourceInfo).suffix(2) == [

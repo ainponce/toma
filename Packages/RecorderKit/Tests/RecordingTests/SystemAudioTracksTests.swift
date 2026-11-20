@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+import CoreAudio
+import Darwin
 import Foundation
 import ProjectFormat
 import SyntheticCapture
@@ -15,10 +17,11 @@ import Testing
     @Test func everyAppGetsItsTrack() {
         #expect(SystemAudioTracks.plan(.applications(["com.apple.Safari", "com.spotify.client"]), ownBundleIdentifier: own) == [
             SystemAudioTrackPlan(
-                trackID: "system-audio-com-apple-Safari", scope: .applications(["com.apple.Safari"]), appBundleID: "com.apple.Safari"),
+                trackID: "system-audio-com-apple-Safari", scope: .applications(["com.apple.Safari"]), appBundleID: "com.apple.Safari",
+                otherApplications: ["com.spotify.client"]),
             SystemAudioTrackPlan(
                 trackID: "system-audio-com-spotify-client", scope: .applications(["com.spotify.client"]),
-                appBundleID: "com.spotify.client"),
+                appBundleID: "com.spotify.client", otherApplications: ["com.apple.Safari"]),
         ])
         // All of the system stays one track, as in phase 2; By App with no app, one track of silence.
         #expect(SystemAudioTracks.plan(.all, ownBundleIdentifier: own)
@@ -37,10 +40,12 @@ import Testing
         #expect(plan.count == 8)
         #expect(plan.prefix(7) == ArraySlice(apps.prefix(7).map { app in
             SystemAudioTrackPlan(
-                trackID: "system-audio-" + app.replacingOccurrences(of: ".", with: "-"), scope: .applications([app]), appBundleID: app)
+                trackID: "system-audio-" + app.replacingOccurrences(of: ".", with: "-"), scope: .applications([app]), appBundleID: app,
+                otherApplications: apps.filter { $0 != app })
         }))
         #expect(plan.last == SystemAudioTrackPlan(
-            trackID: "system-audio", scope: .applications(["com.example.app8", "com.example.app9", "com.example.app10"]), appBundleID: nil))
+            trackID: "system-audio", scope: .applications(["com.example.app8", "com.example.app9", "com.example.app10"]), appBundleID: nil,
+            otherApplications: Array(apps.prefix(7))))
         // Eight are eight tracks of their own.
         let eight = SystemAudioTracks.plan(.applications(Array(apps.prefix(8))), ownBundleIdentifier: own)
         #expect(eight.count == 8 && eight.allSatisfy { $0.appBundleID != nil })
@@ -70,6 +75,92 @@ import Testing
             == [SystemAudioTrackPlan(trackID: "system-audio", scope: .applications([]), appBundleID: nil)])
         // Without a bundle of its own (a command-line tool), nothing of that is left out.
         #expect(SystemAudioTracks.plan(.applications([own]), ownBundleIdentifier: nil).map(\.appBundleID) == [own])
+    }
+
+    // A chosen bundle ID that starts with another chosen one and a dot (Chrome and Chrome Canary, Edge and its betas):
+    // every process is in one track only, its longest chosen app's.
+
+    /// The objects each track's tap takes of `processes`, by track id.
+    private func taken(by plan: [SystemAudioTrackPlan], of processes: [AudioProcessInfo]) -> [String: [AudioObjectID]] {
+        var taken: [String: [AudioObjectID]] = [:]
+        for track in plan {
+            let targets = SystemAudioSelection.targets(
+                scope: track.scope, processes: processes, ownPID: 500, ownObjectID: 10, otherApplications: track.otherApplications)
+            guard case .only(let objects) = targets else { Issue.record("\(track.trackID): \(targets)"); continue }
+            taken[track.trackID] = objects
+        }
+        return taken
+    }
+
+    private func process(_ objectID: AudioObjectID, _ bundle: String) -> AudioProcessInfo {
+        AudioProcessInfo(objectID: objectID, pid: pid_t(objectID) + 1000, bundleIdentifier: bundle, executablePath: nil, isPlayingAudio: true)
+    }
+
+    private var chromes: [AudioProcessInfo] {
+        [
+            AudioProcessInfo(objectID: 10, pid: 500, bundleIdentifier: own, executablePath: nil, isPlayingAudio: false),
+            process(20, "com.google.Chrome"), process(21, "com.google.Chrome.helper"),
+            process(22, "com.google.Chrome.canary"), process(23, "com.google.Chrome.canary.helper"),
+            process(24, "com.apple.Safari"),
+        ]
+    }
+
+    @Test func twoChosenPrefixesShareNoProcess() throws {
+        // Canary's processes are Canary's only, Chrome keeps its helper.
+        let plan = SystemAudioTracks.plan(.applications(["com.google.Chrome", "com.google.Chrome.canary"]), ownBundleIdentifier: own)
+        #expect(taken(by: plan, of: chromes) == [
+            "system-audio-com-google-Chrome": [20, 21], "system-audio-com-google-Chrome-canary": [22, 23],
+        ])
+        // In either order.
+        let reversed = SystemAudioTracks.plan(.applications(["com.google.Chrome.canary", "com.google.Chrome"]), ownBundleIdentifier: own)
+        #expect(taken(by: reversed, of: chromes) == [
+            "system-audio-com-google-Chrome": [20, 21], "system-audio-com-google-Chrome-canary": [22, 23],
+        ])
+        // On macOS 26 the tap names Chrome's helper, never Canary's.
+        let chrome = try #require(plan.first)
+        let targets = SystemAudioSelection.targets(
+            scope: chrome.scope, processes: chromes, ownPID: 500, ownObjectID: 10, otherApplications: chrome.otherApplications)
+        #expect(SystemAudioSelection.tapBundleIDs(
+            scope: chrome.scope, targets: targets, processes: chromes, ownPID: 500, ownBundleIdentifier: own)
+            == ["com.google.Chrome", "com.google.Chrome.helper"])
+        #expect(SystemAudioSelection.owner(of: "com.google.Chrome.canary.helper", among: ["com.google.Chrome", "com.google.Chrome.canary"])
+            == "com.google.Chrome.canary")
+        #expect(SystemAudioSelection.owner(of: "com.google.ChromeCanary", among: ["com.google.Chrome"]) == nil)
+    }
+
+    @Test func aHelperStaysWithItsApp() {
+        // Chrome alone takes its helpers, Canary among them while Canary is not chosen, as in phase 2.
+        let alone = SystemAudioTracks.plan(.applications(["com.google.Chrome", "com.apple.Safari"]), ownBundleIdentifier: own)
+        #expect(taken(by: alone, of: chromes) == ["system-audio-com-google-Chrome": [20, 21, 22, 23], "system-audio-com-apple-Safari": [24]])
+        // Canary chosen with Safari but not Chrome: Chrome and its helper are in no track.
+        let canary = SystemAudioTracks.plan(.applications(["com.google.Chrome.canary", "com.apple.Safari"]), ownBundleIdentifier: own)
+        #expect(taken(by: canary, of: chromes) == ["system-audio-com-google-Chrome-canary": [22, 23], "system-audio-com-apple-Safari": [24]])
+        // One track of several apps (phase 2) takes each process once, whichever app it is of.
+        #expect(SystemAudioSelection.targets(
+            scope: .applications(["com.google.Chrome", "com.google.Chrome.canary"]), processes: chromes, ownPID: 500, ownObjectID: 10)
+            == .only([20, 21, 22, 23]))
+    }
+
+    @Test func theSharedTrackLeavesTheOwnTracksTheirs() {
+        let fillers = (1...6).map { "com.example.app\($0)" }
+        // Chrome has its own track and Canary is in the shared one: Chrome's helper is not shared, Canary is.
+        let chromeOwn = SystemAudioTracks.plan(
+            .applications(fillers + ["com.google.Chrome", "com.example.app7", "com.google.Chrome.canary"]), ownBundleIdentifier: own)
+        #expect(chromeOwn.count == 8 && chromeOwn.last?.trackID == "system-audio")
+        let first = taken(by: chromeOwn, of: chromes)
+        #expect(first["system-audio-com-google-Chrome"] == [20, 21])
+        #expect(first["system-audio"] == [22, 23])
+        // Canary has its own track and Chrome is shared: Canary's processes are not in the shared track.
+        let canaryOwn = SystemAudioTracks.plan(
+            .applications(fillers + ["com.google.Chrome.canary", "com.example.app7", "com.google.Chrome"]), ownBundleIdentifier: own)
+        let second = taken(by: canaryOwn, of: chromes)
+        #expect(second["system-audio-com-google-Chrome-canary"] == [22, 23])
+        #expect(second["system-audio"] == [20, 21])
+        // Every process in one track at most.
+        for tracks in [first, second] {
+            let all = tracks.values.flatMap { $0 }.filter { $0 != 10 }
+            #expect(all.count == Set(all).count)
+        }
     }
 
     @Test func aTrackRecordSaysItsApp() {

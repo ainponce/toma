@@ -10042,6 +10042,17 @@
         }
       }
     },
+    "Up to %lld apps" : {
+      "comment" : "System audio By App: in the menu of apps once the most apps are chosen (8, one track each); no other can be chosen",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hasta %lld apps"
+          }
+        }
+      }
+    },
     "Up to 4× the sound speeds up without changing pitch; faster, the clip has no sound." : {
       "comment" : "The speed menu of the timeline: a note",
       "localizations" : {
@@ -10049,17 +10060,6 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Hasta 4× el sonido se acelera sin cambiar el tono; más rápido, el tramo va sin sonido."
-          }
-        }
-      }
-    },
-    "Up to 8 apps" : {
-      "comment" : "System audio By App: in the menu of apps once 8 are chosen; no other can be chosen",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Hasta 8 apps"
           }
         }
       }

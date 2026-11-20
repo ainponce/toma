@@ -384,7 +384,8 @@ struct Record: AsyncParsableCommand {
             for track in SystemAudioTracks.plan(scope, ownBundleIdentifier: Bundle.main.bundleIdentifier) {
                 sources.append(ProcessTapSource(
                     scope: track.scope, trackID: track.trackID,
-                    appName: track.appBundleID.map(SystemAudioTracks.installedAppName(bundleID:))))
+                    appName: track.appBundleID.map(SystemAudioTracks.installedAppName(bundleID:)),
+                    otherApplications: track.otherApplications))
             }
         }
         try await recordTake(

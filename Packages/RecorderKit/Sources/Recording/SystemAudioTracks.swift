@@ -8,11 +8,15 @@ public struct SystemAudioTrackPlan: Equatable, Sendable {
     public var scope: SystemAudioScope
     /// The app of a track of one app (`TrackRecord.appBundleID`); `nil` in a track of every app or of several.
     public var appBundleID: String?
+    /// The apps chosen in the take that other tracks record: a process of one of them (Chrome Canary's, whose bundle ID
+    /// starts with Chrome's) is left to its own track (`SystemAudioSelection.targets`), so no sound is in two tracks.
+    public var otherApplications: [String]
 
-    public init(trackID: String, scope: SystemAudioScope, appBundleID: String?) {
+    public init(trackID: String, scope: SystemAudioScope, appBundleID: String?, otherApplications: [String] = []) {
         self.trackID = trackID
         self.scope = scope
         self.appBundleID = appBundleID
+        self.otherApplications = otherApplications
     }
 }
 
@@ -28,7 +32,9 @@ public enum SystemAudioTracks {
     /// track of its own, `TrackRecord.systemAudioTrackID` (letters, digits and `-`, with `-2`… when two sanitize
     /// alike), recording only that app (and its helpers): an app that is not open has its track from the start and
     /// records silence until it opens, so no track is ever added mid-take. With more than `maximumTracks` apps, the
-    /// first 7 have their own and the rest share `system-audio`. With none, one `system-audio` track of silence.
+    /// first 7 have their own and the rest share `system-audio`. With none, one `system-audio` track of silence. Each
+    /// track of several tracks has the others' apps in `otherApplications`: every process goes to the one track of the
+    /// longest chosen bundle ID that is its own or its app's (`SystemAudioSelection.owner(of:among:)`).
     public static func plan(_ scope: SystemAudioScope, ownBundleIdentifier: String?) -> [SystemAudioTrackPlan] {
         let shared = "system-audio"
         guard case .applications(let chosen) = scope else {
@@ -45,10 +51,12 @@ public enum SystemAudioTracks {
         var tracks = own.map { bundle in
             let id = TrackRecord.systemAudioTrackID(bundleID: bundle, taken: taken)
             taken.insert(id)
-            return SystemAudioTrackPlan(trackID: id, scope: .applications([bundle]), appBundleID: bundle)
+            return SystemAudioTrackPlan(
+                trackID: id, scope: .applications([bundle]), appBundleID: bundle, otherApplications: apps.filter { $0 != bundle })
         }
         if apps.count > own.count {
-            tracks.append(SystemAudioTrackPlan(trackID: shared, scope: .applications(Array(apps.dropFirst(own.count))), appBundleID: nil))
+            tracks.append(SystemAudioTrackPlan(
+                trackID: shared, scope: .applications(Array(apps.dropFirst(own.count))), appBundleID: nil, otherApplications: own))
         }
         return tracks
     }
