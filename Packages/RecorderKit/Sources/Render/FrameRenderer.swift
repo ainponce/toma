@@ -134,8 +134,14 @@ public final class FrameRenderer: @unchecked Sendable {
     /// What `render(at:into:completion:)` decodes ahead; used on `renderQueue`.
     private let ahead = Mutex(Ahead())
 
+    /// `body` with what `render(at:into:completion:)` decodes ahead held: for the layers' files
+    /// (`FrameRenderer+<Layer>.swift`), which let go of their prefetchers there.
+    func withAhead<T>(_ body: (inout Ahead) throws -> T) rethrows -> T {
+        try ahead.withLock { try body(&$0) }
+    }
+
     /// The frames `render(at:into:completion:)` evaluated and scheduled ahead, and the prefetchers decoding theirs.
-    private struct Ahead {
+    struct Ahead {
         var prefetchers: [TrackKey: FramePrefetcher] = [:]
         /// Evaluated, in order, by their index on the grid: the one expected next first, up to
         /// `FramePrefetcher.borderLookahead` after it.
@@ -165,11 +171,13 @@ public final class FrameRenderer: @unchecked Sendable {
     /// change of screen crossfades: `FrameEvaluator.screenRanges`), one span for each stretch of it. The tracks are those
     /// the document shows (its screens, and the camera unless it is hidden), so the segments that cannot be used at all
     /// are listed before a frame is drawn. After drawing every frame of the timeline in order (an export), it lists every
-    /// such span of the output. A scene of several takes lists those of each take's tracks in that take's clips.
+    /// such span of the output. A scene of several takes lists those of each take's tracks in that take's clips. The
+    /// imported clips of the sequence that cannot be drawn are listed too (`mediaMissingVideo(of:)`): whole when their file
+    /// is not there to be read, as soon as the scene is made.
     public var missingVideo: [MissingVideo] {
         // One scene for all of it: `setScene(_:)` from another thread meanwhile never mixes two revisions.
         let current = scene, timeMap = current.timeMap
-        return current.takeScenesInOrder.flatMap { take, scene -> [MissingVideo] in
+        let takes = current.takeScenesInOrder.flatMap { take, scene -> [MissingVideo] in
             let takeID = scene.takeID, shown = scene.screenRanges
             return scene.videoTrackIDs
                 .compactMap { reader(for: TrackKey(take: take, track: $0)) }
@@ -188,7 +196,8 @@ public final class FrameRenderer: @unchecked Sendable {
                     }
                 }
         }
-        .sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
+        // And the imported clips of the sequence that cannot be drawn.
+        return (takes + mediaMissingVideo(of: current)).sorted { ($0.start, $0.end, $0.track) < ($1.start, $1.end, $1.track) }
     }
 
     /// The parts of output range `range` inside `shown` (ranges in order and apart) of an output `duration` long: an
@@ -325,13 +334,19 @@ public final class FrameRenderer: @unchecked Sendable {
         scene: FrameEvaluator, at outputTime: Double, into target: any MTLTexture, commandBuffer: any MTLCommandBuffer
     ) throws {
         try check(target, size: scene.outputSize)
-        try lock.withLock {
+        let frame = try lock.withLock {
             CVMetalTextureCacheFlush(textureCache, 0)
             let frame = try evaluate(scene, at: outputTime)
             try draw(frame, into: target, commandBuffer: commandBuffer) { key, time in
-                try reader(for: key)?.pixelBuffer(at: time).map(metalTexture(for:))
+                guard let reader = reader(for: key) else { return nil }
+                // An imported clip's within the renderer's limit on them (`MediaClipResources.gate`).
+                let pixelBuffer = Self.isMedia(key) ? mediaResources.gate.run { reader.pixelBuffer(at: time) } : reader.pixelBuffer(at: time)
+                return try pixelBuffer.map(metalTexture(for:))
             }
+            return frame
         }
+        // The imported clips this frame does not show are let go (after the lock: `ahead` is taken before it elsewhere).
+        releaseMedia(keeping: Set(videos(of: frame).map(\.track)))
     }
 
     /// The frame at `outputTime` of `scene`, with the cursor images the renderer can read: what
@@ -502,11 +517,14 @@ public final class FrameRenderer: @unchecked Sendable {
     /// The frame at `outputTime`, evaluated, and the prefetchers that decode the frames it shows, with what each is asked
     /// for. Schedules the frames of the grid ahead of it, from the one expected next: from it, when it is not; and, a
     /// second of output ahead, the first frame of a track that comes back (`DecodeAhead`). Runs on `renderQueue`.
+    ///
+    /// The imported clips' readers that neither it nor the frames looked at ahead show are let go
+    /// (`releaseMedia(keeping:in:)`), once `ahead` is no longer held.
     private func prepare(at outputTime: Double) throws -> PreparedFrame {
         let scene = self.scene, frameRate = scene.frameRate
         let index = gridIndex(of: outputTime, frameRate: frameRate)
         let lastIndex = scene.timeMap.frameCount(frameRate: frameRate) - 1
-        return try ahead.withLock { ahead in
+        let (prepared, released) = try ahead.withLock { ahead -> (PreparedFrame, [TrackFrameReader]) in
             // Another frame than the one expected next: what was read ahead is of no use.
             if index == nil || index != ahead.expected || ahead.frames.first.map({ $0.index != index }) == true {
                 for prefetcher in ahead.prefetchers.values { prefetcher.reset() }
@@ -525,13 +543,17 @@ public final class FrameRenderer: @unchecked Sendable {
                 ahead.plan = plan
                 ahead.frames += evaluated
                 for key in keys { try prefetcher(for: key.track, in: &ahead)?.schedule(key.time) }
+                let released = releaseMedia(keeping: plan.tracksAhead, in: &ahead).1
                 let first = ahead.frames.removeFirst()
-                return PreparedFrame(frame: first.frame, sources: try sources(of: first.frame, in: &ahead))
+                return (PreparedFrame(frame: first.frame, sources: try sources(of: first.frame, in: &ahead)), released)
             }
             let frame = try self.frame(of: scene, at: outputTime)
+            let released = releaseMedia(keeping: Set(videos(of: frame).map(\.track)), in: &ahead).1
             try schedule(frame, in: &ahead)
-            return PreparedFrame(frame: frame, sources: try sources(of: frame, in: &ahead))
+            return (PreparedFrame(frame: frame, sources: try sources(of: frame, in: &ahead)), released)
         }
+        Self.letGo(released)
+        return prepared
     }
 
     /// Tells the prefetchers of the frames `frame` shows that they will be asked for them.
@@ -570,11 +592,17 @@ public final class FrameRenderer: @unchecked Sendable {
     }
 
     /// The prefetcher of `track` (a take's track, or a person's mask or a file of `assets/` by its reader id), made the
-    /// first time; `nil` for a video without a reader (`reader(for:)`).
+    /// first time; `nil` for a video without a reader (`reader(for:)`). An imported clip's decodes within the renderer's
+    /// limit on them (`MediaClipResources.gate`), and is made again when its file gets a new reader (one tried again after
+    /// giving no frame, `MediaClipResources.reader(for:)`).
     private func prefetcher(for track: TrackKey, in ahead: inout Ahead) throws -> FramePrefetcher? {
-        if let prefetcher = ahead.prefetchers[track] { return prefetcher }
+        let media = Self.isMedia(track)
+        if let prefetcher = ahead.prefetchers[track] {
+            guard media, let reader = mediaResources.reader(for: track.track), reader !== prefetcher.reader else { return prefetcher }
+            prefetcher.reset()
+        }
         guard let reader = reader(for: track) else { return nil }
-        let prefetcher = try FramePrefetcher(reader: reader, device: device)
+        let prefetcher = try FramePrefetcher(reader: reader, device: device, gate: media ? mediaResources.gate : nil)
         ahead.prefetchers[track] = prefetcher
         return prefetcher
     }
@@ -625,8 +653,9 @@ public final class FrameRenderer: @unchecked Sendable {
             try draw(frame, into: target.texture, commandBuffer: commandBuffer) { key, time in
                 if let texture = decoded[DecodedKey(key, time: time)] { return texture }
                 // A video without a reader shows nothing, as drawing it frame by frame does; any video with one (a track
-                // of a take, a person's mask, an imported clip or an annotation's clip) was decoded.
-                guard reader(for: key) != nil else { return nil }
+                // of a take, a person's mask, an imported clip or an annotation's clip) was decoded. A clip's reader is
+                // not made here: a file that turned up since the frame was prepared shows nothing in it.
+                guard reader(for: key, makingMedia: false) != nil else { return nil }
                 throw RenderError.frameNotDecoded(track: key.track, sourceTime: time)
             }
             return target
@@ -723,10 +752,16 @@ public final class FrameRenderer: @unchecked Sendable {
     /// take, `CameraLookResources.reader(for:)`'s (a person's mask), or else `mediaReader(for:)`'s (a file of `assets/`),
     /// `nil` for any other. Every scene of the renderer reads with it.
     func reader(for track: TrackKey) -> TrackFrameReader? {
+        reader(for: track, makingMedia: true)
+    }
+
+    /// `reader(for:)`, which makes an imported clip's reader only with `makingMedia` (otherwise the one kept, if any).
+    private func reader(for track: TrackKey, makingMedia: Bool) -> TrackFrameReader? {
         let take = track.take == self.take.id ? nil : track.take
         let owner: TakeRecord? = if let take { takeRecords[take] } else { self.take }
         guard let record = owner?.track(track.track) else {
-            return cameraLook.reader(for: track.track) ?? mediaReader(for: track.track)
+            return cameraLook.reader(for: track.track)
+                ?? (makingMedia ? mediaReader(for: track.track) : mediaResources.existingReader(for: track.track))
         }
         let key = TrackKey(take: take, track: track.track)
         return readers.withLock { readers in

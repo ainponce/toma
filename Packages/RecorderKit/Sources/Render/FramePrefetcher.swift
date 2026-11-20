@@ -41,7 +41,12 @@ final class FramePrefetcher: @unchecked Sendable {
     let trackID: String
     /// `maxBytes`, or less for tests.
     private let byteLimit: Int
-    private let reader: TrackFrameReader
+    /// What it decodes with: internal for the renderer, which makes a clip's prefetcher again with a new reader of its
+    /// file (`FrameRenderer.prefetcher(for:in:)`).
+    let reader: TrackFrameReader
+    /// Taken around each decode (`reader.pixelBuffer(at:)`, a key frame), when given: the renderer's limit on its imported
+    /// clips decoding at once (`MediaClipResources.gate`).
+    private let gate: DecodeGate?
     /// Its own, used only on `queue`.
     private let textureCache: CVMetalTextureCache
     private let queue: DispatchQueue
@@ -117,10 +122,10 @@ final class FramePrefetcher: @unchecked Sendable {
         }
     }
 
-    /// Reads with `reader`, which nothing else should read while this does. `maxBytes`: `FramePrefetcher.maxBytes`, or
-    /// less for tests.
+    /// Reads with `reader`, which nothing else should read while this does, each decode within `gate` when given.
+    /// `maxBytes`: `FramePrefetcher.maxBytes`, or less for tests.
     /// - Throws: `RenderError.metalResourceUnavailable` if Core Video cannot make a texture cache for `device`.
-    init(reader: TrackFrameReader, device: any MTLDevice, maxBytes: Int = FramePrefetcher.maxBytes) throws {
+    init(reader: TrackFrameReader, device: any MTLDevice, maxBytes: Int = FramePrefetcher.maxBytes, gate: DecodeGate? = nil) throws {
         let usage = MTLTextureUsage.shaderRead.rawValue
         let attributes = [kCVMetalTextureUsage as String: NSNumber(value: usage)] as CFDictionary
         var cache: CVMetalTextureCache?
@@ -129,6 +134,7 @@ final class FramePrefetcher: @unchecked Sendable {
             throw RenderError.metalResourceUnavailable("prefetch texture cache (CVReturn \(status))")
         }
         self.reader = reader
+        self.gate = gate
         trackID = reader.trackID
         byteLimit = maxBytes
         textureCache = cache
@@ -250,8 +256,10 @@ final class FramePrefetcher: @unchecked Sendable {
         // The segment's file, known already when it is one shown before: the reader, which may be busy decoding the exact
         // frame ahead (`schedule`), is not waited for.
         let known = keyFrames.withLock { $0.media(at: time) }
-        guard let media = known ?? reader.media(at: time) else { return nil }
-        return keyFrames.withLock { $0.keyFrame(at: time, of: media) }
+        return withGate {
+            guard let media = known ?? reader.media(at: time) else { return nil }
+            return keyFrames.withLock { $0.keyFrame(at: time, of: media) }
+        }
     }
 
     /// How many key frames `keyFrame(atSource:)` decoded, for tests.
@@ -283,6 +291,12 @@ final class FramePrefetcher: @unchecked Sendable {
         }
     }
 
+    /// `body` within `gate`, or as it is without one.
+    private func withGate<T>(_ body: () -> T) -> T {
+        guard let gate else { return body() }
+        return gate.run(body)
+    }
+
     /// Starts decoding on `queue` unless it is decoding already or there is nothing to decode or no room.
     private func decodeIfThereIsRoom() {
         let start = state.withLock { state in
@@ -304,8 +318,9 @@ final class FramePrefetcher: @unchecked Sendable {
                 return (state.entries[index].id, state.entries[index].time, state.lastDecoded)
             }
             guard let next else { return }
-            // Blocks while the reader loads and decodes; nothing else waits on this queue.
-            let pixelBuffer = reader.pixelBuffer(at: next.time)
+            // Blocks while the reader loads and decodes (and, gated, while others of the gate do); nothing else waits on
+            // this queue.
+            let pixelBuffer = withGate { reader.pixelBuffer(at: next.time) }
             let decoded: Result<CachedTexture?, RenderError>
             var bytes = 0
             if let pixelBuffer {
@@ -374,6 +389,12 @@ struct DecodeAhead {
     /// comes within `FramePrefetcher.borderLookahead` seconds.
     init(frameRate: Int) {
         self.init(near: FrameRenderer.lookahead, far: Int((FramePrefetcher.borderLookahead * Double(frameRate)).rounded(.up)))
+    }
+
+    /// The tracks the frames looked at and not drawn yet show (from the one drawn next to `far` after it): those whose
+    /// readers the frames coming need (`FrameRenderer.releaseMedia(keeping:)`).
+    var tracksAhead: Set<TrackKey> {
+        Set(looked.flatMap { $0.videos.map(\.track) })
     }
 
     /// Forgets everything, as after a jump: the prefetchers dropped what they had.
