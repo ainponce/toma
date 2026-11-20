@@ -64,6 +64,11 @@ final class TimelineAccessibility {
         }
         let trim = [Action(.split), Action(.delete), Action(.trimStart), Action(.trimEnd)]
         for clip in content.clips.items {
+            // A frozen frame, a title card or an imported clip (phase 3): "Placa «Intro», 3 s", and Delete.
+            if let info = content.contentClips.info(clip.id) {
+                add(clip.id, .video, clip.output, label: TimelineContentClipItems.accessibilityLabel(info), actions: [Action(.delete)])
+                continue
+            }
             let label = String(
                 format: String(localized: "Part from %1$@ to %2$@, speed %3$@", comment: "VoiceOver: a clip of the timeline, its start, end and speed"),
                 Self.time(clip.output.lowerBound), Self.time(clip.output.upperBound), TimelineFormat.multiplier(clip.info.speed))

@@ -156,6 +156,7 @@ final class TimelineViewController: NSViewController {
         }
         timeline.tracks.forgetThumbnails()
         timeline.tracks.thumbnailCache = ThumbnailCache(project: project, caches: caches)
+        timeline.tracks.contentClips.frames = MediaClipFrames(package: project.package)
         for work in waveformWork { work.cancel() }
         timeline.tracks.waveformLevels = [:]
         let waveforms = WaveformCache(project: project, caches: caches)
