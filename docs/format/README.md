@@ -2262,6 +2262,28 @@ Cómo se dibuja cada anotación de `annotations` (diseño de la fase 3, §5.1 y 
 - **Los pasos** (`kind` `step`) se numeran 1, 2, 3… una sola vez para toda la salida, por dónde la salida muestra primero su rango; los empates, por `layer` y después por el orden de `annotations.items`. Uno cortado entero, vacío o después del fin de la salida no tiene número, no cuenta y no se dibuja.
 - **Sin anotaciones no se mide nada**: los dos grupos están vacíos en todo cuadro, y un documento migrado se dibuja como antes (`make golden-3`).
 
+### Las placas (`titleCard-1`)
+
+Una placa (`sequence[].content` `card`, diseño de la fase 3, §5.2; decisión 10 del plan 3a) ocupa todo el cuadro de salida durante su `duration` en lugar de los pasos 1 a 6 del orden de dibujo, sin teclas ni subtítulos, y las anotaciones de la salida van encima. Lo dibujan `TitleCardScene` (qué hay debajo y cuánto se ve), `TitleCardTextures` (los textos) y `Compositor.drawTitleCard`; el aspecto es `titleCard-1`, congelado: otro aspecto es `titleCard-2`.
+
+- **Los textos.** En una salida de `W × H` píxeles, con la fuente del sistema (SF Pro, pedida para el idioma `en`, como el título de una ventana, así un texto en chino, japonés o coreano se dibuja igual con cualquier idioma del sistema) en los pesos de `kCTFontWeightTrait` (regular 0, semibold 0,3, bold 0,4, heavy 0,56) y el interlineado de CoreText; las líneas se parten por palabras dentro de `0,8 W` y donde el texto tiene un salto (`\n`). Ninguna palabra se parte: un texto con una palabra más ancha que `0,8 W` (una palabra larga en Grande a 9:16) se dibuja más chico, lo justo para que entre. El subtítulo va debajo del título a `0,3` del tamaño del título, en el color del texto (`textColor`) al 70 % de su alfa; un texto vacío no se dibuja, y una placa sin textos no tiene textura.
+
+  | Estilo | Título | Subtítulo | Líneas |
+  |---|---|---|---|
+  | `centered` | `0,085 H`, bold | `0,04 H`, regular | centradas |
+  | `leading` | `0,085 H`, bold | `0,04 H`, regular | desde `0,1 W` |
+  | `large` | `0,14 H`, heavy (0,56) | `0,04 H`, regular | centradas |
+  | `minimal` | `0,05 H`, semibold | `0,03 H`, regular | centradas |
+
+  El bloque (las líneas del título y las del subtítulo) va centrado de arriba abajo, cada línea en una línea de base de píxeles enteros. CoreText lo dibuja en un `CGContext` sRGB fijo, sin suavizado de fuentes ni posición subpíxel y con antialias, en una textura de los píxeles enteros del bloque con un margen de 0,3 del tamaño más grande y 2 píxeles (cortada al cuadro), que se dibuja un texel por píxel: la vista previa y el export dan los mismos bytes. Se guarda por textos, estilo, color y tamaño de salida (las dos últimas).
+- **El fundido.** Con `D` lo que dura la placa en la salida (`ClipContent.outputDuration`) y `F = min(0,3 s, D / 2)`, la placa entra en sus primeros `F` contra el cuadro que la salida muestra en `O_k − 1` (el último instante del clip de antes), quieto todo el fundido, con `p = desplazamiento / F`; y sale en sus últimos `F` contra el cuadro de `O_k + D` (el primero del clip de después), con `p = (D − desplazamiento) / F`; en el resto, `p = 1`. Sin un clip de ese lado (la placa empieza o termina la salida), o con otra placa, ese lado corta (`p = 1`): dos placas no se piden cuadros entre sí y una placa nunca pide uno suyo.
+- **Los fondos** (`background`), con `p`:
+  - `stage`: el cuadro del vecino con el grupo de la pantalla (las pantallas, el marco de ventana o de dispositivo, la sombra, el cursor y los efectos de clic, como lo funden los layouts de la cámara, `RenderFrame.screenOpacity`) y la cámara a `1 − p`; en `p = 1`, el fondo del proyecto solo.
+  - `color`: el cuadro del vecino, quieto, debajo del color sobre todo el cuadro a `p` por su alfa; con un color opaco en `p = 1`, o sin vecino, el fondo solo debajo.
+  - `blurredFrame`: el cuadro del vecino quieto sin cursor, cámara ni efectos de clic, con su pantalla debajo nítida (con su privacidad) y encima la misma con un desenfoque de privacidad en todo su recorte, a fuerza 1, a `p` de su opacidad, y un velo negro al 35 % × `p`. En la primera mitad de la placa es el cuadro del clip de antes y en la segunda el del clip de después (el de un lado si el otro no tiene). Sin pantalla en ese cuadro (la cámara a pantalla completa, sin vecino), como `stage`.
+
+  En todos, ni teclas ni subtítulos, y los textos a `p` encima.
+
 ## Los datos crudos nunca se borran
 
 Los segmentos y `events.jsonl` de una toma son los datos crudos, y ningún componente los borra ni los reescribe sin que el usuario lo pida: ni la grabación, ni la recuperación, ni una actualización de la app. Un archivo que no se puede leer se marca como `unreadable` en el manifiesto y queda en el disco tal cual estaba. La única excepción es la línea cortada al final de `events.jsonl` (ver arriba): son los bytes de una escritura que no terminó, no un evento, y se truncan antes de seguir escribiendo. Lo único que se puede borrar sin perder nada es `cache/` y la carpeta de cachés del proyecto fuera del paquete, porque todo lo que contienen se vuelve a calcular, y el `.reserve` de una toma, que es espacio vacío.
