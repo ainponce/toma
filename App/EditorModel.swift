@@ -339,6 +339,8 @@ final class EditorModel {
     /// The music (plan 3c, Task U12): its themes and imported sounds made into the caches and handed to the preview's mix,
     /// waited for by the export, and the library's themes heard before one is chosen.
     @ObservationIgnored private(set) lazy var audio = EditorAudio(model: self)
+    /// The takes (plan 3d, Task T12): the Takes menu's list and "Re-record from Here" (`EditorModel+Rerecord`).
+    @ObservationIgnored private(set) lazy var takesState = EditorTakes(model: self)
     /// The last `jobs.setRecording(_:)` told, so the next one goes after it and they arrive in order.
     @ObservationIgnored private var recordingTold: Task<Void, Never>?
     /// Which remaking of the mix is the latest, so an older one that finishes late is dropped.
@@ -908,6 +910,7 @@ final class EditorModel {
     /// A take starts or stops recording: the analysis queue pauses while it does (`ProjectJobs.setRecording(_:)`; an
     /// analysis that cannot be suspended is repeated from its last segment after the take).
     func setRecording(_ recording: Bool) {
+        takesState.recordingChanged(recording)
         let previous = recordingTold
         recordingTold = Task { [jobs] in
             await previous?.value

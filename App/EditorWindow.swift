@@ -178,6 +178,27 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate {
         await model.cancelExportAndWait()
     }
 
+    // MARK: - Re-recording
+
+    /// The window is hidden for "Re-record from Here" (3d plan decision 10): from when the app takes the request until it
+    /// ends (`rerecordEnded`), whatever "When Recording Stops" says.
+    private(set) var isHiddenForRerecord = false
+
+    /// "Re-record from Here" begins: playback stops and the window leaves the screen (`orderOut`), its session open and
+    /// its state as it was, while the island and the recorder record the take into its package.
+    func hideForRerecord() {
+        if model.isPlaying { model.pause() }
+        isHiddenForRerecord = true
+        window?.orderOut(nil)
+    }
+
+    /// The re-record ended as `outcome`: the model applies a take recorded (`EditorModel.rerecordEnded`); the app shows the
+    /// window again.
+    func rerecordEnded(_ outcome: RerecordOutcome) {
+        isHiddenForRerecord = false
+        model.rerecordEnded(outcome)
+    }
+
     // MARK: - The panel
 
     /// View ▸ Show Panel / Hide Panel (⌥⌘I) and the bar's `sidebar.right`: the inspector of the horizontal split, once

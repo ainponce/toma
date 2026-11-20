@@ -634,6 +634,17 @@
         }
       }
     },
+    "Add to End" : {
+      "comment" : "Takes menu: this take goes after the end of the video",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Agregar al final"
+          }
+        }
+      }
+    },
     "Add to Favorites" : {
       "comment" : "The library: a project's menu, and the star",
       "localizations" : {
@@ -760,6 +771,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Cantidad"
+          }
+        }
+      }
+    },
+    "An export is in progress." : {
+      "comment" : "Why Re-record from Here is disabled",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Hay una exportación en curso."
           }
         }
       }
@@ -3582,6 +3604,17 @@
         }
       }
     },
+    "Empty" : {
+      "comment" : "Takes menu: a take that recorded nothing",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Vacía"
+          }
+        }
+      }
+    },
     "Empty Trash…" : {
       "comment" : "The library: the trash's button",
       "localizations" : {
@@ -4561,6 +4594,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Importar…"
+          }
+        }
+      }
+    },
+    "In Use" : {
+      "comment" : "Takes menu: a take the video shows",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "En uso"
           }
         }
       }
@@ -7062,6 +7106,17 @@
         }
       }
     },
+    "Re-record into “%@”" : {
+      "comment" : "The open island's title while it records a take into the editor's project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Regrabar en «%@»"
+          }
+        }
+      }
+    },
     "Read-Only" : {
       "comment" : "The library: a project on a disk that cannot be written",
       "localizations" : {
@@ -7617,6 +7672,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "¿Reiniciar la toma? La actual va a la papelera."
+          }
+        }
+      }
+    },
+    "Restart the take? This one stays in the project, unused." : {
+      "comment" : "The open recording island, restarting a take recorded into the editor's project",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "¿Reiniciar la toma? Esta queda en el proyecto, sin usar."
           }
         }
       }
@@ -8905,6 +8971,17 @@
         }
       }
     },
+    "Take %lld" : {
+      "comment" : "Takes menu: a take of the project, by its place",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Toma %lld"
+          }
+        }
+      }
+    },
     "Take saved" : {
       "localizations" : {
         "es" : {
@@ -9447,6 +9524,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "El proyecto es un enlace."
+          }
+        }
+      }
+    },
+    "The project is open for viewing only." : {
+      "comment" : "Why Re-record from Here is disabled",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "El proyecto está abierto solo para ver."
           }
         }
       }
@@ -10445,6 +10533,17 @@
         }
       }
     },
+    "To re-record, make a change to the project first." : {
+      "comment" : "Why Re-record from Here is disabled: a project of an earlier version takes a new take after its first edit",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Para regrabar, hacer antes un cambio en el proyecto."
+          }
+        }
+      }
+    },
     "To record system audio, first turn it on in the recording control to give permission. Recording without it." : {
       "localizations" : {
         "es" : {
@@ -10955,6 +11054,17 @@
         }
       }
     },
+    "Unused" : {
+      "comment" : "Takes menu: a take the video does not show",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Sin usar"
+          }
+        }
+      }
+    },
     "Up to %lld apps" : {
       "comment" : "System audio By App: in the menu of apps once the most apps are chosen (8, one track each); no other can be chosen",
       "localizations" : {
@@ -11048,6 +11158,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Usar en los proyectos nuevos"
+          }
+        }
+      }
+    },
+    "Use from Here" : {
+      "comment" : "Takes menu: this take replaces the video from the playhead",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Usar desde acá"
           }
         }
       }

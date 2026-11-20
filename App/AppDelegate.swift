@@ -76,6 +76,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private static let editedLookDelay = Duration.seconds(1)
     /// The recording control at the notch; made once the app has launched.
     private var island: IslandPanel?
+    /// The editor hidden for its "Re-record from Here" (phase 3 design §8.2), until the recorder tells how it ended: one at
+    /// a time.
+    private weak var rerecordingEditor: EditorWindowController?
     private var powerOffObserver: (any NSObjectProtocol)?
     /// Cancels the exports, closes the take and the editors, and waits for the library's copies (`LibraryWork.shared`, its
     /// default) before a quit goes ahead. Its time limits run on the suspending clock: they stop counting while the Mac
@@ -121,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         recording.openOnboarding = { [weak self] in self?.showOnboarding() }
         recording.showStartFailure = { [weak self] error in self?.showStartFailure(error) }
         recording.takePackageChanged = { [weak self] in self?.takePackageChanged() }
+        recording.rerecordEnded = { [weak self] target, outcome in self?.rerecordEnded(target, outcome) }
         recording.recordingStateChanged = { [weak self] in
             guard let self else { return }
             tellLibraryTake()
@@ -692,6 +696,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func showEditor(for url: URL, take: String?) {
         let key = url.standardizedFileURL
         if let editor = openEditor(of: key) {
+            // Hidden while its re-record is recorded: it comes back once that ends.
+            if editor === rerecordingEditor, editor.isHiddenForRerecord { return }
             editor.reloadIfNeeded()
             // One still reading its state shows itself once it has.
             if editor.isRestored { present(editor) }
@@ -764,7 +770,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             look: { [weak self] urls in self?.library?.model.look(at: urls) },
             open: { [weak self] url in self?.showEditor(for: url, take: nil) },
             moved: { [weak self] in self?.tellLibraryEditors() },
-            recordedHere: { [weak self] url in self?.recording.recordedThisSession(url) ?? false })
+            recordedHere: { [weak self] url in self?.recording.recordedThisSession(url) ?? false },
+            rerecord: { [weak self] request in self?.rerecord(request) ?? false })
+    }
+
+    // MARK: - Re-recording
+
+    /// "Re-record from Here" of `request`'s editor (3d plan decisions 9 and 10): its window is hidden and the island records
+    /// the take into its package. Refused (`false`), the window never hidden, while a take is recorded or another editor's
+    /// re-record is under way, or before the island is made.
+    private func rerecord(_ request: EditorRerecordRequest) -> Bool {
+        guard let editor = editors.values.first(where: { $0.model === request.editor }), rerecordingEditor == nil,
+            !recording.isRecording, let island
+        else { return false }
+        rerecordingEditor = editor
+        editor.hideForRerecord()
+        Task {
+            await island.rerecord(
+                request.take, target: request.target, cameraStyle: request.cameraStyle, projectName: request.projectName,
+                asked: request.asked)
+        }
+        return true
+    }
+
+    /// The recorder told how the re-record of `target` ended (`RecordingController.rerecordEnded`): the island lets it go,
+    /// and its editor comes back, whatever "When Recording Stops" says, and applies a take recorded. Coming back to say
+    /// nothing was recorded, the editor stays behind a window that asks for something (the permissions, the island saying
+    /// why the take could not start); to quit, it is only put back on the screen.
+    private func rerecordEnded(_ target: RerecordTarget, _ outcome: RerecordOutcome) {
+        island?.rerecordEnded(target)
+        let editor = rerecordingEditor
+        rerecordingEditor = nil
+        guard let editor, editors.values.contains(where: { $0 === editor }) else { return }
+        editor.rerecordEnded(outcome)
+        switch outcome {
+        case .recorded:
+            present(editor)
+        case .nothing where island?.isShowingStartFailure == true || onboarding?.window?.isVisible == true:
+            editor.window?.orderFront(nil)
+            if let front = onboarding?.window, front.isVisible { front.orderFront(nil) }
+            updateActivationPolicy(activatingIfRegular: false)
+        case .nothing:
+            present(editor)
+        case .quit:
+            editor.window?.orderFront(nil)
+        }
     }
 
     /// The editor whose package `url` names now (`EditorPlace`): it follows a package renamed or moved while open, and a

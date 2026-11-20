@@ -23,6 +23,10 @@ struct EditorProjectHost {
     /// Whether a take of this launch recorded into the package at this URL (`RecordingController.recordedThisSession`):
     /// its editor may transcribe it by itself (`AutomaticTranscription`).
     var recordedHere: (URL) -> Bool = { _ in false }
+    /// "Re-record from Here" (phase 3 design §8.2): the app hides the request's editor and records a take into its package
+    /// through the island, and the editor hears how it ended (`EditorModel.rerecordEnded`); `false`, with nothing hidden
+    /// nor recorded, if the app can't now.
+    var rerecord: (EditorRerecordRequest) -> Bool = { _ in false }
 }
 
 /// What an editor does with its project as a whole (design §6.7), with the library's operations (`LibraryOperations`),
@@ -262,6 +266,14 @@ final class EditorProjectActions {
                 tell(.of(failure, doing: .restore, name: name, isElsewhere: false))
             }
         }
+    }
+
+    // MARK: - Re-recording
+
+    /// "Re-record from Here", asked by the editor (`EditorModel.rerecordFromHere`): the app takes it from here; `false` if
+    /// it can't now.
+    func rerecord(_ request: EditorRerecordRequest) -> Bool {
+        host.rerecord(request)
     }
 
     // MARK: -
