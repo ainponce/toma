@@ -12,7 +12,8 @@ public struct FocusReading: Equatable, Sendable {
     /// The text cursor's rectangle (its width may be 0); `nil` when the element has no text cursor, it cannot be read,
     /// or the element is secure.
     public var caret: Rect?
-    /// Whether the element is a secure field (its role or subrole is `AXSecureTextField`): its cursor is never written.
+    /// Whether the element is a secure field (its role or subrole is `AXSecureTextField`), or is taken as one because its
+    /// role could not be read: its cursor is never written.
     public var isSecure: Bool
 
     public init(element: Rect?, caret: Rect?, isSecure: Bool) {

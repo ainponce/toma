@@ -16,11 +16,13 @@ import Synchronization
 /// in front nothing is read. Each change asks for a reading on the schedule of `FocusReadSchedule`: at once, or when 50
 /// ms have gone by since the last one, in one reading for all the changes until then.
 ///
-/// A reading asks for the focused element's frame (`AXPosition` and `AXSize`), its role and subrole only to tell a secure
-/// field (`isSecure(role:subrole:)`), and, unless it is one, the text cursor's rectangle: the bounds of the selection's
-/// start (`AXSelectedTextRange`, `AXBoundsForRangeParameterizedAttribute`) with a length of 0 or else of one character
-/// (`caretRanges(selection:characterCount:)`), narrowed to the cursor's edge (`caret(in:of:at:)`). Its time is when it
-/// started. An app that does not tell where its text cursor is (Chrome or Electron without `AXManualAccessibility`) gives
+/// A reading (`reading(of:with:stopped:)`) asks for the focused element's role and subrole only to tell a secure field
+/// (`isSecure(role:subrole:)`), its frame (`AXPosition` and `AXSize`), and, unless it is secure, the text cursor's
+/// rectangle: the bounds of the selection's start (`AXSelectedTextRange`, `AXBoundsForRangeParameterizedAttribute`) with a
+/// length of 0 or else of one character (`caretRanges(selection:characterCount:)`, asking for the text's length only
+/// then), narrowed to the cursor's edge (`caret(in:of:at:)`). It fails closed: an element whose role or subrole cannot be
+/// read (the app did not answer in time, or any other error) counts as secure, and its cursor is not even asked for. A
+/// reading under way when `stop()` comes asks nothing more. Its time is when it started. An app that does not tell where its text cursor is (Chrome or Electron without `AXManualAccessibility`) gives
 /// only the element. Moving a window says nothing, so its rectangles stay as they were until the next reading.
 ///
 /// Every query has a timeout of `messagingTimeout` (`AXUIElementSetMessagingTimeout` on the app's element and on each
@@ -39,11 +41,18 @@ public final class AXFocusSource: FocusSource {
     private struct Running: @unchecked Sendable {
         let context: FocusContext
         let observer: any NSObjectProtocol
+
+        /// Hears no more, and stops its thread without waiting for it.
+        func stop() {
+            NSWorkspace.shared.notificationCenter.removeObserver(observer)
+            context.stop()
+        }
     }
 
     private let isTrusted: @Sendable () -> Bool
     private let clock: @Sendable () -> HostTime
     private let running = Mutex<Running?>(nil)
+    private let threads = ThreadCount()
 
     public convenience init() {
         self.init(isTrusted: { AXIsProcessTrusted() }, clock: HostTime.now)
@@ -59,10 +68,17 @@ public final class AXFocusSource: FocusSource {
         stop()
     }
 
+    /// The focus threads running now, the ones still ending included; for tests.
+    var runningThreads: Int {
+        threads.count
+    }
+
     public func start(handler: @escaping @Sendable (FocusReading, HostTime) -> Void) -> Bool {
-        stop()
-        guard isTrusted() else { return false }
-        let context = FocusContext(handler: handler, clock: clock)
+        guard isTrusted() else {
+            stop()
+            return false
+        }
+        let context = FocusContext(handler: handler, clock: clock, threads: threads)
         let workspace = NSWorkspace.shared
         // Heard on the thread that posts it, and handed to the focus thread at once.
         let observer = workspace.notificationCenter.addObserver(
@@ -72,7 +88,12 @@ public final class AXFocusSource: FocusSource {
             context.frontChanged(to: app?.processIdentifier, heard: true)
         }
         context.frontChanged(to: workspace.frontmostApplication?.processIdentifier, heard: false)
-        running.withLock { $0 = Running(context: context, observer: observer) }
+        // The one started before, by this start or by another at the same time, is swapped out and stopped: none is left.
+        let previous = running.withLock { running -> Running? in
+            defer { running = Running(context: context, observer: observer) }
+            return running
+        }
+        previous?.stop()
         // The thread holds the context while its run loop can call the observer.
         let thread = Thread { context.run() }
         thread.name = "dev.toma.focus"
@@ -82,14 +103,99 @@ public final class AXFocusSource: FocusSource {
     }
 
     public func stop() {
-        guard let running = running.withLock({ $0.take() }) else { return }
-        NSWorkspace.shared.notificationCenter.removeObserver(running.observer)
-        running.context.stop()
+        running.withLock { $0.take() }?.stop()
     }
 
     /// Whether the role or the subrole of an element says it is a secure field (`AXSecureTextField`).
     static func isSecure(role: String?, subrole: String?) -> Bool {
         role == secureTextField || subrole == secureTextField
+    }
+
+    /// What a query of an element's role or subrole answered.
+    enum AttributeAnswer: Equatable, Sendable {
+        case value(String)
+        /// The element has none (`.noValue`, `.attributeUnsupported`).
+        case none
+        /// It is not known: the app did not answer in time (`.cannotComplete`), any other error, or not a string.
+        case unknown
+
+        init(error: AXError, value: CFTypeRef?) {
+            switch error {
+            case .success:
+                guard let value, CFGetTypeID(value) == CFStringGetTypeID() else {
+                    self = .unknown
+                    return
+                }
+                self = .value((value as! CFString) as String)
+            case .noValue, .attributeUnsupported:
+                self = .none
+            default:
+                self = .unknown
+            }
+        }
+
+        var string: String? {
+            if case let .value(string) = self { return string }
+            return nil
+        }
+    }
+
+    /// Whether an element whose role and subrole queries answered these is taken as secure: when either says
+    /// `AXSecureTextField`, or either is not known. It fails closed, so a password field whose app was slow to answer
+    /// never gives its text cursor.
+    static func isSecure(role: AttributeAnswer, subrole: AttributeAnswer) -> Bool {
+        role == .unknown || subrole == .unknown || isSecure(role: role.string, subrole: subrole.string)
+    }
+
+    /// The queries a reading asks of the focused element: Accessibility in the app, the test's own in the tests.
+    protocol FocusQueries {
+        associatedtype Element
+        func role(of element: Element) -> AttributeAnswer
+        func subrole(of element: Element) -> AttributeAnswer
+        func frame(of element: Element) -> Rect?
+        func selection(of element: Element) -> CFRange?
+        func characterCount(of element: Element) -> Int?
+        func bounds(of element: Element, for range: CFRange) -> Rect?
+    }
+
+    /// Where the focus is, with `element` the focused element: its role and subrole, its frame and, unless it is secure
+    /// (`isSecure(role:subrole:)`, which fails closed), its text cursor (`caret(of:with:stopped:)`). `nil` once `stopped`
+    /// says so between two queries: then nothing more is asked.
+    static func reading<Queries: FocusQueries>(
+        of element: Queries.Element, with queries: Queries, stopped: () -> Bool
+    ) -> FocusReading? {
+        let secure = isSecure(role: queries.role(of: element), subrole: queries.subrole(of: element))
+        guard !stopped() else { return nil }
+        let frame = queries.frame(of: element)
+        guard !stopped() else { return nil }
+        // A secure field's cursor, or that of one whose role is not known, is not even asked for.
+        guard !secure else { return FocusReading(element: frame, caret: nil, isSecure: true) }
+        guard let caret = caret(of: element, with: queries, stopped: stopped) else {
+            return stopped() ? nil : FocusReading(element: frame, caret: nil, isSecure: false)
+        }
+        return FocusReading(element: frame, caret: caret, isSecure: false)
+    }
+
+    /// The text cursor's rectangle in `element`: the bounds of the empty range at the selection's start or, if they are
+    /// not a valid cursor, those of the other range of `caretRanges` (the text's length is asked for only then),
+    /// narrowed by `caret(in:of:at:)`. `nil` for an element with no selection or no valid bounds, and once `stopped`.
+    static func caret<Queries: FocusQueries>(
+        of element: Queries.Element, with queries: Queries, stopped: () -> Bool
+    ) -> Rect? {
+        guard let selection = queries.selection(of: element) else { return nil }
+        let location = max(0, selection.location)
+        func caret(for range: CFRange) -> Rect? {
+            guard !stopped(), let box = queries.bounds(of: element, for: range) else { return nil }
+            let caret = Self.caret(in: box, of: range, at: location)
+            return AccessibilityFocusRecorder.isValid(caret, as: .caret) ? caret : nil
+        }
+        if let found = caret(for: CFRange(location: location, length: 0)) { return found }
+        guard !stopped() else { return nil }
+        let count = queries.characterCount(of: element)
+        for range in caretRanges(selection: selection, characterCount: count).dropFirst() {
+            if let found = caret(for: range) { return found }
+        }
+        return nil
     }
 
     private static let secureTextField = "AXSecureTextField"
@@ -156,6 +262,7 @@ private final class FocusContext: @unchecked Sendable {
 
     private let handler: @Sendable (FocusReading, HostTime) -> Void
     private let clock: @Sendable () -> HostTime
+    private let threads: ThreadCount
 
     private let lock = NSLock()
     /// Guarded by `lock`: the focus thread's run loop once it runs, whether `stop()` came, the app in front last told
@@ -172,9 +279,13 @@ private final class FocusContext: @unchecked Sendable {
     private var schedule = FocusReadSchedule()
     private var timer: CFRunLoopTimer?
 
-    init(handler: @escaping @Sendable (FocusReading, HostTime) -> Void, clock: @escaping @Sendable () -> HostTime) {
+    init(
+        handler: @escaping @Sendable (FocusReading, HostTime) -> Void, clock: @escaping @Sendable () -> HostTime,
+        threads: ThreadCount
+    ) {
         self.handler = handler
         self.clock = clock
+        self.threads = threads
     }
 
     private var isStopped: Bool {
@@ -211,6 +322,8 @@ private final class FocusContext: @unchecked Sendable {
     /// On the focus thread: observes the app in front and runs the run loop until `stop()`; returns at once if `stop()`
     /// came first.
     func run() {
+        threads.add(1)
+        defer { threads.add(-1) }
         guard let current = CFRunLoopGetCurrent() else { return }
         let goesOn = lock.withLock { () -> Bool in
             guard !stopped else { return false }
@@ -283,24 +396,20 @@ private final class FocusContext: @unchecked Sendable {
         let time = clock()
         schedule.didRead(at: time)
         if let timer { CFRunLoopTimerSetNextFireDate(timer, CFAbsoluteTimeGetCurrent() + Self.never) }
-        guard let observed else { return }
-        let reading = read(observed)
-        guard !isStopped else { return }
+        guard let observed, let reading = read(observed), !isStopped else { return }
         handler(reading, time)
     }
 
-    /// On the focus thread: where the focus of the observed app is.
-    private func read(_ observed: Observed) -> FocusReading {
-        guard let focused = Self.element(observed.app, kAXFocusedUIElementAttribute) else {
+    /// On the focus thread: where the focus of the observed app is; `nil` once `stop()` came.
+    private func read(_ observed: Observed) -> FocusReading? {
+        guard let focused = AXElementQueries.element(observed.app, kAXFocusedUIElementAttribute) else {
             watchValue(of: nil, in: observed)
             return FocusReading(element: nil, caret: nil, isSecure: false)
         }
         AXUIElementSetMessagingTimeout(focused, AXFocusSource.messagingTimeout)
+        guard !isStopped else { return nil }
         watchValue(of: focused, in: observed)
-        let secure = AXFocusSource.isSecure(
-            role: Self.string(focused, kAXRoleAttribute), subrole: Self.string(focused, kAXSubroleAttribute))
-        // A secure field's cursor is not even asked for.
-        return FocusReading(element: Self.frame(of: focused), caret: secure ? nil : Self.caret(of: focused), isSecure: secure)
+        return AXFocusSource.reading(of: focused, with: AXElementQueries(), stopped: { isStopped })
     }
 
     /// On the focus thread: `kAXValueChangedNotification` on `focused` alone.
@@ -314,65 +423,83 @@ private final class FocusContext: @unchecked Sendable {
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         _ = AXObserverAddNotification(observed.observer, focused, kAXValueChangedNotification as CFString, refcon)
     }
+}
 
-    // MARK: - Queries
+/// How many focus threads run, across the starts of one source.
+private final class ThreadCount: Sendable {
+    private let value = Mutex(0)
 
-    private static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+    var count: Int { value.withLock { $0 } }
+
+    func add(_ delta: Int) {
+        value.withLock { $0 += delta }
+    }
+}
+
+/// The queries of a reading, with Accessibility: each one waits for the app at most the element's messaging timeout.
+private struct AXElementQueries: AXFocusSource.FocusQueries {
+    func role(of element: AXUIElement) -> AXFocusSource.AttributeAnswer {
+        Self.answer(element, kAXRoleAttribute)
+    }
+
+    func subrole(of element: AXUIElement) -> AXFocusSource.AttributeAnswer {
+        Self.answer(element, kAXSubroleAttribute)
+    }
+
+    func frame(of element: AXUIElement) -> Rect? {
+        guard let position = Self.value(element, kAXPositionAttribute, .cgPoint, CGPoint.zero),
+              let size = Self.value(element, kAXSizeAttribute, .cgSize, CGSize.zero)
+        else { return nil }
+        return Rect(x: Double(position.x), y: Double(position.y), width: Double(size.width), height: Double(size.height))
+    }
+
+    func selection(of element: AXUIElement) -> CFRange? {
+        Self.value(element, kAXSelectedTextRangeAttribute, .cfRange, CFRange(location: 0, length: 0))
+    }
+
+    func characterCount(of element: AXUIElement) -> Int? {
+        Self.attribute(element, kAXNumberOfCharactersAttribute).flatMap { ($0 as? NSNumber)?.intValue }
+    }
+
+    func bounds(of element: AXUIElement, for range: CFRange) -> Rect? {
+        var asked = range
+        guard let parameter = AXValueCreate(.cfRange, &asked) else { return nil }
+        var bounds: CFTypeRef?
+        guard AXUIElementCopyParameterizedAttributeValue(
+            element, kAXBoundsForRangeParameterizedAttribute as CFString, parameter, &bounds) == .success,
+            let bounds, let box = Self.unpack(bounds, .cgRect, CGRect.zero)
+        else { return nil }
+        return Rect(x: Double(box.origin.x), y: Double(box.origin.y), width: Double(box.width), height: Double(box.height))
+    }
+
+    static func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
         return value
     }
 
-    private static func element(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+    static func element(_ element: AXUIElement, _ name: String) -> AXUIElement? {
         guard let value = attribute(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
         return (value as! AXUIElement)
     }
 
-    private static func string(_ element: AXUIElement, _ name: String) -> String? {
-        guard let value = attribute(element, name), CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
-        return (value as! CFString) as String
+    /// A string attribute, telling "it has none" from "not known".
+    static func answer(_ element: AXUIElement, _ name: String) -> AXFocusSource.AttributeAnswer {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(element, name as CFString, &value)
+        return AXFocusSource.AttributeAnswer(error: error, value: value)
     }
 
     /// The `AXValue` of `type` an attribute holds, read into a copy of `empty`.
-    private static func value<T: BitwiseCopyable>(_ element: AXUIElement, _ name: String, _ type: AXValueType, _ empty: T) -> T? {
+    static func value<T: BitwiseCopyable>(_ element: AXUIElement, _ name: String, _ type: AXValueType, _ empty: T) -> T? {
         guard let value = attribute(element, name) else { return nil }
         return unpack(value, type, empty)
     }
 
-    private static func unpack<T: BitwiseCopyable>(_ value: CFTypeRef, _ type: AXValueType, _ empty: T) -> T? {
+    static func unpack<T: BitwiseCopyable>(_ value: CFTypeRef, _ type: AXValueType, _ empty: T) -> T? {
         guard CFGetTypeID(value) == AXValueGetTypeID() else { return nil }
         var result = empty
         guard AXValueGetValue(value as! AXValue, type, &result) else { return nil }
         return result
-    }
-
-    private static func frame(of element: AXUIElement) -> Rect? {
-        guard let position = value(element, kAXPositionAttribute, .cgPoint, CGPoint.zero),
-              let size = value(element, kAXSizeAttribute, .cgSize, CGSize.zero)
-        else { return nil }
-        return Rect(x: Double(position.x), y: Double(position.y), width: Double(size.width), height: Double(size.height))
-    }
-
-    /// The text cursor's rectangle in `element`, from the first range of `AXFocusSource.caretRanges` whose bounds give a
-    /// valid one; `nil` for an element with no selection, or no bounds for it.
-    private static func caret(of element: AXUIElement) -> Rect? {
-        guard let selection = value(element, kAXSelectedTextRangeAttribute, .cfRange, CFRange(location: 0, length: 0))
-        else { return nil }
-        let count = attribute(element, kAXNumberOfCharactersAttribute).flatMap { ($0 as? NSNumber)?.intValue }
-        let location = max(0, selection.location)
-        for range in AXFocusSource.caretRanges(selection: selection, characterCount: count) {
-            var asked = range
-            guard let parameter = AXValueCreate(.cfRange, &asked) else { continue }
-            var bounds: CFTypeRef?
-            guard AXUIElementCopyParameterizedAttributeValue(
-                element, kAXBoundsForRangeParameterizedAttribute as CFString, parameter, &bounds) == .success,
-                let bounds, let box = unpack(bounds, .cgRect, CGRect.zero)
-            else { continue }
-            let caret = AXFocusSource.caret(
-                in: Rect(x: Double(box.origin.x), y: Double(box.origin.y), width: Double(box.width), height: Double(box.height)),
-                of: range, at: location)
-            if AccessibilityFocusRecorder.isValid(caret, as: .caret) { return caret }
-        }
-        return nil
     }
 }
