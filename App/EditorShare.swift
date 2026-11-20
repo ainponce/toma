@@ -84,6 +84,8 @@ final class EditorShare {
     @ObservationIgnored private let secrets: any SecretStore
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var loading: Task<Void, Never>?
+    /// The "Delete from Storage" on their way, by the link's id.
+    @ObservationIgnored private var deletions: [String: Task<Void, Never>] = [:]
     /// The last MP4 this editor exported in this session (decision 11).
     @ObservationIgnored private var remembered: RememberedExport?
     #if DEBUG
@@ -157,6 +159,9 @@ final class EditorShare {
     /// "Share": the document as it is now, exported (or the last export, when it is the same video), its poster and its
     /// page uploaded, and the link added to `shares.json` (`ShareJob.run`), with the app's `ExportGate` taken throughout.
     func start() {
+        #if DEBUG
+        if isShowcase { return }
+        #endif
         guard canStart, let model, let session = model.panelSession, let project = model.exportProject else { return }
         let document = session.document
         let settings = SettingsStore().settings
@@ -223,11 +228,43 @@ final class EditorShare {
         task.cancel()
     }
 
-    /// Cancels the share in progress and waits for it to end: what it uploaded is removed, its temporary folder too.
+    /// Cancels the share in progress and waits for it to end (quitting): what it uploaded is removed, its temporary
+    /// folder too; at most `cleanupLimit`, so a stuck network never keeps the app from quitting.
     func cancelAndWait() async {
         guard let task else { return }
         cancel()
-        await task.value
+        await Self.wait(for: [task], atMost: Self.cleanupLimit)
+    }
+
+    /// How long closing the window or quitting waits for a cancelled share's cleanup: the quit's limit for the editors.
+    nonisolated static let cleanupLimit = QuitSequencer.editorsTimeLimit
+
+    /// Returns once every one of `work` has ended, or once `limit` has passed (on the suspending clock); what is still
+    /// running goes on.
+    nonisolated private static func wait(for work: [Task<Void, Never>], atMost limit: Duration) async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                for task in work { await task.value }
+            }
+            group.addTask {
+                try? await Task.sleep(for: limit, clock: .suspending)
+            }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
+    /// The editor's window closed: the share in progress is cancelled, and what has to end before the editor is done
+    /// closing is given back, its cleanup (removing what it uploaded) and a "Delete from Storage" on its way, so the
+    /// window's closing (and a quit right after it) waits for them (`EditorModel.close()`), at most `cleanupLimit`. `nil`
+    /// when nothing runs.
+    func cancelForClose() -> Task<Void, Never>? {
+        cancel()
+        let pending = [task].compactMap { $0 } + Array(deletions.values)
+        guard !pending.isEmpty else { return nil }
+        return Task {
+            await Self.wait(for: pending, atMost: Self.cleanupLimit)
+        }
     }
 
     private func progressed(_ progress: ShareProgress) {
@@ -271,20 +308,24 @@ final class EditorShare {
         return note
     }
 
-    /// "Open": the link in the browser.
+    /// "Open": the link in the browser, if it is a web link (`ShareRules.webLink`): a `shares.json` that came with a
+    /// package from elsewhere never opens a file or another app.
     func open(_ record: ShareRecord) {
-        guard let url = URL(string: record.url) else { return }
+        guard let url = ShareRules.webLink(record.url) else { return }
         NSWorkspace.shared.open(url)
     }
 
     /// "Delete from Storage", once confirmed: the link's three objects removed from the storage, then its row from
     /// `shares.json` (`ShareJob.delete`); if the storage fails the row stays, and why is said under it.
     func delete(_ record: ShareRecord) {
+        #if DEBUG
+        if isShowcase { return }
+        #endif
         guard let project = model?.exportProject, !deleting.contains(record.id) else { return }
         let preferences = SettingsStore().settings.share, secrets = secrets
         deleting.insert(record.id)
         if deleteProblem?.id == record.id { deleteProblem = nil }
-        Task {
+        deletions[record.id] = Task {
             do {
                 try await ShareJob.delete(
                     record, package: project.package, preferences: preferences, secrets: secrets, service: Self.service())
@@ -296,6 +337,7 @@ final class EditorShare {
                 deleteProblem = DeleteProblem(id: record.id, text: ShareTexts.describe(error))
             }
             deleting.remove(record.id)
+            deletions[record.id] = nil
         }
     }
 

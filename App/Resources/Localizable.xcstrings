@@ -4177,17 +4177,6 @@
         }
       }
     },
-    "Earlier Links" : {
-      "comment" : "Share: the project's links shared before",
-      "localizations" : {
-        "es" : {
-          "stringUnit" : {
-            "state" : "translated",
-            "value" : "Links anteriores"
-          }
-        }
-      }
-    },
     "Edit" : {
       "comment" : "The teleprompter: edit its script",
       "localizations" : {
@@ -11315,6 +11304,17 @@
         }
       }
     },
+    "The link couldn't be recorded in the project, and its files couldn't be removed from the storage: they may still be online. Delete the folder “%1$@” of the bucket “%2$@” in your storage's console." : {
+      "comment" : "Share: shares.json could not be written after the upload and deleting the uploaded objects failed too; the folder and the bucket's name",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "No se pudo anotar el link en el proyecto ni borrar sus archivos del almacenamiento: pueden seguir en línea. Borrar a mano la carpeta «%1$@» del bucket «%2$@» desde la consola del almacenamiento."
+          }
+        }
+      }
+    },
     "The link couldn't be recorded in the project, so it was removed from the storage." : {
       "comment" : "Share: shares.json could not be written after the upload, so the uploaded objects were deleted",
       "localizations" : {
@@ -12322,6 +12322,17 @@
           "stringUnit" : {
             "state" : "translated",
             "value" : "Esta Mac no está conectada a internet."
+          }
+        }
+      }
+    },
+    "This Project's Links" : {
+      "comment" : "Share: the links shared from this project, the newest first",
+      "localizations" : {
+        "es" : {
+          "stringUnit" : {
+            "state" : "translated",
+            "value" : "Links de este proyecto"
           }
         }
       }

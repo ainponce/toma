@@ -52,8 +52,9 @@ public enum ShareJob {
     /// Shares `inputs` of `package`: 1) the secret and the configuration, before anything (without a secret,
     /// `.notConfigured(.missingSecret)`), and `shares.json` must be readable (`.historyUnreadable`); 2) a temporary folder
     /// `Toma-share-<UUID>`; 3) `makeVideo`; 4) the poster; 5) the upload; 6) the record with `inputs.documentHash`; 7) the
-    /// record added to `shares.json`, and if that fails the three objects are removed and it throws `.notSaved`. The
-    /// temporary folder is always removed; a reused export, never.
+    /// record added to `shares.json`, and if that fails the three objects are removed and it throws `.notSaved`
+    /// (`.notSavedNorRemoved` with where they are when removing them fails too). The temporary folder is always removed;
+    /// a reused export, never.
     /// - Throws: a `ShareError` (`.cancelled` when the task is cancelled), a `SecretStoreError`, or what exporting or
     ///   making the poster throws.
     public static func run(
@@ -103,11 +104,18 @@ public enum ShareJob {
             // A link the project cannot list could never be deleted from it: it is removed, out of the cancellation's
             // reach.
             logger.error("Share \(record.folder, privacy: .public) not recorded; removing it")
-            let removal = Task {
-                try? await service.delete(record, preferences: preferences, secret: secret)
+            let uploaded = record
+            let removal = Task { () -> Bool in
+                do {
+                    try await service.delete(uploaded, preferences: preferences, secret: secret)
+                    return true
+                } catch {
+                    logger.error("Share \(uploaded.folder, privacy: .public) not recorded and not removed")
+                    return false
+                }
             }
-            _ = await removal.value
-            throw ShareError.notSaved
+            throw await removal.value
+                ? ShareError.notSaved : ShareError.notSavedNorRemoved(bucket: uploaded.bucket, folder: uploaded.folder)
         }
         reporter.report(.uploading, 1)
         return record

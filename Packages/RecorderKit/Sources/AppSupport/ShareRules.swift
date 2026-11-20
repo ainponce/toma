@@ -62,6 +62,15 @@ public enum ShareRules {
         return ShareConfiguration.problems(in: preferences, hasSecret: hasSecret).isEmpty
     }
 
+    /// `text` as a link "Open" may open: `http` or `https` with a host, written exactly so. A row of a `shares.json` that
+    /// came with a package from elsewhere can say anything (`file://`, another app's scheme): it is never opened.
+    public static func webLink(_ text: String) -> URL? {
+        guard let url = URL(string: text), let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http",
+            let host = url.host(percentEncoded: true), !host.isEmpty
+        else { return nil }
+        return url
+    }
+
     /// What is said of a link (design §8.4): public, which never expires, or the instant a signed one expires, or expired.
     public enum LinkNote: Equatable, Sendable {
         case permanent
