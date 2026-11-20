@@ -68,8 +68,15 @@ public final class ManifestStore: Sendable {
         try apply(raisingTo: version, body)
     }
 
-    /// `update(_:)`, raised to `version` when there is one (`update(raisingTo:_:)`).
-    private func apply(raisingTo version: Int?, _ body: (inout Manifest) throws -> Void) throws {
+    /// Only the Replay's working package (`ReplayScratch`, never recovered): `update(_:)` in memory only. The change is
+    /// refused as `update(_:)` refuses it, and otherwise kept and marked to write: the next `update`, `flushPending()` or
+    /// `raiseFormatVersion(to:)` writes it. Nothing touches the disk, so a capture queue never waits for a sync.
+    public func stage(_ body: (inout Manifest) throws -> Void) throws {
+        try apply(raisingTo: nil, writing: false, body)
+    }
+
+    /// `update(_:)`, raised to `version` when there is one (`update(raisingTo:_:)`); in memory only without `writing`.
+    private func apply(raisingTo version: Int?, writing: Bool = true, _ body: (inout Manifest) throws -> Void) throws {
         if let version, version > Manifest.newestFormatVersion { throw ManifestStoreError.unsupportedVersion(version) }
         try state.withLock { state in
             var manifest = state.manifest
@@ -93,7 +100,7 @@ public final class ManifestStore: Sendable {
             let data = try ProjectJSON.encoder().encode(manifest)
             state.manifest = manifest
             state.needsWrite = true
-            try write(data, &state)
+            if writing { try write(data, &state) }
         }
     }
 

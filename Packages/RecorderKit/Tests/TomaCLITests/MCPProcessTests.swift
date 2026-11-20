@@ -27,7 +27,15 @@ import Testing
             try server.send(MCPHarness.call(
                 "export_video", ["project": .string(url.path), "output": .string("movie"), "size": .integer(720)], id: 4,
                 progressToken: .string("p")))
-            for id in Int64(2)...4 { _ = try await server.answer(to: .integer(id)) }
+            // A ping while the export runs is answered at once.
+            while !server.messages.contains(where: { $0["method"] == .string("notifications/progress") }) {
+                try await Task.sleep(for: .milliseconds(5))
+            }
+            try server.send(MCPHarness.request("ping", id: .integer(5)))
+            for id in Int64(2)...5 { _ = try await server.answer(to: .integer(id)) }
+            let ping = server.messages.firstIndex { $0.isAnswer(to: .integer(5)) }
+            let export = server.messages.firstIndex { $0.isAnswer(to: .integer(4)) }
+            #expect(ping! < export!)
             try server.closeInput()
             let exit = try await server.exit()
             #expect(exit.reason == .exit && exit.status == 0, "\(server.standardError)")
@@ -49,9 +57,9 @@ import Testing
                     notifications.append(message)
                 }
             }
-            #expect(answers.compactMap { $0["id"] } == [.integer(1), .integer(2), .integer(3), .integer(4)])
+            #expect(answers.compactMap { $0["id"] } == [.integer(1), .integer(2), .integer(3), .integer(5), .integer(4)])
             #expect(answers[2]["result"]?["isError"] == .bool(true))
-            #expect(answers[3]["result"]?["isError"] == .bool(false), "\(answers[3])")
+            #expect(answers[4]["result"]?["isError"] == .bool(false), "\(answers[4])")
             #expect(!notifications.isEmpty)
             #expect(FileManager.default.fileExists(atPath: dir.appending(path: "movie.mp4").path))
         }
@@ -67,6 +75,64 @@ import Testing
             let exit = try await server.exit()
             #expect(exit.reason == .exit)
             #expect(exit.status == 0)
+        }
+    }
+
+    @Test func eofAnswersTheCallsInFlight() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try await MCPToolsTests.transcribed(in: dir)
+            let server = try MCPProcess(in: dir)
+            defer { server.kill() }
+            // As `printf '…' | toma mcp` does: everything, then the end of the input at once.
+            try server.send(MCPHarness.call("list_projects", ["folder": .string(".")], id: 1))
+            try server.send(MCPHarness.call("get_transcript", ["project": .string("Fixture.toma")], id: 2))
+            try server.send(MCPHarness.call("project_info", ["project": .string("Nope.toma")], id: 3))
+            try server.send(MCPHarness.call(
+                "export_video", ["project": .string(url.path), "output": .string("piped.gif"), "gif": .bool(true),
+                                 "size": .integer(480)], id: 4))
+            try server.send(MCPHarness.request("ping", id: .integer(5)))
+            try server.closeInput()
+            let exit = try await server.exit(timeout: .seconds(300))
+            #expect(exit.reason == .exit && exit.status == 0, "\(server.standardError)")
+            for id in Int64(1)...5 { #expect(server.messages.contains { $0.isAnswer(to: .integer(id)) }, "\(id)") }
+            let projects = server.messages.first { $0.isAnswer(to: .integer(1)) }?["result"]?["structuredContent"]?["projects"]
+            #expect(projects?.arrayValue?.count == 1)
+            let transcript = server.messages.first { $0.isAnswer(to: .integer(2)) }?["result"]?["structuredContent"]
+            #expect(transcript?["segments"]?.arrayValue?.isEmpty == false, "\(String(describing: transcript))")
+            #expect(FileManager.default.fileExists(atPath: dir.appending(path: "piped.gif").path))
+        }
+    }
+
+    @Test func aBackgroundExportOverTheProcess() async throws {
+        try await withTemporaryDirectory { dir in
+            let url = try await CLIFixtures.package(in: dir)
+            let server = try MCPProcess(in: dir)
+            defer { server.kill() }
+            try server.send(MCPHarness.call(
+                "export_video", ["project": .string(url.path), "output": .string("bg.mp4"), "size": .integer(720),
+                                 "background": .bool(true)], id: 1))
+            let started = try await server.answer(to: .integer(1))
+            let id = try #require(started["result"]?["structuredContent"]?["jobId"]?.stringValue)
+            var status = JSONValue.string("running")
+            var k: Int64 = 2
+            let deadline = ContinuousClock.now + .seconds(300)
+            while status == .string("running"), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(100))
+                try server.send(MCPHarness.call("export_status", ["jobId": .string(id)], id: k))
+                status = try await server.answer(to: .integer(k))["result"]?["structuredContent"]?["status"] ?? .null
+                k += 1
+            }
+            #expect(status == .string("done"))
+            #expect(FileManager.default.fileExists(atPath: dir.appending(path: "bg.mp4").path))
+            // The end of the input waits for an export in the background too.
+            try server.send(MCPHarness.call(
+                "export_video", ["project": .string(url.path), "output": .string("last.gif"), "gif": .bool(true),
+                                 "size": .integer(480), "background": .bool(true)], id: 1000))
+            _ = try await server.answer(to: .integer(1000))
+            try server.closeInput()
+            let exit = try await server.exit(timeout: .seconds(300))
+            #expect(exit.reason == .exit && exit.status == 0, "\(server.standardError)")
+            #expect(FileManager.default.fileExists(atPath: dir.appending(path: "last.gif").path))
         }
     }
 
@@ -96,6 +162,10 @@ import Testing
             try server.send(MCPHarness.call(
                 "export_video", ["project": .string(url.path), "output": .string("stopped.mp4"), "size": .integer(2160)], id: 1,
                 progressToken: .integer(1)))
+            // And one in the background.
+            try server.send(MCPHarness.call(
+                "export_video", ["project": .string(url.path), "output": .string("stopped-too.mp4"), "size": .integer(2160),
+                                 "background": .bool(true)], id: 2))
             let deadline = ContinuousClock.now + .seconds(120)
             while !server.messages.contains(where: { ($0["params"]?["progress"]?.numberValue ?? 0) >= 0.25 }),
                 !server.messages.contains(where: { $0.isAnswer(to: .integer(1)) }), ContinuousClock.now < deadline
@@ -103,7 +173,8 @@ import Testing
                 try await Task.sleep(for: .milliseconds(5))
             }
             server.signal(SIGTERM)
-            let exit = try await server.exit()
+            // Promptly: the exports are cancelled, not waited for.
+            let exit = try await server.exit(timeout: .seconds(20))
             #expect(exit.reason == .exit && exit.status == 0, "\(server.standardError)")
             #expect(!server.messages.contains { $0.isAnswer(to: .integer(1)) })
             let left = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter { $0.hasPrefix("stopped") }

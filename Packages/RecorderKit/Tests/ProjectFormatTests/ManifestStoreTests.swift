@@ -288,3 +288,24 @@ private final class ReaderCounters: Sendable {
         #expect(reread.takes.map(\.id) == ["take-001"])
     }
 }
+
+/// The Replay's working package: a staged change lives in memory until the next write, and is refused as `update` refuses it.
+@Test func stageChangesOnlyTheMemoryUntilAWrite() async throws {
+    try withTemporaryDirectory { dir in
+        let package = try ProjectPackage.create(in: dir, name: "Demo", app: testApp, now: testDate)
+        let store = try ManifestStore(package: package)
+        let onDisk = { try ProjectJSON.decoder().decode(Manifest.self, from: Data(contentsOf: package.manifestURL)) }
+        try store.stage { $0.takes.append(take("take-001")) }
+        #expect(store.manifest.takes.map(\.id) == ["take-001"])
+        #expect(try onDisk().takes.isEmpty)
+        // A second take needs version 5, staged or not.
+        #expect(throws: ManifestStoreError.needsFormatVersion(5)) { try store.stage { $0.takes.append(take("take-002")) } }
+        #expect(store.manifest.takes.map(\.id) == ["take-001"])
+        try store.flushPending()
+        #expect(try onDisk() == store.manifest)
+        // The next update writes what was staged before it.
+        try store.stage { $0.takes[0].status = .recording }
+        try store.update { $0.takes[0].tracks = [] }
+        #expect(try onDisk().takes.first?.status == .recording)
+    }
+}

@@ -11,7 +11,8 @@ import Synchronization
 ///
 /// A call runs in a task of its own, so others are answered while an export runs, but the calls on one package go one
 /// at a time (`MCPContext.serialized`). A call keeps nothing open: each opens its project and closes it. A cancelled call
-/// (`notifications/cancelled`, or the end of the input) gets no answer; an export cancelled leaves no file.
+/// (`notifications/cancelled`, or SIGTERM) gets no answer; an export cancelled leaves no file. At the end of the input
+/// the calls still running finish and are answered, and the exports in the background end, before `run` returns.
 actor MCPServer {
     static let protocolVersion = "2025-06-18"
     /// The longest line read: a longer one is answered as an invalid request and skipped.
@@ -23,6 +24,7 @@ actor MCPServer {
     private let workingDirectory: URL
     private let output: LineOutput
     private let locks = PackageLocks()
+    private let jobs = ExportJobs()
     private var calls: [RequestKey: Call] = [:]
 
     private struct Call {
@@ -46,8 +48,8 @@ actor MCPServer {
     }
 
     /// Reads `input` line by line (only `\n` ends one; a `\r` before it is dropped) and answers each message, until the
-    /// end of the input; then cancels the calls still running and waits for them, so an export cancelled removes its
-    /// file before this returns.
+    /// end of the input; then lets the calls still running finish, answering them, and waits for the exports in the
+    /// background (`drain`), so `printf '…' | toma mcp` gets its answers.
     nonisolated func run(input: FileHandle) async {
         var line: [UInt8] = []
         var tooLong = false
@@ -75,7 +77,7 @@ actor MCPServer {
             FileHandle.standardError.write(Data("toma mcp: the input could not be read: \(error)\n".utf8))
         }
         if !line.isEmpty, !tooLong { await receive(String(decoding: line, as: UTF8.self)) }
-        await stop()
+        await drain()
     }
 
     /// Answers one message (a line without its `\n`). A call starts in its own task and is answered when it ends; the
@@ -124,14 +126,23 @@ actor MCPServer {
         }
     }
 
-    /// Cancels every call that runs and waits for them: none is answered.
+    /// Cancels every call that runs and every export in the background, and waits for them (an export removes its
+    /// partial file): no call is answered. SIGINT and SIGTERM end the server so.
     func stop() async {
         let running = calls
         for key in running.keys {
             calls[key]?.cancelled = true
+            calls[key]?.progress?.close()
             running[key]?.task.cancel()
         }
+        await jobs.finish(cancelling: true)
         for call in running.values { await call.task.value }
+    }
+
+    /// Waits for every call that runs to finish, each answered as usual, and then for the exports in the background.
+    func drain() async {
+        while let call = calls.values.first { await call.task.value }
+        await jobs.finish(cancelling: false)
     }
 
     /// How many calls run now (for the tests).
@@ -150,8 +161,9 @@ actor MCPServer {
                 "Toma's screen recordings are .toma packages. List them with list_projects, read one with project_info, "
                     + "get_transcript and get_markers, edit it with apply_commands (each command one undo step, as in "
                     + "the app; times in seconds of the output as it plays then), undo and redo, and export it with "
-                    + "export_video. Paths are absolute or from the server's working directory; an export never goes "
-                    + "inside a .toma package."),
+                    + "export_video (with background: true and export_status when it may take more than a minute). "
+                    + "Paths are absolute or from the server's working directory; an export never goes inside a .toma "
+                    + "package."),
         ])
     }
 
@@ -171,6 +183,8 @@ actor MCPServer {
         case "notifications/cancelled":
             guard let id = params?.member("requestId"), let key = RequestKey(id), calls[key] != nil else { return }
             calls[key]?.cancelled = true
+            // No progress of it any more, even before the call sees that it is cancelled.
+            calls[key]?.progress?.close()
             calls[key]?.task.cancel()
         default:
             // `notifications/initialized`, and any other: nothing to answer.
@@ -207,7 +221,7 @@ actor MCPServer {
             .map { PackageLocks.Reservation(locks.reserve(PackageKey($0))) }
         let context = MCPContext(
             environment: environment, workingDirectory: workingDirectory, progress: progress, locks: locks,
-            reservation: reservation)
+            reservation: reservation, jobs: jobs)
         let task = Task {
             let result: MCPToolResult?
             do {
@@ -230,7 +244,9 @@ actor MCPServer {
     /// Answers the call `key` with `result`, unless it was cancelled; after this, its progress is never sent.
     private func finish(_ key: RequestKey, id: JSONValue, result: MCPToolResult?) {
         guard let call = calls.removeValue(forKey: key) else { return }
-        if let reservation = call.reservation { locks.release(reservation.ticket) }
+        // A place the call never used (it failed before, or never needed the package); an export in the background
+        // took its own and keeps it.
+        if let ticket = call.reservation?.takeIfUnused() { locks.release(ticket) }
         call.progress?.close()
         guard !call.cancelled, let result else { return }
         send(JSONRPC.response(id: id, result: Self.toolResult(result)))

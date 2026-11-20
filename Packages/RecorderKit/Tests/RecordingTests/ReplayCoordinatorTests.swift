@@ -53,9 +53,9 @@ extension RealTimeRecordingTests {
                     let kept = try #require(snapshot.take.track(track.id)).segments
                     let first = try #require(kept.map(\.startHostTime).min())
                     let last = try #require(kept.compactMap(\.endHostTime).max())
-                    // N + margin + a segment, plus a tick of the ring (0.1 s), a frame and the scheduling of a busy Mac.
+                    // N + margin + a segment (the design's N + 20 s), and a frame: the freeze prunes first.
                     let span = last.seconds(since: first)
-                    #expect(span >= 3 && span <= 5.4, "\(track.id) keeps \(span) s")
+                    #expect(span >= 3 && span <= 5 + 1.0 / 30, "\(track.id) keeps \(span) s")
                     #expect(kept.first?.index ?? 0 > 1, "\(track.id) pruned nothing")
                     // No file without its record, no record without its file.
                     #expect(Set(track.segments.map(\.file)) == rig.segmentFiles(of: track.id), "\(track.id)")
@@ -169,6 +169,51 @@ extension RealTimeRecordingTests {
             }
         }
 
+        /// A save right after the tracks rotated by duration: the snapshot never leaves out a segment still finishing.
+        @Test func freezeWaitsForASegmentStillFinishing() async throws {
+            try await withTemporaryDirectory { directory in
+                let gate = Gate()
+                let rig = ReplayRig(in: directory, seconds: 3, writerFactory: gatedWriter(holding: "seg-0001.mov", until: gate))
+                _ = try await rig.coordinator.start()
+                // Both tracks rotated by duration: segment 2 is open, segment 1 held finishing.
+                #expect(await eventually { rig.hasSegment(2, of: ["display-1", "mic"]) })
+                let freeze = Task { try await rig.coordinator.freeze() }
+                try await Task.sleep(for: .milliseconds(300))
+                gate.open()
+                let snapshot = try await freeze.value
+                for track in snapshot.take.tracks {
+                    #expect(track.segments.map(\.index) == [1, 2], "\(track.id)")
+                    #expect(track.segments[0].endHostTime == track.segments[1].startHostTime, "\(track.id)")
+                }
+                await rig.coordinator.thaw()
+                await rig.coordinator.stopAndDiscard()
+            }
+        }
+
+        /// A rotation that never answers (its file never finishes): the freeze gives what closed by its deadline, and never
+        /// a segment after one still finishing.
+        @Test func freezeGivesWhatClosedWhenARotationHangs() async throws {
+            try await withTemporaryDirectory { directory in
+                let gate = Gate()
+                let display = SyntheticVideoSource(width: 320, height: 180, framesPerSecond: 30)
+                let rig = ReplayRig(
+                    in: directory, seconds: 10, sources: [display, SyntheticAudioSource()],
+                    writerFactory: gatedWriter(holding: "seg-0002.mov", until: gate))
+                _ = try await rig.coordinator.start()
+                // The display's segment 2 rotated by duration and hangs finishing; the microphone's did too.
+                #expect(await eventually { rig.hasSegment(3, of: ["display-1", "mic"]) })
+                let started = ContinuousClock.now
+                let snapshot = try await rig.coordinator.freeze()
+                let waited = ContinuousClock.now - started
+                #expect(waited >= ReplayCoordinator.freezeDeadline && waited < ReplayCoordinator.freezeDeadline + .seconds(3))
+                #expect(snapshot.take.track("display-1")?.segments.map(\.index) == [1])
+                #expect(snapshot.take.track("mic")?.segments.map(\.index) == [1])
+                gate.open()
+                await rig.coordinator.thaw()
+                await rig.coordinator.stopAndDiscard()
+            }
+        }
+
         @Test func freezeGivesClosedSegmentsThatEndTogether() async throws {
             try await withTemporaryDirectory { directory in
                 let rig = ReplayRig(in: directory, seconds: 3)
@@ -277,8 +322,9 @@ extension RealTimeRecordingTests {
                 #expect(ReplayScratch.isScratch(package))
                 #expect(RecordingLock.isHeld(at: package.lockURL(take: ReplayScratch.takeID)))
                 try await Task.sleep(for: .milliseconds(1200))
-                #expect(try first.take().track("display-1")?.segments.count ?? 0 >= 2)
-                _ = try await first.coordinator.freeze()
+                let snapshot = try await first.coordinator.freeze()
+                #expect(snapshot.take.track("display-1")?.segments.count ?? 0 >= 2)
+                await first.coordinator.thaw()
                 await first.coordinator.stopAndDiscard()
             }
         }
@@ -351,6 +397,66 @@ extension RealTimeRecordingTests {
     }
 }
 
+// MARK: - Benchmark
+
+extension RealTimeRecordingTests.ReplayCoordinatorTests {
+    /// The cost of the ring on the capture queues, against a take of the same sources without rotation: a display at 4K
+    /// 60 fps, a camera at 1080p 30 fps, a microphone and system audio, 60 s each, segments of 10 s. A synthetic source does
+    /// not emit the frames that fall due while its queue is held, so a held queue shows as a gap in the PTS it delivered.
+    /// `TOMA_BENCH=1` only.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["TOMA_BENCH"] == "1"))
+    func replayRingCost() async throws {
+        let seconds = 60
+        for rotating in [false, true] {
+            try await withTemporaryDirectory { directory in
+                let display = TimedSource(inner: SyntheticVideoSource(width: 3840, height: 2160, framesPerSecond: 60))
+                let camera = TimedSource(inner: SyntheticVideoSource(
+                    trackID: "camera", kind: .camera, width: 1920, height: 1080, framesPerSecond: 30))
+                let sources: [any CaptureSource] = [
+                    display, camera, SyntheticAudioSource(),
+                    SyntheticAudioSource(trackID: "system-audio", kind: .systemAudio, channels: 2),
+                ]
+                if rotating {
+                    let rig = ReplayRig(in: directory, seconds: 30, sources: sources, segmentDuration: .seconds(10))
+                    _ = try await rig.coordinator.start()
+                    try await Task.sleep(for: .seconds(seconds))
+                    await rig.coordinator.stopAndDiscard()
+                } else {
+                    let rig = try Rig(in: directory, sources: sources)
+                    _ = try await rig.coordinator.start()
+                    try await Task.sleep(for: .seconds(seconds))
+                    _ = try await rig.coordinator.stop()
+                }
+                for (name, timed, rate) in [("display 4K60", display, 60), ("camera 1080p30", camera, 30)] {
+                    print("replayRingCost: \(rotating ? "ring" : "take"), \(name): " + Self.describe(timed.deliveries, rate: rate))
+                }
+            }
+        }
+    }
+
+    /// After the first 2 s (the writers' start, the same with or without rotation): frames delivered, the gaps of more
+    /// than 1.5 frames between their PTS (and the frames they miss), the longest a delivery held the queue and the 99th
+    /// percentile of that.
+    static func describe(_ all: [TimedSource.Delivery], rate: Int) -> String {
+        guard let first = all.first?.pts else { return "no frames" }
+        let deliveries = all.filter { $0.pts.seconds(since: first) >= 2 }
+        let interval = 1.0 / Double(rate)
+        var gaps = 0, missing = 0
+        for (a, b) in zip(deliveries, deliveries.dropFirst()) {
+            let gap = b.pts.seconds(since: a.pts)
+            if gap > 1.5 * interval {
+                gaps += 1
+                missing += Int((gap / interval).rounded()) - 1
+            }
+        }
+        let holds = deliveries.map(\.seconds).sorted()
+        let worst = (holds.last ?? 0) * 1000
+        let p99 = holds.isEmpty ? 0 : holds[min(holds.count - 1, holds.count * 99 / 100)] * 1000
+        return String(format: "%d frames, %d gaps missing %d frames, hold p99 %.1f ms, worst %.1f ms",
+            deliveries.count, gaps, missing, p99, worst)
+    }
+}
+
 // MARK: - Support
 
 /// A Replay of synthetic sources (by default a display and a microphone) into `<directory>/Replay`, at scale: segments
@@ -367,13 +473,17 @@ struct ReplayRig {
 
     init(
         in directory: URL, seconds: Int = 3, sources custom: [any CaptureSource]? = nil,
-        input: any InputRecorder = NoInputRecorder(), cameraStyle: CameraStyle? = nil
+        input: any InputRecorder = NoInputRecorder(), cameraStyle: CameraStyle? = nil,
+        segmentDuration: Duration = .seconds(1), writerFactory: WriterFactory? = nil
     ) {
         root = directory.appending(path: "Replay", directoryHint: .isDirectory)
-        let configuration = ReplayConfiguration(seconds: seconds, segmentDuration: .seconds(1), pruneMargin: .seconds(1))
+        let configuration = ReplayConfiguration(
+            seconds: seconds, segmentDuration: segmentDuration, pruneMargin: segmentDuration)
         coordinator = ReplayCoordinator(
             scratchRoot: root, app: AppInfo(name: "Tests", version: "0"), sources: custom ?? [display, mic], input: input,
-            diskMonitor: disk.monitor(volume: directory), configuration: configuration, cameraStyle: cameraStyle)
+            diskMonitor: disk.monitor(volume: directory), configuration: configuration,
+            writerFactory: writerFactory ?? { url, media in try FragmentedTrackWriter(url: url, media: media) },
+            cameraStyle: cameraStyle)
         warningsDone = Task { [warnings, coordinator] in
             for await warning in coordinator.warnings { warnings.append(warning) }
         }
@@ -394,6 +504,11 @@ struct ReplayRig {
         let folder = package.trackDirectory(take: ReplayScratch.takeID, track: track)
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return Set(names.map { "takes/\(ReplayScratch.takeID)/\(track)/\($0)" })
+    }
+
+    /// Whether segment `index` of every track of `tracks` has its file.
+    func hasSegment(_ index: Int, of tracks: [String]) -> Bool {
+        tracks.allSatisfy { FileManager.default.fileExists(atPath: package.segmentURL(take: ReplayScratch.takeID, track: $0, index: index).path) }
     }
 
     /// The event files of the take on disk, by name, in order.

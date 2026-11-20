@@ -21,6 +21,8 @@ public enum APIErrorCode: String, Codable, Sendable, CaseIterable {
     case exportFailed
     /// What the command needs is not on this Mac (the transcription's engine or model) or not where it was asked.
     case notAvailable
+    /// Sharing: the upload to the user's storage failed (the network, the storage's answer), or the link could not be kept.
+    case uploadFailed
 }
 
 /// What the project API throws: a stable `code` and a message in English for a person (or an agent) to read.

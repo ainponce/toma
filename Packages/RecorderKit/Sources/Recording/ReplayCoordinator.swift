@@ -297,22 +297,16 @@ public actor ReplayCoordinator: ReplaySource {
     /// discarded meanwhile; such a call does not count) and `nothingToSave` when no segment of a screen closed.
     public func freeze() async throws -> ReplaySnapshot {
         guard state == .recording, let pipelines = ring?.pipelines else { throw ReplayError.notRunning }
+        // What is too old goes now, unless another save holds it: the ring never keeps more than it needs to.
+        prune()
         freezes += 1
-        let rotated = await withTaskGroup(of: (String, Int?).self) { group in
-            for pipeline in pipelines {
-                group.addTask { (pipeline.trackID, await pipeline.rotate()) }
-            }
-            var rotated: [String: Int] = [:]
-            for await (track, index) in group {
-                if let index { rotated[track] = index }
-            }
-            return rotated
-        }
+        let rotated = await Self.rotations(of: pipelines, within: Self.freezeDeadline)
         guard state == .recording, let ring, let store = ring.store, let log = ring.log else {
             throw ReplayError.notRunning
         }
         do {
             try log.flush()
+            try store.flushPending()
         } catch where isOutOfSpace(error) {
             diskFilled()
             throw ReplayError.notRunning
@@ -324,17 +318,61 @@ public actor ReplayCoordinator: ReplaySource {
             throw ReplayError.nothingToSave
         }
         for i in take.tracks.indices {
-            let limit = rotated[take.tracks[i].id]
+            let limit = rotated[take.tracks[i].id] ?? nil
+            // Never a segment after one still open or finishing (a rotation that did not answer in time): the save would
+            // have a hole there. A rotation that answered left none before its segment.
+            let unclosed = take.tracks[i].segments.filter { $0.endHostTime == nil || $0.endReason == nil }.map(\.index).min()
             take.tracks[i].segments.removeAll { segment in
                 segment.endHostTime == nil || segment.endReason == nil || limit.map { segment.index > $0 } ?? false
+                    || unclosed.map { segment.index > $0 } ?? false
             }
         }
         guard take.tracks.contains(where: { $0.kind.isScreen && !$0.segments.isEmpty }) else {
             throw ReplayError.nothingToSave
         }
+        // The capture queues never sync a segment: the ones a save clones are synced here, off them.
+        try await Self.fullSync(take.tracks.flatMap { track in
+            track.segments.map { ring.package.url.appending(path: $0.file, directoryHint: .notDirectory) }
+        })
         return ReplaySnapshot(
             package: ring.package, take: take, formatVersion: manifest.formatVersion, shards: ring.shards.map(\.url),
             carried: eventState.events)
+    }
+
+    /// How long a freeze waits for the tracks to rotate before it gives what closed so far: a rotation that waits for the
+    /// next sample answers within `TrackPipeline.rotationWait`, plus the time to finish the files.
+    static let freezeDeadline: Duration = TrackPipeline.rotationWait + .seconds(5)
+
+    /// Each track's `rotate()`, by track: those that answered within `deadline` (an answer may be `nil`). One still waiting
+    /// then is left to finish on its own, and its track is missing.
+    private static func rotations(of pipelines: [TrackPipeline], within deadline: Duration) async -> [String: Int?] {
+        guard !pipelines.isEmpty else { return [:] }
+        let (answers, continuation) = AsyncStream.makeStream(of: (String, Int?).self)
+        for pipeline in pipelines {
+            Task { continuation.yield((pipeline.trackID, await pipeline.rotate())) }
+        }
+        let timer = Task {
+            try? await Task.sleep(for: deadline)
+            continuation.finish()
+        }
+        var rotated: [String: Int?] = [:]
+        for await (track, index) in answers {
+            rotated[track] = index
+            if rotated.count == pipelines.count { break }
+        }
+        timer.cancel()
+        continuation.finish()
+        return rotated
+    }
+
+    /// Opens each file (never through a link), full-syncs it (`F_FULLFSYNC`) and closes it, off the caller's actor.
+    @concurrent private static func fullSync(_ urls: [URL]) async throws {
+        for url in urls {
+            let fd = open(url.path, O_RDONLY | O_NOFOLLOW | O_CLOEXEC)
+            guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            defer { close(fd) }
+            try DurableFile.fullSync(fd)
+        }
     }
 
     /// Undoes one `freeze()`: once the last one is thawed, what is too old is deleted again from the next tick on. Does
@@ -349,6 +387,10 @@ public actor ReplayCoordinator: ReplaySource {
     /// Stops the sources and the input, closes every track and the event log, releases the lock and deletes the working
     /// package, then finishes `warnings`. Waits for a `start()` in progress first. Idempotent; a coordinator that never
     /// started is done too.
+    ///
+    /// It does not wait for a save in progress (a `freeze()` not thawed), and neither does a full disk: that save then
+    /// fails cleanly, its files gone, and leaves nothing. Whoever wants the save to finish waits for it first, when a take
+    /// starts and also when the Mac sleeps, the screen locks or Toma quits.
     public func stopAndDiscard() async {
         while state == .starting {
             await withCheckedContinuation { startWaiters.append($0) }
@@ -416,8 +458,8 @@ public actor ReplayCoordinator: ReplaySource {
 
     // MARK: - The ring
 
-    /// How often the ring looks for what to delete and whether the event log is due a new file: a tenth of a segment, so
-    /// nothing outlives N + `pruneMargin` by more than that (the design's N + 20 s on disk, with segments of 10 s).
+    /// How often the ring looks for what to delete and whether the event log is due a new file: a tenth of a segment.
+    /// `prune()` takes it off the margin, so nothing outlives N + `pruneMargin` (the design's N + 20 s on disk).
     static func ringTick(of configuration: ReplayConfiguration) -> Duration {
         configuration.segmentDuration / 10
     }
@@ -456,12 +498,15 @@ public actor ReplayCoordinator: ReplaySource {
         if let failure, isOutOfSpace(failure) { diskFilled() }
     }
 
-    /// Unless frozen: deletes each closed segment that ended before N + `pruneMargin` ago, its record first (a save never
-    /// sees a record without its file), then its file; and each event file whose next one opened before then, after
-    /// folding its events into `eventState`.
+    /// Unless frozen: deletes each closed segment that ended before N + `pruneMargin` − a tick of the ring ago, its record
+    /// first (a save never sees a record without its file), then its file; and each event file whose next one opened
+    /// before then, after folding its events into `eventState`. The tick less makes up for the tick a segment waits to be
+    /// deleted: on disk there is never more than N + `pruneMargin` + a segment (the design's N + 20 s); a save needs only
+    /// what ended after N ago.
     private func prune() {
         guard freezes == 0, let ring, let store = ring.store else { return }
-        let threshold = clock().adding(seconds: -(Double(configuration.seconds) + configuration.pruneMargin.seconds))
+        let margin = max(0, configuration.pruneMargin.seconds - Self.ringTick(of: configuration).seconds)
+        let threshold = clock().adding(seconds: -(Double(configuration.seconds) + margin))
         let takeID = ReplayScratch.takeID
         let old = Set(store.manifest.takes.first { $0.id == takeID }?.tracks.flatMap { track in
             track.segments.filter { segment in
@@ -548,11 +593,11 @@ public actor ReplayCoordinator: ReplaySource {
 
     // MARK: - Helpers
 
-    /// Writes a manifest change; one whose write failed is retried by the next write (`maintain`). Out of space, the
-    /// Replay is discarded.
+    /// Changes the manifest in memory (`ManifestStore.stage`): `maintain` writes it every `syncInterval`, and `freeze()`
+    /// before it answers. Out of space, the Replay is discarded.
     private func updateManifest(_ store: ManifestStore, _ change: (inout Manifest) -> Void) {
         do {
-            try store.update(change)
+            try store.stage(change)
         } catch {
             if isOutOfSpace(error) {
                 diskFilled()

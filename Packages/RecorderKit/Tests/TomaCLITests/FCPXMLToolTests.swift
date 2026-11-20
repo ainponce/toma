@@ -59,6 +59,7 @@ import Testing
             let tool = try #require(tools.first { $0["name"] == .string("export_fcpxml") })
             #expect(tool["inputSchema"]?["properties"]?["replace"]?["type"] == .string("boolean"))
             #expect(tool["inputSchema"]?["properties"]?["gif"] == nil)
+            #expect(tool["inputSchema"]?["properties"]?["background"]?["type"] == .string("boolean"))
             #expect(tool["annotations"]?["readOnlyHint"] == .bool(false))
 
             let arguments: [String: JSONValue] = [
@@ -82,6 +83,23 @@ import Testing
             replacing["replace"] = .bool(true)
             let replaced = try await mcp.call("export_fcpxml", replacing, id: 4)
             #expect(replaced["isError"] == .bool(false), "\(replaced)")
+            // In the background: the job's result has the three paths too.
+            var later = arguments
+            later["output"] = .string("later")
+            later["background"] = .bool(true)
+            var status = try #require(try await mcp.call("export_fcpxml", later, id: 7)["structuredContent"])
+            let job = try #require(status["jobId"]?.stringValue)
+            var k: Int64 = 8
+            let deadline = ContinuousClock.now + .seconds(300)
+            while status["status"] == .string("running"), ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(50))
+                status = try #require(try await mcp.call("export_status", ["jobId": .string(job)], id: k)["structuredContent"])
+                k += 1
+            }
+            #expect(status["status"] == .string("done"), "\(status)")
+            #expect(status["result"]?["fcpxml"] == .string(dir.appending(path: "later.fcpxml").path))
+            #expect(status["result"]?["metadata"] == .string(dir.appending(path: "later.toma-metadata.json").path))
+            #expect(FileManager.default.fileExists(atPath: dir.appending(path: "later.fcpxml").path))
             // A GIF is not one of its arguments.
             var gif = arguments
             gif["gif"] = .bool(true)

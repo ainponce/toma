@@ -1703,6 +1703,8 @@ Contra la Toma.app de la rama, con buckets propios del dueño (ningún agente cr
 - Exportar normal desde la hoja (MP4 entero, un tramo y un GIF) sigue igual que antes de esta versión: el anillo, «Cancelar export», los avisos de lo que quedó afuera.
 - Mientras corre un export de otro editor, «Compartir» está atenuado con «Esperar a que termine el export.».
 - La primera vez que corre `toma share` (S5), macOS pregunta por el Llavero: «Permitir siempre».
+- `toma share <proyecto>` con un bucket real (Ajustes ▸ Compartir ya probado): macOS pregunta una vez por el Llavero y con «Permitir siempre» no vuelve; imprime `progress: N %`, el link y «Public link.» o «Link expires …»; el link abre la página con el video. `--json` es un solo JSON; `--list` lo muestra (también en la ventanita del editor); `--delete <id>` lo borra del bucket y de la lista. ⌃C a mitad de la subida no deja objetos en el bucket. Sin Compartir configurado dice «Share is not set up: open Toma ▸ Settings ▸ Share.».
+- Desde Claude Code (`claude mcp add toma -- toma mcp`): «compartí este proyecto» da el link (y el progreso); «qué links tiene este proyecto» los lista sin subir nada.
 
 **La línea de comandos `toma` (A4)**
 
@@ -1724,6 +1726,22 @@ Con la línea de comandos instalada (A4) y un proyecto de prueba en la bibliotec
 - Con el proyecto abierto en Toma, pedirle a Claude Code un cambio: la herramienta responde `locked` y Claude lo dice; leer y exportar siguen andando.
 - Lo mismo desde Claude Desktop: sumar `{"mcpServers":{"toma":{"command":"/usr/local/bin/toma","args":["mcp"]}}}` (o la ruta de `~/.local/bin/toma` entera) a `~/Library/Application Support/Claude/claude_desktop_config.json` y reiniciar; el ícono de herramientas muestra las de `toma`, y las tres órdenes de arriba hacen lo mismo.
 - Pedir un export largo (por ejemplo a 2160) y detener la respuesta de Claude (Esc) a mitad: si el cliente cancela la llamada, el export para y no queda archivo (ni `.partial`) en el Escritorio; si no la cancela, el export termina igual (anotar cuál de las dos). Salir de Claude Desktop, o cerrar Claude Code, a mitad de un export no deja nada.
+
+**Capítulos con IA desde la línea de comandos y el MCP (I4)**
+
+En un Mac con macOS 26 y Apple Intelligence activado, con un proyecto de prueba de más de un minuto y con transcripción (nunca uno de `~/Movies/Toma` que importe).
+- `toma ai --help` lista `chapters`, `title` y `summary`. `toma ai chapters <proyecto>` imprime una línea por capítulo («00:00 …») y deja el proyecto igual (`toma info` antes y después no cambia). `--json` trae `commands` con un `addMarker` por capítulo; `toma edit <proyecto> --file` con esa lista los agrega y el editor los muestra como marcadores.
+- Con Claude Code (`claude mcp add toma -- toma mcp`): «proponé capítulos para <proyecto> y agregalos» llama a `suggest_chapters` y después a `apply_commands`, y los capítulos aparecen en el editor (Edición ▸ Deshacer los quita de a uno).
+- Con Apple Intelligence apagado en Ajustes del Sistema: `toma ai chapters <proyecto>` sale con 1 y «Apple Intelligence is not turned on»; `suggest_chapters` vuelve con `isError` y `notAvailable`.
+- En una Mac con macOS 15 (o la Toma de esta rama copiada a una): `toma --version` anda y `toma ai chapters` dice que requiere macOS 26, sin cerrarse. `otool -l Toma.app/Contents/Helpers/toma | grep -B2 FoundationModels` muestra `LC_LOAD_WEAK_DYLIB`.
+
+**El servidor MCP: exports largos, transcripción por partes y el fin de la entrada (A5, arreglos)**
+
+Con `toma mcp` conectado como en el bloque de A5 y un proyecto de prueba de más de cinco minutos, con transcripción.
+- En Claude Desktop: «exportalo a MP4 en el Escritorio». La llamada a `export_video` vuelve enseguida con un `jobId` (`background: true`) y Claude consulta `export_status` hasta `done`; el MP4 queda en `~/Desktop` aunque el export tarde varios minutos. Anotar si alguna vez llama sin `background` y la llamada se corta a los 60 s («Request timed out»): en ese caso no tiene que quedar archivo ni `.partial`. Anotar también si macOS le pide a Claude acceso al Escritorio la primera vez.
+- Mientras ese export corre, «¿cuánto dura el proyecto?» responde enseguida (`project_info` no espera al export).
+- En Claude Code: «buscá en la transcripción dónde digo <frase> y cortá esa frase». `get_transcript` vuelve sin el aviso de Claude Code de un resultado de más de 10.000 tokens (da frases con sus tiempos; si pide `words: true`, una parte por vez con `nextFrom`), y el corte cae en la frase.
+- En Terminal: `printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}' | toma mcp` imprime la respuesta con los proyectos y termina.
 
 **El socket de control y el FCPXML de la línea de comandos (A6)**
 
