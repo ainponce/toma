@@ -291,7 +291,8 @@ struct AnnotationScene: Sendable {
     }
 }
 
-/// What a text of one annotation measured (`AnnotationTypography`), kept while the frames ask for the same, under a lock:
+/// What a text of one annotation measured (`AnnotationTypography`), kept while the frames ask for the same, under a lock
+/// held only to read and keep it (the measuring is outside it):
 /// its lines' count for the last width they were wrapped at (in pixels of `AnnotationTypography.referenceUnit`, which only
 /// the space's proportion changes), and the height of a line for the last em. So a text whose stage does not change
 /// measures once, and one whose screen's card grows measures again only while it grows. The same numbers as
@@ -316,19 +317,27 @@ final class TextMeasure: Sendable {
         let em = text.size * unit
         let padding = AnnotationTypography.padding(paddingPreset ?? text.preset, em: em)
         let wrap = AnnotationTypography.referenceWidth(of: text, width: width, unit: unit, padding: paddingPreset)
-        return state.withLock { state in
-            if state.lines.map({ $0.width == wrap }) != true {
-                let lines = AnnotationTypography.lines(of: text, width: width, unit: unit, padding: paddingPreset)
-                state.lines = (wrap, lines?.count)
-                state.count += 1
-            }
-            if state.line.map({ $0.em == em }) != true {
-                state.line = (em, AnnotationTypography.font(text, unit: unit, scale: 1).map(AnnotationTypography.lineHeight(of:)))
-                state.count += 1
-            }
-            guard let count = state.lines?.count, let lineHeight = state.line?.height else { return 2 * padding.y }
-            return Double(count) * lineHeight + 2 * padding.y
+        // What is kept, read under the lock; what is not is measured outside it (CoreText, the font's design) and kept
+        // after. Two frames that miss at once both measure, the same numbers.
+        let (keptLines, keptLine) = state.withLock { state in
+            (state.lines.flatMap { $0.width == wrap ? .some($0.count) : nil }, state.line.flatMap { $0.em == em ? .some($0.height) : nil })
         }
+        let count = keptLines ?? AnnotationTypography.lines(of: text, width: width, unit: unit, padding: paddingPreset)?.count
+        let lineHeight = keptLine ?? AnnotationTypography.font(text, unit: unit, scale: 1).map(AnnotationTypography.lineHeight(of:))
+        if keptLines == nil || keptLine == nil {
+            state.withLock { state in
+                if keptLines == nil {
+                    state.lines = (wrap, count)
+                    state.count += 1
+                }
+                if keptLine == nil {
+                    state.line = (em, lineHeight)
+                    state.count += 1
+                }
+            }
+        }
+        guard let count, let lineHeight else { return 2 * padding.y }
+        return Double(count) * lineHeight + 2 * padding.y
     }
 }
 
