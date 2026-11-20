@@ -71,7 +71,18 @@ private enum Stages {
     #expect(paths.stage.stageSize == stage.stageSize)
     #expect(paths.areThePaths(of: document))
     #expect(!paths.areThePaths(of: document, contentRatio: nil))
-    #expect(MotionPaths(take: Stages.narrow, events: [], document: document, after: paths).stage.stageSize == own.stageSize)
+    // After an edit, the ratio they were built with, unless another one is given.
+    var edited = document
+    edited.style.padding = 0.1
+    let after = MotionPaths(take: Stages.narrow, events: [], document: edited, after: paths)
+    let fresh = MotionPaths(take: Stages.narrow, events: [], document: edited, contentRatio: .some(ratio))
+    #expect(after.stage.stageSize == SIMD2(16.0 / 9, 1))
+    #expect(after.stage.screenRect(at: Stages.base.adding(seconds: 105)) == fresh.stage.screenRect(at: Stages.base.adding(seconds: 105)))
+    #expect(after.areThePaths(of: edited, contentRatio: .some(ratio)))
+    #expect(MotionPaths(take: Stages.narrow, events: [], document: document, after: paths).stage.stageSize == stage.stageSize)
+    let ownAgain = MotionPaths(take: Stages.narrow, events: [], document: edited, after: paths, contentRatio: nil)
+    #expect(ownAgain.stage.stageSize == own.stageSize)
+    #expect(ownAgain.areThePaths(of: edited, contentRatio: nil))
     // A take without a screen first: 16:9, as the output is.
     #expect(StagePoints(take: Stages.narrow, events: [], document: document, contentRatio: .some(nil)).stageSize
         == SIMD2(16.0 / 9, 1))

@@ -234,9 +234,13 @@ final class EditorModel {
     /// Where the take's screens are (`TakeScreens`), read once when the project opens, off the main thread: each
     /// revision's `StagePoints` for the overlays then reads only what its document names.
     @ObservationIgnored private(set) var takeScreens: TakeScreens?
-    /// The screens of every take of the package the same way, by take id (`takeScreens` too): "Like the Recording"
-    /// follows those of the take of the document's first clip (`contentRatio(of:)`).
-    @ObservationIgnored private(set) var screensByTake: [String: TakeScreens] = [:]
+    /// The screens of the takes the same way, by take id (`takeScreens` too): "Like the Recording" follows those of the
+    /// take of the document's first clip (`contentRatio(of:)`). Those of the takes the sequence shows are read when the
+    /// project opens; any other take's only once a document puts it first (`loadScreens(for:)`). Observed: the views that
+    /// size themselves by the ratio follow it when they arrive.
+    private(set) var screensByTake: [String: TakeScreens] = [:]
+    /// The takes whose screens `loadScreens(for:)` is reading.
+    @ObservationIgnored private var screensLoading: Set<String> = []
     /// The edit session, for what the panel does with it (`EditorModel+Panel`).
     var panelSession: EditSession? { session }
     /// The scene the preview draws now (the last revision built and shown): the overlays read the frame at the playhead
@@ -525,8 +529,9 @@ final class EditorModel {
                 let renderer = try FrameRenderer(project: project, document: document, outputSize: size)
                 let screens = TakeScreens(take: project.take, events: project.events)
                 var byTake = [project.take.id: screens]
-                for take in project.takes where byTake[take.id] == nil {
-                    byTake[take.id] = TakeScreens(take: take, events: project.events(ofTake: take.id))
+                // The takes the sequence shows, whose events the renderer read already; any other one on demand.
+                for shown in project.takesShown(by: document) where byTake[shown.take.id] == nil {
+                    byTake[shown.take.id] = TakeScreens(take: shown.take, events: shown.events)
                 }
                 return (renderer, screens, TimelineContent.markerTimes(in: project.events), byTake)
             }.value
@@ -642,6 +647,27 @@ final class EditorModel {
         var project = session.project
         project.package = ProjectPackage(url: session.packageURL, handle: packageHandle)
         return project
+    }
+
+    /// Reads off the main thread, once, the screens of the take "Like the Recording" follows in `document`
+    /// (`StageLayout.contentRatioTake(of:ownTake:)`, the take of its first clip) when the editor has not read them yet:
+    /// a take the sequence did not show when the project opened, put first since. Meanwhile the ratio is unknown (16:9);
+    /// once they arrive, the views that size themselves by it follow (`screensByTake` is observed) and the preview is
+    /// built again at its size.
+    private func loadScreens(for document: EditDocument) {
+        guard let session, !closed else { return }
+        let project = session.project
+        let id = StageLayout.contentRatioTake(of: document, ownTake: project.take.id)
+        guard screensByTake[id] == nil, !screensLoading.contains(id), let shown = project.focused(on: id) else { return }
+        screensLoading.insert(id)
+        Task { [weak self] in
+            let screens = await Task.detached { TakeScreens(take: shown.take, events: shown.events) }.value
+            guard let self else { return }
+            screensLoading.remove(id)
+            guard !closed, self.session === session else { return }
+            screensByTake[id] = screens
+            showCurrentDocument()
+        }
     }
 
     /// The export's size, which the paused preview is drawn at: the document's format at the resolution the export sheet
@@ -818,6 +844,7 @@ final class EditorModel {
         let applied: EditDocument? = gestureStep.flatMap { try? document.applying($0.changes) }
         let shown = gestureLook(applied ?? document)
         let ticket = builds.request(revision: session.revision, ofGesture: true)
+        loadScreens(for: shown)
         builder.build(
             ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis,
             mixDocument: soloDocument(of: shown))
@@ -842,6 +869,7 @@ final class EditorModel {
         guard let builder else { return }
         let shown = heldLook?(document) ?? document
         let ticket = builds.request(revision: revision, ofGesture: false)
+        loadScreens(for: shown)
         builder.build(
             ticket: ticket, document: shown, outputSize: previewSize(of: shown), mix: baseMix, analysis: analysis,
             mixDocument: soloDocument(of: shown))
