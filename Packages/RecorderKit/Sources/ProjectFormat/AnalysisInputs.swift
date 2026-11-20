@@ -26,4 +26,9 @@ public struct AnalysisInputs: Equatable, Sendable {
     /// The face of each camera segment (`faceTrack-1`, §6.2), read whole from the analysis caches. A segment without one
     /// shows no face: Follow the Face stays where it is (`faceFraming-1`).
     public var faceTracks: [CameraSegment: CameraFaceTrack] = [:]
+    /// The file that plays each piece of music, by `MusicItem.source`: the CAF of a library theme or of an imported audio
+    /// (`MusicFile`, plan 3c). A source without one is silent.
+    public var musicFiles: [String: URL] = [:]
+    /// Where each audio track has a voice (`ducking-1`), by `AudioPlan.key(take:track:)`. Empty: the music is not ducked.
+    public var voiceActivity: [String: VoiceActivity] = [:]
 }
