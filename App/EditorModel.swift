@@ -317,7 +317,7 @@ final class EditorModel {
     /// The session's package folder, held open for the readers (`currentProject(of:)`); let go with the session.
     @ObservationIgnored private var packageHandle: PackageHandle?
     @ObservationIgnored private var renderer: FrameRenderer?
-    @ObservationIgnored private var engine: PreviewEngine?
+    @ObservationIgnored private(set) var engine: PreviewEngine?
     @ObservationIgnored private var builder: RevisionBuilder?
     @ObservationIgnored private var player: PreviewAudioPlayer?
     /// The mix made when the project opened, which every revision's derives from.

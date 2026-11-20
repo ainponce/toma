@@ -77,6 +77,8 @@ final class ExportChoices {
     let chapters: [Chapter]
     /// "Chapters in the File" (3d plan decision 4): on each time the sheet opens, never remembered.
     var chaptersInFile = true
+    /// "Metadata for Editors (FCPXML)" (4c decision 12): off each time the sheet opens, never remembered.
+    var editorMetadata = false
 
     /// The GIF's preview, once made; `nil` until then or when there is none to make.
     private(set) var preview: GIFPreviewImage?
@@ -125,8 +127,7 @@ final class ExportChoices {
         resolution = ExportResolution(rawValue: remembered.shortSide) ?? .p1080
         framesPerSecond = StyleCommands.frameRates.contains(document.frameRate) ? document.frameRate : 60
         quality = remembered.highQuality ? .high : .standard
-        // The codecs with alpha are not offered until milestone 4c.
-        codec = ExportCodec(rawValue: remembered.codec).flatMap { $0.hasAlpha ? nil : $0 } ?? .h264
+        codec = ExportCodec(rawValue: remembered.codec) ?? .h264
         let gif = remembered.gif
         gifLongSide = GIFSettings.longSides.contains(gif.longSide) ? gif.longSide : 800
         gifFramesPerSecond = GIFSettings.framesPerSecond.contains(gif.fps) ? gif.fps : 15
@@ -171,8 +172,17 @@ final class ExportChoices {
         ExportRangeRules.canExport(kind: kind, range: range, duration: duration, fps: exportFramesPerSecond)
     }
 
-    /// Whether Quality applies: H.264 and HEVC have a bitrate to choose, ProRes has none.
-    var hasQuality: Bool { codec == .h264 || codec == .hevc }
+    /// Whether Quality applies: the codecs with a bitrate (`ExportCodec.hasBitRate`) have one to choose, ProRes has none.
+    var hasQuality: Bool { codec.hasBitRate }
+
+    /// Whether the editor's preview shows the transparency as a checkerboard: an MP4 with a codec with alpha.
+    var showsAlpha: Bool { kind == .mp4 && codec.hasAlpha }
+
+    /// Whether the sheet offers "Metadata for Editors (FCPXML)": a video, not a GIF.
+    var offersEditorMetadata: Bool { kind == .mp4 }
+
+    /// Whether the switch can be turned on: only the whole video has the files (`ExportSettings.editorMetadata`).
+    var editorMetadataEnabled: Bool { rangeChoice == .whole }
 
     /// Whether the sheet offers "Chapters in the File": a video (MP4 or MOV) with markers with a name.
     var offersChapters: Bool { MarkerRulerRules.offersChaptersInFile(kind: kind, chapters: chapters) }
@@ -184,7 +194,8 @@ final class ExportChoices {
             chapters, kind: kind, isOn: chaptersInFile, localizations: Bundle.main.preferredLocalizations)
         return ExportSettings(
             aspect: aspect, resolution: resolution, framesPerSecond: framesPerSecond, quality: quality, contentRatio: contentRatio,
-            codec: codec, chapters: file.chapters, chapterLanguage: file.language)
+            codec: codec, chapters: file.chapters, chapterLanguage: file.language,
+            editorMetadata: editorMetadata && rangeChoice == .whole)
     }
 
     /// The GIF these choices make of the document.
@@ -371,7 +382,12 @@ struct ExportSheet: View {
         // The preview and the estimate follow the options; the sheet's end stops them (`EditorModel.endExportSheet`), and
         // so does its view going, whichever comes first.
         .onChange(of: request, initial: true) { _, request in choices.optionsChanged(to: request) }
-        .onDisappear { choices.stop() }
+        .onDisappear {
+            choices.stop()
+            model.setPreviewShowsAlpha(false)
+        }
+        // The editor's preview draws on a checkerboard while the codec has alpha (4c decision 12).
+        .onChange(of: choices.showsAlpha, initial: true) { _, on in model.setPreviewShowsAlpha(on) }
         .onChange(of: choices.estimateText) { _, text in
             // VoiceOver says the estimate as it changes (1c design §11).
             if let text { AccessibilityNotification.Announcement(text).post() }
@@ -435,7 +451,7 @@ struct ExportSheet: View {
             }
             .pickerStyle(.segmented)
             Picker("Codec", selection: $choices.codec) {
-                ForEach(ExportCodec.allCases.filter { !$0.hasAlpha }, id: \.self) { codec in
+                ForEach(ExportCodec.allCases, id: \.self) { codec in
                     Text(verbatim: Self.name(codec)).tag(codec)
                 }
             }
@@ -460,8 +476,31 @@ struct ExportSheet: View {
                     Text("From the markers with a name.", comment: "The export sheet: under Chapters in the File")
                 }
             }
+            // Next to the video: the FCPXML and the JSON, for the whole video only.
+            if choices.offersEditorMetadata {
+                Toggle(isOn: $choices.editorMetadata) {
+                    Text("Metadata for Editors (FCPXML)", comment: "The export sheet: a toggle that writes an FCPXML and a JSON next to the video")
+                    if choices.editorMetadataEnabled {
+                        Text(
+                            "Also writes the markers, clicks and zooms next to the video, for Final Cut, DaVinci or After Effects.",
+                            comment: "The export sheet: under Metadata for Editors")
+                    } else {
+                        Text(
+                            "Only for the whole video.",
+                            comment: "The export sheet: Metadata for Editors is off with Between the Marks")
+                    }
+                }
+                .disabled(!choices.editorMetadataEnabled)
+            }
         } footer: {
-            Text(Self.help(choices.codec))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(Self.help(choices.codec))
+                if choices.showsAlpha {
+                    Text(
+                        "The preview shows the transparency as a checkerboard.",
+                        comment: "The export sheet: under the codec, with a codec with alpha")
+                }
+            }
         }
     }
 
@@ -472,7 +511,7 @@ struct ExportSheet: View {
         case .hevc: "HEVC"
         case .proRes422: "ProRes 422"
         case .proRes422HQ: "ProRes 422 HQ"
-        case .hevcAlpha: "HEVC with Alpha"
+        case .hevcAlpha: String(localized: "HEVC with Alpha", comment: "The export sheet: the codec HEVC with an alpha channel")
         case .proRes4444: "ProRes 4444"
         }
     }
@@ -484,7 +523,9 @@ struct ExportSheet: View {
         case .hevc: "Smaller files at the same quality. Some older players can't open it."
         case .proRes422: "To edit in Final Cut or another editor. Very large files."
         case .proRes422HQ: "To edit in Final Cut with more quality. The largest files."
-        case .hevcAlpha, .proRes4444: ""
+        case .hevcAlpha:
+            "Transparent background, to put the video over others in an editor. Plays in Safari and on Apple devices."
+        case .proRes4444: "Transparent background, to edit in Final Cut or another editor. The largest files."
         }
     }
 
@@ -630,6 +671,7 @@ extension EditorModel {
                 let document = export ? self?.panelSession?.document : nil
                 let job = choices.job, kind = choices.kind, preferences = choices.preferences, codec = choices.codec
                 Self.end(sheet, of: window, choices: choices)
+                self?.setPreviewShowsAlpha(false)
                 guard let self, let document else { return }
                 chooseDestination(of: document, job: job, kind: kind, codec: codec, remembering: preferences)
             })
@@ -655,6 +697,7 @@ extension EditorModel {
             let host = sheet.contentViewController as? NSHostingController<ExportSheet>
         else { return }
         Self.end(sheet, of: window, choices: host.rootView.choices)
+        setPreviewShowsAlpha(false)
     }
 
     #if DEBUG
@@ -666,6 +709,27 @@ extension EditorModel {
     /// `-TomaShowcase export` with `TOMA_SHOWCASE_CODEC=<ExportCodec raw value>`: the open sheet exports with that codec.
     func showcaseExportSheetCodec(_ codec: ExportCodec) {
         (window?.attachedSheet?.contentViewController as? NSHostingController<ExportSheet>)?.rootView.choices.codec = codec
+        // TOMA_SHOWCASE_SHEET_PNG=<path>: 2 s later, the sheet's views drawn into `<path>.png` (the window server cannot
+        // capture a window while the screen is locked) and, in `<path>.txt`, whether the preview shows the checkerboard.
+        guard let path = ProcessInfo.processInfo.environment["TOMA_SHOWCASE_SHEET_PNG"] else { return }
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, let view = window?.attachedSheet?.contentView else { return }
+            view.layoutSubtreeIfNeeded()
+            guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds),
+                let context = NSGraphicsContext(bitmapImageRep: rep)
+            else { return }
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = context
+            view.effectiveAppearance.performAsCurrentDrawingAppearance {
+                NSColor.windowBackgroundColor.setFill()
+                view.bounds.fill()
+            }
+            NSGraphicsContext.restoreGraphicsState()
+            view.effectiveAppearance.performAsCurrentDrawingAppearance { view.displayIgnoringOpacity(view.bounds, in: context) }
+            try? rep.representation(using: .png, properties: [:])?.write(to: URL(filePath: path + ".png"))
+            try? "showsAlpha \(engine?.showsAlpha == true)\n".write(toFile: path + ".txt", atomically: true, encoding: .utf8)
+        }
     }
     #endif
 

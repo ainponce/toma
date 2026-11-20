@@ -1672,3 +1672,9 @@ Contra la Toma.app de la rama. Para mirar lo grabado, como en «Grabar el foco»
 - Con Accesibilidad negada y el ajuste prendido: la toma graba, y la isla dice «No se grabó el foco: falta el permiso de Accesibilidad.». Ningún aviso del sistema aparece durante la toma.
 - Pausar y escribir: no hay ninguna línea `focus` entre `paused` y `resumed`.
 - Límites conocidos, para anotar si se ven distintos: Chrome y las apps de Electron, sin cursor de texto (solo el campo); una ventana movida sin cambiar el foco deja el rectángulo de antes hasta el próximo cambio.
+
+**La hoja de export con alfa y los metadatos** (X4)
+
+- En un proyecto con un fondo de color: abrir ⌘E y elegir «HEVC con alfa» (o ProRes 4444) en Códec: la vista previa del editor muestra un damero gris detrás del escenario (la ventana, la sombra y la cámara por encima) y la hoja dice «La vista previa muestra la transparencia como un damero.». Volver a H.264 o cerrar la hoja (Cancelar, Exportar…, Esc) saca el damero. Con «GIF animado» elegido, tampoco hay damero.
+- Con un zoom en modo Atenuar bajo la cabeza y HEVC con alfa elegido: el damero se ve oscurecido solo detrás del escenario, no donde no hay nada que atenuar.
+- Con «Entre las marcas» elegido el interruptor «Metadatos para editores (FCPXML)» queda desactivado y dice «Solo con el video entero.»; con «Todo el video» se puede encender, y siempre arranca apagado al abrir la hoja. Exportar con él encendido deja el `.fcpxml` y el `.toma-metadata.json` junto al video.
